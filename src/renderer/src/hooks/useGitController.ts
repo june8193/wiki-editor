@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GitBranchList, GitStatus } from '@shared/git'
+import { logRendererError, logRendererWarn } from '../logging/rendererLogger'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
 interface UseGitControllerOptions {
@@ -108,7 +109,12 @@ export function useGitController({
       if (!isCurrentRequest(rootPath, epoch)) {
         return
       }
-      setErrorMessage(toErrorMessage(error, 'Git 상태를 불러오지 못했습니다.'))
+      const message = toErrorMessage(error, 'Git 상태를 불러오지 못했습니다.')
+      setErrorMessage(message)
+      logRendererError('git', 'Git status refresh failed', {
+        data: { workspaceRootPath: rootPath, errorMessage: message },
+        error
+      })
     }
   }, [applyWorkspaceGitState, isCurrentRequest])
 
@@ -165,14 +171,23 @@ export function useGitController({
         ) {
           const warnings = await callbacksRef.current.onWorkspaceMutated()
           if (isCurrentRequest(rootPath, epoch) && warnings.length > 0) {
-            setErrorMessage(warnings.join(' '))
+            const message = warnings.join(' ')
+            setErrorMessage(message)
+            logRendererWarn('git', 'Git workspace mutation completed with warnings', {
+              data: { action: actionLabel, workspaceRootPath: rootPath, warningMessage: message }
+            })
           }
         }
 
         return true
       } catch (error: unknown) {
         if (isCurrentRequest(rootPath, epoch)) {
-          setErrorMessage(toErrorMessage(error, options.fallbackError))
+          const message = toErrorMessage(error, options.fallbackError)
+          setErrorMessage(message)
+          logRendererError('git', 'Git action failed', {
+            data: { action: actionLabel, workspaceRootPath: rootPath, errorMessage: message },
+            error
+          })
           if (options.affectsWorkspaceFiles) {
             await window.wikiApi.git
               .status(rootPath)

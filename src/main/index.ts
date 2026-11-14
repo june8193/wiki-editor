@@ -14,6 +14,7 @@ import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
+import { registerLogIpc } from './ipc/registerLogIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import type { AppEnvironmentInfo } from './logging/formatBugReport'
 import { createHelpMenuActions } from './logging/helpMenuActions'
@@ -50,9 +51,12 @@ const logService = new LogService(join(app.getPath('userData'), 'logs'))
 let disposeConfigIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
+let disposeLogIpc: (() => void) | undefined
 let workspaceService: WorkspaceFsService | undefined
 
 function disposeMainResources(): void {
+  disposeLogIpc?.()
+  disposeLogIpc = undefined
   disposeGitIpc?.()
   disposeGitIpc = undefined
   disposeWorkspaceIpc?.()
@@ -87,6 +91,7 @@ void app.whenReady().then(async () => {
 
   const getTargets = () => BrowserWindow.getAllWindows().map((win) => win.webContents)
 
+  disposeLogIpc = registerLogIpc(ipcMain, logService)
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)
   disposeGitIpc = registerGitIpc({
     ipcMain,

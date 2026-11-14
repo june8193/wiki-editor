@@ -23,6 +23,7 @@ import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
+import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
 import { getPaneActiveTab, type PaneId, SplitMode, type TabViewPatch } from './stores/PaneTabStore'
 import { toErrorMessage } from './utils/toErrorMessage'
 
@@ -49,6 +50,16 @@ interface PendingDialogState {
 export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  const reportErrorBanner = useCallback((message: string | null, error?: unknown): void => {
+    setErrorMessage(message)
+    if (message) {
+      logRendererError('ui', 'Error banner displayed', {
+        data: { errorMessage: message },
+        ...(error !== undefined ? { error } : {})
+      })
+    }
+  }, [])
   const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null)
   const [outlineScrollRequest, setOutlineScrollRequest] = useState<OutlineScrollRequest | null>(null)
   const scrollNonceRef = useRef(0)
@@ -75,7 +86,7 @@ export function App() {
     removeFavoriteWorkspace,
     saveRawConfig
   } = useConfigController({
-    onError: setErrorMessage,
+    onError: reportErrorBanner,
     onExternalConfigCommitted: () => void refreshConfigDocRef.current()
   })
 
@@ -127,7 +138,7 @@ export function App() {
     isAutoSavePaused: pendingDialog !== null,
     onSaveConfigRaw: saveRawConfig,
     onWorkspaceSaved: () => void refreshGitStatusRef.current(),
-    onError: setErrorMessage,
+    onError: reportErrorBanner,
     onConfirmCloseDirtyTab: handleConfirmCloseDirtyTab
   })
 
@@ -148,12 +159,12 @@ export function App() {
     renameEntry,
     deleteEntry
   } = useWorkspaceTree({
-    onError: setErrorMessage,
+    onError: reportErrorBanner,
     onWorkspaceOpened: clearWorkspaceBuffers,
     onWorkspaceChanged: () => {
       void reconcileBuffersRef.current().then((warnings) => {
         if (warnings.length > 0) {
-          setErrorMessage(warnings.join(' '))
+          reportErrorBanner(warnings.join(' '))
         }
       })
       void refreshGitStatusRef.current()
@@ -162,6 +173,10 @@ export function App() {
     onEntryRenamed: syncRenamedPath,
     onEntryDeleted: syncDeletedPath
   })
+
+  useEffect(() => {
+    return registerRendererGlobalErrorLogging()
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -258,7 +273,7 @@ export function App() {
   )
 
   const handleSelectFolder = useCallback((): void => {
-    setErrorMessage(null)
+    reportErrorBanner(null)
     void window.wikiApi.workspace
       .selectFolder()
       .then((selectedPath) => {
@@ -267,9 +282,9 @@ export function App() {
         }
       })
       .catch((error: unknown) => {
-        setErrorMessage(toErrorMessage(error, '폴더 선택에 실패했습니다.'))
+        reportErrorBanner(toErrorMessage(error, '폴더 선택에 실패했습니다.'), error)
       })
-  }, [handleSwitchWorkspace])
+  }, [handleSwitchWorkspace, reportErrorBanner])
 
   const handleOpenFile = useCallback(
     (entry: WorkspaceEntry): void => {

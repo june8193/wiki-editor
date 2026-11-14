@@ -1,11 +1,20 @@
 import { act, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { WikiApi } from '@shared/ipc'
+import type { RendererLogPayload } from '@shared/logging'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { MermaidDiagram } from './MermaidDiagram'
 
 describe('MermaidDiagram', () => {
+  const originalWikiApi = (window as { wikiApi?: WikiApi }).wikiApi
+
   afterEach(() => {
     vi.useRealTimers()
+    if (originalWikiApi === undefined) {
+      delete (window as { wikiApi?: WikiApi }).wikiApi
+    } else {
+      window.wikiApi = originalWikiApi
+    }
   })
 
   it('renders diagram immediately on mount and uses cache without re-rendering when unchanged or restored', async () => {
@@ -130,5 +139,45 @@ describe('MermaidDiagram', () => {
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.getByTestId('mermaid-svg')).toHaveTextContent('Recovered')
+  })
+
+  it('logs a warn entry with metadata when Mermaid diagram rendering fails without leaking diagram source', async () => {
+    const entries: RendererLogPayload[] = []
+    window.wikiApi = {
+      log: {
+        write: vi.fn(async (payload: RendererLogPayload) => {
+          entries.push(payload)
+        })
+      }
+    } as unknown as WikiApi
+
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => {
+        throw new Error('Parse error on line 2')
+      })
+    }
+    const renderer = createMermaidRenderer(driver)
+    const secretSource = 'graph TD\n  SECRET_DIAGRAM_NODE --> invalid'
+
+    render(<MermaidDiagram code={secretSource} theme="dark" renderer={renderer} debounceMs={0} />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Parse error on line 2')
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      level: 'warn',
+      category: 'ui',
+      message: 'Mermaid diagram rendering failed',
+      data: {
+        theme: 'dark',
+        codeLength: secretSource.length,
+        errorMessage: 'Parse error on line 2'
+      },
+      error: {
+        name: 'MermaidRenderError',
+        message: 'Parse error on line 2'
+      }
+    })
+    expect(JSON.stringify(entries)).not.toContain('SECRET_DIAGRAM_NODE')
   })
 })

@@ -1,5 +1,6 @@
 import type { AppConfig } from './config'
 import type { GitBranchList, GitStatus, GitSyncResult } from './git'
+import type { RendererLogPayload } from './logging'
 import type {
   WorkspaceChangeEvent,
   WorkspaceEntry,
@@ -47,6 +48,10 @@ export const GIT_IPC_CHANNELS = {
   sync: 'git:sync'
 } as const
 
+export const LOG_IPC_CHANNELS = {
+  write: 'log:write'
+} as const
+
 export interface WikiConfigApi {
   get(): Promise<AppConfig>
   update(patch: Partial<AppConfig>): Promise<AppConfig>
@@ -92,8 +97,13 @@ export interface WikiGitApi {
   sync(workspacePath: string): Promise<GitSyncResult>
 }
 
+export interface WikiLogApi {
+  write(payload: RendererLogPayload): Promise<void>
+}
+
 export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
   git: WikiGitApi
+  log?: WikiLogApi
 }

@@ -2,7 +2,12 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { CONFIG_IPC_CHANNELS, GIT_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import {
+  CONFIG_IPC_CHANNELS,
+  GIT_IPC_CHANNELS,
+  LOG_IPC_CHANNELS,
+  WORKSPACE_IPC_CHANNELS
+} from '@shared/ipc'
 import { LogService } from '../logging/LogService'
 import { type IpcMainLike, registerIpcHandlers } from './ipcHelpers'
 
@@ -150,6 +155,24 @@ describe('registerIpcHandlers logging wrapper', () => {
     expect(entries[3].error?.stack).toContain('Push failed from handler')
     expect(typeof entries[3].data?.durationMs).toBe('number')
 
+    dispose()
+  })
+
+  it('does not generate an IPC audit log for log:write even when logService is passed', async () => {
+    const ipcMain = createFakeIpcMain()
+    const dispose = registerIpcHandlers(
+      ipcMain,
+      [[LOG_IPC_CHANNELS.write, async () => undefined]],
+      { logService }
+    )
+
+    await ipcMain.invoke(LOG_IPC_CHANNELS.write, {
+      level: 'info',
+      category: 'ui',
+      message: 'test'
+    })
+
+    expect(await logService.readEntries()).toHaveLength(0)
     dispose()
   })
 })

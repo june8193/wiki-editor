@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_APP_CONFIG } from '@shared/config'
-import { CONFIG_IPC_CHANNELS, GIT_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import {
+  CONFIG_IPC_CHANNELS,
+  GIT_IPC_CHANNELS,
+  LOG_IPC_CHANNELS,
+  WORKSPACE_IPC_CHANNELS
+} from '@shared/ipc'
+import type { RendererLogPayload } from '@shared/logging'
 import { createWikiApi, IpcRendererLike } from './wikiApi'
 
 function createFakeIpcRenderer(): IpcRendererLike & {
@@ -165,5 +171,21 @@ describe('createWikiApi', () => {
       { channel: GIT_IPC_CHANNELS.push, args: ['C:\\wiki'] },
       { channel: GIT_IPC_CHANNELS.sync, args: ['C:\\wiki'] }
     ])
+  })
+
+  it('routes log.write through log:write IPC channel with exact RendererLogPayload', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+    const payload: RendererLogPayload = {
+      level: 'warn',
+      category: 'ui',
+      message: 'Mermaid diagram rendering failed',
+      data: { codeLength: 42 },
+      error: { name: 'SyntaxError', message: 'Parse error' }
+    }
+
+    await api.log.write(payload)
+
+    expect(ipc.lastInvoked).toEqual([{ channel: LOG_IPC_CHANNELS.write, args: [payload] }])
   })
 })

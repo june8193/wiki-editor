@@ -8,6 +8,7 @@ import {
   WorkspaceEntryKind,
   WorkspaceSummary
 } from '@shared/workspace'
+import { logRendererInfo } from '../logging/rendererLogger'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
 export interface WorkspaceTreeState {
@@ -19,7 +20,7 @@ export interface WorkspaceTreeState {
 }
 
 interface UseWorkspaceTreeOptions {
-  onError: (message: string | null) => void
+  onError: (message: string | null, error?: unknown) => void
   onWorkspaceOpened?: () => void
   onWorkspaceChanged?: () => void
   onEntryRenamed?: (oldPath: string, renamed: WorkspaceEntry) => void
@@ -101,7 +102,8 @@ export function useWorkspaceTree({
     } catch (error: unknown) {
       if (mountedRef.current) {
         callbacksRef.current.onError(
-          toErrorMessage(error, '폴더 트리를 새로고침하지 못했습니다.')
+          toErrorMessage(error, '폴더 트리를 새로고침하지 못했습니다.'),
+          error
         )
       }
     }
@@ -132,11 +134,15 @@ export function useWorkspaceTree({
       setChildrenByDir({})
       setExpandedDirs(new Set())
       setSelectedTreePath(null)
+      logRendererInfo('ui', 'Workspace opened', { rootPath: info.rootPath, name: info.name })
       callbacksRef.current.onWorkspaceOpened?.()
       await window.wikiApi.workspace.watch().catch(() => undefined)
     } catch (error: unknown) {
       if (mountedRef.current) {
-        callbacksRef.current.onError(toErrorMessage(error, '워크스페이스를 열지 못했습니다.'))
+        callbacksRef.current.onError(
+          toErrorMessage(error, '워크스페이스를 열지 못했습니다.'),
+          error
+        )
       }
     }
   }, [])
@@ -151,7 +157,10 @@ export function useWorkspaceTree({
       setChildrenByDir((prev) => ({ ...prev, [dirPath]: entries }))
     } catch (error: unknown) {
       if (mountedRef.current) {
-        callbacksRef.current.onError(toErrorMessage(error, '하위 폴더를 불러오지 못했습니다.'))
+        callbacksRef.current.onError(
+          toErrorMessage(error, '하위 폴더를 불러오지 못했습니다.'),
+          error
+        )
       }
     } finally {
       if (mountedRef.current) {
@@ -233,7 +242,10 @@ export function useWorkspaceTree({
         }
       } catch (error: unknown) {
         if (mountedRef.current) {
-          callbacksRef.current.onError(toErrorMessage(error, '새 항목을 생성하지 못했습니다.'))
+          callbacksRef.current.onError(
+            toErrorMessage(error, '새 항목을 생성하지 못했습니다.'),
+            error
+          )
         }
       }
     },
@@ -277,7 +289,7 @@ export function useWorkspaceTree({
         callbacksRef.current.onEntryRenamed?.(targetPath, renamed)
       } catch (error: unknown) {
         if (mountedRef.current) {
-          callbacksRef.current.onError(toErrorMessage(error, '이름을 변경하지 못했습니다.'))
+          callbacksRef.current.onError(toErrorMessage(error, '이름을 변경하지 못했습니다.'), error)
         }
       }
     },
@@ -320,7 +332,10 @@ export function useWorkspaceTree({
         callbacksRef.current.onEntryDeleted?.(entry.path)
       } catch (error: unknown) {
         if (mountedRef.current) {
-          callbacksRef.current.onError(toErrorMessage(error, '항목을 삭제하지 못했습니다.'))
+          callbacksRef.current.onError(
+            toErrorMessage(error, '항목을 삭제하지 못했습니다.'),
+            error
+          )
         }
       }
     },

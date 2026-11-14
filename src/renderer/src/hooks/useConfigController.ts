@@ -3,7 +3,7 @@ import { AppConfig, type CustomCommandConfig, DEFAULT_APP_CONFIG, ThemeMode } fr
 import { toErrorMessage } from '../utils/toErrorMessage'
 
 interface UseConfigControllerOptions {
-  onError: (message: string | null) => void
+  onError: (message: string | null, error?: unknown) => void
   onExternalConfigCommitted?: () => void
 }
 
@@ -62,7 +62,7 @@ export function useConfigController({
       })
       .catch((error: unknown) => {
         if (mountedRef.current) {
-          onErrorRef.current(toErrorMessage(error, '설정 경로를 불러오지 못했습니다.'))
+          onErrorRef.current(toErrorMessage(error, '설정 경로를 불러오지 못했습니다.'), error)
         }
       })
 
@@ -77,7 +77,7 @@ export function useConfigController({
       })
       .catch((error: unknown) => {
         if (!mountedRef.current) return
-        onErrorRef.current(toErrorMessage(error, '설정을 불러오지 못했습니다.'))
+        onErrorRef.current(toErrorMessage(error, '설정을 불러오지 못했습니다.'), error)
       })
 
     const unsubscribe = configApi.onChanged((updatedConfig) => {
@@ -120,7 +120,7 @@ export function useConfigController({
         inFlightUpdatesRef.current -= 1
         if (seq === mutationSeqRef.current) {
           applyUiConfig(lastCommittedConfigRef.current)
-          onErrorRef.current(toErrorMessage(error, fallbackError))
+          onErrorRef.current(toErrorMessage(error, fallbackError), error)
         }
         return false
       }

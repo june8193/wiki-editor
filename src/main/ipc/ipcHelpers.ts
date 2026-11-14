@@ -1,4 +1,4 @@
-import { CONFIG_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import { CONFIG_IPC_CHANNELS, LOG_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import type { LogService } from '../logging/LogService'
 
 export interface IpcMainLike {
@@ -49,7 +49,7 @@ function wrapIpcHandler(
   handler: (event: unknown, ...args: unknown[]) => unknown,
   logService?: LogService
 ): (event: unknown, ...args: unknown[]) => unknown {
-  if (!logService) {
+  if (!logService || channel === LOG_IPC_CHANNELS.write) {
     return handler
   }
 

@@ -5,6 +5,7 @@ import {
   mapThemeToMermaidTheme,
   type MermaidRenderer
 } from '../editor/mermaidRenderer'
+import { logRendererWarn } from '../logging/rendererLogger'
 
 interface MermaidDiagramProps {
   code: string
@@ -57,6 +58,17 @@ export function MermaidDiagram({
           setAsyncState({ key: renderKey, svg: result.svg, error: null })
         } else {
           setAsyncState({ key: renderKey, svg: null, error: result.errorMessage })
+          logRendererWarn('ui', 'Mermaid diagram rendering failed', {
+            data: {
+              theme,
+              codeLength: code.length,
+              errorMessage: result.errorMessage
+            },
+            error: {
+              name: 'MermaidRenderError',
+              message: result.errorMessage
+            }
+          })
         }
       })
     }

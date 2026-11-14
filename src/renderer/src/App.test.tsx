@@ -9,7 +9,8 @@ import {
   validateConfigRaw
 } from '@shared/config'
 import { createEmptyGitStatus } from '@shared/git'
-import type { WikiApi, WikiGitApi } from '@shared/ipc'
+import type { WikiApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
+import type { RendererLogPayload } from '@shared/logging'
 import {
   addFavoriteWorkspace,
   getWorkspaceDisplayName,
@@ -58,6 +59,7 @@ interface VirtualFsOptions {
   workspaces?: Record<string, Record<string, string | null>>
   selectedFolder?: string | null
   git?: Partial<WikiGitApi>
+  log?: WikiLogApi
 }
 
 function normalizePosix(pathValue: string): string {
@@ -403,7 +405,8 @@ function createInMemoryWikiApi(
         summary: '동기화 완료'
       }),
       ...fsOptions.git
-    }
+    },
+    ...(fsOptions.log ? { log: fsOptions.log } : {})
   }
 
   return {
@@ -2833,5 +2836,260 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(
       /삭제되었으나 미저장 편집 내용이 남아 있습니다 \(keep-dirty\.md\)/
     )
+  })
+})
+
+describe('Renderer error logging & UI breadcrumbs', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('captures global window error and unhandledrejection with stack traces and handles failing log.write safely', async () => {
+    const entries: RendererLogPayload[] = []
+    const writeSpy = vi.fn(async (payload: RendererLogPayload) => {
+      entries.push(payload)
+    })
+
+    const { api } = createInMemoryWikiApi({}, { log: { write: writeSpy } })
+    window.wikiApi = api
+
+    const view = render(<App />)
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const syncError = new Error('Uncaught UI failure')
+    const rejectedError = new Error('Unhandled async rejection')
+
+    act(() => {
+      window.dispatchEvent(
+        new ErrorEvent('error', {
+          message: syncError.message,
+          error: syncError,
+          filename: 'App.tsx',
+          lineno: 12,
+          colno: 4
+        })
+      )
+      const rejectionEvent = Object.assign(new Event('unhandledrejection'), {
+        reason: rejectedError
+      })
+      window.dispatchEvent(rejectionEvent)
+    })
+
+    expect(entries).toHaveLength(2)
+    expect(entries[0]).toMatchObject({
+      level: 'error',
+      category: 'error',
+      message: 'Unhandled error in renderer',
+      data: {
+        filename: 'App.tsx',
+        lineno: 12,
+        colno: 4
+      },
+      error: {
+        name: 'Error',
+        message: 'Uncaught UI failure'
+      }
+    })
+    expect(entries[0].error?.stack).toContain('Uncaught UI failure')
+
+    expect(entries[1]).toMatchObject({
+      level: 'error',
+      category: 'error',
+      message: 'Unhandled promise rejection in renderer',
+      error: {
+        name: 'Error',
+        message: 'Unhandled async rejection'
+      }
+    })
+    expect(entries[1].error?.stack).toContain('Unhandled async rejection')
+
+    // Failing log.write must never throw or recurse
+    view.unmount()
+    const failingWrite = vi.fn(async () => {
+      throw new Error('Log IPC broken')
+    })
+    const { api: failingLogApi } = createInMemoryWikiApi({}, { log: { write: failingWrite } })
+    window.wikiApi = failingLogApi
+
+    render(<App />)
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    act(() => {
+      window.dispatchEvent(
+        new ErrorEvent('error', {
+          message: 'Secondary error',
+          error: new Error('Secondary error')
+        })
+      )
+    })
+    expect(failingWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('logs error entries when error banner or Git panel displays errors without leaking note content', async () => {
+    const user = userEvent.setup()
+    const entries: RendererLogPayload[] = []
+    const writeSpy = vi.fn(async (payload: RendererLogPayload) => {
+      entries.push(payload)
+    })
+
+    const repoStatus = {
+      ...createEmptyGitStatus(true, 'C:/wiki/errlog'),
+      branch: 'main',
+      hasUpstream: true
+    }
+
+    const { api } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/errlog',
+        workspaces: {
+          'C:/wiki/errlog': {
+            'note.md': 'PRIVATE_DOC_BODY'
+          }
+        },
+        git: {
+          status: vi.fn(async () => repoStatus),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [{ name: 'main', current: true, upstream: 'origin/main' }]
+          })),
+          push: vi.fn(async () => {
+            throw new Error('Remote auth failed')
+          })
+        },
+        log: { write: writeSpy }
+      }
+    )
+    api.workspace.writeFile = async () => {
+      throw new Error('Disk full')
+    }
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: '폴더 열기' }))
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('note.md'))
+
+    const editor = await screen.findByTestId('document-editor')
+    appendRawEditorText(editor, '\nNEW_SECRET_TEXT')
+    await user.click(screen.getByRole('button', { name: '저장' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Disk full')
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(within(gitRegion).getByRole('button', { name: 'Push' }))
+    expect(await within(gitRegion).findByRole('alert')).toHaveTextContent('Remote auth failed')
+
+    const errorEntries = entries.filter((entry) => entry.level === 'error')
+    expect(errorEntries.some((entry) => entry.error?.message === 'Disk full')).toBe(true)
+    expect(
+      errorEntries.some(
+        (entry) => entry.category === 'git' && entry.error?.message === 'Remote auth failed'
+      )
+    ).toBe(true)
+
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('PRIVATE_DOC_BODY')
+    expect(serialized).not.toContain('NEW_SECRET_TEXT')
+  })
+
+  it('records chronological ui breadcrumbs for workspace, tabs, editor modes, and split modes without logging document content or typing', async () => {
+    const user = userEvent.setup()
+    const entries: RendererLogPayload[] = []
+    const writeSpy = vi.fn(async (payload: RendererLogPayload) => {
+      entries.push(payload)
+    })
+
+    const { api } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/breadcrumbs',
+        workspaces: {
+          'C:/wiki/breadcrumbs': {
+            'alpha.md': 'SECRET_ALPHA_TEXT',
+            'beta.md': 'SECRET_BETA_TEXT'
+          }
+        },
+        log: { write: writeSpy }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    // 1. Open workspace
+    await user.click(await screen.findByRole('button', { name: '폴더 열기' }))
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+
+    // 2. Open two tabs and type in editor (typing must NOT generate logs or leak body)
+    await user.click(await within(explorer).findByText('alpha.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), '\nTYPED_SECRET_CONTENT')
+    await user.click(within(explorer).getByText('beta.md'))
+
+    // 3. Switch back to alpha.md tab in primary tab bar
+    const primaryPane = screen.getByTestId('pane-primary')
+    await user.click(within(primaryPane).getByRole('tab', { name: /alpha\.md/ }))
+
+    // 4. Switch editor modes: Raw -> 위지윅 -> Preview -> Raw
+    const modeGroup = within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })
+    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+    await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+
+    // 5. Switch split modes: single -> horizontal -> vertical
+    await user.click(screen.getByRole('button', { name: '좌우 분할' }))
+    await user.click(screen.getByRole('button', { name: '상하 분할' }))
+
+    // 6. Duplicate alpha.md to secondary pane, then move beta.md to secondary pane
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /alpha\.md/ }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역에 복제 열기'
+      })
+    )
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /beta\.md/ }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역으로 이동'
+      })
+    )
+
+    // 7. Collapse back to single mode, then close beta.md tab
+    await user.click(screen.getByRole('button', { name: '단일 화면' }))
+    await user.click(within(primaryPane).getByRole('button', { name: 'beta.md 탭 닫기' }))
+
+    const uiEntries = entries.filter((entry) => entry.category === 'ui' && entry.level === 'info')
+    expect(uiEntries.map((entry) => entry.message)).toEqual([
+      'Workspace opened',
+      'Tab opened',
+      'Tab opened',
+      'Tab switched',
+      'Editor mode changed',
+      'Editor mode changed',
+      'Editor mode changed',
+      'Split mode changed',
+      'Split mode changed',
+      'Tab duplicated',
+      'Tab moved',
+      'Split mode changed',
+      'Tab closed'
+    ])
+
+    expect(uiEntries[4].data).toMatchObject({ from: 'raw', to: 'wysiwyg' })
+    expect(uiEntries[5].data).toMatchObject({ from: 'wysiwyg', to: 'preview' })
+    expect(uiEntries[6].data).toMatchObject({ from: 'preview', to: 'raw' })
+    expect(uiEntries[7].data).toMatchObject({ from: 'single', to: 'horizontal' })
+    expect(uiEntries[8].data).toMatchObject({ from: 'horizontal', to: 'vertical' })
+    expect(uiEntries[11].data).toMatchObject({ from: 'vertical', to: 'single' })
+
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('SECRET_ALPHA_TEXT')
+    expect(serialized).not.toContain('SECRET_BETA_TEXT')
+    expect(serialized).not.toContain('TYPED_SECRET_CONTENT')
   })
 })

@@ -1,6 +1,12 @@
 import type { AppConfig } from '@shared/config'
 import type { GitBranchList, GitStatus, GitSyncResult } from '@shared/git'
-import { CONFIG_IPC_CHANNELS, GIT_IPC_CHANNELS, WikiApi, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import {
+  CONFIG_IPC_CHANNELS,
+  GIT_IPC_CHANNELS,
+  LOG_IPC_CHANNELS,
+  WikiApi,
+  WORKSPACE_IPC_CHANNELS
+} from '@shared/ipc'
 import type {
   WorkspaceChangeEvent,
   WorkspaceEntry,
@@ -30,7 +36,7 @@ function subscribeChannel<T>(
 /**
  * Builds the type-safe window.wikiApi bridge exposed through Electron's contextBridge.
  */
-export function createWikiApi(ipcRenderer: IpcRendererLike): WikiApi {
+export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
   return {
     config: {
       get: () => ipcRenderer.invoke(CONFIG_IPC_CHANNELS.get) as Promise<AppConfig>,
@@ -117,6 +123,9 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): WikiApi {
         ipcRenderer.invoke(GIT_IPC_CHANNELS.push, workspacePath) as Promise<GitStatus>,
       sync: (workspacePath) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.sync, workspacePath) as Promise<GitSyncResult>
+    },
+    log: {
+      write: (payload) => ipcRenderer.invoke(LOG_IPC_CHANNELS.write, payload) as Promise<void>
     }
   }
 }
