@@ -1,9 +1,9 @@
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
-import { PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
+import { PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
 import type { OutlineScrollRequest } from './DocumentEditor'
-import { DraggingTabPayload, handleTabDrop, PaneInteractionActions } from './PaneTabBar'
+import { dispatchTabDrop, DraggingTabPayload, PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
 
 interface PaneWorkspaceProps {
@@ -16,18 +16,19 @@ interface PaneWorkspaceProps {
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   onSetSplitRatio: (ratio: number) => void
+  onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
   actions: PaneInteractionActions
 }
 
 const KEYBOARD_RESIZE_STEP = 0.05
 
 const SPLIT_DROP_ZONES: ReadonlyArray<{
-  mode: SplitDirection
+  direction: SplitDirection
   testId: string
   label: string
 }> = [
-  { mode: 'horizontal', testId: 'split-drop-zone-horizontal', label: '여기에 드롭하여 좌우 분할' },
-  { mode: 'vertical', testId: 'split-drop-zone-vertical', label: '여기에 드롭하여 상하 분할' }
+  { direction: 'horizontal', testId: 'split-drop-zone-horizontal', label: '여기에 드롭하여 좌우 분할' },
+  { direction: 'vertical', testId: 'split-drop-zone-vertical', label: '여기에 드롭하여 상하 분할' }
 ]
 
 export function PaneWorkspace({
@@ -40,6 +41,7 @@ export function PaneWorkspace({
   scrollRequest = null,
   isShortcutDisabled = false,
   onSetSplitRatio,
+  onSplitWithTab,
   actions
 }: PaneWorkspaceProps) {
   const [draggingTab, setDraggingTab] = useState<DraggingTabPayload | null>(null)
@@ -94,7 +96,7 @@ export function PaneWorkspace({
     draggingTab !== null &&
     (layout.panes.primary.tabs.length > 1 || (isSplit && layout.panes.secondary.tabs.length > 0))
   const visibleDropZones = canDropToSplit
-    ? SPLIT_DROP_ZONES.filter((zone) => zone.mode !== layout.splitMode)
+    ? SPLIT_DROP_ZONES.filter((zone) => zone.direction !== layout.splitMode)
     : []
   const sharedPaneProps = {
     splitMode: layout.splitMode,
@@ -127,16 +129,19 @@ export function PaneWorkspace({
 
       {visibleDropZones.map((zone) => (
         <div
-          key={zone.mode}
-          className={`split-drop-zone is-${zone.mode}`}
+          key={zone.direction}
+          className={`split-drop-zone is-${zone.direction}`}
           data-testid={zone.testId}
           aria-label={zone.label}
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) =>
-            handleTabDrop(event, draggingTab, 'secondary', actions.onMoveTab, clearDragging, {
-              targetSplitMode: zone.mode,
-              stopPropagation: true
-            })
+            dispatchTabDrop(
+              event,
+              draggingTab,
+              clearDragging,
+              (payload) => onSplitWithTab(payload.paneId, payload.tabId, zone.direction),
+              { stopPropagation: true }
+            )
           }
         >
           <span>{zone.label}</span>

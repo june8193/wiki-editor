@@ -1,7 +1,7 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
 import { useDismissable } from '../hooks/useDismissable'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
-import { PaneId, SplitDirection, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import { PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 
 export interface DraggingTabPayload {
   paneId: PaneId
@@ -16,8 +16,7 @@ export interface PaneInteractionActions {
     sourcePaneId: PaneId,
     targetPaneId: PaneId,
     tabId: string,
-    targetIndex?: number,
-    targetSplitMode?: SplitDirection
+    targetIndex?: number
   ) => void
   onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
   onChangeContent: (bufferKey: string, nextContent: string) => void
@@ -54,6 +53,27 @@ export function parseDraggingTabPayload(
   return fallback
 }
 
+export function dispatchTabDrop(
+  event: DragEvent,
+  draggingTab: DraggingTabPayload | null,
+  onDragEndTab: () => void,
+  onValidDrop: (payload: DraggingTabPayload) => void,
+  options?: {
+    shouldAccept?: (payload: DraggingTabPayload) => boolean
+    stopPropagation?: boolean
+  }
+): void {
+  const payload = parseDraggingTabPayload(event, draggingTab)
+  if (!payload) return
+  if (options?.shouldAccept && !options.shouldAccept(payload)) return
+  event.preventDefault()
+  if (options?.stopPropagation) {
+    event.stopPropagation()
+  }
+  onValidDrop(payload)
+  onDragEndTab()
+}
+
 export function handleTabDrop(
   event: DragEvent,
   draggingTab: DraggingTabPayload | null,
@@ -62,26 +82,22 @@ export function handleTabDrop(
   onDragEndTab: () => void,
   options?: {
     targetIndex?: number
-    targetSplitMode?: SplitDirection
     ignoreSamePane?: boolean
     stopPropagation?: boolean
   }
 ): void {
-  const payload = parseDraggingTabPayload(event, draggingTab)
-  if (!payload) return
-  if (options?.ignoreSamePane && payload.paneId === targetPaneId) return
-  event.preventDefault()
-  if (options?.stopPropagation) {
-    event.stopPropagation()
-  }
-  onMoveTab(
-    payload.paneId,
-    targetPaneId,
-    payload.tabId,
-    options?.targetIndex,
-    options?.targetSplitMode
+  dispatchTabDrop(
+    event,
+    draggingTab,
+    onDragEndTab,
+    (payload) => onMoveTab(payload.paneId, targetPaneId, payload.tabId, options?.targetIndex),
+    {
+      shouldAccept: options?.ignoreSamePane
+        ? (payload) => payload.paneId !== targetPaneId
+        : undefined,
+      stopPropagation: options?.stopPropagation
+    }
   )
-  onDragEndTab()
 }
 
 interface PaneTabBarProps {

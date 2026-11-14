@@ -177,41 +177,50 @@ describe('PaneTabStore', () => {
     expect(snap.panes.secondary.tabs).toHaveLength(0)
   })
 
-  it('splits into vertical or horizontal mode when moving a tab from single mode with targetSplitMode', () => {
+  it('splits into vertical or horizontal mode when splitting a tab from single mode via splitWithTab', () => {
     const store = new PaneTabStore()
     const a = store.openTab('c:/wiki/a.md')
 
-    // Sole tab in single mode cannot split even when targetSplitMode is provided
-    store.moveTab('primary', 'secondary', a.id, undefined, 'vertical')
+    // Sole tab in single mode cannot split
+    store.splitWithTab('primary', a.id, 'vertical')
     expect(store.getSnapshot().splitMode).toBe('single')
     expect(store.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([a.id])
     expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(0)
 
-    // With 2+ tabs, targetSplitMode='vertical' opens vertical split with moved tab focused in secondary
+    // With 2+ tabs, splitWithTab('primary', b.id, 'vertical') opens vertical split with moved tab focused in secondary
     const b = store.openTab('c:/wiki/b.md')
-    store.moveTab('primary', 'secondary', b.id, undefined, 'vertical')
+    store.splitWithTab('primary', b.id, 'vertical')
 
-    const snap = store.getSnapshot()
+    let snap = store.getSnapshot()
     expect(snap.splitMode).toBe('vertical')
     expect(snap.activePaneId).toBe('secondary')
     expect(snap.panes.primary.tabs.map((t) => t.id)).toEqual([a.id])
     expect(snap.panes.primary.activeTabId).toBe(a.id)
     expect(snap.panes.secondary.tabs.map((t) => t.id)).toEqual([b.id])
     expect(snap.panes.secondary.activeTabId).toBe(b.id)
+
+    // Collapsing back to single and splitting with 'horizontal' opens horizontal split
+    store.closeTab('secondary', b.id)
+    const c = store.openTab('c:/wiki/c.md')
+    store.splitWithTab('primary', c.id, 'horizontal')
+    snap = store.getSnapshot()
+    expect(snap.splitMode).toBe('horizontal')
+    expect(snap.panes.primary.tabs.map((t) => t.id)).toEqual([a.id])
+    expect(snap.panes.secondary.tabs.map((t) => t.id)).toEqual([c.id])
   })
 
-  it('switches split orientation in split mode without emptying either pane', () => {
+  it('switches split orientation in split mode via splitWithTab without emptying either pane', () => {
     const store = new PaneTabStore()
     const a = store.openTab('c:/wiki/a.md')
     const b = store.openTab('c:/wiki/b.md')
     const c = store.openTab('c:/wiki/c.md')
 
     // Start horizontal split: primary=[a, b], secondary=[c]
-    store.moveTab('primary', 'secondary', c.id, undefined, 'horizontal')
+    store.splitWithTab('primary', c.id, 'horizontal')
     expect(store.getSnapshot().splitMode).toBe('horizontal')
 
-    // 1) Primary has 2+ tabs -> moving b to secondary with targetSplitMode='vertical' moves tab and switches mode
-    store.moveTab('primary', 'secondary', b.id, undefined, 'vertical')
+    // 1) Primary has 2+ tabs -> splitWithTab('primary', b.id, 'vertical') moves tab to secondary and switches mode
+    store.splitWithTab('primary', b.id, 'vertical')
     let snap = store.getSnapshot()
     expect(snap.splitMode).toBe('vertical')
     expect(snap.activePaneId).toBe('secondary')
@@ -220,7 +229,7 @@ describe('PaneTabStore', () => {
     expect(snap.panes.secondary.activeTabId).toBe(b.id)
 
     // 2) Primary has only 1 tab -> switching to 'horizontal' keeps both panes non-empty and switches mode
-    store.moveTab('primary', 'secondary', a.id, undefined, 'horizontal')
+    store.splitWithTab('primary', a.id, 'horizontal')
     snap = store.getSnapshot()
     expect(snap.splitMode).toBe('horizontal')
     expect(snap.activePaneId).toBe('primary')
@@ -229,7 +238,7 @@ describe('PaneTabStore', () => {
     expect(snap.panes.secondary.tabs.map((t) => t.id)).toEqual([c.id, b.id])
 
     // 3) Dragging from secondary -> preserves secondary tab order, focuses dragged tab, and switches mode
-    store.moveTab('secondary', 'secondary', c.id, undefined, 'vertical')
+    store.splitWithTab('secondary', c.id, 'vertical')
     snap = store.getSnapshot()
     expect(snap.splitMode).toBe('vertical')
     expect(snap.activePaneId).toBe('secondary')
@@ -240,7 +249,7 @@ describe('PaneTabStore', () => {
     const singlePaneStore = new PaneTabStore()
     const sole = singlePaneStore.openTab('c:/wiki/sole.md')
     singlePaneStore.setSplitMode('horizontal')
-    singlePaneStore.moveTab('primary', 'secondary', sole.id, undefined, 'vertical')
+    singlePaneStore.splitWithTab('primary', sole.id, 'vertical')
     expect(singlePaneStore.getSnapshot().splitMode).toBe('horizontal')
     expect(singlePaneStore.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([sole.id])
     expect(singlePaneStore.getSnapshot().panes.secondary.tabs).toHaveLength(0)

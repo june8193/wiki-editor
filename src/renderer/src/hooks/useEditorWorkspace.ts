@@ -551,6 +551,7 @@ export function useEditorWorkspace({
     setSplitMode: tabStore.setSplitMode,
     setSplitRatio: tabStore.setSplitRatio,
     moveTab: tabStore.moveTab,
+    splitWithTab: tabStore.splitWithTab,
     duplicateTabToOtherPane: tabStore.duplicateTabToOtherPane,
     updateTabViewState: tabStore.updateTabViewState,
     clearWorkspaceBuffers,

@@ -104,6 +104,7 @@ export function App() {
     focusPane,
     setSplitRatio,
     moveTab,
+    splitWithTab,
     duplicateTabToOtherPane,
     updateTabViewState,
     clearWorkspaceBuffers,
@@ -496,6 +497,7 @@ export function App() {
           scrollRequest={outlineScrollRequest}
           isShortcutDisabled={pendingDialog !== null}
           onSetSplitRatio={setSplitRatio}
+          onSplitWithTab={splitWithTab}
           actions={paneActions}
         />
 

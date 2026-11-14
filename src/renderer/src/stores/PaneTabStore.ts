@@ -389,30 +389,80 @@ export class PaneTabStore {
     })
   }
 
+  private moveTabBetweenPanes(
+    sourcePaneId: PaneId,
+    targetPaneId: PaneId,
+    tabId: string,
+    nextSplitMode: SplitMode,
+    targetIndex?: number
+  ): void {
+    const sourcePane = this.state.panes[sourcePaneId]
+    const hadSecondaryTabs = this.state.panes.secondary.tabs.length > 0
+    const { nextPane: nextSourcePane, removed } = removeTabFromPane(sourcePane, tabId)
+    if (!removed) return
+
+    const targetPane = this.state.panes[targetPaneId]
+    const existingInTarget = targetPane.tabs.find((tab) => tab.bufferKey === removed.bufferKey)
+
+    const nextTargetPane: PaneState = existingInTarget
+      ? {
+          ...targetPane,
+          activeTabId: existingInTarget.id
+        }
+      : {
+          ...targetPane,
+          tabs: insertTabAt(targetPane.tabs, removed, targetIndex),
+          activeTabId: removed.id
+        }
+
+    const nextPrimary = sourcePaneId === 'primary' ? nextSourcePane : nextTargetPane
+    const nextSecondary = sourcePaneId === 'secondary' ? nextSourcePane : nextTargetPane
+    const reconciled = reconcileRemovedLayout(
+      nextPrimary,
+      nextSecondary,
+      nextSplitMode,
+      targetPaneId,
+      hadSecondaryTabs,
+      true
+    )
+
+    this.commit({
+      ...this.state,
+      ...reconciled
+    })
+  }
+
+  splitWithTab = (
+    sourcePaneId: PaneId,
+    tabId: string,
+    splitDirection: SplitDirection
+  ): void => {
+    const sourcePane = this.state.panes[sourcePaneId]
+    if (!sourcePane.tabs.some((tab) => tab.id === tabId)) return
+
+    if (sourcePaneId === 'primary' && sourcePane.tabs.length > 1) {
+      this.moveTabBetweenPanes('primary', 'secondary', tabId, splitDirection)
+      return
+    }
+
+    if (
+      this.state.splitMode !== 'single' &&
+      this.state.panes.primary.tabs.length > 0 &&
+      this.state.panes.secondary.tabs.length > 0
+    ) {
+      this.focusPaneTabWithSplitMode(sourcePaneId, tabId, splitDirection)
+    }
+  }
+
   moveTab = (
     sourcePaneId: PaneId,
     targetPaneId: PaneId,
     tabId: string,
-    targetIndex?: number,
-    targetSplitMode?: SplitDirection
+    targetIndex?: number
   ): void => {
     const sourcePane = this.state.panes[sourcePaneId]
     const sourceIndex = sourcePane.tabs.findIndex((tab) => tab.id === tabId)
     if (sourceIndex === -1) return
-
-    if (
-      targetSplitMode !== undefined &&
-      (sourcePaneId === targetPaneId || sourcePane.tabs.length <= 1)
-    ) {
-      if (
-        this.state.splitMode !== 'single' &&
-        this.state.panes.primary.tabs.length > 0 &&
-        this.state.panes.secondary.tabs.length > 0
-      ) {
-        this.focusPaneTabWithSplitMode(sourcePaneId, tabId, targetSplitMode)
-      }
-      return
-    }
 
     if (sourcePaneId === targetPaneId) {
       const movingTab = sourcePane.tabs[sourceIndex]
@@ -448,45 +498,12 @@ export class PaneTabStore {
       return
     }
 
-    const hadSecondaryTabs = this.state.panes.secondary.tabs.length > 0
-    const { nextPane: nextSourcePane, removed } = removeTabFromPane(sourcePane, tabId)
-    if (!removed) return
-
-    const targetPane = this.state.panes[targetPaneId]
-    const existingInTarget = targetPane.tabs.find((tab) => tab.bufferKey === removed.bufferKey)
-
-    const nextTargetPane: PaneState = existingInTarget
-      ? {
-          ...targetPane,
-          activeTabId: existingInTarget.id
-        }
-      : {
-          ...targetPane,
-          tabs: insertTabAt(targetPane.tabs, removed, targetIndex),
-          activeTabId: removed.id
-        }
-
     const nextSplitMode =
-      targetSplitMode ??
-      (targetPaneId === 'secondary' && this.state.splitMode === 'single'
+      targetPaneId === 'secondary' && this.state.splitMode === 'single'
         ? 'horizontal'
-        : this.state.splitMode)
+        : this.state.splitMode
 
-    const nextPrimary = sourcePaneId === 'primary' ? nextSourcePane : nextTargetPane
-    const nextSecondary = sourcePaneId === 'secondary' ? nextSourcePane : nextTargetPane
-    const reconciled = reconcileRemovedLayout(
-      nextPrimary,
-      nextSecondary,
-      nextSplitMode,
-      targetPaneId,
-      hadSecondaryTabs,
-      true
-    )
-
-    this.commit({
-      ...this.state,
-      ...reconciled
-    })
+    this.moveTabBetweenPanes(sourcePaneId, targetPaneId, tabId, nextSplitMode, targetIndex)
   }
 
   duplicateTabToOtherPane = (sourcePaneId: PaneId, tabId: string): TabItem | null => {
