@@ -87,6 +87,10 @@ interface PaneTabBarProps {
   >
 }
 
+export function isPaneTabTriggerTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('.pane-tab-bar [role="tab"]') !== null
+}
+
 export function PaneTabBar({
   paneId,
   tabs,

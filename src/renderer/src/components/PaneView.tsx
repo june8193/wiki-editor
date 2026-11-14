@@ -1,4 +1,4 @@
-import { CSSProperties } from 'react'
+import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
@@ -6,6 +6,7 @@ import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
 import {
   DraggingTabPayload,
   handleTabDrop,
+  isPaneTabTriggerTarget,
   PaneInteractionActions,
   PaneTabBar
 } from './PaneTabBar'
@@ -26,10 +27,6 @@ interface PaneViewProps {
   onDragStartTab: (payload: DraggingTabPayload) => void
   onDragEndTab: () => void
   actions: PaneInteractionActions
-}
-
-function isTabTriggerTarget(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest('.tab-trigger') !== null
 }
 
 export function PaneView({
@@ -58,6 +55,11 @@ export function PaneView({
   const canMoveToSplit = !(splitMode === 'single' && pane.tabs.length <= 1)
   const paneStyle: CSSProperties | undefined =
     flexRatio !== undefined ? { flex: `${flexRatio} 1 0%` } : undefined
+  const handlePaneFocusEvent = (event: SyntheticEvent): void => {
+    if (!isPaneTabTriggerTarget(event.target)) {
+      actions.onFocusPane(pane.id)
+    }
+  }
 
   return (
     <section
@@ -65,16 +67,8 @@ export function PaneView({
       data-testid={`pane-${pane.id}`}
       aria-label={pane.id === 'primary' ? '주 편집기 영역' : '보조 편집기 영역'}
       style={paneStyle}
-      onMouseDown={(event) => {
-        if (!isTabTriggerTarget(event.target)) {
-          actions.onFocusPane(pane.id)
-        }
-      }}
-      onFocusCapture={(event) => {
-        if (!isTabTriggerTarget(event.target)) {
-          actions.onFocusPane(pane.id)
-        }
-      }}
+      onMouseDown={handlePaneFocusEvent}
+      onFocusCapture={handlePaneFocusEvent}
       onDragOver={(event) => {
         if (draggingTab) {
           event.preventDefault()
