@@ -89,16 +89,18 @@ describe('LogService.readEntries & formatBugReport', () => {
     const report = formatBugReport({
       entries: syntheticEntries,
       logFilePath: logService.getLogFilePath(),
-      appVersion: '1.0.0',
-      versions: {
-        electron: '45.3.2',
-        chrome: '136.0.0.0',
-        node: '24.0.0'
-      },
-      os: {
-        platform: 'win32',
-        release: '10.0.22631',
-        arch: 'x64'
+      environment: {
+        appVersion: '1.0.0',
+        versions: {
+          electron: '45.3.2',
+          chrome: '136.0.0.0',
+          node: '24.0.0'
+        },
+        os: {
+          platform: 'win32',
+          release: '10.0.22631',
+          arch: 'x64'
+        }
       },
       generatedAt: new Date('2026-11-14T12:00:00.000Z')
     })
@@ -146,9 +148,11 @@ describe('LogService.readEntries & formatBugReport', () => {
     const report = formatBugReport({
       entries,
       logFilePath: logService.getLogFilePath(),
-      appVersion: '1.0.0',
-      versions: {},
-      os: { platform: 'win32', release: '10.0', arch: 'x64' }
+      environment: {
+        appVersion: '1.0.0',
+        versions: {},
+        os: { platform: 'win32', release: '10.0', arch: 'x64' }
+      }
     })
 
     expect(report).toContain('Electron: unknown')

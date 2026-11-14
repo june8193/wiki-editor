@@ -15,8 +15,10 @@ import { GitService } from './git/GitService'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
+import type { AppEnvironmentInfo } from './logging/formatBugReport'
+import { createHelpMenuActions } from './logging/helpMenuActions'
 import { LogService } from './logging/LogService'
-import { createHelpMenuActions, registerProcessLifecycleLogging } from './logging/mainDiagnostics'
+import { registerProcessLifecycleLogging } from './logging/processLifecycleLogging'
 import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
 import { createMainWindowOptions } from './window'
@@ -108,15 +110,19 @@ void app.whenReady().then(async () => {
     }
   })
 
-  const { onCopyBugReport, onOpenLogFolder } = createHelpMenuActions({
-    logService,
+  const environment: AppEnvironmentInfo = {
     appVersion: app.getVersion(),
     versions: process.versions,
     os: {
       platform: process.platform,
       release: getOsRelease(),
       arch: process.arch
-    },
+    }
+  }
+
+  const { onCopyBugReport, onOpenLogFolder } = createHelpMenuActions({
+    logService,
+    environment,
     writeClipboardText: (text) => clipboard.writeText(text),
     showMessageBox,
     openPath: (targetPath) => shell.openPath(targetPath)
@@ -130,10 +136,7 @@ void app.whenReady().then(async () => {
       void onOpenLogFolder()
     },
     onShowVersion: () => {
-      const options = createVersionMessageBoxOptions({
-        appVersion: app.getVersion(),
-        versions: process.versions
-      })
+      const options = createVersionMessageBoxOptions(environment)
       void showMessageBox(options)
     }
   })

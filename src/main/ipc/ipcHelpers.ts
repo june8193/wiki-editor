@@ -56,29 +56,24 @@ function wrapIpcHandler(
   return async (event: unknown, ...args: unknown[]) => {
     const startedAt = performance.now()
     const metadata = extractIpcMetadata(channel, args)
+    const logOutcome = (success: boolean, error?: unknown): Promise<void> => {
+      const data = {
+        channel,
+        success,
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        ...metadata
+      }
+      return success
+        ? logService.info('ipc', `IPC ${channel}`, { data })
+        : logService.error('ipc', `IPC ${channel} failed`, { data, error })
+    }
+
     try {
       const result = await handler(event, ...args)
-      const durationMs = Math.max(0, Math.round(performance.now() - startedAt))
-      await logService.info('ipc', `IPC ${channel}`, {
-        data: {
-          channel,
-          success: true,
-          durationMs,
-          ...metadata
-        }
-      })
+      await logOutcome(true)
       return result
     } catch (error) {
-      const durationMs = Math.max(0, Math.round(performance.now() - startedAt))
-      await logService.error('ipc', `IPC ${channel} failed`, {
-        data: {
-          channel,
-          success: false,
-          durationMs,
-          ...metadata
-        },
-        error
-      })
+      await logOutcome(false, error)
       throw error
     }
   }

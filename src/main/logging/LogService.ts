@@ -7,6 +7,7 @@ import {
   type LogProcess,
   serializeError
 } from '@shared/logging'
+import { createAsyncQueue } from '../asyncQueue'
 import { isErrnoCode } from '../fs/pathSecurity'
 
 export const LOG_FILE_NAME = 'app.jsonl'
@@ -68,7 +69,7 @@ export class LogService {
   private readonly logFilePath: string
   private readonly maxFileSizeBytes: number
   private readonly maxFiles: number
-  private queue: Promise<void> = Promise.resolve()
+  private readonly queue = createAsyncQueue()
 
   constructor(logDir: string, options: LogServiceOptions = {}) {
     this.logDir = logDir
@@ -103,7 +104,7 @@ export class LogService {
       ...(input.error !== undefined ? { error: serializeError(input.error) } : {})
     }
 
-    return this.enqueue(async () => {
+    return this.queue.enqueue(async () => {
       try {
         await mkdir(this.logDir, { recursive: true })
         const line = safeJsonLine(entry)
@@ -174,7 +175,7 @@ export class LogService {
   }
 
   flush(): Promise<void> {
-    return this.queue
+    return this.queue.flush()
   }
 
   async readEntries(): Promise<LogEntry[]> {
@@ -207,14 +208,5 @@ export class LogService {
       }
     }
     return entries
-  }
-
-  private enqueue(task: () => Promise<void>): Promise<void> {
-    const run = this.queue.then(task, task)
-    this.queue = run.then(
-      () => undefined,
-      () => undefined
-    )
-    return run
   }
 }

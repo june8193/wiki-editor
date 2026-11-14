@@ -14,6 +14,7 @@ import {
   removeFavoriteWorkspace,
   toggleFavoriteWorkspace
 } from '@shared/workspace'
+import { createAsyncQueue } from '../asyncQueue'
 import type { LogService } from '../logging/LogService'
 
 export type ConfigChangeListener = (config: AppConfig) => void
@@ -53,7 +54,7 @@ export class ConfigService {
   private readonly configPath: string
   private readonly logService?: LogService
   private readonly listeners = new Set<ConfigChangeListener>()
-  private queue: Promise<void> = Promise.resolve()
+  private readonly queue = createAsyncQueue()
 
   constructor(configPath: string, options: ConfigServiceOptions = {}) {
     this.configPath = configPath
@@ -65,7 +66,7 @@ export class ConfigService {
   }
 
   get(): Promise<AppConfig> {
-    return this.enqueue(() => this.loadOrInitialize())
+    return this.queue.enqueue(() => this.loadOrInitialize())
   }
 
   async update(patch: Partial<AppConfig>): Promise<AppConfig> {
@@ -76,7 +77,7 @@ export class ConfigService {
   }
 
   readRaw(): Promise<string> {
-    return this.enqueue(async () => {
+    return this.queue.enqueue(async () => {
       await this.loadOrInitialize()
       return readFile(this.configPath, 'utf8')
     })
@@ -84,7 +85,7 @@ export class ConfigService {
 
   async saveRaw(rawJson: string): Promise<AppConfig> {
     const validated = validateConfigRaw(rawJson)
-    return this.enqueue(() => this.commitConfig(validated))
+    return this.queue.enqueue(() => this.commitConfig(validated))
   }
 
   removeFavoriteWorkspace(workspacePath: string): Promise<AppConfig> {
@@ -116,7 +117,7 @@ export class ConfigService {
   }
 
   private mutate(transform: (current: AppConfig) => AppConfig): Promise<AppConfig> {
-    return this.enqueue(async () => {
+    return this.queue.enqueue(async () => {
       const current = await this.loadOrInitialize()
       const next = transform(current)
       return this.commitConfig(next)
@@ -127,15 +128,6 @@ export class ConfigService {
     await writeFileAtomic(this.configPath, serializeConfig(next))
     this.notifyListeners(next)
     return cloneAppConfig(next)
-  }
-
-  private enqueue<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(task)
-    this.queue = run.then(
-      () => undefined,
-      () => undefined
-    )
-    return run
   }
 
   private async loadOrInitialize(): Promise<AppConfig> {

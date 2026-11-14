@@ -10,12 +10,16 @@ export interface BugReportOsInfo {
   arch: string
 }
 
-export interface FormatBugReportInput {
-  entries: readonly LogEntry[]
-  logFilePath: string
+export interface AppEnvironmentInfo {
   appVersion: string
   versions: RuntimeVersions
   os: BugReportOsInfo
+}
+
+export interface FormatBugReportInput {
+  entries: readonly LogEntry[]
+  logFilePath: string
+  environment: AppEnvironmentInfo
   generatedAt?: Date
 }
 
@@ -77,11 +81,10 @@ function formatBreadcrumbLine(entry: LogEntry): string {
 export function formatBugReport({
   entries,
   logFilePath,
-  appVersion,
-  versions,
-  os,
+  environment,
   generatedAt = new Date()
 }: FormatBugReportInput): string {
+  const { appVersion, versions, os } = environment
   const recentErrors = entries
     .filter((entry) => entry.level === 'error' || entry.level === 'warn')
     .slice(-MAX_REPORT_ERRORS)
