@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { PaneTabStore } from './PaneTabStore'
+import { canSplitWithTab, PaneTabStore } from './PaneTabStore'
 
 describe('PaneTabStore', () => {
   it('opens tabs, deduplicates within a pane, switches active tab, and selects neighbor on close', () => {
@@ -182,6 +182,7 @@ describe('PaneTabStore', () => {
     const a = store.openTab('c:/wiki/a.md')
 
     // Sole tab in single mode cannot split
+    expect(canSplitWithTab(store.getSnapshot())).toBe(false)
     store.splitWithTab('primary', a.id, 'vertical')
     expect(store.getSnapshot().splitMode).toBe('single')
     expect(store.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([a.id])
@@ -189,6 +190,7 @@ describe('PaneTabStore', () => {
 
     // With 2+ tabs, splitWithTab('primary', b.id, 'vertical') opens vertical split with moved tab focused in secondary
     const b = store.openTab('c:/wiki/b.md')
+    expect(canSplitWithTab(store.getSnapshot())).toBe(true)
     store.splitWithTab('primary', b.id, 'vertical')
 
     let snap = store.getSnapshot()
@@ -229,6 +231,7 @@ describe('PaneTabStore', () => {
     expect(snap.panes.secondary.activeTabId).toBe(b.id)
 
     // 2) Primary has only 1 tab -> switching to 'horizontal' keeps both panes non-empty and switches mode
+    expect(canSplitWithTab(store.getSnapshot())).toBe(true)
     store.splitWithTab('primary', a.id, 'horizontal')
     snap = store.getSnapshot()
     expect(snap.splitMode).toBe('horizontal')
@@ -249,6 +252,7 @@ describe('PaneTabStore', () => {
     const singlePaneStore = new PaneTabStore()
     const sole = singlePaneStore.openTab('c:/wiki/sole.md')
     singlePaneStore.setSplitMode('horizontal')
+    expect(canSplitWithTab(singlePaneStore.getSnapshot())).toBe(false)
     singlePaneStore.splitWithTab('primary', sole.id, 'vertical')
     expect(singlePaneStore.getSnapshot().splitMode).toBe('horizontal')
     expect(singlePaneStore.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([sole.id])

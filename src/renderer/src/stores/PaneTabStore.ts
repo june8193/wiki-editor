@@ -151,6 +151,18 @@ export function getPaneActiveTab(pane: PaneState): TabItem | null {
   return pane.tabs.find((tab) => tab.id === pane.activeTabId) ?? null
 }
 
+function hasPopulatedSplitPanes(layout: PaneLayoutState): boolean {
+  return (
+    layout.splitMode !== 'single' &&
+    layout.panes.primary.tabs.length > 0 &&
+    layout.panes.secondary.tabs.length > 0
+  )
+}
+
+export function canSplitWithTab(layout: PaneLayoutState): boolean {
+  return layout.panes.primary.tabs.length > 1 || hasPopulatedSplitPanes(layout)
+}
+
 /**
  * Manages up to 2 split panes, independent per-pane tab bars, and lightweight inactive tab state.
  */
@@ -257,19 +269,7 @@ export class PaneTabStore {
   activateTab = (paneId: PaneId, tabId: string): void => {
     const pane = this.state.panes[paneId]
     if (!pane.tabs.some((tab) => tab.id === tabId)) return
-    if (pane.activeTabId === tabId && this.state.activePaneId === paneId) return
-
-    this.commit({
-      ...this.state,
-      activePaneId: paneId,
-      panes: {
-        ...this.state.panes,
-        [paneId]: {
-          ...pane,
-          activeTabId: tabId
-        }
-      }
-    })
+    this.commitTabActivation(paneId, tabId, this.state.splitMode)
   }
 
   focusPane = (paneId: PaneId): void => {
@@ -362,10 +362,10 @@ export class PaneTabStore {
     })
   }
 
-  private focusPaneTabWithSplitMode(
+  private commitTabActivation(
     paneId: PaneId,
     tabId: string,
-    splitMode: SplitDirection
+    splitMode: SplitMode
   ): void {
     const pane = this.state.panes[paneId]
     if (
@@ -445,12 +445,8 @@ export class PaneTabStore {
       return
     }
 
-    if (
-      this.state.splitMode !== 'single' &&
-      this.state.panes.primary.tabs.length > 0 &&
-      this.state.panes.secondary.tabs.length > 0
-    ) {
-      this.focusPaneTabWithSplitMode(sourcePaneId, tabId, splitDirection)
+    if (hasPopulatedSplitPanes(this.state)) {
+      this.commitTabActivation(sourcePaneId, tabId, splitDirection)
     }
   }
 

@@ -1,7 +1,7 @@
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
-import { PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
+import { canSplitWithTab, PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
 import type { OutlineScrollRequest } from './DocumentEditor'
 import { dispatchTabDrop, DraggingTabPayload, PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
@@ -92,9 +92,7 @@ export function PaneWorkspace({
 
   const clearDragging = (): void => setDraggingTab(null)
   const isSplit = layout.splitMode !== 'single'
-  const canDropToSplit =
-    draggingTab !== null &&
-    (layout.panes.primary.tabs.length > 1 || (isSplit && layout.panes.secondary.tabs.length > 0))
+  const canDropToSplit = draggingTab !== null && canSplitWithTab(layout)
   const visibleDropZones = canDropToSplit
     ? SPLIT_DROP_ZONES.filter((zone) => zone.direction !== layout.splitMode)
     : []
