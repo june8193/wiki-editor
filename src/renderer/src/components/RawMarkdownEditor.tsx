@@ -1,109 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { json } from '@codemirror/lang-json'
-import { markdown } from '@codemirror/lang-markdown'
-import { bracketMatching, HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { languages } from '@codemirror/language-data'
-import { Annotation, Compartment, EditorState, Extension } from '@codemirror/state'
-import {
-  drawSelection,
-  EditorView,
-  highlightActiveLine,
-  highlightActiveLineGutter,
-  keymap,
-  lineNumbers
-} from '@codemirror/view'
-import { tags } from '@lezer/highlight'
 import type { ThemeMode } from '@shared/config'
-import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
-import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
-import { syncElementScrollTop } from '../hooks/useSyncScrollTop'
+import type { RawTableAction } from '../editor/rawTableCommands'
+import { useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
 import type { CursorPosition } from '../stores/PaneTabStore'
-
-const externalSyncAnnotation = Annotation.define<boolean>()
-
-function isViewCursorInRawTable(view: EditorView): boolean {
-  const head = view.state.selection.main.head
-  const line = view.state.doc.lineAt(head)
-  if (!line.text.includes('|')) {
-    return false
-  }
-  return detectTableAtOffset(view.state.doc.toString(), head) !== null
-}
-
-const markdownHighlightStyle = HighlightStyle.define([
-  { tag: [tags.heading, tags.heading1, tags.heading2, tags.heading3], color: 'var(--cm-heading)', fontWeight: '700' },
-  { tag: tags.strong, fontWeight: '700' },
-  { tag: tags.emphasis, fontStyle: 'italic' },
-  { tag: tags.strikethrough, textDecoration: 'line-through' },
-  { tag: [tags.link, tags.url], color: 'var(--cm-link)', textDecoration: 'underline' },
-  { tag: tags.monospace, color: 'var(--cm-code)', backgroundColor: 'var(--code-bg)' },
-  { tag: tags.quote, color: 'var(--cm-quote)', fontStyle: 'italic' },
-  { tag: tags.keyword, color: 'var(--cm-keyword)' },
-  { tag: tags.string, color: 'var(--cm-string)' },
-  { tag: [tags.number, tags.bool], color: 'var(--cm-number)' },
-  { tag: [tags.comment, tags.meta, tags.processingInstruction], color: 'var(--text-secondary)' },
-  { tag: tags.propertyName, color: 'var(--cm-heading)' }
-])
-
-function createEditorThemeExtension(theme: ThemeMode): Extension {
-  return EditorView.theme(
-    {
-      '&': {
-        height: '100%',
-        backgroundColor: 'var(--bg-app)',
-        color: 'var(--text-primary)',
-        fontSize: '14px'
-      },
-      '.cm-scroller': {
-        overflow: 'auto',
-        fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
-        lineHeight: '1.6'
-      },
-      '.cm-content': {
-        padding: '16px 0',
-        caretColor: 'var(--accent-color)'
-      },
-      '.cm-line': {
-        padding: '0 16px'
-      },
-      '.cm-gutters': {
-        backgroundColor: 'var(--bg-surface)',
-        color: 'var(--text-secondary)',
-        borderRight: '1px solid var(--border-color)'
-      },
-      '.cm-activeLine': {
-        backgroundColor: 'var(--cm-active-line)'
-      },
-      '.cm-activeLineGutter': {
-        backgroundColor: 'var(--bg-elevated)'
-      },
-      '&.cm-focused': {
-        outline: 'none'
-      }
-    },
-    { dark: theme === 'dark' }
-  )
-}
-
-function createLanguageExtension(language: 'markdown' | 'json'): Extension {
-  if (language === 'json') {
-    return json()
-  }
-  return markdown({ codeLanguages: languages })
-}
-
-function clampSelection(docLength: number, cursor: CursorPosition): { anchor: number; head: number } {
-  const anchor = Math.max(0, Math.min(cursor.selectionStart, docLength))
-  const head = Math.max(anchor, Math.min(cursor.selectionEnd, docLength))
-  return { anchor, head }
-}
-
-function syncSelectionAttrs(view: EditorView): void {
-  const { from, to } = view.state.selection.main
-  view.contentDOM.setAttribute('data-selection-start', String(from))
-  view.contentDOM.setAttribute('data-selection-end', String(to))
-}
 
 interface RawMarkdownEditorProps {
   content: string
@@ -143,184 +41,16 @@ export function RawMarkdownEditor({
   onChangeContent,
   onUpdateViewState
 }: RawMarkdownEditorProps) {
-  const hostRef = useRef<HTMLDivElement | null>(null)
-  const viewRef = useRef<EditorView | null>(null)
-  const themeCompartmentRef = useRef(new Compartment())
-  const languageCompartmentRef = useRef(new Compartment())
-  const tableKeymapCompartmentRef = useRef(new Compartment())
-  const onChangeContentRef = useRef(onChangeContent)
-  const onUpdateViewStateRef = useRef(onUpdateViewState)
-  const latestCursorPropRef = useRef(cursor)
-  const latestScrollTopRef = useRef(scrollTop)
-  const lastAppliedCursorRef = useRef(cursor)
-  const showTableToolbarRef = useRef(showTableToolbar)
-  const prevShowTableToolbarRef = useRef(showTableToolbar)
-  const prevThemeRef = useRef(theme)
-  const prevLanguageRef = useRef(language)
-  const isRestoringScrollRef = useRef(false)
-
-  onChangeContentRef.current = onChangeContent
-  onUpdateViewStateRef.current = onUpdateViewState
-  latestCursorPropRef.current = cursor
-  latestScrollTopRef.current = scrollTop
-  showTableToolbarRef.current = showTableToolbar
-
-  const [inTable, setInTable] = useState(() =>
-    showTableToolbar ? detectTableAtOffset(content, cursor.selectionStart) !== null : false
-  )
-
-  useEffect(() => {
-    const host = hostRef.current
-    if (!host) return
-
-    const initialSelection = clampSelection(content.length, latestCursorPropRef.current)
-    const state = EditorState.create({
-      doc: content,
-      selection: initialSelection,
-      extensions: [
-        lineNumbers(),
-        highlightActiveLineGutter(),
-        highlightActiveLine(),
-        history(),
-        drawSelection(),
-        bracketMatching(),
-        EditorView.lineWrapping,
-        syntaxHighlighting(markdownHighlightStyle),
-        languageCompartmentRef.current.of(createLanguageExtension(language)),
-        themeCompartmentRef.current.of(createEditorThemeExtension(theme)),
-        tableKeymapCompartmentRef.current.of(showTableToolbar ? rawTableKeymap : []),
-        keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-        EditorView.contentAttributes.of({
-          'data-testid': 'document-editor',
-          'aria-label': '문서 에디터',
-          spellcheck: 'false'
-        }),
-        EditorView.updateListener.of((update) => {
-          syncSelectionAttrs(update.view)
-          if (update.transactions.some((tr) => tr.annotation(externalSyncAnnotation))) {
-            return
-          }
-          if (update.docChanged) {
-            onChangeContentRef.current(update.state.doc.toString())
-          }
-          if (update.docChanged || update.selectionSet) {
-            const { from, to } = update.state.selection.main
-            lastAppliedCursorRef.current = { selectionStart: from, selectionEnd: to }
-            onUpdateViewStateRef.current({
-              cursor: { selectionStart: from, selectionEnd: to }
-            })
-            if (showTableToolbarRef.current) {
-              setInTable(isViewCursorInRawTable(update.view))
-            }
-          }
-        })
-      ]
-    })
-
-    const view = new EditorView({
-      state,
-      parent: host
-    })
-    view.dom.setAttribute('data-theme-mode', theme)
-    syncSelectionAttrs(view)
-    view.scrollDOM.scrollTop = latestScrollTopRef.current
-    viewRef.current = view
-
-    const handleScroll = (): void => {
-      if (isRestoringScrollRef.current) return
-      onUpdateViewStateRef.current({ scrollTop: view.scrollDOM.scrollTop })
-    }
-    view.scrollDOM.addEventListener('scroll', handleScroll)
-
-    return () => {
-      view.scrollDOM.removeEventListener('scroll', handleScroll)
-      view.destroy()
-      viewRef.current = null
-    }
-    // Mount once per tab/mode instance; external prop updates are synced below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
-    const view = viewRef.current
-    if (!view || prevShowTableToolbarRef.current === showTableToolbar) return
-    prevShowTableToolbarRef.current = showTableToolbar
-    view.dispatch({
-      effects: tableKeymapCompartmentRef.current.reconfigure(
-        showTableToolbar ? rawTableKeymap : []
-      ),
-      annotations: externalSyncAnnotation.of(true)
-    })
-    setInTable(showTableToolbar ? isViewCursorInRawTable(view) : false)
-  }, [showTableToolbar])
-
-  useEffect(() => {
-    const view = viewRef.current
-    if (!view || prevThemeRef.current === theme) return
-    prevThemeRef.current = theme
-    view.dom.setAttribute('data-theme-mode', theme)
-    view.dispatch({
-      effects: themeCompartmentRef.current.reconfigure(createEditorThemeExtension(theme)),
-      annotations: externalSyncAnnotation.of(true)
-    })
-  }, [theme])
-
-  useEffect(() => {
-    const view = viewRef.current
-    if (!view || prevLanguageRef.current === language) return
-    prevLanguageRef.current = language
-    view.dispatch({
-      effects: languageCompartmentRef.current.reconfigure(createLanguageExtension(language)),
-      annotations: externalSyncAnnotation.of(true)
-    })
-  }, [language])
-
-  useLayoutEffect(() => {
-    const view = viewRef.current
-    if (!view) return
-
-    const currentDoc = view.state.doc.toString()
-    const docChanged = currentDoc !== content
-    const cursorPropChanged =
-      lastAppliedCursorRef.current.selectionStart !== cursor.selectionStart ||
-      lastAppliedCursorRef.current.selectionEnd !== cursor.selectionEnd
-
-    if (docChanged || cursorPropChanged) {
-      const targetSelection = clampSelection(content.length, cursor)
-      const currentSel = view.state.selection.main
-      const selectionDiffers =
-        currentSel.from !== targetSelection.anchor || currentSel.to !== targetSelection.head
-
-      view.dispatch({
-        changes: docChanged ? { from: 0, to: currentDoc.length, insert: content } : undefined,
-        selection: docChanged || (cursorPropChanged && selectionDiffers) ? targetSelection : undefined,
-        annotations: externalSyncAnnotation.of(true)
-      })
-      lastAppliedCursorRef.current = {
-        selectionStart: targetSelection.anchor,
-        selectionEnd: targetSelection.head
-      }
-      syncSelectionAttrs(view)
-    }
-
-    if (showTableToolbar && (docChanged || cursorPropChanged)) {
-      setInTable(isViewCursorInRawTable(view))
-    }
-  }, [content, cursor, showTableToolbar])
-
-  useLayoutEffect(() => {
-    const view = viewRef.current
-    if (!view) return
-    isRestoringScrollRef.current = true
-    syncElementScrollTop(view.scrollDOM, scrollTop)
-    isRestoringScrollRef.current = false
-  }, [scrollTop])
-
-  const handleTableAction = (action: RawTableAction): void => {
-    const view = viewRef.current
-    if (!view) return
-    runRawTableAction(view, action)
-  }
+  const { hostRef, inTable, runTableAction } = useRawCodeMirrorEditor({
+    content,
+    language,
+    theme,
+    cursor,
+    scrollTop,
+    showTableToolbar,
+    onChangeContent,
+    onUpdateViewState
+  })
 
   return (
     <div className="raw-editor-shell">
@@ -332,7 +62,7 @@ export function RawMarkdownEditor({
               type="button"
               className={`toolbar-btn${btn.danger ? ' is-danger' : ''}`}
               disabled={btn.requiresTable && !inTable}
-              onClick={() => handleTableAction(btn.action)}
+              onClick={() => runTableAction(btn.action)}
             >
               {btn.label}
             </button>

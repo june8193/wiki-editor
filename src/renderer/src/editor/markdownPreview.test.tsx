@@ -78,10 +78,9 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
     expect(container.querySelector('svg')).toBeNull()
 
     const img = container.querySelector('img')
-    if (img) {
-      expect(img.getAttribute('onerror')).toBeNull()
-      expect(img.getAttribute('src')).toBe('https://example.com/ok.png')
-    }
+    expect(img).not.toBeNull()
+    expect(img!.getAttribute('onerror')).toBeNull()
+    expect(img!.getAttribute('src')).toBe('https://example.com/ok.png')
 
     const html = container.innerHTML.toLowerCase()
     expect(html).not.toContain('onerror')

@@ -297,4 +297,55 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
       })
     ).toBeEnabled()
   })
+
+  it('handles CRLF content and EOF cursor safely without RangeError or spurious resets, preserving CRLF on edits', async () => {
+    const user = userEvent.setup()
+    const crlfDoc = ['Intro line', '', '| A    | B    |', '| ---- | ---- |', '| Val1 | Val2 |'].join('\r\n')
+    const onChangeContent = vi.fn()
+    const onUpdateViewState = vi.fn()
+
+    // Cursor passed at crlfDoc.length (> CM6 internal LF length) must not throw RangeError
+    const { rerender } = render(
+      <RawMarkdownEditor
+        content={crlfDoc}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: crlfDoc.length, selectionEnd: crlfDoc.length }}
+        scrollTop={0}
+        showTableToolbar
+        onChangeContent={onChangeContent}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Re-rendering with same CRLF content and an in-table LF offset must not trigger spurious replacement
+    const tableCellOffset = crlfDoc.replace(/\r\n/g, '\n').indexOf('Val1')
+    rerender(
+      <RawMarkdownEditor
+        content={crlfDoc}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: tableCellOffset, selectionEnd: tableCellOffset }}
+        scrollTop={0}
+        showTableToolbar
+        onChangeContent={onChangeContent}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+    expect(onChangeContent).not.toHaveBeenCalled()
+    expect(editorEl.getAttribute('data-selection-start')).toBe(String(tableCellOffset))
+
+    // Running a Raw table action preserves CRLF line endings in emitted document content
+    const toolbar = screen.getByRole('toolbar', { name: 'Raw 표 편집 툴바' })
+    const addRowBelowBtn = within(toolbar).getByRole('button', { name: '행 아래 추가' })
+    expect(addRowBelowBtn).toBeEnabled()
+    await user.click(addRowBelowBtn)
+    expect(onChangeContent).toHaveBeenCalledTimes(1)
+    const emitted = onChangeContent.mock.calls[0][0] as string
+    expect(emitted).toContain('\r\n')
+    expect(emitted.split('\r\n').filter((line) => line.startsWith('|'))).toHaveLength(4)
+  })
 })

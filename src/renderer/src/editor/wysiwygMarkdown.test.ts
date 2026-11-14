@@ -20,6 +20,18 @@ function createTestWysiwygEditor(markdown: string): Editor {
   return editor
 }
 
+function findTextPos(editor: Editor, snippet: string): number {
+  let foundPos = 0
+  editor.state.doc.descendants((node, pos) => {
+    if (node.isText && node.text?.includes(snippet)) {
+      foundPos = pos + 1
+      return false
+    }
+    return true
+  })
+  return foundPos
+}
+
 describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
   afterEach(() => {
     while (createdEditors.length > 0) {
@@ -134,15 +146,7 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     const editor = createTestWysiwygEditor(initial)
 
     // Position cursor inside header cell "Col 1"
-    let col1Pos = 0
-    editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.text?.includes('Col 1')) {
-        col1Pos = pos + 1
-        return false
-      }
-      return true
-    })
-    editor.commands.setTextSelection(col1Pos)
+    editor.commands.setTextSelection(findTextPos(editor, 'Col 1'))
 
     let updateCount = 0
     editor.on('update', () => {
@@ -170,14 +174,7 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     ].join('\n')
 
     const editor = createTestWysiwygEditor(initial)
-    let a1Pos = 0
-    editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.text?.includes('A1')) {
-        a1Pos = pos + 1
-        return false
-      }
-      return true
-    })
+    const a1Pos = findTextPos(editor, 'A1')
     expect(a1Pos).toBeGreaterThan(0)
     editor.commands.setTextSelection(a1Pos)
     expect(editor.isActive('table')).toBe(true)
@@ -219,15 +216,7 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
       ['| Col 1 | Col 2 |', '| --- | --- |', '| R1A | R1B |', '| R2A | R2B |'].join('\n')
     )
 
-    let col1Pos = 0
-    editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.text?.includes('Col 1')) {
-        col1Pos = pos + 1
-        return false
-      }
-      return true
-    })
-    editor.commands.setTextSelection(col1Pos)
+    editor.commands.setTextSelection(findTextPos(editor, 'Col 1'))
     expect(addTableRowBeforeSafely(editor)).toBe(true)
 
     const afterHeaderAction = editor.getMarkdown().trim().split('\n')
@@ -236,15 +225,7 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     expect(afterHeaderAction[2]).toMatch(/\|\s*\|\s*\|/)
     expect(afterHeaderAction[3]).toContain('R1A')
 
-    let r2Pos = 0
-    editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.text?.includes('R2A')) {
-        r2Pos = pos + 1
-        return false
-      }
-      return true
-    })
-    editor.commands.setTextSelection(r2Pos)
+    editor.commands.setTextSelection(findTextPos(editor, 'R2A'))
     expect(addTableRowBeforeSafely(editor)).toBe(true)
 
     const afterBodyAction = editor.getMarkdown().trim().split('\n')
