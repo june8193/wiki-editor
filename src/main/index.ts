@@ -5,7 +5,7 @@ import { GitService } from './git/GitService'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
-import { createApplicationMenuTemplate } from './menu'
+import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
 import { createMainWindowOptions } from './window'
 
@@ -81,7 +81,17 @@ void app.whenReady().then(async () => {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate(
       createApplicationMenuTemplate({
-        getTargetWebContents: getMenuTargetWebContents
+        getTargetWebContents: getMenuTargetWebContents,
+        onShowVersion: () => {
+          const targetWindow = getActiveWindow()
+          const options = createVersionMessageBoxOptions({
+            appVersion: app.getVersion(),
+            versions: process.versions
+          })
+          void (targetWindow
+            ? dialog.showMessageBox(targetWindow, options)
+            : dialog.showMessageBox(options))
+        }
       })
     )
   )

@@ -2,7 +2,7 @@ import type { BaseWindow, MenuItemConstructorOptions } from 'electron'
 import { describe, expect, it, vi } from 'vitest'
 import { MENU_IPC_CHANNELS } from '@shared/ipc'
 import type { WebContentsLike } from './ipc/ipcHelpers'
-import { createApplicationMenuTemplate } from './menu'
+import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
 
 function getSubmenu(
   template: MenuItemConstructorOptions[],
@@ -15,10 +15,41 @@ function getSubmenu(
   return menu.submenu
 }
 
+describe('createVersionMessageBoxOptions', () => {
+  it('builds message box options with app version and runtime versions', () => {
+    const options = createVersionMessageBoxOptions({
+      appVersion: '1.0.0',
+      versions: {
+        electron: '35.0.0',
+        chrome: '134.0.0.0',
+        node: '22.14.0'
+      }
+    })
+
+    expect(options).toEqual({
+      type: 'info',
+      title: 'Wiki Editor',
+      message: 'Wiki Editor v1.0.0',
+      detail: 'Electron: 35.0.0\nChromium: 134.0.0.0\nNode.js: 22.14.0',
+      buttons: ['OK']
+    })
+  })
+
+  it('falls back to unknown when runtime versions are undefined', () => {
+    const options = createVersionMessageBoxOptions({
+      appVersion: '1.0.0',
+      versions: {}
+    })
+
+    expect(options.detail).toBe('Electron: unknown\nChromium: unknown\nNode.js: unknown')
+  })
+})
+
 describe('createApplicationMenuTemplate', () => {
-  it('defines File, Edit, View, Settings, and Window menus with expected items, roles, and accelerator', () => {
+  it('defines File, Edit, View, Settings, Window, and Help menus with expected items, roles, and accelerator', () => {
     const template = createApplicationMenuTemplate({
-      getTargetWebContents: () => undefined
+      getTargetWebContents: () => undefined,
+      onShowVersion: () => {}
     })
 
     expect(template.map((item) => item.label)).toEqual([
@@ -26,7 +57,8 @@ describe('createApplicationMenuTemplate', () => {
       'Edit',
       'View',
       'Settings',
-      'Window'
+      'Window',
+      'Help'
     ])
 
     const fileMenu = getSubmenu(template, 'File')
@@ -68,6 +100,21 @@ describe('createApplicationMenuTemplate', () => {
 
     const windowMenu = getSubmenu(template, 'Window')
     expect(windowMenu.map((item) => item.role)).toEqual(['minimize', 'zoom', 'close'])
+
+    const helpMenu = getSubmenu(template, 'Help')
+    expect(helpMenu.map((item) => item.label)).toEqual(['Version'])
+  })
+
+  it('invokes onShowVersion when Help > Version is clicked', () => {
+    const onShowVersion = vi.fn()
+    const template = createApplicationMenuTemplate({ onShowVersion })
+
+    const helpMenu = getSubmenu(template, 'Help')
+    expect(typeof helpMenu[0].click).toBe('function')
+
+    helpMenu[0].click?.(undefined as never, undefined as never, undefined as never)
+
+    expect(onShowVersion).toHaveBeenCalledTimes(1)
   })
 
   it('dispatches menu commands to the live target webContents and ignores missing or destroyed targets', () => {
