@@ -2,14 +2,15 @@ import { Editor } from '@tiptap/core'
 import { describe, expect, it } from 'vitest'
 import {
   createWysiwygExtensions,
-  normalizeMarkdownForTiptap,
-  serializeTiptapEditorToMarkdown
+  deleteTableRowPreservingHeader,
+  prepareMarkdownForTiptap,
+  sanitizeHtmlWithRehype
 } from './wysiwygMarkdown'
 
 function createTestWysiwygEditor(markdown: string): Editor {
   return new Editor({
     extensions: createWysiwygExtensions(),
-    content: normalizeMarkdownForTiptap(markdown),
+    content: prepareMarkdownForTiptap(markdown),
     contentType: 'markdown'
   })
 }
@@ -42,7 +43,7 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     ].join('\n')
 
     const editor = createTestWysiwygEditor(sample)
-    const exported = serializeTiptapEditorToMarkdown(editor)
+    const exported = editor.getMarkdown()
     editor.destroy()
 
     expect(exported).toContain('# Title')
@@ -61,11 +62,86 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
   it('preserves trailing task list at EOF without trailing newline', () => {
     const noTrailingNewline = '- [x] First\n- [ ] Last'
     const editor = createTestWysiwygEditor(noTrailingNewline)
-    const exported = serializeTiptapEditorToMarkdown(editor)
+    const exported = editor.getMarkdown()
     editor.destroy()
 
     expect(exported).toContain('[x] First')
     expect(exported).toContain('[ ] Last')
+  })
+
+  it('sanitizes XSS HTML fragments and dangerous URI schemes via rehype-sanitize', () => {
+    expect(sanitizeHtmlWithRehype('<script>alert(1)</script><p onclick="bad()">Safe</p>')).toBe(
+      '<p>Safe</p>'
+    )
+
+    const malicious = [
+      '# Title',
+      '',
+      '<script>alert(1)</script>',
+      '',
+      '<img src="x" onerror="alert(2)" />',
+      '',
+      '<iframe src="https://evil.test"></iframe>',
+      '',
+      '[Bad](javascript:alert(3)) [Ftp](ftp://evil.test) [Ok](https://example.com)',
+      '',
+      '*   kept   spacing'
+    ].join('\n')
+
+    const prepared = prepareMarkdownForTiptap(malicious)
+    expect(prepared).not.toContain('<script')
+    expect(prepared).not.toContain('onerror')
+    expect(prepared).not.toContain('<iframe')
+    expect(prepared).not.toContain('javascript:')
+    expect(prepared).not.toContain('ftp://')
+    expect(prepared).toContain('[Ok](https://example.com)')
+    expect(prepared).toContain('*   kept   spacing')
+
+    const editor = createTestWysiwygEditor(malicious)
+    const jsonStr = JSON.stringify(editor.getJSON())
+    expect(jsonStr).not.toContain('javascript:')
+    expect(jsonStr).not.toContain('ftp://')
+    expect(editor.getMarkdown()).toContain('[Ok](https://example.com)')
+    editor.destroy()
+  })
+
+  it('deletes header row in a single transaction while promoting new top row and supporting single-step undo', () => {
+    const initial = [
+      '| Col 1 | Col 2 |',
+      '| --- | --- |',
+      '| R1A | R1B |',
+      '| R2A | R2B |'
+    ].join('\n')
+
+    const editor = createTestWysiwygEditor(initial)
+
+    // Position cursor inside header cell "Col 1"
+    let col1Pos = 0
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text?.includes('Col 1')) {
+        col1Pos = pos + 1
+        return false
+      }
+      return true
+    })
+    editor.commands.setTextSelection(col1Pos)
+
+    let updateCount = 0
+    editor.on('update', () => {
+      updateCount += 1
+    })
+
+    expect(deleteTableRowPreservingHeader(editor)).toBe(true)
+    expect(updateCount).toBe(1)
+
+    const afterDelete = editor.getMarkdown().trim().split('\n')
+    expect(afterDelete).toHaveLength(3) // R1 header + separator + R2 body
+    expect(afterDelete[0]).toContain('R1A')
+
+    // Single undo restores the deleted header row cleanly
+    expect(editor.commands.undo()).toBe(true)
+    expect(editor.getMarkdown()).toContain('Col 1')
+    editor.destroy()
   })
 
   it('supports table insertion and row/column addition and deletion with clean GFM markdown output', () => {
@@ -76,10 +152,8 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     ].join('\n')
 
     const editor = createTestWysiwygEditor(initial)
-    // Place cursor inside cell "A1"
-    const docText = editor.state.doc
     let a1Pos = 0
-    docText.descendants((node, pos) => {
+    editor.state.doc.descendants((node, pos) => {
       if (node.isText && node.text?.includes('A1')) {
         a1Pos = pos + 1
         return false
@@ -90,37 +164,32 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     editor.commands.setTextSelection(a1Pos)
     expect(editor.isActive('table')).toBe(true)
 
-    // Add row below and column right, then move into the added cell before deleting them
     expect(editor.commands.addRowAfter()).toBe(true)
     expect(editor.commands.addColumnAfter()).toBe(true)
 
-    const afterAdd = serializeTiptapEditorToMarkdown(editor)
+    const afterAdd = editor.getMarkdown()
     const afterAddLines = afterAdd.trim().split('\n')
-    expect(afterAddLines).toHaveLength(4) // header + separator + 2 body rows
+    expect(afterAddLines).toHaveLength(4)
     expect(afterAddLines[0].split('|').slice(1, -1)).toHaveLength(3)
     expect(afterAddLines[1].split('|').slice(1, -1)).toHaveLength(3)
 
-    // Move to the newly added empty column (to the right of A1) and delete it
     expect(editor.commands.goToNextCell()).toBe(true)
     expect(editor.commands.deleteColumn()).toBe(true)
-    // Move to the newly added empty row (next row after A2) and delete it
     expect(editor.commands.goToNextCell()).toBe(true)
     expect(editor.commands.deleteRow()).toBe(true)
 
-    const afterDelete = serializeTiptapEditorToMarkdown(editor)
+    const afterDelete = editor.getMarkdown()
     expect(afterDelete).toContain('A1')
     expect(afterDelete).toContain('A2')
     expect(afterDelete.trim().split('\n')).toHaveLength(3)
 
-    // Delete table completely
     expect(editor.commands.deleteTable()).toBe(true)
     expect(editor.isActive('table')).toBe(false)
-    expect(serializeTiptapEditorToMarkdown(editor).trim()).toBe('')
+    expect(editor.getMarkdown().trim()).toBe('')
 
-    // Insert a brand-new 2x3 table with header row
     expect(editor.commands.insertTable({ rows: 2, cols: 3, withHeaderRow: true })).toBe(true)
     expect(editor.isActive('table')).toBe(true)
-    const insertedLines = serializeTiptapEditorToMarkdown(editor).trim().split('\n')
+    const insertedLines = editor.getMarkdown().trim().split('\n')
     expect(insertedLines).toHaveLength(3)
     expect(insertedLines[0].split('|').slice(1, -1)).toHaveLength(3)
 

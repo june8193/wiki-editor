@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { getWorkspacePathKey, WorkspaceEntry } from '@shared/workspace'
-import { isMarkdownDocument, resolveModeShortcut } from '../editor/editorModes'
+import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import { DocumentBuffer, DocumentBufferStore } from '../stores/DocumentBufferStore'
 import { PaneId, PaneTabStore } from '../stores/PaneTabStore'
 import { toErrorMessage } from '../utils/toErrorMessage'
@@ -183,30 +183,21 @@ export function useEditorWorkspace({
   useEffect(() => {
     const handleGlobalKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || isAutoSavePausedRef.current) return
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-        if (!tabStore.getActiveTab()) return
-        event.preventDefault()
-        saveActivePaneDocument()
-        return
-      }
-
       const activeTab = tabStore.getActiveTab()
       if (!activeTab) return
       const activeBuffer = bufferStore.getBuffer(activeTab.bufferKey)
-      if (!activeBuffer) return
+      const allowRichModes = activeBuffer ? isMarkdownDocument(activeBuffer) : false
 
-      const nextMode = resolveModeShortcut(
-        event,
-        activeTab.mode,
-        isMarkdownDocument(activeBuffer)
-      )
-      if (nextMode) {
-        event.preventDefault()
-        if (nextMode !== activeTab.mode) {
-          tabStore.updateTabViewState(tabStore.getSnapshot().activePaneId, activeTab.id, {
-            mode: nextMode
-          })
-        }
+      const shortcut = resolveEditorShortcut(event, activeTab.mode, allowRichModes)
+      if (!shortcut) return
+
+      event.preventDefault()
+      if (shortcut.type === 'save') {
+        saveActivePaneDocument()
+      } else if (shortcut.mode !== activeTab.mode) {
+        tabStore.updateTabViewState(tabStore.getSnapshot().activePaneId, activeTab.id, {
+          mode: shortcut.mode
+        })
       }
     }
     window.addEventListener('keydown', handleGlobalKeyDown)

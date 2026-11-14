@@ -9,6 +9,10 @@ export interface ModeShortcutEvent {
   altKey: boolean
 }
 
+export type EditorShortcutAction =
+  | { type: 'save' }
+  | { type: 'mode'; mode: EditorMode }
+
 const MODE_ORDER: readonly EditorMode[] = ['raw', 'wysiwyg', 'preview']
 
 /**
@@ -78,4 +82,19 @@ export function resolveModeShortcut(
   }
 
   return null
+}
+
+/**
+ * Resolves global/editor application shortcuts (`Ctrl/Cmd+S` save or mode-switch keys).
+ */
+export function resolveEditorShortcut(
+  event: ModeShortcutEvent,
+  currentMode: EditorMode,
+  allowRichModes: boolean
+): EditorShortcutAction | null {
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 's') {
+    return { type: 'save' }
+  }
+  const mode = resolveModeShortcut(event, currentMode, allowRichModes)
+  return mode ? { type: 'mode', mode } : null
 }

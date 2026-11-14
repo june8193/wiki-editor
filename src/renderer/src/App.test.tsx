@@ -1820,7 +1820,8 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
     const insertedText = getRawEditorText(rawEditor)
     expect(insertedText).toContain('| 열 1 | 열 2 | 열 3 |')
 
-    const bodyCellOffset = insertedText.indexOf('|  |') + 2
+    const insertedLines = insertedText.split('\n')
+    const bodyCellOffset = insertedLines[0].length + 1 + insertedLines[1].length + 1 + 2
     setRawEditorSelection(rawEditor, bodyCellOffset, bodyCellOffset)
     await user.click(within(rawToolbar).getByRole('button', { name: '행 아래 추가' }))
     await user.click(within(rawToolbar).getByRole('button', { name: '열 우 추가' }))

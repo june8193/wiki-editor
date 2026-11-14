@@ -1,6 +1,6 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
 import type { ThemeMode } from '@shared/config'
-import { getRawEditorLanguage, isMarkdownDocument, resolveModeShortcut } from '../editor/editorModes'
+import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
 import { EditorMode, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
@@ -63,18 +63,15 @@ export function DocumentEditor({
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (isShortcutDisabled) return
 
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-      event.preventDefault()
-      event.stopPropagation()
-      onSave()
-      return
-    }
+    const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes)
+    if (!shortcut) return
 
-    const nextMode = resolveModeShortcut(event, effectiveMode, allowRichModes)
-    if (nextMode) {
-      event.preventDefault()
-      event.stopPropagation()
-      handleModeSelect(nextMode)
+    event.preventDefault()
+    event.stopPropagation()
+    if (shortcut.type === 'save') {
+      onSave()
+    } else {
+      handleModeSelect(shortcut.mode)
     }
   }
 

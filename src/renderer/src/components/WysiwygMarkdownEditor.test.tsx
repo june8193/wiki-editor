@@ -127,4 +127,48 @@ describe('WysiwygMarkdownEditor', () => {
     const notPrevented = fireEvent.click(link!)
     expect(notPrevented).toBe(false)
   })
+
+  it('sanitizes XSS payloads via rehype-sanitize, supports cell context menu, and emits once on header row delete', async () => {
+    const user = userEvent.setup()
+    const onChangeContent = vi.fn()
+
+    render(
+      <WysiwygMarkdownEditor
+        content={[
+          '# Safe',
+          '',
+          '<script>alert(1)</script>',
+          '',
+          '<img src="x" onerror="alert(2)" />',
+          '',
+          '[Bad](javascript:alert(3))',
+          '',
+          '| H1 | H2 |',
+          '| --- | --- |',
+          '| R1 | R2 |',
+          '| R3 | R4 |'
+        ].join('\n')}
+        scrollTop={0}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    expect(editorEl.querySelector('script')).toBeNull()
+    expect(editorEl.innerHTML).not.toContain('onerror')
+    expect(editorEl.innerHTML).not.toContain('javascript:')
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Right-click inside header cell opens contextual table menu and deletes header row in a single emit
+    const headerCell = editorEl.querySelector('th')!
+    fireEvent.contextMenu(headerCell, { clientX: 40, clientY: 60 })
+    const cellMenu = await screen.findByRole('menu', { name: '표 셀 작업 메뉴' })
+    await user.click(within(cellMenu).getByRole('menuitem', { name: '현재 행 삭제' }))
+
+    expect(onChangeContent).toHaveBeenCalledTimes(1)
+    const updatedMd = onChangeContent.mock.calls[0][0] as string
+    expect(updatedMd).toMatch(/\|\s*R1\s*\|\s*R2\s*\|/)
+    expect(updatedMd).toMatch(/\|\s*-+\s*\|\s*-+\s*\|/)
+    expect(updatedMd).not.toContain('H1')
+  })
 })

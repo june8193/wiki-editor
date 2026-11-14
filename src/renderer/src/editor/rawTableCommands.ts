@@ -1,11 +1,11 @@
-import { EditorView } from '@codemirror/view'
+import type { Extension } from '@codemirror/state'
+import { EditorView, keymap } from '@codemirror/view'
 import {
   addTableColumn,
   addTableRow,
   deleteTable,
   deleteTableColumn,
   deleteTableRow,
-  detectTableAtOffset,
   formatTableAtOffset,
   insertMarkdownTable,
   TableEditResult
@@ -22,35 +22,33 @@ export type RawTableAction =
   | 'format'
   | 'deleteTable'
 
-function computeRawTableEdit(
-  action: RawTableAction,
-  content: string,
-  offset: number
-): TableEditResult | null {
-  switch (action) {
-    case 'insert':
-      return insertMarkdownTable(content, offset)
-    case 'addRowAbove':
-      return addTableRow(content, offset, 'above')
-    case 'addRowBelow':
-      return addTableRow(content, offset, 'below')
-    case 'addColLeft':
-      return addTableColumn(content, offset, 'left')
-    case 'addColRight':
-      return addTableColumn(content, offset, 'right')
-    case 'deleteRow':
-      return deleteTableRow(content, offset)
-    case 'deleteCol':
-      return deleteTableColumn(content, offset)
-    case 'format':
-      return formatTableAtOffset(content, offset)
-    case 'deleteTable':
-      return deleteTable(content, offset)
-  }
-}
+export const RAW_TABLE_SHORTCUTS: ReadonlyArray<{
+  key: string
+  action: RawTableAction
+}> = [
+  { key: 'Mod-Alt-t', action: 'insert' },
+  { key: 'Mod-Alt-ArrowUp', action: 'addRowAbove' },
+  { key: 'Mod-Alt-ArrowDown', action: 'addRowBelow' },
+  { key: 'Mod-Alt-ArrowLeft', action: 'addColLeft' },
+  { key: 'Mod-Alt-ArrowRight', action: 'addColRight' },
+  { key: 'Mod-Alt-Backspace', action: 'deleteRow' },
+  { key: 'Mod-Alt-Delete', action: 'deleteCol' },
+  { key: 'Mod-Alt-f', action: 'format' }
+]
 
-export function isCursorInRawTable(content: string, offset: number): boolean {
-  return detectTableAtOffset(content, offset) !== null
+const RAW_TABLE_HANDLERS: Record<
+  RawTableAction,
+  (content: string, offset: number) => TableEditResult | null
+> = {
+  insert: (content, offset) => insertMarkdownTable(content, offset),
+  addRowAbove: (content, offset) => addTableRow(content, offset, 'above'),
+  addRowBelow: (content, offset) => addTableRow(content, offset, 'below'),
+  addColLeft: (content, offset) => addTableColumn(content, offset, 'left'),
+  addColRight: (content, offset) => addTableColumn(content, offset, 'right'),
+  deleteRow: (content, offset) => deleteTableRow(content, offset),
+  deleteCol: (content, offset) => deleteTableColumn(content, offset),
+  format: (content, offset) => formatTableAtOffset(content, offset),
+  deleteTable: (content, offset) => deleteTable(content, offset)
 }
 
 /**
@@ -59,7 +57,7 @@ export function isCursorInRawTable(content: string, offset: number): boolean {
 export function runRawTableAction(view: EditorView, action: RawTableAction): boolean {
   const doc = view.state.doc.toString()
   const offset = view.state.selection.main.head
-  const result = computeRawTableEdit(action, doc, offset)
+  const result = RAW_TABLE_HANDLERS[action](doc, offset)
   if (!result) return false
 
   view.dispatch({
@@ -70,3 +68,13 @@ export function runRawTableAction(view: EditorView, action: RawTableAction): boo
   view.focus()
   return true
 }
+
+/**
+ * CodeMirror 6 keymap binding Mod+Alt table editing shortcuts to TableMarkdownManipulator.
+ */
+export const rawTableKeymap: Extension = keymap.of(
+  RAW_TABLE_SHORTCUTS.map(({ key, action }) => ({
+    key,
+    run: (view) => runRawTableAction(view, action)
+  }))
+)

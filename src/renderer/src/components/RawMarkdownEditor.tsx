@@ -15,11 +15,8 @@ import {
 } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
 import type { ThemeMode } from '@shared/config'
-import {
-  isCursorInRawTable,
-  RawTableAction,
-  runRawTableAction
-} from '../editor/rawTableCommands'
+import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
+import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
 import type { CursorPosition } from '../stores/PaneTabStore'
 
 const externalSyncAnnotation = Annotation.define<boolean>()
@@ -107,7 +104,6 @@ interface RawMarkdownEditorProps {
   showTableToolbar?: boolean
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
-  testId?: string
 }
 
 const RAW_TABLE_BUTTONS: ReadonlyArray<{
@@ -135,13 +131,13 @@ export function RawMarkdownEditor({
   scrollTop,
   showTableToolbar = false,
   onChangeContent,
-  onUpdateViewState,
-  testId = 'document-editor'
+  onUpdateViewState
 }: RawMarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const themeCompartmentRef = useRef(new Compartment())
   const languageCompartmentRef = useRef(new Compartment())
+  const tableKeymapCompartmentRef = useRef(new Compartment())
   const onChangeContentRef = useRef(onChangeContent)
   const onUpdateViewStateRef = useRef(onUpdateViewState)
   const latestCursorPropRef = useRef(cursor)
@@ -155,7 +151,7 @@ export function RawMarkdownEditor({
   latestScrollTopRef.current = scrollTop
 
   const [inTable, setInTable] = useState(() =>
-    showTableToolbar ? isCursorInRawTable(content, cursor.selectionStart) : false
+    showTableToolbar ? detectTableAtOffset(content, cursor.selectionStart) !== null : false
   )
 
   const initialLanguage = useMemo(() => createLanguageExtension(language), [language])
@@ -180,9 +176,10 @@ export function RawMarkdownEditor({
         syntaxHighlighting(markdownHighlightStyle),
         languageCompartmentRef.current.of(initialLanguage),
         themeCompartmentRef.current.of(initialTheme),
+        tableKeymapCompartmentRef.current.of(showTableToolbar ? rawTableKeymap : []),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
         EditorView.contentAttributes.of({
-          'data-testid': testId,
+          'data-testid': 'document-editor',
           'aria-label': '문서 에디터',
           spellcheck: 'false'
         }),
@@ -201,7 +198,12 @@ export function RawMarkdownEditor({
               cursor: { selectionStart: from, selectionEnd: to }
             })
             if (showTableToolbar) {
-              setInTable(isCursorInRawTable(update.state.doc.toString(), update.state.selection.main.head))
+              setInTable(
+                detectTableAtOffset(
+                  update.state.doc.toString(),
+                  update.state.selection.main.head
+                ) !== null
+              )
             }
           }
         })
@@ -230,7 +232,18 @@ export function RawMarkdownEditor({
     }
     // Mount once per tab/mode instance; external prop updates are synced below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [testId])
+  }, [])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({
+      effects: tableKeymapCompartmentRef.current.reconfigure(
+        showTableToolbar ? rawTableKeymap : []
+      ),
+      annotations: externalSyncAnnotation.of(true)
+    })
+  }, [showTableToolbar])
 
   useEffect(() => {
     const view = viewRef.current
@@ -283,7 +296,7 @@ export function RawMarkdownEditor({
     }
 
     if (showTableToolbar) {
-      setInTable(isCursorInRawTable(content, view.state.selection.main.head))
+      setInTable(detectTableAtOffset(content, view.state.selection.main.head) !== null)
     }
 
     if (Math.abs(view.scrollDOM.scrollTop - scrollTop) > 1) {

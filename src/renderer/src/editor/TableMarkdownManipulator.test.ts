@@ -60,7 +60,7 @@ describe('TableMarkdownManipulator', () => {
     })
   })
 
-  it('inserts a formatted GFM table template with clean blank line separation', () => {
+  it('inserts a vertically aligned GFM table template with clean blank line separation', () => {
     const md = '# Title\nParagraph'
     const offset = md.length
     const result = insertMarkdownTable(md, offset)
@@ -71,9 +71,9 @@ describe('TableMarkdownManipulator', () => {
         'Paragraph',
         '',
         '| 열 1 | 열 2 | 열 3 |',
-        '| --- | --- | --- |',
-        '|  |  |  |',
-        '|  |  |  |'
+        '| ---- | ---- | ---- |',
+        '|      |      |      |',
+        '|      |      |      |'
       ].join('\n')
     )
     const detected = detectTableAtOffset(result.content, result.cursorOffset)
@@ -85,9 +85,9 @@ describe('TableMarkdownManipulator', () => {
   it('adds rows above and below the current body row and safely inserts first body row from header', () => {
     const md = [
       '| Col A | Col B |',
-      '| --- | ---: |',
-      '| r1a | r1b |',
-      '| r2a | r2b |'
+      '| ----- | ----: |',
+      '| r1a   |   r1b |',
+      '| r2a   |   r2b |'
     ].join('\n')
 
     // Add row above second body row (r2)
@@ -96,10 +96,10 @@ describe('TableMarkdownManipulator', () => {
     expect(above?.content).toBe(
       [
         '| Col A | Col B |',
-        '| --- | ---: |',
-        '| r1a | r1b |',
-        '|  |  |',
-        '| r2a | r2b |'
+        '| ----- | ----: |',
+        '| r1a   |   r1b |',
+        '|       |       |',
+        '| r2a   |   r2b |'
       ].join('\n')
     )
 
@@ -109,10 +109,10 @@ describe('TableMarkdownManipulator', () => {
     expect(below?.content).toBe(
       [
         '| Col A | Col B |',
-        '| --- | ---: |',
-        '| r1a | r1b |',
-        '|  |  |',
-        '| r2a | r2b |'
+        '| ----- | ----: |',
+        '| r1a   |   r1b |',
+        '|       |       |',
+        '| r2a   |   r2b |'
       ].join('\n')
     )
 
@@ -122,46 +122,46 @@ describe('TableMarkdownManipulator', () => {
     expect(fromHeader?.content).toBe(
       [
         '| Col A | Col B |',
-        '| --- | ---: |',
-        '|  |  |',
-        '| r1a | r1b |',
-        '| r2a | r2b |'
+        '| ----- | ----: |',
+        '|       |       |',
+        '| r1a   |   r1b |',
+        '| r2a   |   r2b |'
       ].join('\n')
     )
   })
 
-  it('adds columns left and right while preserving column alignments and padding', () => {
+  it('adds columns left and right while preserving column alignments and vertical pipe padding', () => {
     const md = [
       '| Name | Score |',
-      '| :--- | ---: |',
-      '| Kim | 100 |'
+      '| :--- | ----: |',
+      '| Kim  |   100 |'
     ].join('\n')
 
     const leftRes = addTableColumn(md, md.indexOf('Score'), 'left')
     expect(leftRes?.content).toBe(
       [
-        '| Name | 열 | Score |',
-        '| :--- | --- | ---: |',
-        '| Kim |  | 100 |'
+        '| Name | 열  | Score |',
+        '| :--- | --- | ----: |',
+        '| Kim  |     |   100 |'
       ].join('\n')
     )
 
     const rightRes = addTableColumn(md, md.indexOf('Score'), 'right')
     expect(rightRes?.content).toBe(
       [
-        '| Name | Score | 열 |',
-        '| :--- | ---: | --- |',
-        '| Kim | 100 |  |'
+        '| Name | Score | 열  |',
+        '| :--- | ----: | --- |',
+        '| Kim  |   100 |     |'
       ].join('\n')
     )
   })
 
   it('deletes current body row safely while guarding header and separator rows', () => {
     const md = [
-      '| H1 | H2 |',
+      '| H1  | H2  |',
       '| --- | --- |',
-      '| a1 | a2 |',
-      '| b1 | b2 |'
+      '| a1  | a2  |',
+      '| b1  | b2  |'
     ].join('\n')
 
     // Guard header & separator rows
@@ -172,38 +172,38 @@ describe('TableMarkdownManipulator', () => {
     const deletedFirst = deleteTableRow(md, md.indexOf('a2'))
     expect(deletedFirst?.content).toBe(
       [
-        '| H1 | H2 |',
+        '| H1  | H2  |',
         '| --- | --- |',
-        '| b1 | b2 |'
+        '| b1  | b2  |'
       ].join('\n')
     )
   })
 
   it('deletes current column while preserving remaining alignments and guarding single-column tables', () => {
     const md = [
-      '| A | B | C |',
+      '| A    |   B   |    C |',
       '| :--- | :---: | ---: |',
-      '| 1 | 2 | 3 |'
+      '| 1    |   2   |    3 |'
     ].join('\n')
 
     const res = deleteTableColumn(md, md.indexOf('B'))
     expect(res?.content).toBe(
       [
-        '| A | C |',
+        '| A    |    C |',
         '| :--- | ---: |',
-        '| 1 | 3 |'
+        '| 1    |    3 |'
       ].join('\n')
     )
 
     const singleCol = [
       '| Only |',
-      '| --- |',
-      '| val |'
+      '| ---- |',
+      '| val  |'
     ].join('\n')
     expect(deleteTableColumn(singleCol, singleCol.indexOf('val'))).toBeNull()
   })
 
-  it('formats misaligned tables and deletes an entire table cleanly', () => {
+  it('aligns column pipes visually when formatting tables and deletes entire table cleanly', () => {
     const unaligned = [
       'Before',
       '| Name|Description|',
@@ -216,9 +216,9 @@ describe('TableMarkdownManipulator', () => {
     expect(formatted?.content).toBe(
       [
         'Before',
-        '| Name | Description |',
-        '| :--- | ---: |',
-        '| A | Longer value |',
+        '| Name |  Description |',
+        '| :--- | -----------: |',
+        '| A    | Longer value |',
         'After'
       ].join('\n')
     )

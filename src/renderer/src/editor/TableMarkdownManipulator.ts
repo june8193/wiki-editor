@@ -197,23 +197,76 @@ function parseSeparatorAlignments(line: string): TableAlignment[] | null {
   return alignments
 }
 
-function formatAlignmentMarker(alignment: TableAlignment): string {
+function getDisplayWidth(text: string): number {
+  let width = 0
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0
+    const isWide =
+      (code >= 0x1100 && code <= 0x115f) ||
+      (code >= 0x2e80 && code <= 0xa4cf) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe10 && code <= 0xfe6f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6)
+    width += isWide ? 2 : 1
+  }
+  return width
+}
+
+function getMinAlignmentWidth(alignment: TableAlignment): number {
   switch (alignment) {
     case 'left':
-      return ':---'
-    case 'center':
-      return ':---:'
     case 'right':
-      return '---:'
+      return 4
+    case 'center':
+      return 5
     case 'none':
-      return '---'
+      return 3
   }
 }
 
-function formatTableRowLine(cells: readonly string[], columnCount: number): string {
+function formatAlignmentMarker(alignment: TableAlignment, colWidth: number): string {
+  const width = Math.max(getMinAlignmentWidth(alignment), colWidth)
+  switch (alignment) {
+    case 'left':
+      return `:${'-'.repeat(width - 1)}`
+    case 'center':
+      return `:${'-'.repeat(width - 2)}:`
+    case 'right':
+      return `${'-'.repeat(width - 1)}:`
+    case 'none':
+      return '-'.repeat(width)
+  }
+}
+
+function padCellText(text: string, colWidth: number, alignment: TableAlignment): string {
+  const trimmed = text.trim()
+  const gap = Math.max(0, colWidth - getDisplayWidth(trimmed))
+  if (gap === 0) return trimmed
+  if (alignment === 'right') {
+    return `${' '.repeat(gap)}${trimmed}`
+  }
+  if (alignment === 'center') {
+    const leftPad = Math.floor(gap / 2)
+    return `${' '.repeat(leftPad)}${trimmed}${' '.repeat(gap - leftPad)}`
+  }
+  return `${trimmed}${' '.repeat(gap)}`
+}
+
+function formatTableRowLine(
+  cells: readonly string[],
+  colWidths: readonly number[],
+  alignments: readonly TableAlignment[],
+  isSeparator = false
+): string {
   const normalized: string[] = []
-  for (let c = 0; c < columnCount; c += 1) {
-    normalized.push((cells[c] ?? '').trim())
+  for (let c = 0; c < colWidths.length; c += 1) {
+    if (isSeparator) {
+      normalized.push(formatAlignmentMarker(alignments[c] ?? 'none', colWidths[c]))
+    } else {
+      normalized.push(padCellText(cells[c] ?? '', colWidths[c], alignments[c] ?? 'none'))
+    }
   }
   return `| ${normalized.join(' | ')} |`
 }
@@ -225,16 +278,27 @@ function serializeTableLines(
 ): string[] {
   const columnCount = Math.max(1, alignments.length, header.length)
   const normAlignments: TableAlignment[] = []
+  const colWidths: number[] = []
+
   for (let c = 0; c < columnCount; c += 1) {
-    normAlignments.push(alignments[c] ?? 'none')
+    const alignment = alignments[c] ?? 'none'
+    normAlignments.push(alignment)
+    let width = Math.max(
+      getMinAlignmentWidth(alignment),
+      getDisplayWidth((header[c] ?? '').trim())
+    )
+    for (const row of bodyRows) {
+      width = Math.max(width, getDisplayWidth((row[c] ?? '').trim()))
+    }
+    colWidths.push(width)
   }
 
   const lines = [
-    formatTableRowLine(header, columnCount),
-    formatTableRowLine(normAlignments.map(formatAlignmentMarker), columnCount)
+    formatTableRowLine(header, colWidths, normAlignments),
+    formatTableRowLine([], colWidths, normAlignments, true)
   ]
   for (const row of bodyRows) {
-    lines.push(formatTableRowLine(row, columnCount))
+    lines.push(formatTableRowLine(row, colWidths, normAlignments))
   }
   return lines
 }
@@ -418,6 +482,21 @@ export function createTableTemplate(
   return { markdown, cursorOffsetInSnippet }
 }
 
+function computeBoundaryNewlines(
+  slice: string,
+  edge: 'before' | 'after',
+  lineEnding: string
+): string {
+  if (slice.length === 0) return ''
+  const doubleBreak = `${lineEnding}${lineEnding}`
+  if (edge === 'before') {
+    if (slice.endsWith(doubleBreak) || slice.endsWith('\n\n')) return ''
+    return slice.endsWith('\n') || slice.endsWith('\r') ? lineEnding : doubleBreak
+  }
+  if (slice.startsWith(doubleBreak) || slice.startsWith('\n\n')) return ''
+  return slice.startsWith('\n') || slice.startsWith('\r') ? lineEnding : doubleBreak
+}
+
 /**
  * Inserts a formatted GFM table at the given cursor offset with surrounding blank line separation.
  */
@@ -433,24 +512,8 @@ export function insertMarkdownTable(
 
   const before = markdown.slice(0, clamped)
   const after = markdown.slice(clamped)
-
-  const leadingBreak =
-    before.length === 0
-      ? ''
-      : before.endsWith(`${lineEnding}${lineEnding}`) || before.endsWith('\n\n')
-        ? ''
-        : before.endsWith('\n') || before.endsWith('\r')
-          ? lineEnding
-          : `${lineEnding}${lineEnding}`
-
-  const trailingBreak =
-    after.length === 0
-      ? ''
-      : after.startsWith(`${lineEnding}${lineEnding}`) || after.startsWith('\n\n')
-        ? ''
-        : after.startsWith('\n') || after.startsWith('\r')
-          ? lineEnding
-          : `${lineEnding}${lineEnding}`
+  const leadingBreak = computeBoundaryNewlines(before, 'before', lineEnding)
+  const trailingBreak = computeBoundaryNewlines(after, 'after', lineEnding)
 
   const content = `${before}${leadingBreak}${snippet}${trailingBreak}${after}`
   const cursorOffset = before.length + leadingBreak.length + cursorOffsetInSnippet

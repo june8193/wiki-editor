@@ -8,6 +8,28 @@ import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
 import { unified } from 'unified'
 
+const ALLOWED_URI_SCHEMES = new Set(['http', 'https', 'mailto'])
+
+/**
+ * Validates URLs against safe Markdown schemes (`http`, `https`, `mailto`, or relative paths).
+ */
+export function isSafeMarkdownUrl(url: string): boolean {
+  const normalized = url.replace(/[\u0000-\u0020]+/g, '')
+  if (!normalized) {
+    return false
+  }
+  const colonIdx = normalized.indexOf(':')
+  if (colonIdx === -1) {
+    return true
+  }
+  const firstSep = normalized.search(/[/?#]/)
+  if (firstSep !== -1 && colonIdx > firstSep) {
+    return true
+  }
+  const scheme = normalized.slice(0, colonIdx).toLowerCase()
+  return ALLOWED_URI_SCHEMES.has(scheme)
+}
+
 export const PREVIEW_SANITIZE_SCHEMA: SanitizeSchema = {
   ...defaultSchema,
   strip: [...(defaultSchema.strip ?? ['script']), 'style', 'iframe', 'object', 'embed'],

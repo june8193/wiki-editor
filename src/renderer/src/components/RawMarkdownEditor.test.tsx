@@ -147,7 +147,14 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     await user.click(within(toolbar).getByRole('button', { name: '행 아래 추가' }))
     expect(onChangeContent).toHaveBeenCalledTimes(1)
     expect(currentDoc).toBe(
-      ['# Notes', '', '| Name | Role |', '| :--- | ---: |', '| Alice | Admin |', '|  |  |'].join('\n')
+      [
+        '# Notes',
+        '',
+        '| Name  |  Role |',
+        '| :---- | ----: |',
+        '| Alice | Admin |',
+        '|       |       |'
+      ].join('\n')
     )
 
     // Re-render with updated doc & cursor inside table
@@ -169,10 +176,10 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
       [
         '# Notes',
         '',
-        '| Name | Role | 열 |',
-        '| :--- | ---: | --- |',
-        '| Alice | Admin |  |',
-        '|  |  |  |'
+        '| Name  |  Role | 열  |',
+        '| :---- | ----: | --- |',
+        '| Alice | Admin |     |',
+        '|       |       |     |'
       ].join('\n')
     )
 
@@ -191,7 +198,14 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
 
     await user.click(within(toolbar).getByRole('button', { name: '현재 열 삭제' }))
     expect(currentDoc).toBe(
-      ['# Notes', '', '| Name | 열 |', '| :--- | --- |', '| Alice |  |', '|  |  |'].join('\n')
+      [
+        '# Notes',
+        '',
+        '| Name  | 열  |',
+        '| :---- | --- |',
+        '| Alice |     |',
+        '|       |     |'
+      ].join('\n')
     )
   })
 })

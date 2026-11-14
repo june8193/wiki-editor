@@ -1,35 +1,28 @@
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { useMemo, useRef } from 'react'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
+import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
 
 interface MarkdownPreviewProps {
   content: string
   scrollTop: number
   onScrollTopChange?: (scrollTop: number) => void
-  testId?: string
 }
 
 export function MarkdownPreview({
   content,
   scrollTop,
-  onScrollTopChange,
-  testId = 'document-editor'
+  onScrollTopChange
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const rendered = useMemo(() => renderMarkdownToReact(content), [content])
 
-  useLayoutEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    if (Math.abs(el.scrollTop - scrollTop) > 1) {
-      el.scrollTop = scrollTop
-    }
-  }, [scrollTop])
+  useSyncScrollTop(containerRef, scrollTop)
 
   return (
     <div
       ref={containerRef}
       className="markdown-preview"
-      data-testid={testId}
+      data-testid="document-editor"
       aria-label="마크다운 미리보기"
       tabIndex={0}
       onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
