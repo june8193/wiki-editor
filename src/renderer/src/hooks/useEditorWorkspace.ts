@@ -21,6 +21,7 @@ interface UseEditorWorkspaceOptions {
   autoSaveDelayMs: number
   isAutoSavePaused: boolean
   onSaveConfigRaw: (rawContent: string) => Promise<unknown>
+  onWorkspaceSaved?: () => void
   onError: (message: string | null) => void
   onConfirmCloseDirtyTab: (request: DirtyTabCloseRequest) => void
 }
@@ -33,6 +34,7 @@ export function useEditorWorkspace({
   autoSaveDelayMs,
   isAutoSavePaused,
   onSaveConfigRaw,
+  onWorkspaceSaved,
   onError,
   onConfirmCloseDirtyTab
 }: UseEditorWorkspaceOptions) {
@@ -56,10 +58,20 @@ export function useEditorWorkspace({
   const inFlightSavesRef = useRef<Map<string, InFlightSaveEntry>>(new Map())
   const autoSaveTimersRef = useRef<Map<string, { version: number; timerId: number }>>(new Map())
   const lastAutoSaveAttemptVersionRef = useRef<Map<string, number>>(new Map())
-  const callbacksRef = useRef({ onSaveConfigRaw, onError, onConfirmCloseDirtyTab })
+  const callbacksRef = useRef({
+    onSaveConfigRaw,
+    onWorkspaceSaved,
+    onError,
+    onConfirmCloseDirtyTab
+  })
 
   isAutoSavePausedRef.current = isAutoSavePaused
-  callbacksRef.current = { onSaveConfigRaw, onError, onConfirmCloseDirtyTab }
+  callbacksRef.current = {
+    onSaveConfigRaw,
+    onWorkspaceSaved,
+    onError,
+    onConfirmCloseDirtyTab
+  }
 
   useEffect(() => {
     mountedRef.current = true
@@ -96,6 +108,9 @@ export function useEditorWorkspace({
           }
           if (!mountedRef.current) return false
           bufferStore.markSaved(entry.currentKey, snapshot.content)
+          if (snapshot.kind === 'workspace') {
+            callbacksRef.current.onWorkspaceSaved?.()
+          }
           return true
         } catch (error: unknown) {
           if (mountedRef.current) {
@@ -449,6 +464,68 @@ export function useEditorWorkspace({
     [bufferStore, cleanupBufferTracking, tabStore]
   )
 
+  const reconcileWorkspaceBuffersWithDisk = useCallback(async (): Promise<readonly string[]> => {
+    const openWorkspaceBuffers = bufferStore
+      .getAllBuffers()
+      .filter((buffer) => buffer.kind === 'workspace')
+    if (openWorkspaceBuffers.length === 0) return []
+
+    const conflictNames: string[] = []
+    const missingDirtyNames: string[] = []
+
+    await Promise.all(
+      openWorkspaceBuffers.map(async (buffer) => {
+        const latest = bufferStore.getBuffer(buffer.key)
+        if (!latest || latest.kind !== 'workspace') return
+        if (latest.isSaving || inFlightSavesRef.current.has(latest.key)) return
+
+        try {
+          const diskContent = await window.wikiApi.workspace.readFile(latest.path)
+          if (!mountedRef.current) return
+          const current = bufferStore.getBuffer(latest.key)
+          if (!current || current.kind !== 'workspace') return
+          if (current.isSaving || inFlightSavesRef.current.has(current.key)) return
+
+          if (!current.isDirty) {
+            clearAutoSaveTimer(current.key)
+            bufferStore.refreshCleanContent(current.key, diskContent)
+          } else if (diskContent !== current.savedContent) {
+            conflictNames.push(current.name)
+          }
+        } catch (error: unknown) {
+          if (!mountedRef.current) return
+          const current = bufferStore.getBuffer(latest.key)
+          if (!current || current.kind !== 'workspace') return
+          const message = toErrorMessage(error, '')
+          const isMissing =
+            message.includes('경로를 찾을 수 없습니다') ||
+            message.includes('파일을 찾을 수 없습니다') ||
+            message.includes('ENOENT')
+          if (!isMissing) return
+
+          if (!current.isDirty) {
+            syncDeletedPath(current.path)
+          } else {
+            missingDirtyNames.push(current.name)
+          }
+        }
+      })
+    )
+
+    const warnings: string[] = []
+    if (conflictNames.length > 0) {
+      warnings.push(
+        `외부 변경과 미저장 편집 내용이 충돌할 수 있습니다 (${conflictNames.join(', ')}).`
+      )
+    }
+    if (missingDirtyNames.length > 0) {
+      warnings.push(
+        `외부 변경으로 삭제되었으나 미저장 편집 내용이 남아 있습니다 (${missingDirtyNames.join(', ')}).`
+      )
+    }
+    return warnings
+  }, [bufferStore, clearAutoSaveTimer, syncDeletedPath])
+
   return {
     buffers,
     layout,
@@ -473,6 +550,7 @@ export function useEditorWorkspace({
     updateTabViewState: tabStore.updateTabViewState,
     clearWorkspaceBuffers,
     syncRenamedPath,
-    syncDeletedPath
+    syncDeletedPath,
+    reconcileWorkspaceBuffersWithDisk
   }
 }

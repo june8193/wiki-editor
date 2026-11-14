@@ -1,7 +1,9 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { ConfigService } from './config/ConfigService'
+import { GitService } from './git/GitService'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
+import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
 import { createMainWindowOptions } from './window'
@@ -25,6 +27,7 @@ function createMainWindow(): BrowserWindow {
 
 let disposeConfigIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
+let disposeGitIpc: (() => void) | undefined
 let workspaceService: WorkspaceFsService | undefined
 
 void app.whenReady().then(async () => {
@@ -35,10 +38,16 @@ void app.whenReady().then(async () => {
   workspaceService = new WorkspaceFsService({
     trashItem: (targetPath) => shell.trashItem(targetPath)
   })
+  const gitService = new GitService()
 
   const getTargets = () => BrowserWindow.getAllWindows().map((win) => win.webContents)
 
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets)
+  disposeGitIpc = registerGitIpc({
+    ipcMain,
+    gitService,
+    workspaceService
+  })
   disposeWorkspaceIpc = registerWorkspaceIpc({
     ipcMain,
     workspaceService,
@@ -62,6 +71,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  disposeGitIpc?.()
+  disposeGitIpc = undefined
   disposeWorkspaceIpc?.()
   disposeWorkspaceIpc = undefined
   disposeConfigIpc?.()

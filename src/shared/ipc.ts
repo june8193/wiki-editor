@@ -1,4 +1,5 @@
 import type { AppConfig } from './config'
+import type { GitBranchList, GitStatus, GitSyncResult } from './git'
 import type {
   WorkspaceChangeEvent,
   WorkspaceEntry,
@@ -31,6 +32,21 @@ export const WORKSPACE_IPC_CHANNELS = {
   changed: 'workspace:changed'
 } as const
 
+export const GIT_IPC_CHANNELS = {
+  status: 'git:status',
+  init: 'git:init',
+  stage: 'git:stage',
+  stageAll: 'git:stage-all',
+  unstage: 'git:unstage',
+  unstageAll: 'git:unstage-all',
+  commit: 'git:commit',
+  branches: 'git:branches',
+  checkout: 'git:checkout',
+  pull: 'git:pull',
+  push: 'git:push',
+  sync: 'git:sync'
+} as const
+
 export interface WikiConfigApi {
   get(): Promise<AppConfig>
   update(patch: Partial<AppConfig>): Promise<AppConfig>
@@ -61,7 +77,23 @@ export interface WikiWorkspaceApi {
   onChanged(listener: (event: WorkspaceChangeEvent) => void): () => void
 }
 
+export interface WikiGitApi {
+  status(workspacePath: string): Promise<GitStatus>
+  init(workspacePath: string): Promise<GitStatus>
+  stage(workspacePath: string, paths: string[]): Promise<GitStatus>
+  stageAll(workspacePath: string): Promise<GitStatus>
+  unstage(workspacePath: string, paths: string[]): Promise<GitStatus>
+  unstageAll(workspacePath: string): Promise<GitStatus>
+  commit(workspacePath: string, message: string): Promise<GitStatus>
+  branches(workspacePath: string): Promise<GitBranchList>
+  checkout(workspacePath: string, branchName: string): Promise<GitStatus>
+  pull(workspacePath: string): Promise<GitStatus>
+  push(workspacePath: string): Promise<GitStatus>
+  sync(workspacePath: string): Promise<GitSyncResult>
+}
+
 export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
+  git: WikiGitApi
 }

@@ -8,7 +8,8 @@ import {
   DEFAULT_APP_CONFIG,
   validateConfigRaw
 } from '@shared/config'
-import type { WikiApi } from '@shared/ipc'
+import { createEmptyGitStatus } from '@shared/git'
+import type { WikiApi, WikiGitApi } from '@shared/ipc'
 import {
   addFavoriteWorkspace,
   getWorkspaceDisplayName,
@@ -56,6 +57,7 @@ vi.mock('mermaid', () => ({
 interface VirtualFsOptions {
   workspaces?: Record<string, Record<string, string | null>>
   selectedFolder?: string | null
+  git?: Partial<WikiGitApi>
 }
 
 function normalizePosix(pathValue: string): string {
@@ -377,6 +379,30 @@ function createInMemoryWikiApi(
           workspaceListeners.delete(listener)
         }
       }
+    },
+    git: {
+      status: async (workspacePath) => createEmptyGitStatus(false, workspacePath),
+      init: async (workspacePath) => ({
+        ...createEmptyGitStatus(true, workspacePath),
+        branch: 'main',
+        isUnborn: true
+      }),
+      stage: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+      stageAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+      unstage: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+      unstageAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+      commit: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+      branches: async () => ({ current: null, isDetached: false, branches: [] }),
+      checkout: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+      pull: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+      push: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+      sync: async (workspacePath) => ({
+        status: createEmptyGitStatus(true, workspacePath),
+        pulled: true,
+        pushed: true,
+        summary: '동기화 완료'
+      }),
+      ...fsOptions.git
     }
   }
 
@@ -2580,5 +2606,232 @@ describe('Custom slash commands, Settings UI management, and direct config.json 
     await user.click(within(listbox).getByRole('option', { name: /\/api/ }))
 
     expect(getRawEditorText(mdEditor)).toContain('#### API (guide): ')
+  })
+})
+
+describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('supports git init on non-git workspace, staging/committing, pull refreshing clean buffer & tree, dirty confirm, and conflict warning', async () => {
+    const user = userEvent.setup()
+    let isRepo = false
+    let currentBranch = 'main'
+    let staged: Array<{ path: string; status: 'A' | 'M' }> = []
+    let unstaged: Array<{ path: string; status: 'M' }> = [{ path: 'guide.md', status: 'M' }]
+    let currentStatus = () => ({
+      ...createEmptyGitStatus(isRepo, 'C:/wiki'),
+      branch: isRepo ? currentBranch : null,
+      hasUpstream: isRepo,
+      ahead: isRepo ? 1 : 0,
+      behind: isRepo ? 1 : 0,
+      staged: isRepo ? staged : [],
+      unstaged: isRepo ? unstaged : [],
+      untracked: []
+    })
+
+    let pullFailure: Error | null = null
+    let pullMutation: (() => Promise<void>) | null = null
+    let checkoutMutation: (() => Promise<void>) | null = null
+
+    const gitMocks: Partial<WikiGitApi> = {
+      status: vi.fn(async () => currentStatus()),
+      init: vi.fn(async () => {
+        isRepo = true
+        return currentStatus()
+      }),
+      branches: vi.fn(async () => ({
+        current: currentBranch,
+        isDetached: false,
+        branches: [
+          { name: 'main', current: currentBranch === 'main', upstream: null },
+          { name: 'docs-v2', current: currentBranch === 'docs-v2', upstream: null }
+        ]
+      })),
+      stage: vi.fn(async (_ws, paths) => {
+        for (const p of paths) {
+          unstaged = unstaged.filter((item) => item.path !== p)
+          staged = [...staged, { path: p, status: 'M' }]
+        }
+        return currentStatus()
+      }),
+      commit: vi.fn(async () => {
+        staged = []
+        return currentStatus()
+      }),
+      pull: vi.fn(async () => {
+        if (pullFailure) throw pullFailure
+        if (pullMutation) await pullMutation()
+        unstaged = []
+        return currentStatus()
+      }),
+      checkout: vi.fn(async (_ws, branchName) => {
+        currentBranch = branchName
+        if (checkoutMutation) await checkoutMutation()
+        return currentStatus()
+      })
+    }
+
+    const { api } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki',
+        workspaces: {
+          'C:/wiki': {
+            'guide.md': '# Initial Guide'
+          }
+        },
+        git: gitMocks
+      }
+    )
+
+    // Wire pull/checkout mutations directly onto the virtual workspace files
+    pullMutation = async () => {
+      await api.workspace.writeFile('C:/wiki/guide.md', '# Pulled From Remote')
+      await api.workspace.createEntry('C:/wiki', 'pulled.md', 'file', '# Pulled File')
+    }
+    checkoutMutation = async () => {
+      await api.workspace.writeFile('C:/wiki/guide.md', '# Docs V2 Branch')
+    }
+
+    window.wikiApi = api
+    render(<App />)
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(within(gitRegion).getByText(/워크스페이스를 먼저 열어주세요/)).toBeInTheDocument()
+
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+
+    await user.click(await screen.findByRole('button', { name: '폴더 열기' }))
+    await within(explorer).findByText('guide.md')
+    expect(within(gitRegion).getByRole('button', { name: /Git 저장소 초기화/i })).toBeInTheDocument()
+    await user.click(within(gitRegion).getByRole('button', { name: /Git 저장소 초기화/i }))
+
+    expect(await within(gitRegion).findByLabelText('현재 브랜치 main')).toBeInTheDocument()
+    await user.click(within(gitRegion).getByRole('button', { name: 'guide.md Stage' }))
+    await user.type(within(gitRegion).getByLabelText('커밋 메시지'), 'feat: stage guide')
+    await user.click(within(gitRegion).getByRole('button', { name: 'Commit' }))
+    expect(gitMocks.commit).toHaveBeenCalledWith('C:/wiki', 'feat: stage guide')
+
+    // Open guide.md cleanly in editor, then trigger Pull -> clean buffer & tree refresh automatically
+    await user.click(within(explorer).getByText('guide.md'))
+    const editorEl = await screen.findByTestId('document-editor')
+    expect(getRawEditorText(editorEl)).toBe('# Initial Guide')
+
+    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+
+    await waitFor(() => {
+      expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Pulled From Remote')
+    })
+    expect(await within(explorer).findByText('pulled.md')).toBeInTheDocument()
+
+    // Edit guide.md without saving -> Checkout prompts confirmation
+    appendRawEditorText(screen.getByTestId('document-editor'), '\nUnsaved draft line')
+    await user.selectOptions(within(gitRegion).getByLabelText('브랜치 선택'), 'docs-v2')
+    await user.click(within(gitRegion).getByRole('button', { name: '브랜치 전환' }))
+
+    const confirmDialog = await screen.findByRole('alertdialog')
+    expect(within(confirmDialog).getByText(/guide.md/)).toBeInTheDocument()
+
+    // Canceling aborts checkout cleanly
+    await user.click(within(confirmDialog).getByRole('button', { name: '취소' }))
+    expect(gitMocks.checkout).not.toHaveBeenCalled()
+
+    // Trigger checkout again and proceed without saving -> dirty edit is preserved & conflict warning appears
+    await user.click(within(gitRegion).getByRole('button', { name: '브랜치 전환' }))
+    const secondDialog = await screen.findByRole('alertdialog')
+    await user.click(within(secondDialog).getByRole('button', { name: '저장 없이 진행' }))
+
+    await waitFor(() => {
+      expect(gitMocks.checkout).toHaveBeenCalledWith('C:/wiki', 'docs-v2')
+    })
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toContain('Unsaved draft line')
+    expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(/충돌할 수 있습니다 \(guide\.md\)/)
+
+    // Dismiss Git error and trigger real Git error -> displayed safely inside Git panel
+    await user.click(within(gitRegion).getByRole('button', { name: 'Git 오류 닫기' }))
+    expect(within(gitRegion).queryByRole('alert')).not.toBeInTheDocument()
+
+    // Save dirty edits via saving dialog path, then test Git pull failure
+    pullFailure = new Error('원격 저장소 인증에 실패했습니다.')
+    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    const saveDialog = await screen.findByRole('alertdialog')
+    await user.click(within(saveDialog).getByRole('button', { name: '저장 후 진행' }))
+
+    expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(
+      '원격 저장소 인증에 실패했습니다.'
+    )
+  })
+
+  it('closes deleted clean tabs and preserves deleted dirty tabs with warning after Sync', async () => {
+    const user = userEvent.setup()
+    const cleanStatus = {
+      ...createEmptyGitStatus(true, 'C:/wiki'),
+      branch: 'main',
+      hasUpstream: true
+    }
+
+    let syncMutation: (() => Promise<void>) | null = null
+    const gitMocks: Partial<WikiGitApi> = {
+      status: vi.fn(async () => cleanStatus),
+      branches: vi.fn(async () => ({
+        current: 'main',
+        isDetached: false,
+        branches: [{ name: 'main', current: true, upstream: 'origin/main' }]
+      })),
+      sync: vi.fn(async () => {
+        if (syncMutation) await syncMutation()
+        return { status: cleanStatus, pulled: true, pushed: true, summary: '동기화 완료' }
+      })
+    }
+
+    const { api } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki',
+        workspaces: {
+          'C:/wiki': {
+            'obsolete.md': '# Obsolete',
+            'keep-dirty.md': '# Local Original'
+          }
+        },
+        git: gitMocks
+      }
+    )
+
+    syncMutation = async () => {
+      await api.workspace.deleteEntry('C:/wiki/obsolete.md')
+      await api.workspace.deleteEntry('C:/wiki/keep-dirty.md')
+    }
+
+    window.wikiApi = api
+    render(<App />)
+
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(await screen.findByRole('button', { name: '폴더 열기' }))
+
+    // Open both files: leave obsolete.md clean and make keep-dirty.md dirty
+    await user.click(await within(explorer).findByText('obsolete.md'))
+    expect(await screen.findByRole('tab', { name: 'obsolete.md' })).toBeInTheDocument()
+
+    await user.click(within(explorer).getByText('keep-dirty.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), '\nImportant local edit')
+
+    // Click Sync -> proceed without saving -> obsolete.md clean tab closes, dirty keep-dirty.md stays open with warning
+    await user.click(within(gitRegion).getByRole('button', { name: 'Sync' }))
+    const dialog = await screen.findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: '저장 없이 진행' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('tab', { name: 'obsolete.md' })).not.toBeInTheDocument()
+    })
+    expect(screen.getByRole('tab', { name: /keep-dirty\.md/ })).toBeInTheDocument()
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toContain('Important local edit')
+    expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(
+      /삭제되었으나 미저장 편집 내용이 남아 있습니다 \(keep-dirty\.md\)/
+    )
   })
 })

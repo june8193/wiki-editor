@@ -348,6 +348,10 @@ export class WorkspaceFsService {
     this.workspaceRoot = null
   }
 
+  getWorkspaceRoot(): string | null {
+    return this.workspaceRoot
+  }
+
   private requireWorkspaceRoot(): string {
     if (!this.workspaceRoot) {
       throw new Error('열린 워크스페이스가 없습니다.')

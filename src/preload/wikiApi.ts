@@ -1,5 +1,6 @@
 import type { AppConfig } from '@shared/config'
-import { CONFIG_IPC_CHANNELS, WikiApi, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import type { GitBranchList, GitStatus, GitSyncResult } from '@shared/git'
+import { CONFIG_IPC_CHANNELS, GIT_IPC_CHANNELS, WikiApi, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import type {
   WorkspaceChangeEvent,
   WorkspaceEntry,
@@ -86,6 +87,36 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): WikiApi {
           WORKSPACE_IPC_CHANNELS.changed,
           listener
         )
+    },
+    git: {
+      status: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.status, workspacePath) as Promise<GitStatus>,
+      init: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.init, workspacePath) as Promise<GitStatus>,
+      stage: (workspacePath, paths) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.stage, workspacePath, paths) as Promise<GitStatus>,
+      stageAll: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.stageAll, workspacePath) as Promise<GitStatus>,
+      unstage: (workspacePath, paths) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.unstage, workspacePath, paths) as Promise<GitStatus>,
+      unstageAll: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.unstageAll, workspacePath) as Promise<GitStatus>,
+      commit: (workspacePath, message) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.commit, workspacePath, message) as Promise<GitStatus>,
+      branches: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.branches, workspacePath) as Promise<GitBranchList>,
+      checkout: (workspacePath, branchName) =>
+        ipcRenderer.invoke(
+          GIT_IPC_CHANNELS.checkout,
+          workspacePath,
+          branchName
+        ) as Promise<GitStatus>,
+      pull: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.pull, workspacePath) as Promise<GitStatus>,
+      push: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.push, workspacePath) as Promise<GitStatus>,
+      sync: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.sync, workspacePath) as Promise<GitSyncResult>
     }
   }
 }

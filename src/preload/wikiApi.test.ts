@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_APP_CONFIG } from '@shared/config'
-import { CONFIG_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import { CONFIG_IPC_CHANNELS, GIT_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import { createWikiApi, IpcRendererLike } from './wikiApi'
 
 function createFakeIpcRenderer(): IpcRendererLike & {
@@ -131,6 +131,39 @@ describe('createWikiApi', () => {
       WORKSPACE_IPC_CHANNELS.deleteEntry,
       WORKSPACE_IPC_CHANNELS.watch,
       WORKSPACE_IPC_CHANNELS.unwatch
+    ])
+  })
+
+  it('routes all git:* methods through expected IPC channels with exact arguments', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+
+    await api.git.status('C:\\wiki')
+    await api.git.init('C:\\wiki')
+    await api.git.stage('C:\\wiki', ['a.md'])
+    await api.git.stageAll('C:\\wiki')
+    await api.git.unstage('C:\\wiki', ['a.md'])
+    await api.git.unstageAll('C:\\wiki')
+    await api.git.commit('C:\\wiki', 'feat: add note')
+    await api.git.branches('C:\\wiki')
+    await api.git.checkout('C:\\wiki', 'main')
+    await api.git.pull('C:\\wiki')
+    await api.git.push('C:\\wiki')
+    await api.git.sync('C:\\wiki')
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: GIT_IPC_CHANNELS.status, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.init, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.stage, args: ['C:\\wiki', ['a.md']] },
+      { channel: GIT_IPC_CHANNELS.stageAll, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.unstage, args: ['C:\\wiki', ['a.md']] },
+      { channel: GIT_IPC_CHANNELS.unstageAll, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.commit, args: ['C:\\wiki', 'feat: add note'] },
+      { channel: GIT_IPC_CHANNELS.branches, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.checkout, args: ['C:\\wiki', 'main'] },
+      { channel: GIT_IPC_CHANNELS.pull, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.push, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.sync, args: ['C:\\wiki'] }
     ])
   })
 })

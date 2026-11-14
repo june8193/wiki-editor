@@ -4,6 +4,7 @@ import { ConfirmDialog } from './components/ConfirmDialog'
 import type { OutlineScrollRequest } from './components/DocumentEditor'
 import { DocumentOutlinePanel } from './components/DocumentOutlinePanel'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
+import { GitSidebarPanel } from './components/GitSidebarPanel'
 import { PaneInteractionActions } from './components/PaneTabBar'
 import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -20,6 +21,7 @@ import {
 } from './editor/MarkdownTocEngine'
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
+import { useGitController } from './hooks/useGitController'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { getPaneActiveTab, type PaneId, SplitMode, type TabViewPatch } from './stores/PaneTabStore'
 import { toErrorMessage } from './utils/toErrorMessage'
@@ -41,6 +43,7 @@ interface PendingDialogState {
   secondaryLabel?: string
   onConfirm: () => Promise<void> | void
   onSecondary?: () => Promise<void> | void
+  onCancel?: () => void
 }
 
 export function App() {
@@ -50,6 +53,9 @@ export function App() {
   const [outlineScrollRequest, setOutlineScrollRequest] = useState<OutlineScrollRequest | null>(null)
   const scrollNonceRef = useRef(0)
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
+  const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
+  const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(async () => [])
+  const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const tabCloseActionsRef = useRef<{
     saveAndCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => Promise<boolean>
     forceCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => void
@@ -113,17 +119,20 @@ export function App() {
     updateTabViewState,
     clearWorkspaceBuffers,
     syncRenamedPath,
-    syncDeletedPath
+    syncDeletedPath,
+    reconcileWorkspaceBuffersWithDisk
   } = useEditorWorkspace({
     autoSave: config.autoSave,
     autoSaveDelayMs: config.autoSaveDelayMs,
     isAutoSavePaused: pendingDialog !== null,
     onSaveConfigRaw: saveRawConfig,
+    onWorkspaceSaved: () => void refreshGitStatusRef.current(),
     onError: setErrorMessage,
     onConfirmCloseDirtyTab: handleConfirmCloseDirtyTab
   })
 
   refreshConfigDocRef.current = refreshCleanConfig
+  reconcileBuffersRef.current = reconcileWorkspaceBuffersWithDisk
   tabCloseActionsRef.current = { saveAndCloseTab, forceCloseTab }
 
   const {
@@ -141,10 +150,74 @@ export function App() {
   } = useWorkspaceTree({
     onError: setErrorMessage,
     onWorkspaceOpened: clearWorkspaceBuffers,
+    onWorkspaceChanged: () => {
+      void reconcileBuffersRef.current().then((warnings) => {
+        if (warnings.length > 0) {
+          setErrorMessage(warnings.join(' '))
+        }
+      })
+      void refreshGitStatusRef.current()
+    },
     onFileCreated: openCreatedFile,
     onEntryRenamed: syncRenamedPath,
     onEntryDeleted: syncDeletedPath
   })
+
+  useEffect(() => {
+    return () => {
+      pendingGitConfirmCancelRef.current?.()
+    }
+  }, [])
+
+  const confirmDirtyBuffersBeforeGitMutation = useCallback(
+    (actionLabel: string): Promise<boolean> => {
+      const dirtySummary = getDirtyWorkspaceSummary()
+      if (!dirtySummary) {
+        return Promise.resolve(true)
+      }
+
+      return new Promise<boolean>((resolve) => {
+        let settled = false
+        const finish = (accepted: boolean): void => {
+          if (settled) return
+          settled = true
+          pendingGitConfirmCancelRef.current = null
+          resolve(accepted)
+        }
+        pendingGitConfirmCancelRef.current = () => finish(false)
+
+        setPendingDialog({
+          title: '저장하지 않은 변경 사항',
+          message: `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. ${actionLabel} 전에 어떻게 할까요?`,
+          confirmLabel: '저장 후 진행',
+          secondaryLabel: '저장 없이 진행',
+          onConfirm: async () => {
+            setPendingDialog(null)
+            const saved = await ensureAllWorkspaceBuffersSaved()
+            finish(saved)
+          },
+          onSecondary: () => {
+            setPendingDialog(null)
+            finish(true)
+          },
+          onCancel: () => finish(false)
+        })
+      })
+    },
+    [ensureAllWorkspaceBuffersSaved, getDirtyWorkspaceSummary]
+  )
+
+  const handleGitWorkspaceMutated = useCallback(async (): Promise<readonly string[]> => {
+    await refreshTree()
+    return await reconcileWorkspaceBuffersWithDisk()
+  }, [reconcileWorkspaceBuffersWithDisk, refreshTree])
+
+  const git = useGitController({
+    workspaceRootPath: workspace?.rootPath ?? null,
+    confirmBeforeWorkspaceMutation: confirmDirtyBuffersBeforeGitMutation,
+    onWorkspaceMutated: handleGitWorkspaceMutated
+  })
+  refreshGitStatusRef.current = git.refreshStatus
 
   const guardUnsavedWorkspaceChanges = useCallback(
     (proceed: () => Promise<void>): void => {
@@ -404,6 +477,26 @@ export function App() {
             onRequestDelete={handleRequestDelete}
           />
 
+          <GitSidebarPanel
+            workspaceRootPath={workspace?.rootPath ?? null}
+            status={git.status}
+            branchList={git.branchList}
+            pendingAction={git.pendingAction}
+            errorMessage={git.errorMessage}
+            onDismissError={git.dismissError}
+            onRefresh={() => void git.refreshStatus()}
+            onInitRepo={() => void git.initRepo()}
+            onStageFile={(path) => void git.stageFile(path)}
+            onStageAll={() => void git.stageAll()}
+            onUnstageFile={(path) => void git.unstageFile(path)}
+            onUnstageAll={() => void git.unstageAll()}
+            onCommit={git.commit}
+            onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
+            onPull={() => void git.pull()}
+            onPush={() => void git.push()}
+            onSync={() => void git.sync()}
+          />
+
           <DocumentOutlinePanel
             documentName={activeBuffer?.name ?? null}
             content={activeBuffer?.content ?? ''}
@@ -458,7 +551,10 @@ export function App() {
           onSecondary={
             pendingDialog.onSecondary ? () => void pendingDialog.onSecondary!() : undefined
           }
-          onCancel={() => setPendingDialog(null)}
+          onCancel={() => {
+            pendingDialog.onCancel?.()
+            setPendingDialog(null)
+          }}
         />
       )}
     </div>

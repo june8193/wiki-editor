@@ -21,6 +21,7 @@ export interface WorkspaceTreeState {
 interface UseWorkspaceTreeOptions {
   onError: (message: string | null) => void
   onWorkspaceOpened?: () => void
+  onWorkspaceChanged?: () => void
   onEntryRenamed?: (oldPath: string, renamed: WorkspaceEntry) => void
   onEntryDeleted?: (deletedPath: string) => void
   onFileCreated?: (created: WorkspaceEntry) => void
@@ -32,6 +33,7 @@ interface UseWorkspaceTreeOptions {
 export function useWorkspaceTree({
   onError,
   onWorkspaceOpened,
+  onWorkspaceChanged,
   onEntryRenamed,
   onEntryDeleted,
   onFileCreated
@@ -49,6 +51,7 @@ export function useWorkspaceTree({
   const callbacksRef = useRef({
     onError,
     onWorkspaceOpened,
+    onWorkspaceChanged,
     onEntryRenamed,
     onEntryDeleted,
     onFileCreated
@@ -59,6 +62,7 @@ export function useWorkspaceTree({
   callbacksRef.current = {
     onError,
     onWorkspaceOpened,
+    onWorkspaceChanged,
     onEntryRenamed,
     onEntryDeleted,
     onFileCreated
@@ -108,6 +112,7 @@ export function useWorkspaceTree({
     const unsubscribe = window.wikiApi.workspace.onChanged(() => {
       if (!mountedRef.current) return
       void refreshTree()
+      callbacksRef.current.onWorkspaceChanged?.()
     })
 
     return () => {
