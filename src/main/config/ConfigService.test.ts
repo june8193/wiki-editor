@@ -173,4 +173,64 @@ describe('ConfigService', () => {
     expect((await service.get()).theme).toBe('light')
     expect((await service.get()).autoSaveDelayMs).toBe(1000)
   })
+
+  it('saveRaw validates raw JSON against AppConfig schema, writes atomically, and leaves disk intact on error', async () => {
+    const service = new ConfigService(configPath)
+    await service.get()
+
+    const notifications: string[] = []
+    service.onChanged((cfg) => notifications.push(cfg.theme))
+
+    await expect(service.saveRaw('{ invalid json')).rejects.toThrow(/JSON/i)
+    await expect(service.saveRaw('{"theme": "neon"}')).rejects.toThrow(/theme/i)
+    await expect(service.saveRaw('{"unknown": 1}')).rejects.toThrow(/unknown config key/i)
+
+    expect(notifications).toEqual([])
+    expect((await service.get()).theme).toBe('light')
+
+    const validRaw = JSON.stringify({
+      version: 1,
+      theme: 'dark',
+      autoSave: true,
+      autoSaveDelayMs: 500,
+      showHeadingNumbers: false,
+      favoriteWorkspaces: [
+        { path: join(tempDir, 'docs'), name: 'docs', pinnedAt: '2026-11-14T00:00:00.000Z' }
+      ],
+      recentWorkspaces: [join(tempDir, 'docs')],
+      customCommands: []
+    })
+
+    const saved = await service.saveRaw(validRaw)
+    expect(saved.theme).toBe('dark')
+    expect(saved.autoSave).toBe(true)
+    expect(saved.autoSaveDelayMs).toBe(500)
+    expect(notifications).toEqual(['dark'])
+    expect((await new ConfigService(configPath).get()).theme).toBe('dark')
+  })
+
+  it('manages favoriteWorkspaces and recentWorkspaces atomically with deduplication', async () => {
+    const service = new ConfigService(configPath)
+    const wsA = join(tempDir, 'wiki-a')
+    const wsB = join(tempDir, 'wiki-b')
+
+    const afterAdd = await service.addFavoriteWorkspace(`${wsA}/`, 'Wiki A')
+    expect(afterAdd.favoriteWorkspaces).toHaveLength(1)
+    expect(afterAdd.favoriteWorkspaces[0]).toMatchObject({ path: wsA, name: 'Wiki A' })
+
+    // Duplicate add does not duplicate
+    const afterDup = await service.addFavoriteWorkspace(wsA)
+    expect(afterDup.favoriteWorkspaces).toHaveLength(1)
+
+    // Toggle adds wsB then removes wsA
+    const afterToggleB = await service.toggleFavoriteWorkspace(wsB)
+    expect(afterToggleB.favoriteWorkspaces).toHaveLength(2)
+    const afterRemoveA = await service.removeFavoriteWorkspace(`${wsA}/`)
+    expect(afterRemoveA.favoriteWorkspaces.map((item) => item.path)).toEqual([wsB])
+
+    await service.recordRecentWorkspace(wsA)
+    await service.recordRecentWorkspace(wsB)
+    const afterMru = await service.recordRecentWorkspace(`${wsA}/`)
+    expect(afterMru.recentWorkspaces).toEqual([wsA, wsB])
+  })
 })

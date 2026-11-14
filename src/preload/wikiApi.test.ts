@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_APP_CONFIG } from '@shared/config'
-import { CONFIG_IPC_CHANNELS } from '@shared/ipc'
+import { CONFIG_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import { createWikiApi, IpcRendererLike } from './wikiApi'
 
 function createFakeIpcRenderer(): IpcRendererLike & {
@@ -86,5 +86,53 @@ describe('createWikiApi', () => {
 
     ipc.emit(CONFIG_IPC_CHANNELS.changed, DEFAULT_APP_CONFIG)
     expect(received).toHaveLength(1)
+  })
+
+  it('routes config saveRaw/favorites and workspace:* methods through expected IPC channels', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+    const wsEvents: unknown[] = []
+
+    await api.config.saveRaw('{"version":1}')
+    await api.config.toggleFavoriteWorkspace('C:\\wiki', 'Wiki')
+    await api.config.removeFavoriteWorkspace('C:\\wiki')
+
+    await api.workspace.selectFolder()
+    await api.workspace.open('C:\\wiki')
+    await api.workspace.getRoot()
+    await api.workspace.readDir('C:\\wiki\\docs')
+    await api.workspace.readFile('C:\\wiki\\readme.md')
+    await api.workspace.writeFile('C:\\wiki\\readme.md', '# Hi')
+    await api.workspace.createEntry('C:\\wiki', 'note.md', 'file', '')
+    await api.workspace.renameEntry('C:\\wiki\\note.md', 'guide.md')
+    await api.workspace.deleteEntry('C:\\wiki\\guide.md')
+    await api.workspace.watch()
+    const unsubWs = api.workspace.onChanged((event) => wsEvents.push(event))
+    ipc.emit(WORKSPACE_IPC_CHANNELS.changed, {
+      rootPath: 'C:\\wiki',
+      eventType: 'change',
+      relativePath: 'guide.md'
+    })
+    expect(wsEvents).toHaveLength(1)
+    unsubWs()
+    expect(ipc.listenerCount(WORKSPACE_IPC_CHANNELS.changed)).toBe(0)
+    await api.workspace.unwatch()
+
+    expect(ipc.lastInvoked.map((item) => item.channel)).toEqual([
+      CONFIG_IPC_CHANNELS.saveRaw,
+      CONFIG_IPC_CHANNELS.toggleFavoriteWorkspace,
+      CONFIG_IPC_CHANNELS.removeFavoriteWorkspace,
+      WORKSPACE_IPC_CHANNELS.selectFolder,
+      WORKSPACE_IPC_CHANNELS.open,
+      WORKSPACE_IPC_CHANNELS.getRoot,
+      WORKSPACE_IPC_CHANNELS.readDir,
+      WORKSPACE_IPC_CHANNELS.readFile,
+      WORKSPACE_IPC_CHANNELS.writeFile,
+      WORKSPACE_IPC_CHANNELS.createEntry,
+      WORKSPACE_IPC_CHANNELS.renameEntry,
+      WORKSPACE_IPC_CHANNELS.deleteEntry,
+      WORKSPACE_IPC_CHANNELS.watch,
+      WORKSPACE_IPC_CHANNELS.unwatch
+    ])
   })
 })

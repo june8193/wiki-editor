@@ -1,67 +1,49 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ThemeMode } from '@shared/config'
-import { toErrorMessage } from '../utils/toErrorMessage'
 
 interface SettingsPanelProps {
   theme: ThemeMode
-  reloadSignal: number
+  autoSave: boolean
+  autoSaveDelayMs: number
   configPath: string
   onToggleTheme: () => void
-  onReadRawConfig: () => Promise<string>
-  onClearError: () => void
-  onError: (message: string) => void
+  onToggleAutoSave: () => void
+  onUpdateAutoSaveDelay: (delayMs: number) => void
+  onOpenConfigEditor: () => void
   onClose: () => void
 }
 
 export function SettingsPanel({
   theme,
-  reloadSignal,
+  autoSave,
+  autoSaveDelayMs,
   configPath,
   onToggleTheme,
-  onReadRawConfig,
-  onClearError,
-  onError,
+  onToggleAutoSave,
+  onUpdateAutoSaveDelay,
+  onOpenConfigEditor,
   onClose
 }: SettingsPanelProps) {
-  const [rawConfig, setRawConfig] = useState<string | null>(null)
-  const [isLoadingRaw, setIsLoadingRaw] = useState<boolean>(false)
-  const [isRawOpen, setIsRawOpen] = useState<boolean>(false)
-  const [manualRefreshCount, setManualRefreshCount] = useState<number>(0)
-  const readSeqRef = useRef<number>(0)
-
-  const nextThemeLabel = theme === 'light' ? '다크 모드로 전환' : '라이트 모드로 전환'
+  const [delayDraft, setDelayDraft] = useState<string>(String(autoSaveDelayMs))
 
   useEffect(() => {
-    if (!isRawOpen) return
+    setDelayDraft(String(autoSaveDelayMs))
+  }, [autoSaveDelayMs])
 
-    let active = true
-    const seq = ++readSeqRef.current
-    setIsLoadingRaw(true)
-
-    void onReadRawConfig()
-      .then((raw) => {
-        if (!active || seq !== readSeqRef.current) return
-        setRawConfig(raw)
-      })
-      .catch((error: unknown) => {
-        if (!active || seq !== readSeqRef.current) return
-        onError(toErrorMessage(error, '설정 파일을 읽지 못했습니다.'))
-      })
-      .finally(() => {
-        if (!active || seq !== readSeqRef.current) return
-        setIsLoadingRaw(false)
-      })
-
-    return () => {
-      active = false
+  const commitDelayDraft = (): void => {
+    const parsed = Number(delayDraft)
+    if (Number.isFinite(parsed) && parsed >= 100) {
+      const rounded = Math.round(parsed)
+      setDelayDraft(String(rounded))
+      if (rounded !== autoSaveDelayMs) {
+        onUpdateAutoSaveDelay(rounded)
+      }
+    } else {
+      setDelayDraft(String(autoSaveDelayMs))
     }
-  }, [reloadSignal, isRawOpen, manualRefreshCount, onError, onReadRawConfig])
-
-  const handleOpenRawConfig = (): void => {
-    onClearError()
-    setIsRawOpen(true)
-    setManualRefreshCount((count) => count + 1)
   }
+
+  const nextThemeLabel = theme === 'light' ? '다크 모드로 전환' : '라이트 모드로 전환'
 
   return (
     <aside className="settings-panel" aria-label="전역 설정 패널">
@@ -81,24 +63,43 @@ export function SettingsPanel({
       </section>
 
       <section className="settings-section">
+        <h3 className="settings-section-title">문서 저장</h3>
+        <label className="settings-toggle-row">
+          <input
+            type="checkbox"
+            checked={autoSave}
+            onChange={onToggleAutoSave}
+          />
+          <span>자동 저장 (Auto-save)</span>
+        </label>
+        <label className="settings-delay-row">
+          <span className="settings-description">자동 저장 지연 시간 (ms)</span>
+          <input
+            type="number"
+            min={100}
+            step={100}
+            className="settings-number-input"
+            aria-label="자동 저장 지연 시간"
+            value={delayDraft}
+            onChange={(event) => setDelayDraft(event.target.value)}
+            onBlur={commitDelayDraft}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                commitDelayDraft()
+              }
+            }}
+          />
+        </label>
+      </section>
+
+      <section className="settings-section">
         <h3 className="settings-section-title">전역 설정 파일 (config.json)</h3>
         <code className="config-path-box" data-testid="config-path">
           {configPath || '경로를 불러오는 중...'}
         </code>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={handleOpenRawConfig}
-          disabled={isLoadingRaw}
-        >
-          {isLoadingRaw ? '불러오는 중...' : '설정 파일 직접 열기'}
+        <button type="button" className="btn btn-primary" onClick={onOpenConfigEditor}>
+          설정 파일 직접 열기
         </button>
-
-        {rawConfig !== null && (
-          <pre className="config-raw-preview" data-testid="config-raw-preview">
-            {rawConfig}
-          </pre>
-        )}
       </section>
     </aside>
   )

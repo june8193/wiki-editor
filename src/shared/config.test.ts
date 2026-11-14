@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_APP_CONFIG, normalizeAppConfig, validateConfigPatch } from './config'
+import {
+  DEFAULT_APP_CONFIG,
+  normalizeAppConfig,
+  validateConfigPatch,
+  validateConfigRaw
+} from './config'
 
 describe('shared config validation and normalization', () => {
   it('validates valid partial config updates including favorites and customCommands', () => {
@@ -63,5 +68,28 @@ describe('shared config validation and normalization', () => {
     expect(normalized.customCommands).toEqual([
       { trigger: 'struct', label: 'Struct', template: '```c\n{{cursor}}\n```' }
     ])
+  })
+
+  it('validates raw config.json text strictly and rejects malformed JSON, unknown keys, and invalid field types', () => {
+    const parsed = validateConfigRaw(
+      JSON.stringify({
+        version: 1,
+        theme: 'dark',
+        autoSave: true,
+        autoSaveDelayMs: 1500
+      })
+    )
+    expect(parsed).toEqual({
+      ...DEFAULT_APP_CONFIG,
+      theme: 'dark',
+      autoSave: true,
+      autoSaveDelayMs: 1500
+    })
+
+    expect(() => validateConfigRaw('{ broken')).toThrow(/JSON/i)
+    expect(() => validateConfigRaw('[]')).toThrow(/plain object/i)
+    expect(() => validateConfigRaw('{"unknownKey": true}')).toThrow(/unknown config key/i)
+    expect(() => validateConfigRaw('{"theme": "blue"}')).toThrow(/theme/i)
+    expect(() => validateConfigRaw('{"autoSave": "yes"}')).toThrow(/autoSave/i)
   })
 })

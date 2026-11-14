@@ -51,7 +51,9 @@ function isFavoriteWorkspace(value: unknown): value is FavoriteWorkspace {
   return (
     isPlainRecord(value) &&
     typeof value.path === 'string' &&
+    value.path.trim().length > 0 &&
     typeof value.name === 'string' &&
+    value.name.trim().length > 0 &&
     typeof value.pinnedAt === 'string'
   )
 }
@@ -175,4 +177,32 @@ export function validateConfigPatch(raw: unknown): Partial<AppConfig> {
     }
   }
   return patch
+}
+
+const CONFIG_KEY_SET = new Set<string>(CONFIG_KEYS)
+
+/**
+ * Parses and strictly validates raw config.json text against the AppConfig schema.
+ */
+export function validateConfigRaw(rawText: string): AppConfig {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawText)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`Invalid JSON syntax in config.json: ${reason}`)
+  }
+
+  if (!isPlainRecord(parsed)) {
+    throw new Error('Config document must be a plain object')
+  }
+
+  for (const key of Object.keys(parsed)) {
+    if (!CONFIG_KEY_SET.has(key)) {
+      throw new Error(`Unknown config key: "${key}"`)
+    }
+  }
+
+  const validatedPatch = validateConfigPatch(parsed)
+  return normalizeAppConfig(validatedPatch, DEFAULT_APP_CONFIG)
 }

@@ -85,4 +85,35 @@ describe('registerConfigIpc', () => {
     await configService.update({ theme: 'light' })
     expect(liveMessages).toHaveLength(1)
   })
+
+  it('handles saveRaw, toggleFavoriteWorkspace, and removeFavoriteWorkspace IPC calls', async () => {
+    const configService = new ConfigService(configPath)
+    const ipcMain = createFakeIpcMain()
+    const dispose = registerConfigIpc(ipcMain, configService, () => [])
+
+    const toggled = await ipcMain.invoke(
+      CONFIG_IPC_CHANNELS.toggleFavoriteWorkspace,
+      join(tempDir, 'wiki'),
+      'My Wiki'
+    )
+    expect(toggled).toMatchObject({
+      favoriteWorkspaces: [{ path: join(tempDir, 'wiki'), name: 'My Wiki' }]
+    })
+
+    const removed = await ipcMain.invoke(
+      CONFIG_IPC_CHANNELS.removeFavoriteWorkspace,
+      join(tempDir, 'wiki')
+    )
+    expect(removed).toMatchObject({ favoriteWorkspaces: [] })
+
+    await expect(ipcMain.invoke(CONFIG_IPC_CHANNELS.saveRaw, '{ bad')).rejects.toThrow(/JSON/i)
+
+    const saved = await ipcMain.invoke(
+      CONFIG_IPC_CHANNELS.saveRaw,
+      JSON.stringify({ version: 1, theme: 'dark', autoSave: true })
+    )
+    expect(saved).toMatchObject({ theme: 'dark', autoSave: true })
+
+    dispose()
+  })
 })

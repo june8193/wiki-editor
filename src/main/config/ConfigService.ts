@@ -6,8 +6,15 @@ import {
   DEFAULT_APP_CONFIG,
   isPlainRecord,
   normalizeAppConfig,
-  validateConfigPatch
+  validateConfigPatch,
+  validateConfigRaw
 } from '@shared/config'
+import {
+  addFavoriteWorkspace,
+  recordRecentWorkspace,
+  removeFavoriteWorkspace,
+  toggleFavoriteWorkspace
+} from '@shared/workspace'
 
 export type ConfigChangeListener = (config: AppConfig) => void
 
@@ -57,13 +64,9 @@ export class ConfigService {
 
   async update(patch: Partial<AppConfig>): Promise<AppConfig> {
     const validatedPatch = validateConfigPatch(patch)
-    return this.enqueue(async () => {
-      const current = await this.loadOrInitialize()
-      const next = normalizeAppConfig({ ...current, ...validatedPatch, version: 1 }, current)
-      await writeFileAtomic(this.configPath, serializeConfig(next))
-      this.notifyListeners(next)
-      return cloneAppConfig(next)
-    })
+    return this.mutate((current) =>
+      normalizeAppConfig({ ...current, ...validatedPatch, version: 1 }, current)
+    )
   }
 
   readRaw(): Promise<string> {
@@ -73,11 +76,58 @@ export class ConfigService {
     })
   }
 
+  async saveRaw(rawJson: string): Promise<AppConfig> {
+    const validated = validateConfigRaw(rawJson)
+    return this.enqueue(() => this.commitConfig(validated))
+  }
+
+  addFavoriteWorkspace(workspacePath: string, name?: string): Promise<AppConfig> {
+    return this.mutate((current) => ({
+      ...current,
+      favoriteWorkspaces: addFavoriteWorkspace(current.favoriteWorkspaces, workspacePath, name)
+    }))
+  }
+
+  removeFavoriteWorkspace(workspacePath: string): Promise<AppConfig> {
+    return this.mutate((current) => ({
+      ...current,
+      favoriteWorkspaces: removeFavoriteWorkspace(current.favoriteWorkspaces, workspacePath)
+    }))
+  }
+
+  toggleFavoriteWorkspace(workspacePath: string, name?: string): Promise<AppConfig> {
+    return this.mutate((current) => ({
+      ...current,
+      favoriteWorkspaces: toggleFavoriteWorkspace(current.favoriteWorkspaces, workspacePath, name)
+    }))
+  }
+
+  recordRecentWorkspace(workspacePath: string): Promise<AppConfig> {
+    return this.mutate((current) => ({
+      ...current,
+      recentWorkspaces: recordRecentWorkspace(current.recentWorkspaces, workspacePath)
+    }))
+  }
+
   onChanged(listener: ConfigChangeListener): () => void {
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
     }
+  }
+
+  private mutate(transform: (current: AppConfig) => AppConfig): Promise<AppConfig> {
+    return this.enqueue(async () => {
+      const current = await this.loadOrInitialize()
+      const next = transform(current)
+      return this.commitConfig(next)
+    })
+  }
+
+  private async commitConfig(next: AppConfig): Promise<AppConfig> {
+    await writeFileAtomic(this.configPath, serializeConfig(next))
+    this.notifyListeners(next)
+    return cloneAppConfig(next)
   }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
