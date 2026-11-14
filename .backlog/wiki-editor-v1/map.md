@@ -21,20 +21,20 @@ Windows 전용 경량·고성능 마크다운 데스크톱 위키 에디터(`wik
 - [멀티 탭 + 좌/우(상/하) 2분할 Split View 확정](spec.md#4-문서-버퍼document-buffer-및-2분할-split-pane-상태-모델) — 최대 2개 Pane 각각에 독립 탭 바를 두고 탭 이동/분할 열기 지원.
 - [워크스페이스 폴더 트리 CRUD 및 저장 방식 확정](spec.md#user-stories-사용자-스토리) — 생성/이름변경/삭제 지원, `Ctrl+S` 수동 저장(미저장 `●` 배지) + 자동 저장(Auto-save) 설정 토글 모두 지원.
 - [핵심 Git 패널 연동 수준 확정](spec.md#6-git-연동-계약) — 변경 파일 목록, 선택/전체 Stage, 커밋 메시지/Commit, Pull, Push, 원클릭 Sync, 브랜치 전환을 시스템 Git 연동으로 제공.
+- [위지윅 에디터 엔진 확정: TipTap v3 (`@tiptap/react` + `@tiptap/markdown`)](issues/04-three-mode-markdown-editor-and-table.md#answer) — React 19 호환성, GFM 표 행/열 조작(단일 헤더 행 불변식 보존) 및 마크다운 라운드트립 정확도 검증 완료.
 
 ## Child Tickets (수직 슬라이스 구현 백로그)
 
 - [x] [01 — Electron + React + TS 스캐폴딩, 전역 설정(config.json) 및 라이트/다크 테마](issues/01-electron-react-scaffold-and-config.md) (`26b8158`)
 - [x] [02 — 워크스페이스 폴더 트리(지연 로딩·파일 CRUD·저장) 및 즐겨찾기 관리](issues/02-workspace-folder-tree-and-favorites.md) (`5a02e7b`)
 - [x] [03 — 멀티 탭 및 좌/우(상/하) 2분할 Split View 레이아웃 (비활성 탭 경량화)](issues/03-multi-tab-and-split-pane-layout.md) (`6f0b8cc`)
-- [04 — 3모드 마크다운 에디터(Raw·Preview·위지윅) 및 표(행·열 추가/삭제) 편집](issues/04-three-mode-markdown-editor-and-table.md)
+- [x] [04 — 3모드 마크다운 에디터(Raw·Preview·위지윅) 및 표(행·열 추가/삭제) 편집](issues/04-three-mode-markdown-editor-and-table.md) (`20dd0f1`)
 - [05 — Mermaid 다이어그램 렌더링 및 하이브리드 목차(TOC)·헤딩 자동 넘버링](issues/05-mermaid-toc-and-auto-numbering.md)
 - [06 — 나만의 커스텀 슬래시 명령어(/function, /struct 등) 자동완성 및 설정 UI 연동](issues/06-custom-slash-commands.md)
 - [07 — 워크스페이스 Git 연동 패널 (Status, Stage, Commit, Pull, Push, Branch)](issues/07-git-workspace-integration.md)
 
 ## Not yet specified
 
-- 위지윅 에디터 세부 엔진 최종 선택(Milkdown vs TipTap + `tiptap-markdown`) — 티켓 `04` 착수 시 표 행/열 편집 및 마크다운 라운드트립 정확도 기준 검증 후 확정.
 - Electron Windows 설치 패키징 방식(`electron-builder` NSIS vs Portable `.exe`) — v1 핵심 기능 구현 완료 후 결정.
 
 ## Out of scope
