@@ -8,7 +8,6 @@ import { GitSidebarPanel } from './components/GitSidebarPanel'
 import { PaneInteractionActions } from './components/PaneTabBar'
 import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
-import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { isMarkdownDocument } from './editor/editorModes'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
@@ -394,14 +393,9 @@ export function App() {
       <header className="app-header">
         <div className="app-header-left">
           <h1 className="app-title">Wiki Editor</h1>
-          <WorkspaceSwitcher
-            workspace={workspace}
-            favoriteWorkspaces={config.favoriteWorkspaces}
-            recentWorkspaces={config.recentWorkspaces}
-            onSelectFolder={handleSelectFolder}
-            onSwitchWorkspace={handleSwitchWorkspace}
-            onRemoveFavorite={removeFavoriteWorkspace}
-          />
+          <button type="button" className="btn" onClick={handleSelectFolder}>
+            폴더 열기
+          </button>
         </div>
 
         <div className="app-header-actions">
@@ -436,8 +430,12 @@ export function App() {
           <FolderTreeSidebar
             workspace={workspace}
             isFavorite={isCurrentWorkspaceFavorite}
+            favoriteWorkspaces={config.favoriteWorkspaces}
+            recentWorkspaces={config.recentWorkspaces}
             tree={treeState}
             activeFilePath={activeFilePath}
+            onSwitchWorkspace={handleSwitchWorkspace}
+            onRemoveFavorite={removeFavoriteWorkspace}
             onToggleFavorite={() => {
               if (workspace) {
                 toggleFavoriteWorkspace(workspace.rootPath, workspace.name)

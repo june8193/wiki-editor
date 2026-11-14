@@ -828,6 +828,144 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     expect(getFilesSnapshot().has('C:/wiki/notes/guides/getting-started.md')).toBe(false)
   })
 
+  it('renders workspace switcher inside the left sidebar when no workspace is open and opens a recent workspace directly', async () => {
+    const user = userEvent.setup()
+    const favoriteAlpha = addFavoriteWorkspace(
+      [],
+      'C:/wiki/alpha',
+      'alpha',
+      '2026-11-14T00:00:00.000Z'
+    )
+    const { api } = createInMemoryWikiApi(
+      {
+        favoriteWorkspaces: favoriteAlpha,
+        recentWorkspaces: ['C:/wiki/gamma']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
+          'C:\\wiki\\gamma': { 'gamma.md': '# Gamma' }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await screen.findByRole('button', { name: /폴더 열기/i })
+
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('button', { name: /워크스페이스 전환/i })).not.toBeInTheDocument()
+
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    const switcherTrigger = within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })
+    expect(switcherTrigger).toHaveTextContent('워크스페이스 선택 ▾')
+    expect(switcherTrigger).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      within(sidebar).queryByRole('button', { name: /즐겨찾기 추가|즐겨찾기 해제/i })
+    ).not.toBeInTheDocument()
+    expect(within(sidebar).queryByRole('button', { name: /새 파일/i })).not.toBeInTheDocument()
+    expect(within(sidebar).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
+
+    await user.click(switcherTrigger)
+    const switcherMenu = await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })
+    expect(within(header).queryByRole('region', { name: /워크스페이스 목록/i })).not.toBeInTheDocument()
+
+    await user.click(within(switcherMenu).getByRole('button', { name: /gamma/i }))
+    expect(await within(sidebar).findByText('gamma.md')).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
+      'gamma ▾'
+    )
+    expect(
+      within(sidebar).queryByRole('region', { name: /워크스페이스 목록/i })
+    ).not.toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toBeInTheDocument()
+  })
+
+  it('displays unified workspace dropdown and favorite toggle in sidebar without duplicate name and confirms unsaved edits on switch', async () => {
+    const user = userEvent.setup()
+    const favoriteAlpha = addFavoriteWorkspace(
+      [],
+      'C:/wiki/alpha',
+      'alpha',
+      '2026-11-14T00:00:00.000Z'
+    )
+    const { api } = createInMemoryWikiApi(
+      {
+        autoSave: false,
+        favoriteWorkspaces: favoriteAlpha,
+        recentWorkspaces: ['C:/wiki/recent-ws']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
+          'C:\\wiki\\recent-ws': { 'recent.md': '# Recent' }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    // Open favorite workspace directly from initial unopened state
+    await user.click(await within(sidebar).findByRole('button', { name: /워크스페이스 전환/i }))
+    const initialMenu = await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })
+    await user.click(within(initialMenu).getByRole('button', { name: /★\s*alpha/i }))
+
+    expect(await within(sidebar).findByText('alpha.md')).toBeInTheDocument()
+
+    // Dropdown shows "{workspace.name} ▾" with favorite toggle alongside and no duplicate workspace name
+    const switcherTrigger = within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })
+    expect(switcherTrigger).toHaveTextContent('alpha ▾')
+    expect(within(sidebar).getAllByText(/^alpha(?:\s*▾)?$/)).toHaveLength(1)
+    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 해제/i })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+
+    // Edit alpha.md so workspace has unsaved changes
+    await user.click(within(sidebar).getByText('alpha.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), ' unsaved')
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    // Escape closes sidebar popover without switching
+    await user.click(switcherTrigger)
+    expect(await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(
+      within(sidebar).queryByRole('region', { name: /워크스페이스 목록/i })
+    ).not.toBeInTheDocument()
+
+    // Switch to recent workspace -> triggers unsaved confirmation dialog; cancel keeps current workspace
+    await user.click(switcherTrigger)
+    const menuBeforeCancel = await within(sidebar).findByRole('region', {
+      name: /워크스페이스 목록/i
+    })
+    await user.click(within(menuBeforeCancel).getByRole('button', { name: /recent-ws/i }))
+    const cancelDialog = await screen.findByRole('alertdialog')
+    await user.click(within(cancelDialog).getByRole('button', { name: '취소' }))
+    expect(within(sidebar).getByText('alpha.md')).toBeInTheDocument()
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Alpha unsaved')
+
+    // Retry switching to recent workspace and discard unsaved changes
+    await user.click(switcherTrigger)
+    const menuBeforeDiscard = await within(sidebar).findByRole('region', {
+      name: /워크스페이스 목록/i
+    })
+    await user.click(within(menuBeforeDiscard).getByRole('button', { name: /recent-ws/i }))
+    const discardDialog = await screen.findByRole('alertdialog')
+    await user.click(within(discardDialog).getByRole('button', { name: /버리고 이동/i }))
+
+    expect(await within(sidebar).findByText('recent.md')).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
+      'recent-ws ▾'
+    )
+    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+  })
+
   it('toggles current workspace in favorites and switches workspaces in one click from launcher dropdown', async () => {
     const user = userEvent.setup()
     const favoriteBeta = addFavoriteWorkspace([], 'C:/wiki/beta', 'beta', '2026-11-14T00:00:00.000Z')
