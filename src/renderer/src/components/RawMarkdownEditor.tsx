@@ -17,9 +17,19 @@ import { tags } from '@lezer/highlight'
 import type { ThemeMode } from '@shared/config'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
+import { syncElementScrollTop } from '../hooks/useSyncScrollTop'
 import type { CursorPosition } from '../stores/PaneTabStore'
 
 const externalSyncAnnotation = Annotation.define<boolean>()
+
+function isViewCursorInRawTable(view: EditorView): boolean {
+  const head = view.state.selection.main.head
+  const line = view.state.doc.lineAt(head)
+  if (!line.text.includes('|')) {
+    return false
+  }
+  return detectTableAtOffset(view.state.doc.toString(), head) !== null
+}
 
 const markdownHighlightStyle = HighlightStyle.define([
   { tag: [tags.heading, tags.heading1, tags.heading2, tags.heading3], color: 'var(--cm-heading)', fontWeight: '700' },
@@ -198,12 +208,7 @@ export function RawMarkdownEditor({
               cursor: { selectionStart: from, selectionEnd: to }
             })
             if (showTableToolbar) {
-              setInTable(
-                detectTableAtOffset(
-                  update.state.doc.toString(),
-                  update.state.selection.main.head
-                ) !== null
-              )
+              setInTable(isViewCursorInRawTable(update.view))
             }
           }
         })
@@ -295,16 +300,18 @@ export function RawMarkdownEditor({
       syncSelectionAttrs(view)
     }
 
-    if (showTableToolbar) {
-      setInTable(detectTableAtOffset(content, view.state.selection.main.head) !== null)
+    if (showTableToolbar && (docChanged || cursorPropChanged)) {
+      setInTable(isViewCursorInRawTable(view))
     }
+  }, [content, cursor, showTableToolbar])
 
-    if (Math.abs(view.scrollDOM.scrollTop - scrollTop) > 1) {
-      isRestoringScrollRef.current = true
-      view.scrollDOM.scrollTop = scrollTop
-      isRestoringScrollRef.current = false
-    }
-  }, [content, cursor, scrollTop, showTableToolbar])
+  useLayoutEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    isRestoringScrollRef.current = true
+    syncElementScrollTop(view.scrollDOM, scrollTop)
+    isRestoringScrollRef.current = false
+  }, [scrollTop])
 
   const handleTableAction = (action: RawTableAction): void => {
     const view = viewRef.current

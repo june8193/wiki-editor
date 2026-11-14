@@ -12,7 +12,7 @@ import rehypeStringify from 'rehype-stringify'
 import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
-import { isSafeMarkdownUrl, PREVIEW_SANITIZE_SCHEMA } from './markdownPreview'
+import { isSafeMarkdownUrl, MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 
 interface MdastPositionNode {
   type?: string
@@ -28,7 +28,7 @@ interface MdastPositionNode {
 const markdownAstParser = unified().use(remarkParse).use(remarkGfm)
 const htmlSanitizer = unified()
   .use(rehypeParse, { fragment: true })
-  .use(rehypeSanitize, PREVIEW_SANITIZE_SCHEMA)
+  .use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA)
   .use(rehypeStringify)
 
 /**
@@ -147,6 +147,17 @@ function promoteFirstRowToHeaderIfMissing(tr: Transaction, schema: Schema): void
       return
     }
   }
+}
+
+/**
+ * Inserts a body row above the current body row, or right below the header when cursor is in row 0.
+ * Preserves GFM Markdown's single-header-row invariant.
+ */
+export function addTableRowBeforeSafely(editor: Editor): boolean {
+  if (editor.isActive('tableHeader')) {
+    return editor.chain().focus().addRowAfter().run()
+  }
+  return editor.chain().focus().addRowBefore().run()
 }
 
 /**

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { MarkdownPreview } from '../components/MarkdownPreview'
 import { renderMarkdownToReact } from './markdownPreview'
 
@@ -102,5 +102,37 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
     const link = screen.getByRole('link', { name: 'External' })
     const wasNotPrevented = fireEvent.click(link)
     expect(wasNotPrevented).toBe(false)
+  })
+
+  it('renders an empty placeholder when markdown content is whitespace-only', () => {
+    render(<MarkdownPreview content={'   \n\t  '} scrollTop={0} />)
+    expect(screen.getByText('미리 볼 내용이 없습니다.')).toBeInTheDocument()
+  })
+
+  it('restores non-zero scrollTop and notifies onScrollTopChange when scrolled', () => {
+    const onScrollTopChange = vi.fn()
+    const { rerender } = render(
+      <MarkdownPreview
+        content={'# Title\n\nParagraph'}
+        scrollTop={120}
+        onScrollTopChange={onScrollTopChange}
+      />
+    )
+
+    const preview = screen.getByTestId('document-editor') as HTMLDivElement
+    expect(preview.scrollTop).toBe(120)
+
+    rerender(
+      <MarkdownPreview
+        content={'# Title\n\nParagraph'}
+        scrollTop={240}
+        onScrollTopChange={onScrollTopChange}
+      />
+    )
+    expect(preview.scrollTop).toBe(240)
+
+    preview.scrollTop = 305
+    fireEvent.scroll(preview)
+    expect(onScrollTopChange).toHaveBeenCalledWith(305)
   })
 })

@@ -1,7 +1,9 @@
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { RAW_TABLE_SHORTCUTS, rawTableKeymap, runRawTableAction } from './rawTableCommands'
+
+const createdViews: Array<{ view: EditorView; host: HTMLElement }> = []
 
 function createEditor(doc: string, selectionOffset: number): { view: EditorView; host: HTMLElement } {
   const host = document.createElement('div')
@@ -14,12 +16,21 @@ function createEditor(doc: string, selectionOffset: number): { view: EditorView;
     }),
     parent: host
   })
+  createdViews.push({ view, host })
   return { view, host }
 }
 
 describe('rawTableCommands', () => {
+  afterEach(() => {
+    while (createdViews.length > 0) {
+      const entry = createdViews.pop()!
+      entry.view.destroy()
+      entry.host.remove()
+    }
+  })
+
   it('executes every RawTableAction against a live CodeMirror EditorView', () => {
-    const { view, host } = createEditor('# Intro', 7)
+    const { view } = createEditor('# Intro', 7)
 
     // 1) insert
     expect(runRawTableAction(view, 'insert')).toBe(true)
@@ -75,9 +86,6 @@ describe('rawTableCommands', () => {
     // 6) deleteTable
     expect(runRawTableAction(view, 'deleteTable')).toBe(true)
     expect(view.state.doc.toString()).toBe('')
-
-    view.destroy()
-    host.remove()
   })
 
   it('registers CodeMirror Mod+Alt keyboard shortcuts for Raw table actions', () => {
@@ -92,14 +100,11 @@ describe('rawTableCommands', () => {
       'format'
     ])
 
-    const { view, host } = createEditor('', 0)
+    const { view } = createEditor('', 0)
     // Simulate Mod-Alt-t (Ctrl+Alt+t on Windows) directly via CM6 DOM keydown
     view.contentDOM.dispatchEvent(
       new KeyboardEvent('keydown', { key: 't', ctrlKey: true, altKey: true, bubbles: true })
     )
     expect(view.state.doc.toString()).toContain('| 열 1 | 열 2 | 열 3 |')
-
-    view.destroy()
-    host.remove()
   })
 })

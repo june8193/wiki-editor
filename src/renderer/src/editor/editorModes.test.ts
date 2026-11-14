@@ -3,6 +3,7 @@ import {
   cycleEditorMode,
   getRawEditorLanguage,
   isMarkdownDocument,
+  resolveEditorShortcut,
   resolveModeShortcut
 } from './editorModes'
 
@@ -44,6 +45,39 @@ describe('editorModes helpers', () => {
     ).toBeNull()
     expect(
       resolveModeShortcut({ key: 'M', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, 'raw', false)
+    ).toBeNull()
+  })
+
+  it('resolves Ctrl/Cmd+S save and mode shortcuts while ignoring alt or non-markdown rich switches', () => {
+    expect(
+      resolveEditorShortcut({ key: 's', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false)
+    ).toEqual({ type: 'save' })
+    expect(
+      resolveEditorShortcut({ key: 'S', ctrlKey: false, metaKey: true, shiftKey: false, altKey: false }, 'preview', true)
+    ).toEqual({ type: 'save' })
+
+    // Modifier conflicts or unrelated keys do not match save
+    expect(
+      resolveEditorShortcut({ key: 's', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, 'raw', true)
+    ).toBeNull()
+    expect(
+      resolveEditorShortcut({ key: 's', ctrlKey: true, metaKey: false, shiftKey: false, altKey: true }, 'raw', true)
+    ).toBeNull()
+
+    expect(
+      resolveEditorShortcut({ key: '2', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', true)
+    ).toEqual({ type: 'mode', mode: 'wysiwyg' })
+    expect(
+      resolveEditorShortcut({ key: 'm', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, 'wysiwyg', true)
+    ).toEqual({ type: 'mode', mode: 'preview' })
+    expect(
+      resolveEditorShortcut({ key: '1', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false)
+    ).toEqual({ type: 'mode', mode: 'raw' })
+    expect(
+      resolveEditorShortcut({ key: '2', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false)
+    ).toBeNull()
+    expect(
+      resolveEditorShortcut({ key: 'k', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', true)
     ).toBeNull()
   })
 })

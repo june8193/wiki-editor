@@ -214,44 +214,51 @@ function getDisplayWidth(text: string): number {
   return width
 }
 
-function getMinAlignmentWidth(alignment: TableAlignment): number {
-  switch (alignment) {
-    case 'left':
-    case 'right':
-      return 4
-    case 'center':
-      return 5
-    case 'none':
-      return 3
+interface AlignmentSpec {
+  minWidth: number
+  formatMarker: (width: number) => string
+  padText: (trimmed: string, gap: number) => string
+}
+
+const ALIGNMENT_SPECS: Record<TableAlignment, AlignmentSpec> = {
+  left: {
+    minWidth: 4,
+    formatMarker: (width) => `:${'-'.repeat(width - 1)}`,
+    padText: (trimmed, gap) => `${trimmed}${' '.repeat(gap)}`
+  },
+  center: {
+    minWidth: 5,
+    formatMarker: (width) => `:${'-'.repeat(width - 2)}:`,
+    padText: (trimmed, gap) => {
+      const leftPad = Math.floor(gap / 2)
+      return `${' '.repeat(leftPad)}${trimmed}${' '.repeat(gap - leftPad)}`
+    }
+  },
+  right: {
+    minWidth: 4,
+    formatMarker: (width) => `${'-'.repeat(width - 1)}:`,
+    padText: (trimmed, gap) => `${' '.repeat(gap)}${trimmed}`
+  },
+  none: {
+    minWidth: 3,
+    formatMarker: (width) => '-'.repeat(width),
+    padText: (trimmed, gap) => `${trimmed}${' '.repeat(gap)}`
   }
 }
 
+function getMinAlignmentWidth(alignment: TableAlignment): number {
+  return ALIGNMENT_SPECS[alignment].minWidth
+}
+
 function formatAlignmentMarker(alignment: TableAlignment, colWidth: number): string {
-  const width = Math.max(getMinAlignmentWidth(alignment), colWidth)
-  switch (alignment) {
-    case 'left':
-      return `:${'-'.repeat(width - 1)}`
-    case 'center':
-      return `:${'-'.repeat(width - 2)}:`
-    case 'right':
-      return `${'-'.repeat(width - 1)}:`
-    case 'none':
-      return '-'.repeat(width)
-  }
+  const spec = ALIGNMENT_SPECS[alignment]
+  return spec.formatMarker(Math.max(spec.minWidth, colWidth))
 }
 
 function padCellText(text: string, colWidth: number, alignment: TableAlignment): string {
   const trimmed = text.trim()
   const gap = Math.max(0, colWidth - getDisplayWidth(trimmed))
-  if (gap === 0) return trimmed
-  if (alignment === 'right') {
-    return `${' '.repeat(gap)}${trimmed}`
-  }
-  if (alignment === 'center') {
-    const leftPad = Math.floor(gap / 2)
-    return `${' '.repeat(leftPad)}${trimmed}${' '.repeat(gap - leftPad)}`
-  }
-  return `${trimmed}${' '.repeat(gap)}`
+  return gap === 0 ? trimmed : ALIGNMENT_SPECS[alignment].padText(trimmed, gap)
 }
 
 function formatTableRowLine(

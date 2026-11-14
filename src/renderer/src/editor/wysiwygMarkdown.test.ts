@@ -1,6 +1,7 @@
 import { Editor } from '@tiptap/core'
 import { describe, expect, it } from 'vitest'
 import {
+  addTableRowBeforeSafely,
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
   prepareMarkdownForTiptap,
@@ -192,6 +193,48 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     const insertedLines = editor.getMarkdown().trim().split('\n')
     expect(insertedLines).toHaveLength(3)
     expect(insertedLines[0].split('|').slice(1, -1)).toHaveLength(3)
+
+    editor.destroy()
+  })
+
+  it('addTableRowBeforeSafely keeps a single header row from row 0 and inserts above body rows otherwise', () => {
+    const editor = createTestWysiwygEditor(
+      ['| Col 1 | Col 2 |', '| --- | --- |', '| R1A | R1B |', '| R2A | R2B |'].join('\n')
+    )
+
+    let col1Pos = 0
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text?.includes('Col 1')) {
+        col1Pos = pos + 1
+        return false
+      }
+      return true
+    })
+    editor.commands.setTextSelection(col1Pos)
+    expect(addTableRowBeforeSafely(editor)).toBe(true)
+
+    const afterHeaderAction = editor.getMarkdown().trim().split('\n')
+    expect(afterHeaderAction).toHaveLength(5)
+    expect(afterHeaderAction[0]).toContain('Col 1')
+    expect(afterHeaderAction[2]).toMatch(/\|\s*\|\s*\|/)
+    expect(afterHeaderAction[3]).toContain('R1A')
+
+    let r2Pos = 0
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text?.includes('R2A')) {
+        r2Pos = pos + 1
+        return false
+      }
+      return true
+    })
+    editor.commands.setTextSelection(r2Pos)
+    expect(addTableRowBeforeSafely(editor)).toBe(true)
+
+    const afterBodyAction = editor.getMarkdown().trim().split('\n')
+    expect(afterBodyAction).toHaveLength(6)
+    expect(afterBodyAction[3]).toContain('R1A')
+    expect(afterBodyAction[4]).toMatch(/\|\s*\|\s*\|/)
+    expect(afterBodyAction[5]).toContain('R2A')
 
     editor.destroy()
   })

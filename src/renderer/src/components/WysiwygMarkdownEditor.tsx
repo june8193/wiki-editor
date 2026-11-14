@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import {
+  addTableRowBeforeSafely,
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
   prepareMarkdownForTiptap,
@@ -144,7 +145,7 @@ const TABLE_ACTION_ITEMS: ReadonlyArray<{
   {
     id: 'addRowBefore',
     label: '행 위 추가',
-    run: (editor) => editor.chain().focus().addRowBefore().run()
+    run: (editor) => addTableRowBeforeSafely(editor)
   },
   {
     id: 'addRowAfter',

@@ -171,4 +171,63 @@ describe('WysiwygMarkdownEditor', () => {
     expect(updatedMd).toMatch(/\|\s*-+\s*\|\s*-+\s*\|/)
     expect(updatedMd).not.toContain('H1')
   })
+
+  it('preserves a single header row when adding a row above a header cell via context menu', async () => {
+    const user = userEvent.setup()
+    const onChangeContent = vi.fn()
+
+    render(
+      <WysiwygMarkdownEditor
+        content={['| H1 | H2 |', '| --- | --- |', '| R1 | R2 |'].join('\n')}
+        scrollTop={0}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const headerCell = editorEl.querySelector('th')!
+    fireEvent.contextMenu(headerCell, { clientX: 30, clientY: 50 })
+    const cellMenu = await screen.findByRole('menu', { name: '표 셀 작업 메뉴' })
+    await user.click(within(cellMenu).getByRole('menuitem', { name: '행 위 추가' }))
+
+    expect(editorEl.querySelectorAll('th')).toHaveLength(2)
+    expect(editorEl.querySelectorAll('tr')).toHaveLength(3)
+    expect(editorEl.querySelectorAll('td')).toHaveLength(4)
+    expect(onChangeContent).toHaveBeenCalledTimes(1)
+    const updatedLines = (onChangeContent.mock.calls[0][0] as string).trim().split('\n')
+    expect(updatedLines).toHaveLength(4)
+    expect(updatedLines[0]).toMatch(/\|\s*H1\s*\|\s*H2\s*\|/)
+    expect(updatedLines[2]).toMatch(/\|\s*\|\s*\|/)
+    expect(updatedLines[3]).toMatch(/\|\s*R1\s*\|\s*R2\s*\|/)
+  })
+
+  it('restores non-zero scrollTop and notifies onScrollTopChange when scrolled', () => {
+    const onScrollTopChange = vi.fn()
+    const { container, rerender } = render(
+      <WysiwygMarkdownEditor
+        content={'# Top\n\nParagraph'}
+        scrollTop={145}
+        onChangeContent={vi.fn()}
+        onScrollTopChange={onScrollTopChange}
+      />
+    )
+
+    const scroller = container.querySelector('.wysiwyg-scroll-container') as HTMLDivElement
+    expect(scroller).not.toBeNull()
+    expect(scroller.scrollTop).toBe(145)
+
+    rerender(
+      <WysiwygMarkdownEditor
+        content={'# Top\n\nParagraph'}
+        scrollTop={260}
+        onChangeContent={vi.fn()}
+        onScrollTopChange={onScrollTopChange}
+      />
+    )
+    expect(scroller.scrollTop).toBe(260)
+
+    scroller.scrollTop = 310
+    fireEvent.scroll(scroller)
+    expect(onScrollTopChange).toHaveBeenCalledWith(310)
+  })
 })
