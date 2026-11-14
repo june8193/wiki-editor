@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_APP_CONFIG } from '@shared/config'
-import { CONFIG_IPC_CHANNELS, GIT_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import {
+  type AppMenuCommand,
+  CONFIG_IPC_CHANNELS,
+  GIT_IPC_CHANNELS,
+  MENU_IPC_CHANNELS,
+  WORKSPACE_IPC_CHANNELS
+} from '@shared/ipc'
 import { createWikiApi, IpcRendererLike } from './wikiApi'
 
 function createFakeIpcRenderer(): IpcRendererLike & {
@@ -165,5 +171,28 @@ describe('createWikiApi', () => {
       { channel: GIT_IPC_CHANNELS.push, args: ['C:\\wiki'] },
       { channel: GIT_IPC_CHANNELS.sync, args: ['C:\\wiki'] }
     ])
+  })
+
+  it('subscribes to menu:command without exposing Electron event and cleans up on unsubscribe', () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+    const commands: AppMenuCommand[] = []
+
+    const unsubscribe = api.menu.onCommand((command) => {
+      commands.push(command)
+    })
+
+    expect(ipc.listenerCount(MENU_IPC_CHANNELS.command)).toBe(1)
+
+    ipc.emit(MENU_IPC_CHANNELS.command, 'open-folder')
+    ipc.emit(MENU_IPC_CHANNELS.command, 'toggle-theme')
+    ipc.emit(MENU_IPC_CHANNELS.command, 'toggle-settings')
+    expect(commands).toEqual(['open-folder', 'toggle-theme', 'toggle-settings'])
+
+    unsubscribe()
+    expect(ipc.listenerCount(MENU_IPC_CHANNELS.command)).toBe(0)
+
+    ipc.emit(MENU_IPC_CHANNELS.command, 'open-folder')
+    expect(commands).toHaveLength(3)
   })
 })

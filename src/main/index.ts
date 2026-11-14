@@ -1,10 +1,11 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, type BaseWindow, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
+import { createApplicationMenuTemplate } from './menu'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
 import { createMainWindowOptions } from './window'
 
@@ -41,6 +42,9 @@ void app.whenReady().then(async () => {
   const gitService = new GitService()
 
   const getTargets = () => BrowserWindow.getAllWindows().map((win) => win.webContents)
+  const getActiveWindow = () => BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  const getMenuTargetWebContents = (targetWindow?: BaseWindow) =>
+    (targetWindow instanceof BrowserWindow ? targetWindow : getActiveWindow())?.webContents
 
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets)
   disposeGitIpc = registerGitIpc({
@@ -54,7 +58,7 @@ void app.whenReady().then(async () => {
     configService,
     getTargets,
     selectDirectory: async () => {
-      const targetWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      const targetWindow = getActiveWindow()
       const options = { properties: ['openDirectory'] as Array<'openDirectory'> }
       const result = targetWindow
         ? await dialog.showOpenDialog(targetWindow, options)
@@ -62,6 +66,14 @@ void app.whenReady().then(async () => {
       return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
     }
   })
+
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      createApplicationMenuTemplate({
+        getTargetWebContents: getMenuTargetWebContents
+      })
+    )
+  )
 
   createMainWindow()
 })

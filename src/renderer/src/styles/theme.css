@@ -73,37 +73,6 @@ body,
   color: var(--text-primary);
 }
 
-.app-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  height: 44px;
-  padding: 0 16px;
-  background-color: var(--bg-surface);
-  border-bottom: 1px solid var(--border-color);
-}
-
-.app-header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.app-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.app-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .btn {
   padding: 6px 12px;
   border-radius: 6px;

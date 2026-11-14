@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { AppMenuCommand } from '@shared/ipc'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import type { OutlineScrollRequest } from './components/DocumentEditor'
@@ -52,6 +53,11 @@ export function App() {
   }>({
     saveAndCloseTab: async () => false,
     forceCloseTab: () => undefined
+  })
+  const menuHandlersRef = useRef<Record<AppMenuCommand, () => void>>({
+    'open-folder': () => undefined,
+    'toggle-theme': () => undefined,
+    'toggle-settings': () => undefined
   })
 
   const {
@@ -272,6 +278,18 @@ export function App() {
     void openConfigDocument()
   }, [openConfigDocument])
 
+  menuHandlersRef.current = {
+    'open-folder': handleSelectFolder,
+    'toggle-theme': toggleTheme,
+    'toggle-settings': () => setIsSettingsOpen((open) => !open)
+  }
+
+  useEffect(() => {
+    return window.wikiApi.menu.onCommand((command) => {
+      menuHandlersRef.current[command]?.()
+    })
+  }, [])
+
   const handleRequestDelete = useCallback(
     (entry: WorkspaceEntry): void => {
       setPendingDialog({
@@ -391,35 +409,6 @@ export function App() {
 
   return (
     <div className="app-shell" data-theme={config.theme}>
-      <header className="app-header">
-        <div className="app-header-left">
-          <h1 className="app-title">Wiki Editor</h1>
-          <button type="button" className="btn" onClick={handleSelectFolder}>
-            폴더 열기
-          </button>
-        </div>
-
-        <div className="app-header-actions">
-          <button
-            type="button"
-            className="btn"
-            aria-label="테마 전환"
-            aria-pressed={config.theme === 'dark'}
-            onClick={toggleTheme}
-          >
-            {config.theme === 'light' ? '다크 모드' : '라이트 모드'}
-          </button>
-          <button
-            type="button"
-            className="btn"
-            aria-expanded={isSettingsOpen}
-            onClick={() => setIsSettingsOpen((open) => !open)}
-          >
-            설정
-          </button>
-        </div>
-      </header>
-
       {errorMessage && (
         <div className="error-banner" role="alert">
           {errorMessage}

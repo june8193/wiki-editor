@@ -351,7 +351,9 @@ export function FolderTreeSidebar({
       {!workspace ? (
         <div className="sidebar-empty">
           <p className="sidebar-empty-text">열린 워크스페이스 없음</p>
-          <p className="workspace-placeholder-hint">상단의 &apos;폴더 열기&apos;로 시작하세요.</p>
+          <p className="workspace-placeholder-hint">
+            File 메뉴의 &apos;폴더 열기&apos; 또는 상단 워크스페이스 선택으로 시작하세요.
+          </p>
         </div>
       ) : (
         <ul role="tree" className="folder-tree" onClick={() => onSelectPath(null)}>
