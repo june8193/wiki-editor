@@ -1,10 +1,11 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
+import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
 import { createMainWindowOptions } from './window'
 
@@ -62,6 +63,20 @@ void app.whenReady().then(async () => {
       return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
     }
   })
+
+  const menuTemplate = createApplicationMenuTemplate({
+    onShowVersion: () => {
+      const targetWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      const options = createVersionMessageBoxOptions({
+        appVersion: app.getVersion(),
+        versions: process.versions
+      })
+      void (targetWindow
+        ? dialog.showMessageBox(targetWindow, options)
+        : dialog.showMessageBox(options))
+    }
+  })
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate))
 
   createMainWindow()
 })
