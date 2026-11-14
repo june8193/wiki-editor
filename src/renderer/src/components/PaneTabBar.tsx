@@ -1,7 +1,7 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
 import { useDismissable } from '../hooks/useDismissable'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
-import { PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import { PaneId, SplitDirection, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 
 export interface DraggingTabPayload {
   paneId: PaneId
@@ -16,7 +16,8 @@ export interface PaneInteractionActions {
     sourcePaneId: PaneId,
     targetPaneId: PaneId,
     tabId: string,
-    targetIndex?: number
+    targetIndex?: number,
+    targetSplitMode?: SplitDirection
   ) => void
   onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
   onChangeContent: (bufferKey: string, nextContent: string) => void
@@ -59,7 +60,12 @@ export function handleTabDrop(
   targetPaneId: PaneId,
   onMoveTab: PaneInteractionActions['onMoveTab'],
   onDragEndTab: () => void,
-  options?: { targetIndex?: number; ignoreSamePane?: boolean; stopPropagation?: boolean }
+  options?: {
+    targetIndex?: number
+    targetSplitMode?: SplitDirection
+    ignoreSamePane?: boolean
+    stopPropagation?: boolean
+  }
 ): void {
   const payload = parseDraggingTabPayload(event, draggingTab)
   if (!payload) return
@@ -68,7 +74,13 @@ export function handleTabDrop(
   if (options?.stopPropagation) {
     event.stopPropagation()
   }
-  onMoveTab(payload.paneId, targetPaneId, payload.tabId, options?.targetIndex)
+  onMoveTab(
+    payload.paneId,
+    targetPaneId,
+    payload.tabId,
+    options?.targetIndex,
+    options?.targetSplitMode
+  )
   onDragEndTab()
 }
 

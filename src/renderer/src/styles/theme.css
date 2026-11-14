@@ -930,22 +930,6 @@ body,
 }
 
 
-.split-mode-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  background-color: var(--bg-elevated);
-}
-
-.split-mode-group .btn.is-active {
-  background-color: var(--accent-color);
-  border-color: var(--accent-color);
-  color: var(--accent-contrast);
-}
-
 .pane-workspace {
   flex: 1;
   min-width: 0;
@@ -1075,10 +1059,6 @@ body,
 
 .split-drop-zone {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 35%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1088,6 +1068,28 @@ body,
   font-size: 13px;
   font-weight: 600;
   z-index: 20;
+}
+
+.split-drop-zone > span {
+  pointer-events: none;
+}
+
+.split-drop-zone.is-horizontal {
+  top: 36px;
+  right: 0;
+  bottom: 0;
+  width: 30%;
+}
+
+.split-drop-zone.is-vertical {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 30%;
+}
+
+.pane-workspace.is-single .split-drop-zone.is-vertical {
+  right: 30%;
 }
 
 /* Sidebar Outline panel */

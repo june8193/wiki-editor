@@ -2,6 +2,7 @@ import type { BufferKeyRemap } from './DocumentBufferStore'
 
 export type PaneId = 'primary' | 'secondary'
 export type SplitMode = 'single' | 'horizontal' | 'vertical'
+export type SplitDirection = Exclude<SplitMode, 'single'>
 export type EditorMode = 'raw' | 'preview' | 'wysiwyg'
 
 export interface CursorPosition {
@@ -361,15 +362,57 @@ export class PaneTabStore {
     })
   }
 
+  private focusPaneTabWithSplitMode(
+    paneId: PaneId,
+    tabId: string,
+    splitMode: SplitDirection
+  ): void {
+    const pane = this.state.panes[paneId]
+    if (
+      this.state.splitMode === splitMode &&
+      this.state.activePaneId === paneId &&
+      pane.activeTabId === tabId
+    ) {
+      return
+    }
+    this.commit({
+      ...this.state,
+      splitMode,
+      activePaneId: paneId,
+      panes: {
+        ...this.state.panes,
+        [paneId]: {
+          ...pane,
+          activeTabId: tabId
+        }
+      }
+    })
+  }
+
   moveTab = (
     sourcePaneId: PaneId,
     targetPaneId: PaneId,
     tabId: string,
-    targetIndex?: number
+    targetIndex?: number,
+    targetSplitMode?: SplitDirection
   ): void => {
     const sourcePane = this.state.panes[sourcePaneId]
     const sourceIndex = sourcePane.tabs.findIndex((tab) => tab.id === tabId)
     if (sourceIndex === -1) return
+
+    if (
+      targetSplitMode !== undefined &&
+      (sourcePaneId === targetPaneId || sourcePane.tabs.length <= 1)
+    ) {
+      if (
+        this.state.splitMode !== 'single' &&
+        this.state.panes.primary.tabs.length > 0 &&
+        this.state.panes.secondary.tabs.length > 0
+      ) {
+        this.focusPaneTabWithSplitMode(sourcePaneId, tabId, targetSplitMode)
+      }
+      return
+    }
 
     if (sourcePaneId === targetPaneId) {
       const movingTab = sourcePane.tabs[sourceIndex]
@@ -424,9 +467,10 @@ export class PaneTabStore {
         }
 
     const nextSplitMode =
-      targetPaneId === 'secondary' && this.state.splitMode === 'single'
+      targetSplitMode ??
+      (targetPaneId === 'secondary' && this.state.splitMode === 'single'
         ? 'horizontal'
-        : this.state.splitMode
+        : this.state.splitMode)
 
     const nextPrimary = sourcePaneId === 'primary' ? nextSourcePane : nextTargetPane
     const nextSecondary = sourcePaneId === 'secondary' ? nextSourcePane : nextTargetPane

@@ -1198,6 +1198,19 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     vi.useRealTimers()
   })
 
+  it('omits split mode buttons (단일, 좌우 분할, 상하 분할) from the app header', async () => {
+    const { api } = createInMemoryWikiApi()
+    window.wikiApi = api
+
+    render(<App />)
+    await screen.findByRole('button', { name: /테마 전환/i })
+
+    expect(screen.queryByRole('group', { name: '화면 분할' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '단일 화면' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '좌우 분할' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '상하 분할' })).not.toBeInTheDocument()
+  })
+
   it('opens multiple tabs, switches tabs, closes via X and middle-click, and prompts before closing the last tab of a dirty buffer', async () => {
     const user = userEvent.setup()
     const { api, getFilesSnapshot } = createInMemoryWikiApi(
@@ -1328,8 +1341,9 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     })
     expect(getFilesSnapshot().get('C:/wiki/split/shared.md')).toBe('# Shared synced!')
 
-    // Switch split direction to vertical and resize splitter via keyboard and pointer drag
-    await user.click(screen.getByRole('button', { name: '상하 분할' }))
+    // Switch split direction to vertical by dragging a tab to the vertical drop zone and resize splitter via keyboard and pointer drag
+    fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /side\.md/i }))
+    fireEvent.drop(await screen.findByTestId('split-drop-zone-vertical'))
     expect(workspaceEl).toHaveAttribute('data-split-mode', 'vertical')
 
     const divider = screen.getByRole('separator', { name: '화면 분할 크기 조절' })
@@ -1401,16 +1415,117 @@ describe('Multi-tab and 2-pane Split View layout', () => {
       'b.md'
     ])
 
-    // Drag b.md onto split drop zone in single mode -> creates secondary split with b.md
+    // Drag b.md onto horizontal split drop zone in single mode -> creates horizontal split with b.md
     const bTab = within(primaryPane).getByRole('tab', { name: /b\.md/i })
     fireEvent.dragStart(bTab)
-    const splitDropZone = await screen.findByTestId('split-drop-zone-secondary')
-    fireEvent.drop(splitDropZone)
+    const horizontalDropZone = await screen.findByTestId('split-drop-zone-horizontal')
+    expect(screen.getByTestId('split-drop-zone-vertical')).toBeInTheDocument()
+    fireEvent.drop(horizontalDropZone)
 
     expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
     const secondaryPane = screen.getByTestId('pane-secondary')
     expect(within(secondaryPane).getByRole('tab', { name: /b\.md/i })).toBeInTheDocument()
     expect(within(primaryPane).queryByRole('tab', { name: /b\.md/i })).not.toBeInTheDocument()
+  })
+
+  it('supports vertical drag split from single mode, orientation switching in split mode, and auto-collapse focus preservation', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:\\wiki\\drag-split',
+        workspaces: {
+          'C:\\wiki\\drag-split': {
+            'a.md': '# A',
+            'b.md': '# B',
+            'c.md': '# C'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    // With only 1 tab open in single mode, dragging must NOT show split drop zones
+    await user.click(await within(sidebar).findByText('a.md'))
+    const primaryPane = screen.getByTestId('pane-primary')
+    fireEvent.dragStart(within(primaryPane).getByRole('tab', { name: /a\.md/i }))
+    expect(screen.queryByTestId('split-drop-zone-horizontal')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('split-drop-zone-vertical')).not.toBeInTheDocument()
+    fireEvent.dragEnd(within(primaryPane).getByRole('tab', { name: /a\.md/i }))
+
+    // Open b.md (2 tabs) -> dragging shows both horizontal and vertical drop zones; drop on vertical
+    await user.click(within(sidebar).getByText('b.md'))
+    fireEvent.dragStart(within(primaryPane).getByRole('tab', { name: /b\.md/i }))
+    expect(screen.getByTestId('split-drop-zone-horizontal')).toBeInTheDocument()
+    const verticalDropZone = screen.getByTestId('split-drop-zone-vertical')
+    fireEvent.drop(verticalDropZone)
+
+    const workspaceEl = screen.getByTestId('pane-workspace')
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'vertical')
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    expect(within(primaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['a.md'])
+    expect(within(secondaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['b.md'])
+
+    // In vertical mode with 1 tab in primary, dragging primary tab shows ONLY horizontal drop zone & switches orientation without collapsing
+    fireEvent.dragStart(within(primaryPane).getByRole('tab', { name: /a\.md/i }))
+    expect(screen.queryByTestId('split-drop-zone-vertical')).not.toBeInTheDocument()
+    const switchHorizontalZone = screen.getByTestId('split-drop-zone-horizontal')
+    fireEvent.drop(switchHorizontalZone)
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'horizontal')
+    expect(within(primaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['a.md'])
+    expect(within(secondaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['b.md'])
+
+    // In horizontal mode, dragging secondary tab shows ONLY vertical drop zone & switches back to vertical
+    fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /b\.md/i }))
+    expect(screen.queryByTestId('split-drop-zone-horizontal')).not.toBeInTheDocument()
+    fireEvent.drop(screen.getByTestId('split-drop-zone-vertical'))
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'vertical')
+    expect(within(secondaryPane).getByRole('tab', { name: /b\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    // With 2 tabs in primary (open c.md in primary), dragging c.md to horizontal drop zone moves c.md to secondary AND switches to horizontal
+    await user.click(within(primaryPane).getByRole('tab', { name: /a\.md/i }))
+    await user.click(within(sidebar).getByText('c.md'))
+    expect(within(primaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['a.md', 'c.md'])
+
+    fireEvent.dragStart(within(primaryPane).getByRole('tab', { name: /c\.md/i }))
+    expect(screen.queryByTestId('split-drop-zone-vertical')).not.toBeInTheDocument()
+    fireEvent.drop(screen.getByTestId('split-drop-zone-horizontal'))
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'horizontal')
+    expect(within(primaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['a.md'])
+    expect(within(secondaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      'b.md',
+      'c.md'
+    ])
+    expect(within(secondaryPane).getByRole('tab', { name: /c\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    // Moving all tabs from secondary to primary auto-collapses to single mode while preserving active focus on c.md
+    fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /b\.md/i }))
+    fireEvent.drop(primaryPane)
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'horizontal')
+
+    fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /c\.md/i }))
+    fireEvent.drop(primaryPane)
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'single')
+    expect(screen.queryByTestId('pane-secondary')).not.toBeInTheDocument()
+    expect(within(primaryPane).getByRole('tab', { name: /c\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# C')
   })
 
   it('keeps at most 2 editor instances mounted when 25+ tabs are open and restores cursor/scroll on tab switch', async () => {
@@ -1760,7 +1875,8 @@ describe('Multi-tab and 2-pane Split View layout', () => {
       'true'
     )
 
-    await user.click(screen.getByRole('button', { name: '단일 화면' }))
+    // Closing the sole primary tab promotes secondary into primary and preserves focus on b.md
+    await user.click(within(primaryPane).getByRole('button', { name: 'a.md 탭 닫기' }))
 
     expect(screen.queryByTestId('pane-secondary')).not.toBeInTheDocument()
     expect(within(primaryPane).getByRole('tab', { name: /b\.md/i })).toHaveAttribute(
@@ -2218,10 +2334,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     await user.click(within(sidebar).getByText('manual.md'))
     await user.click(within(sidebar).getByText('other.md'))
 
-    // Open split view and keep <= 2 editor DOM instances
-    await user.click(screen.getByRole('button', { name: '좌우 분할' }))
+    // Open split view by duplicating manual.md and keep <= 2 editor DOM instances
     const primaryPane = screen.getByTestId('pane-primary')
-    const secondaryPane = screen.getByTestId('pane-secondary')
 
     fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
     await user.click(
@@ -2229,6 +2343,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         name: '분할 영역에 복제 열기'
       })
     )
+    const secondaryPane = screen.getByTestId('pane-secondary')
     await user.click(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
     await user.click(
       within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(

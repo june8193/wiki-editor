@@ -23,18 +23,8 @@ import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
-import { getPaneActiveTab, type PaneId, SplitMode, type TabViewPatch } from './stores/PaneTabStore'
+import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
 import { toErrorMessage } from './utils/toErrorMessage'
-
-const SPLIT_MODE_OPTIONS: ReadonlyArray<{
-  mode: SplitMode
-  ariaLabel: string
-  label: string
-}> = [
-  { mode: 'single', ariaLabel: '단일 화면', label: '단일' },
-  { mode: 'horizontal', ariaLabel: '좌우 분할', label: '좌우 분할' },
-  { mode: 'vertical', ariaLabel: '상하 분할', label: '상하 분할' }
-]
 
 interface PendingDialogState {
   title: string
@@ -112,7 +102,6 @@ export function App() {
     saveAndCloseTab,
     activateTab,
     focusPane,
-    setSplitMode,
     setSplitRatio,
     moveTab,
     duplicateTabToOtherPane,
@@ -415,21 +404,6 @@ export function App() {
         </div>
 
         <div className="app-header-actions">
-          <div className="split-mode-group" role="group" aria-label="화면 분할">
-            {SPLIT_MODE_OPTIONS.map((option) => (
-              <button
-                key={option.mode}
-                type="button"
-                className={`btn btn-sm${layout.splitMode === option.mode ? ' is-active' : ''}`}
-                aria-label={option.ariaLabel}
-                aria-pressed={layout.splitMode === option.mode}
-                onClick={() => setSplitMode(option.mode)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-
           <button
             type="button"
             className="btn"
