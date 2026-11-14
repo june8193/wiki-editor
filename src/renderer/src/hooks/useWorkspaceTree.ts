@@ -10,6 +10,14 @@ import {
 } from '@shared/workspace'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
+export interface WorkspaceTreeState {
+  rootEntries: readonly WorkspaceEntry[]
+  childrenByDir: Readonly<Record<string, readonly WorkspaceEntry[]>>
+  expandedDirs: ReadonlySet<string>
+  loadingDirs: ReadonlySet<string>
+  selectedPath: string | null
+}
+
 interface UseWorkspaceTreeOptions {
   onError: (message: string | null) => void
   onWorkspaceOpened?: () => void
@@ -151,6 +159,18 @@ export function useWorkspaceTree({
     }
   }, [])
 
+  const expandDirectory = useCallback(
+    async (dirPath: string): Promise<void> => {
+      if (!expandedDirsRef.current.has(dirPath)) {
+        setExpandedDirs((prev) => new Set(prev).add(dirPath))
+      }
+      if (!childrenByDir[dirPath]) {
+        await loadDirectoryChildren(dirPath)
+      }
+    },
+    [childrenByDir, loadDirectoryChildren]
+  )
+
   const toggleDirectory = useCallback(
     (entry: WorkspaceEntry): void => {
       if (expandedDirsRef.current.has(entry.path)) {
@@ -161,24 +181,9 @@ export function useWorkspaceTree({
         })
         return
       }
-      setExpandedDirs((prev) => new Set(prev).add(entry.path))
-      if (!childrenByDir[entry.path]) {
-        void loadDirectoryChildren(entry.path)
-      }
+      void expandDirectory(entry.path)
     },
-    [childrenByDir, loadDirectoryChildren]
-  )
-
-  const ensureExpanded = useCallback(
-    async (dirPath: string): Promise<void> => {
-      if (!expandedDirsRef.current.has(dirPath)) {
-        setExpandedDirs((prev) => new Set(prev).add(dirPath))
-      }
-      if (!childrenByDir[dirPath]) {
-        await loadDirectoryChildren(dirPath)
-      }
-    },
-    [childrenByDir, loadDirectoryChildren]
+    [expandDirectory]
   )
 
   const resolveCreateParentDir = useCallback((): string | null => {
@@ -317,19 +322,23 @@ export function useWorkspaceTree({
     [refreshDirectory]
   )
 
-  return {
-    workspace,
+  const treeState: WorkspaceTreeState = {
     rootEntries,
     childrenByDir,
     expandedDirs,
     loadingDirs,
-    selectedTreePath,
+    selectedPath: selectedTreePath
+  }
+
+  return {
+    workspace,
+    treeState,
     setSelectedTreePath,
     resolveCreateParentDir,
     openWorkspace,
     refreshTree,
     toggleDirectory,
-    ensureExpanded,
+    ensureExpanded: expandDirectory,
     createEntry,
     renameEntry,
     deleteEntry

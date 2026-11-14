@@ -67,11 +67,15 @@ describe('WorkspaceFsService', () => {
     await expect(service.createEntry(outsideDir, 'pwn.md', 'file')).rejects.toThrow(/워크스페이스|경로/i)
     await expect(service.deleteEntry(outsideDir)).rejects.toThrow(/워크스페이스|경로/i)
 
-    // Test symlink escape if platform permissions allow creating symlinks
+    // Test symlink escape and symlink-to-ignored filtering if platform permissions allow creating symlinks
     const escapeLink = join(workspaceDir, 'escape-link')
+    const gitDir = join(workspaceDir, '.git')
+    await mkdir(gitDir, { recursive: true })
+    const gitLink = join(workspaceDir, 'git-link')
     let symlinkCreated = false
     try {
       await symlink(outsideDir, escapeLink, 'junction')
+      await symlink(gitDir, gitLink, 'junction')
       symlinkCreated = true
     } catch {
       symlinkCreated = false
@@ -79,6 +83,8 @@ describe('WorkspaceFsService', () => {
     if (symlinkCreated) {
       await expect(service.readFile(join(escapeLink, 'secret.txt'))).rejects.toThrow(/워크스페이스|경로/i)
       await expect(service.createEntry(escapeLink, 'new.md', 'file')).rejects.toThrow(/워크스페이스|경로/i)
+      const entries = await service.readDir()
+      expect(entries.some((entry) => entry.name === 'git-link')).toBe(false)
     }
   })
 

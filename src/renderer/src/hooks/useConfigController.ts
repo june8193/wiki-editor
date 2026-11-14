@@ -186,7 +186,6 @@ export function useConfigController({
   return {
     config,
     configPath,
-    setConfigPath,
     toggleTheme,
     toggleAutoSave,
     toggleFavoriteWorkspace,

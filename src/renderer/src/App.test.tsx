@@ -1015,4 +1015,57 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     })
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
+
+  it('waits for an in-flight save before completing 저장 후 이동 without dropping navigation', async () => {
+    const user = userEvent.setup()
+    let releaseFirstSave!: () => void
+    let callNum = 0
+    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+      { autoSave: true, autoSaveDelayMs: 60 },
+      {
+        selectedFolder: 'C:\\wiki\\inflight',
+        workspaces: {
+          'C:\\wiki\\inflight': {
+            'a.md': '# A',
+            'b.md': '# B'
+          }
+        }
+      }
+    )
+    const origWrite = api.workspace.writeFile
+    api.workspace.writeFile = async (filePath, content) => {
+      callNum += 1
+      if (callNum === 1) {
+        return new Promise<void>((resolve) => {
+          releaseFirstSave = () => {
+            void origWrite(filePath, content).then(resolve)
+          }
+        })
+      }
+      return origWrite(filePath, content)
+    }
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    await user.click(await within(sidebar).findByText('a.md'))
+    const editor = await screen.findByTestId('document-editor')
+    await user.type(editor, ' v1')
+
+    // Wait for auto-save to enter in-flight state
+    await waitFor(() => expect(callNum).toBe(1))
+    // Type more while first save is still in flight, then click b.md and choose 저장 후 이동
+    await user.type(editor, ' v2')
+    await user.click(within(sidebar).getByText('b.md'))
+    const dirtyDialog = await screen.findByRole('alertdialog')
+    await user.click(within(dirtyDialog).getByRole('button', { name: /저장 후 이동/i }))
+
+    releaseFirstSave()
+    await waitFor(() => {
+      expect((screen.getByTestId('document-editor') as HTMLTextAreaElement).value).toBe('# B')
+    })
+    expect(getFilesSnapshot().get('C:/wiki/inflight/a.md')).toBe('# A v1 v2')
+  })
 })

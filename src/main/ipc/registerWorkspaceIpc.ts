@@ -41,8 +41,8 @@ export function registerWorkspaceIpc({
     [
       WORKSPACE_IPC_CHANNELS.open,
       async (_event, rootPath) => {
-        stopWatching = null
         const info = await workspaceService.openWorkspace(rootPath as string)
+        stopWatching = null
         await configService.recordRecentWorkspace(info.rootPath)
         return info
       }

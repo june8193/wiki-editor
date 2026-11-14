@@ -43,6 +43,7 @@ export function useDocumentBuffer({
   const mountedRef = useRef<boolean>(true)
   const activeDocRef = useRef<ActiveDocument | null>(null)
   const isSavingRef = useRef<boolean>(false)
+  const inFlightSavePromiseRef = useRef<Promise<boolean> | null>(null)
   const callbacksRef = useRef({ onSaveConfigRaw, onError })
 
   activeDocRef.current = activeDoc
@@ -55,38 +56,49 @@ export function useDocumentBuffer({
     }
   }, [])
 
-  const saveSnapshot = useCallback(async (snapshot: ActiveDocument): Promise<boolean> => {
-    if (isSavingRef.current) return false
+  const saveSnapshot = useCallback((snapshot: ActiveDocument): Promise<boolean> => {
+    if (isSavingRef.current) {
+      return inFlightSavePromiseRef.current ?? Promise.resolve(false)
+    }
+
     isSavingRef.current = true
     setIsSavingDoc(true)
     callbacksRef.current.onError(null)
 
-    try {
-      if (snapshot.kind === 'config') {
-        await callbacksRef.current.onSaveConfigRaw(snapshot.content)
-      } else {
-        await window.wikiApi.workspace.writeFile(snapshot.path, snapshot.content)
-      }
-
-      if (!mountedRef.current) return false
-      setActiveDoc((current) => {
-        if (!current || current.kind !== snapshot.kind || current.path !== snapshot.path) {
-          return current
+    const run = (async (): Promise<boolean> => {
+      try {
+        if (snapshot.kind === 'config') {
+          await callbacksRef.current.onSaveConfigRaw(snapshot.content)
+        } else {
+          await window.wikiApi.workspace.writeFile(snapshot.path, snapshot.content)
         }
-        return { ...current, savedContent: snapshot.content }
-      })
-      return true
-    } catch (error: unknown) {
-      if (mountedRef.current) {
-        callbacksRef.current.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'))
+
+        if (!mountedRef.current) return false
+        setActiveDoc((current) => {
+          if (!current || current.kind !== snapshot.kind || current.path !== snapshot.path) {
+            return current
+          }
+          const updated = { ...current, savedContent: snapshot.content }
+          activeDocRef.current = updated
+          return updated
+        })
+        return true
+      } catch (error: unknown) {
+        if (mountedRef.current) {
+          callbacksRef.current.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'))
+        }
+        return false
+      } finally {
+        isSavingRef.current = false
+        inFlightSavePromiseRef.current = null
+        if (mountedRef.current) {
+          setIsSavingDoc(false)
+        }
       }
-      return false
-    } finally {
-      isSavingRef.current = false
-      if (mountedRef.current) {
-        setIsSavingDoc(false)
-      }
-    }
+    })()
+
+    inFlightSavePromiseRef.current = run
+    return run
   }, [])
 
   const saveActiveDocument = useCallback((): void => {
@@ -94,6 +106,28 @@ export function useDocumentBuffer({
     if (!isDocumentDirty(current) || !current || isSavingRef.current) return
     void saveSnapshot({ ...current })
   }, [saveSnapshot])
+
+  const ensureSaved = useCallback(async (): Promise<boolean> => {
+    if (inFlightSavePromiseRef.current) {
+      const ok = await inFlightSavePromiseRef.current
+      if (!ok) return false
+    }
+    const latest = activeDocRef.current
+    if (!latest || !isDocumentDirty(latest)) {
+      return true
+    }
+    return saveSnapshot({ ...latest })
+  }, [saveSnapshot])
+
+  const getDirtyDocumentName = useCallback((): string | null => {
+    const current = activeDocRef.current
+    return isDocumentDirty(current) && current ? current.name : null
+  }, [])
+
+  const isOpenWorkspaceFile = useCallback((filePath: string): boolean => {
+    const current = activeDocRef.current
+    return current?.kind === 'workspace' && current.path === filePath
+  }, [])
 
   useEffect(() => {
     if (!autoSave || isAutoSavePaused || !activeDoc) return
@@ -138,14 +172,14 @@ export function useDocumentBuffer({
     }
   }, [])
 
-  const openConfigDocument = useCallback(async (): Promise<string | null> => {
+  const openConfigDocument = useCallback(async (): Promise<void> => {
     callbacksRef.current.onError(null)
     try {
       const [resolvedPath, raw] = await Promise.all([
         window.wikiApi.config.getConfigPath(),
         window.wikiApi.config.readRaw()
       ])
-      if (!mountedRef.current) return null
+      if (!mountedRef.current) return
       setActiveDoc({
         kind: 'config',
         path: resolvedPath,
@@ -153,12 +187,10 @@ export function useDocumentBuffer({
         content: raw,
         savedContent: raw
       })
-      return resolvedPath
     } catch (error: unknown) {
       if (mountedRef.current) {
         callbacksRef.current.onError(toErrorMessage(error, '설정 파일을 읽지 못했습니다.'))
       }
-      return null
     }
   }, [])
 
@@ -223,10 +255,11 @@ export function useDocumentBuffer({
 
   return {
     activeDoc,
-    activeDocRef,
     isSavingDoc,
-    saveSnapshot,
     saveActiveDocument,
+    ensureSaved,
+    getDirtyDocumentName,
+    isOpenWorkspaceFile,
     openWorkspaceFile,
     openConfigDocument,
     refreshCleanConfig,

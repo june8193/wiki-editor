@@ -6,7 +6,7 @@ import { FolderTreeSidebar } from './components/FolderTreeSidebar'
 import { SettingsPanel } from './components/SettingsPanel'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { useConfigController } from './hooks/useConfigController'
-import { isDocumentDirty, useDocumentBuffer } from './hooks/useDocumentBuffer'
+import { useDocumentBuffer } from './hooks/useDocumentBuffer'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { toErrorMessage } from './utils/toErrorMessage'
 
@@ -28,7 +28,6 @@ export function App() {
   const {
     config,
     configPath,
-    setConfigPath,
     toggleTheme,
     toggleAutoSave,
     toggleFavoriteWorkspace,
@@ -41,10 +40,11 @@ export function App() {
 
   const {
     activeDoc,
-    activeDocRef,
     isSavingDoc,
-    saveSnapshot,
     saveActiveDocument,
+    ensureSaved,
+    getDirtyDocumentName,
+    isOpenWorkspaceFile,
     openWorkspaceFile,
     openConfigDocument,
     refreshCleanConfig,
@@ -65,11 +65,7 @@ export function App() {
 
   const {
     workspace,
-    rootEntries,
-    childrenByDir,
-    expandedDirs,
-    loadingDirs,
-    selectedTreePath,
+    treeState,
     setSelectedTreePath,
     resolveCreateParentDir,
     openWorkspace,
@@ -89,20 +85,20 @@ export function App() {
 
   const guardUnsavedChanges = useCallback(
     (proceed: () => Promise<void>): void => {
-      const current = activeDocRef.current
-      if (!isDocumentDirty(current) || !current) {
+      const dirtyName = getDirtyDocumentName()
+      if (!dirtyName) {
         void proceed()
         return
       }
 
       setPendingDialog({
         title: '저장하지 않은 변경 사항',
-        message: `"${current.name}"에 저장하지 않은 변경 사항이 있습니다. 어떻게 할까요?`,
+        message: `"${dirtyName}"에 저장하지 않은 변경 사항이 있습니다. 어떻게 할까요?`,
         confirmLabel: '저장 후 이동',
         secondaryLabel: '버리고 이동',
         onConfirm: async () => {
           setPendingDialog(null)
-          const saved = await saveSnapshot({ ...current })
+          const saved = await ensureSaved()
           if (saved) {
             await proceed()
           }
@@ -113,7 +109,7 @@ export function App() {
         }
       })
     },
-    [activeDocRef, saveSnapshot]
+    [ensureSaved, getDirtyDocumentName]
   )
 
   const handleSwitchWorkspace = useCallback(
@@ -139,22 +135,15 @@ export function App() {
 
   const handleOpenFile = useCallback(
     (entry: WorkspaceEntry): void => {
-      if (activeDocRef.current?.kind === 'workspace' && activeDocRef.current.path === entry.path) {
-        return
-      }
+      if (isOpenWorkspaceFile(entry.path)) return
       guardUnsavedChanges(() => openWorkspaceFile(entry))
     },
-    [activeDocRef, guardUnsavedChanges, openWorkspaceFile]
+    [guardUnsavedChanges, isOpenWorkspaceFile, openWorkspaceFile]
   )
 
   const handleOpenConfigEditor = useCallback((): void => {
-    guardUnsavedChanges(async () => {
-      const resolvedPath = await openConfigDocument()
-      if (resolvedPath) {
-        setConfigPath(resolvedPath)
-      }
-    })
-  }, [guardUnsavedChanges, openConfigDocument, setConfigPath])
+    guardUnsavedChanges(openConfigDocument)
+  }, [guardUnsavedChanges, openConfigDocument])
 
   const handleRequestDelete = useCallback(
     (entry: WorkspaceEntry): void => {
@@ -220,11 +209,7 @@ export function App() {
         <FolderTreeSidebar
           workspace={workspace}
           isFavorite={isCurrentWorkspaceFavorite}
-          rootEntries={rootEntries}
-          childrenByDir={childrenByDir}
-          expandedDirs={expandedDirs}
-          loadingDirs={loadingDirs}
-          selectedPath={selectedTreePath}
+          tree={treeState}
           activeFilePath={activeDoc?.kind === 'workspace' ? activeDoc.path : null}
           onToggleFavorite={() => {
             if (workspace) {

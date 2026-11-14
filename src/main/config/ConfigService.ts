@@ -10,7 +10,6 @@ import {
   validateConfigRaw
 } from '@shared/config'
 import {
-  addFavoriteWorkspace,
   recordRecentWorkspace,
   removeFavoriteWorkspace,
   toggleFavoriteWorkspace
@@ -79,13 +78,6 @@ export class ConfigService {
   async saveRaw(rawJson: string): Promise<AppConfig> {
     const validated = validateConfigRaw(rawJson)
     return this.enqueue(() => this.commitConfig(validated))
-  }
-
-  addFavoriteWorkspace(workspacePath: string, name?: string): Promise<AppConfig> {
-    return this.mutate((current) => ({
-      ...current,
-      favoriteWorkspaces: addFavoriteWorkspace(current.favoriteWorkspaces, workspacePath, name)
-    }))
   }
 
   removeFavoriteWorkspace(workspacePath: string): Promise<AppConfig> {

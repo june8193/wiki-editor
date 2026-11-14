@@ -1,4 +1,5 @@
 import {
+  CSSProperties,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
@@ -9,6 +10,7 @@ import {
 } from 'react'
 import { WorkspaceEntry, WorkspaceEntryKind, WorkspaceSummary } from '@shared/workspace'
 import { useDismissable } from '../hooks/useDismissable'
+import type { WorkspaceTreeState } from '../hooks/useWorkspaceTree'
 
 interface InlineCreateState {
   parentDirPath: string
@@ -21,14 +23,62 @@ interface ContextMenuState {
   y: number
 }
 
+interface InlineTreeInputProps {
+  ariaLabel: string
+  placeholder?: string
+  value: string
+  onChange: (nextValue: string) => void
+  onSubmit: () => void
+  onCancel: () => void
+}
+
+function InlineTreeInput({
+  ariaLabel,
+  placeholder,
+  value,
+  onChange,
+  onSubmit,
+  onCancel
+}: InlineTreeInputProps) {
+  const handleSubmit = (event: FormEvent): void => {
+    event.preventDefault()
+    onSubmit()
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="tree-inline-form"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <input
+        type="text"
+        className="tree-inline-input"
+        aria-label={ariaLabel}
+        placeholder={placeholder}
+        value={value}
+        autoFocus
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={onCancel}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.stopPropagation()
+            onCancel()
+          }
+        }}
+      />
+    </form>
+  )
+}
+
+function treeIndentStyle(depth: number): CSSProperties {
+  return { paddingLeft: `${12 + depth * 14}px` }
+}
+
 interface FolderTreeSidebarProps {
   workspace: WorkspaceSummary | null
   isFavorite: boolean
-  rootEntries: readonly WorkspaceEntry[]
-  childrenByDir: Readonly<Record<string, readonly WorkspaceEntry[]>>
-  expandedDirs: ReadonlySet<string>
-  loadingDirs: ReadonlySet<string>
-  selectedPath: string | null
+  tree: WorkspaceTreeState
   activeFilePath: string | null
   onToggleFavorite: () => void
   onSelectPath: (path: string | null) => void
@@ -45,11 +95,7 @@ interface FolderTreeSidebarProps {
 export function FolderTreeSidebar({
   workspace,
   isFavorite,
-  rootEntries,
-  childrenByDir,
-  expandedDirs,
-  loadingDirs,
-  selectedPath,
+  tree,
   activeFilePath,
   onToggleFavorite,
   onSelectPath,
@@ -81,6 +127,11 @@ export function FolderTreeSidebar({
     setContextMenu(null)
   }, [workspace?.rootPath])
 
+  const cancelCreate = (): void => {
+    setInlineCreate(null)
+    setCreateValue('')
+  }
+
   const beginCreate = async (kind: WorkspaceEntryKind, explicitParent?: string): Promise<void> => {
     if (!workspace) return
     setContextMenu(null)
@@ -100,57 +151,22 @@ export function FolderTreeSidebar({
     setRenameValue(entry.name)
   }
 
-  const submitCreate = async (event: FormEvent): Promise<void> => {
-    event.preventDefault()
+  const submitCreate = async (): Promise<void> => {
     if (!inlineCreate) return
     const trimmed = createValue.trim()
     const currentCreate = inlineCreate
-    setInlineCreate(null)
-    setCreateValue('')
+    cancelCreate()
     if (!trimmed) return
     await onCreateEntry(currentCreate.parentDirPath, trimmed, currentCreate.kind)
   }
 
-  const submitRename = async (event: FormEvent): Promise<void> => {
-    event.preventDefault()
+  const submitRename = async (): Promise<void> => {
     if (!renamingEntry) return
     const trimmed = renameValue.trim()
     const target = renamingEntry
     setRenamingEntry(null)
     if (!trimmed || trimmed === target.name) return
     await onRenameEntry(target.path, trimmed)
-  }
-
-  const renderInlineCreateInput = (depth: number) => {
-    if (!inlineCreate) return null
-    const label = inlineCreate.kind === 'file' ? '새 파일 이름' : '새 폴더 이름'
-    const placeholder = inlineCreate.kind === 'file' ? '예: note.md' : '새 폴더 이름'
-    return (
-      <li className="tree-inline-form-row" style={{ paddingLeft: `${12 + depth * 14}px` }}>
-        <form onSubmit={(event) => void submitCreate(event)} className="tree-inline-form">
-          <input
-            type="text"
-            className="tree-inline-input"
-            aria-label={label}
-            placeholder={placeholder}
-            value={createValue}
-            autoFocus
-            onChange={(event) => setCreateValue(event.target.value)}
-            onBlur={() => {
-              setInlineCreate(null)
-              setCreateValue('')
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.stopPropagation()
-                setInlineCreate(null)
-                setCreateValue('')
-              }
-            }}
-          />
-        </form>
-      </li>
-    )
   }
 
   const handleTreeItemKeyDown = (
@@ -191,15 +207,31 @@ export function FolderTreeSidebar({
     setContextMenu({ entry, x: event.clientX, y: event.clientY })
   }
 
+  const renderInlineCreateRow = (depth: number) => {
+    if (!inlineCreate) return null
+    return (
+      <li className="tree-inline-form-row" style={treeIndentStyle(depth)}>
+        <InlineTreeInput
+          ariaLabel={inlineCreate.kind === 'file' ? '새 파일 이름' : '새 폴더 이름'}
+          placeholder={inlineCreate.kind === 'file' ? '예: note.md' : '새 폴더 이름'}
+          value={createValue}
+          onChange={setCreateValue}
+          onSubmit={() => void submitCreate()}
+          onCancel={cancelCreate}
+        />
+      </li>
+    )
+  }
+
   const renderEntries = (entries: readonly WorkspaceEntry[], depth: number) =>
     entries.map((entry) => {
       const isDir = entry.kind === 'directory'
-      const isExpanded = isDir && expandedDirs.has(entry.path)
-      const isLoading = isDir && loadingDirs.has(entry.path)
-      const isSelected = selectedPath === entry.path
+      const isExpanded = isDir && tree.expandedDirs.has(entry.path)
+      const isLoading = isDir && tree.loadingDirs.has(entry.path)
+      const isSelected = tree.selectedPath === entry.path
       const isActiveFile = !isDir && activeFilePath === entry.path
       const isRenaming = renamingEntry?.path === entry.path
-      const childEntries = childrenByDir[entry.path] ?? []
+      const childEntries = tree.childrenByDir[entry.path] ?? []
       const showCreateInside = inlineCreate?.parentDirPath === entry.path
 
       return (
@@ -216,7 +248,7 @@ export function FolderTreeSidebar({
         >
           <div
             className={`tree-row${isSelected ? ' is-selected' : ''}${isActiveFile ? ' is-active-file' : ''}`}
-            style={{ paddingLeft: `${12 + depth * 14}px` }}
+            style={treeIndentStyle(depth)}
             onClick={(event) => {
               event.stopPropagation()
               onSelectPath(entry.path)
@@ -232,27 +264,13 @@ export function FolderTreeSidebar({
             </span>
 
             {isRenaming ? (
-              <form
-                onSubmit={(event) => void submitRename(event)}
-                className="tree-inline-form"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <input
-                  type="text"
-                  className="tree-inline-input"
-                  aria-label="새 이름 입력"
-                  value={renameValue}
-                  autoFocus
-                  onChange={(event) => setRenameValue(event.target.value)}
-                  onBlur={() => setRenamingEntry(null)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Escape') {
-                      event.stopPropagation()
-                      setRenamingEntry(null)
-                    }
-                  }}
-                />
-              </form>
+              <InlineTreeInput
+                ariaLabel="새 이름 입력"
+                value={renameValue}
+                onChange={setRenameValue}
+                onSubmit={() => void submitRename()}
+                onCancel={() => setRenamingEntry(null)}
+              />
             ) : (
               <span className="tree-label">{entry.name}</span>
             )}
@@ -260,12 +278,9 @@ export function FolderTreeSidebar({
 
           {isDir && isExpanded && (
             <ul role="group" className="tree-group">
-              {showCreateInside && renderInlineCreateInput(depth + 1)}
+              {showCreateInside && renderInlineCreateRow(depth + 1)}
               {isLoading && childEntries.length === 0 ? (
-                <li
-                  className="tree-status-row"
-                  style={{ paddingLeft: `${12 + (depth + 1) * 14}px` }}
-                >
+                <li className="tree-status-row" style={treeIndentStyle(depth + 1)}>
                   불러오는 중...
                 </li>
               ) : (
@@ -334,16 +349,12 @@ export function FolderTreeSidebar({
             </div>
           </div>
 
-          <ul
-            role="tree"
-            className="folder-tree"
-            onClick={() => onSelectPath(null)}
-          >
-            {inlineCreate?.parentDirPath === workspace.rootPath && renderInlineCreateInput(0)}
-            {rootEntries.length === 0 && !inlineCreate ? (
+          <ul role="tree" className="folder-tree" onClick={() => onSelectPath(null)}>
+            {inlineCreate?.parentDirPath === workspace.rootPath && renderInlineCreateRow(0)}
+            {tree.rootEntries.length === 0 && !inlineCreate ? (
               <li className="tree-status-row">빈 폴더입니다.</li>
             ) : (
-              renderEntries(rootEntries, 0)
+              renderEntries(tree.rootEntries, 0)
             )}
           </ul>
         </>

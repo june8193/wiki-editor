@@ -214,15 +214,11 @@ describe('ConfigService', () => {
     const wsA = join(tempDir, 'wiki-a')
     const wsB = join(tempDir, 'wiki-b')
 
-    const afterAdd = await service.addFavoriteWorkspace(`${wsA}/`, 'Wiki A')
+    const afterAdd = await service.toggleFavoriteWorkspace(`${wsA}/`, 'Wiki A')
     expect(afterAdd.favoriteWorkspaces).toHaveLength(1)
     expect(afterAdd.favoriteWorkspaces[0]).toMatchObject({ path: wsA, name: 'Wiki A' })
 
-    // Duplicate add does not duplicate
-    const afterDup = await service.addFavoriteWorkspace(wsA)
-    expect(afterDup.favoriteWorkspaces).toHaveLength(1)
-
-    // Toggle adds wsB then removes wsA
+    // Toggle adds wsB, then removes wsA cleanly
     const afterToggleB = await service.toggleFavoriteWorkspace(wsB)
     expect(afterToggleB.favoriteWorkspaces).toHaveLength(2)
     const afterRemoveA = await service.removeFavoriteWorkspace(`${wsA}/`)

@@ -1,4 +1,4 @@
-import { FSWatcher, watch as fsWatch } from 'node:fs'
+import { Dirent, FSWatcher, watch as fsWatch } from 'node:fs'
 import {
   lstat,
   mkdir,
@@ -57,6 +57,15 @@ function isPathInsideRoot(rootPath: string, targetPath: string): boolean {
 function toPosixRelativePath(rootPath: string, targetPath: string): string {
   const rel = relative(rootPath, targetPath)
   return sep === '\\' ? rel.replace(/\\/g, '/') : rel
+}
+
+function buildEntry(root: string, fullPath: string, kind: WorkspaceEntryKind): WorkspaceEntry {
+  return {
+    name: basename(fullPath),
+    path: fullPath,
+    relativePath: toPosixRelativePath(root, fullPath),
+    kind
+  }
 }
 
 function compareEntries(a: WorkspaceEntry, b: WorkspaceEntry): number {
@@ -152,16 +161,11 @@ export class WorkspaceFsService {
         continue
       }
       const entryPath = join(resolvedDir, dirent.name)
-      const kind = await this.resolveEntryKind(root, entryPath, dirent.isDirectory(), dirent.isFile(), dirent.isSymbolicLink())
+      const kind = await this.resolveEntryKind(root, dirent, entryPath)
       if (!kind) {
         continue
       }
-      entries.push({
-        name: dirent.name,
-        path: entryPath,
-        relativePath: toPosixRelativePath(root, entryPath),
-        kind
-      })
+      entries.push(buildEntry(root, entryPath, kind))
     }
 
     return entries.sort(compareEntries)
@@ -227,12 +231,7 @@ export class WorkspaceFsService {
       throw error
     }
 
-    return {
-      name: validName,
-      path: targetPath,
-      relativePath: toPosixRelativePath(root, targetPath),
-      kind
-    }
+    return buildEntry(root, targetPath, kind)
   }
 
   async renameEntry(targetPath: string, newName: string): Promise<WorkspaceEntry> {
@@ -244,17 +243,13 @@ export class WorkspaceFsService {
       throw new Error('워크스페이스 루트 폴더는 이름을 변경할 수 없습니다.')
     }
 
-    const nextPath = await this.resolveWritablePath(join(dirname(logicalTarget), validName))
+    const nextPath = join(dirname(logicalTarget), validName)
+    this.assertLexicalWorkspacePath(root, nextPath)
     const currentStats = await lstat(logicalTarget)
     const kind: WorkspaceEntryKind = currentStats.isDirectory() ? 'directory' : 'file'
 
     if (basename(logicalTarget) === validName) {
-      return {
-        name: validName,
-        path: logicalTarget,
-        relativePath: toPosixRelativePath(root, logicalTarget),
-        kind
-      }
+      return buildEntry(root, logicalTarget, kind)
     }
 
     const isWindowsCaseOnlyRename =
@@ -275,12 +270,7 @@ export class WorkspaceFsService {
 
     await rename(logicalTarget, nextPath)
 
-    return {
-      name: validName,
-      path: nextPath,
-      relativePath: toPosixRelativePath(root, nextPath),
-      kind
-    }
+    return buildEntry(root, nextPath, kind)
   }
 
   async deleteEntry(targetPath: string): Promise<void> {
@@ -327,6 +317,9 @@ export class WorkspaceFsService {
             activeListener(payload)
           }
         }, this.watchDebounceMs)
+      })
+      this.watcher.on('error', () => {
+        this.unwatch()
       })
     }
 
@@ -469,18 +462,16 @@ export class WorkspaceFsService {
 
   private async resolveEntryKind(
     root: string,
-    entryPath: string,
-    isDirectory: boolean,
-    isFile: boolean,
-    isSymlink: boolean
+    dirent: Dirent,
+    entryPath: string
   ): Promise<WorkspaceEntryKind | null> {
-    if (isDirectory) return 'directory'
-    if (isFile) return 'file'
-    if (!isSymlink) return null
+    if (dirent.isDirectory()) return 'directory'
+    if (dirent.isFile()) return 'file'
+    if (!dirent.isSymbolicLink()) return null
 
     try {
       const realTarget = await realpath(entryPath)
-      if (!isPathInsideRoot(root, realTarget)) {
+      if (!isPathInsideRoot(root, realTarget) || this.hasIgnoredSegment(relative(root, realTarget))) {
         return null
       }
       const targetStats = await stat(realTarget)
