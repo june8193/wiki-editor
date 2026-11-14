@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CONFIG_IPC_CHANNELS } from '@shared/ipc'
 import { ConfigService } from '../config/ConfigService'
+import { LogService } from '../logging/LogService'
 import { IpcMainLike, registerConfigIpc, WebContentsLike } from './registerConfigIpc'
 
 type Handler = (_event: unknown, ...args: unknown[]) => unknown
@@ -113,6 +114,45 @@ describe('registerConfigIpc', () => {
       JSON.stringify({ version: 1, theme: 'dark', autoSave: true })
     )
     expect(saved).toMatchObject({ theme: 'dark', autoSave: true })
+
+    dispose()
+  })
+
+  it('logs config:* IPC calls with durationMs and redacts config raw payload on saveRaw', async () => {
+    const logService = new LogService(join(tempDir, 'logs'))
+    const configService = new ConfigService(configPath)
+    const ipcMain = createFakeIpcMain()
+    const dispose = registerConfigIpc(ipcMain, configService, () => [], logService)
+
+    const validRaw = JSON.stringify({ version: 1, theme: 'dark', autoSave: true })
+    await ipcMain.invoke(CONFIG_IPC_CHANNELS.saveRaw, validRaw)
+    await expect(ipcMain.invoke(CONFIG_IPC_CHANNELS.saveRaw, '{ invalid raw secret')).rejects.toThrow(
+      /JSON/i
+    )
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(2)
+    expect(JSON.stringify(entries)).not.toContain(validRaw)
+    expect(JSON.stringify(entries)).not.toContain('invalid raw secret')
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: CONFIG_IPC_CHANNELS.saveRaw,
+        success: true,
+        contentLength: validRaw.length
+      }
+    })
+    expect(entries[1]).toMatchObject({
+      level: 'error',
+      category: 'ipc',
+      data: {
+        channel: CONFIG_IPC_CHANNELS.saveRaw,
+        success: false,
+        contentLength: '{ invalid raw secret'.length
+      }
+    })
+    expect(entries[1].error?.message).toMatch(/JSON/i)
 
     dispose()
   })

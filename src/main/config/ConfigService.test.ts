@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_APP_CONFIG, DEFAULT_CUSTOM_COMMANDS } from '@shared/config'
+import { LogService } from '../logging/LogService'
 import { ConfigService } from './ConfigService'
 
 describe('ConfigService', () => {
@@ -270,5 +271,28 @@ describe('ConfigService', () => {
     await service.update({ customCommands: [] })
     const afterClear = await new ConfigService(configPath).get()
     expect(afterClear.customCommands).toEqual([])
+  })
+
+  it('logs a warn entry with backupPath without leaking corrupt raw content when recovering corrupted config.json', async () => {
+    const logService = new LogService(join(tempDir, 'logs'))
+    const corruptRaw = '{ broken_secret_payload'
+    await mkdir(dirname(configPath), { recursive: true })
+    await writeFile(configPath, corruptRaw, 'utf8')
+
+    const service = new ConfigService(configPath, { logService })
+    await service.get()
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      level: 'warn',
+      process: 'main',
+      category: 'config',
+      data: {
+        configPath
+      }
+    })
+    expect(String(entries[0].data?.backupPath)).toContain('.corrupt.')
+    expect(JSON.stringify(entries[0])).not.toContain(corruptRaw)
   })
 })

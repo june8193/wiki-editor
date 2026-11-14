@@ -1,6 +1,7 @@
 import { GIT_IPC_CHANNELS } from '@shared/ipc'
 import { isSameWorkspacePath } from '@shared/workspace'
 import type { GitService } from '../git/GitService'
+import type { LogService } from '../logging/LogService'
 import type { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import { IpcHandlerTuple, IpcMainLike, registerIpcHandlers } from './ipcHelpers'
 
@@ -8,6 +9,7 @@ export interface RegisterGitIpcOptions {
   ipcMain: IpcMainLike
   gitService: GitService
   workspaceService: WorkspaceFsService
+  logService?: LogService
 }
 
 function assertActiveWorkspaceRoot(
@@ -34,7 +36,8 @@ function assertActiveWorkspaceRoot(
 export function registerGitIpc({
   ipcMain,
   gitService,
-  workspaceService
+  workspaceService,
+  logService
 }: RegisterGitIpcOptions): () => void {
   const withWorkspace =
     <TArgs extends unknown[], TResult>(fn: (rootPath: string, ...args: TArgs) => Promise<TResult>) =>
@@ -78,5 +81,5 @@ export function registerGitIpc({
     [GIT_IPC_CHANNELS.sync, withWorkspace((rootPath) => gitService.sync(rootPath))]
   ]
 
-  return registerIpcHandlers(ipcMain, handlers)
+  return registerIpcHandlers(ipcMain, handlers, { logService })
 }

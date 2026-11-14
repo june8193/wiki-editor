@@ -1,6 +1,7 @@
 import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import type { WorkspaceEntryKind } from '@shared/workspace'
 import { ConfigService } from '../config/ConfigService'
+import type { LogService } from '../logging/LogService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import {
   broadcastIpcEvent,
@@ -16,6 +17,7 @@ export interface RegisterWorkspaceIpcOptions {
   configService: ConfigService
   selectDirectory: () => Promise<string | null>
   getTargets: () => WebContentsLike[]
+  logService?: LogService
 }
 
 /**
@@ -26,7 +28,8 @@ export function registerWorkspaceIpc({
   workspaceService,
   configService,
   selectDirectory,
-  getTargets
+  getTargets,
+  logService
 }: RegisterWorkspaceIpcOptions): () => void {
   let stopWatching: (() => void) | null = null
 
@@ -91,7 +94,7 @@ export function registerWorkspaceIpc({
     ]
   ]
 
-  const removeHandlers = registerIpcHandlers(ipcMain, handlers)
+  const removeHandlers = registerIpcHandlers(ipcMain, handlers, { logService })
 
   return () => {
     clearWatcher()

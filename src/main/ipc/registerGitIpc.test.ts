@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createEmptyGitStatus } from '@shared/git'
 import { GIT_IPC_CHANNELS } from '@shared/ipc'
 import type { GitService } from '../git/GitService'
+import { LogService } from '../logging/LogService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import type { IpcMainLike } from './ipcHelpers'
 import { registerGitIpc } from './registerGitIpc'
@@ -144,5 +145,69 @@ describe('registerGitIpc', () => {
     for (const channel of Object.values(GIT_IPC_CHANNELS)) {
       expect(ipcMain.hasHandler(channel)).toBe(false)
     }
+  })
+
+  it('logs git:* IPC successes and failures with durationMs and error metadata', async () => {
+    const logService = new LogService(join(tempDir, 'logs'))
+    const sampleStatus = createEmptyGitStatus(true, workspaceDir)
+    const fakeGitService: Pick<
+      GitService,
+      | 'status'
+      | 'init'
+      | 'stage'
+      | 'stageAll'
+      | 'unstage'
+      | 'unstageAll'
+      | 'commit'
+      | 'branches'
+      | 'checkout'
+      | 'pull'
+      | 'push'
+      | 'sync'
+    > = {
+      status: vi.fn(async () => sampleStatus),
+      init: vi.fn(async () => sampleStatus),
+      stage: vi.fn(async () => sampleStatus),
+      stageAll: vi.fn(async () => sampleStatus),
+      unstage: vi.fn(async () => sampleStatus),
+      unstageAll: vi.fn(async () => sampleStatus),
+      commit: vi.fn(async () => sampleStatus),
+      branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
+      checkout: vi.fn(async () => sampleStatus),
+      pull: vi.fn(async () => sampleStatus),
+      push: vi.fn(async () => sampleStatus),
+      sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'ok' }))
+    }
+
+    const ipcMain = createFakeIpcMain()
+    const dispose = registerGitIpc({
+      ipcMain,
+      gitService: fakeGitService as GitService,
+      workspaceService,
+      logService
+    })
+
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, workspaceDir)).rejects.toThrow(
+      /열린 워크스페이스/
+    )
+    await workspaceService.openWorkspace(workspaceDir)
+    await ipcMain.invoke(GIT_IPC_CHANNELS.status, workspaceDir)
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(2)
+    expect(entries[0]).toMatchObject({
+      level: 'error',
+      category: 'ipc',
+      data: { channel: GIT_IPC_CHANNELS.status, success: false }
+    })
+    expect(entries[0].error?.message).toMatch(/열린 워크스페이스/)
+    expect(entries[1]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: { channel: GIT_IPC_CHANNELS.status, success: true }
+    })
+    expect(typeof entries[1].data?.durationMs).toBe('number')
+
+    dispose()
   })
 })

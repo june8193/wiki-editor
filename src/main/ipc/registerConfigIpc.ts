@@ -1,6 +1,7 @@
 import { AppConfig } from '@shared/config'
 import { CONFIG_IPC_CHANNELS } from '@shared/ipc'
 import { ConfigService } from '../config/ConfigService'
+import type { LogService } from '../logging/LogService'
 import {
   broadcastIpcEvent,
   IpcHandlerTuple,
@@ -17,7 +18,8 @@ export type { IpcMainLike, WebContentsLike }
 export function registerConfigIpc(
   ipcMain: IpcMainLike,
   configService: ConfigService,
-  getTargets: () => WebContentsLike[]
+  getTargets: () => WebContentsLike[],
+  logService?: LogService
 ): () => void {
   const handlers: readonly IpcHandlerTuple[] = [
     [CONFIG_IPC_CHANNELS.get, () => configService.get()],
@@ -42,7 +44,7 @@ export function registerConfigIpc(
     ]
   ]
 
-  const removeHandlers = registerIpcHandlers(ipcMain, handlers)
+  const removeHandlers = registerIpcHandlers(ipcMain, handlers, { logService })
   const unsubscribe = configService.onChanged((updatedConfig) => {
     broadcastIpcEvent(getTargets, CONFIG_IPC_CHANNELS.changed, updatedConfig)
   })

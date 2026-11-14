@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import { ConfigService } from '../config/ConfigService'
+import { LogService } from '../logging/LogService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import type { IpcMainLike, WebContentsLike } from './registerConfigIpc'
 import { registerWorkspaceIpc } from './registerWorkspaceIpc'
@@ -122,5 +123,67 @@ describe('registerWorkspaceIpc', () => {
 
     dispose()
     expect(ipcMain.hasHandler(WORKSPACE_IPC_CHANNELS.open)).toBe(false)
+  })
+
+  it('logs workspace:* IPC calls while redacting createEntry and writeFile contents', async () => {
+    const logService = new LogService(join(tempDir, 'logs'))
+    const configService = new ConfigService(configPath)
+    const ipcMain = createFakeIpcMain()
+    const dispose = registerWorkspaceIpc({
+      ipcMain,
+      workspaceService,
+      configService,
+      selectDirectory: async () => workspaceDir,
+      getTargets: () => [],
+      logService
+    })
+
+    await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+    const created = (await ipcMain.invoke(
+      WORKSPACE_IPC_CHANNELS.createEntry,
+      '.',
+      'secret-doc.md',
+      'file',
+      'PRIVATE_INITIAL_TEXT'
+    )) as { path: string }
+    await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.writeFile, created.path, 'PRIVATE_UPDATED_TEXT')
+    await expect(
+      ipcMain.invoke(WORKSPACE_IPC_CHANNELS.readFile, join(workspaceDir, 'missing.md'))
+    ).rejects.toThrow()
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(4)
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('PRIVATE_INITIAL_TEXT')
+    expect(serialized).not.toContain('PRIVATE_UPDATED_TEXT')
+
+    expect(entries[1]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: WORKSPACE_IPC_CHANNELS.createEntry,
+        success: true,
+        contentLength: 'PRIVATE_INITIAL_TEXT'.length
+      }
+    })
+    expect(entries[2]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: WORKSPACE_IPC_CHANNELS.writeFile,
+        success: true,
+        contentLength: 'PRIVATE_UPDATED_TEXT'.length
+      }
+    })
+    expect(entries[3]).toMatchObject({
+      level: 'error',
+      category: 'ipc',
+      data: {
+        channel: WORKSPACE_IPC_CHANNELS.readFile,
+        success: false
+      }
+    })
+
+    dispose()
   })
 })

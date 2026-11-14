@@ -15,6 +15,7 @@ import {
   isPathInsideRoot,
   resolveRealPathWithAncestor
 } from '../fs/pathSecurity'
+import type { LogService } from '../logging/LogService'
 import {
   type ExecGitError,
   extractGitErrorDetail,
@@ -35,6 +36,7 @@ export interface GitServiceOptions {
   env?: NodeJS.ProcessEnv
   localTimeoutMs?: number
   networkTimeoutMs?: number
+  logService?: LogService
 }
 
 interface PublishableBranchContext {
@@ -51,11 +53,14 @@ export class GitService {
   private readonly env: NodeJS.ProcessEnv | undefined
   private readonly localTimeoutMs: number
   private readonly networkTimeoutMs: number
+  private readonly logService?: LogService
+  private readonly failedExecMeta = new WeakMap<object, { cwd: string; args: readonly string[] }>()
 
   constructor(options: GitServiceOptions = {}) {
     this.env = options.env
     this.localTimeoutMs = options.localTimeoutMs ?? DEFAULT_LOCAL_TIMEOUT_MS
     this.networkTimeoutMs = options.networkTimeoutMs ?? DEFAULT_LOCAL_TIMEOUT_MS * 2
+    this.logService = options.logService
   }
 
   async status(workspacePath: string): Promise<GitStatus> {
@@ -71,7 +76,7 @@ export class GitService {
     try {
       await this.execGit(resolvedDir, ['init'])
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('init', error)
     }
     return this.status(resolvedDir)
   }
@@ -82,7 +87,7 @@ export class GitService {
     try {
       await this.execGit(repoRoot, ['add', '-A', '--', ...validatedPaths])
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('stage', error)
     }
     return this.statusForRepo(repoRoot)
   }
@@ -92,7 +97,7 @@ export class GitService {
     try {
       await this.execGit(repoRoot, ['add', '-A', '--', '.'])
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('stageAll', error)
     }
     return this.statusForRepo(repoRoot)
   }
@@ -119,7 +124,7 @@ export class GitService {
     try {
       await this.execGit(repoRoot, ['commit', '-m', trimmed])
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('commit', error)
     }
     return this.statusForRepo(repoRoot)
   }
@@ -171,7 +176,7 @@ export class GitService {
         }
       }
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('branches', error)
     }
   }
 
@@ -190,7 +195,7 @@ export class GitService {
     try {
       await this.execGit(repoRoot, ['switch', '--no-guess', trimmed])
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('checkout', error)
     }
     return this.statusForRepo(repoRoot)
   }
@@ -208,7 +213,7 @@ export class GitService {
     try {
       await this.execPull(repoRoot, [])
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('pull', error)
     }
     return this.statusForRepo(repoRoot)
   }
@@ -227,7 +232,7 @@ export class GitService {
         await this.execGit(repoRoot, ['push', '-u', targetRemote, branch], this.networkTimeoutMs)
       }
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('push', error)
     }
     return this.statusForRepo(repoRoot)
   }
@@ -254,7 +259,7 @@ export class GitService {
         await this.execGit(repoRoot, ['push', '-u', targetRemote, branch], this.networkTimeoutMs)
       }
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('sync', error)
     }
 
     const status = await this.statusForRepo(repoRoot)
@@ -275,7 +280,7 @@ export class GitService {
         await this.execGit(repoRoot, ['rm', '--cached', '-r', '--ignore-unmatch', '--', ...targets])
       }
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('unstage', error)
     }
   }
 
@@ -368,7 +373,7 @@ export class GitService {
       ])
       return parsePorcelainV2Z(raw, repoRoot)
     } catch (error) {
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('status', error)
     }
   }
 
@@ -404,7 +409,7 @@ export class GitService {
       if (detail.includes('not a git repository')) {
         return null
       }
-      throw formatGitError(error)
+      throw await this.formatAndLogGitError('findRepoRoot', error)
     }
   }
 
@@ -464,6 +469,25 @@ export class GitService {
     return validated
   }
 
+  private async formatAndLogGitError(operation: string, error: unknown): Promise<GitFormattedError> {
+    if (!(error instanceof GitFormattedError)) {
+      const execErr = error as ExecGitError | undefined
+      const meta =
+        typeof error === 'object' && error !== null ? this.failedExecMeta.get(error) : undefined
+      await this.logService?.error('git', `Git ${operation} failed`, {
+        data: {
+          operation,
+          ...(meta ? { cwd: meta.cwd, args: meta.args } : {}),
+          ...(execErr?.code !== undefined ? { code: execErr.code } : {}),
+          ...(execErr?.signal ? { signal: execErr.signal } : {}),
+          ...(execErr?.killed !== undefined ? { killed: execErr.killed } : {})
+        },
+        error
+      })
+    }
+    return formatGitError(error)
+  }
+
   private async execGit(
     cwd: string,
     args: readonly string[],
@@ -480,14 +504,21 @@ export class GitService {
     }
     delete childEnv.LC_ALL
 
-    const { stdout } = await execFileAsync('git', [...args], {
-      cwd,
-      encoding: 'utf8',
-      windowsHide: true,
-      maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
-      timeout: timeoutMs,
-      env: childEnv
-    })
-    return stdout
+    try {
+      const { stdout } = await execFileAsync('git', [...args], {
+        cwd,
+        encoding: 'utf8',
+        windowsHide: true,
+        maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
+        timeout: timeoutMs,
+        env: childEnv
+      })
+      return stdout
+    } catch (error) {
+      if (typeof error === 'object' && error !== null) {
+        this.failedExecMeta.set(error, { cwd, args: [...args] })
+      }
+      throw error
+    }
   }
 }

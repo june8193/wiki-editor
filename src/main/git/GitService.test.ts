@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { LogService } from '../logging/LogService'
 import { formatGitError, GitService, parsePorcelainV2Z } from './GitService'
 
 const execFileAsync = promisify(execFile)
@@ -306,6 +307,63 @@ describe('GitService integration (isolated temp repos)', () => {
     await expect(service.push(repoDir)).rejects.toThrow(/원격|오류/)
     await expect(service.pull(repoDir)).rejects.toThrow(/원격|upstream|오류/)
   }, 60_000)
+
+  it('logs raw Git CLI stderr, stdout, and exit code at error level before formatting user messages, without logging benign non-repo probes', async () => {
+    const logService = new LogService(join(tempRoot, 'logs'))
+    const loggedService = new GitService({
+      logService,
+      env: {
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: gitConfigFile
+      }
+    })
+
+    // Benign status check on a non-git folder should not log errors
+    const nonRepoStatus = await loggedService.status(nonGitDir)
+    expect(nonRepoStatus.isRepo).toBe(false)
+    expect(await logService.readEntries()).toHaveLength(0)
+
+    // Initialize repo and commit an initial file
+    await loggedService.init(repoDir)
+    await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
+    await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
+    await writeFile(join(repoDir, 'doc.md'), '# Doc\n', 'utf8')
+    await loggedService.stageAll(repoDir)
+    await loggedService.commit(repoDir, 'init')
+
+    // 1. Failing checkout produces raw stderr + exit code
+    await expect(loggedService.checkout(repoDir, 'nonexistent-branch')).rejects.toThrow(/브랜치|오류/)
+
+    // 2. Failing commit with nothing staged produces raw stdout + exit code
+    await expect(loggedService.commit(repoDir, 'empty commit')).rejects.toThrow(/커밋할/)
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(2)
+
+    expect(entries[0]).toMatchObject({
+      level: 'error',
+      process: 'main',
+      category: 'git',
+      data: {
+        operation: 'checkout',
+        code: 128
+      }
+    })
+    expect(entries[0].error?.code).toBe(128)
+    expect(entries[0].error?.stderr).toMatch(/invalid reference|pathspec|did not match/i)
+
+    expect(entries[1]).toMatchObject({
+      level: 'error',
+      process: 'main',
+      category: 'git',
+      data: {
+        operation: 'commit',
+        code: 1
+      }
+    })
+    expect(entries[1].error?.code).toBe(1)
+    expect(entries[1].error?.stdout).toMatch(/nothing to commit/i)
+  }, 30_000)
 })
 
 describe('GitService helpers (unit)', () => {

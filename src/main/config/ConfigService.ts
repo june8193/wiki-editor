@@ -14,8 +14,13 @@ import {
   removeFavoriteWorkspace,
   toggleFavoriteWorkspace
 } from '@shared/workspace'
+import type { LogService } from '../logging/LogService'
 
 export type ConfigChangeListener = (config: AppConfig) => void
+
+export interface ConfigServiceOptions {
+  logService?: LogService
+}
 
 let uniqueSuffixCounter = 0
 
@@ -46,11 +51,13 @@ function serializeConfig(config: AppConfig): string {
  */
 export class ConfigService {
   private readonly configPath: string
+  private readonly logService?: LogService
   private readonly listeners = new Set<ConfigChangeListener>()
   private queue: Promise<void> = Promise.resolve()
 
-  constructor(configPath: string) {
+  constructor(configPath: string, options: ConfigServiceOptions = {}) {
     this.configPath = configPath
+    this.logService = options.logService
   }
 
   getConfigPath(): string {
@@ -145,11 +152,12 @@ export class ConfigService {
     try {
       const parsed: unknown = JSON.parse(raw)
       if (!isPlainRecord(parsed)) {
-        return this.recoverCorrupted(raw)
+        return this.recoverCorrupted(raw, 'non-object')
       }
       return normalizeAppConfig(parsed)
-    } catch {
-      return this.recoverCorrupted(raw)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'invalid-json'
+      return this.recoverCorrupted(raw, reason)
     }
   }
 
@@ -159,9 +167,17 @@ export class ConfigService {
     return cloneAppConfig(initial)
   }
 
-  private async recoverCorrupted(corruptRaw: string): Promise<AppConfig> {
+  private async recoverCorrupted(corruptRaw: string, reason: string): Promise<AppConfig> {
     const backupPath = `${this.configPath}.corrupt.${nextUniqueSuffix()}.bak`
     await writeFileAtomic(backupPath, corruptRaw)
+    await this.logService?.warn('config', 'Recovered corrupted config.json to defaults', {
+      data: {
+        configPath: this.configPath,
+        backupPath,
+        reason,
+        contentLength: corruptRaw.length
+      }
+    })
     return this.writeDefaults()
   }
 

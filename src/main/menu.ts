@@ -11,7 +11,13 @@ export interface VersionDialogInput {
   versions: RuntimeVersions
 }
 
+export interface BugReportCopiedDialogInput {
+  logFilePath: string
+}
+
 export interface ApplicationMenuDeps {
+  onCopyBugReport: () => void
+  onOpenLogFolder: () => void
   onShowVersion: () => void
 }
 
@@ -36,15 +42,44 @@ export function createVersionMessageBoxOptions({
 }
 
 /**
- * Creates the application menu template containing Help > Version.
+ * Builds native message box options confirming bug report copy and pointing to app.jsonl.
+ */
+export function createBugReportCopiedMessageBoxOptions({
+  logFilePath
+}: BugReportCopiedDialogInput): MessageBoxOptions {
+  return {
+    type: 'info',
+    title: 'Wiki Editor',
+    message: 'Bug report copied to clipboard.',
+    detail: `Log file: ${logFilePath}`,
+    buttons: ['OK']
+  }
+}
+
+/**
+ * Creates the application menu template containing Help > Copy Bug Report, Open Log Folder, and Version.
  */
 export function createApplicationMenuTemplate({
+  onCopyBugReport,
+  onOpenLogFolder,
   onShowVersion
 }: ApplicationMenuDeps): MenuItemConstructorOptions[] {
   return [
     {
       label: 'Help',
       submenu: [
+        {
+          label: 'Copy Bug Report',
+          click: () => {
+            onCopyBugReport()
+          }
+        },
+        {
+          label: 'Open Log Folder',
+          click: () => {
+            onOpenLogFolder()
+          }
+        },
         {
           label: 'Version',
           click: () => {

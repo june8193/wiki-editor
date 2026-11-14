@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
+import {
+  createApplicationMenuTemplate,
+  createBugReportCopiedMessageBoxOptions,
+  createVersionMessageBoxOptions
+} from './menu'
 
 describe('createVersionMessageBoxOptions', () => {
   it('builds message box options with app version and runtime versions', () => {
@@ -31,10 +35,31 @@ describe('createVersionMessageBoxOptions', () => {
   })
 })
 
+describe('createBugReportCopiedMessageBoxOptions', () => {
+  it('builds confirmation message box options containing the active log file path', () => {
+    const logFilePath = 'C:\\Users\\tester\\AppData\\Roaming\\wiki-editor\\logs\\app.jsonl'
+    const options = createBugReportCopiedMessageBoxOptions({ logFilePath })
+
+    expect(options).toEqual({
+      type: 'info',
+      title: 'Wiki Editor',
+      message: 'Bug report copied to clipboard.',
+      detail: expect.stringContaining(logFilePath),
+      buttons: ['OK']
+    })
+  })
+})
+
 describe('createApplicationMenuTemplate', () => {
-  it('creates Help menu with Version item that invokes onShowVersion on click', () => {
+  it('creates Help menu with Copy Bug Report, Open Log Folder, and Version items invoking their callbacks', () => {
+    const onCopyBugReport = vi.fn()
+    const onOpenLogFolder = vi.fn()
     const onShowVersion = vi.fn()
-    const template = createApplicationMenuTemplate({ onShowVersion })
+    const template = createApplicationMenuTemplate({
+      onCopyBugReport,
+      onOpenLogFolder,
+      onShowVersion
+    })
 
     expect(template).toHaveLength(1)
     expect(template[0].label).toBe('Help')
@@ -45,16 +70,18 @@ describe('createApplicationMenuTemplate', () => {
       throw new Error('Expected submenu to be an array')
     }
 
-    expect(submenu).toHaveLength(1)
-    expect(submenu[0].label).toBe('Version')
-    expect(typeof submenu[0].click).toBe('function')
+    expect(submenu.map((item) => item.label)).toEqual([
+      'Copy Bug Report',
+      'Open Log Folder',
+      'Version'
+    ])
 
-    submenu[0].click?.(
-      undefined as never,
-      undefined as never,
-      undefined as never
-    )
+    submenu[0].click?.(undefined as never, undefined as never, undefined as never)
+    submenu[1].click?.(undefined as never, undefined as never, undefined as never)
+    submenu[2].click?.(undefined as never, undefined as never, undefined as never)
 
+    expect(onCopyBugReport).toHaveBeenCalledTimes(1)
+    expect(onOpenLogFolder).toHaveBeenCalledTimes(1)
     expect(onShowVersion).toHaveBeenCalledTimes(1)
   })
 })
