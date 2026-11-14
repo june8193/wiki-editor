@@ -1,9 +1,5 @@
 import { type CustomCommandConfig, DEFAULT_TOC_COMMAND_TEMPLATE } from '@shared/config'
-import {
-  detectDocumentLineEnding,
-  generateTocMarkdown,
-  isOffsetInCodeFence
-} from './MarkdownTocEngine'
+import { generateTocMarkdown, isOffsetInCodeFence } from './MarkdownTocEngine'
 
 export interface SlashQueryMatch {
   query: string
@@ -26,11 +22,6 @@ export interface ExpandedSlashTemplate {
   text: string
   cursorOffset: number
   hasCursorPlaceholder: boolean
-}
-
-export interface SlashCommandApplyResult {
-  content: string
-  cursorOffset: number
 }
 
 const CURSOR_PLACEHOLDER = '{{cursor}}'
@@ -194,29 +185,4 @@ export function resolveSlashCommandSnippet(
   }
 
   return expandSlashTemplate(command.template, context)
-}
-
-/**
- * Applies a slash command over the matched `/query` range in `documentText`,
- * preserving document line endings and returning the updated content and cursor offset.
- */
-export function applySlashCommandToText(
-  documentText: string,
-  match: SlashQueryMatch,
-  command: CustomCommandConfig,
-  context: SlashTemplateContext = {}
-): SlashCommandApplyResult {
-  const lineEnding = detectDocumentLineEnding(documentText)
-  const expanded = resolveSlashCommandSnippet(documentText, command, context)
-  const convertLineEndings = (part: string): string =>
-    part.replace(/\r\n?/g, '\n').replace(/\n/g, lineEnding)
-
-  const beforeCursor = convertLineEndings(expanded.text.slice(0, expanded.cursorOffset))
-  const afterCursor = convertLineEndings(expanded.text.slice(expanded.cursorOffset))
-  const inserted = `${beforeCursor}${afterCursor}`
-
-  return {
-    content: documentText.slice(0, match.rangeFrom) + inserted + documentText.slice(match.rangeTo),
-    cursorOffset: match.rangeFrom + beforeCursor.length
-  }
 }

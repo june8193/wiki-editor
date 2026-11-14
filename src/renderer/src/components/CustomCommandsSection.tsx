@@ -14,6 +14,10 @@ interface CustomCommandsSectionProps {
   onSaveCustomCommands: (nextCommands: CustomCommandConfig[]) => Promise<boolean> | boolean
 }
 
+function isSameTrigger(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase()
+}
+
 /**
  * Settings UI section for listing, adding, editing, deleting, validating, and live-previewing
  * custom slash commands persisted in global config.json.
@@ -51,12 +55,16 @@ export function CustomCommandsSection({
   }
 
   const handleDelete = async (trigger: string): Promise<void> => {
-    const nextCommands = customCommands.filter(
-      (cmd) => cmd.trigger.toLowerCase() !== trigger.toLowerCase()
-    )
-    const ok = await onSaveCustomCommands(nextCommands)
-    if (ok && editingTrigger && editingTrigger.toLowerCase() === trigger.toLowerCase()) {
-      resetForm()
+    if (isSubmitting) return
+    setIsSubmitting(true)
+    try {
+      const nextCommands = customCommands.filter((cmd) => !isSameTrigger(cmd.trigger, trigger))
+      const ok = await onSaveCustomCommands(nextCommands)
+      if (ok && editingTrigger && isSameTrigger(editingTrigger, trigger)) {
+        resetForm()
+      }
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -64,10 +72,7 @@ export function CustomCommandsSection({
     event.preventDefault()
 
     const otherTriggers = customCommands
-      .filter(
-        (cmd) =>
-          editingTrigger === null || cmd.trigger.toLowerCase() !== editingTrigger.toLowerCase()
-      )
+      .filter((cmd) => editingTrigger === null || !isSameTrigger(cmd.trigger, editingTrigger))
       .map((cmd) => cmd.trigger)
 
     const triggerError = validateCustomCommandTrigger(triggerInput, otherTriggers)
@@ -92,9 +97,7 @@ export function CustomCommandsSection({
 
     const nextCommands =
       editingTrigger !== null
-        ? customCommands.map((cmd) =>
-            cmd.trigger.toLowerCase() === editingTrigger.toLowerCase() ? nextCommand : cmd
-          )
+        ? customCommands.map((cmd) => (isSameTrigger(cmd.trigger, editingTrigger) ? nextCommand : cmd))
         : [...customCommands, nextCommand]
 
     setIsSubmitting(true)
@@ -138,7 +141,9 @@ export function CustomCommandsSection({
           customCommands.map((cmd) => (
             <li
               key={cmd.trigger}
-              className={`custom-command-item${editingTrigger === cmd.trigger ? ' is-editing' : ''}`}
+              className={`custom-command-item${
+                editingTrigger !== null && isSameTrigger(editingTrigger, cmd.trigger) ? ' is-editing' : ''
+              }`}
             >
               <div className="custom-command-item-info">
                 <code className="custom-command-trigger">/{cmd.trigger}</code>
@@ -152,6 +157,7 @@ export function CustomCommandsSection({
                   type="button"
                   className="btn btn-sm"
                   aria-label={`/${cmd.trigger} 수정`}
+                  disabled={isSubmitting}
                   onClick={() => startEdit(cmd)}
                 >
                   수정
@@ -160,6 +166,7 @@ export function CustomCommandsSection({
                   type="button"
                   className="btn btn-sm btn-danger"
                   aria-label={`/${cmd.trigger} 삭제`}
+                  disabled={isSubmitting}
                   onClick={() => void handleDelete(cmd.trigger)}
                 >
                   삭제

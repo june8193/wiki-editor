@@ -606,4 +606,27 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     expect(mdDoc).toContain('- [Heading](#heading)')
     expect(mdDoc).toContain('<!-- /toc -->')
   })
+
+  it('does not open slash popup when enableSlashCommands is false (e.g. plain text files)', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <RawMarkdownEditor
+        content=""
+        language="markdown"
+        enableSlashCommands={false}
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const editor = screen.getByTestId('document-editor')
+    editor.focus()
+    await user.keyboard('/fun')
+
+    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
+  })
 })

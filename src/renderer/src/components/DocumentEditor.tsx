@@ -175,6 +175,7 @@ export function DocumentEditor({
           cursor={tab.cursor}
           scrollTop={tab.scrollTop}
           showTableToolbar={allowRichModes}
+          enableSlashCommands={allowRichModes}
           customCommands={customCommands}
           documentTitle={documentTitle}
           scrollRequest={

@@ -11,6 +11,7 @@ interface RawMarkdownEditorProps {
   cursor: CursorPosition
   scrollTop: number
   showTableToolbar?: boolean
+  enableSlashCommands?: boolean
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
   scrollRequest?: RawScrollRequest | null
@@ -42,6 +43,7 @@ export function RawMarkdownEditor({
   cursor,
   scrollTop,
   showTableToolbar = false,
+  enableSlashCommands = language === 'markdown',
   customCommands,
   documentTitle,
   scrollRequest,
@@ -56,6 +58,7 @@ export function RawMarkdownEditor({
       cursor,
       scrollTop,
       showTableToolbar,
+      enableSlashCommands,
       customCommands,
       documentTitle,
       scrollRequest,
@@ -90,7 +93,7 @@ export function RawMarkdownEditor({
         </div>
       )}
       <div ref={hostRef} className="codemirror-host" />
-      {language === 'markdown' ? <SlashCommandMenu {...slashMenuProps} /> : null}
+      {enableSlashCommands ? <SlashCommandMenu {...slashMenuProps} /> : null}
     </div>
   )
 }

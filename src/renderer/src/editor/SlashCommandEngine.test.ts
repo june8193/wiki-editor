@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CUSTOM_COMMANDS, type CustomCommandConfig } from '@shared/config'
 import {
-  applySlashCommandToText,
   deriveDocumentTitle,
   detectSlashQuery,
   expandSlashTemplate,
@@ -121,32 +120,28 @@ describe('SlashCommandEngine', () => {
     expect(withoutCursor.cursorOffset).toBe(withoutCursor.text.length)
   })
 
-  it('applies slash command replacement to LF and CRLF documents preserving line endings and cursor offset', () => {
+  it('resolves command snippets with title/date/cursor placeholders accurately across multiline templates', () => {
     const cmd: CustomCommandConfig = {
       trigger: 'fn',
       label: 'Fn',
       template: '### {{title}}\nDate: {{date}}\nBody: {{cursor}}end'
     }
 
-    const lfDoc = '# Top\n\n/fn\n\nAfter'
-    const lfMatch = detectSlashQuery(lfDoc, lfDoc.indexOf('/fn') + 3)!
-    const lfResult = applySlashCommandToText(lfDoc, lfMatch, cmd, {
+    const doc = '# Top\n\n/fn\n\nAfter'
+    const resolved = resolveSlashCommandSnippet(doc, cmd, {
       fileName: 'guide.md',
       date: '2026-11-14'
     })
-    expect(lfResult.content).toBe('# Top\n\n### guide\nDate: 2026-11-14\nBody: end\n\nAfter')
-    expect(lfResult.content.slice(lfResult.cursorOffset, lfResult.cursorOffset + 3)).toBe('end')
+    expect(resolved.hasCursorPlaceholder).toBe(true)
+    expect(resolved.text).toBe('### guide\nDate: 2026-11-14\nBody: end')
+    expect(resolved.text.slice(resolved.cursorOffset, resolved.cursorOffset + 3)).toBe('end')
 
     const crlfDoc = '# Top\r\n\r\n/fn\r\n\r\nAfter'
-    const crlfMatch = detectSlashQuery(crlfDoc, crlfDoc.indexOf('/fn') + 3)!
-    const crlfResult = applySlashCommandToText(crlfDoc, crlfMatch, cmd, {
-      fileName: 'guide.md',
-      date: '2026-11-14'
+    expect(detectSlashQuery(crlfDoc, crlfDoc.indexOf('/fn') + 3)).toEqual({
+      query: 'fn',
+      rangeFrom: crlfDoc.indexOf('/fn'),
+      rangeTo: crlfDoc.indexOf('/fn') + 3
     })
-    expect(crlfResult.content).toBe(
-      '# Top\r\n\r\n### guide\r\nDate: 2026-11-14\r\nBody: end\r\n\r\nAfter'
-    )
-    expect(crlfResult.content.slice(crlfResult.cursorOffset, crlfResult.cursorOffset + 3)).toBe('end')
   })
 
   it('generates live TOC markup for the default toc command while honoring user-customized toc templates', () => {

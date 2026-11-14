@@ -442,41 +442,29 @@ export function detectProseMirrorSlashQuery(state: EditorState): SlashQueryMatch
   }
 }
 
-function pickCursorSentinel(text: string): string {
+function pickCursorSentinel(expandedText: string, docText: string): string {
   let index = 0
-  while (text.includes(`WIKICURSOR${index}`)) {
+  while (expandedText.includes(`WIKICURSOR${index}`) || docText.includes(`WIKICURSOR${index}`)) {
     index += 1
   }
   return `WIKICURSOR${index}`
 }
 
-/**
- * Replaces the active `/query` ProseMirror range with sanitized Markdown nodes in a single
- * transaction and moves the cursor to the expanded `{{cursor}}` position.
- */
-export function insertWysiwygMarkdownWithCursor(
+function buildWysiwygCommandFragment(
   editor: Editor,
   command: CustomCommandConfig,
-  range: Pick<SlashQueryMatch, 'rangeFrom' | 'rangeTo'>,
   context?: { title?: string; date?: string; now?: Date }
-): boolean {
-  const { state } = editor
-  const { rangeFrom, rangeTo } = range
-  if (rangeFrom < 0 || rangeTo > state.doc.content.size || rangeFrom > rangeTo) {
-    return false
-  }
-
+): { fragment: Fragment; sentinel: string | null } {
   let markdownToInsert: string
   let sentinel: string | null = null
 
   if (isDefaultTocCommand(command)) {
-    const currentMd = editor.getMarkdown()
-    const resolved = resolveSlashCommandSnippet(currentMd, command, context)
-    markdownToInsert = resolved.text
+    markdownToInsert = resolveSlashCommandSnippet(editor.getMarkdown(), command, context).text
   } else {
     const expanded = expandSlashTemplate(command.template, context)
     if (expanded.hasCursorPlaceholder) {
-      sentinel = pickCursorSentinel(expanded.text)
+      const existingDocText = editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n')
+      sentinel = pickCursorSentinel(expanded.text, existingDocText)
       markdownToInsert =
         expanded.text.slice(0, expanded.cursorOffset) +
         sentinel +
@@ -491,11 +479,19 @@ export function insertWysiwygMarkdownWithCursor(
   const jsonBlocks = Array.isArray(parsedDoc?.content) ? parsedDoc.content : []
   const created =
     jsonBlocks.length > 0
-      ? createNodeFromContent(jsonBlocks, state.schema, { slice: false })
+      ? createNodeFromContent(jsonBlocks, editor.state.schema, { slice: false })
       : Fragment.empty
   const fragment = created instanceof Fragment ? created : Fragment.from(created)
+  return { fragment, sentinel }
+}
 
-  const $from = state.doc.resolve(rangeFrom)
+function applyWysiwygFragmentReplacement(
+  tr: Transaction,
+  range: Pick<SlashQueryMatch, 'rangeFrom' | 'rangeTo'>,
+  fragment: Fragment
+): { searchFrom: number; fallbackEndPos: number } {
+  const { rangeFrom, rangeTo } = range
+  const $from = tr.doc.resolve(rangeFrom)
   const isStandaloneTopParagraph =
     $from.depth === 1 &&
     $from.parent.type.name === 'paragraph' &&
@@ -504,60 +500,94 @@ export function insertWysiwygMarkdownWithCursor(
     $from.parent.textBetween(rangeTo - $from.start(1), $from.parent.content.size, undefined, '\uFFFC').trim() ===
       ''
 
-  const tr = state.tr
-  let fallbackEndPos: number
-
   if (isStandaloneTopParagraph) {
     const replaceFrom = $from.before(1)
     const replaceTo = $from.after(1)
     const replacement =
       fragment.childCount === 0
-        ? Fragment.from(state.schema.nodes.paragraph.create())
+        ? Fragment.from(tr.doc.type.schema.nodes.paragraph.create())
         : fragment
     tr.replaceWith(replaceFrom, replaceTo, replacement)
-    fallbackEndPos = replaceFrom + replacement.size
-  } else if (fragment.childCount === 1 && fragment.firstChild?.type.name === 'paragraph') {
+    return { searchFrom: replaceFrom, fallbackEndPos: replaceFrom + replacement.size }
+  }
+
+  if (fragment.childCount === 1 && fragment.firstChild?.type.name === 'paragraph') {
     const inlineContent = fragment.firstChild.content
     tr.replaceWith(rangeFrom, rangeTo, inlineContent)
-    fallbackEndPos = rangeFrom + inlineContent.size
-  } else if (fragment.childCount === 0) {
+    return { searchFrom: rangeFrom, fallbackEndPos: rangeFrom + inlineContent.size }
+  }
+
+  if (fragment.childCount === 0) {
     tr.delete(rangeFrom, rangeTo)
-    fallbackEndPos = rangeFrom
-  } else {
-    tr.replaceRange(rangeFrom, rangeTo, new Slice(fragment, 0, 0))
-    fallbackEndPos = Math.min(tr.doc.content.size, rangeFrom + fragment.size)
+    return { searchFrom: rangeFrom, fallbackEndPos: rangeFrom }
   }
 
-  let cursorPos: number | null = null
-  let marksAtCursor: readonly Mark[] = []
+  tr.replaceRange(rangeFrom, rangeTo, new Slice(fragment, 0, 0))
+  return {
+    searchFrom: Math.max(0, rangeFrom - 1),
+    fallbackEndPos: Math.min(tr.doc.content.size, rangeFrom + fragment.size + 2)
+  }
+}
 
-  if (sentinel) {
-    let foundFrom: number | null = null
-    let foundTo: number | null = null
-    tr.doc.descendants((node, pos) => {
-      if (foundFrom !== null) return false
-      if (node.isText && node.text) {
-        const idx = node.text.indexOf(sentinel)
-        if (idx !== -1) {
-          foundFrom = pos + idx
-          foundTo = foundFrom + sentinel.length
-          marksAtCursor = node.marks
-          return false
-        }
+function consumeCursorSentinel(
+  tr: Transaction,
+  sentinel: string,
+  searchFrom: number,
+  searchTo: number
+): { pos: number; marks: readonly Mark[] } | null {
+  let foundFrom: number | null = null
+  let foundTo: number | null = null
+  let marks: readonly Mark[] = []
+  const clampedFrom = Math.max(0, searchFrom)
+  const clampedTo = Math.min(tr.doc.content.size, Math.max(clampedFrom, searchTo))
+
+  tr.doc.nodesBetween(clampedFrom, clampedTo, (node, pos) => {
+    if (foundFrom !== null) return false
+    if (node.isText && node.text) {
+      const idx = node.text.indexOf(sentinel)
+      if (idx !== -1) {
+        foundFrom = pos + idx
+        foundTo = foundFrom + sentinel.length
+        marks = node.marks
+        return false
       }
-      return true
-    })
-
-    if (foundFrom !== null && foundTo !== null) {
-      tr.delete(foundFrom, foundTo)
-      cursorPos = foundFrom
     }
+    return true
+  })
+
+  if (foundFrom === null || foundTo === null) {
+    return null
+  }
+  tr.delete(foundFrom, foundTo)
+  return { pos: foundFrom, marks }
+}
+
+/**
+ * Replaces the active `/query` ProseMirror range with sanitized Markdown nodes in a single
+ * transaction and moves the cursor to the expanded `{{cursor}}` position.
+ */
+export function insertWysiwygMarkdownWithCursor(
+  editor: Editor,
+  command: CustomCommandConfig,
+  range: Pick<SlashQueryMatch, 'rangeFrom' | 'rangeTo'>,
+  context?: { title?: string; date?: string; now?: Date }
+): boolean {
+  const { state } = editor
+  if (range.rangeFrom < 0 || range.rangeTo > state.doc.content.size || range.rangeFrom > range.rangeTo) {
+    return false
   }
 
-  const targetPos = Math.max(0, Math.min(cursorPos ?? fallbackEndPos, tr.doc.content.size))
-  tr.setSelection(TextSelection.near(tr.doc.resolve(targetPos), cursorPos !== null ? 1 : -1))
-  if (cursorPos !== null && marksAtCursor.length > 0) {
-    tr.setStoredMarks(marksAtCursor)
+  const { fragment, sentinel } = buildWysiwygCommandFragment(editor, command, context)
+  const tr = state.tr
+  const { searchFrom, fallbackEndPos } = applyWysiwygFragmentReplacement(tr, range, fragment)
+  const consumed = sentinel
+    ? consumeCursorSentinel(tr, sentinel, searchFrom, fallbackEndPos + 2)
+    : null
+
+  const targetPos = Math.max(0, Math.min(consumed?.pos ?? fallbackEndPos, tr.doc.content.size))
+  tr.setSelection(TextSelection.near(tr.doc.resolve(targetPos), consumed ? 1 : -1))
+  if (consumed && consumed.marks.length > 0) {
+    tr.setStoredMarks(consumed.marks)
   }
   tr.setMeta(slashInsertPluginKey, true)
 

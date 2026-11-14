@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CustomCommandConfig } from '@shared/config'
 import { filterSlashCommands, type SlashQueryMatch } from '../editor/SlashCommandEngine'
 
@@ -6,6 +6,15 @@ export interface CaretRectCoords {
   left: number
   top: number
   bottom: number
+}
+
+export interface CoordsProvider {
+  coordsAtPos: (pos: number) => { left: number; top: number; bottom: number } | null
+}
+
+export interface SlashMenuRange {
+  rangeFrom: number
+  rangeTo: number
 }
 
 export interface SlashMenuPosition {
@@ -36,6 +45,18 @@ const CLOSED_MENU_STATE: SlashMenuState = {
   items: [],
   selectedIndex: 0,
   position: { top: 24, left: 16 }
+}
+
+/**
+ * Safely queries caret viewport coordinates from either CodeMirror or ProseMirror views.
+ */
+export function readSafeCaretCoords(view: CoordsProvider, pos: number): CaretRectCoords | null {
+  try {
+    const rect = view.coordsAtPos(pos)
+    return rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : null
+  } catch {
+    return null
+  }
 }
 
 export function computeSlashMenuPosition(
@@ -74,15 +95,32 @@ export function computeSlashMenuPosition(
   }
 }
 
+function preserveSelectedIndex(
+  items: readonly CustomCommandConfig[],
+  prev: Pick<SlashMenuState, 'isOpen' | 'items' | 'selectedIndex'>
+): number {
+  const prevTrigger = prev.isOpen ? prev.items[prev.selectedIndex]?.trigger : undefined
+  if (!prevTrigger) {
+    return 0
+  }
+  const preservedIdx = items.findIndex((item) => item.trigger === prevTrigger)
+  return preservedIdx >= 0 ? preservedIdx : 0
+}
+
 /**
- * Shared state machine for editor slash command autocomplete menus (Raw & WYSIWYG).
- * Maintains a synchronous ref mirror so keydown handlers see immediate keyboard state updates.
+ * Shared state machine and editor bridge for slash command autocomplete menus (Raw & WYSIWYG).
+ * Keeps a synchronous ref mirror so editor keydown handlers read latest state immediately.
  */
-export function useSlashMenu(commands: readonly CustomCommandConfig[]) {
+export function useSlashMenu(
+  commands: readonly CustomCommandConfig[],
+  onApplyCommand?: (command: CustomCommandConfig, range?: SlashMenuRange) => boolean
+) {
   const [menuState, setMenuState] = useState<SlashMenuState>(CLOSED_MENU_STATE)
   const stateRef = useRef<SlashMenuState>(CLOSED_MENU_STATE)
   const commandsRef = useRef<readonly CustomCommandConfig[]>(commands)
   commandsRef.current = commands
+  const onApplyRef = useRef(onApplyCommand)
+  onApplyRef.current = onApplyCommand
 
   const commitState = useCallback((next: SlashMenuState) => {
     stateRef.current = next
@@ -104,25 +142,15 @@ export function useSlashMenu(commands: readonly CustomCommandConfig[]) {
       shellEl: HTMLElement | null
     ): void => {
       if (!match) {
-        if (stateRef.current.isOpen) {
-          commitState(CLOSED_MENU_STATE)
-        }
+        dismiss()
         return
       }
 
       const items = filterSlashCommands(commandsRef.current, match.query)
       if (items.length === 0) {
-        if (stateRef.current.isOpen) {
-          commitState(CLOSED_MENU_STATE)
-        }
+        dismiss()
         return
       }
-
-      const prev = stateRef.current
-      const prevTrigger = prev.isOpen ? prev.items[prev.selectedIndex]?.trigger : undefined
-      const preservedIdx = prevTrigger
-        ? items.findIndex((item) => item.trigger === prevTrigger)
-        : -1
 
       commitState({
         isOpen: true,
@@ -130,11 +158,11 @@ export function useSlashMenu(commands: readonly CustomCommandConfig[]) {
         rangeFrom: match.rangeFrom,
         rangeTo: match.rangeTo,
         items,
-        selectedIndex: preservedIdx >= 0 ? preservedIdx : 0,
+        selectedIndex: preserveSelectedIndex(items, stateRef.current),
         position: computeSlashMenuPosition(shellEl, coords)
       })
     },
-    [commitState]
+    [commitState, dismiss]
   )
 
   const moveSelection = useCallback(
@@ -164,6 +192,51 @@ export function useSlashMenu(commands: readonly CustomCommandConfig[]) {
     [commitState]
   )
 
+  const applySelected = useCallback((): boolean => {
+    const current = stateRef.current
+    if (!current.isOpen || current.items.length === 0 || !onApplyRef.current) {
+      return false
+    }
+    const selected = current.items[current.selectedIndex] ?? current.items[0]
+    if (!selected) {
+      return false
+    }
+    const applied = onApplyRef.current(selected, {
+      rangeFrom: current.rangeFrom,
+      rangeTo: current.rangeTo
+    })
+    if (applied) {
+      dismiss()
+    }
+    return applied
+  }, [dismiss])
+
+  const selectCommand = useCallback(
+    (command: CustomCommandConfig): void => {
+      if (!onApplyRef.current) return
+      const current = stateRef.current
+      const applied = onApplyRef.current(
+        command,
+        current.isOpen ? { rangeFrom: current.rangeFrom, rangeTo: current.rangeTo } : undefined
+      )
+      if (applied) {
+        dismiss()
+      }
+    },
+    [dismiss]
+  )
+
+  const dismissIfSelectionOutside = useCallback(
+    (from: number, to: number, empty: boolean): void => {
+      const current = stateRef.current
+      if (!current.isOpen) return
+      if (!empty || from < current.rangeFrom || to > current.rangeTo) {
+        dismiss()
+      }
+    },
+    [dismiss]
+  )
+
   useEffect(() => {
     const current = stateRef.current
     if (!current.isOpen) {
@@ -174,23 +247,46 @@ export function useSlashMenu(commands: readonly CustomCommandConfig[]) {
       commitState(CLOSED_MENU_STATE)
       return
     }
-    const prevTrigger = current.items[current.selectedIndex]?.trigger
-    const preservedIdx = prevTrigger
-      ? items.findIndex((item) => item.trigger === prevTrigger)
-      : -1
     commitState({
       ...current,
       items,
-      selectedIndex: preservedIdx >= 0 ? preservedIdx : 0
+      selectedIndex: preserveSelectedIndex(items, current)
     })
   }, [commands, commitState])
 
+  const controlsRef = useRef({
+    stateRef,
+    updateFromMatch,
+    moveSelection,
+    applySelected,
+    dismiss,
+    dismissIfSelectionOutside
+  })
+
+  const menuProps = useMemo(
+    () => ({
+      isOpen: menuState.isOpen,
+      items: menuState.items,
+      selectedIndex: menuState.selectedIndex,
+      position: menuState.position,
+      onSelect: selectCommand,
+      onHoverIndex: setSelectedIndex,
+      onDismiss: dismiss
+    }),
+    [dismiss, menuState, selectCommand, setSelectedIndex]
+  )
+
   return {
     menuState,
+    menuProps,
+    controlsRef,
     stateRef,
     updateFromMatch,
     moveSelection,
     setSelectedIndex,
-    dismiss
+    dismiss,
+    applySelected,
+    selectCommand,
+    dismissIfSelectionOutside
   }
 }

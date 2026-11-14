@@ -21,22 +21,10 @@ import {
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
 import { useOneShotScroll } from '../hooks/useOneShotScroll'
-import { type CaretRectCoords, useSlashMenu } from '../hooks/useSlashMenu'
+import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from '../hooks/useSlashMenu'
 import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
 import { SlashCommandMenu } from './SlashCommandMenu'
-
-function safeProseMirrorCoords(
-  view: Editor['view'],
-  pos: number
-): CaretRectCoords | null {
-  try {
-    const coords = view.coordsAtPos(pos)
-    return { left: coords.left, top: coords.top, bottom: coords.bottom }
-  } catch {
-    return null
-  }
-}
 
 export interface WysiwygScrollRequest {
   index: number
@@ -247,75 +235,19 @@ export function WysiwygMarkdownEditor({
   const editorRef = useRef<Editor | null>(null)
 
   const {
-    menuState: slashMenuState,
-    stateRef: slashStateRef,
-    updateFromMatch: updateSlashFromMatch,
-    moveSelection: moveSlashSelection,
-    setSelectedIndex: setSlashSelectedIndex,
+    controlsRef: slashControlsRef,
+    menuProps: slashMenuProps,
     dismiss: dismissSlashMenu
-  } = useSlashMenu(customCommands)
-
-  const applySlashCommand = useCallback(
-    (
-      instance: Editor | null,
-      command: CustomCommandConfig,
-      explicitRange?: { rangeFrom: number; rangeTo: number }
-    ): boolean => {
-      if (!instance) return false
-      const range = explicitRange ?? detectProseMirrorSlashQuery(instance.state)
-      if (!range) return false
-
-      const applied = insertWysiwygMarkdownWithCursor(instance, command, range, {
-        title: documentTitleRef.current
-      })
-      if (applied) {
-        dismissSlashMenu()
-      }
-      return applied
-    },
-    [dismissSlashMenu]
-  )
-
-  const slashControlsRef = useRef({
-    stateRef: slashStateRef,
-    updateFromMatch: updateSlashFromMatch,
-    moveSelection: moveSlashSelection,
-    dismiss: dismissSlashMenu,
-    applySelected: (): boolean => {
-      const current = slashStateRef.current
-      const instance = editorRef.current
-      if (!current.isOpen || current.items.length === 0 || !instance) {
-        return false
-      }
-      const selected = current.items[current.selectedIndex] ?? current.items[0]
-      if (!selected) {
-        return false
-      }
-      return applySlashCommand(instance, selected, {
-        rangeFrom: current.rangeFrom,
-        rangeTo: current.rangeTo
-      })
-    }
-  })
-  slashControlsRef.current.stateRef = slashStateRef
-  slashControlsRef.current.updateFromMatch = updateSlashFromMatch
-  slashControlsRef.current.moveSelection = moveSlashSelection
-  slashControlsRef.current.dismiss = dismissSlashMenu
-  slashControlsRef.current.applySelected = (): boolean => {
-    const current = slashStateRef.current
+  } = useSlashMenu(customCommands, (command, explicitRange?: SlashMenuRange) => {
     const instance = editorRef.current
-    if (!current.isOpen || current.items.length === 0 || !instance) {
-      return false
-    }
-    const selected = current.items[current.selectedIndex] ?? current.items[0]
-    if (!selected) {
-      return false
-    }
-    return applySlashCommand(instance, selected, {
-      rangeFrom: current.rangeFrom,
-      rangeTo: current.rangeTo
+    if (!instance) return false
+    const range = explicitRange ?? detectProseMirrorSlashQuery(instance.state)
+    if (!range) return false
+
+    return insertWysiwygMarkdownWithCursor(instance, command, range, {
+      title: documentTitleRef.current
     })
-  }
+  })
 
   const [cellMenuPos, setCellMenuPos] = useState<{ x: number; y: number } | null>(null)
   const closeCellMenu = useCallback(() => setCellMenuPos(null), [])
@@ -386,18 +318,15 @@ export function WysiwygMarkdownEditor({
           return
         }
         const match = detectProseMirrorSlashQuery(instance.state)
-        const coords = match ? safeProseMirrorCoords(instance.view, match.rangeFrom) : null
+        const coords = match ? readSafeCaretCoords(instance.view, match.rangeFrom) : null
         slashControlsRef.current.updateFromMatch(match, coords, shellRef.current)
       },
       onSelectionUpdate: ({ editor: instance, transaction }) => {
-        if (transaction.docChanged || !slashControlsRef.current.stateRef.current.isOpen) {
+        if (transaction.docChanged) {
           return
         }
         const { from, to, empty } = instance.state.selection
-        const active = slashControlsRef.current.stateRef.current
-        if (!empty || from < active.rangeFrom || to > active.rangeTo) {
-          slashControlsRef.current.dismiss()
-        }
+        slashControlsRef.current.dismissIfSelectionOutside(from, to, empty)
       }
     },
     []
@@ -498,18 +427,6 @@ export function WysiwygMarkdownEditor({
   const mermaidContextValue = useMemo(
     () => ({ theme, mermaidRenderer }),
     [mermaidRenderer, theme]
-  )
-
-  const handleSelectSlashCommand = useCallback(
-    (command: CustomCommandConfig): void => {
-      const current = slashStateRef.current
-      applySlashCommand(
-        editor,
-        command,
-        current.isOpen ? { rangeFrom: current.rangeFrom, rangeTo: current.rangeTo } : undefined
-      )
-    },
-    [applySlashCommand, editor, slashStateRef]
   )
 
   return (
@@ -623,15 +540,7 @@ export function WysiwygMarkdownEditor({
         </div>
       )}
 
-      <SlashCommandMenu
-        isOpen={slashMenuState.isOpen}
-        items={slashMenuState.items}
-        selectedIndex={slashMenuState.selectedIndex}
-        position={slashMenuState.position}
-        onSelect={handleSelectSlashCommand}
-        onHoverIndex={setSlashSelectedIndex}
-        onDismiss={dismissSlashMenu}
-      />
+      <SlashCommandMenu {...slashMenuProps} />
     </div>
   )
 }
