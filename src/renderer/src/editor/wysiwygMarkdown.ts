@@ -19,7 +19,8 @@ import { MermaidCodeBlockNodeView } from '../components/MermaidCodeBlockNodeView
 import { isSafeMarkdownUrl, MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 import {
   createHeadingNumberTracker,
-  HEADING_NUMBER_PREFIX_RE,
+  hasHeadingNumberPrefix,
+  LEADING_HEADING_NUMBER_RE,
   stripHeadingNumberPrefix
 } from './MarkdownTocEngine'
 
@@ -79,18 +80,20 @@ const HeadingNumberingExtension = Extension.create<{ showHeadingNumbers: boolean
                 const { number } = tracker.next(level)
                 const text = node.textContent
                 if (stripHeadingNumberPrefix(text).trim().length > 0) {
-                  const firstChild = node.firstChild
-                  const explicitMatch =
-                    firstChild && firstChild.isText && firstChild.text
-                      ? HEADING_NUMBER_PREFIX_RE.exec(firstChild.text)
-                      : null
-                  if (explicitMatch) {
-                    decorations.push(
-                      Decoration.inline(pos + 1, pos + 1 + explicitMatch[0].length, {
-                        class: 'heading-number-suppressed',
-                        'aria-hidden': 'true'
-                      })
-                    )
+                  if (hasHeadingNumberPrefix(text)) {
+                    const firstChild = node.firstChild
+                    const explicitMatch =
+                      firstChild && firstChild.isText && firstChild.text
+                        ? LEADING_HEADING_NUMBER_RE.exec(firstChild.text)
+                        : null
+                    if (explicitMatch) {
+                      decorations.push(
+                        Decoration.inline(pos + 1, pos + 1 + explicitMatch[0].length, {
+                          class: 'heading-number-suppressed',
+                          'aria-hidden': 'true'
+                        })
+                      )
+                    }
                   }
                   decorations.push(
                     Decoration.widget(

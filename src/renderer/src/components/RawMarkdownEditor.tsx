@@ -3,8 +3,6 @@ import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
 import type { CursorPosition } from '../stores/PaneTabStore'
 
-export type { RawScrollRequest }
-
 interface RawMarkdownEditorProps {
   content: string
   language: 'markdown' | 'json'

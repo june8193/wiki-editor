@@ -13,6 +13,7 @@ import {
   sanitizeHtmlWithRehype
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
+import { useOneShotScroll } from '../hooks/useOneShotScroll'
 import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
 
@@ -214,7 +215,6 @@ export function WysiwygMarkdownEditor({
   const onChangeContentRef = useRef(onChangeContent)
   onChangeContentRef.current = onChangeContent
   const insertTocRef = useRef<() => void>(() => undefined)
-  const handledScrollNonceRef = useRef<number | null>(null)
 
   const [cellMenuPos, setCellMenuPos] = useState<{ x: number; y: number } | null>(null)
   const closeCellMenu = useCallback(() => setCellMenuPos(null), [])
@@ -268,6 +268,24 @@ export function WysiwygMarkdownEditor({
     []
   )
 
+  const syncEditorContent = useCallback(
+    (markdown: string, markLocalEdit: boolean): void => {
+      if (!editor) return
+      isProgrammaticSyncRef.current = true
+      try {
+        editor.commands.setContent(prepareMarkdownForTiptap(markdown), {
+          emitUpdate: false,
+          contentType: 'markdown'
+        })
+        hasLocalEditRef.current = markLocalEdit
+        lastEmittedMarkdownRef.current = markdown
+      } finally {
+        isProgrammaticSyncRef.current = false
+      }
+    },
+    [editor]
+  )
+
   const handleInsertToc = useCallback((): void => {
     if (!editor) return
     const currentMd = hasLocalEditRef.current ? editor.getMarkdown() : contentRef.current
@@ -275,38 +293,17 @@ export function WysiwygMarkdownEditor({
     const nextMd = insertOrUpdateTocBlock(currentMd, cursorLine)
     if (nextMd === currentMd) return
 
-    isProgrammaticSyncRef.current = true
-    try {
-      editor.commands.setContent(prepareMarkdownForTiptap(nextMd), {
-        emitUpdate: false,
-        contentType: 'markdown'
-      })
-      hasLocalEditRef.current = true
-      lastEmittedMarkdownRef.current = nextMd
-    } finally {
-      isProgrammaticSyncRef.current = false
-    }
+    syncEditorContent(nextMd, true)
     onChangeContentRef.current(nextMd)
-  }, [editor])
+  }, [editor, syncEditorContent])
 
   insertTocRef.current = handleInsertToc
 
   useEffect(() => {
     if (!editor) return
     if (content === lastEmittedMarkdownRef.current) return
-
-    isProgrammaticSyncRef.current = true
-    try {
-      editor.commands.setContent(prepareMarkdownForTiptap(content), {
-        emitUpdate: false,
-        contentType: 'markdown'
-      })
-      hasLocalEditRef.current = false
-      lastEmittedMarkdownRef.current = content
-    } finally {
-      isProgrammaticSyncRef.current = false
-    }
-  }, [content, editor])
+    syncEditorContent(content, false)
+  }, [content, editor, syncEditorContent])
 
   useEffect(() => {
     if (!editor) return
@@ -316,10 +313,8 @@ export function WysiwygMarkdownEditor({
     }
   }, [editor, showHeadingNumbers])
 
-  useEffect(() => {
-    if (!editor || !scrollRequest) return
-    if (handledScrollNonceRef.current === scrollRequest.nonce) return
-    handledScrollNonceRef.current = scrollRequest.nonce
+  useOneShotScroll(scrollRequest, Boolean(editor), (req) => {
+    if (!editor) return false
 
     const headingPositions: number[] = []
     editor.state.doc.descendants((node, pos) => {
@@ -330,15 +325,16 @@ export function WysiwygMarkdownEditor({
       return node.type.name !== 'codeBlock'
     })
 
-    const targetPos = headingPositions[scrollRequest.index]
-    if (targetPos === undefined) return
+    const targetPos = headingPositions[req.index]
+    if (targetPos === undefined) return true
 
     const dom = editor.view.nodeDOM(targetPos)
     if (dom instanceof Element && typeof dom.scrollIntoView === 'function') {
       dom.scrollIntoView({ block: 'start' })
     }
     editor.commands.setTextSelection(targetPos + 1)
-  }, [editor, scrollRequest])
+    return true
+  })
 
   useSyncScrollTop(scrollContainerRef, scrollTop)
 

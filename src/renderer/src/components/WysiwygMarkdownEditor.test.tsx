@@ -360,4 +360,26 @@ describe('WysiwygMarkdownEditor', () => {
       Element.prototype.scrollIntoView = origScrollIntoView
     }
   })
+
+  it('suppresses stale explicit numeric prefix when a heading starts with inline bold formatting', () => {
+    const { container } = render(
+      <WysiwygMarkdownEditor
+        content={'# Intro\n\n## 1. **Bold** Title'}
+        scrollTop={0}
+        theme="light"
+        showHeadingNumbers={true}
+        onChangeContent={vi.fn()}
+      />
+    )
+
+    const numberBadges = Array.from(container.querySelectorAll('.heading-number')).map(
+      (el) => el.textContent
+    )
+    expect(numberBadges).toEqual(['1. ', '1.1. '])
+
+    const headings = container.querySelectorAll('.ProseMirror h2')
+    expect(headings).toHaveLength(1)
+    const suppressed = headings[0]?.querySelector('.heading-number-suppressed')
+    expect(suppressed?.textContent).toBe('1. ')
+  })
 })

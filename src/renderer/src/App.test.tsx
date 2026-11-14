@@ -2251,4 +2251,113 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     expect(afterStrip).not.toContain('## 1.1. First Section')
     expect(afterStrip).toContain('# 99. Code comment must stay unchanged')
   })
+
+  it('replaces non-fenced /toc placeholder when running Outline insert TOC in WYSIWYG mode', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      { theme: 'light', showHeadingNumbers: false },
+      {
+        selectedFolder: 'C:\\wiki\\wysiwyg-toc',
+        workspaces: {
+          'C:\\wiki\\wysiwyg-toc': {
+            'doc.md': ['# Heading', '', '/toc', '', '## Details'].join('\n')
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await user.click(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('doc.md'))
+
+    await user.click(
+      within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+        name: '위지윅'
+      })
+    )
+
+    const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+    await user.click(within(outline).getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
+
+    await user.click(
+      within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+        name: 'Raw'
+      })
+    )
+    const rawText = getRawEditorText(screen.getByTestId('document-editor'))
+    expect(rawText).toContain('<!-- toc -->')
+    expect(rawText).toContain('- [Heading](#heading)')
+    expect(rawText).toContain('  - [Details](#details)')
+    expect(rawText).toContain('<!-- /toc -->')
+    expect(rawText).not.toMatch(/^\/toc$/m)
+  })
+
+  it('does not replay stale outlineScrollRequest after tab switch or global Ctrl+1/Ctrl+3 shortcuts', async () => {
+    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollIntoView'
+    )
+    const scrollIntoViewMock = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: scrollIntoViewMock
+    })
+
+    try {
+      const user = userEvent.setup()
+      const { api } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\scroll-once',
+          workspaces: {
+            'C:\\wiki\\scroll-once': {
+              'alpha.md': ['# Alpha', '', '## Target Heading', '', 'Body'].join('\n'),
+              'beta.md': ['# Beta', '', 'Other'].join('\n')
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+      const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+      await user.click(within(sidebar).getByText('alpha.md'))
+      await user.click(within(sidebar).getByText('beta.md'))
+      await user.click(screen.getByRole('tab', { name: 'alpha.md' }))
+
+      await user.click(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: 'Preview'
+        })
+      )
+
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      await user.click(within(outline).getByRole('button', { name: /Target Heading/i }))
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+
+      scrollIntoViewMock.mockClear()
+      await user.click(screen.getByRole('tab', { name: 'beta.md' }))
+      await user.click(screen.getByRole('tab', { name: 'alpha.md' }))
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      await user.click(within(outline).getByRole('button', { name: /Target Heading/i }))
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+
+      scrollIntoViewMock.mockClear()
+      fireEvent.keyDown(window, { key: '1', ctrlKey: true })
+      expect(screen.getByRole('button', { name: 'Raw' })).toHaveAttribute('aria-pressed', 'true')
+      fireEvent.keyDown(window, { key: '3', ctrlKey: true })
+      expect(screen.getByRole('button', { name: 'Preview' })).toHaveAttribute('aria-pressed', 'true')
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+    } finally {
+      if (origScrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+      }
+    }
+  })
 })

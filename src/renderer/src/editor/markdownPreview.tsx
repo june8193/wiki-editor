@@ -21,7 +21,8 @@ import { MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 import {
   createHeadingNumberTracker,
   createHeadingSlugTracker,
-  hasHeadingNumberPrefix
+  hasHeadingNumberPrefix,
+  LEADING_HEADING_NUMBER_RE
 } from './MarkdownTocEngine'
 import type { MermaidRenderer } from './mermaidRenderer'
 
@@ -39,8 +40,6 @@ interface PreviewRenderContextValue {
 }
 
 const PreviewRenderContext = createContext<PreviewRenderContextValue>({ theme: 'light' })
-
-const LEADING_HEADING_NUM_ONLY_RE = /^\d+(?:\.\d+)*\.[ \t]+/
 
 function decodeSlugSafely(rawSlug: string): string {
   try {
@@ -65,7 +64,7 @@ function stripLeadingNumberFromFirstTextLeaf(children: HastRootContent[]): boole
     const child = children[i]
     if (child.type === 'text') {
       if (child.value.length === 0) continue
-      const stripped = child.value.replace(LEADING_HEADING_NUM_ONLY_RE, '')
+      const stripped = child.value.replace(LEADING_HEADING_NUMBER_RE, '')
       if (stripped !== child.value) {
         child.value = stripped
         return true

@@ -23,6 +23,7 @@ import {
   tryReplaceSlashTocAtLine
 } from '../editor/MarkdownTocEngine'
 import type { CursorPosition } from '../stores/PaneTabStore'
+import { useOneShotScroll } from './useOneShotScroll'
 import { syncElementScrollTop } from './useSyncScrollTop'
 
 const externalSyncAnnotation = Annotation.define<boolean>()
@@ -176,7 +177,6 @@ export function useRawCodeMirrorEditor({
 }: UseRawCodeMirrorEditorOptions) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
-  const handledScrollNonceRef = useRef<number | null>(null)
   const compartmentsRef = useRef({
     language: new Compartment(),
     theme: new Compartment(),
@@ -364,14 +364,12 @@ export function useRawCodeMirrorEditor({
     syncElementScrollTop(view.scrollDOM, scrollTop)
   }, [scrollTop])
 
-  useEffect(() => {
+  useOneShotScroll(scrollRequest, true, (req) => {
     const view = viewRef.current
-    if (!view || !scrollRequest) return
-    if (handledScrollNonceRef.current === scrollRequest.nonce) return
-    handledScrollNonceRef.current = scrollRequest.nonce
+    if (!view) return false
 
     const lineCount = view.state.doc.lines
-    const clampedLine = Math.max(1, Math.min(scrollRequest.line, lineCount))
+    const clampedLine = Math.max(1, Math.min(req.line, lineCount))
     const lineInfo = view.state.doc.line(clampedLine)
     view.dispatch({
       selection: { anchor: lineInfo.from },
@@ -379,7 +377,8 @@ export function useRawCodeMirrorEditor({
     })
     syncSelectionAttrs(view)
     view.focus()
-  }, [scrollRequest])
+    return true
+  })
 
   const runTableAction = useCallback((action: RawTableAction): void => {
     const view = viewRef.current

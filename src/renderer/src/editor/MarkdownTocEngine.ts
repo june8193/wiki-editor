@@ -40,7 +40,7 @@ interface ScannedLine {
   inCodeFence: boolean
 }
 
-export const HEADING_NUMBER_PREFIX_RE = /^(\d+(?:\.\d+)*\.)([ \t]+)(?=\S)/
+export const LEADING_HEADING_NUMBER_RE = /^(\d+(?:\.\d+)*\.)([ \t]+)/
 const ATX_HEADING_RE = /^([ ]{0,3})(#{1,6})([ \t]+)(.+?)([ \t]*)$/
 const TRAILING_CLOSING_HASHES_RE = /^(.*?)(?:[ \t]+#+)?$/
 const FENCE_OPEN_RE = /^[ ]{0,3}(`{3,}|~{3,})(.*)$/
@@ -154,18 +154,13 @@ function scanMarkdownLines(markdown: string): ScannedLine[] {
   return result
 }
 
-export function isLineInsideCodeFence(markdown: string, targetLine1Based: number): boolean {
-  const lines = scanMarkdownLines(markdown)
-  const target = lines[targetLine1Based - 1]
-  return target ? target.inCodeFence : false
-}
-
 export function hasHeadingNumberPrefix(text: string): boolean {
-  return HEADING_NUMBER_PREFIX_RE.test(text)
+  const match = LEADING_HEADING_NUMBER_RE.exec(text)
+  return match !== null && /\S/.test(text.slice(match[0].length))
 }
 
 export function stripHeadingNumberPrefix(text: string): string {
-  return text.replace(HEADING_NUMBER_PREFIX_RE, '')
+  return hasHeadingNumberPrefix(text) ? text.replace(LEADING_HEADING_NUMBER_RE, '') : text
 }
 
 export function stripInlineMarkdown(text: string): string {
@@ -342,13 +337,9 @@ function findExistingTocMarkerRange(
  * Inserts a new TOC block (or updates an existing `<!-- toc -->` block in-place) safely
  * outside fenced code blocks while preserving CRLF/LF line endings.
  */
-export function insertOrUpdateTocBlock(
-  markdown: string,
-  cursorLine?: number,
-  options: TocGenerateOptions = {}
-): string {
+export function insertOrUpdateTocBlock(markdown: string, cursorLine?: number): string {
   const lineEnding = detectDocumentLineEnding(markdown)
-  const tocBody = generateTocMarkdown(markdown, options)
+  const tocBody = generateTocMarkdown(markdown)
   const tocLines = tocBody
     ? [TOC_START_MARKER, ...tocBody.split('\n'), TOC_END_MARKER]
     : [TOC_START_MARKER, TOC_END_MARKER]
@@ -418,15 +409,14 @@ export function insertOrUpdateTocBlock(
  */
 export function tryReplaceSlashTocAtLine(
   markdown: string,
-  targetLine1Based: number,
-  options: TocGenerateOptions = {}
+  targetLine1Based: number
 ): string | null {
   const lines = scanMarkdownLines(markdown)
   const target = lines[targetLine1Based - 1]
   if (!target || target.inCodeFence || target.text.trim() !== '/toc') {
     return null
   }
-  const next = insertOrUpdateTocBlock(markdown, targetLine1Based, options)
+  const next = insertOrUpdateTocBlock(markdown, targetLine1Based)
   return next === markdown ? null : next
 }
 

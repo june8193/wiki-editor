@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
+import { useOneShotScroll } from '../hooks/useOneShotScroll'
 import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
 
 export interface PreviewScrollRequest {
@@ -36,7 +37,6 @@ export function MarkdownPreview({
   onScrollTopChange
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const handledScrollNonceRef = useRef<number | null>(null)
 
   const scrollToHeading = useCallback((slug?: string, index?: number): void => {
     const container = containerRef.current
@@ -75,12 +75,9 @@ export function MarkdownPreview({
 
   useSyncScrollTop(containerRef, scrollTop)
 
-  useEffect(() => {
-    if (!scrollRequest) return
-    if (handledScrollNonceRef.current === scrollRequest.nonce) return
-    handledScrollNonceRef.current = scrollRequest.nonce
-    scrollToHeading(scrollRequest.slug, scrollRequest.index)
-  }, [scrollRequest, scrollToHeading])
+  useOneShotScroll(scrollRequest, true, (req) => {
+    scrollToHeading(req.slug, req.index)
+  })
 
   return (
     <div

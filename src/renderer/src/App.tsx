@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import type { OutlineScrollRequest } from './components/DocumentEditor'
@@ -11,6 +11,7 @@ import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { isMarkdownDocument } from './editor/editorModes'
 import {
   applyHeadingNumbers,
+  findFirstNonFencedSlashTocLine,
   insertOrUpdateTocBlock,
   type MarkdownHeading,
   resolveRawCursorLine,
@@ -253,12 +254,18 @@ export function App() {
     [activePane.id, activeTab, isActiveMarkdown]
   )
 
+  useEffect(() => {
+    if (outlineScrollRequest !== null) {
+      setOutlineScrollRequest(null)
+    }
+  }, [outlineScrollRequest])
+
   const handleOutlineInsertToc = useCallback((): void => {
     applyActiveMarkdownTransform((content) => {
       const cursorLine =
         activeTab?.mode === 'raw'
           ? resolveRawCursorLine(content, activeTab.cursor.selectionStart)
-          : undefined
+          : findFirstNonFencedSlashTocLine(content)
       return insertOrUpdateTocBlock(content, cursorLine)
     })
   }, [activeTab?.cursor.selectionStart, activeTab?.mode, applyActiveMarkdownTransform])
