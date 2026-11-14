@@ -25,11 +25,20 @@ export function useGitController({
   const activeWorkspaceRef = useRef<string | null>(workspaceRootPath)
   const workspaceEpochRef = useRef(0)
   const requestSeqRef = useRef(0)
-  const mutationLockRef = useRef(false)
+  const mutationTokenRef = useRef<number | null>(null)
+  const mutationCounterRef = useRef(0)
   const callbacksRef = useRef({ confirmBeforeWorkspaceMutation, onWorkspaceMutated })
 
   activeWorkspaceRef.current = workspaceRootPath
   callbacksRef.current = { confirmBeforeWorkspaceMutation, onWorkspaceMutated }
+
+  const isCurrentRequest = useCallback((rootPath: string, epoch: number): boolean => {
+    return (
+      mountedRef.current &&
+      activeWorkspaceRef.current === rootPath &&
+      workspaceEpochRef.current === epoch
+    )
+  }, [])
 
   useEffect(() => {
     mountedRef.current = true
@@ -45,11 +54,7 @@ export function useGitController({
       nextStatus: GitStatus,
       fetchBranches: boolean
     ): Promise<void> => {
-      if (
-        !mountedRef.current ||
-        activeWorkspaceRef.current !== rootPath ||
-        workspaceEpochRef.current !== epoch
-      ) {
+      if (!isCurrentRequest(rootPath, epoch)) {
         return
       }
       const applySeq = ++requestSeqRef.current
@@ -63,12 +68,7 @@ export function useGitController({
 
       try {
         const nextBranches = await window.wikiApi.git.branches(rootPath)
-        if (
-          !mountedRef.current ||
-          activeWorkspaceRef.current !== rootPath ||
-          workspaceEpochRef.current !== epoch ||
-          requestSeqRef.current !== applySeq
-        ) {
+        if (!isCurrentRequest(rootPath, epoch) || requestSeqRef.current !== applySeq) {
           return
         }
         setBranchList(nextBranches)
@@ -76,7 +76,7 @@ export function useGitController({
         // Branch lookup failures are non-fatal if status succeeded cleanly
       }
     },
-    []
+    [isCurrentRequest]
   )
 
   const refreshStatus = useCallback(async (): Promise<void> => {
@@ -88,7 +88,7 @@ export function useGitController({
       return
     }
     // Active mutations fetch fresh Git state when done; skip concurrent FS watch refreshes while locked
-    if (mutationLockRef.current) {
+    if (mutationTokenRef.current !== null) {
       return
     }
 
@@ -97,32 +97,28 @@ export function useGitController({
     try {
       const nextStatus = await window.wikiApi.git.status(rootPath)
       if (
-        mutationLockRef.current ||
-        workspaceEpochRef.current !== epoch ||
+        mutationTokenRef.current !== null ||
+        !isCurrentRequest(rootPath, epoch) ||
         requestSeqRef.current !== refreshSeq
       ) {
         return
       }
       await applyWorkspaceGitState(rootPath, epoch, nextStatus, true)
     } catch (error: unknown) {
-      if (
-        !mountedRef.current ||
-        activeWorkspaceRef.current !== rootPath ||
-        workspaceEpochRef.current !== epoch
-      ) {
+      if (!isCurrentRequest(rootPath, epoch)) {
         return
       }
       setErrorMessage(toErrorMessage(error, 'Git 상태를 불러오지 못했습니다.'))
     }
-  }, [applyWorkspaceGitState])
+  }, [applyWorkspaceGitState, isCurrentRequest])
 
   useEffect(() => {
     workspaceEpochRef.current += 1
+    mutationTokenRef.current = null
     setErrorMessage(null)
     setStatus(null)
     setBranchList(null)
     setPendingAction(null)
-    mutationLockRef.current = false
 
     if (workspaceRootPath) {
       void refreshStatus()
@@ -140,21 +136,17 @@ export function useGitController({
       }
     ): Promise<boolean> => {
       const rootPath = activeWorkspaceRef.current
-      if (!rootPath || mutationLockRef.current) return false
+      if (!rootPath || mutationTokenRef.current !== null) return false
 
       const epoch = workspaceEpochRef.current
-      mutationLockRef.current = true
+      const token = ++mutationCounterRef.current
+      mutationTokenRef.current = token
       setErrorMessage(null)
 
       try {
         if (options.affectsWorkspaceFiles && callbacksRef.current.confirmBeforeWorkspaceMutation) {
           const confirmed = await callbacksRef.current.confirmBeforeWorkspaceMutation(actionLabel)
-          if (
-            !confirmed ||
-            !mountedRef.current ||
-            activeWorkspaceRef.current !== rootPath ||
-            workspaceEpochRef.current !== epoch
-          ) {
+          if (!confirmed || !isCurrentRequest(rootPath, epoch)) {
             return false
           }
         }
@@ -168,29 +160,18 @@ export function useGitController({
 
         if (
           options.affectsWorkspaceFiles &&
-          mountedRef.current &&
-          activeWorkspaceRef.current === rootPath &&
-          workspaceEpochRef.current === epoch &&
+          isCurrentRequest(rootPath, epoch) &&
           callbacksRef.current.onWorkspaceMutated
         ) {
           const warnings = await callbacksRef.current.onWorkspaceMutated()
-          if (
-            mountedRef.current &&
-            activeWorkspaceRef.current === rootPath &&
-            workspaceEpochRef.current === epoch &&
-            warnings.length > 0
-          ) {
+          if (isCurrentRequest(rootPath, epoch) && warnings.length > 0) {
             setErrorMessage(warnings.join(' '))
           }
         }
 
         return true
       } catch (error: unknown) {
-        if (
-          mountedRef.current &&
-          activeWorkspaceRef.current === rootPath &&
-          workspaceEpochRef.current === epoch
-        ) {
+        if (isCurrentRequest(rootPath, epoch)) {
           setErrorMessage(toErrorMessage(error, options.fallbackError))
           if (options.affectsWorkspaceFiles) {
             await window.wikiApi.git
@@ -202,13 +183,15 @@ export function useGitController({
         }
         return false
       } finally {
-        mutationLockRef.current = false
-        if (mountedRef.current) {
-          setPendingAction(null)
+        if (mutationTokenRef.current === token) {
+          mutationTokenRef.current = null
+          if (mountedRef.current) {
+            setPendingAction(null)
+          }
         }
       }
     },
-    [applyWorkspaceGitState]
+    [applyWorkspaceGitState, isCurrentRequest]
   )
 
   const initRepo = useCallback(async (): Promise<void> => {

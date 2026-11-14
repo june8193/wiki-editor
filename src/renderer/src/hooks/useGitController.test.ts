@@ -145,4 +145,86 @@ describe('useGitController', () => {
     })
     expect(unstageMock).toHaveBeenCalledWith('C:/repo-b', ['new.md', 'old.md'])
   })
+
+  it('does not clear active mutation lock or loading state in a new workspace when a stale mutation finishes', async () => {
+    let resolveSlowRepoAPull!: (value: GitStatus) => void
+    let resolveRepoBPull!: (value: GitStatus) => void
+    const pullMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<GitStatus>((resolve) => {
+            resolveSlowRepoAPull = resolve
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<GitStatus>((resolve) => {
+            resolveRepoBPull = resolve
+          })
+      )
+
+    window.wikiApi = {
+      git: {
+        status: vi.fn(async (ws) => makeStatus(ws === 'C:/repo-a' ? 'a-branch' : 'b-branch')),
+        init: vi.fn(),
+        stage: vi.fn(),
+        stageAll: vi.fn(),
+        unstage: vi.fn(),
+        unstageAll: vi.fn(),
+        commit: vi.fn(),
+        branches: vi.fn(async () => ({ current: 'b-branch', isDetached: false, branches: [] })),
+        checkout: vi.fn(),
+        pull: pullMock,
+        push: vi.fn(),
+        sync: vi.fn()
+      }
+    } as unknown as WikiApi
+
+    const { result, rerender } = renderHook(
+      ({ ws }: { ws: string | null }) => useGitController({ workspaceRootPath: ws }),
+      { initialProps: { ws: 'C:/repo-a' } }
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.branch).toBe('a-branch')
+    })
+
+    let slowPull!: Promise<void>
+    act(() => {
+      slowPull = result.current.pull()
+    })
+    await waitFor(() => {
+      expect(result.current.pendingAction).toBe('Pull')
+    })
+
+    // Switch to repo-b and start a Pull there before repo-a finishes
+    rerender({ ws: 'C:/repo-b' })
+    await waitFor(() => {
+      expect(result.current.status?.branch).toBe('b-branch')
+    })
+
+    let repoBPull!: Promise<void>
+    act(() => {
+      repoBPull = result.current.pull()
+    })
+    await waitFor(() => {
+      expect(result.current.pendingAction).toBe('Pull')
+    })
+
+    // Resolve stale repo-a Pull -> repo-b lock and pendingAction must stay active
+    await act(async () => {
+      resolveSlowRepoAPull(makeStatus('stale-a'))
+      await slowPull
+    })
+    expect(result.current.pendingAction).toBe('Pull')
+    expect(result.current.status?.branch).toBe('b-branch')
+
+    await act(async () => {
+      resolveRepoBPull(makeStatus('b-updated', 2))
+      await repoBPull
+    })
+    expect(result.current.pendingAction).toBeNull()
+    expect(result.current.status?.branch).toBe('b-updated')
+  })
 })

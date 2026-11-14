@@ -19,8 +19,9 @@ import {
   type ExecGitError,
   extractGitErrorDetail,
   formatGitError,
-  parsePorcelainV2Z
-} from './gitPorcelain'
+  GitFormattedError
+} from './gitErrors'
+import { parsePorcelainV2Z } from './gitPorcelain'
 
 export { formatGitError, parsePorcelainV2Z }
 
@@ -58,19 +59,10 @@ export class GitService {
   }
 
   async status(workspacePath: string): Promise<GitStatus> {
-    const resolvedDir = await this.resolveExistingDirectory(workspacePath)
-    let repoRoot: string
-    try {
-      const topLevel = (await this.execGit(resolvedDir, ['rev-parse', '--show-toplevel'])).trim()
-      repoRoot = await realpath(topLevel)
-    } catch (error) {
-      const detail = extractGitErrorDetail(error).toLowerCase()
-      if (detail.includes('not a git repository')) {
-        return createEmptyGitStatus(false, null)
-      }
-      throw formatGitError(error)
+    const repoRoot = await this.findRepoRoot(workspacePath)
+    if (!repoRoot) {
+      return createEmptyGitStatus(false, null)
     }
-
     return this.statusForRepo(repoRoot)
   }
 
@@ -366,6 +358,8 @@ export class GitService {
   private async statusForRepo(repoRoot: string): Promise<GitStatus> {
     try {
       const raw = await this.execGit(repoRoot, [
+        '-c',
+        'core.quotePath=false',
         'status',
         '--porcelain=v2',
         '--branch',
@@ -400,14 +394,26 @@ export class GitService {
     return realDir
   }
 
-  private async requireRepoRoot(workspacePath: string): Promise<string> {
+  private async findRepoRoot(workspacePath: string): Promise<string | null> {
     const workspaceDir = await this.resolveExistingDirectory(workspacePath)
     try {
       const topLevel = (await this.execGit(workspaceDir, ['rev-parse', '--show-toplevel'])).trim()
       return await realpath(topLevel)
     } catch (error) {
+      const detail = extractGitErrorDetail(error).toLowerCase()
+      if (detail.includes('not a git repository')) {
+        return null
+      }
       throw formatGitError(error)
     }
+  }
+
+  private async requireRepoRoot(workspacePath: string): Promise<string> {
+    const repoRoot = await this.findRepoRoot(workspacePath)
+    if (!repoRoot) {
+      throw new GitFormattedError('현재 워크스페이스는 Git 저장소가 아닙니다.')
+    }
+    return repoRoot
   }
 
   private async hasHeadCommit(repoRoot: string): Promise<boolean> {
@@ -463,19 +469,24 @@ export class GitService {
     args: readonly string[],
     timeoutMs = this.localTimeoutMs
   ): Promise<string> {
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...this.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GCM_INTERACTIVE: 'never',
+      GIT_MERGE_AUTOEDIT: 'no',
+      LC_MESSAGES: 'C',
+      LANGUAGE: 'C'
+    }
+    delete childEnv.LC_ALL
+
     const { stdout } = await execFileAsync('git', [...args], {
       cwd,
       encoding: 'utf8',
       windowsHide: true,
       maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
       timeout: timeoutMs,
-      env: {
-        ...process.env,
-        ...this.env,
-        GIT_TERMINAL_PROMPT: '0',
-        GCM_INTERACTIVE: 'never',
-        GIT_MERGE_AUTOEDIT: 'no'
-      }
+      env: childEnv
     })
     return stdout
   }

@@ -169,8 +169,12 @@ export function App() {
     }
   }, [])
 
-  const confirmDirtyBuffersBeforeGitMutation = useCallback(
-    (actionLabel: string): Promise<boolean> => {
+  const promptUnsavedWorkspaceChanges = useCallback(
+    (options: {
+      message: (dirtySummary: string) => string
+      confirmLabel: string
+      secondaryLabel: string
+    }): Promise<boolean> => {
       const dirtySummary = getDirtyWorkspaceSummary()
       if (!dirtySummary) {
         return Promise.resolve(true)
@@ -188,9 +192,9 @@ export function App() {
 
         setPendingDialog({
           title: '저장하지 않은 변경 사항',
-          message: `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. ${actionLabel} 전에 어떻게 할까요?`,
-          confirmLabel: '저장 후 진행',
-          secondaryLabel: '저장 없이 진행',
+          message: options.message(dirtySummary),
+          confirmLabel: options.confirmLabel,
+          secondaryLabel: options.secondaryLabel,
           onConfirm: async () => {
             setPendingDialog(null)
             const saved = await ensureAllWorkspaceBuffersSaved()
@@ -207,6 +211,17 @@ export function App() {
     [ensureAllWorkspaceBuffersSaved, getDirtyWorkspaceSummary]
   )
 
+  const confirmDirtyBuffersBeforeGitMutation = useCallback(
+    (actionLabel: string): Promise<boolean> =>
+      promptUnsavedWorkspaceChanges({
+        message: (dirtySummary) =>
+          `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. ${actionLabel} 전에 어떻게 할까요?`,
+        confirmLabel: '저장 후 진행',
+        secondaryLabel: '저장 없이 진행'
+      }),
+    [promptUnsavedWorkspaceChanges]
+  )
+
   const handleGitWorkspaceMutated = useCallback(async (): Promise<readonly string[]> => {
     await refreshTree()
     return await reconcileWorkspaceBuffersWithDisk()
@@ -221,31 +236,18 @@ export function App() {
 
   const guardUnsavedWorkspaceChanges = useCallback(
     (proceed: () => Promise<void>): void => {
-      const dirtySummary = getDirtyWorkspaceSummary()
-      if (!dirtySummary) {
-        void proceed()
-        return
-      }
-
-      setPendingDialog({
-        title: '저장하지 않은 변경 사항',
-        message: `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. 어떻게 할까요?`,
+      void promptUnsavedWorkspaceChanges({
+        message: (dirtySummary) =>
+          `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. 어떻게 할까요?`,
         confirmLabel: '저장 후 이동',
-        secondaryLabel: '버리고 이동',
-        onConfirm: async () => {
-          setPendingDialog(null)
-          const saved = await ensureAllWorkspaceBuffersSaved()
-          if (saved) {
-            await proceed()
-          }
-        },
-        onSecondary: async () => {
-          setPendingDialog(null)
-          await proceed()
+        secondaryLabel: '버리고 이동'
+      }).then((accepted) => {
+        if (accepted) {
+          void proceed()
         }
       })
     },
-    [ensureAllWorkspaceBuffersSaved, getDirtyWorkspaceSummary]
+    [promptUnsavedWorkspaceChanges]
   )
 
   const handleSwitchWorkspace = useCallback(
