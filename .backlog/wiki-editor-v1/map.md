@@ -24,7 +24,7 @@ Windows 전용 경량·고성능 마크다운 데스크톱 위키 에디터(`wik
 
 ## Child Tickets (수직 슬라이스 구현 백로그)
 
-- [01 — Electron + React + TS 스캐폴딩, 전역 설정(config.json) 및 라이트/다크 테마](issues/01-electron-react-scaffold-and-config.md)
+- [x] [01 — Electron + React + TS 스캐폴딩, 전역 설정(config.json) 및 라이트/다크 테마](issues/01-electron-react-scaffold-and-config.md) (`26b8158`)
 - [02 — 워크스페이스 폴더 트리(지연 로딩·파일 CRUD·저장) 및 즐겨찾기 관리](issues/02-workspace-folder-tree-and-favorites.md)
 - [03 — 멀티 탭 및 좌/우(상/하) 2분할 Split View 레이아웃 (비활성 탭 경량화)](issues/03-multi-tab-and-split-pane-layout.md)
 - [04 — 3모드 마크다운 에디터(Raw·Preview·위지윅) 및 표(행·열 추가/삭제) 편집](issues/04-three-mode-markdown-editor-and-table.md)
