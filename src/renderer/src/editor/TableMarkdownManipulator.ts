@@ -48,7 +48,7 @@ function splitLinesWithOffsets(markdown: string): LineSpan[] {
       lines.push({
         text: markdown.slice(lineStart, textEnd),
         start: lineStart,
-        end: rawEnd
+        end: textEnd
       })
       lineStart = i + 1
     }
@@ -60,12 +60,11 @@ function splitLinesWithOffsets(markdown: string): LineSpan[] {
 function findLineIndexAtOffset(lines: readonly LineSpan[], offset: number): number {
   const clamped = Math.max(0, offset)
   for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i]
-    if (clamped >= line.start && clamped <= line.end) {
+    if (i === lines.length - 1 || clamped < lines[i + 1].start) {
       return i
     }
   }
-  return Math.max(0, lines.length - 1)
+  return 0
 }
 
 function computeFencedLineMask(lines: readonly LineSpan[]): boolean[] {
@@ -246,10 +245,6 @@ const ALIGNMENT_SPECS: Record<TableAlignment, AlignmentSpec> = {
   }
 }
 
-function getMinAlignmentWidth(alignment: TableAlignment): number {
-  return ALIGNMENT_SPECS[alignment].minWidth
-}
-
 function formatAlignmentMarker(alignment: TableAlignment, colWidth: number): string {
   const spec = ALIGNMENT_SPECS[alignment]
   return spec.formatMarker(Math.max(spec.minWidth, colWidth))
@@ -291,7 +286,7 @@ function serializeTableLines(
     const alignment = alignments[c] ?? 'none'
     normAlignments.push(alignment)
     let width = Math.max(
-      getMinAlignmentWidth(alignment),
+      ALIGNMENT_SPECS[alignment].minWidth,
       getDisplayWidth((header[c] ?? '').trim())
     )
     for (const row of bodyRows) {
@@ -344,28 +339,88 @@ function computeCellCursorOffset(
   return offset + bound.startCol + (rawSlice.trim().length === 0 ? 1 : leadingSpaces)
 }
 
-function applyTableRewrite(
-  markdown: string,
-  context: TableContext,
-  nextHeader: readonly string[],
-  nextAlignments: readonly TableAlignment[],
-  nextBodyRows: readonly string[][],
-  cursorRowInTable: number,
-  cursorColIndex: number
-): TableEditResult {
+interface RewriteTableInput {
+  markdown: string
+  context: TableContext
+  header: readonly string[]
+  alignments: readonly TableAlignment[]
+  bodyRows: readonly string[][]
+  cursorRow: number
+  cursorCol: number
+}
+
+function applyTableRewrite({
+  markdown,
+  context,
+  header,
+  alignments,
+  bodyRows,
+  cursorRow,
+  cursorCol
+}: RewriteTableInput): TableEditResult {
   const lineEnding = markdown.includes('\r\n') ? '\r\n' : '\n'
-  const tableLines = serializeTableLines(nextHeader, nextAlignments, nextBodyRows)
+  const tableLines = serializeTableLines(header, alignments, bodyRows)
   const replacement = tableLines.join(lineEnding)
   const content =
     markdown.slice(0, context.startOffset) + replacement + markdown.slice(context.endOffset)
   const cursorOffset = computeCellCursorOffset(
     context.startOffset,
     tableLines,
-    cursorRowInTable,
-    cursorColIndex,
+    cursorRow,
+    cursorCol,
     lineEnding
   )
   return { content, cursorOffset }
+}
+
+function normalizeRowCells(cells: readonly string[], columnCount: number): string[] {
+  return Array.from({ length: columnCount }, (_, idx) => cells[idx] ?? '')
+}
+
+function locateTableBlock(
+  lines: readonly LineSpan[],
+  fencedMask: readonly boolean[],
+  cursorLineIndex: number
+): { headerLine: number; endLine: number; alignments: TableAlignment[] } | null {
+  const isPipeLine = (idx: number): boolean =>
+    idx >= 0 && idx < lines.length && !fencedMask[idx] && splitTableRow(lines[idx].text).hasPipe
+
+  if (!isPipeLine(cursorLineIndex)) return null
+
+  let startLine = cursorLineIndex
+  while (isPipeLine(startLine - 1)) startLine -= 1
+
+  let endLine = cursorLineIndex
+  while (isPipeLine(endLine + 1)) endLine += 1
+
+  for (let i = startLine; i < endLine; i += 1) {
+    const alignments = parseSeparatorAlignments(lines[i + 1].text)
+    if (alignments && splitTableRow(lines[i].text).hasPipe) {
+      return cursorLineIndex < i ? null : { headerLine: i, endLine, alignments }
+    }
+  }
+
+  return null
+}
+
+function resolveTableCursor(
+  lines: readonly LineSpan[],
+  headerLine: number,
+  cursorLineIndex: number,
+  offset: number,
+  columnCount: number
+): { colIndex: number; section: TableSection; bodyRowIndex: number } {
+  const currentLineParsed = splitTableRow(lines[cursorLineIndex].text)
+  const colInLine = Math.max(0, offset - lines[cursorLineIndex].start)
+  const colIndex = getColumnIndexInLine(currentLineParsed, colInLine, columnCount)
+
+  if (cursorLineIndex === headerLine) {
+    return { colIndex, section: 'header', bodyRowIndex: -1 }
+  }
+  if (cursorLineIndex === headerLine + 1) {
+    return { colIndex, section: 'separator', bodyRowIndex: -1 }
+  }
+  return { colIndex, section: 'body', bodyRowIndex: cursorLineIndex - (headerLine + 2) }
 }
 
 /**
@@ -377,93 +432,35 @@ export function detectTableAtOffset(markdown: string, offset: number): TableCont
 
   const fencedMask = computeFencedLineMask(lines)
   const cursorLineIndex = findLineIndexAtOffset(lines, offset)
-  if (fencedMask[cursorLineIndex]) return null
+  const block = locateTableBlock(lines, fencedMask, cursorLineIndex)
+  if (!block) return null
 
-  const isTableLine = (idx: number): boolean => {
-    if (idx < 0 || idx >= lines.length || fencedMask[idx]) return false
-    return splitTableRow(lines[idx].text).hasPipe
-  }
-
-  if (!isTableLine(cursorLineIndex)) return null
-
-  let startLine = cursorLineIndex
-  while (startLine > 0 && isTableLine(startLine - 1)) {
-    startLine -= 1
-  }
-
-  let endLine = cursorLineIndex
-  while (endLine + 1 < lines.length && isTableLine(endLine + 1)) {
-    endLine += 1
-  }
-
-  // Locate separator line inside the contiguous pipe block around cursor
-  let headerLine = startLine
-  let alignments = startLine + 1 <= endLine ? parseSeparatorAlignments(lines[startLine + 1].text) : null
-
-  if (!alignments) {
-    // Allow blocks where a non-table pipe line immediately precedes a real header + separator
-    for (let i = startLine + 1; i < endLine; i += 1) {
-      const candidate = parseSeparatorAlignments(lines[i + 1].text)
-      if (candidate && splitTableRow(lines[i].text).hasPipe) {
-        headerLine = i
-        alignments = candidate
-        startLine = i
-        break
-      }
-    }
-  }
-
-  if (!alignments || cursorLineIndex < headerLine) {
-    return null
-  }
-
-  const headerParsed = splitTableRow(lines[headerLine].text)
-  if (!headerParsed.hasPipe) return null
-
-  const columnCount = Math.max(headerParsed.cells.length, alignments.length)
-  const normalizedAlignments: TableAlignment[] = []
-  for (let c = 0; c < columnCount; c += 1) {
-    normalizedAlignments.push(alignments[c] ?? 'none')
-  }
-
-  const bodyRows: string[][] = []
-  for (let r = headerLine + 2; r <= endLine; r += 1) {
-    const rowCells = splitTableRow(lines[r].text).cells
-    const padded = Array.from({ length: columnCount }, (_, idx) => rowCells[idx] ?? '')
-    bodyRows.push(padded)
-  }
-
-  const normalizedHeader = Array.from(
+  const headerParsed = splitTableRow(lines[block.headerLine].text)
+  const columnCount = Math.max(headerParsed.cells.length, block.alignments.length)
+  const normalizedAlignments = Array.from(
     { length: columnCount },
-    (_, idx) => headerParsed.cells[idx] ?? ''
+    (_, c) => block.alignments[c] ?? 'none'
   )
 
-  const currentLineParsed = splitTableRow(lines[cursorLineIndex].text)
-  const colInLine = Math.max(0, offset - lines[cursorLineIndex].start)
-  const colIndex = getColumnIndexInLine(currentLineParsed, colInLine, columnCount)
-
-  let section: TableSection = 'body'
-  let bodyRowIndex = cursorLineIndex - (headerLine + 2)
-  if (cursorLineIndex === headerLine) {
-    section = 'header'
-    bodyRowIndex = -1
-  } else if (cursorLineIndex === headerLine + 1) {
-    section = 'separator'
-    bodyRowIndex = -1
+  const bodyRows: string[][] = []
+  for (let r = block.headerLine + 2; r <= block.endLine; r += 1) {
+    bodyRows.push(normalizeRowCells(splitTableRow(lines[r].text).cells, columnCount))
   }
 
+  const cursor = resolveTableCursor(lines, block.headerLine, cursorLineIndex, offset, columnCount)
+
   return {
-    startLine: headerLine,
-    endLine,
-    startOffset: lines[headerLine].start,
-    endOffset: lines[endLine].end,
+    startLine: block.headerLine,
+    endLine: block.endLine,
+    startOffset: lines[block.headerLine].start,
+    endOffset: lines[block.endLine].end,
     lineIndex: cursorLineIndex,
-    section,
-    bodyRowIndex,
-    colIndex,
+    section: cursor.section,
+    bodyRowIndex: cursor.bodyRowIndex,
+    colIndex: cursor.colIndex,
     columnCount,
     alignments: normalizedAlignments,
-    header: normalizedHeader,
+    header: normalizeRowCells(headerParsed.cells, columnCount),
     bodyRows
   }
 }
@@ -533,16 +530,15 @@ export function insertMarkdownTable(
 export function formatTableAtOffset(markdown: string, offset: number): TableEditResult | null {
   const context = detectTableAtOffset(markdown, offset)
   if (!context) return null
-  const rowInTable = context.lineIndex - context.startLine
-  return applyTableRewrite(
+  return applyTableRewrite({
     markdown,
     context,
-    context.header,
-    context.alignments,
-    context.bodyRows,
-    rowInTable,
-    context.colIndex
-  )
+    header: context.header,
+    alignments: context.alignments,
+    bodyRows: context.bodyRows,
+    cursorRow: context.lineIndex - context.startLine,
+    cursorCol: context.colIndex
+  })
 }
 
 /**
@@ -567,15 +563,15 @@ export function addTableRow(
   }
 
   nextBodyRows.splice(insertBodyIndex, 0, emptyRow)
-  return applyTableRewrite(
+  return applyTableRewrite({
     markdown,
     context,
-    context.header,
-    context.alignments,
-    nextBodyRows,
-    2 + insertBodyIndex,
-    context.colIndex
-  )
+    header: context.header,
+    alignments: context.alignments,
+    bodyRows: nextBodyRows,
+    cursorRow: 2 + insertBodyIndex,
+    cursorCol: context.colIndex
+  })
 }
 
 /**
@@ -602,16 +598,15 @@ export function addTableColumn(
     return copy
   })
 
-  const rowInTable = context.lineIndex - context.startLine
-  return applyTableRewrite(
+  return applyTableRewrite({
     markdown,
     context,
-    nextHeader,
-    nextAlignments,
-    nextBodyRows,
-    rowInTable,
-    insertCol
-  )
+    header: nextHeader,
+    alignments: nextAlignments,
+    bodyRows: nextBodyRows,
+    cursorRow: context.lineIndex - context.startLine,
+    cursorCol: insertCol
+  })
 }
 
 /**
@@ -632,15 +627,15 @@ export function deleteTableRow(markdown: string, offset: number): TableEditResul
       ? 0
       : 2 + Math.min(context.bodyRowIndex, nextBodyRows.length - 1)
 
-  return applyTableRewrite(
+  return applyTableRewrite({
     markdown,
     context,
-    context.header,
-    context.alignments,
-    nextBodyRows,
-    targetRowInTable,
-    context.colIndex
-  )
+    header: context.header,
+    alignments: context.alignments,
+    bodyRows: nextBodyRows,
+    cursorRow: targetRowInTable,
+    cursorCol: context.colIndex
+  })
 }
 
 /**
@@ -657,17 +652,15 @@ export function deleteTableColumn(markdown: string, offset: number): TableEditRe
   const nextAlignments = context.alignments.filter((_, idx) => idx !== removeCol)
   const nextBodyRows = context.bodyRows.map((row) => row.filter((_, idx) => idx !== removeCol))
 
-  const nextColIndex = Math.min(removeCol, nextHeader.length - 1)
-  const rowInTable = context.lineIndex - context.startLine
-  return applyTableRewrite(
+  return applyTableRewrite({
     markdown,
     context,
-    nextHeader,
-    nextAlignments,
-    nextBodyRows,
-    rowInTable,
-    nextColIndex
-  )
+    header: nextHeader,
+    alignments: nextAlignments,
+    bodyRows: nextBodyRows,
+    cursorRow: context.lineIndex - context.startLine,
+    cursorCol: Math.min(removeCol, nextHeader.length - 1)
+  })
 }
 
 /**
@@ -691,6 +684,13 @@ export function deleteTable(markdown: string, offset: number): TableEditResult |
     nextBefore = nextBefore.slice(0, -2)
   } else if (nextBefore.endsWith('\n')) {
     nextBefore = nextBefore.slice(0, -1)
+  }
+
+  // Collapse double blank lines left when both sides had blank-line separation around the table
+  if (nextBefore.endsWith('\r\n\r\n') && nextAfter.startsWith('\r\n')) {
+    nextAfter = nextAfter.slice(2)
+  } else if (nextBefore.endsWith('\n\n') && nextAfter.startsWith('\n')) {
+    nextAfter = nextAfter.slice(1)
   }
 
   return {

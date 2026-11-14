@@ -1,5 +1,5 @@
 import { Editor } from '@tiptap/core'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   addTableRowBeforeSafely,
   createWysiwygExtensions,
@@ -8,15 +8,28 @@ import {
   sanitizeHtmlWithRehype
 } from './wysiwygMarkdown'
 
+const createdEditors: Editor[] = []
+
 function createTestWysiwygEditor(markdown: string): Editor {
-  return new Editor({
+  const editor = new Editor({
     extensions: createWysiwygExtensions(),
     content: prepareMarkdownForTiptap(markdown),
     contentType: 'markdown'
   })
+  createdEditors.push(editor)
+  return editor
 }
 
 describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
+  afterEach(() => {
+    while (createdEditors.length > 0) {
+      const editor = createdEditors.pop()!
+      if (!editor.isDestroyed) {
+        editor.destroy()
+      }
+    }
+  })
+
   it('roundtrips headings, formatting, code blocks, blockquotes, links, lists, task lists, and tables', () => {
     const sample = [
       '# Title',
@@ -85,6 +98,10 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
       '<iframe src="https://evil.test"></iframe>',
       '',
       '[Bad](javascript:alert(3)) [Ftp](ftp://evil.test) [Ok](https://example.com)',
+      '',
+      '[RefBad][badref]',
+      '',
+      '[badref]: javascript:alert(4)',
       '',
       '*   kept   spacing'
     ].join('\n')

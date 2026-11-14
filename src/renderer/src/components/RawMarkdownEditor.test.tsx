@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { EditorView } from '@codemirror/view'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
@@ -207,5 +208,93 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
         '|       |     |'
       ].join('\n')
     )
+  })
+
+  it('tracks table cursor state when showTableToolbar flips from false to true on an open editor', async () => {
+    const tableDoc = [
+      'Intro',
+      '',
+      '| Name  | Role  |',
+      '| ----- | ----- |',
+      '| Alice | Admin |'
+    ].join('\n')
+    let currentDoc = tableDoc
+    const onChangeContent = vi.fn((next: string) => {
+      currentDoc = next
+    })
+
+    const { rerender } = render(
+      <RawMarkdownEditor
+        content={currentDoc}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        showTableToolbar={false}
+        onChangeContent={onChangeContent}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    expect(screen.queryByRole('toolbar', { name: 'Raw 표 편집 툴바' })).not.toBeInTheDocument()
+
+    // Simulate renaming an open .txt tab to .md while editor remains mounted
+    rerender(
+      <RawMarkdownEditor
+        content={currentDoc}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        showTableToolbar
+        onChangeContent={onChangeContent}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const toolbar = screen.getByRole('toolbar', { name: 'Raw 표 편집 툴바' })
+    const addRowBelowBtn = within(toolbar).getByRole('button', { name: '행 아래 추가' })
+    expect(addRowBelowBtn).toBeDisabled()
+
+    // Move cursor into table via editor update listener (without prop-driven cursor change)
+    const adminOffset = currentDoc.indexOf('Admin')
+    const view = EditorView.findFromDOM(screen.getByTestId('document-editor'))!
+    view.dispatch({ selection: { anchor: adminOffset } })
+
+    await waitFor(() => {
+      expect(addRowBelowBtn).toBeEnabled()
+    })
+
+    // Flipping showTableToolbar off then back on while cursor sits inside the table also stays synced
+    rerender(
+      <RawMarkdownEditor
+        content={currentDoc}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: adminOffset, selectionEnd: adminOffset }}
+        scrollTop={0}
+        showTableToolbar={false}
+        onChangeContent={onChangeContent}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    expect(screen.queryByRole('toolbar', { name: 'Raw 표 편집 툴바' })).not.toBeInTheDocument()
+
+    rerender(
+      <RawMarkdownEditor
+        content={currentDoc}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: adminOffset, selectionEnd: adminOffset }}
+        scrollTop={0}
+        showTableToolbar
+        onChangeContent={onChangeContent}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    expect(
+      within(screen.getByRole('toolbar', { name: 'Raw 표 편집 툴바' })).getByRole('button', {
+        name: '행 아래 추가'
+      })
+    ).toBeEnabled()
   })
 })

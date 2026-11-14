@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { json } from '@codemirror/lang-json'
 import { markdown } from '@codemirror/lang-markdown'
@@ -153,19 +153,21 @@ export function RawMarkdownEditor({
   const latestCursorPropRef = useRef(cursor)
   const latestScrollTopRef = useRef(scrollTop)
   const lastAppliedCursorRef = useRef(cursor)
+  const showTableToolbarRef = useRef(showTableToolbar)
+  const prevShowTableToolbarRef = useRef(showTableToolbar)
+  const prevThemeRef = useRef(theme)
+  const prevLanguageRef = useRef(language)
   const isRestoringScrollRef = useRef(false)
 
   onChangeContentRef.current = onChangeContent
   onUpdateViewStateRef.current = onUpdateViewState
   latestCursorPropRef.current = cursor
   latestScrollTopRef.current = scrollTop
+  showTableToolbarRef.current = showTableToolbar
 
   const [inTable, setInTable] = useState(() =>
     showTableToolbar ? detectTableAtOffset(content, cursor.selectionStart) !== null : false
   )
-
-  const initialLanguage = useMemo(() => createLanguageExtension(language), [language])
-  const initialTheme = useMemo(() => createEditorThemeExtension(theme), [theme])
 
   useEffect(() => {
     const host = hostRef.current
@@ -184,8 +186,8 @@ export function RawMarkdownEditor({
         bracketMatching(),
         EditorView.lineWrapping,
         syntaxHighlighting(markdownHighlightStyle),
-        languageCompartmentRef.current.of(initialLanguage),
-        themeCompartmentRef.current.of(initialTheme),
+        languageCompartmentRef.current.of(createLanguageExtension(language)),
+        themeCompartmentRef.current.of(createEditorThemeExtension(theme)),
         tableKeymapCompartmentRef.current.of(showTableToolbar ? rawTableKeymap : []),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
         EditorView.contentAttributes.of({
@@ -207,7 +209,7 @@ export function RawMarkdownEditor({
             onUpdateViewStateRef.current({
               cursor: { selectionStart: from, selectionEnd: to }
             })
-            if (showTableToolbar) {
+            if (showTableToolbarRef.current) {
               setInTable(isViewCursorInRawTable(update.view))
             }
           }
@@ -241,18 +243,21 @@ export function RawMarkdownEditor({
 
   useEffect(() => {
     const view = viewRef.current
-    if (!view) return
+    if (!view || prevShowTableToolbarRef.current === showTableToolbar) return
+    prevShowTableToolbarRef.current = showTableToolbar
     view.dispatch({
       effects: tableKeymapCompartmentRef.current.reconfigure(
         showTableToolbar ? rawTableKeymap : []
       ),
       annotations: externalSyncAnnotation.of(true)
     })
+    setInTable(showTableToolbar ? isViewCursorInRawTable(view) : false)
   }, [showTableToolbar])
 
   useEffect(() => {
     const view = viewRef.current
-    if (!view) return
+    if (!view || prevThemeRef.current === theme) return
+    prevThemeRef.current = theme
     view.dom.setAttribute('data-theme-mode', theme)
     view.dispatch({
       effects: themeCompartmentRef.current.reconfigure(createEditorThemeExtension(theme)),
@@ -262,7 +267,8 @@ export function RawMarkdownEditor({
 
   useEffect(() => {
     const view = viewRef.current
-    if (!view) return
+    if (!view || prevLanguageRef.current === language) return
+    prevLanguageRef.current = language
     view.dispatch({
       effects: languageCompartmentRef.current.reconfigure(createLanguageExtension(language)),
       annotations: externalSyncAnnotation.of(true)
@@ -282,15 +288,12 @@ export function RawMarkdownEditor({
     if (docChanged || cursorPropChanged) {
       const targetSelection = clampSelection(content.length, cursor)
       const currentSel = view.state.selection.main
-      const needSelectionUpdate =
-        docChanged
-          ? currentSel.from !== targetSelection.anchor || currentSel.to !== targetSelection.head
-          : cursorPropChanged &&
-            (currentSel.from !== targetSelection.anchor || currentSel.to !== targetSelection.head)
+      const selectionDiffers =
+        currentSel.from !== targetSelection.anchor || currentSel.to !== targetSelection.head
 
       view.dispatch({
         changes: docChanged ? { from: 0, to: currentDoc.length, insert: content } : undefined,
-        selection: needSelectionUpdate || docChanged ? targetSelection : undefined,
+        selection: docChanged || (cursorPropChanged && selectionDiffers) ? targetSelection : undefined,
         annotations: externalSyncAnnotation.of(true)
       })
       lastAppliedCursorRef.current = {

@@ -226,4 +226,26 @@ describe('TableMarkdownManipulator', () => {
     const removed = deleteTable(formatted!.content, formatted!.content.indexOf('Longer'))
     expect(removed?.content).toBe('Before\nAfter')
   })
+
+  it('preserves CRLF line endings across table edits and handles deleting the last body row', () => {
+    const crlfDoc = '# Note\r\n\r\nAfter'
+    const inserted = insertMarkdownTable(crlfDoc, '# Note'.length, 1, 2)
+    expect(inserted.content).toBe(
+      ['# Note', '', '| 열 1 | 열 2 |', '| ---- | ---- |', '|      |      |', '', 'After'].join('\r\n')
+    )
+
+    const bodyOffset = inserted.content.lastIndexOf('|      |') + 2
+    const added = addTableRow(inserted.content, bodyOffset, 'below')!
+    expect(added.content.split('\r\n').filter((line) => line.startsWith('|'))).toHaveLength(4)
+
+    // Delete single remaining body row safely and move cursor back to header
+    const deletedLastBody = deleteTableRow(inserted.content, bodyOffset)!
+    expect(deletedLastBody.content).toBe(
+      ['# Note', '', '| 열 1 | 열 2 |', '| ---- | ---- |', '', 'After'].join('\r\n')
+    )
+    expect(deletedLastBody.cursorOffset).toBe(deletedLastBody.content.indexOf('열 2'))
+
+    const removed = deleteTable(deletedLastBody.content, deletedLastBody.cursorOffset)!
+    expect(removed.content).toBe('# Note\r\n\r\nAfter')
+  })
 })

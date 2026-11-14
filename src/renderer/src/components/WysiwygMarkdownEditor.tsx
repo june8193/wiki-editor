@@ -293,14 +293,12 @@ export function WysiwygMarkdownEditor({
             return
           }
           event.preventDefault()
-          if (
-            typeof document.elementFromPoint === 'function' &&
-            (event.clientX > 0 || event.clientY > 0)
-          ) {
-            const coords = editor.view.posAtCoords({ left: event.clientX, top: event.clientY })
-            if (coords) {
-              editor.commands.setTextSelection(coords.pos)
-            }
+          const coords =
+            typeof document.elementFromPoint === 'function' && (event.clientX > 0 || event.clientY > 0)
+              ? editor.view.posAtCoords({ left: event.clientX, top: event.clientY })
+              : null
+          if (coords) {
+            editor.commands.setTextSelection(coords.pos)
           } else {
             const domPos = editor.view.posAtDOM(cellEl, 0)
             editor.commands.setTextSelection(domPos + 1)

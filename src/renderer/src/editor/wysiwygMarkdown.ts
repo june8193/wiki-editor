@@ -87,7 +87,11 @@ export function prepareMarkdownForTiptap(markdown: string): string {
         })
         return
       }
-      if (node.type === 'image' && typeof node.url === 'string' && !isSafeMarkdownUrl(node.url)) {
+      if (
+        (node.type === 'image' || node.type === 'definition') &&
+        typeof node.url === 'string' &&
+        !isSafeMarkdownUrl(node.url)
+      ) {
         patches.push({
           start,
           end,
