@@ -30,7 +30,7 @@ Windows 전용 경량·고성능 마크다운 데스크톱 위키 에디터(`wik
 - [x] [03 — 멀티 탭 및 좌/우(상/하) 2분할 Split View 레이아웃 (비활성 탭 경량화)](issues/03-multi-tab-and-split-pane-layout.md) (`6f0b8cc`)
 - [x] [04 — 3모드 마크다운 에디터(Raw·Preview·위지윅) 및 표(행·열 추가/삭제) 편집](issues/04-three-mode-markdown-editor-and-table.md) (`20dd0f1`)
 - [x] [05 — Mermaid 다이어그램 렌더링 및 하이브리드 목차(TOC)·헤딩 자동 넘버링](issues/05-mermaid-toc-and-auto-numbering.md) (`d76f41e`)
-- [06 — 나만의 커스텀 슬래시 명령어(/function, /struct 등) 자동완성 및 설정 UI 연동](issues/06-custom-slash-commands.md)
+- [x] [06 — 나만의 커스텀 슬래시 명령어(/function, /struct 등) 자동완성 및 설정 UI 연동](issues/06-custom-slash-commands.md) (`eed0b67`)
 - [07 — 워크스페이스 Git 연동 패널 (Status, Stage, Commit, Pull, Push, Branch)](issues/07-git-workspace-integration.md)
 
 ## Not yet specified
