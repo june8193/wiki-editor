@@ -1,4 +1,4 @@
-import { AnyExtension, Editor, Extension } from '@tiptap/core'
+import { AnyExtension, Editor, Extension, Node as TiptapNode } from '@tiptap/core'
 import CodeBlock from '@tiptap/extension-code-block'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { TableKit } from '@tiptap/extension-table'
@@ -17,7 +17,15 @@ import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 import { MermaidCodeBlockNodeView } from '../components/MermaidCodeBlockNodeView'
 import { isSafeMarkdownUrl, MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
-import { createHeadingNumberTracker, hasHeadingNumberPrefix } from './MarkdownTocEngine'
+import {
+  createHeadingNumberTracker,
+  HEADING_NUMBER_PREFIX_RE,
+  stripHeadingNumberPrefix
+} from './MarkdownTocEngine'
+
+const TOC_MARKER_COMMENT_RE = /^[ \t]*<!--\s*(\/?toc)\s*-->[ \t]*$/i
+const TOC_MARKER_LINE_RE = /^[ \t]*<!--\s*(\/?toc)\s*-->[ \t]*(?:\r?\n|$)/i
+const TOC_MARKER_SEARCH_RE = /<!--\s*\/?toc\s*-->/i
 
 interface MdastPositionNode {
   type?: string
@@ -70,7 +78,20 @@ const HeadingNumberingExtension = Extension.create<{ showHeadingNumbers: boolean
                 const level = Number(node.attrs.level ?? 1)
                 const { number } = tracker.next(level)
                 const text = node.textContent
-                if (text.trim().length > 0 && !hasHeadingNumberPrefix(text)) {
+                if (stripHeadingNumberPrefix(text).trim().length > 0) {
+                  const firstChild = node.firstChild
+                  const explicitMatch =
+                    firstChild && firstChild.isText && firstChild.text
+                      ? HEADING_NUMBER_PREFIX_RE.exec(firstChild.text)
+                      : null
+                  if (explicitMatch) {
+                    decorations.push(
+                      Decoration.inline(pos + 1, pos + 1 + explicitMatch[0].length, {
+                        class: 'heading-number-suppressed',
+                        'aria-hidden': 'true'
+                      })
+                    )
+                  }
                   decorations.push(
                     Decoration.widget(
                       pos + 1,
@@ -104,6 +125,77 @@ const HeadingNumberingExtension = Extension.create<{ showHeadingNumbers: boolean
 const MermaidAwareCodeBlock = CodeBlock.extend({
   addNodeView() {
     return ReactNodeViewRenderer(MermaidCodeBlockNodeView)
+  }
+})
+
+/**
+ * Preserves `<!-- toc -->` and `<!-- /toc -->` markers cleanly across WYSIWYG roundtrips
+ * without weakening HTML comment/tag XSS sanitization for any other HTML input.
+ */
+const TocMarker = TiptapNode.create({
+  name: 'tocMarker',
+  group: 'block',
+  atom: true,
+  selectable: false,
+  draggable: false,
+
+  addAttributes() {
+    return {
+      kind: {
+        default: 'start'
+      }
+    }
+  },
+
+  parseHTML() {
+    return [
+      {
+        tag: 'div[data-toc-marker]',
+        getAttrs: (el) => {
+          const raw = el instanceof Element ? el.getAttribute('data-toc-marker') : null
+          return { kind: raw === 'end' ? 'end' : 'start' }
+        }
+      }
+    ]
+  },
+
+  renderHTML({ node }) {
+    return [
+      'div',
+      {
+        'data-toc-marker': node.attrs.kind === 'end' ? 'end' : 'start',
+        'aria-hidden': 'true',
+        class: 'wysiwyg-toc-marker'
+      }
+    ]
+  },
+
+  markdownTokenizer: {
+    name: 'tocMarker',
+    level: 'block',
+    start: (src) => {
+      const match = TOC_MARKER_SEARCH_RE.exec(src)
+      return match ? match.index : -1
+    },
+    tokenize: (src) => {
+      const match = TOC_MARKER_LINE_RE.exec(src)
+      if (!match) return undefined
+      return {
+        type: 'tocMarker',
+        raw: match[0],
+        kind: match[1].toLowerCase() === '/toc' ? 'end' : 'start'
+      }
+    }
+  },
+
+  parseMarkdown(token, helpers) {
+    return helpers.createNode('tocMarker', {
+      kind: token.kind === 'end' ? 'end' : 'start'
+    })
+  },
+
+  renderMarkdown(node) {
+    return node.attrs?.kind === 'end' ? '<!-- /toc -->' : '<!-- toc -->'
   }
 })
 
@@ -154,10 +246,14 @@ export function prepareMarkdownForTiptap(markdown: string): string {
     const end = node.position?.end?.offset
     if (typeof start === 'number' && typeof end === 'number') {
       if (node.type === 'html') {
+        const rawHtml = normalized.slice(start, end)
+        if (TOC_MARKER_COMMENT_RE.test(rawHtml)) {
+          return
+        }
         patches.push({
           start,
           end,
-          replacement: sanitizeHtmlWithRehype(normalized.slice(start, end))
+          replacement: sanitizeHtmlWithRehype(rawHtml)
         })
         return
       }
@@ -275,6 +371,7 @@ export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): 
       }
     }),
     MermaidAwareCodeBlock,
+    TocMarker,
     HeadingNumberingExtension.configure({
       showHeadingNumbers: options.showHeadingNumbers ?? false
     }),

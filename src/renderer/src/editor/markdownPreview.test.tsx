@@ -253,6 +253,19 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
       expect(container.querySelector('h3')).toHaveTextContent('1. Details')
       expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
       expect(scrollIntoViewMock.mock.instances[1]).toBe(container.querySelector('h2'))
+
+      // Rerendering with new scrollTop or content and the same scrollRequest object/nonce must NOT re-trigger scrolling
+      scrollIntoViewMock.mockClear()
+      rerender(
+        <MarkdownPreview
+          content={`${md}\n\nMore text`}
+          scrollTop={120}
+          theme="light"
+          showHeadingNumbers={false}
+          scrollRequest={{ slug: 'sub-topic', index: 1, nonce: 1 }}
+        />
+      )
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
     } finally {
       Element.prototype.scrollIntoView = origScrollIntoView
     }

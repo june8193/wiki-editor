@@ -11,6 +11,7 @@ import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 export interface OutlineScrollRequest {
   paneId: PaneId
   tabId: string
+  mode: EditorMode
   line: number
   slug: string
   index: number
@@ -58,6 +59,8 @@ export function DocumentEditor({
   const allowRichModes = isMarkdownDocument(activeDoc)
   const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
   const rawLanguage = getRawEditorLanguage(activeDoc)
+  const matchedScrollRequest =
+    scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
 
   const handleModeSelect = useCallback(
     (nextMode: EditorMode): void => {
@@ -169,7 +172,9 @@ export function DocumentEditor({
           scrollTop={tab.scrollTop}
           showTableToolbar={allowRichModes}
           scrollRequest={
-            scrollRequest ? { line: scrollRequest.line, nonce: scrollRequest.nonce } : null
+            matchedScrollRequest
+              ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
+              : null
           }
           onChangeContent={onChangeContent}
           onUpdateViewState={onUpdateViewState}
@@ -184,8 +189,8 @@ export function DocumentEditor({
           showHeadingNumbers={showHeadingNumbers}
           mermaidRenderer={mermaidRenderer}
           scrollRequest={
-            scrollRequest
-              ? { slug: scrollRequest.slug, index: scrollRequest.index, nonce: scrollRequest.nonce }
+            matchedScrollRequest
+              ? { index: matchedScrollRequest.index, nonce: matchedScrollRequest.nonce }
               : null
           }
           onChangeContent={onChangeContent}
@@ -201,8 +206,12 @@ export function DocumentEditor({
           showHeadingNumbers={showHeadingNumbers}
           mermaidRenderer={mermaidRenderer}
           scrollRequest={
-            scrollRequest
-              ? { slug: scrollRequest.slug, index: scrollRequest.index, nonce: scrollRequest.nonce }
+            matchedScrollRequest
+              ? {
+                  slug: matchedScrollRequest.slug,
+                  index: matchedScrollRequest.index,
+                  nonce: matchedScrollRequest.nonce
+                }
               : null
           }
           onScrollTopChange={handleScrollTopChange}

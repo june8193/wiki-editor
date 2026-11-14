@@ -17,7 +17,11 @@ import { tags } from '@lezer/highlight'
 import type { ThemeMode } from '@shared/config'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
-import { insertOrUpdateTocBlock, isLineInsideCodeFence } from '../editor/MarkdownTocEngine'
+import {
+  detectDocumentLineEnding,
+  insertOrUpdateTocBlock,
+  tryReplaceSlashTocAtLine
+} from '../editor/MarkdownTocEngine'
 import type { CursorPosition } from '../stores/PaneTabStore'
 import { syncElementScrollTop } from './useSyncScrollTop'
 
@@ -30,17 +34,12 @@ function applyRawTocCommand(view: EditorView, requireSlashTocLine: boolean): boo
   }
 
   const line = view.state.doc.lineAt(sel.from)
-  if (requireSlashTocLine && line.text.trim() !== '/toc') {
-    return false
-  }
-
   const docText = view.state.doc.toString()
-  if (requireSlashTocLine && isLineInsideCodeFence(docText, line.number)) {
-    return false
-  }
+  const nextDoc = requireSlashTocLine
+    ? tryReplaceSlashTocAtLine(docText, line.number)
+    : insertOrUpdateTocBlock(docText, line.number)
 
-  const nextDoc = insertOrUpdateTocBlock(docText, line.number)
-  if (nextDoc === docText) {
+  if (!nextDoc || nextDoc === docText) {
     return false
   }
 
@@ -90,10 +89,6 @@ const markdownHighlightStyle = HighlightStyle.define([
 
 function normalizeDocText(text: string): string {
   return text.replace(/\r\n?/g, '\n')
-}
-
-function detectLineEnding(text: string): '\r\n' | '\n' {
-  return text.includes('\r\n') ? '\r\n' : '\n'
 }
 
 function createEditorThemeExtension(theme: ThemeMode): Extension {
@@ -208,7 +203,7 @@ export function useRawCodeMirrorEditor({
     onUpdateViewState
   }
 
-  const lineEndingRef = useRef<'\r\n' | '\n'>(detectLineEnding(content))
+  const lineEndingRef = useRef<'\r\n' | '\n'>(detectDocumentLineEnding(content))
   const lastCursorPropRef = useRef<CursorPosition>(cursor)
   const prevCompartmentsRef = useRef({ language, theme, showTableToolbar })
 
@@ -335,7 +330,7 @@ export function useRawCodeMirrorEditor({
     const currentDoc = view.state.doc.toString()
     const docChanged = currentDoc !== normalizedPropDoc
     if (docChanged && (content.includes('\n') || content.includes('\r'))) {
-      lineEndingRef.current = detectLineEnding(content)
+      lineEndingRef.current = detectDocumentLineEnding(content)
     }
 
     const cursorPropChanged =

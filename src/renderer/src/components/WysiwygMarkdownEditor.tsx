@@ -3,7 +3,7 @@ import type { ThemeMode } from '@shared/config'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import { insertOrUpdateTocBlock, isLineInsideCodeFence } from '../editor/MarkdownTocEngine'
+import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
   addTableRowBeforeSafely,
   createWysiwygExtensions,
@@ -17,7 +17,6 @@ import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
 
 export interface WysiwygScrollRequest {
-  slug?: string
   index: number
   nonce: number
 }
@@ -215,6 +214,7 @@ export function WysiwygMarkdownEditor({
   const onChangeContentRef = useRef(onChangeContent)
   onChangeContentRef.current = onChangeContent
   const insertTocRef = useRef<() => void>(() => undefined)
+  const handledScrollNonceRef = useRef<number | null>(null)
 
   const [cellMenuPos, setCellMenuPos] = useState<{ x: number; y: number } | null>(null)
   const closeCellMenu = useCallback(() => setCellMenuPos(null), [])
@@ -271,12 +271,7 @@ export function WysiwygMarkdownEditor({
   const handleInsertToc = useCallback((): void => {
     if (!editor) return
     const currentMd = hasLocalEditRef.current ? editor.getMarkdown() : contentRef.current
-    const lines = currentMd.split(/\r?\n/)
-    const tocLineIdx = lines.findIndex((line) => line.trim() === '/toc')
-    const cursorLine =
-      tocLineIdx !== -1 && !isLineInsideCodeFence(currentMd, tocLineIdx + 1)
-        ? tocLineIdx + 1
-        : undefined
+    const cursorLine = findFirstNonFencedSlashTocLine(currentMd)
     const nextMd = insertOrUpdateTocBlock(currentMd, cursorLine)
     if (nextMd === currentMd) return
 
@@ -323,6 +318,8 @@ export function WysiwygMarkdownEditor({
 
   useEffect(() => {
     if (!editor || !scrollRequest) return
+    if (handledScrollNonceRef.current === scrollRequest.nonce) return
+    handledScrollNonceRef.current = scrollRequest.nonce
 
     const headingPositions: number[] = []
     editor.state.doc.descendants((node, pos) => {

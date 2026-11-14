@@ -36,6 +36,7 @@ export function MarkdownPreview({
   onScrollTopChange
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const handledScrollNonceRef = useRef<number | null>(null)
 
   const scrollToHeading = useCallback((slug?: string, index?: number): void => {
     const container = containerRef.current
@@ -76,6 +77,8 @@ export function MarkdownPreview({
 
   useEffect(() => {
     if (!scrollRequest) return
+    if (handledScrollNonceRef.current === scrollRequest.nonce) return
+    handledScrollNonceRef.current = scrollRequest.nonce
     scrollToHeading(scrollRequest.slug, scrollRequest.index)
   }, [scrollRequest, scrollToHeading])
 

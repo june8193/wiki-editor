@@ -1,8 +1,8 @@
 import { memo, useMemo, useState } from 'react'
 import {
+  formatOutlineHeadingTitle,
   type MarkdownHeading,
-  parseMarkdownHeadings,
-  stripInlineMarkdown
+  parseMarkdownHeadings
 } from '../editor/MarkdownTocEngine'
 
 export interface DocumentOutlinePanelProps {
@@ -15,13 +15,6 @@ export interface DocumentOutlinePanelProps {
   onInsertToc: () => void
   onApplyHeadingNumbers: () => void
   onStripHeadingNumbers: () => void
-}
-
-function formatHeadingDisplayTitle(heading: MarkdownHeading, showHeadingNumbers: boolean): string {
-  if (!showHeadingNumbers && heading.hasExplicitNumber) {
-    return stripInlineMarkdown(heading.rawTitle) || heading.rawTitle
-  }
-  return heading.title
 }
 
 /**
@@ -75,7 +68,7 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
                 <span className="outline-item-number">{heading.number}</span>
               )}
               <span className="outline-item-title">
-                {formatHeadingDisplayTitle(heading, showHeadingNumbers)}
+                {formatOutlineHeadingTitle(heading, showHeadingNumbers)}
               </span>
             </button>
           </li>

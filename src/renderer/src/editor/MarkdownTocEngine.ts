@@ -32,10 +32,6 @@ interface ParsedFenceLine {
   length: number
 }
 
-interface ActiveFenceState extends ParsedFenceLine {
-  // Extensible fence metadata
-}
-
 interface ScannedLine {
   lineNumber: number
   rawLine: string
@@ -66,6 +62,27 @@ export function getLineNumberAtOffset(text: string, offset: number): number {
   return line
 }
 
+/**
+ * Resolves the 1-based markdown line number corresponding to an LF-normalized cursor offset
+ * (as reported by CodeMirror 6), safely handling CRLF documents.
+ */
+export function resolveRawCursorLine(markdown: string, lfOffset: number): number {
+  return getLineNumberAtOffset(markdown.replace(/\r\n/g, '\n'), lfOffset)
+}
+
+/**
+ * Formats an Outline heading label consistently with dynamic numbering settings.
+ */
+export function formatOutlineHeadingTitle(
+  heading: MarkdownHeading,
+  showHeadingNumbers: boolean
+): string {
+  if (!showHeadingNumbers && heading.hasExplicitNumber) {
+    return stripInlineMarkdown(heading.rawTitle) || heading.rawTitle
+  }
+  return heading.title
+}
+
 function tryOpenFence(line: string): ParsedFenceLine | null {
   const match = FENCE_OPEN_RE.exec(line)
   if (!match) return null
@@ -79,7 +96,7 @@ function tryOpenFence(line: string): ParsedFenceLine | null {
   return { char, length: fence.length }
 }
 
-function isClosingFence(line: string, active: ActiveFenceState): boolean {
+function isClosingFence(line: string, active: ParsedFenceLine): boolean {
   const trimmed = line.replace(/^[ ]{0,3}/, '')
   let count = 0
   while (count < trimmed.length && trimmed[count] === active.char) {
@@ -91,7 +108,7 @@ function isClosingFence(line: string, active: ActiveFenceState): boolean {
 
 function scanMarkdownLines(markdown: string): ScannedLine[] {
   const result: ScannedLine[] = []
-  let activeFence: ActiveFenceState | null = null
+  let activeFence: ParsedFenceLine | null = null
   let index = 0
   let lineNumber = 1
 
@@ -393,6 +410,33 @@ export function insertOrUpdateTocBlock(
   ]
 
   return [...before, ...blockToInsert, ...after].join(lineEnding)
+}
+
+/**
+ * Replaces a `/toc` command on `targetLine1Based` with an inserted/updated TOC block if and only if
+ * that line is outside fenced code blocks and produces a modified document; otherwise returns `null`.
+ */
+export function tryReplaceSlashTocAtLine(
+  markdown: string,
+  targetLine1Based: number,
+  options: TocGenerateOptions = {}
+): string | null {
+  const lines = scanMarkdownLines(markdown)
+  const target = lines[targetLine1Based - 1]
+  if (!target || target.inCodeFence || target.text.trim() !== '/toc') {
+    return null
+  }
+  const next = insertOrUpdateTocBlock(markdown, targetLine1Based, options)
+  return next === markdown ? null : next
+}
+
+/**
+ * Returns the 1-based line number of the first standalone `/toc` line outside code fences, if any.
+ */
+export function findFirstNonFencedSlashTocLine(markdown: string): number | undefined {
+  const lines = scanMarkdownLines(markdown)
+  const found = lines.find((line) => !line.inCodeFence && line.text.trim() === '/toc')
+  return found?.lineNumber
 }
 
 function transformHeadingLines(

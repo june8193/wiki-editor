@@ -2052,94 +2052,111 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
   it('updates sidebar Outline ignoring code fences, toggles showHeadingNumbers cleanly with persistence, and scrolls to headings across modes', async () => {
     const user = userEvent.setup()
     const scrollIntoViewMock = vi.fn()
+    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollIntoView'
+    )
     HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
 
-    const guideDoc = [
-      '# Intro',
-      '',
-      '```bash',
-      '# Ignored Comment',
-      '```',
-      '',
-      '## Setup',
-      '### Step One'
-    ].join('\n')
+    try {
+      const guideDoc = [
+        '# Intro',
+        '',
+        '```bash',
+        '# Ignored Comment',
+        '```',
+        '',
+        '## Setup',
+        '### Step One'
+      ].join('\n')
 
-    const { api, getFilesSnapshot } = createInMemoryWikiApi(
-      { theme: 'light', showHeadingNumbers: true },
-      {
-        selectedFolder: 'C:\\wiki\\outline',
-        workspaces: {
-          'C:\\wiki\\outline': {
-            'guide.md': guideDoc
+      const { api, getFilesSnapshot } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: true },
+        {
+          selectedFolder: 'C:\\wiki\\outline',
+          workspaces: {
+            'C:\\wiki\\outline': {
+              'guide.md': guideDoc
+            }
           }
         }
-      }
-    )
-    window.wikiApi = api
-
-    const firstRender = render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
-    await user.click(await screen.findByText('guide.md'))
-
-    const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
-    const items = within(within(outline).getByRole('list')).getAllByRole('listitem')
-    expect(items).toHaveLength(3)
-    expect(items[0].textContent).toContain('1.')
-    expect(items[1].textContent).toContain('1.1.')
-    expect(items[2].textContent).toContain('1.1.1.')
-    expect(outline.textContent).not.toContain('Ignored Comment')
-
-    // Click heading in Outline in Raw mode -> moves cursor to target heading line
-    await user.click(within(items[1]).getByRole('button'))
-    await waitFor(() => {
-      expect(getRawEditorSelection(screen.getByTestId('document-editor')).start).toBe(
-        guideDoc.indexOf('## Setup')
       )
-    })
+      window.wikiApi = api
 
-    // Switch to Preview mode and verify dynamic heading numbers + click-to-scroll
-    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
-    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
-    const setupHeading = screen.getByRole('heading', { level: 2, name: 'Setup' })
-    expect(setupHeading.textContent).toBe('1.1. Setup')
+      const firstRender = render(<App />)
+      await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+      await user.click(await screen.findByText('guide.md'))
 
-    scrollIntoViewMock.mockClear()
-    await user.click(within(items[2]).getByRole('button'))
-    expect(scrollIntoViewMock).toHaveBeenCalled()
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const items = within(within(outline).getByRole('list')).getAllByRole('listitem')
+      expect(items).toHaveLength(3)
+      expect(items[0].textContent).toContain('1.')
+      expect(items[1].textContent).toContain('1.1.')
+      expect(items[2].textContent).toContain('1.1.1.')
+      expect(outline.textContent).not.toContain('Ignored Comment')
 
-    // Toggle showHeadingNumbers off via Outline button -> hides numbers in Outline & Preview without dirtying buffer
-    await user.click(within(outline).getByRole('button', { name: '헤딩 번호 표시' }))
-    expect(screen.getByRole('heading', { level: 2, name: 'Setup' }).textContent).toBe('Setup')
-    expect(within(outline).queryByText('1.1.')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
-    expect(getFilesSnapshot().get('C:/wiki/outline/guide.md')).toBe(guideDoc)
+      // Click heading in Outline in Raw mode -> moves cursor to target heading line
+      await user.click(within(items[1]).getByRole('button'))
+      await waitFor(() => {
+        expect(getRawEditorSelection(screen.getByTestId('document-editor')).start).toBe(
+          guideDoc.indexOf('## Setup')
+        )
+      })
 
-    // Verify WYSIWYG mode reflects dynamic heading numbering toggle and click-to-scroll too
-    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
-    scrollIntoViewMock.mockClear()
-    const currentItems = within(within(outline).getByRole('list')).getAllByRole('listitem')
-    await user.click(within(currentItems[1]).getByRole('button'))
-    expect(scrollIntoViewMock).toHaveBeenCalled()
+      // Switch to Preview mode and verify dynamic heading numbers + one-shot click-to-scroll
+      const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      const setupHeading = screen.getByRole('heading', { level: 2, name: 'Setup' })
+      expect(setupHeading.textContent).toBe('1.1. Setup')
 
-    // Open SettingsPanel, verify checkbox reflects false, toggle back true and verify persistence across restart
-    await user.click(screen.getByRole('button', { name: /설정/i }))
-    const settingsPanel = screen.getByLabelText('전역 설정 패널')
-    const headingToggleCheckbox = within(settingsPanel).getByRole('checkbox', {
-      name: /헤딩 자동 넘버링 표시/i
-    }) as HTMLInputElement
-    expect(headingToggleCheckbox.checked).toBe(false)
+      scrollIntoViewMock.mockClear()
+      await user.click(within(items[2]).getByRole('button'))
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
 
-    await user.click(headingToggleCheckbox)
-    expect(headingToggleCheckbox.checked).toBe(true)
+      // Toggle showHeadingNumbers off via Outline button -> hides numbers without dirtying buffer or re-scrolling
+      await user.click(within(outline).getByRole('button', { name: '헤딩 번호 표시' }))
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(screen.getByRole('heading', { level: 2, name: 'Setup' }).textContent).toBe('Setup')
+      expect(within(outline).queryByText('1.1.')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+      expect(getFilesSnapshot().get('C:/wiki/outline/guide.md')).toBe(guideDoc)
 
-    firstRender.unmount()
-    render(<App />)
-    await user.click(await screen.findByRole('button', { name: /설정/i }))
-    const reopenedCheckbox = within(screen.getByLabelText('전역 설정 패널')).getByRole('checkbox', {
-      name: /헤딩 자동 넘버링 표시/i
-    }) as HTMLInputElement
-    expect(reopenedCheckbox.checked).toBe(true)
+      // Verify WYSIWYG mode reflects dynamic heading numbering toggle and one-shot click-to-scroll too
+      await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+      scrollIntoViewMock.mockClear()
+      const currentItems = within(within(outline).getByRole('list')).getAllByRole('listitem')
+      await user.click(within(currentItems[1]).getByRole('button'))
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+
+      // Open SettingsPanel, verify checkbox reflects false, toggle back true without re-scrolling and verify persistence across restart
+      await user.click(screen.getByRole('button', { name: /설정/i }))
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      const settingsPanel = screen.getByLabelText('전역 설정 패널')
+      const headingToggleCheckbox = within(settingsPanel).getByRole('checkbox', {
+        name: /헤딩 자동 넘버링 표시/i
+      }) as HTMLInputElement
+      expect(headingToggleCheckbox.checked).toBe(false)
+
+      await user.click(headingToggleCheckbox)
+      expect(headingToggleCheckbox.checked).toBe(true)
+
+      firstRender.unmount()
+      render(<App />)
+      await user.click(await screen.findByRole('button', { name: /설정/i }))
+      const reopenedCheckbox = within(screen.getByLabelText('전역 설정 패널')).getByRole(
+        'checkbox',
+        {
+          name: /헤딩 자동 넘버링 표시/i
+        }
+      ) as HTMLInputElement
+      expect(reopenedCheckbox.checked).toBe(true)
+    } finally {
+      if (origScrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+      }
+    }
   })
 
   it('inserts /toc and writes/strips heading numbers outside code fences with split-pane sync', async () => {

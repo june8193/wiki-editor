@@ -257,4 +257,29 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     expect(exported).toContain('```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```')
     expect(exported).toContain('After diagram')
   })
+
+  it('preserves <!-- toc --> / <!-- /toc --> markers across WYSIWYG roundtrips while still sanitizing unsafe HTML comments/scripts', () => {
+    const sample = [
+      '# Guide',
+      '',
+      '<!-- toc -->',
+      '- [Section](#section)',
+      '<!-- /toc -->',
+      '',
+      '<!-- <script>alert(1)</script> -->',
+      '<img src="x" onerror="alert(2)">',
+      '',
+      '## Section'
+    ].join('\n')
+
+    const editor = createTestWysiwygEditor(sample)
+    const exported = editor.getMarkdown()
+    editor.destroy()
+
+    expect(exported).toContain('<!-- toc -->')
+    expect(exported).toContain('<!-- /toc -->')
+    expect(exported).toContain('- [Section](#section)')
+    expect(exported).not.toContain('script')
+    expect(exported).not.toContain('onerror')
+  })
 })

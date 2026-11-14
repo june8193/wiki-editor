@@ -1,6 +1,5 @@
 import { CSSProperties } from 'react'
 import type { ThemeMode } from '@shared/config'
-import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
@@ -19,7 +18,6 @@ interface PaneViewProps {
   theme: ThemeMode
   autoSave: boolean
   showHeadingNumbers?: boolean
-  mermaidRenderer?: MermaidRenderer
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
@@ -37,7 +35,6 @@ export function PaneView({
   theme,
   autoSave,
   showHeadingNumbers = true,
-  mermaidRenderer,
   scrollRequest = null,
   isShortcutDisabled = false,
   buffers,
@@ -97,7 +94,6 @@ export function PaneView({
           theme={theme}
           autoSave={autoSave}
           showHeadingNumbers={showHeadingNumbers}
-          mermaidRenderer={mermaidRenderer}
           scrollRequest={activeScrollRequest}
           isShortcutDisabled={isShortcutDisabled}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}

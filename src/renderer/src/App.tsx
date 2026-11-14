@@ -11,15 +11,15 @@ import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { isMarkdownDocument } from './editor/editorModes'
 import {
   applyHeadingNumbers,
-  getLineNumberAtOffset,
   insertOrUpdateTocBlock,
   type MarkdownHeading,
+  resolveRawCursorLine,
   stripHeadingNumbers
 } from './editor/MarkdownTocEngine'
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
-import { getPaneActiveTab, SplitMode } from './stores/PaneTabStore'
+import { getPaneActiveTab, type PaneId, SplitMode, type TabViewPatch } from './stores/PaneTabStore'
 import { toErrorMessage } from './utils/toErrorMessage'
 
 const SPLIT_MODE_OPTIONS: ReadonlyArray<{
@@ -243,6 +243,7 @@ export function App() {
       setOutlineScrollRequest({
         paneId: activePane.id,
         tabId: activeTab.id,
+        mode: activeTab.mode,
         line: heading.line,
         slug: heading.slug,
         index,
@@ -256,7 +257,7 @@ export function App() {
     applyActiveMarkdownTransform((content) => {
       const cursorLine =
         activeTab?.mode === 'raw'
-          ? getLineNumberAtOffset(content.replace(/\r\n/g, '\n'), activeTab.cursor.selectionStart)
+          ? resolveRawCursorLine(content, activeTab.cursor.selectionStart)
           : undefined
       return insertOrUpdateTocBlock(content, cursorLine)
     })
@@ -270,6 +271,24 @@ export function App() {
     applyActiveMarkdownTransform(stripHeadingNumbers)
   }, [applyActiveMarkdownTransform])
 
+  const handlePaneChangeContent = useCallback(
+    (bufferKey: string, nextContent: string): void => {
+      setOutlineScrollRequest(null)
+      updateBufferContent(bufferKey, nextContent)
+    },
+    [updateBufferContent]
+  )
+
+  const handlePaneUpdateTabViewState = useCallback(
+    (paneId: PaneId, tabId: string, patch: TabViewPatch): void => {
+      if (patch.mode !== undefined) {
+        setOutlineScrollRequest(null)
+      }
+      updateTabViewState(paneId, tabId, patch)
+    },
+    [updateTabViewState]
+  )
+
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       onFocusPane: focusPane,
@@ -277,19 +296,19 @@ export function App() {
       onCloseTab: requestCloseTab,
       onMoveTab: moveTab,
       onDuplicateTab: duplicateTabToOtherPane,
-      onChangeContent: updateBufferContent,
+      onChangeContent: handlePaneChangeContent,
       onSaveBuffer: saveBufferByKey,
-      onUpdateTabViewState: updateTabViewState
+      onUpdateTabViewState: handlePaneUpdateTabViewState
     }),
     [
       activateTab,
       duplicateTabToOtherPane,
       focusPane,
+      handlePaneChangeContent,
+      handlePaneUpdateTabViewState,
       moveTab,
       requestCloseTab,
-      saveBufferByKey,
-      updateBufferContent,
-      updateTabViewState
+      saveBufferByKey
     ]
   )
 

@@ -241,7 +241,15 @@ describe('DocumentEditor 3-mode switcher & roundtrip', () => {
         autoSave={false}
         showHeadingNumbers={false}
         mermaidRenderer={mermaidRenderer}
-        scrollRequest={{ paneId: 'primary', tabId: 'tab-1', line: 3, slug: 'flow', index: 1, nonce: 1 }}
+        scrollRequest={{
+          paneId: 'primary',
+          tabId: 'tab-1',
+          mode: 'raw',
+          line: 3,
+          slug: 'flow',
+          index: 1,
+          nonce: 1
+        }}
         onChangeContent={onChangeContent}
         onSave={vi.fn()}
         onUpdateViewState={onUpdateViewState}

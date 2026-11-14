@@ -315,7 +315,9 @@ describe('WysiwygMarkdownEditor', () => {
       const h3 = editorEl.querySelector('h3')!
       expect(h1.querySelector('.heading-number')).toHaveTextContent('1.')
       expect(h2.querySelector('.heading-number')).toHaveTextContent('1.1.')
-      expect(h3.querySelector('.heading-number')).toBeNull()
+      // Stale explicit prefix "1. " under H1->H2 is visually suppressed and replaced with hierarchical "1.1.1."
+      expect(h3.querySelector('.heading-number')).toHaveTextContent('1.1.1.')
+      expect(h3.querySelector('.heading-number-suppressed')).toHaveTextContent('1.')
       expect(onChangeContent).not.toHaveBeenCalled()
 
       // Toggle off dynamic heading numbers + trigger scrollRequest to H2
@@ -329,9 +331,23 @@ describe('WysiwygMarkdownEditor', () => {
         />
       )
       expect(editorEl.querySelector('.heading-number')).toBeNull()
+      expect(editorEl.querySelector('.heading-number-suppressed')).toBeNull()
       expect(onChangeContent).not.toHaveBeenCalled()
-      expect(scrollIntoViewMock).toHaveBeenCalled()
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
       expect(scrollIntoViewMock.mock.instances[0]).toBe(h2)
+
+      // Rerendering with unchanged nonce (e.g. new scrollTop/content) must NOT re-trigger scrolling
+      scrollIntoViewMock.mockClear()
+      rerender(
+        <WysiwygMarkdownEditor
+          content={md}
+          scrollTop={80}
+          showHeadingNumbers={false}
+          scrollRequest={{ index: 1, nonce: 1 }}
+          onChangeContent={onChangeContent}
+        />
+      )
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
 
       // Toolbar "목차 삽입" button inserts generated TOC links
       const formatToolbar = screen.getByRole('toolbar', { name: '위지윅 서식 툴바' })
