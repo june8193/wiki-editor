@@ -363,6 +363,15 @@ export class WorkspaceFsService {
       .some((segment) => IGNORED_ENTRY_NAMES.has(segment))
   }
 
+  private assertWithinWorkspaceAndAllowed(root: string, targetPath: string): void {
+    if (!isPathInsideRoot(root, targetPath)) {
+      throw new Error('워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.')
+    }
+    if (this.hasIgnoredSegment(relative(root, targetPath))) {
+      throw new Error('시스템 폴더 경로에는 접근할 수 없습니다.')
+    }
+  }
+
   private assertLexicalWorkspacePath(root: string, inputPath: string): string {
     if (inputPath.includes('\0')) {
       throw new Error('유효하지 않은 경로입니다.')
@@ -374,16 +383,23 @@ export class WorkspaceFsService {
           ? resolve(inputPath)
           : resolve(root, inputPath)
 
-    if (!isPathInsideRoot(root, candidate)) {
-      throw new Error('워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.')
-    }
-
-    const rel = relative(root, candidate)
-    if (this.hasIgnoredSegment(rel)) {
-      throw new Error('시스템 폴더 경로에는 접근할 수 없습니다.')
-    }
-
+    this.assertWithinWorkspaceAndAllowed(root, candidate)
     return candidate
+  }
+
+  private async rejectDanglingSymlink(cursor: string): Promise<void> {
+    let stats
+    try {
+      stats = await lstat(cursor)
+    } catch (error) {
+      if (isErrnoCode(error, 'ENOENT')) {
+        return
+      }
+      throw error
+    }
+    if (stats.isSymbolicLink()) {
+      throw new Error('유효하지 않거나 워크스페이스 루트 밖을 가리키는 심볼릭 링크에는 접근할 수 없습니다.')
+    }
   }
 
   private async resolveRealWithAncestor(root: string, candidate: string): Promise<{
@@ -398,14 +414,13 @@ export class WorkspaceFsService {
         const realAncestor = await realpath(cursor)
         const resolvedReal =
           tailSegments.length > 0 ? join(realAncestor, ...tailSegments.slice().reverse()) : realAncestor
-        if (!isPathInsideRoot(root, resolvedReal)) {
-          throw new Error('워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.')
-        }
+        this.assertWithinWorkspaceAndAllowed(root, resolvedReal)
         return { resolvedReal, exists: tailSegments.length === 0 }
       } catch (error) {
         if (!isErrnoCode(error, 'ENOENT')) {
           throw error
         }
+        await this.rejectDanglingSymlink(cursor)
         const parent = dirname(cursor)
         if (parent === cursor) {
           throw new Error('워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.')

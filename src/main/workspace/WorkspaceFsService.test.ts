@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -67,24 +67,49 @@ describe('WorkspaceFsService', () => {
     await expect(service.createEntry(outsideDir, 'pwn.md', 'file')).rejects.toThrow(/워크스페이스|경로/i)
     await expect(service.deleteEntry(outsideDir)).rejects.toThrow(/워크스페이스|경로/i)
 
-    // Test symlink escape and symlink-to-ignored filtering if platform permissions allow creating symlinks
+    // Test symlink escape, dangling symlinks, and symlink-to-ignored filtering if platform permissions allow
     const escapeLink = join(workspaceDir, 'escape-link')
     const gitDir = join(workspaceDir, '.git')
     await mkdir(gitDir, { recursive: true })
+    await writeFile(join(gitDir, 'HEAD'), 'ref: refs/heads/main', 'utf8')
     const gitLink = join(workspaceDir, 'git-link')
-    let symlinkCreated = false
+    const danglingDirLink = join(workspaceDir, 'dangling-dir-link')
+    const missingOutsideDir = join(outsideDir, 'missing-dir')
+    let junctionCreated = false
     try {
       await symlink(outsideDir, escapeLink, 'junction')
       await symlink(gitDir, gitLink, 'junction')
-      symlinkCreated = true
+      await symlink(missingOutsideDir, danglingDirLink, 'junction')
+      junctionCreated = true
     } catch {
-      symlinkCreated = false
+      junctionCreated = false
     }
-    if (symlinkCreated) {
+    if (junctionCreated) {
       await expect(service.readFile(join(escapeLink, 'secret.txt'))).rejects.toThrow(/워크스페이스|경로/i)
       await expect(service.createEntry(escapeLink, 'new.md', 'file')).rejects.toThrow(/워크스페이스|경로/i)
+      await expect(service.writeFile(danglingDirLink, 'bad')).rejects.toThrow(/심볼릭/)
+      await expect(service.writeFile(join(danglingDirLink, 'pwn.md'), 'bad')).rejects.toThrow(/심볼릭/)
+      await expect(service.readDir(danglingDirLink)).rejects.toThrow(/심볼릭/)
       const entries = await service.readDir()
       expect(entries.some((entry) => entry.name === 'git-link')).toBe(false)
+      await expect(service.readDir(gitLink)).rejects.toThrow(/시스템 폴더/)
+      await expect(service.readFile(join(gitLink, 'HEAD'))).rejects.toThrow(/시스템 폴더/)
+      await expect(service.writeFile(join(gitLink, 'HEAD'), 'bad')).rejects.toThrow(/시스템 폴더/)
+      await expect(service.createEntry(gitLink, 'evil.md', 'file')).rejects.toThrow(/시스템 폴더/)
+    }
+
+    const danglingFileLink = join(workspaceDir, 'dangling-file.md')
+    const danglingOutsideTarget = join(outsideDir, 'dangling-pwned.md')
+    let fileSymlinkCreated = false
+    try {
+      await symlink(danglingOutsideTarget, danglingFileLink, 'file')
+      fileSymlinkCreated = true
+    } catch {
+      fileSymlinkCreated = false
+    }
+    if (fileSymlinkCreated) {
+      await expect(service.writeFile(danglingFileLink, 'pwned')).rejects.toThrow(/워크스페이스|심볼릭|경로/i)
+      await expect(lstat(danglingOutsideTarget)).rejects.toMatchObject({ code: 'ENOENT' })
     }
   })
 
