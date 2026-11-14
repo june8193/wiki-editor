@@ -1,20 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
-import { AppConfig } from '@shared/config'
+import { ThemeMode } from '@shared/config'
 
 interface SettingsPanelProps {
-  config: AppConfig
+  theme: ThemeMode
+  persistedVersion: number
   configPath: string
   onToggleTheme: () => void
   onReadRawConfig: () => Promise<string>
+  onClearError: () => void
   onError: (message: string) => void
   onClose: () => void
 }
 
 export function SettingsPanel({
-  config,
+  theme,
+  persistedVersion,
   configPath,
   onToggleTheme,
   onReadRawConfig,
+  onClearError,
   onError,
   onClose
 }: SettingsPanelProps) {
@@ -24,7 +28,7 @@ export function SettingsPanel({
   const [refreshCount, setRefreshCount] = useState<number>(0)
   const readSeqRef = useRef<number>(0)
 
-  const nextThemeLabel = config.theme === 'light' ? '다크 모드로 전환' : '라이트 모드로 전환'
+  const nextThemeLabel = theme === 'light' ? '다크 모드로 전환' : '라이트 모드로 전환'
 
   useEffect(() => {
     if (!isRawOpen) return
@@ -50,9 +54,10 @@ export function SettingsPanel({
     return () => {
       active = false
     }
-  }, [config, isRawOpen, refreshCount, onError, onReadRawConfig])
+  }, [persistedVersion, isRawOpen, refreshCount, onError, onReadRawConfig])
 
   const handleOpenRawConfig = (): void => {
+    onClearError()
     setIsRawOpen(true)
     setRefreshCount((count) => count + 1)
   }
@@ -68,9 +73,7 @@ export function SettingsPanel({
 
       <section className="settings-section">
         <h3 className="settings-section-title">화면 테마</h3>
-        <p className="settings-description">
-          현재 테마: {config.theme === 'light' ? '라이트' : '다크'}
-        </p>
+        <p className="settings-description">현재 테마: {theme === 'light' ? '라이트' : '다크'}</p>
         <button type="button" className="btn" onClick={onToggleTheme}>
           {nextThemeLabel}
         </button>

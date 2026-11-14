@@ -68,19 +68,65 @@ function isCustomCommandConfig(value: unknown): value is CustomCommandConfig {
   )
 }
 
-function isString(value: unknown): value is string {
-  return typeof value === 'string'
+function parseTypedArray<T>(
+  value: unknown,
+  guard: (item: unknown) => item is T,
+  cloneItem: (item: T) => T,
+  strict: boolean
+): T[] | null {
+  if (!Array.isArray(value)) return null
+  if (strict && !value.every(guard)) return null
+  return value.filter(guard).map(cloneItem)
 }
 
-function normalizeArrayField<T>(
-  candidate: unknown,
-  fallback: readonly T[],
-  guard: (value: unknown) => value is T,
-  cloneItem: (item: T) => T
-): T[] {
-  const source = Array.isArray(candidate) ? candidate.filter(guard) : fallback
-  return source.map(cloneItem)
+interface FieldSpec<K extends keyof AppConfig> {
+  parse: (value: unknown, strict: boolean) => AppConfig[K] | null
+  errorMessage: string
 }
+
+const CONFIG_FIELD_SPECS: { [K in keyof AppConfig]: FieldSpec<K> } = {
+  version: {
+    parse: (value) => (value === 1 ? 1 : null),
+    errorMessage: 'Invalid config version: expected 1'
+  },
+  theme: {
+    parse: (value) => (value === 'light' || value === 'dark' ? value : null),
+    errorMessage: 'Invalid theme: expected "light" or "dark"'
+  },
+  autoSave: {
+    parse: (value) => (typeof value === 'boolean' ? value : null),
+    errorMessage: 'Invalid autoSave: expected boolean'
+  },
+  autoSaveDelayMs: {
+    parse: (value) =>
+      typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : null,
+    errorMessage: 'Invalid autoSaveDelayMs: expected positive finite number'
+  },
+  showHeadingNumbers: {
+    parse: (value) => (typeof value === 'boolean' ? value : null),
+    errorMessage: 'Invalid showHeadingNumbers: expected boolean'
+  },
+  favoriteWorkspaces: {
+    parse: (value, strict) => parseTypedArray(value, isFavoriteWorkspace, shallowClone, strict),
+    errorMessage: 'Invalid favoriteWorkspaces: expected FavoriteWorkspace[]'
+  },
+  recentWorkspaces: {
+    parse: (value, strict) =>
+      parseTypedArray(
+        value,
+        (item): item is string => typeof item === 'string',
+        (item) => item,
+        strict
+      ),
+    errorMessage: 'Invalid recentWorkspaces: expected string[]'
+  },
+  customCommands: {
+    parse: (value, strict) => parseTypedArray(value, isCustomCommandConfig, shallowClone, strict),
+    errorMessage: 'Invalid customCommands: expected CustomCommandConfig[]'
+  }
+}
+
+const CONFIG_KEYS = Object.keys(CONFIG_FIELD_SPECS) as Array<keyof AppConfig>
 
 export function cloneAppConfig(config: AppConfig): AppConfig {
   return {
@@ -95,42 +141,15 @@ export function normalizeAppConfig(
   raw: Record<string, unknown>,
   base: AppConfig = DEFAULT_APP_CONFIG
 ): AppConfig {
-  const theme: ThemeMode = raw.theme === 'light' || raw.theme === 'dark' ? raw.theme : base.theme
-  const autoSave = typeof raw.autoSave === 'boolean' ? raw.autoSave : base.autoSave
-  const autoSaveDelayMs =
-    typeof raw.autoSaveDelayMs === 'number' &&
-    Number.isFinite(raw.autoSaveDelayMs) &&
-    raw.autoSaveDelayMs > 0
-      ? Math.round(raw.autoSaveDelayMs)
-      : base.autoSaveDelayMs
-  const showHeadingNumbers =
-    typeof raw.showHeadingNumbers === 'boolean' ? raw.showHeadingNumbers : base.showHeadingNumbers
-
-  return {
-    version: 1,
-    theme,
-    autoSave,
-    autoSaveDelayMs,
-    showHeadingNumbers,
-    favoriteWorkspaces: normalizeArrayField(
-      raw.favoriteWorkspaces,
-      base.favoriteWorkspaces,
-      isFavoriteWorkspace,
-      shallowClone
-    ),
-    recentWorkspaces: normalizeArrayField(
-      raw.recentWorkspaces,
-      base.recentWorkspaces,
-      isString,
-      (value) => value
-    ),
-    customCommands: normalizeArrayField(
-      raw.customCommands,
-      base.customCommands,
-      isCustomCommandConfig,
-      shallowClone
-    )
+  const result = cloneAppConfig(base)
+  for (const key of CONFIG_KEYS) {
+    const parsed = CONFIG_FIELD_SPECS[key].parse(raw[key], false)
+    if (parsed !== null) {
+      ;(result as Record<keyof AppConfig, unknown>)[key] = parsed
+    }
   }
+  result.version = 1
+  return result
 }
 
 /**
@@ -142,66 +161,15 @@ export function validateConfigPatch(raw: unknown): Partial<AppConfig> {
   }
 
   const patch: Partial<AppConfig> = {}
-
-  if ('version' in raw && raw.version !== undefined) {
-    if (raw.version !== 1) {
-      throw new Error('Invalid config version: expected 1')
+  for (const key of CONFIG_KEYS) {
+    if (key in raw && raw[key] !== undefined) {
+      const spec = CONFIG_FIELD_SPECS[key]
+      const parsed = spec.parse(raw[key], true)
+      if (parsed === null) {
+        throw new Error(spec.errorMessage)
+      }
+      ;(patch as Record<keyof AppConfig, unknown>)[key] = parsed
     }
-    patch.version = 1
   }
-
-  if ('theme' in raw && raw.theme !== undefined) {
-    if (raw.theme !== 'light' && raw.theme !== 'dark') {
-      throw new Error('Invalid theme: expected "light" or "dark"')
-    }
-    patch.theme = raw.theme
-  }
-
-  if ('autoSave' in raw && raw.autoSave !== undefined) {
-    if (typeof raw.autoSave !== 'boolean') {
-      throw new Error('Invalid autoSave: expected boolean')
-    }
-    patch.autoSave = raw.autoSave
-  }
-
-  if ('autoSaveDelayMs' in raw && raw.autoSaveDelayMs !== undefined) {
-    if (
-      typeof raw.autoSaveDelayMs !== 'number' ||
-      !Number.isFinite(raw.autoSaveDelayMs) ||
-      raw.autoSaveDelayMs <= 0
-    ) {
-      throw new Error('Invalid autoSaveDelayMs: expected positive finite number')
-    }
-    patch.autoSaveDelayMs = Math.round(raw.autoSaveDelayMs)
-  }
-
-  if ('showHeadingNumbers' in raw && raw.showHeadingNumbers !== undefined) {
-    if (typeof raw.showHeadingNumbers !== 'boolean') {
-      throw new Error('Invalid showHeadingNumbers: expected boolean')
-    }
-    patch.showHeadingNumbers = raw.showHeadingNumbers
-  }
-
-  if ('favoriteWorkspaces' in raw && raw.favoriteWorkspaces !== undefined) {
-    if (!Array.isArray(raw.favoriteWorkspaces) || !raw.favoriteWorkspaces.every(isFavoriteWorkspace)) {
-      throw new Error('Invalid favoriteWorkspaces: expected FavoriteWorkspace[]')
-    }
-    patch.favoriteWorkspaces = raw.favoriteWorkspaces.map(shallowClone)
-  }
-
-  if ('recentWorkspaces' in raw && raw.recentWorkspaces !== undefined) {
-    if (!Array.isArray(raw.recentWorkspaces) || !raw.recentWorkspaces.every(isString)) {
-      throw new Error('Invalid recentWorkspaces: expected string[]')
-    }
-    patch.recentWorkspaces = [...raw.recentWorkspaces]
-  }
-
-  if ('customCommands' in raw && raw.customCommands !== undefined) {
-    if (!Array.isArray(raw.customCommands) || !raw.customCommands.every(isCustomCommandConfig)) {
-      throw new Error('Invalid customCommands: expected CustomCommandConfig[]')
-    }
-    patch.customCommands = raw.customCommands.map(shallowClone)
-  }
-
   return patch
 }

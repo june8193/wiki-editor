@@ -237,4 +237,93 @@ describe('App shell, theme persistence, and settings panel', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('읽기 권한 없음')
   })
+
+  it('closes the settings panel when clicking 닫기 and surfaces initial load failures', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    const view = render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    expect(screen.getByLabelText('전역 설정 패널')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /닫기/i }))
+    expect(screen.queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
+
+    view.unmount()
+
+    const failingApi = createInMemoryWikiApi().api
+    failingApi.config.get = async () => {
+      throw new Error('초기 설정 로드 실패')
+    }
+    window.wikiApi = failingApi
+
+    render(<App />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('초기 설정 로드 실패')
+  })
+
+  it('keeps error banner visible and avoids stale raw read when saving theme fails while raw preview is open', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    let readRawCalls = 0
+    const origReadRaw = api.config.readRaw
+    api.config.readRaw = async () => {
+      readRawCalls += 1
+      return origReadRaw()
+    }
+    api.config.update = async () => {
+      throw new Error('저장 실패 유지 테스트')
+    }
+    window.wikiApi = api
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
+    await screen.findByTestId('config-raw-preview')
+    const callsBeforeToggle = readRawCalls
+
+    await user.click(screen.getByRole('button', { name: /테마 전환/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('저장 실패 유지 테스트')
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    expect(readRawCalls).toBe(callsBeforeToggle)
+  })
+
+  it('surfaces error and avoids flicker when onChanged from first toggle arrives during second failing toggle', async () => {
+    const user = userEvent.setup()
+    const { api, emitExternalChange } = createInMemoryWikiApi({ theme: 'light' })
+
+    let resolveFirst!: (value: AppConfig) => void
+    let rejectSecond!: (error: Error) => void
+    let callCount = 0
+    api.config.update = () => {
+      callCount += 1
+      if (callCount === 1) {
+        return new Promise<AppConfig>((resolve) => {
+          resolveFirst = resolve
+        })
+      }
+      return new Promise<AppConfig>((_resolve, reject) => {
+        rejectSecond = reject
+      })
+    }
+    window.wikiApi = api
+
+    render(<App />)
+    const toggle = await screen.findByRole('button', { name: /테마 전환/i })
+
+    await user.click(toggle) // light -> dark (in-flight)
+    await user.click(toggle) // dark -> light (in-flight)
+
+    emitExternalChange({ theme: 'dark' })
+    resolveFirst({ ...cloneAppConfig(DEFAULT_APP_CONFIG), theme: 'dark' })
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+
+    rejectSecond(new Error('두 번째 저장 실패'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('두 번째 저장 실패')
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
+  })
 })

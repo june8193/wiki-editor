@@ -8,12 +8,15 @@ function applyThemeAttribute(theme: ThemeMode): void {
 
 export function App() {
   const [config, setConfig] = useState<AppConfig>(DEFAULT_APP_CONFIG)
+  const [persistedVersion, setPersistedVersion] = useState<number>(0)
   const [configPath, setConfigPath] = useState<string>('')
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const latestThemeRef = useRef<ThemeMode>(DEFAULT_APP_CONFIG.theme)
+  const lastCommittedConfigRef = useRef<AppConfig>(DEFAULT_APP_CONFIG)
   const mutationSeqRef = useRef<number>(0)
+  const inFlightUpdatesRef = useRef<number>(0)
   const mountedRef = useRef<boolean>(true)
 
   useEffect(() => {
@@ -29,6 +32,8 @@ export function App() {
       .then(([loadedConfig, resolvedPath]) => {
         if (!mountedRef.current) return
         setConfigPath(resolvedPath)
+        lastCommittedConfigRef.current = loadedConfig
+        setPersistedVersion((version) => version + 1)
         if (mutationSeqRef.current === initialSeq) {
           latestThemeRef.current = loadedConfig.theme
           setConfig(loadedConfig)
@@ -41,9 +46,12 @@ export function App() {
 
     const unsubscribe = configApi.onChanged((updatedConfig) => {
       if (!mountedRef.current) return
-      mutationSeqRef.current += 1
-      latestThemeRef.current = updatedConfig.theme
-      setConfig(updatedConfig)
+      lastCommittedConfigRef.current = updatedConfig
+      setPersistedVersion((version) => version + 1)
+      if (inFlightUpdatesRef.current === 0) {
+        latestThemeRef.current = updatedConfig.theme
+        setConfig(updatedConfig)
+      }
     })
 
     return () => {
@@ -54,8 +62,8 @@ export function App() {
 
   const handleToggleTheme = async (): Promise<void> => {
     const seq = ++mutationSeqRef.current
-    const previousTheme = latestThemeRef.current
-    const nextTheme: ThemeMode = previousTheme === 'light' ? 'dark' : 'light'
+    inFlightUpdatesRef.current += 1
+    const nextTheme: ThemeMode = latestThemeRef.current === 'light' ? 'dark' : 'light'
 
     latestThemeRef.current = nextTheme
     setErrorMessage(null)
@@ -63,19 +71,27 @@ export function App() {
 
     try {
       const saved = await window.wikiApi.config.update({ theme: nextTheme })
-      if (!mountedRef.current || seq !== mutationSeqRef.current) return
-      latestThemeRef.current = saved.theme
-      setConfig(saved)
+      if (!mountedRef.current) return
+      inFlightUpdatesRef.current -= 1
+      lastCommittedConfigRef.current = saved
+      setPersistedVersion((version) => version + 1)
+      if (seq === mutationSeqRef.current) {
+        latestThemeRef.current = saved.theme
+        setConfig(saved)
+      }
     } catch (error: unknown) {
-      if (!mountedRef.current || seq !== mutationSeqRef.current) return
-      latestThemeRef.current = previousTheme
-      setConfig((prev) => ({ ...prev, theme: previousTheme }))
-      setErrorMessage(error instanceof Error ? error.message : '테마 설정 저장에 실패했습니다.')
+      if (!mountedRef.current) return
+      inFlightUpdatesRef.current -= 1
+      if (seq === mutationSeqRef.current) {
+        const committed = lastCommittedConfigRef.current
+        latestThemeRef.current = committed.theme
+        setConfig(committed)
+        setErrorMessage(error instanceof Error ? error.message : '테마 설정 저장에 실패했습니다.')
+      }
     }
   }
 
   const handleReadRawConfig = useCallback(async (): Promise<string> => {
-    setErrorMessage(null)
     const [resolvedPath, raw] = await Promise.all([
       window.wikiApi.config.getConfigPath(),
       window.wikiApi.config.readRaw()
@@ -84,6 +100,10 @@ export function App() {
       setConfigPath(resolvedPath)
     }
     return raw
+  }, [])
+
+  const handleClearError = useCallback((): void => {
+    setErrorMessage(null)
   }, [])
 
   return (
@@ -124,10 +144,12 @@ export function App() {
 
         {isSettingsOpen && (
           <SettingsPanel
-            config={config}
+            theme={config.theme}
+            persistedVersion={persistedVersion}
             configPath={configPath}
             onToggleTheme={() => void handleToggleTheme()}
             onReadRawConfig={handleReadRawConfig}
+            onClearError={handleClearError}
             onError={setErrorMessage}
             onClose={() => setIsSettingsOpen(false)}
           />
