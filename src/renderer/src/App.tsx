@@ -1,11 +1,21 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import type { OutlineScrollRequest } from './components/DocumentEditor'
+import { DocumentOutlinePanel } from './components/DocumentOutlinePanel'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
 import { PaneInteractionActions } from './components/PaneTabBar'
 import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
+import { isMarkdownDocument } from './editor/editorModes'
+import {
+  applyHeadingNumbers,
+  getLineNumberAtOffset,
+  insertOrUpdateTocBlock,
+  type MarkdownHeading,
+  stripHeadingNumbers
+} from './editor/MarkdownTocEngine'
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
@@ -35,6 +45,8 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null)
+  const [outlineScrollRequest, setOutlineScrollRequest] = useState<OutlineScrollRequest | null>(null)
+  const scrollNonceRef = useRef(0)
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
   const tabCloseActionsRef = useRef<{
     saveAndCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => Promise<boolean>
@@ -49,6 +61,7 @@ export function App() {
     configPath,
     toggleTheme,
     toggleAutoSave,
+    toggleShowHeadingNumbers,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     saveRawConfig
@@ -210,6 +223,52 @@ export function App() {
   const activeTab = getPaneActiveTab(activePane)
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
+  const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
+
+  const applyActiveMarkdownTransform = useCallback(
+    (transform: (content: string) => string): void => {
+      if (!activeBuffer || !isActiveMarkdown) return
+      const nextContent = transform(activeBuffer.content)
+      if (nextContent !== activeBuffer.content) {
+        updateBufferContent(activeBuffer.key, nextContent)
+      }
+    },
+    [activeBuffer, isActiveMarkdown, updateBufferContent]
+  )
+
+  const handleSelectOutlineHeading = useCallback(
+    (heading: MarkdownHeading, index: number): void => {
+      if (!activeTab || !isActiveMarkdown) return
+      scrollNonceRef.current += 1
+      setOutlineScrollRequest({
+        paneId: activePane.id,
+        tabId: activeTab.id,
+        line: heading.line,
+        slug: heading.slug,
+        index,
+        nonce: scrollNonceRef.current
+      })
+    },
+    [activePane.id, activeTab, isActiveMarkdown]
+  )
+
+  const handleOutlineInsertToc = useCallback((): void => {
+    applyActiveMarkdownTransform((content) => {
+      const cursorLine =
+        activeTab?.mode === 'raw'
+          ? getLineNumberAtOffset(content.replace(/\r\n/g, '\n'), activeTab.cursor.selectionStart)
+          : undefined
+      return insertOrUpdateTocBlock(content, cursorLine)
+    })
+  }, [activeTab?.cursor.selectionStart, activeTab?.mode, applyActiveMarkdownTransform])
+
+  const handleOutlineApplyHeadingNumbers = useCallback((): void => {
+    applyActiveMarkdownTransform(applyHeadingNumbers)
+  }, [applyActiveMarkdownTransform])
+
+  const handleOutlineStripHeadingNumbers = useCallback((): void => {
+    applyActiveMarkdownTransform(stripHeadingNumbers)
+  }, [applyActiveMarkdownTransform])
 
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
@@ -295,32 +354,48 @@ export function App() {
       )}
 
       <main className="app-main">
-        <FolderTreeSidebar
-          workspace={workspace}
-          isFavorite={isCurrentWorkspaceFavorite}
-          tree={treeState}
-          activeFilePath={activeFilePath}
-          onToggleFavorite={() => {
-            if (workspace) {
-              toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
-            }
-          }}
-          onSelectPath={setSelectedTreePath}
-          onToggleDirectory={toggleDirectory}
-          onEnsureExpanded={ensureExpanded}
-          onResolveCreateParentDir={resolveCreateParentDir}
-          onOpenFile={handleOpenFile}
-          onRefreshTree={() => void refreshTree()}
-          onCreateEntry={createEntry}
-          onRenameEntry={renameEntry}
-          onRequestDelete={handleRequestDelete}
-        />
+        <aside className="left-sidebar">
+          <FolderTreeSidebar
+            workspace={workspace}
+            isFavorite={isCurrentWorkspaceFavorite}
+            tree={treeState}
+            activeFilePath={activeFilePath}
+            onToggleFavorite={() => {
+              if (workspace) {
+                toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
+              }
+            }}
+            onSelectPath={setSelectedTreePath}
+            onToggleDirectory={toggleDirectory}
+            onEnsureExpanded={ensureExpanded}
+            onResolveCreateParentDir={resolveCreateParentDir}
+            onOpenFile={handleOpenFile}
+            onRefreshTree={() => void refreshTree()}
+            onCreateEntry={createEntry}
+            onRenameEntry={renameEntry}
+            onRequestDelete={handleRequestDelete}
+          />
+
+          <DocumentOutlinePanel
+            documentName={activeBuffer?.name ?? null}
+            content={activeBuffer?.content ?? ''}
+            isMarkdownDocument={isActiveMarkdown}
+            showHeadingNumbers={config.showHeadingNumbers}
+            onToggleHeadingNumbers={toggleShowHeadingNumbers}
+            onSelectHeading={handleSelectOutlineHeading}
+            onInsertToc={handleOutlineInsertToc}
+            onApplyHeadingNumbers={handleOutlineApplyHeadingNumbers}
+            onStripHeadingNumbers={handleOutlineStripHeadingNumbers}
+          />
+        </aside>
 
         <PaneWorkspace
           layout={layout}
           buffers={buffers}
           theme={config.theme}
           autoSave={config.autoSave}
+          showHeadingNumbers={config.showHeadingNumbers}
+          scrollRequest={outlineScrollRequest}
           isShortcutDisabled={pendingDialog !== null}
           onSetSplitRatio={setSplitRatio}
           actions={paneActions}
@@ -330,9 +405,11 @@ export function App() {
           <SettingsPanel
             theme={config.theme}
             autoSave={config.autoSave}
+            showHeadingNumbers={config.showHeadingNumbers}
             configPath={configPath}
             onToggleTheme={toggleTheme}
             onToggleAutoSave={toggleAutoSave}
+            onToggleShowHeadingNumbers={toggleShowHeadingNumbers}
             onOpenConfigEditor={handleOpenConfigEditor}
             onClose={() => setIsSettingsOpen(false)}
           />

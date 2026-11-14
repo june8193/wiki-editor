@@ -1,8 +1,9 @@
 import { CSSProperties } from 'react'
 import type { ThemeMode } from '@shared/config'
+import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
-import { DocumentEditor } from './DocumentEditor'
+import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
 import {
   DraggingTabPayload,
   handleTabDrop,
@@ -17,6 +18,9 @@ interface PaneViewProps {
   flexRatio?: number
   theme: ThemeMode
   autoSave: boolean
+  showHeadingNumbers?: boolean
+  mermaidRenderer?: MermaidRenderer
+  scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
@@ -32,6 +36,9 @@ export function PaneView({
   flexRatio,
   theme,
   autoSave,
+  showHeadingNumbers = true,
+  mermaidRenderer,
+  scrollRequest = null,
   isShortcutDisabled = false,
   buffers,
   draggingTab,
@@ -41,6 +48,10 @@ export function PaneView({
 }: PaneViewProps) {
   const activeTab = getPaneActiveTab(pane)
   const activeBuffer = activeTab ? (buffers[activeTab.bufferKey] ?? null) : null
+  const activeScrollRequest =
+    activeTab && scrollRequest && scrollRequest.paneId === pane.id && scrollRequest.tabId === activeTab.id
+      ? scrollRequest
+      : null
   const canMoveToSplit = !(splitMode === 'single' && pane.tabs.length <= 1)
   const paneStyle: CSSProperties | undefined =
     flexRatio !== undefined ? { flex: `${flexRatio} 1 0%` } : undefined
@@ -85,6 +96,9 @@ export function PaneView({
           tab={activeTab}
           theme={theme}
           autoSave={autoSave}
+          showHeadingNumbers={showHeadingNumbers}
+          mermaidRenderer={mermaidRenderer}
+          scrollRequest={activeScrollRequest}
           isShortcutDisabled={isShortcutDisabled}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}

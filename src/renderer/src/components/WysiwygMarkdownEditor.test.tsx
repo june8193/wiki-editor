@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
+import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 describe('WysiwygMarkdownEditor', () => {
@@ -229,5 +230,118 @@ describe('WysiwygMarkdownEditor', () => {
     scroller.scrollTop = 310
     fireEvent.scroll(scroller)
     expect(onScrollTopChange).toHaveBeenCalledWith(310)
+  })
+
+  it('renders mermaid blocks with theme sync, source toggle, and lossless markdown roundtrip', async () => {
+    const user = userEvent.setup()
+    const onChangeContent = vi.fn()
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => {
+        if (text.includes('broken')) {
+          throw new Error('Mermaid WYSIWYG error')
+        }
+        return { svg: `<svg><text>${text.trim()}</text></svg>` }
+      })
+    }
+    const renderer = createMermaidRenderer(driver)
+    const md = [
+      '# Architecture',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  A --> B',
+      '```'
+    ].join('\n')
+
+    const { rerender } = render(
+      <WysiwygMarkdownEditor
+        content={md}
+        scrollTop={0}
+        theme="light"
+        mermaidRenderer={renderer}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    expect(await screen.findByTestId('mermaid-svg')).toHaveTextContent('A --> B')
+    expect(screen.getByTestId('mermaid-diagram')).toHaveAttribute('data-mermaid-theme', 'default')
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Toggle theme to dark -> updates Mermaid diagram without mutating markdown
+    rerender(
+      <WysiwygMarkdownEditor
+        content={md}
+        scrollTop={0}
+        theme="dark"
+        mermaidRenderer={renderer}
+        onChangeContent={onChangeContent}
+      />
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('mermaid-diagram')).toHaveAttribute('data-mermaid-theme', 'dark')
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Clicking 코드 편집 toggles the embedded code source block
+    const mermaidBlock = screen.getByTestId('wysiwyg-mermaid-block')
+    const editCodeBtn = within(mermaidBlock).getByRole('button', { name: '코드 편집' })
+    await user.click(editCodeBtn)
+    expect(within(mermaidBlock).getByRole('button', { name: '코드 숨기기' })).toBeInTheDocument()
+  })
+
+  it('renders dynamic heading numbers via decorations without mutating markdown, scrolls on scrollRequest, and inserts /toc', async () => {
+    const user = userEvent.setup()
+    const onChangeContent = vi.fn()
+    const scrollIntoViewMock = vi.fn()
+    const origScrollIntoView = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollIntoViewMock
+
+    try {
+      const md = ['# Intro', '', '## Details', '', '### 1. Explicit'].join('\n')
+      const { rerender } = render(
+        <WysiwygMarkdownEditor
+          content={md}
+          scrollTop={0}
+          showHeadingNumbers
+          onChangeContent={onChangeContent}
+        />
+      )
+
+      const editorEl = screen.getByTestId('document-editor')
+      const h1 = editorEl.querySelector('h1')!
+      const h2 = editorEl.querySelector('h2')!
+      const h3 = editorEl.querySelector('h3')!
+      expect(h1.querySelector('.heading-number')).toHaveTextContent('1.')
+      expect(h2.querySelector('.heading-number')).toHaveTextContent('1.1.')
+      expect(h3.querySelector('.heading-number')).toBeNull()
+      expect(onChangeContent).not.toHaveBeenCalled()
+
+      // Toggle off dynamic heading numbers + trigger scrollRequest to H2
+      rerender(
+        <WysiwygMarkdownEditor
+          content={md}
+          scrollTop={0}
+          showHeadingNumbers={false}
+          scrollRequest={{ index: 1, nonce: 1 }}
+          onChangeContent={onChangeContent}
+        />
+      )
+      expect(editorEl.querySelector('.heading-number')).toBeNull()
+      expect(onChangeContent).not.toHaveBeenCalled()
+      expect(scrollIntoViewMock).toHaveBeenCalled()
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(h2)
+
+      // Toolbar "목차 삽입" button inserts generated TOC links
+      const formatToolbar = screen.getByRole('toolbar', { name: '위지윅 서식 툴바' })
+      await user.click(within(formatToolbar).getByRole('button', { name: '목차 삽입' }))
+      expect(onChangeContent).toHaveBeenCalledTimes(1)
+      const withToc = onChangeContent.mock.calls[0][0] as string
+      expect(withToc).toContain('<!-- toc -->')
+      expect(withToc).toContain('- [Intro](#intro)')
+    } finally {
+      Element.prototype.scrollIntoView = origScrollIntoView
+    }
   })
 })

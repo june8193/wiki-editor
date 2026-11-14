@@ -3,9 +3,11 @@ import { ThemeMode } from '@shared/config'
 interface SettingsPanelProps {
   theme: ThemeMode
   autoSave: boolean
+  showHeadingNumbers?: boolean
   configPath: string
   onToggleTheme: () => void
   onToggleAutoSave: () => void
+  onToggleShowHeadingNumbers?: () => void
   onOpenConfigEditor: () => void
   onClose: () => void
 }
@@ -13,9 +15,11 @@ interface SettingsPanelProps {
 export function SettingsPanel({
   theme,
   autoSave,
+  showHeadingNumbers = true,
   configPath,
   onToggleTheme,
   onToggleAutoSave,
+  onToggleShowHeadingNumbers,
   onOpenConfigEditor,
   onClose
 }: SettingsPanelProps) {
@@ -43,6 +47,18 @@ export function SettingsPanel({
         <label className="settings-toggle-row">
           <input type="checkbox" checked={autoSave} onChange={onToggleAutoSave} />
           <span>자동 저장 (Auto-save)</span>
+        </label>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">문서 표시</h3>
+        <label className="settings-toggle-row">
+          <input
+            type="checkbox"
+            checked={showHeadingNumbers}
+            onChange={onToggleShowHeadingNumbers}
+          />
+          <span>헤딩 자동 넘버링 표시</span>
         </label>
       </section>
 

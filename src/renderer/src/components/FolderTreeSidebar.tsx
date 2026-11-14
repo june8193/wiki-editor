@@ -299,7 +299,7 @@ export function FolderTreeSidebar({
     })
 
   return (
-    <aside className="workspace-sidebar" aria-label="워크스페이스 탐색기">
+    <section className="workspace-sidebar" aria-label="워크스페이스 탐색기">
       {!workspace ? (
         <div className="sidebar-empty">
           <p className="sidebar-empty-text">열린 워크스페이스 없음</p>
@@ -428,6 +428,6 @@ export function FolderTreeSidebar({
           </button>
         </div>
       )}
-    </aside>
+    </section>
   )
 }

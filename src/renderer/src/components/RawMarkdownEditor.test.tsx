@@ -348,4 +348,107 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     expect(emitted).toContain('\r\n')
     expect(emitted.split('\r\n').filter((line) => line.startsWith('|'))).toHaveLength(4)
   })
+
+  it('scrolls to and moves selection to the target heading line on scrollRequest and supports /toc insertion outside code fences', async () => {
+    const user = userEvent.setup()
+    const doc = [
+      '# Title',
+      '',
+      '/toc',
+      '',
+      '```md',
+      '/toc',
+      '```',
+      '',
+      '## Details',
+      'Body text'
+    ].join('\n')
+    const onChangeContent = vi.fn()
+    const onUpdateViewState = vi.fn()
+
+    const { rerender } = render(
+      <RawMarkdownEditor
+        content={doc}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        showTableToolbar
+        onChangeContent={onChangeContent}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    // Scroll request targets 1-based line 9 ("## Details")
+    rerender(
+      <RawMarkdownEditor
+        content={doc}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        showTableToolbar
+        scrollRequest={{ line: 9, nonce: 1 }}
+        onChangeContent={onChangeContent}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const targetOffset = doc.indexOf('## Details')
+    await waitFor(() => {
+      expect(editorEl.getAttribute('data-selection-start')).toBe(String(targetOffset))
+    })
+
+    // Triggering Enter on /toc inside a fenced code block does NOT insert a TOC block
+    const view = EditorView.findFromDOM(editorEl)!
+    const insideFencePos = doc.indexOf('/toc', doc.indexOf('```md')) + 4
+    view.dispatch({ selection: { anchor: insideFencePos } })
+    fireEvent.keyDown(editorEl, { key: 'Enter' })
+
+    const emittedInsideFence = onChangeContent.mock.calls.at(-1)?.[0] as string
+    expect(emittedInsideFence).not.toContain('<!-- toc -->')
+
+    // Re-render original doc and trigger Enter on /toc outside fence
+    onChangeContent.mockClear()
+    rerender(
+      <RawMarkdownEditor
+        content={doc}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: doc.indexOf('/toc') + 4, selectionEnd: doc.indexOf('/toc') + 4 }}
+        scrollTop={0}
+        showTableToolbar
+        onChangeContent={onChangeContent}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    fireEvent.keyDown(editorEl, { key: 'Enter' })
+    expect(onChangeContent).toHaveBeenCalled()
+    const afterSlashToc = onChangeContent.mock.calls.at(-1)?.[0] as string
+    expect(afterSlashToc).toContain('<!-- toc -->')
+    expect(afterSlashToc).toContain('- [Details](#details)')
+
+    // Toolbar button also inserts/updates TOC when a new heading is added
+    onChangeContent.mockClear()
+    const docWithAddedHeading = `${afterSlashToc}\n\n### New Section`
+    rerender(
+      <RawMarkdownEditor
+        content={docWithAddedHeading}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        showTableToolbar
+        onChangeContent={onChangeContent}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+    const toolbar = screen.getByRole('toolbar', { name: 'Raw 표 편집 툴바' })
+    await user.click(within(toolbar).getByRole('button', { name: '목차 삽입' }))
+    expect(onChangeContent).toHaveBeenCalledTimes(1)
+    expect(onChangeContent.mock.calls[0][0]).toContain('<!-- toc -->')
+    expect(onChangeContent.mock.calls[0][0]).toContain('- [New Section](#new-section)')
+  })
 })

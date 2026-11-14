@@ -1,22 +1,83 @@
-import { useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import type { ThemeMode } from '@shared/config'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
+import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
+
+export interface PreviewScrollRequest {
+  slug?: string
+  index: number
+  nonce: number
+}
 
 interface MarkdownPreviewProps {
   content: string
   scrollTop: number
+  theme?: ThemeMode
+  showHeadingNumbers?: boolean
+  mermaidRenderer?: MermaidRenderer
+  scrollRequest?: PreviewScrollRequest | null
   onScrollTopChange?: (scrollTop: number) => void
+}
+
+function scrollHeadingIntoView(target: Element): void {
+  if (typeof target.scrollIntoView === 'function') {
+    target.scrollIntoView({ block: 'start' })
+  }
 }
 
 export function MarkdownPreview({
   content,
   scrollTop,
+  theme = 'light',
+  showHeadingNumbers = false,
+  mermaidRenderer,
+  scrollRequest,
   onScrollTopChange
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const rendered = useMemo(() => renderMarkdownToReact(content), [content])
+
+  const scrollToHeading = useCallback((slug?: string, index?: number): void => {
+    const container = containerRef.current
+    if (!container) return
+
+    const headings = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6'))
+    if (slug) {
+      const bySlug = headings.find((el) => el.id === slug)
+      if (bySlug) {
+        scrollHeadingIntoView(bySlug)
+        return
+      }
+    }
+    if (index !== undefined && index >= 0 && index < headings.length) {
+      scrollHeadingIntoView(headings[index])
+    }
+  }, [])
+
+  const handleAnchorNavigate = useCallback(
+    (slug: string): void => {
+      scrollToHeading(slug)
+    },
+    [scrollToHeading]
+  )
+
+  const rendered = useMemo(
+    () =>
+      renderMarkdownToReact(content, {
+        theme,
+        showHeadingNumbers,
+        mermaidRenderer,
+        onAnchorNavigate: handleAnchorNavigate
+      }),
+    [content, handleAnchorNavigate, mermaidRenderer, showHeadingNumbers, theme]
+  )
 
   useSyncScrollTop(containerRef, scrollTop)
+
+  useEffect(() => {
+    if (!scrollRequest) return
+    scrollToHeading(scrollRequest.slug, scrollRequest.index)
+  }, [scrollRequest, scrollToHeading])
 
   return (
     <div

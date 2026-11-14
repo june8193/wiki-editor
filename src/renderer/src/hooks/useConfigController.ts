@@ -144,6 +144,15 @@ export function useConfigController({
     )
   }, [runConfigMutation])
 
+  const toggleShowHeadingNumbers = useCallback((): void => {
+    const nextShowHeadingNumbers = !latestConfigRef.current.showHeadingNumbers
+    void runConfigMutation(
+      (prev) => ({ ...prev, showHeadingNumbers: nextShowHeadingNumbers }),
+      () => window.wikiApi.config.update({ showHeadingNumbers: nextShowHeadingNumbers }),
+      '헤딩 자동 넘버링 설정 변경에 실패했습니다.'
+    )
+  }, [runConfigMutation])
+
   const toggleFavoriteWorkspace = useCallback(
     (workspacePath: string, name: string): void => {
       void runConfigMutation(
@@ -188,6 +197,7 @@ export function useConfigController({
     configPath,
     toggleTheme,
     toggleAutoSave,
+    toggleShowHeadingNumbers,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     saveRawConfig

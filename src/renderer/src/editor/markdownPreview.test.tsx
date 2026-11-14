@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { MarkdownPreview } from '../components/MarkdownPreview'
+import { createMermaidRenderer, type MermaidDriver } from './mermaidRenderer'
 import { renderMarkdownToReact } from './markdownPreview'
 
 describe('markdownPreview pipeline and XSS sanitization', () => {
@@ -133,5 +134,127 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
     preview.scrollTop = 305
     fireEvent.scroll(preview)
     expect(onScrollTopChange).toHaveBeenCalledWith(305)
+  })
+
+  it('renders mermaid code blocks via MermaidDiagram with theme sync and error isolation while still sanitizing raw <svg>', async () => {
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => {
+        if (text.includes('invalid')) {
+          throw new Error('Bad mermaid syntax')
+        }
+        return { svg: '<svg><g><text>Flow OK</text></g></svg>' }
+      })
+    }
+    const renderer = createMermaidRenderer(driver)
+    const md = [
+      '# Diagram Doc',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  A --> B',
+      '```',
+      '',
+      '```mermaid',
+      'invalid diagram',
+      '```',
+      '',
+      '<svg onload="alert(1)"><circle r="5" /></svg>'
+    ].join('\n')
+
+    const { container, rerender } = render(
+      <MarkdownPreview
+        content={md}
+        scrollTop={0}
+        theme="light"
+        mermaidRenderer={renderer}
+      />
+    )
+
+    expect(await screen.findByTestId('mermaid-svg')).toHaveTextContent('Flow OK')
+    const diagrams = screen.getAllByTestId('mermaid-diagram')
+    expect(diagrams).toHaveLength(2)
+    expect(diagrams[0]).toHaveAttribute('data-mermaid-theme', 'default')
+    expect(screen.getByRole('alert')).toHaveTextContent('Bad mermaid syntax')
+    expect(screen.getByRole('alert')).toHaveTextContent('invalid diagram')
+    // Raw HTML <svg onload> outside fenced mermaid block must still be stripped by rehype-sanitize
+    expect(container.querySelector('circle')).toBeNull()
+
+    rerender(
+      <MarkdownPreview
+        content={md}
+        scrollTop={0}
+        theme="dark"
+        mermaidRenderer={renderer}
+      />
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(driver.initialize).toHaveBeenLastCalledWith(
+      expect.objectContaining({ theme: 'dark' })
+    )
+    expect(container.querySelector('[data-mermaid-theme="dark"]')).not.toBeNull()
+  })
+
+  it('displays dynamic hierarchical heading numbers without double-numbering and scrolls on TOC anchor click or scrollRequest', () => {
+    const md = [
+      '- [Intro](#intro)',
+      '- [Details](#1-details)',
+      '',
+      '# Intro',
+      '## **Sub** Topic',
+      '### 1. Details'
+    ].join('\n')
+
+    const scrollIntoViewMock = vi.fn()
+    const origScrollIntoView = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollIntoViewMock
+
+    try {
+      const { container, rerender } = render(
+        <MarkdownPreview
+          content={md}
+          scrollTop={0}
+          theme="light"
+          showHeadingNumbers
+        />
+      )
+
+      const h1 = container.querySelector('h1')!
+      const h2 = container.querySelector('h2')!
+      const h3 = container.querySelector('h3')!
+      expect(h1).toHaveTextContent('1. Intro')
+      expect(h1).toHaveAttribute('id', 'intro')
+      expect(h2).toHaveTextContent('1.1. Sub Topic')
+      expect(h3).toHaveTextContent('1.1.1. Details')
+      expect(h3.textContent).not.toContain('1.1.1. 1.')
+
+      // Accessible name preserves title without decorative dynamic number prefix
+      expect(screen.getByRole('heading', { level: 1, name: 'Intro' })).toBeInTheDocument()
+
+      // Clicking TOC anchor scrolls target heading into view
+      fireEvent.click(screen.getByRole('link', { name: 'Intro' }))
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(h1)
+
+      // Disabling showHeadingNumbers removes dynamic numbers cleanly
+      rerender(
+        <MarkdownPreview
+          content={md}
+          scrollTop={0}
+          theme="light"
+          showHeadingNumbers={false}
+          scrollRequest={{ slug: 'sub-topic', index: 1, nonce: 1 }}
+        />
+      )
+      expect(container.querySelector('h1')).toHaveTextContent('Intro')
+      expect(container.querySelector('h1')?.textContent).not.toContain('1.')
+      expect(container.querySelector('h3')).toHaveTextContent('1. Details')
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
+      expect(scrollIntoViewMock.mock.instances[1]).toBe(container.querySelector('h2'))
+    } finally {
+      Element.prototype.scrollIntoView = origScrollIntoView
+    }
   })
 })

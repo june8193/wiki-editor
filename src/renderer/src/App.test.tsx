@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   AppConfig,
   cloneAppConfig,
@@ -19,7 +19,39 @@ import {
   WorkspaceEntry,
   WorkspaceEntryKind
 } from '@shared/workspace'
+import { defaultMermaidRenderer } from './editor/mermaidRenderer'
 import { App } from './App'
+
+const mermaidMockState = vi.hoisted(() => {
+  let activeTheme = 'default'
+  const initialize = vi.fn((cfg?: { theme?: string }) => {
+    activeTheme = cfg?.theme ?? 'default'
+  })
+  const render = vi.fn(async (_id: string, text: string) => {
+    if (text.includes('SYNTAX_ERROR')) {
+      throw new Error('Syntax error in Mermaid graph')
+    }
+    return {
+      svg: `<svg data-mermaid-theme="${activeTheme}" data-code="${text.trim()}"><g><text>DiagramOK</text></g></svg>`
+    }
+  })
+  return {
+    initialize,
+    render,
+    reset: () => {
+      activeTheme = 'default'
+      initialize.mockClear()
+      render.mockClear()
+    }
+  }
+})
+
+vi.mock('mermaid', () => ({
+  default: {
+    initialize: mermaidMockState.initialize,
+    render: mermaidMockState.render
+  }
+}))
 
 interface VirtualFsOptions {
   workspaces?: Record<string, Record<string, string | null>>
@@ -1918,5 +1950,288 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
       'href',
       'https://example.com'
     )
+  })
+})
+
+describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+    defaultMermaidRenderer.clearCache()
+    mermaidMockState.reset()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('renders mermaid diagrams in Preview and WYSIWYG, syncs theme via cache, isolates syntax errors, and preserves roundtrip', async () => {
+    const user = userEvent.setup()
+    const diagramDoc = [
+      '# Architecture',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  A[Start] --> B[End]',
+      '```',
+      '',
+      '```mermaid',
+      'SYNTAX_ERROR broken node',
+      '```'
+    ].join('\n')
+
+    const { api } = createInMemoryWikiApi(
+      { theme: 'light', showHeadingNumbers: true },
+      {
+        selectedFolder: 'C:\\wiki\\mermaid',
+        workspaces: {
+          'C:\\wiki\\mermaid': {
+            'diagram.md': diagramDoc
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await user.click(await screen.findByText('diagram.md'))
+
+    // Preview mode renders valid Mermaid SVG and isolates broken block without crashing
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+
+    await waitFor(() => {
+      const svgs = screen.getByTestId('document-editor').querySelectorAll('svg[data-mermaid-theme]')
+      expect(svgs).toHaveLength(1)
+      expect(svgs[0].getAttribute('data-mermaid-theme')).toBe('default')
+    })
+
+    const errorAlert = screen.getByRole('alert')
+    expect(errorAlert.textContent).toContain('Syntax error in Mermaid graph')
+    expect(errorAlert.textContent).toContain('SYNTAX_ERROR broken node')
+
+    // Switch theme Light -> Dark -> Light: Dark re-renders cleanly, Light back hits cache
+    const callsAfterInitial = mermaidMockState.render.mock.calls.length
+    await user.click(screen.getByRole('button', { name: /테마 전환/i }))
+    await waitFor(() => {
+      const svg = screen.getByTestId('document-editor').querySelector('svg[data-mermaid-theme]')
+      expect(svg?.getAttribute('data-mermaid-theme')).toBe('dark')
+    })
+
+    const callsAfterDark = mermaidMockState.render.mock.calls.length
+    expect(callsAfterDark).toBeGreaterThan(callsAfterInitial)
+
+    await user.click(screen.getByRole('button', { name: /테마 전환/i }))
+    await waitFor(() => {
+      const svg = screen.getByTestId('document-editor').querySelector('svg[data-mermaid-theme]')
+      expect(svg?.getAttribute('data-mermaid-theme')).toBe('default')
+    })
+    // Valid diagram hit cache on Light return; only the un-cached broken block might retry or wait — ensure valid diagram came from cache without doubling render count
+    expect(
+      mermaidMockState.render.mock.calls
+        .slice(callsAfterDark)
+        .filter(([, src]) => !String(src).includes('SYNTAX_ERROR'))
+    ).toHaveLength(0)
+
+    // Switch to WYSIWYG: Mermaid NodeView renders both SVG and error isolation
+    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+    await waitFor(() => {
+      const blocks = within(screen.getByTestId('document-editor')).getAllByTestId('wysiwyg-mermaid-block')
+      expect(blocks).toHaveLength(2)
+      expect(blocks[0].querySelector('svg')?.getAttribute('data-mermaid-theme')).toBe('default')
+      expect(within(blocks[1]).getByRole('alert').textContent).toContain('SYNTAX_ERROR broken node')
+    })
+
+    // Return to Raw: lossless roundtrip preserves original markdown without dirty flag
+    await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(diagramDoc)
+    expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+  })
+
+  it('updates sidebar Outline ignoring code fences, toggles showHeadingNumbers cleanly with persistence, and scrolls to headings across modes', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewMock = vi.fn()
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+    const guideDoc = [
+      '# Intro',
+      '',
+      '```bash',
+      '# Ignored Comment',
+      '```',
+      '',
+      '## Setup',
+      '### Step One'
+    ].join('\n')
+
+    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+      { theme: 'light', showHeadingNumbers: true },
+      {
+        selectedFolder: 'C:\\wiki\\outline',
+        workspaces: {
+          'C:\\wiki\\outline': {
+            'guide.md': guideDoc
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const firstRender = render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await user.click(await screen.findByText('guide.md'))
+
+    const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+    const items = within(within(outline).getByRole('list')).getAllByRole('listitem')
+    expect(items).toHaveLength(3)
+    expect(items[0].textContent).toContain('1.')
+    expect(items[1].textContent).toContain('1.1.')
+    expect(items[2].textContent).toContain('1.1.1.')
+    expect(outline.textContent).not.toContain('Ignored Comment')
+
+    // Click heading in Outline in Raw mode -> moves cursor to target heading line
+    await user.click(within(items[1]).getByRole('button'))
+    await waitFor(() => {
+      expect(getRawEditorSelection(screen.getByTestId('document-editor')).start).toBe(
+        guideDoc.indexOf('## Setup')
+      )
+    })
+
+    // Switch to Preview mode and verify dynamic heading numbers + click-to-scroll
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+    const setupHeading = screen.getByRole('heading', { level: 2, name: 'Setup' })
+    expect(setupHeading.textContent).toBe('1.1. Setup')
+
+    scrollIntoViewMock.mockClear()
+    await user.click(within(items[2]).getByRole('button'))
+    expect(scrollIntoViewMock).toHaveBeenCalled()
+
+    // Toggle showHeadingNumbers off via Outline button -> hides numbers in Outline & Preview without dirtying buffer
+    await user.click(within(outline).getByRole('button', { name: '헤딩 번호 표시' }))
+    expect(screen.getByRole('heading', { level: 2, name: 'Setup' }).textContent).toBe('Setup')
+    expect(within(outline).queryByText('1.1.')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    expect(getFilesSnapshot().get('C:/wiki/outline/guide.md')).toBe(guideDoc)
+
+    // Verify WYSIWYG mode reflects dynamic heading numbering toggle and click-to-scroll too
+    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+    scrollIntoViewMock.mockClear()
+    const currentItems = within(within(outline).getByRole('list')).getAllByRole('listitem')
+    await user.click(within(currentItems[1]).getByRole('button'))
+    expect(scrollIntoViewMock).toHaveBeenCalled()
+
+    // Open SettingsPanel, verify checkbox reflects false, toggle back true and verify persistence across restart
+    await user.click(screen.getByRole('button', { name: /설정/i }))
+    const settingsPanel = screen.getByLabelText('전역 설정 패널')
+    const headingToggleCheckbox = within(settingsPanel).getByRole('checkbox', {
+      name: /헤딩 자동 넘버링 표시/i
+    }) as HTMLInputElement
+    expect(headingToggleCheckbox.checked).toBe(false)
+
+    await user.click(headingToggleCheckbox)
+    expect(headingToggleCheckbox.checked).toBe(true)
+
+    firstRender.unmount()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    const reopenedCheckbox = within(screen.getByLabelText('전역 설정 패널')).getByRole('checkbox', {
+      name: /헤딩 자동 넘버링 표시/i
+    }) as HTMLInputElement
+    expect(reopenedCheckbox.checked).toBe(true)
+  })
+
+  it('inserts /toc and writes/strips heading numbers outside code fences with split-pane sync', async () => {
+    const user = userEvent.setup()
+    const initialDoc = [
+      '# Title',
+      '',
+      '```python',
+      '# 99. Code comment must stay unchanged',
+      '```',
+      '',
+      '## First Section',
+      '## Second Section'
+    ].join('\n')
+
+    const { api } = createInMemoryWikiApi(
+      { theme: 'light', showHeadingNumbers: true },
+      {
+        selectedFolder: 'C:\\wiki\\actions',
+        workspaces: {
+          'C:\\wiki\\actions': {
+            'manual.md': initialDoc,
+            'other.md': '# Other'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(within(sidebar).getByText('manual.md'))
+    await user.click(within(sidebar).getByText('other.md'))
+
+    // Open split view and keep <= 2 editor DOM instances
+    await user.click(screen.getByRole('button', { name: '좌우 분할' }))
+    const primaryPane = screen.getByTestId('pane-primary')
+    const secondaryPane = screen.getByTestId('pane-secondary')
+
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역에 복제 열기'
+      })
+    )
+    await user.click(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
+    await user.click(
+      within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Preview' }
+      )
+    )
+    expect(screen.getAllByTestId('document-editor')).toHaveLength(2)
+
+    // Focus primary pane and run "본문 헤딩 번호 쓰기"
+    await user.click(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
+    const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+
+    await user.click(within(outline).getByRole('button', { name: '본문 헤딩 번호 쓰기' }))
+    expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toContain(
+      '# 1. Title'
+    )
+    expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toContain(
+      '## 1.1. First Section'
+    )
+    expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toContain(
+      '# 99. Code comment must stay unchanged'
+    )
+    expect(within(primaryPane).getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    // Verify Preview pane displays explicit heading without double numbering ("1.1. 1.1. First Section")
+    expect(
+      within(secondaryPane).getByRole('heading', { level: 2, name: 'First Section' }).textContent
+    ).toBe('1.1. First Section')
+
+    // Run "본문에 목차(/toc) 삽입"
+    await user.click(within(outline).getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
+    const afterToc = getRawEditorText(within(primaryPane).getByTestId('document-editor'))
+    expect(afterToc).toContain('<!-- toc -->')
+    expect(afterToc).toContain('- [1.1. First Section](#11-first-section)')
+    expect(afterToc).toContain('<!-- /toc -->')
+    expect(
+      within(secondaryPane).getByRole('link', { name: '1.1. First Section' })
+    ).toHaveAttribute('href', '#11-first-section')
+
+    // Run "본문 헤딩 번호 제거" -> strips headings outside code fence only
+    await user.click(within(outline).getByRole('button', { name: '본문 헤딩 번호 제거' }))
+    const afterStrip = getRawEditorText(within(primaryPane).getByTestId('document-editor'))
+    expect(afterStrip).toContain('# Title')
+    expect(afterStrip).toContain('## First Section')
+    expect(afterStrip).not.toContain('## 1.1. First Section')
+    expect(afterStrip).toContain('# 99. Code comment must stay unchanged')
   })
 })

@@ -236,4 +236,25 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
 
     editor.destroy()
   })
+
+  it('roundtrips mermaid fenced code blocks losslessly alongside standard markdown', () => {
+    const sample = [
+      '# Architecture',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  A[Start] --> B[End]',
+      '```',
+      '',
+      'After diagram'
+    ].join('\n')
+
+    const editor = createTestWysiwygEditor(sample)
+    const exported = editor.getMarkdown()
+    editor.destroy()
+
+    expect(exported).toContain('# Architecture')
+    expect(exported).toContain('```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```')
+    expect(exported).toContain('After diagram')
+  })
 })

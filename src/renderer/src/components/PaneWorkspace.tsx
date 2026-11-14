@@ -1,7 +1,9 @@
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
+import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { PaneLayoutState } from '../stores/PaneTabStore'
+import type { OutlineScrollRequest } from './DocumentEditor'
 import { DraggingTabPayload, handleTabDrop, PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
 
@@ -10,6 +12,9 @@ interface PaneWorkspaceProps {
   buffers: DocumentBufferSnapshot
   theme: ThemeMode
   autoSave: boolean
+  showHeadingNumbers?: boolean
+  mermaidRenderer?: MermaidRenderer
+  scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   onSetSplitRatio: (ratio: number) => void
   actions: PaneInteractionActions
@@ -22,6 +27,9 @@ export function PaneWorkspace({
   buffers,
   theme,
   autoSave,
+  showHeadingNumbers = true,
+  mermaidRenderer,
+  scrollRequest = null,
   isShortcutDisabled = false,
   onSetSplitRatio,
   actions
@@ -74,6 +82,20 @@ export function PaneWorkspace({
 
   const clearDragging = (): void => setDraggingTab(null)
   const isSplit = layout.splitMode !== 'single'
+  const sharedPaneProps = {
+    splitMode: layout.splitMode,
+    theme,
+    autoSave,
+    showHeadingNumbers,
+    mermaidRenderer,
+    scrollRequest,
+    isShortcutDisabled,
+    buffers,
+    draggingTab,
+    onDragStartTab: setDraggingTab,
+    onDragEndTab: clearDragging,
+    actions
+  }
 
   return (
     <div
@@ -84,17 +106,9 @@ export function PaneWorkspace({
     >
       <PaneView
         pane={layout.panes.primary}
-        splitMode={layout.splitMode}
         isActivePane={layout.activePaneId === 'primary'}
         flexRatio={isSplit ? layout.splitRatio : undefined}
-        theme={theme}
-        autoSave={autoSave}
-        isShortcutDisabled={isShortcutDisabled}
-        buffers={buffers}
-        draggingTab={draggingTab}
-        onDragStartTab={setDraggingTab}
-        onDragEndTab={clearDragging}
-        actions={actions}
+        {...sharedPaneProps}
       />
 
       {!isSplit && draggingTab && layout.panes.primary.tabs.length > 1 && (
@@ -130,17 +144,9 @@ export function PaneWorkspace({
 
           <PaneView
             pane={layout.panes.secondary}
-            splitMode={layout.splitMode}
             isActivePane={layout.activePaneId === 'secondary'}
             flexRatio={1 - layout.splitRatio}
-            theme={theme}
-            autoSave={autoSave}
-            isShortcutDisabled={isShortcutDisabled}
-            buffers={buffers}
-            draggingTab={draggingTab}
-            onDragStartTab={setDraggingTab}
-            onDragEndTab={clearDragging}
-            actions={actions}
+            {...sharedPaneProps}
           />
         </>
       )}

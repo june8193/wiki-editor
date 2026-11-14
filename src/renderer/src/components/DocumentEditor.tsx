@@ -1,17 +1,30 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
 import type { ThemeMode } from '@shared/config'
 import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
+import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
-import { EditorMode, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import { EditorMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
+
+export interface OutlineScrollRequest {
+  paneId: PaneId
+  tabId: string
+  line: number
+  slug: string
+  index: number
+  nonce: number
+}
 
 interface DocumentEditorProps {
   document: DocumentBuffer
   tab: TabItem
   theme: ThemeMode
   autoSave: boolean
+  showHeadingNumbers?: boolean
+  mermaidRenderer?: MermaidRenderer
+  scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   onChangeContent: (nextContent: string) => void
   onSave: () => void
@@ -34,6 +47,9 @@ export function DocumentEditor({
   tab,
   theme,
   autoSave,
+  showHeadingNumbers = true,
+  mermaidRenderer,
+  scrollRequest = null,
   isShortcutDisabled = false,
   onChangeContent,
   onSave,
@@ -152,6 +168,9 @@ export function DocumentEditor({
           cursor={tab.cursor}
           scrollTop={tab.scrollTop}
           showTableToolbar={allowRichModes}
+          scrollRequest={
+            scrollRequest ? { line: scrollRequest.line, nonce: scrollRequest.nonce } : null
+          }
           onChangeContent={onChangeContent}
           onUpdateViewState={onUpdateViewState}
         />
@@ -161,6 +180,14 @@ export function DocumentEditor({
         <WysiwygMarkdownEditor
           content={activeDoc.content}
           scrollTop={tab.scrollTop}
+          theme={theme}
+          showHeadingNumbers={showHeadingNumbers}
+          mermaidRenderer={mermaidRenderer}
+          scrollRequest={
+            scrollRequest
+              ? { slug: scrollRequest.slug, index: scrollRequest.index, nonce: scrollRequest.nonce }
+              : null
+          }
           onChangeContent={onChangeContent}
           onScrollTopChange={handleScrollTopChange}
         />
@@ -170,6 +197,14 @@ export function DocumentEditor({
         <MarkdownPreview
           content={activeDoc.content}
           scrollTop={tab.scrollTop}
+          theme={theme}
+          showHeadingNumbers={showHeadingNumbers}
+          mermaidRenderer={mermaidRenderer}
+          scrollRequest={
+            scrollRequest
+              ? { slug: scrollRequest.slug, index: scrollRequest.index, nonce: scrollRequest.nonce }
+              : null
+          }
           onScrollTopChange={handleScrollTopChange}
         />
       )}

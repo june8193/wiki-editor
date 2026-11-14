@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
+import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { DocumentEditor } from './DocumentEditor'
 import type { DocumentBuffer } from '../stores/DocumentBufferStore'
 import type { EditorMode, TabItem } from '../stores/PaneTabStore'
@@ -162,5 +163,97 @@ describe('DocumentEditor 3-mode switcher & roundtrip', () => {
     )
     fireEvent.keyDown(screen.getByTestId('document-editor'), { key: '3', ctrlKey: true })
     expect(onUpdateViewState).not.toHaveBeenCalled()
+  })
+
+  it('threads showHeadingNumbers, mermaidRenderer, and scrollRequest cleanly while roundtripping mermaid blocks', async () => {
+    const user = userEvent.setup()
+    let mode: EditorMode = 'raw'
+    const mermaidDoc = createDoc({
+      content: '# Arch\n\n## Flow\n\n```mermaid\nflowchart LR\n  A --> B\n```',
+      savedContent: '# Arch\n\n## Flow\n\n```mermaid\nflowchart LR\n  A --> B\n```'
+    })
+    const onChangeContent = vi.fn()
+    const onUpdateViewState = vi.fn((patch: { mode?: EditorMode }) => {
+      if (patch.mode) mode = patch.mode
+    })
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => ({ svg: `<svg data-src="${text.trim()}"></svg>` }))
+    }
+    const mermaidRenderer = createMermaidRenderer(driver)
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={mermaidDoc}
+        tab={createTab(mode)}
+        theme="light"
+        autoSave={false}
+        showHeadingNumbers
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={onChangeContent}
+        onSave={vi.fn()}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+
+    rerender(
+      <DocumentEditor
+        document={mermaidDoc}
+        tab={createTab(mode)}
+        theme="light"
+        autoSave={false}
+        showHeadingNumbers
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={onChangeContent}
+        onSave={vi.fn()}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('wysiwyg-mermaid-block').querySelector('svg')).not.toBeNull()
+    })
+
+    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+    rerender(
+      <DocumentEditor
+        document={mermaidDoc}
+        tab={createTab(mode)}
+        theme="light"
+        autoSave={false}
+        showHeadingNumbers={false}
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={onChangeContent}
+        onSave={vi.fn()}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+    expect(screen.getByRole('heading', { level: 2, name: 'Flow' }).textContent).toBe('Flow')
+
+    await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+    rerender(
+      <DocumentEditor
+        document={mermaidDoc}
+        tab={createTab(mode)}
+        theme="light"
+        autoSave={false}
+        showHeadingNumbers={false}
+        mermaidRenderer={mermaidRenderer}
+        scrollRequest={{ paneId: 'primary', tabId: 'tab-1', line: 3, slug: 'flow', index: 1, nonce: 1 }}
+        onChangeContent={onChangeContent}
+        onSave={vi.fn()}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('document-editor').getAttribute('data-selection-start')).toBe(
+        String(mermaidDoc.content.indexOf('## Flow'))
+      )
+    })
+    expect(onChangeContent).not.toHaveBeenCalled()
+    expect(screen.getByTestId('document-editor').textContent).toContain('flowchart LR')
   })
 })

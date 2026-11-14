@@ -1,19 +1,34 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ThemeMode } from '@shared/config'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
+import type { MermaidRenderer } from '../editor/mermaidRenderer'
+import { insertOrUpdateTocBlock, isLineInsideCodeFence } from '../editor/MarkdownTocEngine'
 import {
   addTableRowBeforeSafely,
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
+  headingNumberingPluginKey,
   prepareMarkdownForTiptap,
   sanitizeHtmlWithRehype
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
 import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
+import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
+
+export interface WysiwygScrollRequest {
+  slug?: string
+  index: number
+  nonce: number
+}
 
 interface WysiwygMarkdownEditorProps {
   content: string
   scrollTop: number
+  theme?: ThemeMode
+  showHeadingNumbers?: boolean
+  mermaidRenderer?: MermaidRenderer
+  scrollRequest?: WysiwygScrollRequest | null
   onChangeContent: (nextContent: string) => void
   onScrollTopChange?: (scrollTop: number) => void
 }
@@ -183,15 +198,23 @@ const TABLE_ACTION_ITEMS: ReadonlyArray<{
 export function WysiwygMarkdownEditor({
   content,
   scrollTop,
+  theme = 'light',
+  showHeadingNumbers = false,
+  mermaidRenderer,
+  scrollRequest,
   onChangeContent,
   onScrollTopChange
 }: WysiwygMarkdownEditorProps) {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const contextMenuRef = useRef<HTMLDivElement | null>(null)
   const isProgrammaticSyncRef = useRef(false)
+  const hasLocalEditRef = useRef(false)
+  const contentRef = useRef(content)
+  contentRef.current = content
   const lastEmittedMarkdownRef = useRef(content)
   const onChangeContentRef = useRef(onChangeContent)
   onChangeContentRef.current = onChangeContent
+  const insertTocRef = useRef<() => void>(() => undefined)
 
   const [cellMenuPos, setCellMenuPos] = useState<{ x: number; y: number } | null>(null)
   const closeCellMenu = useCallback(() => setCellMenuPos(null), [])
@@ -200,7 +223,7 @@ export function WysiwygMarkdownEditor({
   const editor = useEditor(
     {
       immediatelyRender: true,
-      extensions: createWysiwygExtensions(),
+      extensions: createWysiwygExtensions({ showHeadingNumbers }),
       content: prepareMarkdownForTiptap(content),
       contentType: 'markdown',
       editorProps: {
@@ -209,12 +232,34 @@ export function WysiwygMarkdownEditor({
           'data-testid': 'document-editor',
           'aria-label': '위지윅 문서 에디터'
         },
-        transformPastedHTML: sanitizeHtmlWithRehype
+        transformPastedHTML: sanitizeHtmlWithRehype,
+        handleKeyDown: (view, event) => {
+          if (
+            event.key === 'Enter' &&
+            !event.shiftKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.altKey
+          ) {
+            const { $from, empty } = view.state.selection
+            if (
+              empty &&
+              $from.parent.type.name === 'paragraph' &&
+              $from.parent.textContent.trim() === '/toc'
+            ) {
+              event.preventDefault()
+              insertTocRef.current()
+              return true
+            }
+          }
+          return false
+        }
       },
       onUpdate: ({ editor: instance, transaction }) => {
         if (isProgrammaticSyncRef.current || !transaction.docChanged) {
           return
         }
+        hasLocalEditRef.current = true
         const serialized = instance.getMarkdown()
         lastEmittedMarkdownRef.current = serialized
         onChangeContentRef.current(serialized)
@@ -222,6 +267,34 @@ export function WysiwygMarkdownEditor({
     },
     []
   )
+
+  const handleInsertToc = useCallback((): void => {
+    if (!editor) return
+    const currentMd = hasLocalEditRef.current ? editor.getMarkdown() : contentRef.current
+    const lines = currentMd.split(/\r?\n/)
+    const tocLineIdx = lines.findIndex((line) => line.trim() === '/toc')
+    const cursorLine =
+      tocLineIdx !== -1 && !isLineInsideCodeFence(currentMd, tocLineIdx + 1)
+        ? tocLineIdx + 1
+        : undefined
+    const nextMd = insertOrUpdateTocBlock(currentMd, cursorLine)
+    if (nextMd === currentMd) return
+
+    isProgrammaticSyncRef.current = true
+    try {
+      editor.commands.setContent(prepareMarkdownForTiptap(nextMd), {
+        emitUpdate: false,
+        contentType: 'markdown'
+      })
+      hasLocalEditRef.current = true
+      lastEmittedMarkdownRef.current = nextMd
+    } finally {
+      isProgrammaticSyncRef.current = false
+    }
+    onChangeContentRef.current(nextMd)
+  }, [editor])
+
+  insertTocRef.current = handleInsertToc
 
   useEffect(() => {
     if (!editor) return
@@ -233,11 +306,42 @@ export function WysiwygMarkdownEditor({
         emitUpdate: false,
         contentType: 'markdown'
       })
+      hasLocalEditRef.current = false
       lastEmittedMarkdownRef.current = content
     } finally {
       isProgrammaticSyncRef.current = false
     }
   }, [content, editor])
+
+  useEffect(() => {
+    if (!editor) return
+    const current = headingNumberingPluginKey.getState(editor.state)
+    if (current !== showHeadingNumbers) {
+      editor.view.dispatch(editor.state.tr.setMeta(headingNumberingPluginKey, showHeadingNumbers))
+    }
+  }, [editor, showHeadingNumbers])
+
+  useEffect(() => {
+    if (!editor || !scrollRequest) return
+
+    const headingPositions: number[] = []
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'heading') {
+        headingPositions.push(pos)
+        return false
+      }
+      return node.type.name !== 'codeBlock'
+    })
+
+    const targetPos = headingPositions[scrollRequest.index]
+    if (targetPos === undefined) return
+
+    const dom = editor.view.nodeDOM(targetPos)
+    if (dom instanceof Element && typeof dom.scrollIntoView === 'function') {
+      dom.scrollIntoView({ block: 'start' })
+    }
+    editor.commands.setTextSelection(targetPos + 1)
+  }, [editor, scrollRequest])
 
   useSyncScrollTop(scrollContainerRef, scrollTop)
 
@@ -259,6 +363,11 @@ export function WysiwygMarkdownEditor({
     })
   })
 
+  const mermaidContextValue = useMemo(
+    () => ({ theme, mermaidRenderer }),
+    [mermaidRenderer, theme]
+  )
+
   return (
     <div className="wysiwyg-shell">
       <div className="editor-toolbar" role="toolbar" aria-label="위지윅 서식 툴바">
@@ -279,6 +388,14 @@ export function WysiwygMarkdownEditor({
             </button>
           )
         })}
+        <button
+          type="button"
+          className="toolbar-btn"
+          title="본문에 목차(/toc) 삽입"
+          onClick={handleInsertToc}
+        >
+          목차 삽입
+        </button>
       </div>
 
       <div
@@ -332,7 +449,9 @@ export function WysiwygMarkdownEditor({
           </div>
         )}
 
-        <EditorContent editor={editor} className="wysiwyg-editor-content" />
+        <WysiwygMermaidContext.Provider value={mermaidContextValue}>
+          <EditorContent editor={editor} className="wysiwyg-editor-content" />
+        </WysiwygMermaidContext.Provider>
       </div>
 
       {cellMenuPos && (
