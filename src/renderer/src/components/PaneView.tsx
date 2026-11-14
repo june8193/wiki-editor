@@ -28,6 +28,10 @@ interface PaneViewProps {
   actions: PaneInteractionActions
 }
 
+function isTabTriggerTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('.tab-trigger') !== null
+}
+
 export function PaneView({
   pane,
   splitMode,
@@ -61,8 +65,16 @@ export function PaneView({
       data-testid={`pane-${pane.id}`}
       aria-label={pane.id === 'primary' ? '주 편집기 영역' : '보조 편집기 영역'}
       style={paneStyle}
-      onMouseDown={() => actions.onFocusPane(pane.id)}
-      onFocusCapture={() => actions.onFocusPane(pane.id)}
+      onMouseDown={(event) => {
+        if (!isTabTriggerTarget(event.target)) {
+          actions.onFocusPane(pane.id)
+        }
+      }}
+      onFocusCapture={(event) => {
+        if (!isTabTriggerTarget(event.target)) {
+          actions.onFocusPane(pane.id)
+        }
+      }}
       onDragOver={(event) => {
         if (draggingTab) {
           event.preventDefault()

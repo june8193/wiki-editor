@@ -3092,4 +3092,63 @@ describe('Renderer error logging & UI breadcrumbs', () => {
     expect(serialized).not.toContain('SECRET_BETA_TEXT')
     expect(serialized).not.toContain('TYPED_SECRET_CONTENT')
   })
+
+  it('logs Tab switched when clicking an already-selected tab in the inactive split pane and logs Tab switched instead of Tab duplicated for an already-open tab', async () => {
+    const user = userEvent.setup()
+    const entries: RendererLogPayload[] = []
+    const { api } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/split-switch',
+        workspaces: {
+          'C:/wiki/split-switch': {
+            'alpha.md': '# Alpha',
+            'beta.md': '# Beta'
+          }
+        },
+        log: {
+          write: (payload) => {
+            entries.push(payload)
+            return Promise.resolve()
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: '폴더 열기' }))
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('alpha.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /alpha\.md/ }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역에 복제 열기'
+      })
+    )
+
+    const baselineCount = entries.length
+
+    // Clicking the already-selected tab in the inactive primary pane must record 'Tab switched'
+    await user.click(within(primaryPane).getByRole('tab', { name: /alpha\.md/ }))
+
+    // Duplicating alpha.md again when secondary already holds it must switch focus rather than log 'Tab duplicated'
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /alpha\.md/ }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역에 복제 열기'
+      })
+    )
+
+    const recentUi = entries
+      .slice(baselineCount)
+      .filter((entry) => entry.category === 'ui' && entry.level === 'info')
+    expect(recentUi.map((entry) => ({ message: entry.message, paneId: entry.data?.paneId }))).toEqual([
+      { message: 'Tab switched', paneId: 'primary' },
+      { message: 'Tab switched', paneId: 'secondary' }
+    ])
+  })
 })

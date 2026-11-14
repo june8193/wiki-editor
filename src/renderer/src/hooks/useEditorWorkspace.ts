@@ -4,12 +4,9 @@ import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes
 import { logRendererInfo } from '../logging/rendererLogger'
 import { DocumentBuffer, DocumentBufferStore } from '../stores/DocumentBufferStore'
 import {
-  type OpenTabOptions,
   type PaneId,
   PaneTabStore,
-  type SplitMode,
-  type TabItem,
-  type TabViewPatch
+  type PaneTabTransition
 } from '../stores/PaneTabStore'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
@@ -32,6 +29,75 @@ function isMissingWorkspaceFileError(error: unknown): boolean {
     message.includes('파일을 찾을 수 없습니다') ||
     message.includes('ENOENT')
   )
+}
+
+function logPaneTabTransition(
+  bufferStore: DocumentBufferStore,
+  transition: PaneTabTransition
+): void {
+  const resolvePath = (bufferKey: string): string =>
+    bufferStore.getBuffer(bufferKey)?.path ?? bufferKey
+
+  switch (transition.type) {
+    case 'tab-opened':
+      logRendererInfo('ui', 'Tab opened', {
+        paneId: transition.paneId,
+        tabId: transition.tab.id,
+        filePath: resolvePath(transition.tab.bufferKey),
+        mode: transition.tab.mode
+      })
+      return
+    case 'tab-duplicated':
+      logRendererInfo('ui', 'Tab duplicated', {
+        sourcePaneId: transition.sourcePaneId,
+        targetPaneId: transition.targetPaneId,
+        sourceTabId: transition.sourceTabId,
+        tabId: transition.tab.id,
+        filePath: resolvePath(transition.tab.bufferKey),
+        mode: transition.tab.mode
+      })
+      return
+    case 'tab-switched':
+      logRendererInfo('ui', 'Tab switched', {
+        paneId: transition.paneId,
+        tabId: transition.tab.id,
+        filePath: resolvePath(transition.tab.bufferKey),
+        mode: transition.tab.mode
+      })
+      return
+    case 'tab-moved':
+      logRendererInfo('ui', 'Tab moved', {
+        sourcePaneId: transition.sourcePaneId,
+        targetPaneId: transition.targetPaneId,
+        tabId: transition.tab.id,
+        filePath: resolvePath(transition.tab.bufferKey),
+        ...(transition.targetIndex !== undefined ? { targetIndex: transition.targetIndex } : {})
+      })
+      return
+    case 'tab-closed':
+      logRendererInfo('ui', 'Tab closed', {
+        paneId: transition.paneId,
+        tabId: transition.closedTab.id,
+        filePath: resolvePath(transition.closedTab.bufferKey),
+        isLastReferenceForBuffer: transition.isLastReferenceForBuffer
+      })
+      return
+    case 'editor-mode-changed':
+      logRendererInfo('ui', 'Editor mode changed', {
+        paneId: transition.paneId,
+        tabId: transition.tab.id,
+        filePath: resolvePath(transition.tab.bufferKey),
+        from: transition.from,
+        to: transition.to
+      })
+      return
+    case 'split-mode-changed':
+      logRendererInfo('ui', 'Split mode changed', {
+        from: transition.from,
+        to: transition.to
+      })
+      return
+  }
 }
 
 interface UseEditorWorkspaceOptions {
@@ -60,12 +126,13 @@ export function useEditorWorkspace({
   if (!bufferStoreRef.current) {
     bufferStoreRef.current = new DocumentBufferStore()
   }
+  const bufferStore = bufferStoreRef.current
   const tabStoreRef = useRef<PaneTabStore | null>(null)
   if (!tabStoreRef.current) {
-    tabStoreRef.current = new PaneTabStore()
+    tabStoreRef.current = new PaneTabStore({
+      onTransition: (transition) => logPaneTabTransition(bufferStore, transition)
+    })
   }
-
-  const bufferStore = bufferStoreRef.current
   const tabStore = tabStoreRef.current
 
   const buffers = useSyncExternalStore(bufferStore.subscribe, bufferStore.getSnapshot)
@@ -212,130 +279,6 @@ export function useEditorWorkspace({
     return `${dirty[0].name} 외 ${dirty.length - 1}개`
   }, [bufferStore])
 
-  const resolveBufferPath = useCallback(
-    (bufferKey: string): string => bufferStore.getBuffer(bufferKey)?.path ?? bufferKey,
-    [bufferStore]
-  )
-
-  const logSplitModeIfChanged = useCallback((prevMode: SplitMode, nextMode: SplitMode): void => {
-    if (prevMode !== nextMode) {
-      logRendererInfo('ui', 'Split mode changed', { from: prevMode, to: nextMode })
-    }
-  }, [])
-
-  const openTabWithLogging = useCallback(
-    (bufferKey: string, options: OpenTabOptions = {}): TabItem => {
-      const prevSnap = tabStore.getSnapshot()
-      const targetPaneId = options.paneId ?? prevSnap.activePaneId
-      const existedBefore = prevSnap.panes[targetPaneId].tabs.some(
-        (tab) => tab.bufferKey === bufferKey
-      )
-      const tab = tabStore.openTab(bufferKey, options)
-      const nextSnap = tabStore.getSnapshot()
-      if (nextSnap !== prevSnap) {
-        logRendererInfo('ui', existedBefore ? 'Tab switched' : 'Tab opened', {
-          paneId: targetPaneId,
-          tabId: tab.id,
-          filePath: resolveBufferPath(bufferKey),
-          mode: tab.mode
-        })
-        logSplitModeIfChanged(prevSnap.splitMode, nextSnap.splitMode)
-      }
-      return tab
-    },
-    [logSplitModeIfChanged, resolveBufferPath, tabStore]
-  )
-
-  const updateTabViewState = useCallback(
-    (paneId: PaneId, tabId: string, patch: TabViewPatch): void => {
-      const prevMode = tabStore.getTab(paneId, tabId)?.mode
-      tabStore.updateTabViewState(paneId, tabId, patch)
-      const nextTab = tabStore.getTab(paneId, tabId)
-      if (
-        prevMode !== undefined &&
-        nextTab &&
-        patch.mode !== undefined &&
-        prevMode !== nextTab.mode
-      ) {
-        logRendererInfo('ui', 'Editor mode changed', {
-          paneId,
-          tabId,
-          filePath: resolveBufferPath(nextTab.bufferKey),
-          from: prevMode,
-          to: nextTab.mode
-        })
-      }
-    },
-    [resolveBufferPath, tabStore]
-  )
-
-  const activateTab = useCallback(
-    (paneId: PaneId, tabId: string): void => {
-      const prevSnap = tabStore.getSnapshot()
-      tabStore.activateTab(paneId, tabId)
-      const nextSnap = tabStore.getSnapshot()
-      if (nextSnap !== prevSnap) {
-        const tab = tabStore.getTab(paneId, tabId)
-        logRendererInfo('ui', 'Tab switched', {
-          paneId,
-          tabId,
-          ...(tab ? { filePath: resolveBufferPath(tab.bufferKey), mode: tab.mode } : {})
-        })
-      }
-    },
-    [resolveBufferPath, tabStore]
-  )
-
-  const setSplitMode = useCallback(
-    (mode: SplitMode): void => {
-      const prevMode = tabStore.getSnapshot().splitMode
-      tabStore.setSplitMode(mode)
-      logSplitModeIfChanged(prevMode, tabStore.getSnapshot().splitMode)
-    },
-    [logSplitModeIfChanged, tabStore]
-  )
-
-  const moveTab = useCallback(
-    (sourcePaneId: PaneId, targetPaneId: PaneId, tabId: string, targetIndex?: number): void => {
-      const prevSnap = tabStore.getSnapshot()
-      const movingTab = tabStore.getTab(sourcePaneId, tabId)
-      tabStore.moveTab(sourcePaneId, targetPaneId, tabId, targetIndex)
-      const nextSnap = tabStore.getSnapshot()
-      if (nextSnap !== prevSnap) {
-        logRendererInfo('ui', 'Tab moved', {
-          sourcePaneId,
-          targetPaneId,
-          tabId,
-          ...(movingTab ? { filePath: resolveBufferPath(movingTab.bufferKey) } : {}),
-          ...(targetIndex !== undefined ? { targetIndex } : {})
-        })
-        logSplitModeIfChanged(prevSnap.splitMode, nextSnap.splitMode)
-      }
-    },
-    [logSplitModeIfChanged, resolveBufferPath, tabStore]
-  )
-
-  const duplicateTabToOtherPane = useCallback(
-    (sourcePaneId: PaneId, tabId: string): TabItem | null => {
-      const prevSnap = tabStore.getSnapshot()
-      const duplicated = tabStore.duplicateTabToOtherPane(sourcePaneId, tabId)
-      if (duplicated) {
-        const targetPaneId: PaneId = sourcePaneId === 'primary' ? 'secondary' : 'primary'
-        logRendererInfo('ui', 'Tab duplicated', {
-          sourcePaneId,
-          targetPaneId,
-          sourceTabId: tabId,
-          tabId: duplicated.id,
-          filePath: resolveBufferPath(duplicated.bufferKey),
-          mode: duplicated.mode
-        })
-        logSplitModeIfChanged(prevSnap.splitMode, tabStore.getSnapshot().splitMode)
-      }
-      return duplicated
-    },
-    [logSplitModeIfChanged, resolveBufferPath, tabStore]
-  )
-
   // Global fallback Ctrl+S and mode-switch shortcut handler when focus is outside a specific pane editor
   useEffect(() => {
     const handleGlobalKeyDown = (event: KeyboardEvent): void => {
@@ -352,7 +295,7 @@ export function useEditorWorkspace({
       if (shortcut.type === 'save') {
         saveActivePaneDocument()
       } else if (shortcut.mode !== activeTab.mode) {
-        updateTabViewState(tabStore.getSnapshot().activePaneId, activeTab.id, {
+        tabStore.updateTabViewState(tabStore.getSnapshot().activePaneId, activeTab.id, {
           mode: shortcut.mode
         })
       }
@@ -361,7 +304,7 @@ export function useEditorWorkspace({
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown)
     }
-  }, [bufferStore, saveActivePaneDocument, tabStore, updateTabViewState])
+  }, [bufferStore, saveActivePaneDocument, tabStore])
 
   // Per-buffer debounced auto-save for dirty workspace files
   useEffect(() => {
@@ -420,7 +363,7 @@ export function useEditorWorkspace({
     async (entry: WorkspaceEntry, targetPaneId?: PaneId): Promise<void> => {
       const key = getWorkspacePathKey(entry.path)
       if (bufferStore.hasBuffer(key)) {
-        openTabWithLogging(key, { paneId: targetPaneId })
+        tabStore.openTab(key, { paneId: targetPaneId })
         return
       }
 
@@ -434,14 +377,14 @@ export function useEditorWorkspace({
           name: entry.name,
           content
         })
-        openTabWithLogging(buf.key, { paneId: targetPaneId })
+        tabStore.openTab(buf.key, { paneId: targetPaneId })
       } catch (error: unknown) {
         if (mountedRef.current) {
           callbacksRef.current.onError(toErrorMessage(error, '파일을 열지 못했습니다.'), error)
         }
       }
     },
-    [bufferStore, openTabWithLogging]
+    [bufferStore, tabStore]
   )
 
   const openConfigDocument = useCallback(
@@ -450,7 +393,7 @@ export function useEditorWorkspace({
         .getAllBuffers()
         .find((buffer) => buffer.kind === 'config')
       if (existingConfig) {
-        openTabWithLogging(existingConfig.key, { paneId: targetPaneId })
+        tabStore.openTab(existingConfig.key, { paneId: targetPaneId })
         return
       }
 
@@ -467,7 +410,7 @@ export function useEditorWorkspace({
           name: 'config.json',
           content: raw
         })
-        openTabWithLogging(buf.key, { paneId: targetPaneId })
+        tabStore.openTab(buf.key, { paneId: targetPaneId })
       } catch (error: unknown) {
         if (mountedRef.current) {
           callbacksRef.current.onError(
@@ -477,7 +420,7 @@ export function useEditorWorkspace({
         }
       }
     },
-    [bufferStore, openTabWithLogging]
+    [bufferStore, tabStore]
   )
 
   const refreshCleanConfig = useCallback(async (): Promise<void> => {
@@ -503,9 +446,9 @@ export function useEditorWorkspace({
         name: created.name,
         content: ''
       })
-      openTabWithLogging(buf.key)
+      tabStore.openTab(buf.key)
     },
-    [bufferStore, openTabWithLogging]
+    [bufferStore, tabStore]
   )
 
   const updateBufferContent = useCallback(
@@ -535,23 +478,13 @@ export function useEditorWorkspace({
 
   const forceCloseTab = useCallback(
     (paneId: PaneId, tabId: string): void => {
-      const prevSplitMode = tabStore.getSnapshot().splitMode
       const result = tabStore.closeTab(paneId, tabId)
-      if (result) {
-        logRendererInfo('ui', 'Tab closed', {
-          paneId,
-          tabId: result.closedTab.id,
-          filePath: resolveBufferPath(result.closedTab.bufferKey),
-          isLastReferenceForBuffer: result.isLastReferenceForBuffer
-        })
-        logSplitModeIfChanged(prevSplitMode, tabStore.getSnapshot().splitMode)
-        if (result.isLastReferenceForBuffer) {
-          cleanupBufferTracking([result.closedTab.bufferKey])
-          bufferStore.removeBuffer(result.closedTab.bufferKey)
-        }
+      if (result?.isLastReferenceForBuffer) {
+        cleanupBufferTracking([result.closedTab.bufferKey])
+        bufferStore.removeBuffer(result.closedTab.bufferKey)
       }
     },
-    [bufferStore, cleanupBufferTracking, logSplitModeIfChanged, resolveBufferPath, tabStore]
+    [bufferStore, cleanupBufferTracking, tabStore]
   )
 
   const requestCloseTab = useCallback(
@@ -691,13 +624,13 @@ export function useEditorWorkspace({
     requestCloseTab,
     forceCloseTab,
     saveAndCloseTab,
-    activateTab,
+    activateTab: tabStore.activateTab,
     focusPane: tabStore.focusPane,
-    setSplitMode,
+    setSplitMode: tabStore.setSplitMode,
     setSplitRatio: tabStore.setSplitRatio,
-    moveTab,
-    duplicateTabToOtherPane,
-    updateTabViewState,
+    moveTab: tabStore.moveTab,
+    duplicateTabToOtherPane: tabStore.duplicateTabToOtherPane,
+    updateTabViewState: tabStore.updateTabViewState,
     clearWorkspaceBuffers,
     syncRenamedPath,
     syncDeletedPath,

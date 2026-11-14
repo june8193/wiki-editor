@@ -46,6 +46,31 @@ export interface CloseTabResult {
   isLastReferenceForBuffer: boolean
 }
 
+export type PaneTabTransition =
+  | { type: 'tab-opened'; paneId: PaneId; tab: TabItem }
+  | {
+      type: 'tab-duplicated'
+      sourcePaneId: PaneId
+      targetPaneId: PaneId
+      sourceTabId: string
+      tab: TabItem
+    }
+  | { type: 'tab-switched'; paneId: PaneId; tab: TabItem }
+  | {
+      type: 'tab-moved'
+      sourcePaneId: PaneId
+      targetPaneId: PaneId
+      tab: TabItem
+      targetIndex?: number
+    }
+  | { type: 'tab-closed'; paneId: PaneId; closedTab: TabItem; isLastReferenceForBuffer: boolean }
+  | { type: 'editor-mode-changed'; paneId: PaneId; tab: TabItem; from: EditorMode; to: EditorMode }
+  | { type: 'split-mode-changed'; from: SplitMode; to: SplitMode }
+
+export interface PaneTabStoreOptions {
+  onTransition?: (transition: PaneTabTransition) => void
+}
+
 const MIN_SPLIT_RATIO = 0.15
 const MAX_SPLIT_RATIO = 0.85
 
@@ -150,6 +175,16 @@ export function getPaneActiveTab(pane: PaneState): TabItem | null {
   return pane.tabs.find((tab) => tab.id === pane.activeTabId) ?? null
 }
 
+function hasBufferReferenceInPanes(
+  panes: Record<PaneId, PaneState>,
+  bufferKey: string,
+  excludeTabId?: string
+): boolean {
+  return [panes.primary, panes.secondary].some((pane) =>
+    pane.tabs.some((tab) => tab.bufferKey === bufferKey && tab.id !== excludeTabId)
+  )
+}
+
 /**
  * Manages up to 2 split panes, independent per-pane tab bars, and lightweight inactive tab state.
  */
@@ -157,6 +192,11 @@ export class PaneTabStore {
   private state: PaneLayoutState = createInitialState()
   private nextTabSeq = 1
   private listeners = new Set<() => void>()
+  private readonly onTransition?: (transition: PaneTabTransition) => void
+
+  constructor(options: PaneTabStoreOptions = {}) {
+    this.onTransition = options.onTransition
+  }
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -167,8 +207,14 @@ export class PaneTabStore {
 
   getSnapshot = (): PaneLayoutState => this.state
 
-  private commit(nextState: PaneLayoutState): void {
+  private commit(
+    nextState: PaneLayoutState,
+    transitions: readonly PaneTabTransition[] = []
+  ): void {
     this.state = nextState
+    for (const transition of transitions) {
+      this.onTransition?.(transition)
+    }
     for (const listener of this.listeners) {
       listener()
     }
@@ -189,43 +235,51 @@ export class PaneTabStore {
   }
 
   hasOtherTabForBuffer(bufferKey: string, excludeTabId?: string): boolean {
-    for (const pane of [this.state.panes.primary, this.state.panes.secondary]) {
-      if (pane.tabs.some((tab) => tab.bufferKey === bufferKey && tab.id !== excludeTabId)) {
-        return true
-      }
-    }
-    return false
+    return hasBufferReferenceInPanes(this.state.panes, bufferKey, excludeTabId)
   }
 
-  openTab(bufferKey: string, options: OpenTabOptions = {}): TabItem {
+  openTab = (bufferKey: string, options: OpenTabOptions = {}): TabItem =>
+    this.openTabWithOutcome(bufferKey, options)
+
+  private openTabWithOutcome(
+    bufferKey: string,
+    options: OpenTabOptions = {},
+    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string }
+  ): TabItem {
+    const prevSplitMode = this.state.splitMode
     const targetPaneId = options.paneId ?? this.state.activePaneId
     const targetPane = this.state.panes[targetPaneId]
     const nextSplitMode =
-      targetPaneId === 'secondary' && this.state.splitMode === 'single'
-        ? 'horizontal'
-        : this.state.splitMode
+      targetPaneId === 'secondary' && prevSplitMode === 'single' ? 'horizontal' : prevSplitMode
 
     const existing = targetPane.tabs.find((tab) => tab.bufferKey === bufferKey)
     if (existing) {
       if (
         targetPane.activeTabId === existing.id &&
         this.state.activePaneId === targetPaneId &&
-        nextSplitMode === this.state.splitMode
+        nextSplitMode === prevSplitMode
       ) {
         return existing
       }
-      this.commit({
-        ...this.state,
-        splitMode: nextSplitMode,
-        activePaneId: targetPaneId,
-        panes: {
-          ...this.state.panes,
-          [targetPaneId]: {
-            ...targetPane,
-            activeTabId: existing.id
+      const transitions: PaneTabTransition[] = [{ type: 'tab-switched', paneId: targetPaneId, tab: existing }]
+      if (nextSplitMode !== prevSplitMode) {
+        transitions.push({ type: 'split-mode-changed', from: prevSplitMode, to: nextSplitMode })
+      }
+      this.commit(
+        {
+          ...this.state,
+          splitMode: nextSplitMode,
+          activePaneId: targetPaneId,
+          panes: {
+            ...this.state.panes,
+            [targetPaneId]: {
+              ...targetPane,
+              activeTabId: existing.id
+            }
           }
-        }
-      })
+        },
+        transitions
+      )
       return existing
     }
 
@@ -237,38 +291,60 @@ export class PaneTabStore {
       scrollTop: 0
     }
 
-    this.commit({
-      ...this.state,
-      splitMode: nextSplitMode,
-      activePaneId: targetPaneId,
-      panes: {
-        ...this.state.panes,
-        [targetPaneId]: {
-          ...targetPane,
-          tabs: [...targetPane.tabs, created],
-          activeTabId: created.id
+    const transitions: PaneTabTransition[] = [
+      duplicateFrom
+        ? {
+            type: 'tab-duplicated',
+            sourcePaneId: duplicateFrom.sourcePaneId,
+            targetPaneId,
+            sourceTabId: duplicateFrom.sourceTabId,
+            tab: created
+          }
+        : { type: 'tab-opened', paneId: targetPaneId, tab: created }
+    ]
+    if (nextSplitMode !== prevSplitMode) {
+      transitions.push({ type: 'split-mode-changed', from: prevSplitMode, to: nextSplitMode })
+    }
+
+    this.commit(
+      {
+        ...this.state,
+        splitMode: nextSplitMode,
+        activePaneId: targetPaneId,
+        panes: {
+          ...this.state.panes,
+          [targetPaneId]: {
+            ...targetPane,
+            tabs: [...targetPane.tabs, created],
+            activeTabId: created.id
+          }
         }
-      }
-    })
+      },
+      transitions
+    )
     return created
   }
 
   activateTab = (paneId: PaneId, tabId: string): void => {
     const pane = this.state.panes[paneId]
-    if (!pane.tabs.some((tab) => tab.id === tabId)) return
+    const targetTab = pane.tabs.find((tab) => tab.id === tabId)
+    if (!targetTab) return
     if (pane.activeTabId === tabId && this.state.activePaneId === paneId) return
 
-    this.commit({
-      ...this.state,
-      activePaneId: paneId,
-      panes: {
-        ...this.state.panes,
-        [paneId]: {
-          ...pane,
-          activeTabId: tabId
+    this.commit(
+      {
+        ...this.state,
+        activePaneId: paneId,
+        panes: {
+          ...this.state.panes,
+          [paneId]: {
+            ...pane,
+            activeTabId: tabId
+          }
         }
-      }
-    })
+      },
+      [{ type: 'tab-switched', paneId, tab: targetTab }]
+    )
   }
 
   focusPane = (paneId: PaneId): void => {
@@ -281,6 +357,7 @@ export class PaneTabStore {
   }
 
   closeTab(paneId: PaneId, tabId: string): CloseTabResult | null {
+    const prevSplitMode = this.state.splitMode
     const hadSecondaryTabs = this.state.panes.secondary.tabs.length > 0
     const { nextPane, removed } = removeTabFromPane(this.state.panes[paneId], tabId)
     if (!removed) return null
@@ -290,31 +367,50 @@ export class PaneTabStore {
     const reconciled = reconcileRemovedLayout(
       nextPrimary,
       nextSecondary,
-      this.state.splitMode,
+      prevSplitMode,
       this.state.activePaneId,
       hadSecondaryTabs,
       paneId === 'primary'
     )
+    const isLastReferenceForBuffer = !hasBufferReferenceInPanes(reconciled.panes, removed.bufferKey)
 
-    this.commit({
-      ...this.state,
-      ...reconciled
-    })
+    const transitions: PaneTabTransition[] = [
+      { type: 'tab-closed', paneId, closedTab: removed, isLastReferenceForBuffer }
+    ]
+    if (reconciled.splitMode !== prevSplitMode) {
+      transitions.push({
+        type: 'split-mode-changed',
+        from: prevSplitMode,
+        to: reconciled.splitMode
+      })
+    }
+
+    this.commit(
+      {
+        ...this.state,
+        ...reconciled
+      },
+      transitions
+    )
 
     return {
       closedTab: removed,
-      isLastReferenceForBuffer: !this.hasOtherTabForBuffer(removed.bufferKey)
+      isLastReferenceForBuffer
     }
   }
 
   setSplitMode = (mode: SplitMode): void => {
-    if (mode === this.state.splitMode) return
+    const prevSplitMode = this.state.splitMode
+    if (mode === prevSplitMode) return
 
     if (mode !== 'single') {
-      this.commit({
-        ...this.state,
-        splitMode: mode
-      })
+      this.commit(
+        {
+          ...this.state,
+          splitMode: mode
+        },
+        [{ type: 'split-mode-changed', from: prevSplitMode, to: mode }]
+      )
       return
     }
 
@@ -337,19 +433,22 @@ export class PaneTabStore {
         ? secondary.activeTabId
         : (mergedTabs[0]?.id ?? null))
 
-    this.commit({
-      ...this.state,
-      splitMode: 'single',
-      activePaneId: 'primary',
-      panes: {
-        primary: {
-          id: 'primary',
-          tabs: mergedTabs,
-          activeTabId: nextPrimaryActive
-        },
-        secondary: { id: 'secondary', tabs: [], activeTabId: null }
-      }
-    })
+    this.commit(
+      {
+        ...this.state,
+        splitMode: 'single',
+        activePaneId: 'primary',
+        panes: {
+          primary: {
+            id: 'primary',
+            tabs: mergedTabs,
+            activeTabId: nextPrimaryActive
+          },
+          secondary: { id: 'secondary', tabs: [], activeTabId: null }
+        }
+      },
+      [{ type: 'split-mode-changed', from: prevSplitMode, to: 'single' }]
+    )
   }
 
   setSplitRatio = (ratio: number): void => {
@@ -367,6 +466,7 @@ export class PaneTabStore {
     tabId: string,
     targetIndex?: number
   ): void => {
+    const prevSplitMode = this.state.splitMode
     const sourcePane = this.state.panes[sourcePaneId]
     const sourceIndex = sourcePane.tabs.findIndex((tab) => tab.id === tabId)
     if (sourceIndex === -1) return
@@ -381,25 +481,36 @@ export class PaneTabStore {
       if (clampedIndex === sourceIndex && sourcePane.activeTabId === tabId) return
 
       const reordered = insertTabAt(without, movingTab, clampedIndex)
-      this.commit({
-        ...this.state,
-        activePaneId: targetPaneId,
-        panes: {
-          ...this.state.panes,
-          [sourcePaneId]: {
-            ...sourcePane,
-            tabs: reordered,
-            activeTabId: tabId
+      this.commit(
+        {
+          ...this.state,
+          activePaneId: targetPaneId,
+          panes: {
+            ...this.state.panes,
+            [sourcePaneId]: {
+              ...sourcePane,
+              tabs: reordered,
+              activeTabId: tabId
+            }
           }
-        }
-      })
+        },
+        [
+          {
+            type: 'tab-moved',
+            sourcePaneId,
+            targetPaneId,
+            tab: movingTab,
+            ...(targetIndex !== undefined ? { targetIndex } : {})
+          }
+        ]
+      )
       return
     }
 
     if (
       sourcePaneId === 'primary' &&
       targetPaneId === 'secondary' &&
-      this.state.splitMode === 'single' &&
+      prevSplitMode === 'single' &&
       sourcePane.tabs.length <= 1
     ) {
       return
@@ -424,9 +535,7 @@ export class PaneTabStore {
         }
 
     const nextSplitMode =
-      targetPaneId === 'secondary' && this.state.splitMode === 'single'
-        ? 'horizontal'
-        : this.state.splitMode
+      targetPaneId === 'secondary' && prevSplitMode === 'single' ? 'horizontal' : prevSplitMode
 
     const nextPrimary = sourcePaneId === 'primary' ? nextSourcePane : nextTargetPane
     const nextSecondary = sourcePaneId === 'secondary' ? nextSourcePane : nextTargetPane
@@ -439,17 +548,41 @@ export class PaneTabStore {
       true
     )
 
-    this.commit({
-      ...this.state,
-      ...reconciled
-    })
+    const transitions: PaneTabTransition[] = [
+      {
+        type: 'tab-moved',
+        sourcePaneId,
+        targetPaneId,
+        tab: existingInTarget ?? removed,
+        ...(targetIndex !== undefined ? { targetIndex } : {})
+      }
+    ]
+    if (reconciled.splitMode !== prevSplitMode) {
+      transitions.push({
+        type: 'split-mode-changed',
+        from: prevSplitMode,
+        to: reconciled.splitMode
+      })
+    }
+
+    this.commit(
+      {
+        ...this.state,
+        ...reconciled
+      },
+      transitions
+    )
   }
 
   duplicateTabToOtherPane = (sourcePaneId: PaneId, tabId: string): TabItem | null => {
     const sourceTab = this.getTab(sourcePaneId, tabId)
     if (!sourceTab) return null
     const targetPaneId: PaneId = sourcePaneId === 'primary' ? 'secondary' : 'primary'
-    return this.openTab(sourceTab.bufferKey, { paneId: targetPaneId, mode: sourceTab.mode })
+    return this.openTabWithOutcome(
+      sourceTab.bufferKey,
+      { paneId: targetPaneId, mode: sourceTab.mode },
+      { sourcePaneId, sourceTabId: tabId }
+    )
   }
 
   updateTabViewState = (paneId: PaneId, tabId: string, patch: TabViewPatch): void => {
@@ -480,16 +613,32 @@ export class PaneTabStore {
     const nextTabs = [...pane.tabs]
     nextTabs[index] = updatedTab
 
-    this.commit({
-      ...this.state,
-      panes: {
-        ...this.state.panes,
-        [paneId]: {
-          ...pane,
-          tabs: nextTabs
+    const transitions: PaneTabTransition[] =
+      nextMode !== current.mode
+        ? [
+            {
+              type: 'editor-mode-changed',
+              paneId,
+              tab: updatedTab,
+              from: current.mode,
+              to: nextMode
+            }
+          ]
+        : []
+
+    this.commit(
+      {
+        ...this.state,
+        panes: {
+          ...this.state.panes,
+          [paneId]: {
+            ...pane,
+            tabs: nextTabs
+          }
         }
-      }
-    })
+      },
+      transitions
+    )
   }
 
   remapBufferKeys(remappings: readonly BufferKeyRemap[]): void {
@@ -547,18 +696,27 @@ export class PaneTabStore {
     const sResult = filterPane(this.state.panes.secondary)
     if (!pResult.changed && !sResult.changed) return
 
+    const prevSplitMode = this.state.splitMode
     const reconciled = reconcileRemovedLayout(
       pResult.nextPane,
       sResult.nextPane,
-      this.state.splitMode,
+      prevSplitMode,
       this.state.activePaneId,
       hadSecondaryTabs,
       true
     )
 
-    this.commit({
-      ...this.state,
-      ...reconciled
-    })
+    const transitions: PaneTabTransition[] =
+      reconciled.splitMode !== prevSplitMode
+        ? [{ type: 'split-mode-changed', from: prevSplitMode, to: reconciled.splitMode }]
+        : []
+
+    this.commit(
+      {
+        ...this.state,
+        ...reconciled
+      },
+      transitions
+    )
   }
 }

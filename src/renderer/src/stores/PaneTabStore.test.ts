@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { PaneTabStore } from './PaneTabStore'
+import { PaneTabStore, type PaneTabTransition } from './PaneTabStore'
 
 describe('PaneTabStore', () => {
   it('opens tabs, deduplicates within a pane, switches active tab, and selects neighbor on close', () => {
@@ -175,5 +175,61 @@ describe('PaneTabStore', () => {
     expect(snap.panes.primary.tabs.map((t) => t.id)).toEqual([sec.id, sole.id])
     expect(snap.panes.primary.activeTabId).toBe(sole.id)
     expect(snap.panes.secondary.tabs).toHaveLength(0)
+  })
+
+  it('emits authoritative domain transitions and treats duplicate-to-existing as focus switch instead of duplicate', () => {
+    const transitions: PaneTabTransition[] = []
+    const store = new PaneTabStore({
+      onTransition: (transition) => {
+        transitions.push(transition)
+      }
+    })
+
+    const primaryAlpha = store.openTab('c:/wiki/alpha.md')
+    store.openTab('c:/wiki/alpha.md') // already active in primary -> no transition
+
+    const duplicatedAlpha = store.duplicateTabToOtherPane('primary', primaryAlpha.id)
+    expect(duplicatedAlpha).not.toBeNull()
+
+    // Focus back to primary via activateTab even though primaryAlpha is already primary.activeTabId
+    store.activateTab('primary', primaryAlpha.id)
+
+    // Duplicate again while secondary already has alpha.md -> switches focus, NOT tab-duplicated
+    store.duplicateTabToOtherPane('primary', primaryAlpha.id)
+    // Repeating when secondary is already active with alpha.md -> no-op
+    store.duplicateTabToOtherPane('primary', primaryAlpha.id)
+
+    // Cursor/scroll updates emit no transition; mode changes emit editor-mode-changed
+    store.updateTabViewState('secondary', duplicatedAlpha!.id, {
+      cursor: { selectionStart: 3, selectionEnd: 3 }
+    })
+    store.updateTabViewState('secondary', duplicatedAlpha!.id, { mode: 'preview' })
+
+    const beta = store.openTab('c:/wiki/beta.md', { paneId: 'primary' })
+    store.moveTab('primary', 'secondary', beta.id, 0)
+    store.closeTab('secondary', duplicatedAlpha!.id)
+    store.closeTab('secondary', beta.id)
+
+    expect(
+      transitions.map((t) =>
+        t.type === 'split-mode-changed'
+          ? `${t.type}:${t.from}->${t.to}`
+          : t.type === 'editor-mode-changed'
+            ? `${t.type}:${t.from}->${t.to}`
+            : `${t.type}`
+      )
+    ).toEqual([
+      'tab-opened',
+      'tab-duplicated',
+      'split-mode-changed:single->horizontal',
+      'tab-switched',
+      'tab-switched',
+      'editor-mode-changed:raw->preview',
+      'tab-opened',
+      'tab-moved',
+      'tab-closed',
+      'tab-closed',
+      'split-mode-changed:horizontal->single'
+    ])
   })
 })
