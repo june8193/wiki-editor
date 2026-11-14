@@ -5,18 +5,23 @@ import {
   cloneAppConfig,
   DEFAULT_APP_CONFIG,
   isPlainRecord,
-  normalizeAppConfig
+  normalizeAppConfig,
+  validateConfigPatch
 } from '@shared/config'
 
 export type ConfigChangeListener = (config: AppConfig) => void
 
-let tempSequence = 0
+let uniqueSuffixCounter = 0
+
+function nextUniqueSuffix(): string {
+  uniqueSuffixCounter += 1
+  return `${process.pid}.${Date.now()}-${uniqueSuffixCounter}`
+}
 
 async function writeFileAtomic(filePath: string, content: string): Promise<void> {
   const dir = dirname(filePath)
   await mkdir(dir, { recursive: true })
-  tempSequence += 1
-  const tempPath = join(dir, `.${basename(filePath)}.${process.pid}.${tempSequence}.tmp`)
+  const tempPath = join(dir, `.${basename(filePath)}.${nextUniqueSuffix()}.tmp`)
   try {
     await writeFile(tempPath, content, 'utf8')
     await rename(tempPath, filePath)
@@ -50,16 +55,11 @@ export class ConfigService {
     return this.enqueue(() => this.loadOrInitialize())
   }
 
-  update(patch: Partial<AppConfig>): Promise<AppConfig> {
+  async update(patch: Partial<AppConfig>): Promise<AppConfig> {
+    const validatedPatch = validateConfigPatch(patch)
     return this.enqueue(async () => {
       const current = await this.loadOrInitialize()
-      const safePatch = isPlainRecord(patch) ? patch : {}
-      const merged: Record<string, unknown> = {
-        ...current,
-        ...safePatch,
-        version: 1
-      }
-      const next = normalizeAppConfig(merged, current)
+      const next = normalizeAppConfig({ ...current, ...validatedPatch, version: 1 }, current)
       await writeFileAtomic(this.configPath, serializeConfig(next))
       this.notifyListeners(next)
       return cloneAppConfig(next)
@@ -118,8 +118,7 @@ export class ConfigService {
   }
 
   private async recoverCorrupted(corruptRaw: string): Promise<AppConfig> {
-    tempSequence += 1
-    const backupPath = `${this.configPath}.corrupt.${Date.now()}-${tempSequence}.bak`
+    const backupPath = `${this.configPath}.corrupt.${nextUniqueSuffix()}.bak`
     await writeFileAtomic(backupPath, corruptRaw)
     return this.writeDefaults()
   }

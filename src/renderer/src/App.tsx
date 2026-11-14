@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppConfig, DEFAULT_APP_CONFIG, ThemeMode } from '@shared/config'
 import { SettingsPanel } from './components/SettingsPanel'
 
@@ -10,76 +10,81 @@ export function App() {
   const [config, setConfig] = useState<AppConfig>(DEFAULT_APP_CONFIG)
   const [configPath, setConfigPath] = useState<string>('')
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
-  const [rawConfig, setRawConfig] = useState<string | null>(null)
-  const [isLoadingRaw, setIsLoadingRaw] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  const latestThemeRef = useRef<ThemeMode>(DEFAULT_APP_CONFIG.theme)
+  const mutationSeqRef = useRef<number>(0)
+  const mountedRef = useRef<boolean>(true)
 
   useEffect(() => {
     applyThemeAttribute(config.theme)
   }, [config.theme])
 
   useEffect(() => {
-    let active = true
+    mountedRef.current = true
     const configApi = window.wikiApi.config
+    const initialSeq = mutationSeqRef.current
 
     void Promise.all([configApi.get(), configApi.getConfigPath()])
       .then(([loadedConfig, resolvedPath]) => {
-        if (!active) return
-        setConfig(loadedConfig)
+        if (!mountedRef.current) return
         setConfigPath(resolvedPath)
+        if (mutationSeqRef.current === initialSeq) {
+          latestThemeRef.current = loadedConfig.theme
+          setConfig(loadedConfig)
+        }
       })
       .catch((error: unknown) => {
-        if (!active) return
+        if (!mountedRef.current) return
         setErrorMessage(error instanceof Error ? error.message : '설정을 불러오지 못했습니다.')
       })
 
     const unsubscribe = configApi.onChanged((updatedConfig) => {
-      if (!active) return
+      if (!mountedRef.current) return
+      mutationSeqRef.current += 1
+      latestThemeRef.current = updatedConfig.theme
       setConfig(updatedConfig)
     })
 
     return () => {
-      active = false
+      mountedRef.current = false
       unsubscribe()
     }
   }, [])
 
   const handleToggleTheme = async (): Promise<void> => {
-    const previousTheme = config.theme
+    const seq = ++mutationSeqRef.current
+    const previousTheme = latestThemeRef.current
     const nextTheme: ThemeMode = previousTheme === 'light' ? 'dark' : 'light'
 
+    latestThemeRef.current = nextTheme
     setErrorMessage(null)
     setConfig((prev) => ({ ...prev, theme: nextTheme }))
 
     try {
       const saved = await window.wikiApi.config.update({ theme: nextTheme })
+      if (!mountedRef.current || seq !== mutationSeqRef.current) return
+      latestThemeRef.current = saved.theme
       setConfig(saved)
-      if (rawConfig !== null) {
-        const refreshedRaw = await window.wikiApi.config.readRaw()
-        setRawConfig(refreshedRaw)
-      }
     } catch (error: unknown) {
+      if (!mountedRef.current || seq !== mutationSeqRef.current) return
+      latestThemeRef.current = previousTheme
       setConfig((prev) => ({ ...prev, theme: previousTheme }))
       setErrorMessage(error instanceof Error ? error.message : '테마 설정 저장에 실패했습니다.')
     }
   }
 
-  const handleOpenRawConfig = async (): Promise<void> => {
-    setIsLoadingRaw(true)
+  const handleReadRawConfig = useCallback(async (): Promise<string> => {
     setErrorMessage(null)
-    try {
-      const [resolvedPath, raw] = await Promise.all([
-        window.wikiApi.config.getConfigPath(),
-        window.wikiApi.config.readRaw()
-      ])
+    const [resolvedPath, raw] = await Promise.all([
+      window.wikiApi.config.getConfigPath(),
+      window.wikiApi.config.readRaw()
+    ])
+    if (mountedRef.current) {
       setConfigPath(resolvedPath)
-      setRawConfig(raw)
-    } catch (error: unknown) {
-      setErrorMessage(error instanceof Error ? error.message : '설정 파일을 읽지 못했습니다.')
-    } finally {
-      setIsLoadingRaw(false)
     }
-  }
+    return raw
+  }, [])
 
   return (
     <div className="app-shell" data-theme={config.theme}>
@@ -119,12 +124,11 @@ export function App() {
 
         {isSettingsOpen && (
           <SettingsPanel
-            theme={config.theme}
+            config={config}
             configPath={configPath}
-            rawConfig={rawConfig}
-            isLoadingRaw={isLoadingRaw}
             onToggleTheme={() => void handleToggleTheme()}
-            onOpenRawConfig={() => void handleOpenRawConfig()}
+            onReadRawConfig={handleReadRawConfig}
+            onError={setErrorMessage}
             onClose={() => setIsSettingsOpen(false)}
           />
         )}

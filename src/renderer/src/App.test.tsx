@@ -17,18 +17,22 @@ function createInMemoryWikiApi(initialOverrides: Partial<AppConfig> = {}): {
   const listeners = new Set<(config: AppConfig) => void>()
   const configPath = 'C:\\Users\\test\\AppData\\Roaming\\wiki-editor\\config.json'
 
+  const applyAndBroadcast = (patch: Partial<AppConfig>): AppConfig => {
+    state = { ...state, ...patch, version: 1 }
+    const snapshot = cloneAppConfig(state)
+    for (const listener of listeners) {
+      listener(snapshot)
+    }
+    return cloneAppConfig(snapshot)
+  }
+
   const api: WikiApi = {
     config: {
       async get() {
         return cloneAppConfig(state)
       },
       async update(patch) {
-        state = { ...state, ...patch, version: 1 }
-        const snapshot = cloneAppConfig(state)
-        for (const listener of listeners) {
-          listener(snapshot)
-        }
-        return cloneAppConfig(snapshot)
+        return applyAndBroadcast(patch)
       },
       async getConfigPath() {
         return configPath
@@ -48,11 +52,7 @@ function createInMemoryWikiApi(initialOverrides: Partial<AppConfig> = {}): {
   return {
     api,
     emitExternalChange(patch) {
-      state = { ...state, ...patch, version: 1 }
-      const snapshot = cloneAppConfig(state)
-      for (const listener of listeners) {
-        listener(snapshot)
-      }
+      applyAndBroadcast(patch)
     },
     getListenerCount: () => listeners.size
   }
@@ -150,5 +150,91 @@ describe('App shell, theme persistence, and settings panel', () => {
 
     view.unmount()
     expect(getListenerCount()).toBe(0)
+  })
+
+  it('refreshes open raw config preview when an external change arrives', async () => {
+    const user = userEvent.setup()
+    const { api, emitExternalChange } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
+
+    const preview = await screen.findByTestId('config-raw-preview')
+    expect(preview.textContent).toContain('"theme": "light"')
+
+    emitExternalChange({ theme: 'dark' })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('config-raw-preview').textContent).toContain('"theme": "dark"')
+    })
+  })
+
+  it('rolls back theme and shows an error banner when saving theme fails', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    api.config.update = async () => {
+      throw new Error('디스크 쓰기 오류')
+    }
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    await user.click(await screen.findByRole('button', { name: /테마 전환/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('디스크 쓰기 오류')
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+  })
+
+  it('keeps the latest theme when rapid toggles resolve out of order', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+
+    let resolveFirst!: (value: AppConfig) => void
+    let callCount = 0
+    api.config.update = (patch) => {
+      callCount += 1
+      if (callCount === 1) {
+        return new Promise<AppConfig>((resolve) => {
+          resolveFirst = resolve
+        })
+      }
+      return Promise.resolve({ ...cloneAppConfig(DEFAULT_APP_CONFIG), ...patch })
+    }
+    window.wikiApi = api
+
+    render(<App />)
+    const toggle = await screen.findByRole('button', { name: /테마 전환/i })
+
+    await user.click(toggle) // light -> dark (pending)
+    await user.click(toggle) // dark -> light (resolves immediately)
+
+    resolveFirst({ ...cloneAppConfig(DEFAULT_APP_CONFIG), theme: 'dark' })
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+  })
+
+  it('shows an error banner when reading raw config fails', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    api.config.readRaw = async () => {
+      throw new Error('읽기 권한 없음')
+    }
+    window.wikiApi = api
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('읽기 권한 없음')
   })
 })

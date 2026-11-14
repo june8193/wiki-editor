@@ -152,4 +152,25 @@ describe('ConfigService', () => {
     const updatedRaw = await service.readRaw()
     expect(JSON.parse(updatedRaw).theme).toBe('dark')
   })
+
+  it('rejects invalid schema updates without overwriting disk or notifying listeners', async () => {
+    const service = new ConfigService(configPath)
+    await service.get()
+
+    let changeCount = 0
+    service.onChanged(() => {
+      changeCount += 1
+    })
+
+    await expect(
+      service.update({ theme: 'invalid-theme' as 'light' })
+    ).rejects.toThrow(/theme/i)
+    await expect(
+      service.update({ autoSaveDelayMs: -100 })
+    ).rejects.toThrow(/autoSaveDelayMs/i)
+
+    expect(changeCount).toBe(0)
+    expect((await service.get()).theme).toBe('light')
+    expect((await service.get()).autoSaveDelayMs).toBe(1000)
+  })
 })

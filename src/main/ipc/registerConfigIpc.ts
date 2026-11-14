@@ -29,7 +29,7 @@ export function registerConfigIpc(
 
   ipcMain.handle(CONFIG_IPC_CHANNELS.get, () => configService.get())
   ipcMain.handle(CONFIG_IPC_CHANNELS.update, (_event, patch) =>
-    configService.update((patch ?? {}) as Partial<AppConfig>)
+    configService.update(patch as Partial<AppConfig>)
   )
   ipcMain.handle(CONFIG_IPC_CHANNELS.getPath, () => configService.getConfigPath())
   ipcMain.handle(CONFIG_IPC_CHANNELS.readRaw, () => configService.readRaw())
