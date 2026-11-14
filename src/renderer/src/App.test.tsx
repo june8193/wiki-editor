@@ -1448,4 +1448,222 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     expect(within(primaryPane).queryByRole('tab', { name: /keep\.md/i })).not.toBeInTheDocument()
     expect(within(primaryPane).getByRole('tab', { name: /config\.json/i })).toBeInTheDocument()
   })
+
+  it('preserves unfocused split pane cursor selection when the other pane edits and scrolls', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\ws1',
+        workspaces: {
+          'C:\\wiki\\ws1': {
+            'doc.md': 'Hello World!'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await user.click(await screen.findByText('doc.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /doc\.md/i }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역에 복제 열기'
+      })
+    )
+
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    const primaryEditor = within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement
+    const secondaryEditor = within(secondaryPane).getByTestId(
+      'document-editor'
+    ) as HTMLTextAreaElement
+
+    secondaryEditor.focus()
+    secondaryEditor.setSelectionRange(2, 5)
+    fireEvent.select(secondaryEditor)
+
+    primaryEditor.focus()
+    secondaryEditor.scrollTop = 90
+    fireEvent.scroll(secondaryEditor)
+
+    fireEvent.change(primaryEditor, { target: { value: 'Hello World! Edited' } })
+
+    expect(secondaryEditor.value).toBe('Hello World! Edited')
+    expect(secondaryEditor.selectionStart).toBe(2)
+    expect(secondaryEditor.selectionEnd).toBe(5)
+    expect(secondaryEditor.scrollTop).toBe(90)
+  })
+
+  it('stops auto-save retries after a write failure until the next edit', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      { autoSave: true, autoSaveDelayMs: 40 },
+      {
+        selectedFolder: 'C:\\wiki\\ws1',
+        workspaces: {
+          'C:\\wiki\\ws1': {
+            'fail.md': '# Start'
+          }
+        }
+      }
+    )
+    const writeSpy = vi
+      .spyOn(api.workspace, 'writeFile')
+      .mockRejectedValueOnce(new Error('Disk full'))
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await user.click(await screen.findByText('fail.md'))
+
+    const editor = screen.getByTestId('document-editor')
+    fireEvent.change(editor, { target: { value: '# First failed edit' } })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Disk full')
+    expect(writeSpy).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+    })
+    expect(writeSpy).toHaveBeenCalledTimes(1)
+
+    fireEvent.change(editor, { target: { value: '# Recovered edit' } })
+    await waitFor(() => {
+      expect(writeSpy).toHaveBeenCalledTimes(2)
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    })
+  })
+
+  it('ignores Ctrl+S shortcuts while a ConfirmDialog is open', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\ws1',
+        workspaces: {
+          'C:\\wiki\\ws1': {
+            'dirty.md': 'initial'
+          }
+        }
+      }
+    )
+    const writeSpy = vi.spyOn(api.workspace, 'writeFile')
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await user.click(await screen.findByText('dirty.md'))
+
+    const editor = screen.getByTestId('document-editor')
+    fireEvent.change(editor, { target: { value: 'unsaved changes' } })
+
+    await user.click(screen.getByRole('button', { name: 'dirty.md 탭 닫기' }))
+    const dialog = await screen.findByRole('alertdialog')
+
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(dialog, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+
+    expect(writeSpy).not.toHaveBeenCalled()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+  })
+
+  it('clears saving state cleanly when renaming a file while a save is in flight', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\ws1',
+        workspaces: {
+          'C:\\wiki\\ws1': {
+            'slow.md': '# Slow'
+          }
+        }
+      }
+    )
+    let resolveWrite!: () => void
+    vi.spyOn(api.workspace, 'writeFile').mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveWrite = resolve
+      })
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('slow.md'))
+
+    fireEvent.change(screen.getByTestId('document-editor'), { target: { value: '# Slow edited' } })
+    await user.click(screen.getByRole('button', { name: '저장' }))
+    expect(screen.getByText('저장 중...')).toBeInTheDocument()
+
+    const slowItem = within(sidebar).getByRole('treeitem', { name: 'slow.md' })
+    slowItem.focus()
+    fireEvent.keyDown(slowItem, { key: 'F2' })
+    const renameInput = await within(sidebar).findByLabelText('새 이름 입력')
+    await user.clear(renameInput)
+    await user.type(renameInput, 'fast.md{Enter}')
+
+    expect(await screen.findByRole('tab', { name: /fast\.md/i })).toBeInTheDocument()
+
+    await act(async () => {
+      resolveWrite()
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('저장됨')).toBeInTheDocument()
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    })
+  })
+
+  it('preserves active secondary tab focus when collapsing split view to single mode', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\ws1',
+        workspaces: {
+          'C:\\wiki\\ws1': {
+            'a.md': '# A',
+            'b.md': '# B'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await user.click(await screen.findByText('a.md'))
+    await user.click(screen.getByText('b.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /b\.md/i }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역으로 이동'
+      })
+    )
+
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    expect(within(secondaryPane).getByRole('tab', { name: /b\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    await user.click(screen.getByRole('button', { name: '단일 화면' }))
+
+    expect(screen.queryByTestId('pane-secondary')).not.toBeInTheDocument()
+    expect(within(primaryPane).getByRole('tab', { name: /b\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(screen.getByTestId('document-editor')).toHaveValue('# B')
+  })
 })

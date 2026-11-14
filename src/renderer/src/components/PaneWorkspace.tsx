@@ -1,31 +1,16 @@
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
-import { CursorPosition, PaneId, PaneLayoutState } from '../stores/PaneTabStore'
-import { DraggingTabPayload, parseDraggingTabPayload } from './PaneTabBar'
+import { PaneLayoutState } from '../stores/PaneTabStore'
+import { DraggingTabPayload, handleTabDrop, PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
 
 interface PaneWorkspaceProps {
   layout: PaneLayoutState
   buffers: DocumentBufferSnapshot
   autoSave: boolean
-  onFocusPane: (paneId: PaneId) => void
-  onActivateTab: (paneId: PaneId, tabId: string) => void
-  onCloseTab: (paneId: PaneId, tabId: string) => void
-  onMoveTab: (
-    sourcePaneId: PaneId,
-    targetPaneId: PaneId,
-    tabId: string,
-    targetIndex?: number
-  ) => void
-  onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
+  isShortcutDisabled?: boolean
   onSetSplitRatio: (ratio: number) => void
-  onChangeContent: (bufferKey: string, nextContent: string) => void
-  onSaveBuffer: (bufferKey: string) => void
-  onUpdateTabViewState: (
-    paneId: PaneId,
-    tabId: string,
-    patch: { cursor?: CursorPosition; scrollTop?: number }
-  ) => void
+  actions: PaneInteractionActions
 }
 
 const KEYBOARD_RESIZE_STEP = 0.05
@@ -34,15 +19,9 @@ export function PaneWorkspace({
   layout,
   buffers,
   autoSave,
-  onFocusPane,
-  onActivateTab,
-  onCloseTab,
-  onMoveTab,
-  onDuplicateTab,
+  isShortcutDisabled = false,
   onSetSplitRatio,
-  onChangeContent,
-  onSaveBuffer,
-  onUpdateTabViewState
+  actions
 }: PaneWorkspaceProps) {
   const [draggingTab, setDraggingTab] = useState<DraggingTabPayload | null>(null)
   const [isResizing, setIsResizing] = useState(false)
@@ -102,35 +81,26 @@ export function PaneWorkspace({
     >
       <PaneView
         pane={layout.panes.primary}
+        splitMode={layout.splitMode}
         isActivePane={layout.activePaneId === 'primary'}
         flexRatio={isSplit ? layout.splitRatio : undefined}
         autoSave={autoSave}
+        isShortcutDisabled={isShortcutDisabled}
         buffers={buffers}
         draggingTab={draggingTab}
         onDragStartTab={setDraggingTab}
         onDragEndTab={clearDragging}
-        onFocusPane={onFocusPane}
-        onActivateTab={onActivateTab}
-        onCloseTab={onCloseTab}
-        onMoveTab={onMoveTab}
-        onDuplicateTab={onDuplicateTab}
-        onChangeContent={onChangeContent}
-        onSaveBuffer={onSaveBuffer}
-        onUpdateTabViewState={onUpdateTabViewState}
+        actions={actions}
       />
 
-      {!isSplit && draggingTab && (
+      {!isSplit && draggingTab && layout.panes.primary.tabs.length > 1 && (
         <div
           className="split-drop-zone"
           data-testid="split-drop-zone-secondary"
           onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => {
-            event.preventDefault()
-            const payload = parseDraggingTabPayload(event, draggingTab)
-            if (!payload) return
-            onMoveTab(payload.paneId, 'secondary', payload.tabId)
-            clearDragging()
-          }}
+          onDrop={(event) =>
+            handleTabDrop(event, draggingTab, 'secondary', actions.onMoveTab, clearDragging)
+          }
         >
           <span>여기에 드롭하여 분할</span>
         </div>
@@ -151,27 +121,21 @@ export function PaneWorkspace({
               event.preventDefault()
               setIsResizing(true)
             }}
-            onDoubleClick={() => onSetSplitRatio(0.5)}
             onKeyDown={handleSplitterKeyDown}
           />
 
           <PaneView
             pane={layout.panes.secondary}
+            splitMode={layout.splitMode}
             isActivePane={layout.activePaneId === 'secondary'}
             flexRatio={1 - layout.splitRatio}
             autoSave={autoSave}
+            isShortcutDisabled={isShortcutDisabled}
             buffers={buffers}
             draggingTab={draggingTab}
             onDragStartTab={setDraggingTab}
             onDragEndTab={clearDragging}
-            onFocusPane={onFocusPane}
-            onActivateTab={onActivateTab}
-            onCloseTab={onCloseTab}
-            onMoveTab={onMoveTab}
-            onDuplicateTab={onDuplicateTab}
-            onChangeContent={onChangeContent}
-            onSaveBuffer={onSaveBuffer}
-            onUpdateTabViewState={onUpdateTabViewState}
+            actions={actions}
           />
         </>
       )}

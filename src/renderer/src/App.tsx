@@ -1,14 +1,15 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
+import { PaneInteractionActions } from './components/PaneTabBar'
 import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
-import { SplitMode } from './stores/PaneTabStore'
+import { getPaneActiveTab, SplitMode } from './stores/PaneTabStore'
 import { toErrorMessage } from './utils/toErrorMessage'
 
 const SPLIT_MODE_OPTIONS: ReadonlyArray<{
@@ -206,11 +207,32 @@ export function App() {
   )
 
   const activePane = layout.panes[layout.activePaneId]
-  const activeTab = activePane.activeTabId
-    ? activePane.tabs.find((tab) => tab.id === activePane.activeTabId)
-    : undefined
+  const activeTab = getPaneActiveTab(activePane)
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
+
+  const paneActions = useMemo<PaneInteractionActions>(
+    () => ({
+      onFocusPane: focusPane,
+      onActivateTab: activateTab,
+      onCloseTab: requestCloseTab,
+      onMoveTab: moveTab,
+      onDuplicateTab: duplicateTabToOtherPane,
+      onChangeContent: updateBufferContent,
+      onSaveBuffer: saveBufferByKey,
+      onUpdateTabViewState: updateTabViewState
+    }),
+    [
+      activateTab,
+      duplicateTabToOtherPane,
+      focusPane,
+      moveTab,
+      requestCloseTab,
+      saveBufferByKey,
+      updateBufferContent,
+      updateTabViewState
+    ]
+  )
 
   const isCurrentWorkspaceFavorite =
     workspace !== null && isFavoriteWorkspacePath(config.favoriteWorkspaces, workspace.rootPath)
@@ -298,15 +320,9 @@ export function App() {
           layout={layout}
           buffers={buffers}
           autoSave={config.autoSave}
-          onFocusPane={focusPane}
-          onActivateTab={activateTab}
-          onCloseTab={requestCloseTab}
-          onMoveTab={moveTab}
-          onDuplicateTab={duplicateTabToOtherPane}
+          isShortcutDisabled={pendingDialog !== null}
           onSetSplitRatio={setSplitRatio}
-          onChangeContent={updateBufferContent}
-          onSaveBuffer={saveBufferByKey}
-          onUpdateTabViewState={updateTabViewState}
+          actions={paneActions}
         />
 
         {isSettingsOpen && (

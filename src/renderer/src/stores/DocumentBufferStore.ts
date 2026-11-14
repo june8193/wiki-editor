@@ -156,20 +156,6 @@ export class DocumentBufferStore {
     this.commit({ ...this.buffers, [key]: updated })
   }
 
-  discardChanges(pathOrKey: string): void {
-    const key = this.resolveKey(pathOrKey)
-    const current = this.buffers[key]
-    if (!current || !current.isDirty) return
-
-    const updated: DocumentBuffer = {
-      ...current,
-      content: current.savedContent,
-      isDirty: false,
-      version: current.version + 1
-    }
-    this.commit({ ...this.buffers, [key]: updated })
-  }
-
   setSaving(pathOrKey: string, isSaving: boolean): void {
     const key = this.resolveKey(pathOrKey)
     const current = this.buffers[key]

@@ -6,6 +6,7 @@ interface DocumentEditorProps {
   document: DocumentBuffer
   tab: TabItem
   autoSave: boolean
+  isShortcutDisabled?: boolean
   onChangeContent: (nextContent: string) => void
   onSave: () => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
@@ -15,19 +16,25 @@ export function DocumentEditor({
   document: activeDoc,
   tab,
   autoSave,
+  isShortcutDisabled = false,
   onChangeContent,
   onSave,
   onUpdateViewState
 }: DocumentEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const lastRestoredKeyRef = useRef<string | null>(null)
+  const lastContentRef = useRef<string>(activeDoc.content)
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current
     if (!textarea) return
 
     const restoreKey = `${tab.id}:${tab.mode}`
-    if (lastRestoredKeyRef.current !== restoreKey) {
+    const isUnfocusedContentSync =
+      document.activeElement !== textarea && lastContentRef.current !== activeDoc.content
+    lastContentRef.current = activeDoc.content
+
+    if (lastRestoredKeyRef.current !== restoreKey || isUnfocusedContentSync) {
       lastRestoredKeyRef.current = restoreKey
       const maxOffset = activeDoc.content.length
       const start = Math.max(0, Math.min(tab.cursor.selectionStart, maxOffset))
@@ -43,15 +50,20 @@ export function DocumentEditor({
     tab.cursor.selectionStart,
     tab.cursor.selectionEnd,
     tab.scrollTop,
-    activeDoc.content.length
+    activeDoc.content
   ])
 
-  const syncViewState = (el: HTMLTextAreaElement): void => {
+  const syncCursor = (el: HTMLTextAreaElement): void => {
     onUpdateViewState({
       cursor: {
         selectionStart: el.selectionStart ?? 0,
         selectionEnd: el.selectionEnd ?? 0
-      },
+      }
+    })
+  }
+
+  const syncScroll = (el: HTMLTextAreaElement): void => {
+    onUpdateViewState({
       scrollTop: el.scrollTop
     })
   }
@@ -69,6 +81,7 @@ export function DocumentEditor({
       className="editor-pane"
       aria-label="문서 편집 영역"
       onKeyDown={(event) => {
+        if (isShortcutDisabled) return
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
           event.preventDefault()
           event.stopPropagation()
@@ -115,13 +128,19 @@ export function DocumentEditor({
         value={activeDoc.content}
         onChange={(event) => {
           onChangeContent(event.target.value)
-          syncViewState(event.currentTarget)
+          onUpdateViewState({
+            cursor: {
+              selectionStart: event.currentTarget.selectionStart ?? 0,
+              selectionEnd: event.currentTarget.selectionEnd ?? 0
+            },
+            scrollTop: event.currentTarget.scrollTop
+          })
         }}
-        onSelect={(event) => syncViewState(event.currentTarget)}
-        onKeyUp={(event) => syncViewState(event.currentTarget)}
-        onMouseUp={(event) => syncViewState(event.currentTarget)}
-        onScroll={(event) => syncViewState(event.currentTarget)}
-        onBlur={(event) => syncViewState(event.currentTarget)}
+        onSelect={(event) => syncCursor(event.currentTarget)}
+        onKeyUp={(event) => syncCursor(event.currentTarget)}
+        onMouseUp={(event) => syncCursor(event.currentTarget)}
+        onScroll={(event) => syncScroll(event.currentTarget)}
+        onBlur={(event) => syncCursor(event.currentTarget)}
         spellCheck={false}
       />
     </section>

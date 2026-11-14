@@ -1,59 +1,44 @@
 import { CSSProperties } from 'react'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
-import { CursorPosition, PaneId, PaneState } from '../stores/PaneTabStore'
+import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { DocumentEditor } from './DocumentEditor'
-import { DraggingTabPayload, PaneTabBar, parseDraggingTabPayload } from './PaneTabBar'
+import {
+  DraggingTabPayload,
+  handleTabDrop,
+  PaneInteractionActions,
+  PaneTabBar
+} from './PaneTabBar'
 
 interface PaneViewProps {
   pane: PaneState
+  splitMode: SplitMode
   isActivePane: boolean
   flexRatio?: number
   autoSave: boolean
+  isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
   onDragEndTab: () => void
-  onFocusPane: (paneId: PaneId) => void
-  onActivateTab: (paneId: PaneId, tabId: string) => void
-  onCloseTab: (paneId: PaneId, tabId: string) => void
-  onMoveTab: (
-    sourcePaneId: PaneId,
-    targetPaneId: PaneId,
-    tabId: string,
-    targetIndex?: number
-  ) => void
-  onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
-  onChangeContent: (bufferKey: string, nextContent: string) => void
-  onSaveBuffer: (bufferKey: string) => void
-  onUpdateTabViewState: (
-    paneId: PaneId,
-    tabId: string,
-    patch: { cursor?: CursorPosition; scrollTop?: number }
-  ) => void
+  actions: PaneInteractionActions
 }
 
 export function PaneView({
   pane,
+  splitMode,
   isActivePane,
   flexRatio,
   autoSave,
+  isShortcutDisabled = false,
   buffers,
   draggingTab,
   onDragStartTab,
   onDragEndTab,
-  onFocusPane,
-  onActivateTab,
-  onCloseTab,
-  onMoveTab,
-  onDuplicateTab,
-  onChangeContent,
-  onSaveBuffer,
-  onUpdateTabViewState
+  actions
 }: PaneViewProps) {
-  const activeTab = pane.activeTabId
-    ? (pane.tabs.find((tab) => tab.id === pane.activeTabId) ?? null)
-    : null
+  const activeTab = getPaneActiveTab(pane)
   const activeBuffer = activeTab ? (buffers[activeTab.bufferKey] ?? null) : null
+  const canMoveToSplit = !(splitMode === 'single' && pane.tabs.length <= 1)
   const paneStyle: CSSProperties | undefined =
     flexRatio !== undefined ? { flex: `${flexRatio} 1 0%` } : undefined
 
@@ -63,34 +48,30 @@ export function PaneView({
       data-testid={`pane-${pane.id}`}
       aria-label={pane.id === 'primary' ? '주 편집기 영역' : '보조 편집기 영역'}
       style={paneStyle}
-      onMouseDown={() => onFocusPane(pane.id)}
-      onFocusCapture={() => onFocusPane(pane.id)}
+      onMouseDown={() => actions.onFocusPane(pane.id)}
+      onFocusCapture={() => actions.onFocusPane(pane.id)}
       onDragOver={(event) => {
         if (draggingTab) {
           event.preventDefault()
         }
       }}
-      onDrop={(event) => {
-        const payload = parseDraggingTabPayload(event, draggingTab)
-        if (!payload || payload.paneId === pane.id) return
-        event.preventDefault()
-        onMoveTab(payload.paneId, pane.id, payload.tabId)
-        onDragEndTab()
-      }}
+      onDrop={(event) =>
+        handleTabDrop(event, draggingTab, pane.id, actions.onMoveTab, onDragEndTab, {
+          ignoreSamePane: true
+        })
+      }
     >
       {pane.tabs.length > 0 && (
         <PaneTabBar
           paneId={pane.id}
           tabs={pane.tabs}
           activeTabId={pane.activeTabId}
+          canMoveToSplit={canMoveToSplit}
           buffers={buffers}
           draggingTab={draggingTab}
           onDragStartTab={onDragStartTab}
           onDragEndTab={onDragEndTab}
-          onActivateTab={onActivateTab}
-          onCloseTab={onCloseTab}
-          onMoveTab={onMoveTab}
-          onDuplicateTab={onDuplicateTab}
+          actions={actions}
         />
       )}
 
@@ -100,9 +81,10 @@ export function PaneView({
           document={activeBuffer}
           tab={activeTab}
           autoSave={autoSave}
-          onChangeContent={(nextContent) => onChangeContent(activeBuffer.key, nextContent)}
-          onSave={() => onSaveBuffer(activeBuffer.key)}
-          onUpdateViewState={(patch) => onUpdateTabViewState(pane.id, activeTab.id, patch)}
+          isShortcutDisabled={isShortcutDisabled}
+          onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
+          onSave={() => actions.onSaveBuffer(activeBuffer.key)}
+          onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}
         />
       ) : (
         <section className="workspace-placeholder">

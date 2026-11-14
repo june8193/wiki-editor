@@ -10,6 +10,11 @@ export interface DirtyTabCloseRequest {
   buffer: DocumentBuffer
 }
 
+interface InFlightSaveEntry {
+  currentKey: string
+  promise: Promise<boolean>
+}
+
 interface UseEditorWorkspaceOptions {
   autoSave: boolean
   autoSaveDelayMs: number
@@ -47,8 +52,9 @@ export function useEditorWorkspace({
 
   const mountedRef = useRef<boolean>(true)
   const isAutoSavePausedRef = useRef<boolean>(isAutoSavePaused)
-  const inFlightSavesRef = useRef<Map<string, Promise<boolean>>>(new Map())
+  const inFlightSavesRef = useRef<Map<string, InFlightSaveEntry>>(new Map())
   const autoSaveTimersRef = useRef<Map<string, { version: number; timerId: number }>>(new Map())
+  const lastAutoSaveAttemptVersionRef = useRef<Map<string, number>>(new Map())
   const callbacksRef = useRef({ onSaveConfigRaw, onError, onConfirmCloseDirtyTab })
 
   isAutoSavePausedRef.current = isAutoSavePaused
@@ -69,11 +75,16 @@ export function useEditorWorkspace({
     (snapshot: DocumentBuffer): Promise<boolean> => {
       const existing = inFlightSavesRef.current.get(snapshot.key)
       if (existing) {
-        return existing
+        return existing.promise
       }
 
       bufferStore.setSaving(snapshot.key, true)
       callbacksRef.current.onError(null)
+
+      const entry: InFlightSaveEntry = {
+        currentKey: snapshot.key,
+        promise: Promise.resolve(false)
+      }
 
       const run = (async (): Promise<boolean> => {
         try {
@@ -83,7 +94,7 @@ export function useEditorWorkspace({
             await window.wikiApi.workspace.writeFile(snapshot.path, snapshot.content)
           }
           if (!mountedRef.current) return false
-          bufferStore.markSaved(snapshot.key, snapshot.content)
+          bufferStore.markSaved(entry.currentKey, snapshot.content)
           return true
         } catch (error: unknown) {
           if (mountedRef.current) {
@@ -91,14 +102,17 @@ export function useEditorWorkspace({
           }
           return false
         } finally {
-          inFlightSavesRef.current.delete(snapshot.key)
+          if (inFlightSavesRef.current.get(entry.currentKey) === entry) {
+            inFlightSavesRef.current.delete(entry.currentKey)
+          }
           if (mountedRef.current) {
-            bufferStore.setSaving(snapshot.key, false)
+            bufferStore.setSaving(entry.currentKey, false)
           }
         }
       })()
 
-      inFlightSavesRef.current.set(snapshot.key, run)
+      entry.promise = run
+      inFlightSavesRef.current.set(snapshot.key, entry)
       return run
     },
     [bufferStore]
@@ -125,8 +139,9 @@ export function useEditorWorkspace({
     async (bufferKey: string): Promise<boolean> => {
       const inFlight = inFlightSavesRef.current.get(bufferKey)
       if (inFlight) {
-        const ok = await inFlight
+        const ok = await inFlight.promise
         if (!ok) return false
+        bufferKey = inFlight.currentKey
       }
       const latest = bufferStore.getBuffer(bufferKey)
       if (!latest || !latest.isDirty) {
@@ -166,7 +181,7 @@ export function useEditorWorkspace({
   // Global fallback Ctrl+S handler when focus is outside a specific pane editor
   useEffect(() => {
     const handleGlobalKeyDown = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented) return
+      if (event.defaultPrevented || isAutoSavePausedRef.current) return
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         if (!tabStore.getActiveTab()) return
         event.preventDefault()
@@ -193,14 +208,28 @@ export function useEditorWorkspace({
 
     for (const [key, entry] of timers.entries()) {
       const buf = buffers[key]
-      if (!buf || buf.kind !== 'workspace' || !buf.isDirty || buf.version !== entry.version) {
+      if (
+        !buf ||
+        buf.kind !== 'workspace' ||
+        !buf.isDirty ||
+        buf.isSaving ||
+        buf.version !== entry.version
+      ) {
         window.clearTimeout(entry.timerId)
         timers.delete(key)
       }
     }
 
+    for (const attemptedKey of lastAutoSaveAttemptVersionRef.current.keys()) {
+      const buf = buffers[attemptedKey]
+      if (!buf || !buf.isDirty) {
+        lastAutoSaveAttemptVersionRef.current.delete(attemptedKey)
+      }
+    }
+
     for (const buf of Object.values(buffers)) {
-      if (buf.kind !== 'workspace' || !buf.isDirty) continue
+      if (buf.kind !== 'workspace' || !buf.isDirty || buf.isSaving) continue
+      if (lastAutoSaveAttemptVersionRef.current.get(buf.key) === buf.version) continue
       if (timers.has(buf.key)) continue
 
       const scheduledVersion = buf.version
@@ -208,8 +237,9 @@ export function useEditorWorkspace({
         timers.delete(buf.key)
         if (isAutoSavePausedRef.current) return
         const latest = bufferStore.getBuffer(buf.key)
-        if (!latest || latest.kind !== 'workspace' || !latest.isDirty) return
+        if (!latest || latest.kind !== 'workspace' || !latest.isDirty || latest.isSaving) return
         if (latest.version !== scheduledVersion) return
+        lastAutoSaveAttemptVersionRef.current.set(latest.key, scheduledVersion)
         void saveBufferSnapshot({ ...latest })
       }, autoSaveDelayMs)
 
@@ -313,14 +343,33 @@ export function useEditorWorkspace({
     [bufferStore]
   )
 
+  const clearAutoSaveTimer = useCallback((key: string): void => {
+    const timer = autoSaveTimersRef.current.get(key)
+    if (timer) {
+      window.clearTimeout(timer.timerId)
+      autoSaveTimersRef.current.delete(key)
+    }
+  }, [])
+
+  const cleanupBufferTracking = useCallback(
+    (keys: Iterable<string>): void => {
+      for (const key of keys) {
+        clearAutoSaveTimer(key)
+        lastAutoSaveAttemptVersionRef.current.delete(key)
+      }
+    },
+    [clearAutoSaveTimer]
+  )
+
   const forceCloseTab = useCallback(
     (paneId: PaneId, tabId: string): void => {
       const result = tabStore.closeTab(paneId, tabId)
       if (result?.isLastReferenceForBuffer) {
+        cleanupBufferTracking([result.closedTab.bufferKey])
         bufferStore.removeBuffer(result.closedTab.bufferKey)
       }
     },
-    [bufferStore, tabStore]
+    [bufferStore, cleanupBufferTracking, tabStore]
   )
 
   const requestCloseTab = useCallback(
@@ -351,23 +400,41 @@ export function useEditorWorkspace({
 
   const clearWorkspaceBuffers = useCallback((): void => {
     const removedKeys = bufferStore.clearWorkspaceBuffers()
+    cleanupBufferTracking(removedKeys)
     tabStore.closeTabsByBufferKeys(removedKeys)
-  }, [bufferStore, tabStore])
+  }, [bufferStore, cleanupBufferTracking, tabStore])
 
   const syncRenamedPath = useCallback(
     (oldPath: string, renamed: WorkspaceEntry): void => {
       const remappings = bufferStore.syncRenamedPath(oldPath, renamed.path)
+      if (remappings.length === 0) return
+
+      for (const { oldKey, newKey } of remappings) {
+        clearAutoSaveTimer(oldKey)
+        const attemptedVersion = lastAutoSaveAttemptVersionRef.current.get(oldKey)
+        if (attemptedVersion !== undefined) {
+          lastAutoSaveAttemptVersionRef.current.delete(oldKey)
+          lastAutoSaveAttemptVersionRef.current.set(newKey, attemptedVersion)
+        }
+        const inFlight = inFlightSavesRef.current.get(oldKey)
+        if (inFlight) {
+          inFlightSavesRef.current.delete(oldKey)
+          inFlight.currentKey = newKey
+          inFlightSavesRef.current.set(newKey, inFlight)
+        }
+      }
       tabStore.remapBufferKeys(remappings)
     },
-    [bufferStore, tabStore]
+    [bufferStore, clearAutoSaveTimer, tabStore]
   )
 
   const syncDeletedPath = useCallback(
     (deletedPath: string): void => {
       const removedKeys = bufferStore.removeBuffersUnderPath(deletedPath)
+      cleanupBufferTracking(removedKeys)
       tabStore.closeTabsByBufferKeys(removedKeys)
     },
-    [bufferStore, tabStore]
+    [bufferStore, cleanupBufferTracking, tabStore]
   )
 
   return {

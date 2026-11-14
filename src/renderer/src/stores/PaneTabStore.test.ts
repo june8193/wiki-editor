@@ -122,4 +122,58 @@ describe('PaneTabStore', () => {
     expect(store.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([primaryTab.id])
     expect(extraTab.bufferKey).toBe('c:/wiki/extra.md')
   })
+
+  it('preserves secondary active tab focus when collapsing to single mode (including deduplicated buffers)', () => {
+    const store = new PaneTabStore()
+
+    const primaryDoc = store.openTab('c:/wiki/a.md')
+    const sharedPrimary = store.openTab('c:/wiki/shared.md')
+    store.activateTab('primary', primaryDoc.id)
+
+    const secondaryUnique = store.openTab('c:/wiki/sec.md', { paneId: 'secondary' })
+    expect(store.getSnapshot().activePaneId).toBe('secondary')
+
+    // Case 1: active secondary tab is unique -> promoted to primary and focused
+    store.setSplitMode('single')
+    expect(store.getSnapshot().splitMode).toBe('single')
+    expect(store.getSnapshot().activePaneId).toBe('primary')
+    expect(store.getSnapshot().panes.primary.activeTabId).toBe(secondaryUnique.id)
+    expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(0)
+
+    // Case 2: active secondary tab shares bufferKey with a primary tab -> primary matching tab gets focused
+    store.activateTab('primary', primaryDoc.id)
+    const duplicated = store.duplicateTabToOtherPane('primary', sharedPrimary.id)!
+    store.activateTab('secondary', duplicated.id)
+    expect(store.getSnapshot().activePaneId).toBe('secondary')
+
+    store.setSplitMode('single')
+    expect(store.getSnapshot().splitMode).toBe('single')
+    expect(store.getSnapshot().panes.primary.activeTabId).toBe(sharedPrimary.id)
+    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.bufferKey)).not.toHaveLength(0)
+  })
+
+  it('blocks moving the sole primary tab to secondary in single mode, but promotes secondary when emptying primary in split mode', () => {
+    const store = new PaneTabStore()
+
+    const sole = store.openTab('c:/wiki/sole.md')
+    expect(store.getSnapshot().splitMode).toBe('single')
+
+    // Attempting to move the sole primary tab to secondary in single mode is a no-op
+    store.moveTab('primary', 'secondary', sole.id)
+    expect(store.getSnapshot().splitMode).toBe('single')
+    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([sole.id])
+    expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(0)
+
+    // In split mode, moving primary's last tab to secondary promotes secondary into primary & collapses to single
+    const sec = store.openTab('c:/wiki/sec.md', { paneId: 'secondary' })
+    expect(store.getSnapshot().splitMode).toBe('horizontal')
+
+    store.moveTab('primary', 'secondary', sole.id)
+    const snap = store.getSnapshot()
+    expect(snap.splitMode).toBe('single')
+    expect(snap.activePaneId).toBe('primary')
+    expect(snap.panes.primary.tabs.map((t) => t.id)).toEqual([sec.id, sole.id])
+    expect(snap.panes.primary.activeTabId).toBe(sole.id)
+    expect(snap.panes.secondary.tabs).toHaveLength(0)
+  })
 })

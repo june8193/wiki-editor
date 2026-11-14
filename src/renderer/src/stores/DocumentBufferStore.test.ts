@@ -34,7 +34,7 @@ describe('DocumentBufferStore', () => {
     unsubscribe()
   })
 
-  it('tracks content updates, versions, dirty state, save completion, and discard without clobbering concurrent edits', () => {
+  it('tracks content updates, versions, dirty state, and save completion without clobbering concurrent edits', () => {
     const store = new DocumentBufferStore()
     const listener = vi.fn()
     store.subscribe(listener)
@@ -72,14 +72,6 @@ describe('DocumentBufferStore', () => {
     // Saving v2 clears dirty
     store.markSaved(buf.key, 'v2')
     current = store.getBuffer(buf.key)!
-    expect(current.isDirty).toBe(false)
-
-    // Editing and discarding resets to savedContent
-    store.updateContent(buf.key, 'v3')
-    expect(store.getBuffer(buf.key)!.isDirty).toBe(true)
-    store.discardChanges(buf.key)
-    current = store.getBuffer(buf.key)!
-    expect(current.content).toBe('v2')
     expect(current.isDirty).toBe(false)
     expect(listener).toHaveBeenCalled()
   })

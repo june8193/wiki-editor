@@ -145,6 +145,11 @@ function reconcileRemovedLayout(
   }
 }
 
+export function getPaneActiveTab(pane: PaneState): TabItem | null {
+  if (!pane.activeTabId) return null
+  return pane.tabs.find((tab) => tab.id === pane.activeTabId) ?? null
+}
+
 /**
  * Manages up to 2 split panes, independent per-pane tab bars, and lightweight inactive tab state.
  */
@@ -180,9 +185,7 @@ export class PaneTabStore {
   }
 
   getActiveTab(paneId: PaneId = this.state.activePaneId): TabItem | undefined {
-    const pane = this.state.panes[paneId]
-    if (!pane.activeTabId) return undefined
-    return pane.tabs.find((tab) => tab.id === pane.activeTabId)
+    return getPaneActiveTab(this.state.panes[paneId]) ?? undefined
   }
 
   hasOtherTabForBuffer(bufferKey: string, excludeTabId?: string): boolean {
@@ -322,7 +325,13 @@ export class PaneTabStore {
       ...primary.tabs,
       ...secondary.tabs.filter((tab) => !existingKeys.has(tab.bufferKey))
     ]
+    const activeSecondaryTab =
+      this.state.activePaneId === 'secondary' ? getPaneActiveTab(secondary) : null
+    const preservedSecondaryFocus = activeSecondaryTab
+      ? mergedTabs.find((tab) => tab.bufferKey === activeSecondaryTab.bufferKey)?.id ?? null
+      : null
     const nextPrimaryActive =
+      preservedSecondaryFocus ??
       primary.activeTabId ??
       (secondary.activeTabId && mergedTabs.some((t) => t.id === secondary.activeTabId)
         ? secondary.activeTabId
@@ -387,6 +396,15 @@ export class PaneTabStore {
       return
     }
 
+    if (
+      sourcePaneId === 'primary' &&
+      targetPaneId === 'secondary' &&
+      this.state.splitMode === 'single' &&
+      sourcePane.tabs.length <= 1
+    ) {
+      return
+    }
+
     const hadSecondaryTabs = this.state.panes.secondary.tabs.length > 0
     const { nextPane: nextSourcePane, removed } = removeTabFromPane(sourcePane, tabId)
     if (!removed) return
@@ -418,7 +436,7 @@ export class PaneTabStore {
       nextSplitMode,
       targetPaneId,
       hadSecondaryTabs,
-      false
+      true
     )
 
     this.commit({

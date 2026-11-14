@@ -1,11 +1,31 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
 import { useDismissable } from '../hooks/useDismissable'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
-import { PaneId, TabItem } from '../stores/PaneTabStore'
+import { CursorPosition, PaneId, TabItem } from '../stores/PaneTabStore'
 
 export interface DraggingTabPayload {
   paneId: PaneId
   tabId: string
+}
+
+export interface PaneInteractionActions {
+  onFocusPane: (paneId: PaneId) => void
+  onActivateTab: (paneId: PaneId, tabId: string) => void
+  onCloseTab: (paneId: PaneId, tabId: string) => void
+  onMoveTab: (
+    sourcePaneId: PaneId,
+    targetPaneId: PaneId,
+    tabId: string,
+    targetIndex?: number
+  ) => void
+  onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
+  onChangeContent: (bufferKey: string, nextContent: string) => void
+  onSaveBuffer: (bufferKey: string) => void
+  onUpdateTabViewState: (
+    paneId: PaneId,
+    tabId: string,
+    patch: { cursor?: CursorPosition; scrollTop?: number }
+  ) => void
 }
 
 interface TabContextMenuState {
@@ -37,37 +57,50 @@ export function parseDraggingTabPayload(
   return fallback
 }
 
+export function handleTabDrop(
+  event: DragEvent,
+  draggingTab: DraggingTabPayload | null,
+  targetPaneId: PaneId,
+  onMoveTab: PaneInteractionActions['onMoveTab'],
+  onDragEndTab: () => void,
+  options?: { targetIndex?: number; ignoreSamePane?: boolean; stopPropagation?: boolean }
+): void {
+  const payload = parseDraggingTabPayload(event, draggingTab)
+  if (!payload) return
+  if (options?.ignoreSamePane && payload.paneId === targetPaneId) return
+  event.preventDefault()
+  if (options?.stopPropagation) {
+    event.stopPropagation()
+  }
+  onMoveTab(payload.paneId, targetPaneId, payload.tabId, options?.targetIndex)
+  onDragEndTab()
+}
+
 interface PaneTabBarProps {
   paneId: PaneId
   tabs: readonly TabItem[]
   activeTabId: string | null
+  canMoveToSplit: boolean
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
   onDragEndTab: () => void
-  onActivateTab: (paneId: PaneId, tabId: string) => void
-  onCloseTab: (paneId: PaneId, tabId: string) => void
-  onMoveTab: (
-    sourcePaneId: PaneId,
-    targetPaneId: PaneId,
-    tabId: string,
-    targetIndex?: number
-  ) => void
-  onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
+  actions: Pick<
+    PaneInteractionActions,
+    'onActivateTab' | 'onCloseTab' | 'onMoveTab' | 'onDuplicateTab'
+  >
 }
 
 export function PaneTabBar({
   paneId,
   tabs,
   activeTabId,
+  canMoveToSplit,
   buffers,
   draggingTab,
   onDragStartTab,
   onDragEndTab,
-  onActivateTab,
-  onCloseTab,
-  onMoveTab,
-  onDuplicateTab
+  actions
 }: PaneTabBarProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
@@ -85,14 +118,11 @@ export function PaneTabBar({
       onDragOver={(event) => {
         event.preventDefault()
       }}
-      onDrop={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        const payload = parseDraggingTabPayload(event, draggingTab)
-        if (!payload) return
-        onMoveTab(payload.paneId, paneId, payload.tabId)
-        onDragEndTab()
-      }}
+      onDrop={(event) =>
+        handleTabDrop(event, draggingTab, paneId, actions.onMoveTab, onDragEndTab, {
+          stopPropagation: true
+        })
+      }
     >
       {tabs.map((tab, index) => {
         const buffer = buffers[tab.bufferKey]
@@ -120,14 +150,12 @@ export function PaneTabBar({
             onDragOver={(event) => {
               event.preventDefault()
             }}
-            onDrop={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              const payload = parseDraggingTabPayload(event, draggingTab)
-              if (!payload) return
-              onMoveTab(payload.paneId, paneId, payload.tabId, index)
-              onDragEndTab()
-            }}
+            onDrop={(event) =>
+              handleTabDrop(event, draggingTab, paneId, actions.onMoveTab, onDragEndTab, {
+                targetIndex: index,
+                stopPropagation: true
+              })
+            }
             onMouseDown={(event) => {
               if (event.button === 1) {
                 event.preventDefault()
@@ -137,7 +165,7 @@ export function PaneTabBar({
               if (event.button === 1) {
                 event.preventDefault()
                 event.stopPropagation()
-                onCloseTab(paneId, tab.id)
+                actions.onCloseTab(paneId, tab.id)
               }
             }}
             onContextMenu={(event) => {
@@ -152,7 +180,7 @@ export function PaneTabBar({
               aria-selected={isActive}
               className="tab-trigger"
               title={buffer.path}
-              onClick={() => onActivateTab(paneId, tab.id)}
+              onClick={() => actions.onActivateTab(paneId, tab.id)}
             >
               <span className="tab-label">{buffer.name}</span>
               {buffer.isDirty && (
@@ -171,7 +199,7 @@ export function PaneTabBar({
               aria-label={`${buffer.name} 탭 닫기`}
               onClick={(event) => {
                 event.stopPropagation()
-                onCloseTab(paneId, tab.id)
+                actions.onCloseTab(paneId, tab.id)
               }}
             >
               ×
@@ -192,10 +220,11 @@ export function PaneTabBar({
             type="button"
             role="menuitem"
             className="context-menu-item"
+            disabled={!canMoveToSplit}
             onClick={() => {
               const targetTabId = contextMenu.tabId
               setContextMenu(null)
-              onMoveTab(paneId, otherPaneId, targetTabId)
+              actions.onMoveTab(paneId, otherPaneId, targetTabId)
             }}
           >
             분할 영역으로 이동
@@ -207,7 +236,7 @@ export function PaneTabBar({
             onClick={() => {
               const targetTabId = contextMenu.tabId
               setContextMenu(null)
-              onDuplicateTab(paneId, targetTabId)
+              actions.onDuplicateTab(paneId, targetTabId)
             }}
           >
             분할 영역에 복제 열기
@@ -219,7 +248,7 @@ export function PaneTabBar({
             onClick={() => {
               const targetTabId = contextMenu.tabId
               setContextMenu(null)
-              onCloseTab(paneId, targetTabId)
+              actions.onCloseTab(paneId, targetTabId)
             }}
           >
             닫기
