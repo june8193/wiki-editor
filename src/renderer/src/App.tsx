@@ -1,14 +1,25 @@
 import { useCallback, useRef, useState } from 'react'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
-import { DocumentEditor } from './components/DocumentEditor'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
+import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { useConfigController } from './hooks/useConfigController'
-import { useDocumentBuffer } from './hooks/useDocumentBuffer'
+import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
+import { SplitMode } from './stores/PaneTabStore'
 import { toErrorMessage } from './utils/toErrorMessage'
+
+const SPLIT_MODE_OPTIONS: ReadonlyArray<{
+  mode: SplitMode
+  ariaLabel: string
+  label: string
+}> = [
+  { mode: 'single', ariaLabel: '단일 화면', label: '단일' },
+  { mode: 'horizontal', ariaLabel: '좌우 분할', label: '좌우 분할' },
+  { mode: 'vertical', ariaLabel: '상하 분할', label: '상하 분할' }
+]
 
 interface PendingDialogState {
   title: string
@@ -24,6 +35,13 @@ export function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null)
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
+  const tabCloseActionsRef = useRef<{
+    saveAndCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => Promise<boolean>
+    forceCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => void
+  }>({
+    saveAndCloseTab: async () => false,
+    forceCloseTab: () => undefined
+  })
 
   const {
     config,
@@ -38,30 +56,58 @@ export function App() {
     onExternalConfigCommitted: () => void refreshConfigDocRef.current()
   })
 
+  const handleConfirmCloseDirtyTab = useCallback((request: DirtyTabCloseRequest): void => {
+    setPendingDialog({
+      title: '저장하지 않은 변경 사항',
+      message: `"${request.buffer.name}"에 저장하지 않은 변경 사항이 있습니다. 저장하고 닫을까요?`,
+      confirmLabel: '저장 후 닫기',
+      secondaryLabel: '버리고 닫기',
+      onConfirm: async () => {
+        setPendingDialog(null)
+        await tabCloseActionsRef.current.saveAndCloseTab(request.paneId, request.tabId)
+      },
+      onSecondary: () => {
+        setPendingDialog(null)
+        tabCloseActionsRef.current.forceCloseTab(request.paneId, request.tabId)
+      }
+    })
+  }, [])
+
   const {
-    activeDoc,
-    isSavingDoc,
-    saveActiveDocument,
-    ensureSaved,
-    getDirtyDocumentName,
-    isOpenWorkspaceFile,
+    buffers,
+    layout,
     openWorkspaceFile,
     openConfigDocument,
     refreshCleanConfig,
-    updateContent,
-    openCreatedFileIfClean,
-    clearWorkspaceDocument,
+    openCreatedFile,
+    updateBufferContent,
+    saveBufferByKey,
+    ensureAllWorkspaceBuffersSaved,
+    getDirtyWorkspaceSummary,
+    requestCloseTab,
+    forceCloseTab,
+    saveAndCloseTab,
+    activateTab,
+    focusPane,
+    setSplitMode,
+    setSplitRatio,
+    moveTab,
+    duplicateTabToOtherPane,
+    updateTabViewState,
+    clearWorkspaceBuffers,
     syncRenamedPath,
     syncDeletedPath
-  } = useDocumentBuffer({
+  } = useEditorWorkspace({
     autoSave: config.autoSave,
     autoSaveDelayMs: config.autoSaveDelayMs,
     isAutoSavePaused: pendingDialog !== null,
     onSaveConfigRaw: saveRawConfig,
-    onError: setErrorMessage
+    onError: setErrorMessage,
+    onConfirmCloseDirtyTab: handleConfirmCloseDirtyTab
   })
 
   refreshConfigDocRef.current = refreshCleanConfig
+  tabCloseActionsRef.current = { saveAndCloseTab, forceCloseTab }
 
   const {
     workspace,
@@ -77,28 +123,28 @@ export function App() {
     deleteEntry
   } = useWorkspaceTree({
     onError: setErrorMessage,
-    onWorkspaceOpened: clearWorkspaceDocument,
-    onFileCreated: openCreatedFileIfClean,
+    onWorkspaceOpened: clearWorkspaceBuffers,
+    onFileCreated: openCreatedFile,
     onEntryRenamed: syncRenamedPath,
     onEntryDeleted: syncDeletedPath
   })
 
-  const guardUnsavedChanges = useCallback(
+  const guardUnsavedWorkspaceChanges = useCallback(
     (proceed: () => Promise<void>): void => {
-      const dirtyName = getDirtyDocumentName()
-      if (!dirtyName) {
+      const dirtySummary = getDirtyWorkspaceSummary()
+      if (!dirtySummary) {
         void proceed()
         return
       }
 
       setPendingDialog({
         title: '저장하지 않은 변경 사항',
-        message: `"${dirtyName}"에 저장하지 않은 변경 사항이 있습니다. 어떻게 할까요?`,
+        message: `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. 어떻게 할까요?`,
         confirmLabel: '저장 후 이동',
         secondaryLabel: '버리고 이동',
         onConfirm: async () => {
           setPendingDialog(null)
-          const saved = await ensureSaved()
+          const saved = await ensureAllWorkspaceBuffersSaved()
           if (saved) {
             await proceed()
           }
@@ -109,14 +155,14 @@ export function App() {
         }
       })
     },
-    [ensureSaved, getDirtyDocumentName]
+    [ensureAllWorkspaceBuffersSaved, getDirtyWorkspaceSummary]
   )
 
   const handleSwitchWorkspace = useCallback(
     (targetPath: string): void => {
-      guardUnsavedChanges(() => openWorkspace(targetPath))
+      guardUnsavedWorkspaceChanges(() => openWorkspace(targetPath))
     },
-    [guardUnsavedChanges, openWorkspace]
+    [guardUnsavedWorkspaceChanges, openWorkspace]
   )
 
   const handleSelectFolder = useCallback((): void => {
@@ -135,15 +181,14 @@ export function App() {
 
   const handleOpenFile = useCallback(
     (entry: WorkspaceEntry): void => {
-      if (isOpenWorkspaceFile(entry.path)) return
-      guardUnsavedChanges(() => openWorkspaceFile(entry))
+      void openWorkspaceFile(entry)
     },
-    [guardUnsavedChanges, isOpenWorkspaceFile, openWorkspaceFile]
+    [openWorkspaceFile]
   )
 
   const handleOpenConfigEditor = useCallback((): void => {
-    guardUnsavedChanges(openConfigDocument)
-  }, [guardUnsavedChanges, openConfigDocument])
+    void openConfigDocument()
+  }, [openConfigDocument])
 
   const handleRequestDelete = useCallback(
     (entry: WorkspaceEntry): void => {
@@ -159,6 +204,13 @@ export function App() {
     },
     [deleteEntry]
   )
+
+  const activePane = layout.panes[layout.activePaneId]
+  const activeTab = activePane.activeTabId
+    ? activePane.tabs.find((tab) => tab.id === activePane.activeTabId)
+    : undefined
+  const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
+  const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
 
   const isCurrentWorkspaceFavorite =
     workspace !== null && isFavoriteWorkspacePath(config.favoriteWorkspaces, workspace.rootPath)
@@ -179,6 +231,21 @@ export function App() {
         </div>
 
         <div className="app-header-actions">
+          <div className="split-mode-group" role="group" aria-label="화면 분할">
+            {SPLIT_MODE_OPTIONS.map((option) => (
+              <button
+                key={option.mode}
+                type="button"
+                className={`btn btn-sm${layout.splitMode === option.mode ? ' is-active' : ''}`}
+                aria-label={option.ariaLabel}
+                aria-pressed={layout.splitMode === option.mode}
+                onClick={() => setSplitMode(option.mode)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
           <button
             type="button"
             className="btn"
@@ -210,7 +277,7 @@ export function App() {
           workspace={workspace}
           isFavorite={isCurrentWorkspaceFavorite}
           tree={treeState}
-          activeFilePath={activeDoc?.kind === 'workspace' ? activeDoc.path : null}
+          activeFilePath={activeFilePath}
           onToggleFavorite={() => {
             if (workspace) {
               toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
@@ -227,12 +294,19 @@ export function App() {
           onRequestDelete={handleRequestDelete}
         />
 
-        <DocumentEditor
-          document={activeDoc}
-          isSaving={isSavingDoc}
+        <PaneWorkspace
+          layout={layout}
+          buffers={buffers}
           autoSave={config.autoSave}
-          onChangeContent={updateContent}
-          onSave={saveActiveDocument}
+          onFocusPane={focusPane}
+          onActivateTab={activateTab}
+          onCloseTab={requestCloseTab}
+          onMoveTab={moveTab}
+          onDuplicateTab={duplicateTabToOtherPane}
+          onSetSplitRatio={setSplitRatio}
+          onChangeContent={updateBufferContent}
+          onSaveBuffer={saveBufferByKey}
+          onUpdateTabViewState={updateTabViewState}
         />
 
         {isSettingsOpen && (

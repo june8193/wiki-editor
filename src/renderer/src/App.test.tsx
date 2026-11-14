@@ -901,13 +901,16 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     await user.type(editor, ' edited')
     expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
 
-    // Clicking second.md while dirty opens confirmation dialog -> choose 저장 후 이동
+    // Clicking second.md opens a second tab while first.md stays open and dirty; closing first.md prompts -> 저장 후 닫기
     await user.click(within(sidebar).getByText('second.md'))
+    expect((screen.getByTestId('document-editor') as HTMLTextAreaElement).value).toBe('# Second')
+    await user.click(screen.getByRole('button', { name: 'first.md 탭 닫기' }))
     const dirtyDialog = await screen.findByRole('alertdialog')
-    await user.click(within(dirtyDialog).getByRole('button', { name: /저장 후 이동/i }))
+    await user.click(within(dirtyDialog).getByRole('button', { name: /저장 후 닫기/i }))
 
     await waitFor(() => {
       expect((screen.getByTestId('document-editor') as HTMLTextAreaElement).value).toBe('# Second')
+      expect(screen.queryByRole('tab', { name: /first\.md/i })).not.toBeInTheDocument()
     })
     expect(getFilesSnapshot().get('C:/wiki/sync/first.md')).toBe('# First edited')
 
@@ -994,13 +997,14 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     // While dirty-confirmation dialog is open, auto-save is paused and must not auto-write before choice
     await user.type(editor, ' unsaved')
-    await user.click(within(sidebar).getByText('other.md'))
+    await user.click(screen.getByRole('button', { name: 'top-level.md 탭 닫기' }))
     const dirtyDialog = await screen.findByRole('alertdialog')
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 120))
     })
     expect(writeCount).toBe(1)
-    await user.click(within(dirtyDialog).getByRole('button', { name: /버리고 이동/i }))
+    await user.click(within(dirtyDialog).getByRole('button', { name: /버리고 닫기/i }))
+    await user.click(within(sidebar).getByText('other.md'))
     await waitFor(() => {
       expect((screen.getByTestId('document-editor') as HTMLTextAreaElement).value).toBe('# Other')
     })
@@ -1020,14 +1024,23 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     const user = userEvent.setup()
     let releaseFirstSave!: () => void
     let callNum = 0
+    const nextFav = addFavoriteWorkspace(
+      [],
+      'C:/wiki/inflight-next',
+      'inflight-next',
+      '2026-11-14T00:00:00.000Z'
+    )
     const { api, getFilesSnapshot } = createInMemoryWikiApi(
-      { autoSave: true, autoSaveDelayMs: 60 },
+      { autoSave: true, autoSaveDelayMs: 60, favoriteWorkspaces: nextFav },
       {
         selectedFolder: 'C:\\wiki\\inflight',
         workspaces: {
           'C:\\wiki\\inflight': {
             'a.md': '# A',
             'b.md': '# B'
+          },
+          'C:\\wiki\\inflight-next': {
+            'next.md': '# Next'
           }
         }
       }
@@ -1056,16 +1069,383 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     // Wait for auto-save to enter in-flight state
     await waitFor(() => expect(callNum).toBe(1))
-    // Type more while first save is still in flight, then click b.md and choose 저장 후 이동
+    // Type more while first save is still in flight, then switch workspace and choose 저장 후 이동
     await user.type(editor, ' v2')
-    await user.click(within(sidebar).getByText('b.md'))
+    await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
+    const launcherMenu = await screen.findByRole('region', { name: /워크스페이스 목록/i })
+    await user.click(within(launcherMenu).getByRole('button', { name: /★\s*inflight-next/i }))
     const dirtyDialog = await screen.findByRole('alertdialog')
     await user.click(within(dirtyDialog).getByRole('button', { name: /저장 후 이동/i }))
 
     releaseFirstSave()
-    await waitFor(() => {
-      expect((screen.getByTestId('document-editor') as HTMLTextAreaElement).value).toBe('# B')
-    })
+    expect(await within(sidebar).findByText('next.md')).toBeInTheDocument()
     expect(getFilesSnapshot().get('C:/wiki/inflight/a.md')).toBe('# A v1 v2')
+  })
+})
+
+describe('Multi-tab and 2-pane Split View layout', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('opens multiple tabs, switches tabs, closes via X and middle-click, and prompts before closing the last tab of a dirty buffer', async () => {
+    const user = userEvent.setup()
+    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:\\wiki\\tabs',
+        workspaces: {
+          'C:\\wiki\\tabs': {
+            'one.md': '# One',
+            'two.md': '# Two',
+            'three.md': '# Three'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    await user.click(await within(sidebar).findByText('one.md'))
+    await user.click(within(sidebar).getByText('two.md'))
+    await user.click(within(sidebar).getByText('three.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    const tabs = within(primaryPane).getAllByRole('tab')
+    expect(tabs).toHaveLength(3)
+    expect(tabs.map((t) => t.textContent)).toEqual(['one.md', 'two.md', 'three.md'])
+    expect(tabs[2]).toHaveAttribute('aria-selected', 'true')
+
+    // Edit three.md so it becomes dirty
+    await user.type(within(primaryPane).getByTestId('document-editor'), ' edited')
+    expect(within(tabs[2]).getByTestId('tab-dirty-indicator')).toHaveTextContent('●')
+
+    // Click one.md tab to switch cleanly without losing three.md edits
+    await user.click(tabs[0])
+    expect(within(primaryPane).getByRole('tab', { name: /one\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect((within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement).value).toBe(
+      '# One'
+    )
+
+    // Middle-click clean two.md tab closes it immediately
+    const twoTab = within(primaryPane).getByRole('tab', { name: /two\.md/i })
+    fireEvent(twoTab, new MouseEvent('auxclick', { button: 1, bubbles: true }))
+    expect(within(primaryPane).queryByRole('tab', { name: /two\.md/i })).not.toBeInTheDocument()
+
+    // Close dirty three.md via X button -> opens confirmation dialog -> choose 저장 후 닫기
+    await user.click(within(primaryPane).getByRole('button', { name: 'three.md 탭 닫기' }))
+    const dialog = await screen.findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: /저장 후 닫기/i }))
+
+    await waitFor(() => {
+      expect(within(primaryPane).queryByRole('tab', { name: /three\.md/i })).not.toBeInTheDocument()
+    })
+    expect(getFilesSnapshot().get('C:/wiki/tabs/three.md')).toBe('# Three edited')
+  })
+
+  it('supports horizontal/vertical split view, resizing divider, context menu move/duplicate, real-time shared buffer sync, and auto-collapse', async () => {
+    const user = userEvent.setup()
+    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:\\wiki\\split',
+        workspaces: {
+          'C:\\wiki\\split': {
+            'shared.md': '# Shared',
+            'side.md': '# Side'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    await user.click(await within(sidebar).findByText('shared.md'))
+    await user.click(within(sidebar).getByText('side.md'))
+
+    const workspaceEl = screen.getByTestId('pane-workspace')
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'single')
+
+    // Context menu "분할 영역으로 이동" moves side.md to secondary and opens horizontal split
+    const primaryPane = screen.getByTestId('pane-primary')
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /side\.md/i }))
+    const tabMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+    await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'horizontal')
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(1)
+    expect(within(secondaryPane).getByRole('tab', { name: /side\.md/i })).toBeInTheDocument()
+
+    // Duplicate shared.md into secondary pane so both panes show the same file simultaneously
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /shared\.md/i }))
+    const dupMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+    await user.click(within(dupMenu).getByRole('menuitem', { name: '분할 영역에 복제 열기' }))
+
+    expect(within(secondaryPane).getByRole('tab', { name: /shared\.md/i })).toBeInTheDocument()
+
+    // Editing in primary immediately syncs content and dirty ● to secondary
+    const primaryEditor = within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement
+    const secondaryEditor = within(secondaryPane).getByTestId('document-editor') as HTMLTextAreaElement
+    await user.type(primaryEditor, ' synced!')
+
+    expect(secondaryEditor.value).toBe('# Shared synced!')
+    expect(within(primaryPane).getByTestId('dirty-indicator')).toHaveTextContent('●')
+    expect(within(secondaryPane).getByTestId('dirty-indicator')).toHaveTextContent('●')
+
+    // Closing one split tab of a dirty file does NOT prompt because the other pane still holds the buffer
+    await user.click(within(secondaryPane).getByRole('button', { name: 'shared.md 탭 닫기' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(within(primaryPane).getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    // Duplicate back, then save in secondary -> clears dirty ● in BOTH panes
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /shared\.md/i }))
+    const dupMenu2 = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+    await user.click(within(dupMenu2).getByRole('menuitem', { name: '분할 영역에 복제 열기' }))
+
+    const syncedSecondaryEditor = within(secondaryPane).getByTestId('document-editor')
+    fireEvent.keyDown(syncedSecondaryEditor, { key: 's', ctrlKey: true })
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    })
+    expect(getFilesSnapshot().get('C:/wiki/split/shared.md')).toBe('# Shared synced!')
+
+    // Switch split direction to vertical and resize splitter via keyboard and pointer drag
+    await user.click(screen.getByRole('button', { name: '상하 분할' }))
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'vertical')
+
+    const divider = screen.getByRole('separator', { name: '화면 분할 크기 조절' })
+    expect(divider).toHaveAttribute('aria-orientation', 'horizontal')
+    expect(divider).toHaveAttribute('aria-valuenow', '50')
+
+    fireEvent.keyDown(divider, { key: 'ArrowDown' })
+    expect(divider).toHaveAttribute('aria-valuenow', '55')
+
+    vi.spyOn(workspaceEl, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 800,
+      bottom: 600,
+      width: 800,
+      height: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+    fireEvent.mouseDown(divider, { clientY: 330 })
+    fireEvent.mouseMove(window, { clientY: 180 })
+    fireEvent.mouseUp(window)
+    expect(divider).toHaveAttribute('aria-valuenow', '30')
+
+    // Closing all tabs in secondary auto-collapses back to single pane
+    await user.click(within(secondaryPane).getByRole('button', { name: 'shared.md 탭 닫기' }))
+    await user.click(within(secondaryPane).getByRole('button', { name: 'side.md 탭 닫기' }))
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'single')
+    expect(screen.queryByTestId('pane-secondary')).not.toBeInTheDocument()
+  })
+
+  it('supports drag-and-drop reordering and moving tabs between panes', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:\\wiki\\dnd',
+        workspaces: {
+          'C:\\wiki\\dnd': {
+            'a.md': '# A',
+            'b.md': '# B',
+            'c.md': '# C'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    await user.click(await within(sidebar).findByText('a.md'))
+    await user.click(within(sidebar).getByText('b.md'))
+    await user.click(within(sidebar).getByText('c.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    const cTab = within(primaryPane).getByRole('tab', { name: /c\.md/i })
+    const aTab = within(primaryPane).getByRole('tab', { name: /a\.md/i })
+
+    // Reorder c.md before a.md within primary tab bar
+    fireEvent.dragStart(cTab)
+    fireEvent.drop(aTab)
+    expect(within(primaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      'c.md',
+      'a.md',
+      'b.md'
+    ])
+
+    // Drag b.md onto split drop zone in single mode -> creates secondary split with b.md
+    const bTab = within(primaryPane).getByRole('tab', { name: /b\.md/i })
+    fireEvent.dragStart(bTab)
+    const splitDropZone = await screen.findByTestId('split-drop-zone-secondary')
+    fireEvent.drop(splitDropZone)
+
+    expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    expect(within(secondaryPane).getByRole('tab', { name: /b\.md/i })).toBeInTheDocument()
+    expect(within(primaryPane).queryByRole('tab', { name: /b\.md/i })).not.toBeInTheDocument()
+  })
+
+  it('keeps at most 2 editor instances mounted when 25+ tabs are open and restores cursor/scroll on tab switch', async () => {
+    const user = userEvent.setup()
+    const files: Record<string, string> = {}
+    for (let i = 1; i <= 25; i += 1) {
+      const num = String(i).padStart(2, '0')
+      files[`doc-${num}.md`] = `# Document ${num}\nLine 2 content for testing cursor and scroll`
+    }
+
+    const { api } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:\\wiki\\many',
+        workspaces: {
+          'C:\\wiki\\many': files
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    for (let i = 1; i <= 25; i += 1) {
+      const num = String(i).padStart(2, '0')
+      await user.click(await within(sidebar).findByText(`doc-${num}.md`))
+    }
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(25)
+    // In single pane, only 1 editor DOM node is mounted regardless of 25 open tabs
+    expect(screen.getAllByTestId('document-editor')).toHaveLength(1)
+
+    // Switch to doc-01.md, set selection range and scrollTop, then switch to doc-02.md and back
+    await user.click(within(primaryPane).getByRole('tab', { name: 'doc-01.md' }))
+    const editor01 = within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement
+    editor01.setSelectionRange(4, 11)
+    fireEvent.select(editor01)
+    editor01.scrollTop = 180
+    fireEvent.scroll(editor01)
+
+    await user.click(within(primaryPane).getByRole('tab', { name: 'doc-02.md' }))
+    expect(screen.getAllByTestId('document-editor')).toHaveLength(1)
+    expect((within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement).value).toContain(
+      '# Document 02'
+    )
+
+    // Switch back to doc-01.md -> restored cursor & scrollTop
+    await user.click(within(primaryPane).getByRole('tab', { name: 'doc-01.md' }))
+    const restored01 = within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement
+    expect(restored01.selectionStart).toBe(4)
+    expect(restored01.selectionEnd).toBe(11)
+    expect(restored01.scrollTop).toBe(180)
+
+    // Move doc-25.md to secondary pane -> still at most 2 editor DOM instances across 25 tabs
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: 'doc-25.md' }))
+    const menu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+    await user.click(within(menu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+    expect(screen.getAllByTestId('document-editor')).toHaveLength(2)
+  })
+
+  it('syncs file renames and deletions across split panes and keeps config.json tab open across workspace switches', async () => {
+    const user = userEvent.setup()
+    const nextFav = addFavoriteWorkspace([], 'C:/wiki/ws2', 'ws2', '2026-11-14T00:00:00.000Z')
+    const { api } = createInMemoryWikiApi(
+      { favoriteWorkspaces: nextFav },
+      {
+        selectedFolder: 'C:\\wiki\\ws1',
+        workspaces: {
+          'C:\\wiki\\ws1': {
+            'target.md': '# Target',
+            'keep.md': '# Keep'
+          },
+          'C:\\wiki\\ws2': {
+            'ws2.md': '# WS2'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    await user.click(await within(sidebar).findByText('target.md'))
+    await user.click(within(sidebar).getByText('keep.md'))
+
+    // Open config.json as its own tab too
+    await user.click(screen.getByRole('button', { name: /설정/i }))
+    await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    expect(within(primaryPane).getByRole('tab', { name: /config\.json/i })).toBeInTheDocument()
+
+    // Duplicate target.md to secondary pane
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /target\.md/i }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역에 복제 열기'
+      })
+    )
+    const secondaryPane = screen.getByTestId('pane-secondary')
+
+    // Rename target.md -> updated.md updates tabs in BOTH panes
+    const targetItem = within(sidebar).getByRole('treeitem', { name: 'target.md' })
+    targetItem.focus()
+    fireEvent.keyDown(targetItem, { key: 'F2' })
+    const renameInput = await within(sidebar).findByLabelText('새 이름 입력')
+    await user.clear(renameInput)
+    await user.type(renameInput, 'updated.md{Enter}')
+
+    expect(await within(primaryPane).findByRole('tab', { name: /updated\.md/i })).toBeInTheDocument()
+    expect(within(secondaryPane).getByRole('tab', { name: /updated\.md/i })).toBeInTheDocument()
+
+    // Delete updated.md removes tab in both panes and auto-collapses secondary
+    fireEvent.contextMenu(within(sidebar).getByText('updated.md'))
+    await user.click(
+      within(await screen.findByRole('menu')).getByRole('menuitem', { name: /삭제/i })
+    )
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: /삭제 확인/i })
+    )
+
+    await waitFor(() => {
+      expect(within(primaryPane).queryByRole('tab', { name: /updated\.md/i })).not.toBeInTheDocument()
+      expect(screen.queryByTestId('pane-secondary')).not.toBeInTheDocument()
+    })
+
+    // Switching workspace closes workspace tabs (keep.md) while preserving config.json tab
+    await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
+    await user.click(
+      within(await screen.findByRole('region', { name: /워크스페이스 목록/i })).getByRole('button', {
+        name: /★\s*ws2/i
+      })
+    )
+
+    expect(await within(sidebar).findByText('ws2.md')).toBeInTheDocument()
+    expect(within(primaryPane).queryByRole('tab', { name: /keep\.md/i })).not.toBeInTheDocument()
+    expect(within(primaryPane).getByRole('tab', { name: /config\.json/i })).toBeInTheDocument()
   })
 })

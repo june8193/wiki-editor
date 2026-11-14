@@ -8,7 +8,12 @@ import {
   useRef,
   useState
 } from 'react'
-import { WorkspaceEntry, WorkspaceEntryKind, WorkspaceSummary } from '@shared/workspace'
+import {
+  isSameWorkspacePath,
+  WorkspaceEntry,
+  WorkspaceEntryKind,
+  WorkspaceSummary
+} from '@shared/workspace'
 import { useDismissable } from '../hooks/useDismissable'
 import type { WorkspaceTreeState } from '../hooks/useWorkspaceTree'
 
@@ -229,7 +234,8 @@ export function FolderTreeSidebar({
       const isExpanded = isDir && tree.expandedDirs.has(entry.path)
       const isLoading = isDir && tree.loadingDirs.has(entry.path)
       const isSelected = tree.selectedPath === entry.path
-      const isActiveFile = !isDir && activeFilePath === entry.path
+      const isActiveFile =
+        !isDir && activeFilePath !== null && isSameWorkspacePath(activeFilePath, entry.path)
       const isRenaming = renamingEntry?.path === entry.path
       const childEntries = tree.childrenByDir[entry.path] ?? []
       const showCreateInside = inlineCreate?.parentDirPath === entry.path
