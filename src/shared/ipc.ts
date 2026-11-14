@@ -20,7 +20,6 @@ export const CONFIG_IPC_CHANNELS = {
 export const WORKSPACE_IPC_CHANNELS = {
   selectFolder: 'workspace:select-folder',
   open: 'workspace:open',
-  getRoot: 'workspace:get-root',
   readDir: 'workspace:read-dir',
   readFile: 'workspace:read-file',
   writeFile: 'workspace:write-file',
@@ -46,7 +45,6 @@ export interface WikiConfigApi {
 export interface WikiWorkspaceApi {
   selectFolder(): Promise<string | null>
   open(rootPath: string): Promise<WorkspaceInfo>
-  getRoot(): Promise<string | null>
   readDir(dirPath?: string): Promise<WorkspaceEntry[]>
   readFile(filePath: string): Promise<string>
   writeFile(filePath: string, content: string): Promise<void>

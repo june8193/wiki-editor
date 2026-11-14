@@ -117,9 +117,20 @@ describe('WorkspaceFsService', () => {
     await service.deleteEntry(folder.path)
     expect(await service.readDir()).toEqual([])
 
-    // Deleting or renaming workspace root is forbidden
+    // Deleting or renaming workspace root is forbidden (even with different drive/path casing on Windows)
     await expect(service.deleteEntry('.')).rejects.toThrow(/루트/)
     await expect(service.renameEntry('.', 'other')).rejects.toThrow(/루트/)
+    const rootVariant =
+      process.platform === 'win32'
+        ? workspaceDir.toUpperCase()
+        : workspaceDir
+    await expect(service.deleteEntry(rootVariant)).rejects.toThrow(/루트/)
+    await expect(service.renameEntry(rootVariant, 'other')).rejects.toThrow(/루트/)
+
+    // Valid files whose names start with ".." inside the workspace must NOT be blocked as traversal
+    const dotDotFile = await service.createEntry('.', '..notes.md', 'file', 'valid content')
+    expect(await service.readFile(dotDotFile.path)).toBe('valid content')
+    await service.deleteEntry(dotDotFile.path)
   })
 
   it('delegates deleteEntry to injected trashItem handler when configured', async () => {

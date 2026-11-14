@@ -5,14 +5,10 @@ import {
   isSameWorkspacePath,
   remapPathPrefix,
   WorkspaceEntry,
-  WorkspaceEntryKind
+  WorkspaceEntryKind,
+  WorkspaceSummary
 } from '@shared/workspace'
 import { toErrorMessage } from '../utils/toErrorMessage'
-
-export interface WorkspaceState {
-  rootPath: string
-  name: string
-}
 
 interface UseWorkspaceTreeOptions {
   onError: (message: string | null) => void
@@ -32,7 +28,7 @@ export function useWorkspaceTree({
   onEntryDeleted,
   onFileCreated
 }: UseWorkspaceTreeOptions) {
-  const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
+  const [workspace, setWorkspace] = useState<WorkspaceSummary | null>(null)
   const [rootEntries, setRootEntries] = useState<WorkspaceEntry[]>([])
   const [childrenByDir, setChildrenByDir] = useState<Record<string, WorkspaceEntry[]>>({})
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set())
@@ -40,7 +36,7 @@ export function useWorkspaceTree({
   const [selectedTreePath, setSelectedTreePath] = useState<string | null>(null)
 
   const mountedRef = useRef<boolean>(true)
-  const workspaceRef = useRef<WorkspaceState | null>(null)
+  const workspaceRef = useRef<WorkspaceSummary | null>(null)
   const expandedDirsRef = useRef<Set<string>>(expandedDirs)
   const callbacksRef = useRef({
     onError,
@@ -185,6 +181,23 @@ export function useWorkspaceTree({
     [childrenByDir, loadDirectoryChildren]
   )
 
+  const resolveCreateParentDir = useCallback((): string | null => {
+    if (!workspace) return null
+    if (!selectedTreePath) return workspace.rootPath
+
+    let matched = rootEntries.find((item) => item.path === selectedTreePath)
+    if (!matched) {
+      for (const children of Object.values(childrenByDir)) {
+        matched = children.find((item) => item.path === selectedTreePath)
+        if (matched) break
+      }
+    }
+    if (matched?.kind === 'directory') {
+      return matched.path
+    }
+    return getParentPath(selectedTreePath, workspace.rootPath)
+  }, [workspace, selectedTreePath, rootEntries, childrenByDir])
+
   const refreshDirectory = useCallback(async (dirPath: string): Promise<void> => {
     const currentWs = workspaceRef.current
     if (!currentWs) return
@@ -312,6 +325,7 @@ export function useWorkspaceTree({
     loadingDirs,
     selectedTreePath,
     setSelectedTreePath,
+    resolveCreateParentDir,
     openWorkspace,
     refreshTree,
     toggleDirectory,

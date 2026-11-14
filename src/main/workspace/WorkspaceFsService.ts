@@ -13,13 +13,14 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   getWorkspaceDisplayName,
+  isSameWorkspacePath,
   WorkspaceChangeEvent,
   WorkspaceEntry,
   WorkspaceEntryKind,
   WorkspaceInfo
 } from '@shared/workspace'
 
-export const DEFAULT_IGNORED_ENTRY_NAMES: ReadonlySet<string> = new Set([
+export const IGNORED_ENTRY_NAMES: ReadonlySet<string> = new Set([
   '.git',
   'node_modules',
   '.hg',
@@ -29,7 +30,6 @@ export const DEFAULT_IGNORED_ENTRY_NAMES: ReadonlySet<string> = new Set([
 ])
 
 export interface WorkspaceFsServiceOptions {
-  ignoredEntryNames?: ReadonlySet<string>
   trashItem?: (targetPath: string) => Promise<void>
   watchDebounceMs?: number
 }
@@ -45,7 +45,13 @@ function isErrnoCode(error: unknown, code: string): boolean {
 
 function isPathInsideRoot(rootPath: string, targetPath: string): boolean {
   const rel = relative(rootPath, targetPath)
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+  return (
+    rel === '' ||
+    (rel !== '..' &&
+      !rel.startsWith(`..${sep}`) &&
+      !rel.startsWith('../') &&
+      !isAbsolute(rel))
+  )
 }
 
 function toPosixRelativePath(rootPath: string, targetPath: string): string {
@@ -61,7 +67,7 @@ function compareEntries(a: WorkspaceEntry, b: WorkspaceEntry): number {
   return baseOrder !== 0 ? baseOrder : a.name.localeCompare(b.name)
 }
 
-function validateEntryName(name: string): string {
+function validateWritableEntryName(name: string): string {
   const trimmed = name.trim()
   if (!trimmed || name !== trimmed) {
     throw new Error('유효한 파일 또는 폴더 이름을 입력하세요.')
@@ -75,6 +81,9 @@ function validateEntryName(name: string): string {
   if (trimmed.endsWith('.')) {
     throw new Error('이름은 마침표(.)로 끝날 수 없습니다.')
   }
+  if (IGNORED_ENTRY_NAMES.has(trimmed)) {
+    throw new Error(`시스템 예약 이름("${trimmed}")은 사용할 수 없습니다.`)
+  }
   return trimmed
 }
 
@@ -82,7 +91,6 @@ function validateEntryName(name: string): string {
  * Manages asynchronous workspace filesystem traversal, CRUD, path security, and watching.
  */
 export class WorkspaceFsService {
-  private readonly ignoredEntryNames: ReadonlySet<string>
   private readonly trashItem?: (targetPath: string) => Promise<void>
   private readonly watchDebounceMs: number
 
@@ -92,13 +100,8 @@ export class WorkspaceFsService {
   private watchListeners = new Set<WorkspaceWatchListener>()
 
   constructor(options: WorkspaceFsServiceOptions = {}) {
-    this.ignoredEntryNames = options.ignoredEntryNames ?? DEFAULT_IGNORED_ENTRY_NAMES
     this.trashItem = options.trashItem
     this.watchDebounceMs = options.watchDebounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS
-  }
-
-  getWorkspaceRoot(): string | null {
-    return this.workspaceRoot
   }
 
   async openWorkspace(rootPath: string): Promise<WorkspaceInfo> {
@@ -145,7 +148,7 @@ export class WorkspaceFsService {
     const entries: WorkspaceEntry[] = []
 
     for (const dirent of dirents) {
-      if (this.ignoredEntryNames.has(dirent.name)) {
+      if (IGNORED_ENTRY_NAMES.has(dirent.name)) {
         continue
       }
       const entryPath = join(resolvedDir, dirent.name)
@@ -201,10 +204,7 @@ export class WorkspaceFsService {
     initialContent = ''
   ): Promise<WorkspaceEntry> {
     const root = this.requireWorkspaceRoot()
-    const validName = validateEntryName(name)
-    if (this.ignoredEntryNames.has(validName)) {
-      throw new Error(`시스템 예약 이름("${validName}")은 사용할 수 없습니다.`)
-    }
+    const validName = validateWritableEntryName(name)
 
     const resolvedParent = await this.resolveExistingPath(parentDirPath || '.')
     const parentStats = await stat(resolvedParent)
@@ -237,13 +237,10 @@ export class WorkspaceFsService {
 
   async renameEntry(targetPath: string, newName: string): Promise<WorkspaceEntry> {
     const root = this.requireWorkspaceRoot()
-    const validName = validateEntryName(newName)
-    if (this.ignoredEntryNames.has(validName)) {
-      throw new Error(`시스템 예약 이름("${validName}")은 사용할 수 없습니다.`)
-    }
+    const validName = validateWritableEntryName(newName)
 
     const logicalTarget = await this.resolveExistingLogicalPath(targetPath)
-    if (logicalTarget === root) {
+    if (isSameWorkspacePath(logicalTarget, root)) {
       throw new Error('워크스페이스 루트 폴더는 이름을 변경할 수 없습니다.')
     }
 
@@ -289,7 +286,7 @@ export class WorkspaceFsService {
   async deleteEntry(targetPath: string): Promise<void> {
     const root = this.requireWorkspaceRoot()
     const logicalTarget = await this.resolveExistingLogicalPath(targetPath)
-    if (logicalTarget === root) {
+    if (isSameWorkspacePath(logicalTarget, root)) {
       throw new Error('워크스페이스 루트 폴더는 삭제할 수 없습니다.')
     }
 
@@ -370,7 +367,7 @@ export class WorkspaceFsService {
     return relativePath
       .split(/[\\/]/)
       .filter(Boolean)
-      .some((segment) => this.ignoredEntryNames.has(segment))
+      .some((segment) => IGNORED_ENTRY_NAMES.has(segment))
   }
 
   private assertLexicalWorkspacePath(root: string, inputPath: string): string {

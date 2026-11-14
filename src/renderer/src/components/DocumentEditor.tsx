@@ -1,12 +1,5 @@
 import { useEffect } from 'react'
-
-export interface ActiveDocument {
-  kind: 'workspace' | 'config'
-  path: string
-  name: string
-  content: string
-  savedContent: string
-}
+import { ActiveDocument, isDocumentDirty } from '../hooks/useDocumentBuffer'
 
 interface DocumentEditorProps {
   document: ActiveDocument | null
@@ -23,7 +16,7 @@ export function DocumentEditor({
   onChangeContent,
   onSave
 }: DocumentEditorProps) {
-  const isDirty = activeDoc !== null && activeDoc.content !== activeDoc.savedContent
+  const isDirty = isDocumentDirty(activeDoc)
 
   useEffect(() => {
     if (!activeDoc) return
@@ -55,7 +48,7 @@ export function DocumentEditor({
   const saveStatusText = isSaving
     ? '저장 중...'
     : isDirty
-      ? autoSave
+      ? activeDoc.kind === 'workspace' && autoSave
         ? '자동 저장 대기'
         : '미저장'
       : '저장됨'

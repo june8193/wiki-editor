@@ -47,7 +47,6 @@ export function registerWorkspaceIpc({
         return info
       }
     ],
-    [WORKSPACE_IPC_CHANNELS.getRoot, () => workspaceService.getWorkspaceRoot()],
     [WORKSPACE_IPC_CHANNELS.readDir, (_event, dirPath) => workspaceService.readDir(dirPath as string | undefined)],
     [WORKSPACE_IPC_CHANNELS.readFile, (_event, filePath) => workspaceService.readFile(filePath as string)],
     [

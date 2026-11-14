@@ -1,5 +1,14 @@
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from 'react'
-import { getParentPath, WorkspaceEntry, WorkspaceEntryKind } from '@shared/workspace'
+import {
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState
+} from 'react'
+import { WorkspaceEntry, WorkspaceEntryKind, WorkspaceSummary } from '@shared/workspace'
+import { useDismissable } from '../hooks/useDismissable'
 
 interface InlineCreateState {
   parentDirPath: string
@@ -13,8 +22,7 @@ interface ContextMenuState {
 }
 
 interface FolderTreeSidebarProps {
-  workspaceName: string | null
-  workspacePath: string | null
+  workspace: WorkspaceSummary | null
   isFavorite: boolean
   rootEntries: readonly WorkspaceEntry[]
   childrenByDir: Readonly<Record<string, readonly WorkspaceEntry[]>>
@@ -23,9 +31,10 @@ interface FolderTreeSidebarProps {
   selectedPath: string | null
   activeFilePath: string | null
   onToggleFavorite: () => void
-  onSelectEntry: (entry: WorkspaceEntry) => void
+  onSelectPath: (path: string | null) => void
   onToggleDirectory: (entry: WorkspaceEntry) => void
   onEnsureExpanded: (dirPath: string) => Promise<void>
+  onResolveCreateParentDir: () => string | null
   onOpenFile: (entry: WorkspaceEntry) => void
   onRefreshTree: () => void
   onCreateEntry: (parentDirPath: string, name: string, kind: WorkspaceEntryKind) => Promise<void>
@@ -33,34 +42,8 @@ interface FolderTreeSidebarProps {
   onRequestDelete: (entry: WorkspaceEntry) => void
 }
 
-function resolveTargetParentDir(
-  workspacePath: string,
-  selectedPath: string | null,
-  rootEntries: readonly WorkspaceEntry[],
-  childrenByDir: Readonly<Record<string, readonly WorkspaceEntry[]>>
-): string {
-  if (!selectedPath) return workspacePath
-
-  const findEntry = (entries: readonly WorkspaceEntry[]): WorkspaceEntry | undefined =>
-    entries.find((item) => item.path === selectedPath)
-
-  let matched = findEntry(rootEntries)
-  if (!matched) {
-    for (const children of Object.values(childrenByDir)) {
-      matched = findEntry(children)
-      if (matched) break
-    }
-  }
-
-  if (matched?.kind === 'directory') {
-    return matched.path
-  }
-  return getParentPath(selectedPath, workspacePath)
-}
-
 export function FolderTreeSidebar({
-  workspaceName,
-  workspacePath,
+  workspace,
   isFavorite,
   rootEntries,
   childrenByDir,
@@ -69,9 +52,10 @@ export function FolderTreeSidebar({
   selectedPath,
   activeFilePath,
   onToggleFavorite,
-  onSelectEntry,
+  onSelectPath,
   onToggleDirectory,
   onEnsureExpanded,
+  onResolveCreateParentDir,
   onOpenFile,
   onRefreshTree,
   onCreateEntry,
@@ -84,37 +68,25 @@ export function FolderTreeSidebar({
   const [renameValue, setRenameValue] = useState('')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  const closeContextMenu = useCallback(() => setContextMenu(null), [])
 
+  useDismissable(contextMenu !== null, menuRef, closeContextMenu)
+
+  // Reset transient editing states whenever active workspace changes
   useEffect(() => {
-    if (!contextMenu) return
-
-    const closeOnOutsideClick = (event: MouseEvent): void => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setContextMenu(null)
-      }
-    }
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        setContextMenu(null)
-      }
-    }
-
-    document.addEventListener('mousedown', closeOnOutsideClick)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('mousedown', closeOnOutsideClick)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [contextMenu])
+    setInlineCreate(null)
+    setCreateValue('')
+    setRenamingEntry(null)
+    setRenameValue('')
+    setContextMenu(null)
+  }, [workspace?.rootPath])
 
   const beginCreate = async (kind: WorkspaceEntryKind, explicitParent?: string): Promise<void> => {
-    if (!workspacePath) return
+    if (!workspace) return
     setContextMenu(null)
     setRenamingEntry(null)
-    const targetParent =
-      explicitParent ??
-      resolveTargetParentDir(workspacePath, selectedPath, rootEntries, childrenByDir)
-    if (targetParent !== workspacePath) {
+    const targetParent = explicitParent ?? onResolveCreateParentDir() ?? workspace.rootPath
+    if (targetParent !== workspace.rootPath) {
       await onEnsureExpanded(targetParent)
     }
     setCreateValue('')
@@ -132,13 +104,10 @@ export function FolderTreeSidebar({
     event.preventDefault()
     if (!inlineCreate) return
     const trimmed = createValue.trim()
-    if (!trimmed) {
-      setInlineCreate(null)
-      return
-    }
     const currentCreate = inlineCreate
     setInlineCreate(null)
     setCreateValue('')
+    if (!trimmed) return
     await onCreateEntry(currentCreate.parentDirPath, trimmed, currentCreate.kind)
   }
 
@@ -148,9 +117,7 @@ export function FolderTreeSidebar({
     const trimmed = renameValue.trim()
     const target = renamingEntry
     setRenamingEntry(null)
-    if (!trimmed || trimmed === target.name) {
-      return
-    }
+    if (!trimmed || trimmed === target.name) return
     await onRenameEntry(target.path, trimmed)
   }
 
@@ -169,10 +136,15 @@ export function FolderTreeSidebar({
             value={createValue}
             autoFocus
             onChange={(event) => setCreateValue(event.target.value)}
+            onBlur={() => {
+              setInlineCreate(null)
+              setCreateValue('')
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
                 event.stopPropagation()
                 setInlineCreate(null)
+                setCreateValue('')
               }
             }}
           />
@@ -215,7 +187,7 @@ export function FolderTreeSidebar({
   ): void => {
     event.preventDefault()
     event.stopPropagation()
-    onSelectEntry(entry)
+    onSelectPath(entry.path)
     setContextMenu({ entry, x: event.clientX, y: event.clientY })
   }
 
@@ -247,7 +219,7 @@ export function FolderTreeSidebar({
             style={{ paddingLeft: `${12 + depth * 14}px` }}
             onClick={(event) => {
               event.stopPropagation()
-              onSelectEntry(entry)
+              onSelectPath(entry.path)
               if (isDir) {
                 onToggleDirectory(entry)
               } else {
@@ -272,6 +244,7 @@ export function FolderTreeSidebar({
                   value={renameValue}
                   autoFocus
                   onChange={(event) => setRenameValue(event.target.value)}
+                  onBlur={() => setRenamingEntry(null)}
                   onKeyDown={(event) => {
                     if (event.key === 'Escape') {
                       event.stopPropagation()
@@ -306,7 +279,7 @@ export function FolderTreeSidebar({
 
   return (
     <aside className="workspace-sidebar" aria-label="워크스페이스 탐색기">
-      {!workspacePath ? (
+      {!workspace ? (
         <div className="sidebar-empty">
           <p className="sidebar-empty-text">열린 워크스페이스 없음</p>
           <p className="workspace-placeholder-hint">상단의 &apos;폴더 열기&apos;로 시작하세요.</p>
@@ -315,9 +288,14 @@ export function FolderTreeSidebar({
         <>
           <div className="sidebar-header">
             <div className="sidebar-title-row">
-              <span className="sidebar-workspace-name" title={workspacePath}>
-                {workspaceName}
-              </span>
+              <button
+                type="button"
+                className="sidebar-workspace-name-btn"
+                title={workspace.rootPath}
+                onClick={() => onSelectPath(null)}
+              >
+                {workspace.name}
+              </button>
               <button
                 type="button"
                 className={`icon-btn${isFavorite ? ' is-favorite' : ''}`}
@@ -356,8 +334,12 @@ export function FolderTreeSidebar({
             </div>
           </div>
 
-          <ul role="tree" className="folder-tree">
-            {inlineCreate?.parentDirPath === workspacePath && renderInlineCreateInput(0)}
+          <ul
+            role="tree"
+            className="folder-tree"
+            onClick={() => onSelectPath(null)}
+          >
+            {inlineCreate?.parentDirPath === workspace.rootPath && renderInlineCreateInput(0)}
             {rootEntries.length === 0 && !inlineCreate ? (
               <li className="tree-status-row">빈 폴더입니다.</li>
             ) : (

@@ -144,17 +144,6 @@ export function useConfigController({
     )
   }, [runConfigMutation])
 
-  const updateAutoSaveDelay = useCallback(
-    (delayMs: number): void => {
-      void runConfigMutation(
-        (prev) => ({ ...prev, autoSaveDelayMs: delayMs }),
-        () => window.wikiApi.config.update({ autoSaveDelayMs: delayMs }),
-        '자동 저장 지연 시간 변경에 실패했습니다.'
-      )
-    },
-    [runConfigMutation]
-  )
-
   const toggleFavoriteWorkspace = useCallback(
     (workspacePath: string, name: string): void => {
       void runConfigMutation(
@@ -200,7 +189,6 @@ export function useConfigController({
     setConfigPath,
     toggleTheme,
     toggleAutoSave,
-    updateAutoSaveDelay,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     saveRawConfig

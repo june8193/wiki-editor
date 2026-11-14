@@ -191,9 +191,6 @@ function createInMemoryWikiApi(
           entries: listDir(normalized)
         }
       },
-      async getRoot() {
-        return activeRoot
-      },
       async readDir(dirPath) {
         if (!activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
         return listDir(dirPath ?? activeRoot)
@@ -939,5 +936,83 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
       relativePath: 'external-added.md'
     })
     expect(await within(sidebar).findByText('external-added.md')).toBeInTheDocument()
+  })
+
+  it('allows returning selection to workspace root, disables auto-save on config.json and paused dirty dialogs, and blocks concurrent Ctrl+S saves', async () => {
+    const user = userEvent.setup()
+    let writeCount = 0
+    let resolveWrite!: () => void
+    const { api } = createInMemoryWikiApi(
+      { autoSave: true, autoSaveDelayMs: 60 },
+      {
+        selectedFolder: 'C:\\wiki\\edge',
+        workspaces: {
+          'C:\\wiki\\edge': {
+            'nested/inner.md': '# Inner',
+            'other.md': '# Other'
+          }
+        }
+      }
+    )
+    const origWriteFile = api.workspace.writeFile
+    api.workspace.writeFile = async (filePath, content) => {
+      writeCount += 1
+      if (writeCount === 1) {
+        return new Promise<void>((resolve) => {
+          resolveWrite = () => {
+            void origWriteFile(filePath, content).then(resolve)
+          }
+        })
+      }
+      return origWriteFile(filePath, content)
+    }
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    // Select nested item, then click empty tree area to clear selection and create at workspace root
+    await user.click(await within(sidebar).findByText('nested'))
+    expect(await within(sidebar).findByText('inner.md')).toBeInTheDocument()
+    await user.click(within(sidebar).getByText('inner.md'))
+    await user.click(within(sidebar).getByRole('tree'))
+    await user.click(within(sidebar).getByRole('button', { name: /새 파일/i }))
+    await user.type(await within(sidebar).findByLabelText('새 파일 이름'), 'top-level.md{Enter}')
+    expect(await within(sidebar).findByText('top-level.md')).toBeInTheDocument()
+
+    // Rapid Ctrl+S while save is in flight must NOT fire overlapping writeFile calls
+    const editor = await screen.findByTestId('document-editor')
+    await user.type(editor, 'hello')
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
+    expect(writeCount).toBe(1)
+    resolveWrite()
+    await waitFor(() => {
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    })
+
+    // While dirty-confirmation dialog is open, auto-save is paused and must not auto-write before choice
+    await user.type(editor, ' unsaved')
+    await user.click(within(sidebar).getByText('other.md'))
+    const dirtyDialog = await screen.findByRole('alertdialog')
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+    })
+    expect(writeCount).toBe(1)
+    await user.click(within(dirtyDialog).getByRole('button', { name: /버리고 이동/i }))
+    await waitFor(() => {
+      expect((screen.getByTestId('document-editor') as HTMLTextAreaElement).value).toBe('# Other')
+    })
+
+    // Auto-save must NOT fire on invalid mid-edit config.json
+    await user.click(screen.getByRole('button', { name: /설정/i }))
+    await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
+    const configEditor = await screen.findByTestId('document-editor')
+    fireEvent.change(configEditor, { target: { value: '{ invalid json' } })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+    })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

@@ -296,12 +296,23 @@ body,
   gap: 6px;
 }
 
-.sidebar-workspace-name {
+.sidebar-workspace-name-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
   font-size: 13px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
+}
+
+.sidebar-workspace-name-btn:hover {
+  background-color: var(--bg-elevated);
 }
 
 .sidebar-actions {
@@ -555,22 +566,6 @@ body,
   font-size: 13px;
   margin-bottom: 10px;
   cursor: pointer;
-}
-
-.settings-delay-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.settings-number-input {
-  width: 120px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  background-color: var(--bg-app);
-  color: var(--text-primary);
-  font-size: 13px;
 }
 
 .config-path-box {

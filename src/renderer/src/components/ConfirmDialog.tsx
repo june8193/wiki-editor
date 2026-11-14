@@ -2,7 +2,6 @@ interface ConfirmDialogProps {
   title: string
   message: string
   confirmLabel: string
-  cancelLabel?: string
   secondaryLabel?: string
   onConfirm: () => void
   onSecondary?: () => void
@@ -13,7 +12,6 @@ export function ConfirmDialog({
   title,
   message,
   confirmLabel,
-  cancelLabel = '취소',
   secondaryLabel,
   onConfirm,
   onSecondary,
@@ -37,7 +35,7 @@ export function ConfirmDialog({
         </p>
         <div className="modal-actions">
           <button type="button" className="btn" onClick={onCancel}>
-            {cancelLabel}
+            취소
           </button>
           {secondaryLabel && onSecondary && (
             <button type="button" className="btn" onClick={onSecondary}>

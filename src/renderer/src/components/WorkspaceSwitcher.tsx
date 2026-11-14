@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { FavoriteWorkspace } from '@shared/config'
-import { getWorkspaceDisplayName, isSameWorkspacePath } from '@shared/workspace'
+import { getWorkspaceDisplayName, isSameWorkspacePath, WorkspaceSummary } from '@shared/workspace'
+import { useDismissable } from '../hooks/useDismissable'
 
 interface WorkspaceSwitcherProps {
-  workspaceName: string | null
-  workspacePath: string | null
+  workspace: WorkspaceSummary | null
   favoriteWorkspaces: readonly FavoriteWorkspace[]
   recentWorkspaces: readonly string[]
   onSelectFolder: () => void
@@ -13,8 +13,7 @@ interface WorkspaceSwitcherProps {
 }
 
 export function WorkspaceSwitcher({
-  workspaceName,
-  workspacePath,
+  workspace,
   favoriteWorkspaces,
   recentWorkspaces,
   onSelectFolder,
@@ -23,28 +22,9 @@ export function WorkspaceSwitcher({
 }: WorkspaceSwitcherProps) {
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const closeMenu = useCallback(() => setIsOpen(false), [])
 
-  useEffect(() => {
-    if (!isOpen) return
-
-    const handleOutsideMouseDown = (event: MouseEvent): void => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        setIsOpen(false)
-      }
-    }
-
-    document.addEventListener('mousedown', handleOutsideMouseDown)
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', handleOutsideMouseDown)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [isOpen])
+  useDismissable(isOpen, containerRef, closeMenu)
 
   const handleChooseWorkspace = (targetPath: string): void => {
     setIsOpen(false)
@@ -65,15 +45,11 @@ export function WorkspaceSwitcher({
           aria-expanded={isOpen}
           onClick={() => setIsOpen((open) => !open)}
         >
-          {workspaceName ?? '워크스페이스 선택'} ▾
+          {workspace?.name ?? '워크스페이스 선택'} ▾
         </button>
 
         {isOpen && (
-          <section
-            className="launcher-popover"
-            role="region"
-            aria-label="워크스페이스 목록"
-          >
+          <section className="launcher-popover" role="region" aria-label="워크스페이스 목록">
             <div className="launcher-section">
               <div className="launcher-section-title">즐겨찾기 워크스페이스</div>
               {favoriteWorkspaces.length === 0 ? (
@@ -81,7 +57,8 @@ export function WorkspaceSwitcher({
               ) : (
                 <ul className="launcher-list">
                   {favoriteWorkspaces.map((fav) => {
-                    const active = workspacePath !== null && isSameWorkspacePath(workspacePath, fav.path)
+                    const active =
+                      workspace !== null && isSameWorkspacePath(workspace.rootPath, fav.path)
                     return (
                       <li key={fav.path} className="launcher-item">
                         <button
@@ -115,7 +92,7 @@ export function WorkspaceSwitcher({
                 <ul className="launcher-list">
                   {recentWorkspaces.map((recentPath) => {
                     const active =
-                      workspacePath !== null && isSameWorkspacePath(workspacePath, recentPath)
+                      workspace !== null && isSameWorkspacePath(workspace.rootPath, recentPath)
                     return (
                       <li key={recentPath} className="launcher-item">
                         <button

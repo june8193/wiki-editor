@@ -9,9 +9,12 @@ export interface WorkspaceEntry {
   kind: WorkspaceEntryKind
 }
 
-export interface WorkspaceInfo {
+export interface WorkspaceSummary {
   rootPath: string
   name: string
+}
+
+export interface WorkspaceInfo extends WorkspaceSummary {
   entries: WorkspaceEntry[]
 }
 

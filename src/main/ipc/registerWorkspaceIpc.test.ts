@@ -78,7 +78,6 @@ describe('registerWorkspaceIpc', () => {
 
     const opened = await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.open, workspaceDir)
     expect(opened).toMatchObject({ name: 'docs', entries: [] })
-    expect(await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.getRoot)).toBeTruthy()
     expect((await configService.get()).recentWorkspaces).toHaveLength(1)
 
     const folder = (await ipcMain.invoke(

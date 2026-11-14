@@ -1,17 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  getWorkspaceDisplayName,
-  isFavoriteWorkspacePath,
-  isNestedOrSamePath,
-  remapPathPrefix,
-  WorkspaceEntry
-} from '@shared/workspace'
+import { useCallback, useRef, useState } from 'react'
+import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
-import { ActiveDocument, DocumentEditor } from './components/DocumentEditor'
+import { DocumentEditor } from './components/DocumentEditor'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
 import { SettingsPanel } from './components/SettingsPanel'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { useConfigController } from './hooks/useConfigController'
+import { isDocumentDirty, useDocumentBuffer } from './hooks/useDocumentBuffer'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { toErrorMessage } from './utils/toErrorMessage'
 
@@ -27,39 +22,8 @@ interface PendingDialogState {
 export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [activeDoc, setActiveDoc] = useState<ActiveDocument | null>(null)
-  const [isSavingDoc, setIsSavingDoc] = useState<boolean>(false)
   const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null)
-
-  const mountedRef = useRef<boolean>(true)
-  const activeDocRef = useRef<ActiveDocument | null>(null)
-  activeDocRef.current = activeDoc
-
-  useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-    }
-  }, [])
-
-  const refreshCleanConfigEditor = useCallback(async (): Promise<void> => {
-    const doc = activeDocRef.current
-    if (!doc || doc.kind !== 'config' || doc.content !== doc.savedContent) {
-      return
-    }
-    try {
-      const raw = await window.wikiApi.config.readRaw()
-      if (!mountedRef.current) return
-      setActiveDoc((current) => {
-        if (!current || current.kind !== 'config' || current.content !== current.savedContent) {
-          return current
-        }
-        return { ...current, content: raw, savedContent: raw }
-      })
-    } catch {
-      // Preserve primary error banners during background config refresh
-    }
-  }, [])
+  const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
 
   const {
     config,
@@ -67,14 +31,37 @@ export function App() {
     setConfigPath,
     toggleTheme,
     toggleAutoSave,
-    updateAutoSaveDelay,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     saveRawConfig
   } = useConfigController({
     onError: setErrorMessage,
-    onExternalConfigCommitted: () => void refreshCleanConfigEditor()
+    onExternalConfigCommitted: () => void refreshConfigDocRef.current()
   })
+
+  const {
+    activeDoc,
+    activeDocRef,
+    isSavingDoc,
+    saveSnapshot,
+    saveActiveDocument,
+    openWorkspaceFile,
+    openConfigDocument,
+    refreshCleanConfig,
+    updateContent,
+    openCreatedFileIfClean,
+    clearWorkspaceDocument,
+    syncRenamedPath,
+    syncDeletedPath
+  } = useDocumentBuffer({
+    autoSave: config.autoSave,
+    autoSaveDelayMs: config.autoSaveDelayMs,
+    isAutoSavePaused: pendingDialog !== null,
+    onSaveConfigRaw: saveRawConfig,
+    onError: setErrorMessage
+  })
+
+  refreshConfigDocRef.current = refreshCleanConfig
 
   const {
     workspace,
@@ -84,6 +71,7 @@ export function App() {
     loadingDirs,
     selectedTreePath,
     setSelectedTreePath,
+    resolveCreateParentDir,
     openWorkspace,
     refreshTree,
     toggleDirectory,
@@ -93,107 +81,16 @@ export function App() {
     deleteEntry
   } = useWorkspaceTree({
     onError: setErrorMessage,
-    onWorkspaceOpened: () => {
-      setActiveDoc((current) => (current?.kind === 'config' ? current : null))
-    },
-    onFileCreated: (created) => {
-      const currentDoc = activeDocRef.current
-      if (!currentDoc || currentDoc.content === currentDoc.savedContent) {
-        setActiveDoc({
-          kind: 'workspace',
-          path: created.path,
-          name: created.name,
-          content: '',
-          savedContent: ''
-        })
-      }
-    },
-    onEntryRenamed: (oldPath, renamed) => {
-      setActiveDoc((current) => {
-        if (!current || current.kind !== 'workspace') return current
-        if (!isNestedOrSamePath(current.path, oldPath)) return current
-        const nextPath = remapPathPrefix(current.path, oldPath, renamed.path)
-        return {
-          ...current,
-          path: nextPath,
-          name: getWorkspaceDisplayName(nextPath)
-        }
-      })
-    },
-    onEntryDeleted: (deletedPath) => {
-      setActiveDoc((current) => {
-        if (!current || current.kind !== 'workspace') return current
-        return isNestedOrSamePath(current.path, deletedPath) ? null : current
-      })
-    }
+    onWorkspaceOpened: clearWorkspaceDocument,
+    onFileCreated: openCreatedFileIfClean,
+    onEntryRenamed: syncRenamedPath,
+    onEntryDeleted: syncDeletedPath
   })
-
-  const saveDocumentSnapshot = useCallback(
-    async (snapshot: ActiveDocument): Promise<boolean> => {
-      setIsSavingDoc(true)
-      setErrorMessage(null)
-
-      try {
-        if (snapshot.kind === 'config') {
-          await saveRawConfig(snapshot.content)
-        } else {
-          await window.wikiApi.workspace.writeFile(snapshot.path, snapshot.content)
-        }
-
-        if (!mountedRef.current) return false
-        setActiveDoc((current) => {
-          if (!current || current.kind !== snapshot.kind || current.path !== snapshot.path) {
-            return current
-          }
-          return { ...current, savedContent: snapshot.content }
-        })
-        return true
-      } catch (error: unknown) {
-        if (mountedRef.current) {
-          setErrorMessage(toErrorMessage(error, '문서 저장에 실패했습니다.'))
-        }
-        return false
-      } finally {
-        if (mountedRef.current) {
-          setIsSavingDoc(false)
-        }
-      }
-    },
-    [saveRawConfig]
-  )
-
-  const handleManualSave = useCallback((): void => {
-    const current = activeDocRef.current
-    if (!current || current.content === current.savedContent) return
-    void saveDocumentSnapshot({ ...current })
-  }, [saveDocumentSnapshot])
-
-  useEffect(() => {
-    if (!config.autoSave || !activeDoc) return
-    if (activeDoc.content === activeDoc.savedContent) return
-
-    const snapshot: ActiveDocument = { ...activeDoc }
-    const timer = window.setTimeout(() => {
-      void saveDocumentSnapshot(snapshot)
-    }, config.autoSaveDelayMs)
-
-    return () => {
-      window.clearTimeout(timer)
-    }
-  }, [
-    config.autoSave,
-    config.autoSaveDelayMs,
-    activeDoc?.kind,
-    activeDoc?.path,
-    activeDoc?.content,
-    activeDoc?.savedContent,
-    saveDocumentSnapshot
-  ])
 
   const guardUnsavedChanges = useCallback(
     (proceed: () => Promise<void>): void => {
       const current = activeDocRef.current
-      if (!current || current.content === current.savedContent) {
+      if (!isDocumentDirty(current) || !current) {
         void proceed()
         return
       }
@@ -205,7 +102,7 @@ export function App() {
         secondaryLabel: '버리고 이동',
         onConfirm: async () => {
           setPendingDialog(null)
-          const saved = await saveDocumentSnapshot({ ...current })
+          const saved = await saveSnapshot({ ...current })
           if (saved) {
             await proceed()
           }
@@ -216,7 +113,7 @@ export function App() {
         }
       })
     },
-    [saveDocumentSnapshot]
+    [activeDocRef, saveSnapshot]
   )
 
   const handleSwitchWorkspace = useCallback(
@@ -231,14 +128,12 @@ export function App() {
     void window.wikiApi.workspace
       .selectFolder()
       .then((selectedPath) => {
-        if (selectedPath && mountedRef.current) {
+        if (selectedPath) {
           handleSwitchWorkspace(selectedPath)
         }
       })
       .catch((error: unknown) => {
-        if (mountedRef.current) {
-          setErrorMessage(toErrorMessage(error, '폴더 선택에 실패했습니다.'))
-        }
+        setErrorMessage(toErrorMessage(error, '폴더 선택에 실패했습니다.'))
       })
   }, [handleSwitchWorkspace])
 
@@ -247,52 +142,19 @@ export function App() {
       if (activeDocRef.current?.kind === 'workspace' && activeDocRef.current.path === entry.path) {
         return
       }
-      guardUnsavedChanges(async () => {
-        setErrorMessage(null)
-        try {
-          const content = await window.wikiApi.workspace.readFile(entry.path)
-          if (!mountedRef.current) return
-          setActiveDoc({
-            kind: 'workspace',
-            path: entry.path,
-            name: entry.name,
-            content,
-            savedContent: content
-          })
-        } catch (error: unknown) {
-          if (mountedRef.current) {
-            setErrorMessage(toErrorMessage(error, '파일을 열지 못했습니다.'))
-          }
-        }
-      })
+      guardUnsavedChanges(() => openWorkspaceFile(entry))
     },
-    [guardUnsavedChanges]
+    [activeDocRef, guardUnsavedChanges, openWorkspaceFile]
   )
 
   const handleOpenConfigEditor = useCallback((): void => {
     guardUnsavedChanges(async () => {
-      setErrorMessage(null)
-      try {
-        const [resolvedPath, raw] = await Promise.all([
-          window.wikiApi.config.getConfigPath(),
-          window.wikiApi.config.readRaw()
-        ])
-        if (!mountedRef.current) return
+      const resolvedPath = await openConfigDocument()
+      if (resolvedPath) {
         setConfigPath(resolvedPath)
-        setActiveDoc({
-          kind: 'config',
-          path: resolvedPath,
-          name: 'config.json',
-          content: raw,
-          savedContent: raw
-        })
-      } catch (error: unknown) {
-        if (mountedRef.current) {
-          setErrorMessage(toErrorMessage(error, '설정 파일을 읽지 못했습니다.'))
-        }
       }
     })
-  }, [guardUnsavedChanges, setConfigPath])
+  }, [guardUnsavedChanges, openConfigDocument, setConfigPath])
 
   const handleRequestDelete = useCallback(
     (entry: WorkspaceEntry): void => {
@@ -318,8 +180,7 @@ export function App() {
         <div className="app-header-left">
           <h1 className="app-title">Wiki Editor</h1>
           <WorkspaceSwitcher
-            workspaceName={workspace?.name ?? null}
-            workspacePath={workspace?.rootPath ?? null}
+            workspace={workspace}
             favoriteWorkspaces={config.favoriteWorkspaces}
             recentWorkspaces={config.recentWorkspaces}
             onSelectFolder={handleSelectFolder}
@@ -357,8 +218,7 @@ export function App() {
 
       <main className="app-main">
         <FolderTreeSidebar
-          workspaceName={workspace?.name ?? null}
-          workspacePath={workspace?.rootPath ?? null}
+          workspace={workspace}
           isFavorite={isCurrentWorkspaceFavorite}
           rootEntries={rootEntries}
           childrenByDir={childrenByDir}
@@ -371,9 +231,10 @@ export function App() {
               toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
             }
           }}
-          onSelectEntry={(entry) => setSelectedTreePath(entry.path)}
+          onSelectPath={setSelectedTreePath}
           onToggleDirectory={toggleDirectory}
           onEnsureExpanded={ensureExpanded}
+          onResolveCreateParentDir={resolveCreateParentDir}
           onOpenFile={handleOpenFile}
           onRefreshTree={() => void refreshTree()}
           onCreateEntry={createEntry}
@@ -385,21 +246,17 @@ export function App() {
           document={activeDoc}
           isSaving={isSavingDoc}
           autoSave={config.autoSave}
-          onChangeContent={(nextContent) =>
-            setActiveDoc((current) => (current ? { ...current, content: nextContent } : null))
-          }
-          onSave={handleManualSave}
+          onChangeContent={updateContent}
+          onSave={saveActiveDocument}
         />
 
         {isSettingsOpen && (
           <SettingsPanel
             theme={config.theme}
             autoSave={config.autoSave}
-            autoSaveDelayMs={config.autoSaveDelayMs}
             configPath={configPath}
             onToggleTheme={toggleTheme}
             onToggleAutoSave={toggleAutoSave}
-            onUpdateAutoSaveDelay={updateAutoSaveDelay}
             onOpenConfigEditor={handleOpenConfigEditor}
             onClose={() => setIsSettingsOpen(false)}
           />

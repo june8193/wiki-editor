@@ -99,7 +99,6 @@ describe('createWikiApi', () => {
 
     await api.workspace.selectFolder()
     await api.workspace.open('C:\\wiki')
-    await api.workspace.getRoot()
     await api.workspace.readDir('C:\\wiki\\docs')
     await api.workspace.readFile('C:\\wiki\\readme.md')
     await api.workspace.writeFile('C:\\wiki\\readme.md', '# Hi')
@@ -124,7 +123,6 @@ describe('createWikiApi', () => {
       CONFIG_IPC_CHANNELS.removeFavoriteWorkspace,
       WORKSPACE_IPC_CHANNELS.selectFolder,
       WORKSPACE_IPC_CHANNELS.open,
-      WORKSPACE_IPC_CHANNELS.getRoot,
       WORKSPACE_IPC_CHANNELS.readDir,
       WORKSPACE_IPC_CHANNELS.readFile,
       WORKSPACE_IPC_CHANNELS.writeFile,
