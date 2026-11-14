@@ -19,6 +19,12 @@ import {
   WorkspaceEntryKind,
   WorkspaceInfo
 } from '@shared/workspace'
+import {
+  hasBlockedPathSegment,
+  isErrnoCode,
+  isPathInsideRoot,
+  resolveRealPathWithAncestor
+} from '../fs/pathSecurity'
 
 export const IGNORED_ENTRY_NAMES: ReadonlySet<string> = new Set([
   '.git',
@@ -38,21 +44,6 @@ export type WorkspaceWatchListener = (event: WorkspaceChangeEvent) => void
 
 const INVALID_ENTRY_NAME_RE = /[<>:"/\\|?*\x00-\x1f]/
 const DEFAULT_WATCH_DEBOUNCE_MS = 120
-
-function isErrnoCode(error: unknown, code: string): boolean {
-  return (error as NodeJS.ErrnoException)?.code === code
-}
-
-function isPathInsideRoot(rootPath: string, targetPath: string): boolean {
-  const rel = relative(rootPath, targetPath)
-  return (
-    rel === '' ||
-    (rel !== '..' &&
-      !rel.startsWith(`..${sep}`) &&
-      !rel.startsWith('../') &&
-      !isAbsolute(rel))
-  )
-}
 
 function toPosixRelativePath(rootPath: string, targetPath: string): string {
   const rel = relative(rootPath, targetPath)
@@ -298,7 +289,7 @@ export class WorkspaceFsService {
 
       this.watcher = fsWatch(root, { recursive: true }, (eventType, filename) => {
         const normalizedRel = filename ? filename.replace(/\\/g, '/') : null
-        if (normalizedRel && this.hasIgnoredSegment(normalizedRel)) {
+        if (normalizedRel && hasBlockedPathSegment(normalizedRel, IGNORED_ENTRY_NAMES)) {
           return
         }
         pendingEventType = eventType
@@ -359,19 +350,11 @@ export class WorkspaceFsService {
     return this.workspaceRoot
   }
 
-  private hasIgnoredSegment(relativePath: string): boolean {
-    if (!relativePath) return false
-    return relativePath
-      .split(/[\\/]/)
-      .filter(Boolean)
-      .some((segment) => IGNORED_ENTRY_NAMES.has(segment))
-  }
-
   private assertWithinWorkspaceAndAllowed(root: string, targetPath: string): void {
     if (!isPathInsideRoot(root, targetPath)) {
       throw new Error('워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.')
     }
-    if (this.hasIgnoredSegment(relative(root, targetPath))) {
+    if (hasBlockedPathSegment(relative(root, targetPath), IGNORED_ENTRY_NAMES)) {
       throw new Error('시스템 폴더 경로에는 접근할 수 없습니다.')
     }
   }
@@ -391,48 +374,16 @@ export class WorkspaceFsService {
     return candidate
   }
 
-  private async rejectDanglingSymlink(cursor: string): Promise<void> {
-    let stats
-    try {
-      stats = await lstat(cursor)
-    } catch (error) {
-      if (isErrnoCode(error, 'ENOENT')) {
-        return
-      }
-      throw error
-    }
-    if (stats.isSymbolicLink()) {
-      throw new Error('유효하지 않거나 워크스페이스 루트 밖을 가리키는 심볼릭 링크에는 접근할 수 없습니다.')
-    }
-  }
-
-  private async resolveRealWithAncestor(root: string, candidate: string): Promise<{
-    resolvedReal: string
-    exists: boolean
-  }> {
-    const tailSegments: string[] = []
-    let cursor = candidate
-
-    while (true) {
-      try {
-        const realAncestor = await realpath(cursor)
-        const resolvedReal =
-          tailSegments.length > 0 ? join(realAncestor, ...tailSegments.slice().reverse()) : realAncestor
-        this.assertWithinWorkspaceAndAllowed(root, resolvedReal)
-        return { resolvedReal, exists: tailSegments.length === 0 }
-      } catch (error) {
-        if (!isErrnoCode(error, 'ENOENT')) {
-          throw error
-        }
-        await this.rejectDanglingSymlink(cursor)
-        const parent = dirname(cursor)
-        if (parent === cursor) {
-          throw new Error('워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.')
-        }
-        tailSegments.push(basename(cursor))
-        cursor = parent
-      }
-    }
+  private resolveRealWithAncestor(
+    root: string,
+    candidate: string
+  ): Promise<{ resolvedReal: string; exists: boolean }> {
+    return resolveRealPathWithAncestor(candidate, {
+      outsideMessage: '워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.',
+      danglingSymlinkMessage:
+        '유효하지 않거나 워크스페이스 루트 밖을 가리키는 심볼릭 링크에는 접근할 수 없습니다.',
+      assertResolved: (resolvedReal) => this.assertWithinWorkspaceAndAllowed(root, resolvedReal)
+    })
   }
 
   private async resolveExistingPath(inputPath: string): Promise<string> {
@@ -490,7 +441,10 @@ export class WorkspaceFsService {
 
     try {
       const realTarget = await realpath(entryPath)
-      if (!isPathInsideRoot(root, realTarget) || this.hasIgnoredSegment(relative(root, realTarget))) {
+      if (
+        !isPathInsideRoot(root, realTarget) ||
+        hasBlockedPathSegment(relative(root, realTarget), IGNORED_ENTRY_NAMES)
+      ) {
         return null
       }
       const targetStats = await stat(realTarget)

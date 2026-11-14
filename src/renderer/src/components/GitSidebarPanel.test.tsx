@@ -130,8 +130,11 @@ describe('GitSidebarPanel', () => {
     await user.click(within(region).getByRole('button', { name: 'Git 상태 새로고침' }))
     expect(onRefresh).toHaveBeenCalledTimes(1)
 
+    await user.click(within(region).getByRole('button', { name: 'docs/guide.md Unstage' }))
+    expect(onUnstageFile).toHaveBeenCalledWith('docs/guide.md', 'docs/old.md')
+
     await user.click(within(region).getByRole('button', { name: 'added.md Unstage' }))
-    expect(onUnstageFile).toHaveBeenCalledWith('added.md')
+    expect(onUnstageFile).toHaveBeenCalledWith('added.md', undefined)
 
     await user.click(within(region).getByRole('button', { name: '전체 Unstage' }))
     expect(onUnstageAll).toHaveBeenCalledTimes(1)

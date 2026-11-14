@@ -1,22 +1,34 @@
 import { execFile } from 'node:child_process'
-import { lstat, realpath, stat } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { realpath, stat } from 'node:fs/promises'
+import { isAbsolute, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
   createEmptyGitStatus,
   type GitBranchInfo,
   type GitBranchList,
-  type GitChangedFile,
-  type GitStagedStatus,
   type GitStatus,
-  type GitSyncResult,
-  type GitUnstagedStatus
+  type GitSyncResult
 } from '@shared/git'
+import {
+  hasBlockedPathSegment,
+  isErrnoCode,
+  isPathInsideRoot,
+  resolveRealPathWithAncestor
+} from '../fs/pathSecurity'
+import {
+  type ExecGitError,
+  extractGitErrorDetail,
+  formatGitError,
+  parsePorcelainV2Z
+} from './gitPorcelain'
+
+export { formatGitError, parsePorcelainV2Z }
 
 const execFileAsync = promisify(execFile)
 
 const DEFAULT_LOCAL_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_BUFFER_BYTES = 10 * 1024 * 1024
+const GIT_METADATA_NAMES: ReadonlySet<string> = new Set(['.git'])
 
 export interface GitServiceOptions {
   env?: NodeJS.ProcessEnv
@@ -24,248 +36,11 @@ export interface GitServiceOptions {
   networkTimeoutMs?: number
 }
 
-interface ExecGitError extends Error {
-  code?: string | number
-  stdout?: string
-  stderr?: string
-  killed?: boolean
-  signal?: NodeJS.Signals | null
-}
-
-function isErrnoCode(error: unknown, code: string): boolean {
-  return (error as NodeJS.ErrnoException)?.code === code
-}
-
-function isPathInsideBase(baseDir: string, targetPath: string): boolean {
-  const rel = relative(baseDir, targetPath)
-  return (
-    rel === '' ||
-    (rel !== '..' &&
-      !rel.startsWith(`..${sep}`) &&
-      !rel.startsWith('../') &&
-      !isAbsolute(rel))
-  )
-}
-
-function hasGitMetadataSegment(relPath: string): boolean {
-  if (!relPath) return false
-  return relPath
-    .split(/[\\/]/)
-    .filter(Boolean)
-    .some((segment) => segment === '.git')
-}
-
-function extractGitErrorDetail(error: unknown): string {
-  const execErr = error as ExecGitError
-  const stderr = typeof execErr?.stderr === 'string' ? execErr.stderr.trim() : ''
-  const stdout = typeof execErr?.stdout === 'string' ? execErr.stdout.trim() : ''
-  if (stderr) return stderr
-  if (stdout) return stdout
-  if (error instanceof Error && error.message) return error.message
-  return '알 수 없는 Git 오류'
-}
-
-export function formatGitError(error: unknown): Error {
-  if (error instanceof Error && (error as { isFormattedGitError?: boolean }).isFormattedGitError) {
-    return error
-  }
-
-  const execErr = error as ExecGitError
-  if (execErr?.code === 'ENOENT') {
-    const formatted = new Error('시스템에 Git CLI가 설치되어 있지 않거나 PATH에서 찾을 수 없습니다.')
-    ;(formatted as { isFormattedGitError?: boolean }).isFormattedGitError = true
-    return formatted
-  }
-
-  if (execErr?.killed || execErr?.signal === 'SIGTERM') {
-    const formatted = new Error('Git 명령 실행 시간이 초과되었습니다.')
-    ;(formatted as { isFormattedGitError?: boolean }).isFormattedGitError = true
-    return formatted
-  }
-
-  const detail = extractGitErrorDetail(error)
-  const lower = detail.toLowerCase()
-
-  let message: string
-  if (lower.includes('not a git repository')) {
-    message = '현재 워크스페이스는 Git 저장소가 아닙니다.'
-  } else if (
-    lower.includes('authentication failed') ||
-    lower.includes('could not read username') ||
-    lower.includes('terminal prompts disabled') ||
-    lower.includes('permission denied (publickey)') ||
-    lower.includes('invalid username or token')
-  ) {
-    message = `Git 인증에 실패했습니다. 시스템 자격 증명 또는 SSH 키를 확인하세요.\n${detail}`
-  } else if (
-    lower.includes('conflict') ||
-    lower.includes('automatic merge failed') ||
-    lower.includes('unmerged files') ||
-    lower.includes('unresolved conflict')
-  ) {
-    message = `병합 충돌(Conflict)이 발생했습니다. 충돌 파일을 해결한 뒤 다시 시도하세요.\n${detail}`
-  } else if (
-    lower.includes('would be overwritten by') ||
-    lower.includes('please commit your changes or stash them')
-  ) {
-    message = `커밋되지 않은 로컬 변경 사항이 있어 작업을 완료할 수 없습니다. 변경 사항을 커밋하거나 정리한 뒤 다시 시도하세요.\n${detail}`
-  } else if (
-    lower.includes('non-fast-forward') ||
-    lower.includes('fetch first') ||
-    lower.includes('failed to push some refs')
-  ) {
-    message = `원격 저장소에 새 커밋이 있어 Push가 거부되었습니다. 먼저 Pull 또는 Sync를 실행하세요.\n${detail}`
-  } else if (lower.includes('has no upstream branch') || lower.includes('no tracking information')) {
-    message = `현재 브랜치에 연결된 원격 추적(upstream) 브랜치가 없습니다.\n${detail}`
-  } else if (
-    lower.includes('unable to access') ||
-    lower.includes('could not resolve host') ||
-    lower.includes('connection refused') ||
-    lower.includes('failed to connect')
-  ) {
-    message = `원격 저장소에 연결할 수 없습니다.\n${detail}`
-  } else if (lower.includes('invalid reference:')) {
-    message = `브랜치를 찾을 수 없습니다.\n${detail}`
-  } else if (lower.includes('no configured push destination') || lower.includes('does not appear to be a git repository')) {
-    message = `원격 저장소(remote)에 접근할 수 없습니다.\n${detail}`
-  } else if (lower.includes('nothing to commit') || lower.includes('no changes added to commit')) {
-    message = '커밋할 Staged 변경 사항이 없습니다.'
-  } else {
-    message = `Git 명령 실행 중 오류가 발생했습니다: ${detail}`
-  }
-
-  const formatted = new Error(message)
-  ;(formatted as { isFormattedGitError?: boolean }).isFormattedGitError = true
-  return formatted
-}
-
-function splitPorcelainFields(record: string, fieldsBeforePath: number): {
-  fields: string[]
-  rest: string
-} {
-  const fields: string[] = []
-  let start = 0
-  for (let i = 0; i < fieldsBeforePath; i += 1) {
-    const spaceIdx = record.indexOf(' ', start)
-    if (spaceIdx === -1) {
-      fields.push(record.slice(start))
-      return { fields, rest: '' }
-    }
-    fields.push(record.slice(start, spaceIdx))
-    start = spaceIdx + 1
-  }
-  return { fields, rest: record.slice(start) }
-}
-
-function toStagedStatus(code: string): GitStagedStatus | null {
-  switch (code) {
-    case 'M':
-    case 'A':
-    case 'D':
-    case 'R':
-    case 'C':
-    case 'U':
-      return code
-    default:
-      return null
-  }
-}
-
-function toUnstagedStatus(code: string): GitUnstagedStatus | null {
-  switch (code) {
-    case 'M':
-    case 'D':
-    case 'U':
-      return code
-    default:
-      return null
-  }
-}
-
-/**
- * Parses `git status --porcelain=v2 --branch -z` output into structured GitStatus.
- */
-export function parsePorcelainV2Z(raw: string, repoRoot: string): GitStatus {
-  const status = createEmptyGitStatus(true, repoRoot)
-  const tokens = raw.split('\0')
-
-  for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i]
-    if (!token) continue
-
-    if (token.startsWith('# ')) {
-      if (token === '# branch.oid (initial)') {
-        status.isUnborn = true
-      } else if (token.startsWith('# branch.head ')) {
-        const head = token.slice('# branch.head '.length)
-        if (head === '(detached)') {
-          status.isDetached = true
-          status.branch = null
-        } else {
-          status.isDetached = false
-          status.branch = head
-        }
-      } else if (token.startsWith('# branch.upstream ')) {
-        status.hasUpstream = true
-      } else if (token.startsWith('# branch.ab ')) {
-        const match = /^# branch\.ab \+(\d+) -(\d+)$/.exec(token)
-        if (match) {
-          status.ahead = Number(match[1])
-          status.behind = Number(match[2])
-        }
-      }
-      continue
-    }
-
-    if (token.startsWith('1 ')) {
-      const { fields, rest } = splitPorcelainFields(token, 8)
-      const xy = fields[1] ?? '..'
-      const stagedCode = toStagedStatus(xy[0] ?? '.')
-      const unstagedCode = toUnstagedStatus(xy[1] ?? '.')
-      if (stagedCode) {
-        status.staged.push({ path: rest, status: stagedCode })
-      }
-      if (unstagedCode) {
-        status.unstaged.push({ path: rest, status: unstagedCode })
-      }
-      continue
-    }
-
-    if (token.startsWith('2 ')) {
-      const { fields, rest } = splitPorcelainFields(token, 9)
-      const xy = fields[1] ?? '..'
-      const origPath = tokens[i + 1]
-      if (origPath !== undefined) {
-        i += 1
-      }
-      const stagedCode = toStagedStatus(xy[0] ?? '.')
-      const unstagedCode = toUnstagedStatus(xy[1] ?? '.')
-      if (stagedCode) {
-        const entry: GitChangedFile = { path: rest, status: stagedCode }
-        if (origPath) {
-          entry.origPath = origPath
-        }
-        status.staged.push(entry)
-      }
-      if (unstagedCode) {
-        status.unstaged.push({ path: rest, status: unstagedCode })
-      }
-      continue
-    }
-
-    if (token.startsWith('u ')) {
-      const { rest } = splitPorcelainFields(token, 10)
-      status.hasConflicts = true
-      status.unstaged.push({ path: rest, status: 'U' })
-      continue
-    }
-
-    if (token.startsWith('? ')) {
-      status.untracked.push({ path: token.slice(2), status: '?' })
-    }
-  }
-
-  return status
+interface PublishableBranchContext {
+  repoRoot: string
+  currentStatus: GitStatus
+  branch: string
+  remotes: string[]
 }
 
 /**
@@ -310,8 +85,8 @@ export class GitService {
   }
 
   async stage(workspacePath: string, paths: readonly string[]): Promise<GitStatus> {
-    const { workspaceDir, repoRoot } = await this.requireRepoContext(workspacePath)
-    const validatedPaths = await this.validateRepoRelativePaths(workspaceDir, repoRoot, paths)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const validatedPaths = await this.validateRepoRelativePaths(repoRoot, paths)
     try {
       await this.execGit(repoRoot, ['add', '-A', '--', ...validatedPaths])
     } catch (error) {
@@ -321,9 +96,9 @@ export class GitService {
   }
 
   async stageAll(workspacePath: string): Promise<GitStatus> {
-    const { workspaceDir, repoRoot } = await this.requireRepoContext(workspacePath)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
     try {
-      await this.execGit(workspaceDir, ['add', '-A', '--', '.'])
+      await this.execGit(repoRoot, ['add', '-A', '--', '.'])
     } catch (error) {
       throw formatGitError(error)
     }
@@ -331,40 +106,15 @@ export class GitService {
   }
 
   async unstage(workspacePath: string, paths: readonly string[]): Promise<GitStatus> {
-    const { workspaceDir, repoRoot } = await this.requireRepoContext(workspacePath)
-    const validatedPaths = await this.validateRepoRelativePaths(workspaceDir, repoRoot, paths)
-    const hasHead = await this.hasHeadCommit(repoRoot)
-    try {
-      if (hasHead) {
-        await this.execGit(repoRoot, ['reset', '-q', 'HEAD', '--', ...validatedPaths])
-      } else {
-        await this.execGit(repoRoot, [
-          'rm',
-          '--cached',
-          '-r',
-          '--ignore-unmatch',
-          '--',
-          ...validatedPaths
-        ])
-      }
-    } catch (error) {
-      throw formatGitError(error)
-    }
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const validatedPaths = await this.validateRepoRelativePaths(repoRoot, paths)
+    await this.execUnstageTargets(repoRoot, validatedPaths)
     return this.statusForRepo(repoRoot)
   }
 
   async unstageAll(workspacePath: string): Promise<GitStatus> {
-    const { workspaceDir, repoRoot } = await this.requireRepoContext(workspacePath)
-    const hasHead = await this.hasHeadCommit(repoRoot)
-    try {
-      if (hasHead) {
-        await this.execGit(workspaceDir, ['reset', '-q', 'HEAD', '--', '.'])
-      } else {
-        await this.execGit(workspaceDir, ['rm', '-r', '--cached', '--ignore-unmatch', '--', '.'])
-      }
-    } catch (error) {
-      throw formatGitError(error)
-    }
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    await this.execUnstageTargets(repoRoot, ['.'])
     return this.statusForRepo(repoRoot)
   }
 
@@ -373,7 +123,7 @@ export class GitService {
     if (!trimmed) {
       throw new Error('커밋 메시지를 입력하세요.')
     }
-    const { repoRoot } = await this.requireRepoContext(workspacePath)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
     try {
       await this.execGit(repoRoot, ['commit', '-m', trimmed])
     } catch (error) {
@@ -383,7 +133,7 @@ export class GitService {
   }
 
   async branches(workspacePath: string): Promise<GitBranchList> {
-    const { repoRoot } = await this.requireRepoContext(workspacePath)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
     try {
       const raw = await this.execGit(repoRoot, [
         'for-each-ref',
@@ -444,7 +194,7 @@ export class GitService {
     ) {
       throw new Error('유효한 브랜치 이름이 아닙니다.')
     }
-    const { repoRoot } = await this.requireRepoContext(workspacePath)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
     try {
       await this.execGit(repoRoot, ['switch', '--no-guess', trimmed])
     } catch (error) {
@@ -454,7 +204,7 @@ export class GitService {
   }
 
   async pull(workspacePath: string): Promise<GitStatus> {
-    const { repoRoot } = await this.requireRepoContext(workspacePath)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
     const currentStatus = await this.statusForRepo(repoRoot)
     await this.requireRemotes(repoRoot)
     if (currentStatus.isDetached) {
@@ -472,26 +222,17 @@ export class GitService {
   }
 
   async push(workspacePath: string): Promise<GitStatus> {
-    const { repoRoot } = await this.requireRepoContext(workspacePath)
-    const currentStatus = await this.statusForRepo(repoRoot)
-    const remotes = await this.requireRemotes(repoRoot)
-    if (currentStatus.isUnborn) {
-      throw new Error('커밋된 내역이 없어 Push할 수 없습니다.')
-    }
-    if (currentStatus.isDetached || !currentStatus.branch) {
-      throw new Error('Detached HEAD 상태에서는 Push할 수 없습니다.')
-    }
+    const { repoRoot, currentStatus, branch, remotes } = await this.requirePublishableBranchContext(
+      workspacePath,
+      'Push'
+    )
 
     try {
       if (currentStatus.hasUpstream) {
         await this.execGit(repoRoot, ['push'], this.networkTimeoutMs)
       } else {
         const targetRemote = this.resolveTargetRemote(remotes)
-        await this.execGit(
-          repoRoot,
-          ['push', '-u', targetRemote, currentStatus.branch],
-          this.networkTimeoutMs
-        )
+        await this.execGit(repoRoot, ['push', '-u', targetRemote, branch], this.networkTimeoutMs)
       }
     } catch (error) {
       throw formatGitError(error)
@@ -500,15 +241,10 @@ export class GitService {
   }
 
   async sync(workspacePath: string): Promise<GitSyncResult> {
-    const { repoRoot } = await this.requireRepoContext(workspacePath)
-    const currentStatus = await this.statusForRepo(repoRoot)
-    const remotes = await this.requireRemotes(repoRoot)
-    if (currentStatus.isUnborn) {
-      throw new Error('커밋된 내역이 없어 Sync할 수 없습니다.')
-    }
-    if (currentStatus.isDetached || !currentStatus.branch) {
-      throw new Error('Detached HEAD 상태에서는 Sync할 수 없습니다.')
-    }
+    const { repoRoot, currentStatus, branch, remotes } = await this.requirePublishableBranchContext(
+      workspacePath,
+      'Sync'
+    )
 
     let pulled = false
     try {
@@ -518,20 +254,12 @@ export class GitService {
         await this.execGit(repoRoot, ['push'], this.networkTimeoutMs)
       } else {
         const targetRemote = this.resolveTargetRemote(remotes)
-        const hasRemoteHead = await this.remoteBranchExists(
-          repoRoot,
-          targetRemote,
-          currentStatus.branch
-        )
+        const hasRemoteHead = await this.remoteBranchExists(repoRoot, targetRemote, branch)
         if (hasRemoteHead) {
-          await this.execPull(repoRoot, [targetRemote, currentStatus.branch])
+          await this.execPull(repoRoot, [targetRemote, branch])
           pulled = true
         }
-        await this.execGit(
-          repoRoot,
-          ['push', '-u', targetRemote, currentStatus.branch],
-          this.networkTimeoutMs
-        )
+        await this.execGit(repoRoot, ['push', '-u', targetRemote, branch], this.networkTimeoutMs)
       }
     } catch (error) {
       throw formatGitError(error)
@@ -544,6 +272,35 @@ export class GitService {
       pushed: true,
       summary: pulled ? 'Pull 및 Push 동기화 완료' : '원격 브랜치 게시(Push) 완료'
     }
+  }
+
+  private async execUnstageTargets(repoRoot: string, targets: readonly string[]): Promise<void> {
+    const hasHead = await this.hasHeadCommit(repoRoot)
+    try {
+      if (hasHead) {
+        await this.execGit(repoRoot, ['reset', '-q', 'HEAD', '--', ...targets])
+      } else {
+        await this.execGit(repoRoot, ['rm', '--cached', '-r', '--ignore-unmatch', '--', ...targets])
+      }
+    } catch (error) {
+      throw formatGitError(error)
+    }
+  }
+
+  private async requirePublishableBranchContext(
+    workspacePath: string,
+    actionName: 'Push' | 'Sync'
+  ): Promise<PublishableBranchContext> {
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const currentStatus = await this.statusForRepo(repoRoot)
+    const remotes = await this.requireRemotes(repoRoot)
+    if (currentStatus.isUnborn) {
+      throw new Error(`커밋된 내역이 없어 ${actionName}할 수 없습니다.`)
+    }
+    if (currentStatus.isDetached || !currentStatus.branch) {
+      throw new Error(`Detached HEAD 상태에서는 ${actionName}할 수 없습니다.`)
+    }
+    return { repoRoot, currentStatus, branch: currentStatus.branch, remotes }
   }
 
   private async execPull(repoRoot: string, extraArgs: readonly string[]): Promise<void> {
@@ -643,14 +400,11 @@ export class GitService {
     return realDir
   }
 
-  private async requireRepoContext(
-    workspacePath: string
-  ): Promise<{ workspaceDir: string; repoRoot: string }> {
+  private async requireRepoRoot(workspacePath: string): Promise<string> {
     const workspaceDir = await this.resolveExistingDirectory(workspacePath)
     try {
       const topLevel = (await this.execGit(workspaceDir, ['rev-parse', '--show-toplevel'])).trim()
-      const repoRoot = await realpath(topLevel)
-      return { workspaceDir, repoRoot }
+      return await realpath(topLevel)
     } catch (error) {
       throw formatGitError(error)
     }
@@ -666,7 +420,6 @@ export class GitService {
   }
 
   private async validateRepoRelativePaths(
-    workspaceDir: string,
     repoRoot: string,
     paths: readonly string[]
   ): Promise<string[]> {
@@ -674,68 +427,35 @@ export class GitService {
       throw new Error('대상 파일 경로가 지정되지 않았습니다.')
     }
 
+    const outsideMessage = '워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.'
     const validated: string[] = []
     for (const rawPath of paths) {
       if (typeof rawPath !== 'string' || rawPath.trim().length === 0 || rawPath.includes('\0')) {
         throw new Error('유효하지 않은 파일 경로입니다.')
       }
 
-      const candidate = isAbsolute(rawPath) ? resolve(rawPath) : resolve(workspaceDir, rawPath)
-      if (!isPathInsideBase(workspaceDir, candidate) || candidate === workspaceDir) {
-        throw new Error('워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.')
+      const candidate = isAbsolute(rawPath) ? resolve(rawPath) : resolve(repoRoot, rawPath)
+      if (!isPathInsideRoot(repoRoot, candidate) || candidate === repoRoot) {
+        throw new Error(outsideMessage)
       }
-      if (hasGitMetadataSegment(relative(workspaceDir, candidate))) {
+      if (hasBlockedPathSegment(relative(repoRoot, candidate), GIT_METADATA_NAMES)) {
         throw new Error('시스템 .git 경로에는 접근할 수 없습니다.')
       }
 
-      const resolvedReal = await this.resolveRealWithinBase(workspaceDir, repoRoot, candidate)
-      if (hasGitMetadataSegment(relative(repoRoot, resolvedReal))) {
+      const { resolvedReal } = await resolveRealPathWithAncestor(candidate, {
+        outsideMessage,
+        assertResolved: (resolved) => {
+          if (!isPathInsideRoot(repoRoot, resolved)) {
+            throw new Error(outsideMessage)
+          }
+        }
+      })
+      if (hasBlockedPathSegment(relative(repoRoot, resolvedReal), GIT_METADATA_NAMES)) {
         throw new Error('시스템 .git 경로에는 접근할 수 없습니다.')
       }
       validated.push(relative(repoRoot, resolvedReal).replace(/\\/g, '/'))
     }
     return validated
-  }
-
-  private async resolveRealWithinBase(
-    workspaceDir: string,
-    repoRoot: string,
-    candidate: string
-  ): Promise<string> {
-    const tailSegments: string[] = []
-    let cursor = candidate
-
-    while (true) {
-      try {
-        const realAncestor = await realpath(cursor)
-        const resolvedReal =
-          tailSegments.length > 0 ? join(realAncestor, ...tailSegments.slice().reverse()) : realAncestor
-        if (
-          !isPathInsideBase(workspaceDir, resolvedReal) ||
-          !isPathInsideBase(repoRoot, resolvedReal)
-        ) {
-          throw new Error('워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.')
-        }
-        return resolvedReal
-      } catch (error) {
-        if (!isErrnoCode(error, 'ENOENT')) {
-          throw error
-        }
-        const linkStats = await lstat(cursor).catch((statErr) => {
-          if (isErrnoCode(statErr, 'ENOENT')) return null
-          throw statErr
-        })
-        if (linkStats?.isSymbolicLink()) {
-          throw new Error('유효하지 않은 심볼릭 링크 경로입니다.')
-        }
-        const parent = dirname(cursor)
-        if (parent === cursor) {
-          throw new Error('워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.')
-        }
-        tailSegments.push(basename(cursor))
-        cursor = parent
-      }
-    }
   }
 
   private async execGit(

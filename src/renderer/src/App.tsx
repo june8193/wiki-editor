@@ -488,7 +488,7 @@ export function App() {
             onInitRepo={() => void git.initRepo()}
             onStageFile={(path) => void git.stageFile(path)}
             onStageAll={() => void git.stageAll()}
-            onUnstageFile={(path) => void git.unstageFile(path)}
+            onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
             onUnstageAll={() => void git.unstageAll()}
             onCommit={git.commit}
             onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}

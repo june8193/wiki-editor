@@ -149,13 +149,33 @@ describe('GitService integration (isolated temp repos)', () => {
       'M:note 1.md'
     ])
 
+    // Stage and unstage a renamed pair (both path and origPath) and operate cleanly from a subdirectory workspace
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'before subdocs check')
+
+    const subDir = join(repoDir, 'subdocs')
+    await mkdir(subDir, { recursive: true })
+    await writeFile(join(subDir, 'sub.md'), '# Sub\n', 'utf8')
+    await runGit(repoDir, ['mv', 'note 1.md', 'note-renamed.md'])
+    await service.stage(subDir, ['subdocs/sub.md'])
+    st = await service.status(subDir)
+    expect(st.staged).toContainEqual({ path: 'note-renamed.md', origPath: 'note 1.md', status: 'R' })
+    st = await service.unstage(subDir, ['note-renamed.md', 'note 1.md'])
+    expect(st.staged.map((f) => f.path)).toEqual(['subdocs/sub.md'])
+    st = await service.unstageAll(subDir)
+    expect(st.staged).toEqual([])
+    st = await service.stageAll(subDir)
+    expect(st.staged.map((f) => f.path)).toContain('subdocs/sub.md')
+    expect(st.staged.map((f) => f.path)).toContain('note-renamed.md')
+    await service.unstageAll(subDir)
+
     // Path traversal & .git access & empty path arrays are blocked
     await expect(service.stage(repoDir, [])).rejects.toThrow()
     await expect(service.stage(repoDir, ['../outside.txt'])).rejects.toThrow(/경로|저장소/)
     await expect(service.stage(repoDir, [join(tempRoot, 'outside.txt')])).rejects.toThrow(/경로|저장소/)
     await expect(service.stage(repoDir, ['.git/config'])).rejects.toThrow(/경로|\.git|시스템/)
     await expect(service.unstage(repoDir, ['../outside.txt'])).rejects.toThrow(/경로|저장소/)
-  }, 20_000)
+  }, 30_000)
 
   it('lists local branches, checks out branches safely, and rejects conflicting or invalid checkouts', async () => {
     await service.init(repoDir)

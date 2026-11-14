@@ -12,7 +12,7 @@ export interface GitSidebarPanelProps {
   onInitRepo: () => void
   onStageFile: (path: string) => void
   onStageAll: () => void
-  onUnstageFile: (path: string) => void
+  onUnstageFile: (path: string, origPath?: string) => void
   onUnstageAll: () => void
   onCommit: (message: string) => Promise<boolean> | boolean
   onCheckoutBranch: (branchName: string) => void
@@ -27,6 +27,78 @@ function formatGitFileLabel(file: GitChangedFile): string {
 
 function getBadgeModifier(code: GitChangedFile['status']): string {
   return code === '?' ? 'untracked' : code.toLowerCase()
+}
+
+interface GitFileSectionProps {
+  title: string
+  files: readonly GitChangedFile[]
+  emptyText: string
+  bulkButtonText: string
+  bulkAriaLabel: string
+  itemActionSymbol: '+' | '-'
+  itemActionTitle: 'Stage' | 'Unstage'
+  isBusy: boolean
+  onBulkAction: () => void
+  onItemAction: (file: GitChangedFile) => void
+}
+
+function GitFileSection({
+  title,
+  files,
+  emptyText,
+  bulkButtonText,
+  bulkAriaLabel,
+  itemActionSymbol,
+  itemActionTitle,
+  isBusy,
+  onBulkAction,
+  onItemAction
+}: GitFileSectionProps) {
+  return (
+    <div className="git-section">
+      <div className="git-section-header">
+        <span className="git-section-title">
+          {title} ({files.length})
+        </span>
+        <button
+          type="button"
+          className="git-section-action-btn"
+          aria-label={bulkAriaLabel}
+          title={bulkAriaLabel}
+          disabled={isBusy || files.length === 0}
+          onClick={onBulkAction}
+        >
+          {bulkButtonText}
+        </button>
+      </div>
+      {files.length === 0 ? (
+        <p className="git-empty-subtext">{emptyText}</p>
+      ) : (
+        <ul className="git-file-list" role="list">
+          {files.map((file) => (
+            <li key={`${itemActionTitle}:${file.status}:${file.path}`} className="git-file-item">
+              <span className={`git-badge git-badge--${getBadgeModifier(file.status)}`}>
+                {file.status}
+              </span>
+              <span className="git-file-path" title={formatGitFileLabel(file)}>
+                {formatGitFileLabel(file)}
+              </span>
+              <button
+                type="button"
+                className="git-file-action-btn"
+                aria-label={`${file.path} ${itemActionTitle}`}
+                title={itemActionTitle}
+                disabled={isBusy}
+                onClick={() => onItemAction(file)}
+              >
+                {itemActionSymbol}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -204,91 +276,31 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
           </button>
         </form>
 
-        <div className="git-section">
-          <div className="git-section-header">
-            <span className="git-section-title">스테이지됨 ({status.staged.length})</span>
-            <button
-              type="button"
-              className="git-section-action-btn"
-              aria-label="전체 Unstage"
-              title="전체 Unstage"
-              disabled={isBusy || status.staged.length === 0}
-              onClick={onUnstageAll}
-            >
-              전체 -
-            </button>
-          </div>
-          {status.staged.length === 0 ? (
-            <p className="git-empty-subtext">스테이지된 변경 사항 없음</p>
-          ) : (
-            <ul className="git-file-list" role="list">
-              {status.staged.map((file) => (
-                <li key={`staged:${file.path}`} className="git-file-item">
-                  <span className={`git-badge git-badge--${getBadgeModifier(file.status)}`}>
-                    {file.status}
-                  </span>
-                  <span className="git-file-path" title={formatGitFileLabel(file)}>
-                    {formatGitFileLabel(file)}
-                  </span>
-                  <button
-                    type="button"
-                    className="git-file-action-btn"
-                    aria-label={`${file.path} Unstage`}
-                    title="Unstage"
-                    disabled={isBusy}
-                    onClick={() => onUnstageFile(file.path)}
-                  >
-                    -
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <GitFileSection
+          title="스테이지됨"
+          files={status.staged}
+          emptyText="스테이지된 변경 사항 없음"
+          bulkButtonText="전체 -"
+          bulkAriaLabel="전체 Unstage"
+          itemActionSymbol="-"
+          itemActionTitle="Unstage"
+          isBusy={isBusy}
+          onBulkAction={onUnstageAll}
+          onItemAction={(file) => onUnstageFile(file.path, file.origPath)}
+        />
 
-        <div className="git-section">
-          <div className="git-section-header">
-            <span className="git-section-title">
-              변경 사항 ({unstagedAndUntracked.length})
-            </span>
-            <button
-              type="button"
-              className="git-section-action-btn"
-              aria-label="전체 Stage"
-              title="전체 Stage"
-              disabled={isBusy || unstagedAndUntracked.length === 0}
-              onClick={onStageAll}
-            >
-              전체 +
-            </button>
-          </div>
-          {unstagedAndUntracked.length === 0 ? (
-            <p className="git-empty-subtext">변경된 파일 없음</p>
-          ) : (
-            <ul className="git-file-list" role="list">
-              {unstagedAndUntracked.map((file) => (
-                <li key={`change:${file.status}:${file.path}`} className="git-file-item">
-                  <span className={`git-badge git-badge--${getBadgeModifier(file.status)}`}>
-                    {file.status}
-                  </span>
-                  <span className="git-file-path" title={formatGitFileLabel(file)}>
-                    {formatGitFileLabel(file)}
-                  </span>
-                  <button
-                    type="button"
-                    className="git-file-action-btn"
-                    aria-label={`${file.path} Stage`}
-                    title="Stage"
-                    disabled={isBusy}
-                    onClick={() => onStageFile(file.path)}
-                  >
-                    +
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <GitFileSection
+          title="변경 사항"
+          files={unstagedAndUntracked}
+          emptyText="변경된 파일 없음"
+          bulkButtonText="전체 +"
+          bulkAriaLabel="전체 Stage"
+          itemActionSymbol="+"
+          itemActionTitle="Stage"
+          isBusy={isBusy}
+          onBulkAction={onStageAll}
+          onItemAction={(file) => onStageFile(file.path)}
+        />
       </>
     )
   }

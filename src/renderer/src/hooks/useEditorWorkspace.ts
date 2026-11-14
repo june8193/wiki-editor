@@ -16,6 +16,16 @@ interface InFlightSaveEntry {
   promise: Promise<boolean>
 }
 
+// Electron contextBridge strips Error subclasses/errno codes, so deleted workspace files match localized/ENOENT messages.
+function isMissingWorkspaceFileError(error: unknown): boolean {
+  const message = toErrorMessage(error, '')
+  return (
+    message.includes('경로를 찾을 수 없습니다') ||
+    message.includes('파일을 찾을 수 없습니다') ||
+    message.includes('ENOENT')
+  )
+}
+
 interface UseEditorWorkspaceOptions {
   autoSave: boolean
   autoSaveDelayMs: number
@@ -496,12 +506,7 @@ export function useEditorWorkspace({
           if (!mountedRef.current) return
           const current = bufferStore.getBuffer(latest.key)
           if (!current || current.kind !== 'workspace') return
-          const message = toErrorMessage(error, '')
-          const isMissing =
-            message.includes('경로를 찾을 수 없습니다') ||
-            message.includes('파일을 찾을 수 없습니다') ||
-            message.includes('ENOENT')
-          if (!isMissing) return
+          if (!isMissingWorkspaceFileError(error)) return
 
           if (!current.isDirty) {
             syncDeletedPath(current.path)
