@@ -330,4 +330,30 @@ describe('App shell, theme persistence, and settings panel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('두 번째 저장 실패')
     expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
   })
+
+  it('applies persisted config if an early toggle fails before initial get() resolves', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'dark' })
+
+    let resolveGet!: (value: AppConfig) => void
+    api.config.get = () =>
+      new Promise<AppConfig>((resolve) => {
+        resolveGet = resolve
+      })
+    api.config.update = async () => {
+      throw new Error('초기 로드 전 저장 실패')
+    }
+    window.wikiApi = api
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /테마 전환/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('초기 로드 전 저장 실패')
+
+    resolveGet({ ...cloneAppConfig(DEFAULT_APP_CONFIG), theme: 'dark' })
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
+    })
+  })
 })

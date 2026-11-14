@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppConfig, DEFAULT_APP_CONFIG, ThemeMode } from '@shared/config'
 import { SettingsPanel } from './components/SettingsPanel'
+import { toErrorMessage } from './utils/toErrorMessage'
 
 function applyThemeAttribute(theme: ThemeMode): void {
   document.documentElement.setAttribute('data-theme', theme)
@@ -8,7 +9,7 @@ function applyThemeAttribute(theme: ThemeMode): void {
 
 export function App() {
   const [config, setConfig] = useState<AppConfig>(DEFAULT_APP_CONFIG)
-  const [commitSeq, setCommitSeq] = useState<number>(0)
+  const [reloadSignal, setReloadSignal] = useState<number>(0)
   const [configPath, setConfigPath] = useState<string>('')
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -17,6 +18,7 @@ export function App() {
   const lastCommittedConfigRef = useRef<AppConfig>(DEFAULT_APP_CONFIG)
   const mutationSeqRef = useRef<number>(0)
   const inFlightUpdatesRef = useRef<number>(0)
+  const hasMutationCommitRef = useRef<boolean>(false)
   const mountedRef = useRef<boolean>(true)
 
   const applyUiConfig = useCallback((nextConfig: AppConfig): void => {
@@ -27,7 +29,7 @@ export function App() {
   const recordCommittedConfig = useCallback(
     (committed: AppConfig, shouldApplyToUi: boolean): void => {
       lastCommittedConfigRef.current = committed
-      setCommitSeq((seq) => seq + 1)
+      setReloadSignal((signal) => signal + 1)
       if (shouldApplyToUi) {
         applyUiConfig(committed)
       }
@@ -42,7 +44,6 @@ export function App() {
   useEffect(() => {
     mountedRef.current = true
     const configApi = window.wikiApi.config
-    const initialSeq = mutationSeqRef.current
 
     void configApi
       .getConfigPath()
@@ -53,9 +54,7 @@ export function App() {
       })
       .catch((error: unknown) => {
         if (mountedRef.current) {
-          setErrorMessage(
-            error instanceof Error ? error.message : '설정 경로를 불러오지 못했습니다.'
-          )
+          setErrorMessage(toErrorMessage(error, '설정 경로를 불러오지 못했습니다.'))
         }
       })
 
@@ -63,15 +62,19 @@ export function App() {
       .get()
       .then((loadedConfig) => {
         if (!mountedRef.current) return
-        recordCommittedConfig(loadedConfig, mutationSeqRef.current === initialSeq)
+        recordCommittedConfig(
+          loadedConfig,
+          inFlightUpdatesRef.current === 0 && !hasMutationCommitRef.current
+        )
       })
       .catch((error: unknown) => {
         if (!mountedRef.current) return
-        setErrorMessage(error instanceof Error ? error.message : '설정을 불러오지 못했습니다.')
+        setErrorMessage(toErrorMessage(error, '설정을 불러오지 못했습니다.'))
       })
 
     const unsubscribe = configApi.onChanged((updatedConfig) => {
       if (!mountedRef.current) return
+      hasMutationCommitRef.current = true
       recordCommittedConfig(updatedConfig, inFlightUpdatesRef.current === 0)
     })
 
@@ -94,13 +97,14 @@ export function App() {
       const saved = await window.wikiApi.config.update({ theme: nextTheme })
       if (!mountedRef.current) return
       inFlightUpdatesRef.current -= 1
+      hasMutationCommitRef.current = true
       recordCommittedConfig(saved, seq === mutationSeqRef.current)
     } catch (error: unknown) {
       if (!mountedRef.current) return
       inFlightUpdatesRef.current -= 1
       if (seq === mutationSeqRef.current) {
         applyUiConfig(lastCommittedConfigRef.current)
-        setErrorMessage(error instanceof Error ? error.message : '테마 설정 저장에 실패했습니다.')
+        setErrorMessage(toErrorMessage(error, '테마 설정 저장에 실패했습니다.'))
       }
     }
   }
@@ -159,7 +163,7 @@ export function App() {
         {isSettingsOpen && (
           <SettingsPanel
             theme={config.theme}
-            commitSeq={commitSeq}
+            reloadSignal={reloadSignal}
             configPath={configPath}
             onToggleTheme={() => void handleToggleTheme()}
             onReadRawConfig={handleReadRawConfig}

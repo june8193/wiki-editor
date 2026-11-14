@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { ThemeMode } from '@shared/config'
+import { toErrorMessage } from '../utils/toErrorMessage'
 
 interface SettingsPanelProps {
   theme: ThemeMode
-  commitSeq: number
+  reloadSignal: number
   configPath: string
   onToggleTheme: () => void
   onReadRawConfig: () => Promise<string>
@@ -14,7 +15,7 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({
   theme,
-  commitSeq,
+  reloadSignal,
   configPath,
   onToggleTheme,
   onReadRawConfig,
@@ -25,7 +26,7 @@ export function SettingsPanel({
   const [rawConfig, setRawConfig] = useState<string | null>(null)
   const [isLoadingRaw, setIsLoadingRaw] = useState<boolean>(false)
   const [isRawOpen, setIsRawOpen] = useState<boolean>(false)
-  const [refreshCount, setRefreshCount] = useState<number>(0)
+  const [manualRefreshCount, setManualRefreshCount] = useState<number>(0)
   const readSeqRef = useRef<number>(0)
 
   const nextThemeLabel = theme === 'light' ? '다크 모드로 전환' : '라이트 모드로 전환'
@@ -44,7 +45,7 @@ export function SettingsPanel({
       })
       .catch((error: unknown) => {
         if (!active || seq !== readSeqRef.current) return
-        onError(error instanceof Error ? error.message : '설정 파일을 읽지 못했습니다.')
+        onError(toErrorMessage(error, '설정 파일을 읽지 못했습니다.'))
       })
       .finally(() => {
         if (!active || seq !== readSeqRef.current) return
@@ -54,12 +55,12 @@ export function SettingsPanel({
     return () => {
       active = false
     }
-  }, [commitSeq, isRawOpen, refreshCount, onError, onReadRawConfig])
+  }, [reloadSignal, isRawOpen, manualRefreshCount, onError, onReadRawConfig])
 
   const handleOpenRawConfig = (): void => {
     onClearError()
     setIsRawOpen(true)
-    setRefreshCount((count) => count + 1)
+    setManualRefreshCount((count) => count + 1)
   }
 
   return (
