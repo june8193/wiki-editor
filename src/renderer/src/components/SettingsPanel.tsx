@@ -3,7 +3,7 @@ import { ThemeMode } from '@shared/config'
 
 interface SettingsPanelProps {
   theme: ThemeMode
-  persistedVersion: number
+  commitSeq: number
   configPath: string
   onToggleTheme: () => void
   onReadRawConfig: () => Promise<string>
@@ -14,7 +14,7 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({
   theme,
-  persistedVersion,
+  commitSeq,
   configPath,
   onToggleTheme,
   onReadRawConfig,
@@ -54,7 +54,7 @@ export function SettingsPanel({
     return () => {
       active = false
     }
-  }, [persistedVersion, isRawOpen, refreshCount, onError, onReadRawConfig])
+  }, [commitSeq, isRawOpen, refreshCount, onError, onReadRawConfig])
 
   const handleOpenRawConfig = (): void => {
     onClearError()

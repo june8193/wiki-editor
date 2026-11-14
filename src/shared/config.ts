@@ -98,8 +98,11 @@ const CONFIG_FIELD_SPECS: { [K in keyof AppConfig]: FieldSpec<K> } = {
     errorMessage: 'Invalid autoSave: expected boolean'
   },
   autoSaveDelayMs: {
-    parse: (value) =>
-      typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : null,
+    parse: (value) => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return null
+      const rounded = Math.round(value)
+      return rounded > 0 ? rounded : null
+    },
     errorMessage: 'Invalid autoSaveDelayMs: expected positive finite number'
   },
   showHeadingNumbers: {

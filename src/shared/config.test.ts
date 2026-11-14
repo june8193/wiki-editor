@@ -32,6 +32,7 @@ describe('shared config validation and normalization', () => {
     expect(() => validateConfigPatch({ theme: 'solarized' })).toThrow(/theme/i)
     expect(() => validateConfigPatch({ autoSave: 'yes' })).toThrow(/autoSave/i)
     expect(() => validateConfigPatch({ autoSaveDelayMs: 0 })).toThrow(/autoSaveDelayMs/i)
+    expect(() => validateConfigPatch({ autoSaveDelayMs: 0.4 })).toThrow(/autoSaveDelayMs/i)
     expect(() => validateConfigPatch({ showHeadingNumbers: 1 })).toThrow(/showHeadingNumbers/i)
     expect(() => validateConfigPatch({ favoriteWorkspaces: [{ path: 123 }] })).toThrow(
       /favoriteWorkspaces/i

@@ -261,6 +261,10 @@ describe('App shell, theme persistence, and settings panel', () => {
 
     render(<App />)
     expect(await screen.findByRole('alert')).toHaveTextContent('초기 설정 로드 실패')
+    await user.click(screen.getByRole('button', { name: /설정/i }))
+    expect(
+      await screen.findByText('C:\\Users\\test\\AppData\\Roaming\\wiki-editor\\config.json')
+    ).toBeInTheDocument()
   })
 
   it('keeps error banner visible and avoids stale raw read when saving theme fails while raw preview is open', async () => {

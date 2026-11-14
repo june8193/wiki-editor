@@ -8,7 +8,7 @@ function applyThemeAttribute(theme: ThemeMode): void {
 
 export function App() {
   const [config, setConfig] = useState<AppConfig>(DEFAULT_APP_CONFIG)
-  const [persistedVersion, setPersistedVersion] = useState<number>(0)
+  const [commitSeq, setCommitSeq] = useState<number>(0)
   const [configPath, setConfigPath] = useState<string>('')
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -19,6 +19,22 @@ export function App() {
   const inFlightUpdatesRef = useRef<number>(0)
   const mountedRef = useRef<boolean>(true)
 
+  const applyUiConfig = useCallback((nextConfig: AppConfig): void => {
+    latestThemeRef.current = nextConfig.theme
+    setConfig(nextConfig)
+  }, [])
+
+  const recordCommittedConfig = useCallback(
+    (committed: AppConfig, shouldApplyToUi: boolean): void => {
+      lastCommittedConfigRef.current = committed
+      setCommitSeq((seq) => seq + 1)
+      if (shouldApplyToUi) {
+        applyUiConfig(committed)
+      }
+    },
+    [applyUiConfig]
+  )
+
   useEffect(() => {
     applyThemeAttribute(config.theme)
   }, [config.theme])
@@ -28,16 +44,26 @@ export function App() {
     const configApi = window.wikiApi.config
     const initialSeq = mutationSeqRef.current
 
-    void Promise.all([configApi.get(), configApi.getConfigPath()])
-      .then(([loadedConfig, resolvedPath]) => {
-        if (!mountedRef.current) return
-        setConfigPath(resolvedPath)
-        lastCommittedConfigRef.current = loadedConfig
-        setPersistedVersion((version) => version + 1)
-        if (mutationSeqRef.current === initialSeq) {
-          latestThemeRef.current = loadedConfig.theme
-          setConfig(loadedConfig)
+    void configApi
+      .getConfigPath()
+      .then((resolvedPath) => {
+        if (mountedRef.current) {
+          setConfigPath(resolvedPath)
         }
+      })
+      .catch((error: unknown) => {
+        if (mountedRef.current) {
+          setErrorMessage(
+            error instanceof Error ? error.message : '설정 경로를 불러오지 못했습니다.'
+          )
+        }
+      })
+
+    void configApi
+      .get()
+      .then((loadedConfig) => {
+        if (!mountedRef.current) return
+        recordCommittedConfig(loadedConfig, mutationSeqRef.current === initialSeq)
       })
       .catch((error: unknown) => {
         if (!mountedRef.current) return
@@ -46,46 +72,34 @@ export function App() {
 
     const unsubscribe = configApi.onChanged((updatedConfig) => {
       if (!mountedRef.current) return
-      lastCommittedConfigRef.current = updatedConfig
-      setPersistedVersion((version) => version + 1)
-      if (inFlightUpdatesRef.current === 0) {
-        latestThemeRef.current = updatedConfig.theme
-        setConfig(updatedConfig)
-      }
+      recordCommittedConfig(updatedConfig, inFlightUpdatesRef.current === 0)
     })
 
     return () => {
       mountedRef.current = false
       unsubscribe()
     }
-  }, [])
+  }, [recordCommittedConfig])
 
   const handleToggleTheme = async (): Promise<void> => {
     const seq = ++mutationSeqRef.current
     inFlightUpdatesRef.current += 1
     const nextTheme: ThemeMode = latestThemeRef.current === 'light' ? 'dark' : 'light'
 
-    latestThemeRef.current = nextTheme
     setErrorMessage(null)
+    latestThemeRef.current = nextTheme
     setConfig((prev) => ({ ...prev, theme: nextTheme }))
 
     try {
       const saved = await window.wikiApi.config.update({ theme: nextTheme })
       if (!mountedRef.current) return
       inFlightUpdatesRef.current -= 1
-      lastCommittedConfigRef.current = saved
-      setPersistedVersion((version) => version + 1)
-      if (seq === mutationSeqRef.current) {
-        latestThemeRef.current = saved.theme
-        setConfig(saved)
-      }
+      recordCommittedConfig(saved, seq === mutationSeqRef.current)
     } catch (error: unknown) {
       if (!mountedRef.current) return
       inFlightUpdatesRef.current -= 1
       if (seq === mutationSeqRef.current) {
-        const committed = lastCommittedConfigRef.current
-        latestThemeRef.current = committed.theme
-        setConfig(committed)
+        applyUiConfig(lastCommittedConfigRef.current)
         setErrorMessage(error instanceof Error ? error.message : '테마 설정 저장에 실패했습니다.')
       }
     }
@@ -145,7 +159,7 @@ export function App() {
         {isSettingsOpen && (
           <SettingsPanel
             theme={config.theme}
-            persistedVersion={persistedVersion}
+            commitSeq={commitSeq}
             configPath={configPath}
             onToggleTheme={() => void handleToggleTheme()}
             onReadRawConfig={handleReadRawConfig}

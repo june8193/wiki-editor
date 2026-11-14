@@ -20,19 +20,19 @@ export function registerConfigIpc(
   configService: ConfigService,
   getTargets: () => WebContentsLike[]
 ): () => void {
-  const invokeChannels = [
-    CONFIG_IPC_CHANNELS.get,
-    CONFIG_IPC_CHANNELS.update,
-    CONFIG_IPC_CHANNELS.getPath,
-    CONFIG_IPC_CHANNELS.readRaw
+  const handlers: Array<readonly [string, (event: unknown, ...args: unknown[]) => unknown]> = [
+    [CONFIG_IPC_CHANNELS.get, () => configService.get()],
+    [
+      CONFIG_IPC_CHANNELS.update,
+      (_event, patch) => configService.update(patch as Partial<AppConfig>)
+    ],
+    [CONFIG_IPC_CHANNELS.getPath, () => configService.getConfigPath()],
+    [CONFIG_IPC_CHANNELS.readRaw, () => configService.readRaw()]
   ]
 
-  ipcMain.handle(CONFIG_IPC_CHANNELS.get, () => configService.get())
-  ipcMain.handle(CONFIG_IPC_CHANNELS.update, (_event, patch) =>
-    configService.update(patch as Partial<AppConfig>)
-  )
-  ipcMain.handle(CONFIG_IPC_CHANNELS.getPath, () => configService.getConfigPath())
-  ipcMain.handle(CONFIG_IPC_CHANNELS.readRaw, () => configService.readRaw())
+  for (const [channel, handler] of handlers) {
+    ipcMain.handle(channel, handler)
+  }
 
   const unsubscribe = configService.onChanged((updatedConfig) => {
     for (const target of getTargets()) {
@@ -44,7 +44,7 @@ export function registerConfigIpc(
 
   return () => {
     unsubscribe()
-    for (const channel of invokeChannels) {
+    for (const [channel] of handlers) {
       ipcMain.removeHandler(channel)
     }
   }
