@@ -2334,7 +2334,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     await user.click(within(sidebar).getByText('manual.md'))
     await user.click(within(sidebar).getByText('other.md'))
 
-    // Open split view by duplicating manual.md and keep <= 2 editor DOM instances
+    // Open horizontal split panes by duplicating manual.md and keep <= 2 editor DOM instances
     const primaryPane = screen.getByTestId('pane-primary')
 
     fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: 'manual.md' }))

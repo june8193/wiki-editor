@@ -220,25 +220,7 @@ export class PaneTabStore {
 
     const existing = targetPane.tabs.find((tab) => tab.bufferKey === bufferKey)
     if (existing) {
-      if (
-        targetPane.activeTabId === existing.id &&
-        this.state.activePaneId === targetPaneId &&
-        nextSplitMode === this.state.splitMode
-      ) {
-        return existing
-      }
-      this.commit({
-        ...this.state,
-        splitMode: nextSplitMode,
-        activePaneId: targetPaneId,
-        panes: {
-          ...this.state.panes,
-          [targetPaneId]: {
-            ...targetPane,
-            activeTabId: existing.id
-          }
-        }
-      })
+      this.commitTabActivation(targetPaneId, existing.id, nextSplitMode)
       return existing
     }
 

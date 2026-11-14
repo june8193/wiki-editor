@@ -5,7 +5,7 @@ import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
 import {
   DraggingTabPayload,
-  handleTabDrop,
+  handleTabMoveDrop,
   PaneInteractionActions,
   PaneTabBar
 } from './PaneTabBar'
@@ -69,7 +69,7 @@ export function PaneView({
         }
       }}
       onDrop={(event) =>
-        handleTabDrop(event, draggingTab, pane.id, actions.onMoveTab, onDragEndTab, {
+        handleTabMoveDrop(event, draggingTab, onDragEndTab, pane.id, actions.onMoveTab, {
           ignoreSamePane: true
         })
       }

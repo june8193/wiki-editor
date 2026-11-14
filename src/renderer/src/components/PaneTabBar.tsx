@@ -74,12 +74,12 @@ export function dispatchTabDrop(
   onDragEndTab()
 }
 
-export function handleTabDrop(
+export function handleTabMoveDrop(
   event: DragEvent,
   draggingTab: DraggingTabPayload | null,
+  onDragEndTab: () => void,
   targetPaneId: PaneId,
   onMoveTab: PaneInteractionActions['onMoveTab'],
-  onDragEndTab: () => void,
   options?: {
     targetIndex?: number
     ignoreSamePane?: boolean
@@ -143,7 +143,7 @@ export function PaneTabBar({
         event.preventDefault()
       }}
       onDrop={(event) =>
-        handleTabDrop(event, draggingTab, paneId, actions.onMoveTab, onDragEndTab, {
+        handleTabMoveDrop(event, draggingTab, onDragEndTab, paneId, actions.onMoveTab, {
           stopPropagation: true
         })
       }
@@ -175,7 +175,7 @@ export function PaneTabBar({
               event.preventDefault()
             }}
             onDrop={(event) =>
-              handleTabDrop(event, draggingTab, paneId, actions.onMoveTab, onDragEndTab, {
+              handleTabMoveDrop(event, draggingTab, onDragEndTab, paneId, actions.onMoveTab, {
                 targetIndex: index,
                 stopPropagation: true
               })
