@@ -3,6 +3,7 @@ import {
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  ReactNode,
   useCallback,
   useEffect,
   useRef,
@@ -83,6 +84,7 @@ function treeIndentStyle(depth: number): CSSProperties {
 interface FolderTreeSidebarProps {
   workspace: WorkspaceSummary | null
   isFavorite: boolean
+  workspaceSwitcher: ReactNode
   tree: WorkspaceTreeState
   activeFilePath: string | null
   onToggleFavorite: () => void
@@ -100,6 +102,7 @@ interface FolderTreeSidebarProps {
 export function FolderTreeSidebar({
   workspace,
   isFavorite,
+  workspaceSwitcher,
   tree,
   activeFilePath,
   onToggleFavorite,
@@ -300,70 +303,67 @@ export function FolderTreeSidebar({
 
   return (
     <section className="workspace-sidebar" aria-label="워크스페이스 탐색기">
+      <div className="sidebar-header">
+        <div className="sidebar-title-row">
+          {workspaceSwitcher}
+          {workspace && (
+            <button
+              type="button"
+              className={`icon-btn${isFavorite ? ' is-favorite' : ''}`}
+              aria-label={isFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'}
+              aria-pressed={isFavorite}
+              onClick={onToggleFavorite}
+            >
+              {isFavorite ? '★' : '☆'}
+            </button>
+          )}
+        </div>
+        {workspace && (
+          <div className="sidebar-actions">
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label="새 파일"
+              onClick={() => void beginCreate('file')}
+            >
+              + 파일
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label="새 폴더"
+              onClick={() => void beginCreate('directory')}
+            >
+              + 폴더
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label="트리 새로고침"
+              onClick={onRefreshTree}
+            >
+              새로고침
+            </button>
+          </div>
+        )}
+      </div>
+
       {!workspace ? (
         <div className="sidebar-empty">
           <p className="sidebar-empty-text">열린 워크스페이스 없음</p>
-          <p className="workspace-placeholder-hint">상단의 &apos;폴더 열기&apos;로 시작하세요.</p>
+          <p className="workspace-placeholder-hint">
+            File 메뉴의 &apos;폴더 열기&apos; 또는 상단 워크스페이스 선택으로 시작하세요.
+          </p>
         </div>
       ) : (
-        <>
-          <div className="sidebar-header">
-            <div className="sidebar-title-row">
-              <button
-                type="button"
-                className="sidebar-workspace-name-btn"
-                title={workspace.rootPath}
-                onClick={() => onSelectPath(null)}
-              >
-                {workspace.name}
-              </button>
-              <button
-                type="button"
-                className={`icon-btn${isFavorite ? ' is-favorite' : ''}`}
-                aria-label={isFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'}
-                aria-pressed={isFavorite}
-                onClick={onToggleFavorite}
-              >
-                {isFavorite ? '★' : '☆'}
-              </button>
-            </div>
-            <div className="sidebar-actions">
-              <button
-                type="button"
-                className="btn btn-sm"
-                aria-label="새 파일"
-                onClick={() => void beginCreate('file')}
-              >
-                + 파일
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm"
-                aria-label="새 폴더"
-                onClick={() => void beginCreate('directory')}
-              >
-                + 폴더
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm"
-                aria-label="트리 새로고침"
-                onClick={onRefreshTree}
-              >
-                새로고침
-              </button>
-            </div>
-          </div>
-
-          <ul role="tree" className="folder-tree" onClick={() => onSelectPath(null)}>
-            {inlineCreate?.parentDirPath === workspace.rootPath && renderInlineCreateRow(0)}
-            {tree.rootEntries.length === 0 && !inlineCreate ? (
-              <li className="tree-status-row">빈 폴더입니다.</li>
-            ) : (
-              renderEntries(tree.rootEntries, 0)
-            )}
-          </ul>
-        </>
+        <ul role="tree" className="folder-tree" onClick={() => onSelectPath(null)}>
+          {inlineCreate?.parentDirPath === workspace.rootPath && renderInlineCreateRow(0)}
+          {tree.rootEntries.length === 0 && !inlineCreate ? (
+            <li className="tree-status-row">빈 폴더입니다.</li>
+          ) : (
+            renderEntries(tree.rootEntries, 0)
+          )}
+        </ul>
       )}
 
       {contextMenu && (

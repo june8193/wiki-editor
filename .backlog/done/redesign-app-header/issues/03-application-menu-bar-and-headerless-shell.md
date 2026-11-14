@@ -1,0 +1,22 @@
+# 03 — 애플리케이션 메뉴 바 구성(폴더 열기 · 테마 전환 · 설정 패널) 및 앱 헤더 완전 제거
+
+**Spec:** [spec.md](../spec.md)
+
+**What to build:** Electron 애플리케이션 메뉴 바에 `File > 폴더 열기`, `View > 테마 전환`, `Settings > 설정 패널`(및 기본 `Edit`/`View`/`Window` 동작)을 구성하여 렌더러와 IPC로 연결하고, 앱 내부의 `<header class="app-header">`를 완전히 제거한 뒤 도메인 문서를 최신 구조로 갱신합니다.
+
+**Blocked by:** 01-drag-split-horizontal-and-vertical, 02-sidebar-workspace-switcher
+
+**Status:** resolved
+
+- [x] Electron 애플리케이션 메뉴 바가 `File`(`폴더 열기...` `CmdOrCtrl+O`, 종료), `Edit`(실행 취소, 다시 실행, 잘라내기, 복사, 붙여넣기, 모두 선택), `View`(`테마 전환`, 새로고침, 개발자 도구, 확대/축소, 전체 화면), `Settings`(`설정 패널`), `Window`(최소화, 닫기 등)로 구성됩니다.
+- [x] 애플리케이션 메뉴에서 `폴더 열기...`, `테마 전환`, `설정 패널` 선택 시 Preload 브릿지(`window.wikiApi`)를 통해 렌더러에 이벤트가 전달되며, 컴포넌트 언마운트 시 리스너가 정상 해제됩니다.
+- [x] 메뉴 바의 `File > 폴더 열기...` 실행 시 미저장 변경 사항이 있으면 기존 확인 다이얼로그(`저장 후 이동` / `버리고 이동`)가 표시된 후 폴더 선택 및 워크스페이스 전환이 수행됩니다.
+- [x] 메뉴 바의 `View > 테마 전환` 실행 시 라이트/다크 테마가 즉시 전환·저장되고, `Settings > 설정 패널` 실행 시 우측 전역 설정 패널이 열리고 닫힙니다.
+- [x] 앱 내부의 `<header class="app-header">` 영역(앱 제목, 기존 폴더 열기·테마 전환·설정 버튼 포함)이 완전히 제거되며, 폴더 트리 빈 상태 안내 문구가 새로운 진입 경로에 맞게 갱신됩니다.
+- [x] 도메인 용어집(`CONTEXT.md`)에서 앱 헤더 제거 및 애플리케이션 메뉴 바·워크스페이스 전환기·화면 분할 모드 설명이 실제 구현과 일치하도록 업데이트됩니다.
+- [x] 메뉴 템플릿/Preload 브릿지 단위 테스트와 `<App />` 통합 테스트가 모두 통과합니다.
+
+## Comments
+
+- Commits: `9967d83`, `3115b0e`
+- Verification: `npm run typecheck` passed, `npm test` passed (`30 passed (30)`, `189 passed (189)`), `npm run build` passed, parallel `/code-review` converged to 0 Standards and 0 Spec findings after 2 iterations.

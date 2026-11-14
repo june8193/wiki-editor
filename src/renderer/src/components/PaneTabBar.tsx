@@ -53,23 +53,51 @@ export function parseDraggingTabPayload(
   return fallback
 }
 
-export function handleTabDrop(
+export function dispatchTabDrop(
   event: DragEvent,
   draggingTab: DraggingTabPayload | null,
-  targetPaneId: PaneId,
-  onMoveTab: PaneInteractionActions['onMoveTab'],
   onDragEndTab: () => void,
-  options?: { targetIndex?: number; ignoreSamePane?: boolean; stopPropagation?: boolean }
+  onValidDrop: (payload: DraggingTabPayload) => void,
+  options?: {
+    shouldAccept?: (payload: DraggingTabPayload) => boolean
+    stopPropagation?: boolean
+  }
 ): void {
   const payload = parseDraggingTabPayload(event, draggingTab)
   if (!payload) return
-  if (options?.ignoreSamePane && payload.paneId === targetPaneId) return
+  if (options?.shouldAccept && !options.shouldAccept(payload)) return
   event.preventDefault()
   if (options?.stopPropagation) {
     event.stopPropagation()
   }
-  onMoveTab(payload.paneId, targetPaneId, payload.tabId, options?.targetIndex)
+  onValidDrop(payload)
   onDragEndTab()
+}
+
+export function handleTabMoveDrop(
+  event: DragEvent,
+  draggingTab: DraggingTabPayload | null,
+  onDragEndTab: () => void,
+  targetPaneId: PaneId,
+  onMoveTab: PaneInteractionActions['onMoveTab'],
+  options?: {
+    targetIndex?: number
+    ignoreSamePane?: boolean
+    stopPropagation?: boolean
+  }
+): void {
+  dispatchTabDrop(
+    event,
+    draggingTab,
+    onDragEndTab,
+    (payload) => onMoveTab(payload.paneId, targetPaneId, payload.tabId, options?.targetIndex),
+    {
+      shouldAccept: options?.ignoreSamePane
+        ? (payload) => payload.paneId !== targetPaneId
+        : undefined,
+      stopPropagation: options?.stopPropagation
+    }
+  )
 }
 
 interface PaneTabBarProps {
@@ -119,7 +147,7 @@ export function PaneTabBar({
         event.preventDefault()
       }}
       onDrop={(event) =>
-        handleTabDrop(event, draggingTab, paneId, actions.onMoveTab, onDragEndTab, {
+        handleTabMoveDrop(event, draggingTab, onDragEndTab, paneId, actions.onMoveTab, {
           stopPropagation: true
         })
       }
@@ -151,7 +179,7 @@ export function PaneTabBar({
               event.preventDefault()
             }}
             onDrop={(event) =>
-              handleTabDrop(event, draggingTab, paneId, actions.onMoveTab, onDragEndTab, {
+              handleTabMoveDrop(event, draggingTab, onDragEndTab, paneId, actions.onMoveTab, {
                 targetIndex: index,
                 stopPropagation: true
               })

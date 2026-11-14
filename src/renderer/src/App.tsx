@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { AppMenuCommand } from '@shared/ipc'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import type { OutlineScrollRequest } from './components/DocumentEditor'
@@ -24,18 +25,8 @@ import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorks
 import { useGitController } from './hooks/useGitController'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
-import { getPaneActiveTab, type PaneId, SplitMode, type TabViewPatch } from './stores/PaneTabStore'
+import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
 import { toErrorMessage } from './utils/toErrorMessage'
-
-const SPLIT_MODE_OPTIONS: ReadonlyArray<{
-  mode: SplitMode
-  ariaLabel: string
-  label: string
-}> = [
-  { mode: 'single', ariaLabel: '단일 화면', label: '단일' },
-  { mode: 'horizontal', ariaLabel: '좌우 분할', label: '좌우 분할' },
-  { mode: 'vertical', ariaLabel: '상하 분할', label: '상하 분할' }
-]
 
 interface PendingDialogState {
   title: string
@@ -67,12 +58,20 @@ export function App() {
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
   const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(async () => [])
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
+  const isDialogOpenRef = useRef<boolean>(false)
+  isDialogOpenRef.current = pendingDialog !== null
+  const isSelectingFolderRef = useRef<boolean>(false)
   const tabCloseActionsRef = useRef<{
     saveAndCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => Promise<boolean>
     forceCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => void
   }>({
     saveAndCloseTab: async () => false,
     forceCloseTab: () => undefined
+  })
+  const menuHandlersRef = useRef<Record<AppMenuCommand, () => void>>({
+    'open-folder': () => undefined,
+    'toggle-theme': () => undefined,
+    'toggle-settings': () => undefined
   })
 
   const {
@@ -123,9 +122,9 @@ export function App() {
     saveAndCloseTab,
     activateTab,
     focusPane,
-    setSplitMode,
     setSplitRatio,
     moveTab,
+    splitWithTab,
     duplicateTabToOtherPane,
     updateTabViewState,
     clearWorkspaceBuffers,
@@ -273,17 +272,24 @@ export function App() {
   )
 
   const handleSelectFolder = useCallback((): void => {
+    if (isDialogOpenRef.current || isSelectingFolderRef.current) {
+      return
+    }
+
+    isSelectingFolderRef.current = true
     reportErrorBanner(null)
-    void window.wikiApi.workspace
-      .selectFolder()
-      .then((selectedPath) => {
-        if (selectedPath) {
+    void window.wikiApi.workspace.selectFolder().then(
+      (selectedPath) => {
+        isSelectingFolderRef.current = false
+        if (selectedPath && !isDialogOpenRef.current) {
           handleSwitchWorkspace(selectedPath)
         }
-      })
-      .catch((error: unknown) => {
+      },
+      (error: unknown) => {
+        isSelectingFolderRef.current = false
         reportErrorBanner(toErrorMessage(error, '폴더 선택에 실패했습니다.'), error)
-      })
+      }
+    )
   }, [handleSwitchWorkspace, reportErrorBanner])
 
   const handleOpenFile = useCallback(
@@ -296,6 +302,21 @@ export function App() {
   const handleOpenConfigEditor = useCallback((): void => {
     void openConfigDocument()
   }, [openConfigDocument])
+
+  menuHandlersRef.current = {
+    'open-folder': handleSelectFolder,
+    'toggle-theme': toggleTheme,
+    'toggle-settings': () => setIsSettingsOpen((open) => !open)
+  }
+
+  useEffect(() => {
+    return window.wikiApi.menu.onCommand((command) => {
+      if (isDialogOpenRef.current) {
+        return
+      }
+      menuHandlersRef.current[command]?.()
+    })
+  }, [])
 
   const handleRequestDelete = useCallback(
     (entry: WorkspaceEntry): void => {
@@ -416,55 +437,6 @@ export function App() {
 
   return (
     <div className="app-shell" data-theme={config.theme}>
-      <header className="app-header">
-        <div className="app-header-left">
-          <h1 className="app-title">Wiki Editor</h1>
-          <WorkspaceSwitcher
-            workspace={workspace}
-            favoriteWorkspaces={config.favoriteWorkspaces}
-            recentWorkspaces={config.recentWorkspaces}
-            onSelectFolder={handleSelectFolder}
-            onSwitchWorkspace={handleSwitchWorkspace}
-            onRemoveFavorite={removeFavoriteWorkspace}
-          />
-        </div>
-
-        <div className="app-header-actions">
-          <div className="split-mode-group" role="group" aria-label="화면 분할">
-            {SPLIT_MODE_OPTIONS.map((option) => (
-              <button
-                key={option.mode}
-                type="button"
-                className={`btn btn-sm${layout.splitMode === option.mode ? ' is-active' : ''}`}
-                aria-label={option.ariaLabel}
-                aria-pressed={layout.splitMode === option.mode}
-                onClick={() => setSplitMode(option.mode)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-
-          <button
-            type="button"
-            className="btn"
-            aria-label="테마 전환"
-            aria-pressed={config.theme === 'dark'}
-            onClick={toggleTheme}
-          >
-            {config.theme === 'light' ? '다크 모드' : '라이트 모드'}
-          </button>
-          <button
-            type="button"
-            className="btn"
-            aria-expanded={isSettingsOpen}
-            onClick={() => setIsSettingsOpen((open) => !open)}
-          >
-            설정
-          </button>
-        </div>
-      </header>
-
       {errorMessage && (
         <div className="error-banner" role="alert">
           {errorMessage}
@@ -476,6 +448,15 @@ export function App() {
           <FolderTreeSidebar
             workspace={workspace}
             isFavorite={isCurrentWorkspaceFavorite}
+            workspaceSwitcher={
+              <WorkspaceSwitcher
+                workspace={workspace}
+                favoriteWorkspaces={config.favoriteWorkspaces}
+                recentWorkspaces={config.recentWorkspaces}
+                onSwitchWorkspace={handleSwitchWorkspace}
+                onRemoveFavorite={removeFavoriteWorkspace}
+              />
+            }
             tree={treeState}
             activeFilePath={activeFilePath}
             onToggleFavorite={() => {
@@ -537,6 +518,7 @@ export function App() {
           scrollRequest={outlineScrollRequest}
           isShortcutDisabled={pendingDialog !== null}
           onSetSplitRatio={setSplitRatio}
+          onSplitWithTab={splitWithTab}
           actions={paneActions}
         />
 

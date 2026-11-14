@@ -1,4 +1,6 @@
-import type { MenuItemConstructorOptions, MessageBoxOptions } from 'electron'
+import type { BaseWindow, MenuItemConstructorOptions, MessageBoxOptions } from 'electron'
+import { type AppMenuCommand, MENU_IPC_CHANNELS } from '@shared/ipc'
+import type { WebContentsLike } from './ipc/ipcHelpers'
 
 export interface RuntimeVersions {
   electron?: string
@@ -15,11 +17,14 @@ export interface BugReportCopiedDialogInput {
   logFilePath: string
 }
 
-export interface ApplicationMenuDeps {
-  onCopyBugReport: () => void
-  onOpenLogFolder: () => void
-  onShowVersion: () => void
+export interface CreateApplicationMenuOptions {
+  getTargetWebContents?: (targetWindow?: BaseWindow) => WebContentsLike | undefined
+  onCopyBugReport?: () => void
+  onOpenLogFolder?: () => void
+  onShowVersion?: () => void
 }
+
+export type ApplicationMenuDeps = CreateApplicationMenuOptions
 
 /**
  * Builds native message box options displaying app and runtime versions.
@@ -57,33 +62,98 @@ export function createBugReportCopiedMessageBoxOptions({
 }
 
 /**
- * Creates the application menu template containing Help > Copy Bug Report, Open Log Folder, and Version.
+ * Builds the Electron application menu template, routes custom commands to the active renderer,
+ * and wires Help > Copy Bug Report, Open Log Folder, and Version actions.
  */
 export function createApplicationMenuTemplate({
+  getTargetWebContents,
   onCopyBugReport,
   onOpenLogFolder,
   onShowVersion
-}: ApplicationMenuDeps): MenuItemConstructorOptions[] {
+}: CreateApplicationMenuOptions): MenuItemConstructorOptions[] {
+  const sendCommand = (command: AppMenuCommand, targetWindow?: BaseWindow): void => {
+    const target = getTargetWebContents?.(targetWindow)
+    if (target && !target.isDestroyed()) {
+      target.send(MENU_IPC_CHANNELS.command, command)
+    }
+  }
+
   return [
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: '폴더 열기...',
+          accelerator: 'CmdOrCtrl+O',
+          click: (_menuItem, window) => sendCommand('open-folder', window)
+        },
+        { type: 'separator' },
+        { role: 'quit' }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        {
+          label: '테마 전환',
+          click: (_menuItem, window) => sendCommand('toggle-theme', window)
+        },
+        { type: 'separator' },
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Settings',
+      submenu: [
+        {
+          label: '설정 패널',
+          click: (_menuItem, window) => sendCommand('toggle-settings', window)
+        }
+      ]
+    },
+    {
+      label: 'Window',
+      submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'close' }]
+    },
     {
       label: 'Help',
       submenu: [
         {
           label: 'Copy Bug Report',
           click: () => {
-            onCopyBugReport()
+            onCopyBugReport?.()
           }
         },
         {
           label: 'Open Log Folder',
           click: () => {
-            onOpenLogFolder()
+            onOpenLogFolder?.()
           }
         },
         {
           label: 'Version',
           click: () => {
-            onShowVersion()
+            onShowVersion?.()
           }
         }
       ]

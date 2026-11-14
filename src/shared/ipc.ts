@@ -48,6 +48,12 @@ export const GIT_IPC_CHANNELS = {
   sync: 'git:sync'
 } as const
 
+export type AppMenuCommand = 'open-folder' | 'toggle-theme' | 'toggle-settings'
+
+export const MENU_IPC_CHANNELS = {
+  command: 'menu:command'
+} as const
+
 export const LOG_IPC_CHANNELS = {
   write: 'log:write'
 } as const
@@ -97,6 +103,10 @@ export interface WikiGitApi {
   sync(workspacePath: string): Promise<GitSyncResult>
 }
 
+export interface WikiMenuApi {
+  onCommand(listener: (command: AppMenuCommand) => void): () => void
+}
+
 export interface WikiLogApi {
   write(payload: RendererLogPayload): Promise<void>
 }
@@ -105,5 +115,6 @@ export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
   git: WikiGitApi
+  menu: WikiMenuApi
   log?: WikiLogApi
 }

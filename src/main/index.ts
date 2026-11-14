@@ -2,6 +2,7 @@ import { release as getOsRelease } from 'node:os'
 import { join } from 'node:path'
 import {
   app,
+  type BaseWindow,
   BrowserWindow,
   clipboard,
   dialog,
@@ -41,8 +42,16 @@ function createMainWindow(): BrowserWindow {
   return mainWindow
 }
 
+function getActiveWindow(): BrowserWindow | undefined {
+  const focused = BrowserWindow.getFocusedWindow()
+  if (focused && !focused.isDestroyed()) {
+    return focused
+  }
+  return BrowserWindow.getAllWindows().find((win) => !win.isDestroyed())
+}
+
 function showMessageBox(options: MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
-  const targetWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  const targetWindow = getActiveWindow()
   return targetWindow ? dialog.showMessageBox(targetWindow, options) : dialog.showMessageBox(options)
 }
 
@@ -90,6 +99,13 @@ void app.whenReady().then(async () => {
   const gitService = new GitService({ logService })
 
   const getTargets = () => BrowserWindow.getAllWindows().map((win) => win.webContents)
+  const getMenuTargetWebContents = (targetWindow?: BaseWindow) => {
+    const win =
+      targetWindow instanceof BrowserWindow && !targetWindow.isDestroyed()
+        ? targetWindow
+        : getActiveWindow()
+    return win && !win.isDestroyed() ? win.webContents : undefined
+  }
 
   disposeLogIpc = registerLogIpc(ipcMain, logService)
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)
@@ -106,7 +122,7 @@ void app.whenReady().then(async () => {
     getTargets,
     logService,
     selectDirectory: async () => {
-      const targetWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      const targetWindow = getActiveWindow()
       const options = { properties: ['openDirectory'] as Array<'openDirectory'> }
       const result = targetWindow
         ? await dialog.showOpenDialog(targetWindow, options)
@@ -134,6 +150,7 @@ void app.whenReady().then(async () => {
   })
 
   const menuTemplate = createApplicationMenuTemplate({
+    getTargetWebContents: getMenuTargetWebContents,
     onCopyBugReport: () => {
       void onCopyBugReport()
     },

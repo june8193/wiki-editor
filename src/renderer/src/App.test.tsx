@@ -9,7 +9,7 @@ import {
   validateConfigRaw
 } from '@shared/config'
 import { createEmptyGitStatus } from '@shared/git'
-import type { WikiApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
+import type { AppMenuCommand, WikiApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import {
   addFavoriteWorkspace,
@@ -137,7 +137,9 @@ function createInMemoryWikiApi(
   api: WikiApi
   emitExternalChange: (patch: Partial<AppConfig>) => void
   emitWorkspaceChange: (event: WorkspaceChangeEvent) => void
+  emitMenuCommand: (command: AppMenuCommand) => void
   getListenerCount: () => number
+  getMenuListenerCount: () => number
   getFilesSnapshot: () => Map<string, string>
   readDirCalls: string[]
 } {
@@ -147,6 +149,7 @@ function createInMemoryWikiApi(
   }
   const configListeners = new Set<(config: AppConfig) => void>()
   const workspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
+  const menuListeners = new Set<(command: AppMenuCommand) => void>()
   const configPath = 'C:\\Users\\test\\AppData\\Roaming\\wiki-editor\\config.json'
 
   // Virtual directory & file map keyed by normalized POSIX-style paths
@@ -406,6 +409,14 @@ function createInMemoryWikiApi(
       }),
       ...fsOptions.git
     },
+    menu: {
+      onCommand(listener) {
+        menuListeners.add(listener)
+        return () => {
+          menuListeners.delete(listener)
+        }
+      }
+    },
     ...(fsOptions.log ? { log: fsOptions.log } : {})
   }
 
@@ -419,16 +430,55 @@ function createInMemoryWikiApi(
         listener(event)
       }
     },
+    emitMenuCommand(command) {
+      for (const listener of menuListeners) {
+        listener(command)
+      }
+    },
     getListenerCount: () => configListeners.size,
+    getMenuListenerCount: () => menuListeners.size,
     getFilesSnapshot: () => new Map(files),
     readDirCalls
   }
+}
+
+async function triggerMenuCommand(
+  emitMenuCommand: (command: AppMenuCommand) => void,
+  command: AppMenuCommand
+): Promise<void> {
+  await act(async () => {
+    emitMenuCommand(command)
+  })
 }
 
 describe('App shell, theme persistence, and settings panel', () => {
   beforeEach(() => {
     document.documentElement.removeAttribute('data-theme')
     vi.useRealTimers()
+  })
+
+  it('removes the internal app-header completely and updates folder tree empty-state guidance', async () => {
+    const { api } = createInMemoryWikiApi()
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    expect(screen.queryByRole('banner')).not.toBeInTheDocument()
+    expect(document.querySelector('header.app-header')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Wiki Editor' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /폴더 열기/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /테마 전환/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^설정$/i })).not.toBeInTheDocument()
+
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    expect(within(sidebar).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
+    expect(
+      within(sidebar).getByText("File 메뉴의 '폴더 열기' 또는 상단 워크스페이스 선택으로 시작하세요.")
+    ).toBeInTheDocument()
   })
 
   it('initializes document theme from persisted config on mount', async () => {
@@ -442,9 +492,8 @@ describe('App shell, theme persistence, and settings panel', () => {
     })
   })
 
-  it('toggles theme from header, updates data-theme immediately, and persists across restart', async () => {
-    const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi({ theme: 'light' })
+  it('toggles theme via application menu command, updates data-theme immediately, and persists across restart', async () => {
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
     window.wikiApi = api
 
     const firstMount = render(<App />)
@@ -453,8 +502,7 @@ describe('App shell, theme persistence, and settings panel', () => {
       expect(document.documentElement).toHaveAttribute('data-theme', 'light')
     })
 
-    const headerToggle = await screen.findByRole('button', { name: /테마 전환/i })
-    await user.click(headerToggle)
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
 
     await waitFor(() => {
       expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
@@ -471,13 +519,12 @@ describe('App shell, theme persistence, and settings panel', () => {
 
   it('displays config.json path and opens config.json in the editor when clicking 설정 파일 직접 열기', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi({ theme: 'light', autoSave: true })
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light', autoSave: true })
     window.wikiApi = api
 
     render(<App />)
 
-    const settingsButton = await screen.findByRole('button', { name: /설정/i })
-    await user.click(settingsButton)
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
 
     expect(
       await screen.findByText('C:\\Users\\test\\AppData\\Roaming\\wiki-editor\\config.json')
@@ -522,12 +569,12 @@ describe('App shell, theme persistence, and settings panel', () => {
 
   it('refreshes open clean config.json editor when an external change arrives', async () => {
     const user = userEvent.setup()
-    const { api, emitExternalChange } = createInMemoryWikiApi({ theme: 'light' })
+    const { api, emitExternalChange, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
     window.wikiApi = api
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
 
     const editor = await screen.findByTestId('document-editor')
@@ -541,8 +588,7 @@ describe('App shell, theme persistence, and settings panel', () => {
   })
 
   it('rolls back theme and shows an error banner when saving theme fails', async () => {
-    const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
     api.config.update = async () => {
       throw new Error('디스크 쓰기 오류')
     }
@@ -554,15 +600,14 @@ describe('App shell, theme persistence, and settings panel', () => {
       expect(document.documentElement).toHaveAttribute('data-theme', 'light')
     })
 
-    await user.click(await screen.findByRole('button', { name: /테마 전환/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
 
     expect(await screen.findByRole('alert')).toHaveTextContent('디스크 쓰기 오류')
     expect(document.documentElement).toHaveAttribute('data-theme', 'light')
   })
 
   it('keeps the latest theme when rapid toggles resolve out of order', async () => {
-    const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
 
     let resolveFirst!: (value: AppConfig) => void
     let callCount = 0
@@ -578,10 +623,12 @@ describe('App shell, theme persistence, and settings panel', () => {
     window.wikiApi = api
 
     render(<App />)
-    const toggle = await screen.findByRole('button', { name: /테마 전환/i })
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
 
-    await user.click(toggle)
-    await user.click(toggle)
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
 
     resolveFirst({ ...cloneAppConfig(DEFAULT_APP_CONFIG), theme: 'dark' })
 
@@ -592,7 +639,7 @@ describe('App shell, theme persistence, and settings panel', () => {
 
   it('shows an error banner when reading raw config fails', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
     api.config.readRaw = async () => {
       throw new Error('읽기 권한 없음')
     }
@@ -600,7 +647,7 @@ describe('App shell, theme persistence, and settings panel', () => {
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('읽기 권한 없음')
@@ -608,12 +655,12 @@ describe('App shell, theme persistence, and settings panel', () => {
 
   it('closes the settings panel when clicking 닫기 and surfaces initial load failures', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
     window.wikiApi = api
 
     const view = render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     expect(screen.getByLabelText('전역 설정 패널')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /닫기/i }))
@@ -621,15 +668,15 @@ describe('App shell, theme persistence, and settings panel', () => {
 
     view.unmount()
 
-    const failingApi = createInMemoryWikiApi().api
-    failingApi.config.get = async () => {
+    const failingHarness = createInMemoryWikiApi()
+    failingHarness.api.config.get = async () => {
       throw new Error('초기 설정 로드 실패')
     }
-    window.wikiApi = failingApi
+    window.wikiApi = failingHarness.api
 
     render(<App />)
     expect(await screen.findByRole('alert')).toHaveTextContent('초기 설정 로드 실패')
-    await user.click(screen.getByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(failingHarness.emitMenuCommand, 'toggle-settings')
     expect(
       await screen.findByText('C:\\Users\\test\\AppData\\Roaming\\wiki-editor\\config.json')
     ).toBeInTheDocument()
@@ -637,7 +684,7 @@ describe('App shell, theme persistence, and settings panel', () => {
 
   it('keeps error banner visible and avoids stale raw read when saving theme fails while config editor is open', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
     let readRawCalls = 0
     const origReadRaw = api.config.readRaw
     api.config.readRaw = async () => {
@@ -651,12 +698,12 @@ describe('App shell, theme persistence, and settings panel', () => {
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
     await screen.findByTestId('document-editor')
     const callsBeforeToggle = readRawCalls
 
-    await user.click(screen.getByRole('button', { name: /테마 전환/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
 
     expect(await screen.findByRole('alert')).toHaveTextContent('저장 실패 유지 테스트')
     expect(document.documentElement).toHaveAttribute('data-theme', 'light')
@@ -664,8 +711,7 @@ describe('App shell, theme persistence, and settings panel', () => {
   })
 
   it('surfaces error and avoids flicker when onChanged from first toggle arrives during second failing toggle', async () => {
-    const user = userEvent.setup()
-    const { api, emitExternalChange } = createInMemoryWikiApi({ theme: 'light' })
+    const { api, emitExternalChange, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
 
     let resolveFirst!: (value: AppConfig) => void
     let rejectSecond!: (error: Error) => void
@@ -684,10 +730,12 @@ describe('App shell, theme persistence, and settings panel', () => {
     window.wikiApi = api
 
     render(<App />)
-    const toggle = await screen.findByRole('button', { name: /테마 전환/i })
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
 
-    await user.click(toggle)
-    await user.click(toggle)
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
 
     emitExternalChange({ theme: 'dark' })
     resolveFirst({ ...cloneAppConfig(DEFAULT_APP_CONFIG), theme: 'dark' })
@@ -700,8 +748,7 @@ describe('App shell, theme persistence, and settings panel', () => {
   })
 
   it('applies persisted config if an early toggle fails before initial get() resolves', async () => {
-    const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi({ theme: 'dark' })
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'dark' })
 
     let resolveGet!: (value: AppConfig) => void
     api.config.get = () =>
@@ -715,7 +762,7 @@ describe('App shell, theme persistence, and settings panel', () => {
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /테마 전환/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
     expect(await screen.findByRole('alert')).toHaveTextContent('초기 로드 전 저장 실패')
 
     resolveGet({ ...cloneAppConfig(DEFAULT_APP_CONFIG), theme: 'dark' })
@@ -723,6 +770,191 @@ describe('App shell, theme persistence, and settings panel', () => {
     await waitFor(() => {
       expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
     })
+  })
+
+  it('handles toggle-theme and toggle-settings application menu commands and cleans up listener on unmount', async () => {
+    const { api, emitMenuCommand, getMenuListenerCount } = createInMemoryWikiApi({
+      theme: 'light'
+    })
+    window.wikiApi = api
+
+    const view = render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+      expect(getMenuListenerCount()).toBe(1)
+    })
+
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
+    })
+    expect((await api.config.get()).theme).toBe('dark')
+
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.getByLabelText('전역 설정 패널')).toBeInTheDocument()
+
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
+
+    view.unmount()
+    expect(getMenuListenerCount()).toBe(0)
+  })
+
+  it('handles open-folder application menu command with unsaved changes confirmation dialog (저장 후 이동 / 버리고 이동)', async () => {
+    const user = userEvent.setup()
+    let nextSelectedFolder = 'C:\\wiki\\first'
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        workspaces: {
+          'C:\\wiki\\first': { 'first.md': '# First' },
+          'C:\\wiki\\second': { 'second.md': '# Second' },
+          'C:\\wiki\\third': { 'third.md': '# Third' }
+        }
+      }
+    )
+    api.workspace.selectFolder = async () => nextSelectedFolder
+    window.wikiApi = api
+
+    render(<App />)
+
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('first.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), ' edited')
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    // Trigger File > 폴더 열기... with unsaved changes -> cancel preserves current workspace
+    nextSelectedFolder = 'C:\\wiki\\second'
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const cancelDialog = await screen.findByRole('alertdialog')
+    expect(within(cancelDialog).getByRole('button', { name: '저장 후 이동' })).toBeInTheDocument()
+    expect(within(cancelDialog).getByRole('button', { name: '버리고 이동' })).toBeInTheDocument()
+    await user.click(within(cancelDialog).getByRole('button', { name: '취소' }))
+    expect(within(sidebar).getByText('first.md')).toBeInTheDocument()
+
+    // Retry File > 폴더 열기... and choose 저장 후 이동 -> saves edit and switches workspace
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const saveDialog = await screen.findByRole('alertdialog')
+    await user.click(within(saveDialog).getByRole('button', { name: '저장 후 이동' }))
+    expect(await within(sidebar).findByText('second.md')).toBeInTheDocument()
+    expect(getFilesSnapshot().get('C:/wiki/first/first.md')).toBe('# First edited')
+
+    // Make dirty edit in second workspace and choose 버리고 이동 on open-folder
+    await user.click(within(sidebar).getByText('second.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), ' discarded')
+    nextSelectedFolder = 'C:\\wiki\\third'
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const discardDialog = await screen.findByRole('alertdialog')
+    await user.click(within(discardDialog).getByRole('button', { name: '버리고 이동' }))
+    expect(await within(sidebar).findByText('third.md')).toBeInTheDocument()
+    expect(getFilesSnapshot().get('C:/wiki/second/second.md')).toBe('# Second')
+  })
+
+  it('ignores application menu commands while a ConfirmDialog is open without breaking pending Git mutations', async () => {
+    const user = userEvent.setup()
+    const gitStatus = {
+      ...createEmptyGitStatus(true, 'C:/wiki/first'),
+      branch: 'main',
+      hasUpstream: true
+    }
+    const pullMock = vi.fn(async () => gitStatus)
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\first',
+        workspaces: {
+          'C:\\wiki\\first': { 'dirty.md': '# Dirty' },
+          'C:\\wiki\\second': { 'second.md': '# Second' }
+        },
+        git: {
+          status: vi.fn(async () => gitStatus),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [{ name: 'main', current: true, upstream: 'origin/main' }]
+          })),
+          pull: pullMock
+        }
+      }
+    )
+    const selectFolderSpy = vi.fn(async () => 'C:\\wiki\\second')
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    api.workspace.selectFolder = selectFolderSpy
+
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('dirty.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), ' unsaved')
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    const gitDialog = await screen.findByRole('alertdialog')
+
+    // Native menu commands triggered while modal ConfirmDialog is active should be ignored
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+
+    expect(selectFolderSpy).not.toHaveBeenCalled()
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    expect(screen.queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
+    expect(screen.getByRole('alertdialog')).toBe(gitDialog)
+
+    // Original Git ConfirmDialog still resolves cleanly without deadlocking Git mutations
+    await user.click(within(gitDialog).getByRole('button', { name: '저장 없이 진행' }))
+    await waitFor(() => {
+      expect(pullMock).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+  })
+
+  it('prevents overlapping selectFolder calls when open-folder fires while a folder picker is pending', async () => {
+    let resolveFirstSelect!: (value: string | null) => void
+    let callCount = 0
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {},
+      {
+        workspaces: {
+          'C:\\wiki\\first': { 'first.md': '# First' },
+          'C:\\wiki\\second': { 'second.md': '# Second' }
+        }
+      }
+    )
+    const selectFolderSpy = vi.fn(async () => {
+      callCount += 1
+      if (callCount === 1) {
+        return await new Promise<string | null>((resolve) => {
+          resolveFirstSelect = resolve
+        })
+      }
+      return 'C:\\wiki\\second'
+    })
+    api.workspace.selectFolder = selectFolderSpy
+    window.wikiApi = api
+
+    render(<App />)
+
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(selectFolderSpy).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveFirstSelect('C:\\wiki\\first')
+    })
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    expect(await within(sidebar).findByText('first.md')).toBeInTheDocument()
+
+    // Once the first folder picker resolves, subsequent open-folder calls work normally
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(selectFolderSpy).toHaveBeenCalledTimes(2)
+    expect(await within(sidebar).findByText('second.md')).toBeInTheDocument()
   })
 })
 
@@ -734,7 +966,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
   it('opens a workspace folder via dialog, lazily loads 1-depth subfolders on click, and collapses cleanly', async () => {
     const user = userEvent.setup()
-    const { api, readDirCalls } = createInMemoryWikiApi(
+    const { api, emitMenuCommand, readDirCalls } = createInMemoryWikiApi(
       {},
       {
         selectedFolder: 'C:\\wiki\\project',
@@ -750,7 +982,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
 
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     expect(await within(sidebar).findByText('docs')).toBeInTheDocument()
@@ -771,7 +1003,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
   it('creates files/folders, renames via F2 and context menu, and deletes after confirmation', async () => {
     const user = userEvent.setup()
-    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
       {},
       {
         selectedFolder: 'C:\\wiki\\notes',
@@ -785,7 +1017,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
 
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     await within(sidebar).findByText('existing.md')
@@ -831,10 +1063,143 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     expect(getFilesSnapshot().has('C:/wiki/notes/guides/getting-started.md')).toBe(false)
   })
 
+  it('renders workspace switcher inside the left sidebar when no workspace is open and opens a recent workspace directly', async () => {
+    const user = userEvent.setup()
+    const favoriteAlpha = addFavoriteWorkspace(
+      [],
+      'C:/wiki/alpha',
+      'alpha',
+      '2026-11-14T00:00:00.000Z'
+    )
+    const { api } = createInMemoryWikiApi(
+      {
+        favoriteWorkspaces: favoriteAlpha,
+        recentWorkspaces: ['C:/wiki/gamma']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
+          'C:\\wiki\\gamma': { 'gamma.md': '# Gamma' }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await screen.findByText('열린 워크스페이스 없음')
+
+    expect(screen.queryByRole('banner')).not.toBeInTheDocument()
+
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    const switcherTrigger = within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })
+    expect(switcherTrigger).toHaveTextContent('워크스페이스 선택 ▾')
+    expect(switcherTrigger).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      within(sidebar).queryByRole('button', { name: /즐겨찾기 추가|즐겨찾기 해제/i })
+    ).not.toBeInTheDocument()
+    expect(within(sidebar).queryByRole('button', { name: /새 파일/i })).not.toBeInTheDocument()
+    expect(within(sidebar).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
+
+    await user.click(switcherTrigger)
+    const switcherMenu = await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })
+
+    await user.click(within(switcherMenu).getByRole('button', { name: /gamma/i }))
+    expect(await within(sidebar).findByText('gamma.md')).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
+      'gamma ▾'
+    )
+    expect(
+      within(sidebar).queryByRole('region', { name: /워크스페이스 목록/i })
+    ).not.toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toBeInTheDocument()
+  })
+
+  it('displays unified workspace switcher and favorite toggle in sidebar without duplicate name and confirms unsaved edits on switch', async () => {
+    const user = userEvent.setup()
+    const favoriteAlpha = addFavoriteWorkspace(
+      [],
+      'C:/wiki/alpha',
+      'alpha',
+      '2026-11-14T00:00:00.000Z'
+    )
+    const { api } = createInMemoryWikiApi(
+      {
+        autoSave: false,
+        favoriteWorkspaces: favoriteAlpha,
+        recentWorkspaces: ['C:/wiki/recent-ws']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
+          'C:\\wiki\\recent-ws': { 'recent.md': '# Recent' }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    const selectFromWorkspaceSwitcher = async (itemPattern: RegExp): Promise<void> => {
+      await user.click(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i }))
+      const workspaceList = await within(sidebar).findByRole('region', {
+        name: /워크스페이스 목록/i
+      })
+      await user.click(within(workspaceList).getByRole('button', { name: itemPattern }))
+    }
+
+    // Open favorite workspace directly from initial unopened state
+    await selectFromWorkspaceSwitcher(/★\s*alpha/i)
+
+    expect(await within(sidebar).findByText('alpha.md')).toBeInTheDocument()
+
+    // Workspace switcher shows "{workspace.name} ▾" with favorite toggle alongside and no duplicate workspace name
+    const switcherTrigger = within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })
+    expect(switcherTrigger).toHaveTextContent('alpha ▾')
+    expect(within(sidebar).getAllByText(/^alpha(?:\s*▾)?$/)).toHaveLength(1)
+    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 해제/i })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+
+    // Edit alpha.md so workspace has unsaved changes
+    await user.click(within(sidebar).getByText('alpha.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), ' unsaved')
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    // Escape closes sidebar workspace switcher popover without switching
+    await user.click(switcherTrigger)
+    expect(await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(
+      within(sidebar).queryByRole('region', { name: /워크스페이스 목록/i })
+    ).not.toBeInTheDocument()
+
+    // Switch to recent workspace -> triggers unsaved confirmation dialog; cancel keeps current workspace
+    await selectFromWorkspaceSwitcher(/recent-ws/i)
+    const cancelDialog = await screen.findByRole('alertdialog')
+    await user.click(within(cancelDialog).getByRole('button', { name: '취소' }))
+    expect(within(sidebar).getByText('alpha.md')).toBeInTheDocument()
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Alpha unsaved')
+
+    // Retry switching to recent workspace and discard unsaved changes
+    await selectFromWorkspaceSwitcher(/recent-ws/i)
+    const discardDialog = await screen.findByRole('alertdialog')
+    await user.click(within(discardDialog).getByRole('button', { name: /버리고 이동/i }))
+
+    expect(await within(sidebar).findByText('recent.md')).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
+      'recent-ws ▾'
+    )
+    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+  })
+
   it('toggles current workspace in favorites and switches workspaces in one click from launcher dropdown', async () => {
     const user = userEvent.setup()
     const favoriteBeta = addFavoriteWorkspace([], 'C:/wiki/beta', 'beta', '2026-11-14T00:00:00.000Z')
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { favoriteWorkspaces: favoriteBeta },
       {
         selectedFolder: 'C:\\wiki\\alpha',
@@ -847,7 +1212,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
 
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     expect(await within(sidebar).findByText('alpha.md')).toBeInTheDocument()
@@ -885,7 +1250,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
   it('tracks dirty ● indicator, saves manually with Ctrl+S, and auto-saves when autoSave is enabled', async () => {
     const user = userEvent.setup()
-    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
       { autoSave: false, autoSaveDelayMs: 120 },
       {
         selectedFolder: 'C:\\wiki\\docs',
@@ -899,7 +1264,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     await user.click(await within(sidebar).findByText('note.md'))
 
@@ -919,7 +1284,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     expect(getFilesSnapshot().get('C:/wiki/docs/note.md')).toBe('# Initial\nUpdated line')
 
     // Enable auto-save in settings panel
-    await user.click(screen.getByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     const autoSaveToggle = await screen.findByRole('checkbox', { name: /자동 저장/i })
     await user.click(autoSaveToggle)
     await waitFor(() => {
@@ -944,12 +1309,12 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
   it('validates config.json when editing and saving directly, applying valid changes immediately and rejecting invalid JSON without corrupting config', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi({ theme: 'light', autoSave: false })
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light', autoSave: false })
     window.wikiApi = api
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
 
     const editor = await screen.findByTestId('document-editor')
@@ -990,7 +1355,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
   it('prompts before leaving unsaved edits, syncs active document path on rename, and refreshes on workspace watch events', async () => {
     const user = userEvent.setup()
-    const { api, emitWorkspaceChange, getFilesSnapshot } = createInMemoryWikiApi(
+    const { api, emitMenuCommand, emitWorkspaceChange, getFilesSnapshot } = createInMemoryWikiApi(
       {},
       {
         selectedFolder: 'C:\\wiki\\sync',
@@ -1005,7 +1370,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
 
     await user.click(await within(sidebar).findByText('first.md'))
@@ -1057,7 +1422,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     const user = userEvent.setup()
     let writeCount = 0
     let resolveWrite!: () => void
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: true, autoSaveDelayMs: 60 },
       {
         selectedFolder: 'C:\\wiki\\edge',
@@ -1084,7 +1449,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
 
     // Select nested item, then click empty tree area to clear selection and create at workspace root
@@ -1122,7 +1487,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     })
 
     // Auto-save must NOT fire on invalid mid-edit config.json
-    await user.click(screen.getByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
     const configEditor = await screen.findByTestId('document-editor')
     setRawEditorText(configEditor, '{ invalid json')
@@ -1142,7 +1507,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
       'inflight-next',
       '2026-11-14T00:00:00.000Z'
     )
-    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
       { autoSave: true, autoSaveDelayMs: 60, favoriteWorkspaces: nextFav },
       {
         selectedFolder: 'C:\\wiki\\inflight',
@@ -1172,7 +1537,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
 
     await user.click(await within(sidebar).findByText('a.md'))
@@ -1201,9 +1566,23 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     vi.useRealTimers()
   })
 
+  it('omits split mode buttons (단일, 좌우 분할, 상하 분할) from the app header', async () => {
+    const { api } = createInMemoryWikiApi()
+    window.wikiApi = api
+
+    render(<App />)
+    await screen.findByText('열린 워크스페이스 없음')
+
+    expect(screen.queryByRole('banner')).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: '화면 분할' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '단일 화면' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '좌우 분할' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '상하 분할' })).not.toBeInTheDocument()
+  })
+
   it('opens multiple tabs, switches tabs, closes via X and middle-click, and prompts before closing the last tab of a dirty buffer', async () => {
     const user = userEvent.setup()
-    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
       {},
       {
         selectedFolder: 'C:\\wiki\\tabs',
@@ -1219,7 +1598,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
 
     await user.click(await within(sidebar).findByText('one.md'))
@@ -1262,7 +1641,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
 
   it('supports horizontal/vertical split view, resizing divider, context menu move/duplicate, real-time shared buffer sync, and auto-collapse', async () => {
     const user = userEvent.setup()
-    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
       {},
       {
         selectedFolder: 'C:\\wiki\\split',
@@ -1277,7 +1656,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
 
     await user.click(await within(sidebar).findByText('shared.md'))
@@ -1331,8 +1710,9 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     })
     expect(getFilesSnapshot().get('C:/wiki/split/shared.md')).toBe('# Shared synced!')
 
-    // Switch split direction to vertical and resize splitter via keyboard and pointer drag
-    await user.click(screen.getByRole('button', { name: '상하 분할' }))
+    // Switch split direction to vertical by dragging a tab to the vertical drop zone and resize splitter via keyboard and pointer drag
+    fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /side\.md/i }))
+    fireEvent.drop(await screen.findByTestId('split-drop-zone-vertical'))
     expect(workspaceEl).toHaveAttribute('data-split-mode', 'vertical')
 
     const divider = screen.getByRole('separator', { name: '화면 분할 크기 조절' })
@@ -1368,7 +1748,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
 
   it('supports drag-and-drop reordering and moving tabs between panes', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       {},
       {
         selectedFolder: 'C:\\wiki\\dnd',
@@ -1384,7 +1764,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
 
     await user.click(await within(sidebar).findByText('a.md'))
@@ -1404,16 +1784,117 @@ describe('Multi-tab and 2-pane Split View layout', () => {
       'b.md'
     ])
 
-    // Drag b.md onto split drop zone in single mode -> creates secondary split with b.md
+    // Drag b.md onto horizontal split drop zone in single mode -> creates horizontal split with b.md
     const bTab = within(primaryPane).getByRole('tab', { name: /b\.md/i })
     fireEvent.dragStart(bTab)
-    const splitDropZone = await screen.findByTestId('split-drop-zone-secondary')
-    fireEvent.drop(splitDropZone)
+    const horizontalDropZone = await screen.findByTestId('split-drop-zone-horizontal')
+    expect(screen.getByTestId('split-drop-zone-vertical')).toBeInTheDocument()
+    fireEvent.drop(horizontalDropZone)
 
     expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
     const secondaryPane = screen.getByTestId('pane-secondary')
     expect(within(secondaryPane).getByRole('tab', { name: /b\.md/i })).toBeInTheDocument()
     expect(within(primaryPane).queryByRole('tab', { name: /b\.md/i })).not.toBeInTheDocument()
+  })
+
+  it('supports vertical drag split from single mode, orientation switching in split mode, and auto-collapse focus preservation', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:\\wiki\\drag-split',
+        workspaces: {
+          'C:\\wiki\\drag-split': {
+            'a.md': '# A',
+            'b.md': '# B',
+            'c.md': '# C'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    // With only 1 tab open in single mode, dragging must NOT show split drop zones
+    await user.click(await within(sidebar).findByText('a.md'))
+    const primaryPane = screen.getByTestId('pane-primary')
+    fireEvent.dragStart(within(primaryPane).getByRole('tab', { name: /a\.md/i }))
+    expect(screen.queryByTestId('split-drop-zone-horizontal')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('split-drop-zone-vertical')).not.toBeInTheDocument()
+    fireEvent.dragEnd(within(primaryPane).getByRole('tab', { name: /a\.md/i }))
+
+    // Open b.md (2 tabs) -> dragging shows both horizontal and vertical drop zones; drop on vertical
+    await user.click(within(sidebar).getByText('b.md'))
+    fireEvent.dragStart(within(primaryPane).getByRole('tab', { name: /b\.md/i }))
+    expect(screen.getByTestId('split-drop-zone-horizontal')).toBeInTheDocument()
+    const verticalDropZone = screen.getByTestId('split-drop-zone-vertical')
+    fireEvent.drop(verticalDropZone)
+
+    const workspaceEl = screen.getByTestId('pane-workspace')
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'vertical')
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    expect(within(primaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['a.md'])
+    expect(within(secondaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['b.md'])
+
+    // In vertical mode with 1 tab in primary, dragging primary tab shows ONLY horizontal drop zone & switches orientation without collapsing
+    fireEvent.dragStart(within(primaryPane).getByRole('tab', { name: /a\.md/i }))
+    expect(screen.queryByTestId('split-drop-zone-vertical')).not.toBeInTheDocument()
+    const switchHorizontalZone = screen.getByTestId('split-drop-zone-horizontal')
+    fireEvent.drop(switchHorizontalZone)
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'horizontal')
+    expect(within(primaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['a.md'])
+    expect(within(secondaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['b.md'])
+
+    // In horizontal mode, dragging secondary tab shows ONLY vertical drop zone & switches back to vertical
+    fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /b\.md/i }))
+    expect(screen.queryByTestId('split-drop-zone-horizontal')).not.toBeInTheDocument()
+    fireEvent.drop(screen.getByTestId('split-drop-zone-vertical'))
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'vertical')
+    expect(within(secondaryPane).getByRole('tab', { name: /b\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    // With 2 tabs in primary (open c.md in primary), dragging c.md to horizontal drop zone moves c.md to secondary AND switches to horizontal
+    await user.click(within(primaryPane).getByRole('tab', { name: /a\.md/i }))
+    await user.click(within(sidebar).getByText('c.md'))
+    expect(within(primaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['a.md', 'c.md'])
+
+    fireEvent.dragStart(within(primaryPane).getByRole('tab', { name: /c\.md/i }))
+    expect(screen.queryByTestId('split-drop-zone-vertical')).not.toBeInTheDocument()
+    fireEvent.drop(screen.getByTestId('split-drop-zone-horizontal'))
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'horizontal')
+    expect(within(primaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual(['a.md'])
+    expect(within(secondaryPane).getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      'b.md',
+      'c.md'
+    ])
+    expect(within(secondaryPane).getByRole('tab', { name: /c\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    // Moving all tabs from secondary to primary auto-collapses to single mode while preserving active focus on c.md
+    fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /b\.md/i }))
+    fireEvent.drop(primaryPane)
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'horizontal')
+
+    fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /c\.md/i }))
+    fireEvent.drop(primaryPane)
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'single')
+    expect(screen.queryByTestId('pane-secondary')).not.toBeInTheDocument()
+    expect(within(primaryPane).getByRole('tab', { name: /c\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# C')
   })
 
   it('keeps at most 2 editor instances mounted when 25+ tabs are open and restores cursor/scroll on tab switch', async () => {
@@ -1424,7 +1905,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
       files[`doc-${num}.md`] = `# Document ${num}\nLine 2 content for testing cursor and scroll`
     }
 
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       {},
       {
         selectedFolder: 'C:\\wiki\\many',
@@ -1436,7 +1917,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
 
     for (let i = 1; i <= 25; i += 1) {
@@ -1480,7 +1961,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
   it('syncs file renames and deletions across split panes and keeps config.json tab open across workspace switches', async () => {
     const user = userEvent.setup()
     const nextFav = addFavoriteWorkspace([], 'C:/wiki/ws2', 'ws2', '2026-11-14T00:00:00.000Z')
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { favoriteWorkspaces: nextFav },
       {
         selectedFolder: 'C:\\wiki\\ws1',
@@ -1498,14 +1979,14 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
 
     await user.click(await within(sidebar).findByText('target.md'))
     await user.click(within(sidebar).getByText('keep.md'))
 
     // Open config.json as its own tab too
-    await user.click(screen.getByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
 
     const primaryPane = screen.getByTestId('pane-primary')
@@ -1560,7 +2041,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
 
   it('preserves unfocused split pane cursor selection when the other pane edits and scrolls', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:\\wiki\\ws1',
@@ -1574,7 +2055,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await user.click(await screen.findByText('doc.md'))
 
     const primaryPane = screen.getByTestId('pane-primary')
@@ -1606,7 +2087,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
 
   it('stops auto-save retries after a write failure until the next edit', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: true, autoSaveDelayMs: 40 },
       {
         selectedFolder: 'C:\\wiki\\ws1',
@@ -1623,7 +2104,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await user.click(await screen.findByText('fail.md'))
 
     const editor = screen.getByTestId('document-editor')
@@ -1646,7 +2127,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
 
   it('ignores Ctrl+S shortcuts while a ConfirmDialog is open', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:\\wiki\\ws1',
@@ -1661,7 +2142,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await user.click(await screen.findByText('dirty.md'))
 
     const editor = screen.getByTestId('document-editor')
@@ -1680,7 +2161,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
 
   it('clears saving state cleanly when renaming a file while a save is in flight', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:\\wiki\\ws1',
@@ -1700,7 +2181,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     await user.click(await within(sidebar).findByText('slow.md'))
 
@@ -1730,7 +2211,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
 
   it('preserves active secondary tab focus when collapsing split view to single mode', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:\\wiki\\ws1',
@@ -1745,7 +2226,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await user.click(await screen.findByText('a.md'))
     await user.click(screen.getByText('b.md'))
 
@@ -1763,7 +2244,8 @@ describe('Multi-tab and 2-pane Split View layout', () => {
       'true'
     )
 
-    await user.click(screen.getByRole('button', { name: '단일 화면' }))
+    // Closing the sole primary tab promotes secondary into primary and preserves focus on b.md
+    await user.click(within(primaryPane).getByRole('button', { name: 'a.md 탭 닫기' }))
 
     expect(screen.queryByTestId('pane-secondary')).not.toBeInTheDocument()
     expect(within(primaryPane).getByRole('tab', { name: /b\.md/i })).toHaveAttribute(
@@ -1783,7 +2265,7 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
   it('supports Left Raw + Right Preview live sync in split view and lossless Raw <-> WYSIWYG <-> Preview roundtrips', async () => {
     const user = userEvent.setup()
     const initialMd = '# Title\n\n*   kept   spacing\n\n- [x] Done'
-    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:\\wiki\\modes',
@@ -1797,7 +2279,7 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await user.click(await screen.findByText('doc.md'))
 
     const primaryPane = screen.getByTestId('pane-primary')
@@ -1854,7 +2336,7 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
 
   it('supports GFM table insertion and row/column add/delete in both Raw mode and WYSIWYG mode', async () => {
     const user = userEvent.setup()
-    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:\\wiki\\tables',
@@ -1869,7 +2351,7 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
 
     // 1) Raw mode table manipulation via TableMarkdownManipulator toolbar
@@ -1937,7 +2419,7 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
 
   it('sanitizes XSS payloads in Preview mode and syncs editor theme across Light and Dark modes', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { theme: 'light', autoSave: false },
       {
         selectedFolder: 'C:\\wiki\\xss',
@@ -1952,12 +2434,12 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await user.click(await screen.findByText('xss.md'))
 
     // Verify theme sync on CodeMirror 6 in Raw mode
     expect(document.querySelector('.cm-editor')?.getAttribute('data-theme-mode')).toBe('light')
-    await user.click(screen.getByRole('button', { name: /테마 전환/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
     await waitFor(() => {
       expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
       expect(document.querySelector('.cm-editor')?.getAttribute('data-theme-mode')).toBe('dark')
@@ -2009,7 +2491,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       '```'
     ].join('\n')
 
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { theme: 'light', showHeadingNumbers: true },
       {
         selectedFolder: 'C:\\wiki\\mermaid',
@@ -2023,7 +2505,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await user.click(await screen.findByText('diagram.md'))
 
     // Preview mode renders valid Mermaid SVG and isolates broken block without crashing
@@ -2042,7 +2524,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
     // Switch theme Light -> Dark -> Light: Dark re-renders cleanly, Light back hits cache
     const callsAfterInitial = mermaidMockState.render.mock.calls.length
-    await user.click(screen.getByRole('button', { name: /테마 전환/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
     await waitFor(() => {
       const svg = screen.getByTestId('document-editor').querySelector('svg[data-mermaid-theme]')
       expect(svg?.getAttribute('data-mermaid-theme')).toBe('dark')
@@ -2051,7 +2533,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     const callsAfterDark = mermaidMockState.render.mock.calls.length
     expect(callsAfterDark).toBeGreaterThan(callsAfterInitial)
 
-    await user.click(screen.getByRole('button', { name: /테마 전환/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
     await waitFor(() => {
       const svg = screen.getByTestId('document-editor').querySelector('svg[data-mermaid-theme]')
       expect(svg?.getAttribute('data-mermaid-theme')).toBe('default')
@@ -2099,7 +2581,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         '### Step One'
       ].join('\n')
 
-      const { api, getFilesSnapshot } = createInMemoryWikiApi(
+      const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
         { theme: 'light', showHeadingNumbers: true },
         {
           selectedFolder: 'C:\\wiki\\outline',
@@ -2113,7 +2595,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       window.wikiApi = api
 
       const firstRender = render(<App />)
-      await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
       await user.click(await screen.findByText('guide.md'))
 
       const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
@@ -2158,7 +2640,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
 
       // Open SettingsPanel, verify checkbox reflects false, toggle back true without re-scrolling and verify persistence across restart
-      await user.click(screen.getByRole('button', { name: /설정/i }))
+      await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
       expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
       const settingsPanel = screen.getByLabelText('전역 설정 패널')
       const headingToggleCheckbox = within(settingsPanel).getByRole('checkbox', {
@@ -2171,7 +2653,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
       firstRender.unmount()
       render(<App />)
-      await user.click(await screen.findByRole('button', { name: /설정/i }))
+      await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
       const reopenedCheckbox = within(screen.getByLabelText('전역 설정 패널')).getByRole(
         'checkbox',
         {
@@ -2201,7 +2683,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       '## Second Section'
     ].join('\n')
 
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { theme: 'light', showHeadingNumbers: true },
       {
         selectedFolder: 'C:\\wiki\\actions',
@@ -2216,15 +2698,13 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     await user.click(within(sidebar).getByText('manual.md'))
     await user.click(within(sidebar).getByText('other.md'))
 
-    // Open split view and keep <= 2 editor DOM instances
-    await user.click(screen.getByRole('button', { name: '좌우 분할' }))
+    // Open horizontal split panes by duplicating manual.md and keep <= 2 editor DOM instances
     const primaryPane = screen.getByTestId('pane-primary')
-    const secondaryPane = screen.getByTestId('pane-secondary')
 
     fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
     await user.click(
@@ -2232,6 +2712,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         name: '분할 영역에 복제 열기'
       })
     )
+    const secondaryPane = screen.getByTestId('pane-secondary')
     await user.click(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
     await user.click(
       within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
@@ -2283,7 +2764,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
   it('replaces non-fenced /toc placeholder when running Outline insert TOC in WYSIWYG mode', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { theme: 'light', showHeadingNumbers: false },
       {
         selectedFolder: 'C:\\wiki\\wysiwyg-toc',
@@ -2297,7 +2778,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await user.click(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('doc.md'))
 
     await user.click(
@@ -2336,7 +2817,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
     try {
       const user = userEvent.setup()
-      const { api } = createInMemoryWikiApi(
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
         { theme: 'light', showHeadingNumbers: false },
         {
           selectedFolder: 'C:\\wiki\\scroll-once',
@@ -2351,7 +2832,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       window.wikiApi = api
 
       render(<App />)
-      await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
       const sidebar = screen.getByLabelText('워크스페이스 탐색기')
       await user.click(within(sidebar).getByText('alpha.md'))
       await user.click(within(sidebar).getByText('beta.md'))
@@ -2394,7 +2875,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 describe('Custom slash commands, Settings UI management, and direct config.json sync', () => {
   it('manages custom slash commands in Settings UI with validation, live preview, config.json persistence, and real-time editor sync', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { theme: 'light' },
       {
         selectedFolder: 'C:\\wiki\\slash-settings',
@@ -2409,11 +2890,11 @@ describe('Custom slash commands, Settings UI management, and direct config.json 
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     await user.click(within(sidebar).getByText('notes.md'))
 
-    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     const settingsPanel = screen.getByLabelText('전역 설정 패널')
 
     // Built-in default seed commands appear in Settings UI
@@ -2524,7 +3005,7 @@ describe('Custom slash commands, Settings UI management, and direct config.json 
 
   it('validates direct config.json edits on Ctrl+S, preserves last valid config on error, and applies valid new commands', async () => {
     const user = userEvent.setup()
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { theme: 'light' },
       {
         selectedFolder: 'C:\\wiki\\raw-config-slash',
@@ -2539,10 +3020,10 @@ describe('Custom slash commands, Settings UI management, and direct config.json 
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await user.click(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('guide.md'))
 
-    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
     await user.click(within(screen.getByLabelText('전역 설정 패널')).getByRole('button', { name: '닫기' }))
 
@@ -2677,7 +3158,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       })
     }
 
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:/wiki',
@@ -2707,7 +3188,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
 
     const explorer = screen.getByLabelText('워크스페이스 탐색기')
 
-    await user.click(await screen.findByRole('button', { name: '폴더 열기' }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await within(explorer).findByText('guide.md')
     expect(within(gitRegion).getByRole('button', { name: /Git 저장소 초기화/i })).toBeInTheDocument()
     await user.click(within(gitRegion).getByRole('button', { name: /Git 저장소 초기화/i }))
@@ -2790,7 +3271,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       })
     }
 
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:/wiki',
@@ -2814,7 +3295,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
 
     const explorer = screen.getByLabelText('워크스페이스 탐색기')
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
-    await user.click(await screen.findByRole('button', { name: '폴더 열기' }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
 
     // Open both files: leave obsolete.md clean and make keep-dirty.md dirty
     await user.click(await within(explorer).findByText('obsolete.md'))
@@ -2943,7 +3424,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
       hasUpstream: true
     }
 
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:/wiki/errlog',
@@ -2972,7 +3453,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
     window.wikiApi = api
 
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: '폴더 열기' }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('note.md'))
 
     const editor = await screen.findByTestId('document-editor')
@@ -3005,7 +3486,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
       entries.push(payload)
     })
 
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:/wiki/breadcrumbs',
@@ -3023,7 +3504,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
     render(<App />)
 
     // 1. Open workspace
-    await user.click(await screen.findByRole('button', { name: '폴더 열기' }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const explorer = screen.getByLabelText('워크스페이스 탐색기')
 
     // 2. Open two tabs and type in editor (typing must NOT generate logs or leak body)
@@ -3041,27 +3522,24 @@ describe('Renderer error logging & UI breadcrumbs', () => {
     await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
     await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
 
-    // 5. Switch split modes: single -> horizontal -> vertical
-    await user.click(screen.getByRole('button', { name: '좌우 분할' }))
-    await user.click(screen.getByRole('button', { name: '상하 분할' }))
+    // 5. Drag beta.md onto horizontal split drop zone, then drag onto vertical drop zone
+    fireEvent.dragStart(within(primaryPane).getByRole('tab', { name: /beta\.md/ }))
+    fireEvent.drop(await screen.findByTestId('split-drop-zone-horizontal'))
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /beta\.md/ }))
+    fireEvent.drop(await screen.findByTestId('split-drop-zone-vertical'))
 
-    // 6. Duplicate alpha.md to secondary pane, then move beta.md to secondary pane
+    // 6. Duplicate alpha.md to secondary pane
     fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /alpha\.md/ }))
     await user.click(
       within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
         name: '분할 영역에 복제 열기'
       })
     )
-    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /beta\.md/ }))
-    await user.click(
-      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
-        name: '분할 영역으로 이동'
-      })
-    )
 
-    // 7. Collapse back to single mode, then close beta.md tab
-    await user.click(screen.getByRole('button', { name: '단일 화면' }))
-    await user.click(within(primaryPane).getByRole('button', { name: 'beta.md 탭 닫기' }))
+    // 7. Close secondary tabs to collapse back to single mode
+    await user.click(within(secondaryPane).getByRole('button', { name: 'beta.md 탭 닫기' }))
+    await user.click(within(secondaryPane).getByRole('button', { name: 'alpha.md 탭 닫기' }))
 
     const uiEntries = entries.filter((entry) => entry.category === 'ui' && entry.level === 'info')
     expect(uiEntries.map((entry) => entry.message)).toEqual([
@@ -3072,20 +3550,21 @@ describe('Renderer error logging & UI breadcrumbs', () => {
       'Editor mode changed',
       'Editor mode changed',
       'Editor mode changed',
+      'Tab moved',
       'Split mode changed',
       'Split mode changed',
       'Tab duplicated',
-      'Tab moved',
-      'Split mode changed',
-      'Tab closed'
+      'Tab closed',
+      'Tab closed',
+      'Split mode changed'
     ])
 
     expect(uiEntries[4].data).toMatchObject({ from: 'raw', to: 'wysiwyg' })
     expect(uiEntries[5].data).toMatchObject({ from: 'wysiwyg', to: 'preview' })
     expect(uiEntries[6].data).toMatchObject({ from: 'preview', to: 'raw' })
-    expect(uiEntries[7].data).toMatchObject({ from: 'single', to: 'horizontal' })
-    expect(uiEntries[8].data).toMatchObject({ from: 'horizontal', to: 'vertical' })
-    expect(uiEntries[11].data).toMatchObject({ from: 'vertical', to: 'single' })
+    expect(uiEntries[8].data).toMatchObject({ from: 'single', to: 'horizontal' })
+    expect(uiEntries[9].data).toMatchObject({ from: 'horizontal', to: 'vertical' })
+    expect(uiEntries[13].data).toMatchObject({ from: 'vertical', to: 'single' })
 
     const serialized = JSON.stringify(entries)
     expect(serialized).not.toContain('SECRET_ALPHA_TEXT')
@@ -3096,7 +3575,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
   it('logs Tab switched when clicking an already-selected tab in the inactive split pane and logs Tab switched instead of Tab duplicated for an already-open tab', async () => {
     const user = userEvent.setup()
     const entries: RendererLogPayload[] = []
-    const { api } = createInMemoryWikiApi(
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false },
       {
         selectedFolder: 'C:/wiki/split-switch',
@@ -3118,7 +3597,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: '폴더 열기' }))
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const explorer = screen.getByLabelText('워크스페이스 탐색기')
     await user.click(await within(explorer).findByText('alpha.md'))
 
