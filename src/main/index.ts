@@ -42,9 +42,20 @@ void app.whenReady().then(async () => {
   const gitService = new GitService()
 
   const getTargets = () => BrowserWindow.getAllWindows().map((win) => win.webContents)
-  const getActiveWindow = () => BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-  const getMenuTargetWebContents = (targetWindow?: BaseWindow) =>
-    (targetWindow instanceof BrowserWindow ? targetWindow : getActiveWindow())?.webContents
+  const getActiveWindow = (): BrowserWindow | undefined => {
+    const focused = BrowserWindow.getFocusedWindow()
+    if (focused && !focused.isDestroyed()) {
+      return focused
+    }
+    return BrowserWindow.getAllWindows().find((win) => !win.isDestroyed())
+  }
+  const getMenuTargetWebContents = (targetWindow?: BaseWindow) => {
+    const win =
+      targetWindow instanceof BrowserWindow && !targetWindow.isDestroyed()
+        ? targetWindow
+        : getActiveWindow()
+    return win && !win.isDestroyed() ? win.webContents : undefined
+  }
 
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets)
   disposeGitIpc = registerGitIpc({

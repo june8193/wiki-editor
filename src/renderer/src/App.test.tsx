@@ -782,23 +782,17 @@ describe('App shell, theme persistence, and settings panel', () => {
       expect(getMenuListenerCount()).toBe(1)
     })
 
-    act(() => {
-      emitMenuCommand('toggle-theme')
-    })
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
 
     await waitFor(() => {
       expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
     })
     expect((await api.config.get()).theme).toBe('dark')
 
-    act(() => {
-      emitMenuCommand('toggle-settings')
-    })
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     expect(screen.getByLabelText('전역 설정 패널')).toBeInTheDocument()
 
-    act(() => {
-      emitMenuCommand('toggle-settings')
-    })
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     expect(screen.queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
 
     view.unmount()
@@ -823,9 +817,7 @@ describe('App shell, theme persistence, and settings panel', () => {
 
     render(<App />)
 
-    await act(async () => {
-      emitMenuCommand('open-folder')
-    })
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     await user.click(await within(sidebar).findByText('first.md'))
     appendRawEditorText(await screen.findByTestId('document-editor'), ' edited')
@@ -833,9 +825,7 @@ describe('App shell, theme persistence, and settings panel', () => {
 
     // Trigger File > 폴더 열기... with unsaved changes -> cancel preserves current workspace
     nextSelectedFolder = 'C:\\wiki\\second'
-    await act(async () => {
-      emitMenuCommand('open-folder')
-    })
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const cancelDialog = await screen.findByRole('alertdialog')
     expect(within(cancelDialog).getByRole('button', { name: '저장 후 이동' })).toBeInTheDocument()
     expect(within(cancelDialog).getByRole('button', { name: '버리고 이동' })).toBeInTheDocument()
@@ -843,9 +833,7 @@ describe('App shell, theme persistence, and settings panel', () => {
     expect(within(sidebar).getByText('first.md')).toBeInTheDocument()
 
     // Retry File > 폴더 열기... and choose 저장 후 이동 -> saves edit and switches workspace
-    await act(async () => {
-      emitMenuCommand('open-folder')
-    })
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const saveDialog = await screen.findByRole('alertdialog')
     await user.click(within(saveDialog).getByRole('button', { name: '저장 후 이동' }))
     expect(await within(sidebar).findByText('second.md')).toBeInTheDocument()
@@ -855,13 +843,115 @@ describe('App shell, theme persistence, and settings panel', () => {
     await user.click(within(sidebar).getByText('second.md'))
     appendRawEditorText(await screen.findByTestId('document-editor'), ' discarded')
     nextSelectedFolder = 'C:\\wiki\\third'
-    await act(async () => {
-      emitMenuCommand('open-folder')
-    })
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
     const discardDialog = await screen.findByRole('alertdialog')
     await user.click(within(discardDialog).getByRole('button', { name: '버리고 이동' }))
     expect(await within(sidebar).findByText('third.md')).toBeInTheDocument()
     expect(getFilesSnapshot().get('C:/wiki/second/second.md')).toBe('# Second')
+  })
+
+  it('ignores application menu commands while a ConfirmDialog is open without breaking pending Git mutations', async () => {
+    const user = userEvent.setup()
+    const gitStatus = {
+      ...createEmptyGitStatus(true, 'C:/wiki/first'),
+      branch: 'main',
+      hasUpstream: true
+    }
+    const pullMock = vi.fn(async () => gitStatus)
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\first',
+        workspaces: {
+          'C:\\wiki\\first': { 'dirty.md': '# Dirty' },
+          'C:\\wiki\\second': { 'second.md': '# Second' }
+        },
+        git: {
+          status: vi.fn(async () => gitStatus),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [{ name: 'main', current: true, upstream: 'origin/main' }]
+          })),
+          pull: pullMock
+        }
+      }
+    )
+    const selectFolderSpy = vi.fn(async () => 'C:\\wiki\\second')
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    api.workspace.selectFolder = selectFolderSpy
+
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('dirty.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), ' unsaved')
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    const gitDialog = await screen.findByRole('alertdialog')
+
+    // Native menu commands triggered while modal ConfirmDialog is active should be ignored
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+
+    expect(selectFolderSpy).not.toHaveBeenCalled()
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    expect(screen.queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
+    expect(screen.getByRole('alertdialog')).toBe(gitDialog)
+
+    // Original Git ConfirmDialog still resolves cleanly without deadlocking Git mutations
+    await user.click(within(gitDialog).getByRole('button', { name: '저장 없이 진행' }))
+    await waitFor(() => {
+      expect(pullMock).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+  })
+
+  it('prevents overlapping selectFolder calls when open-folder fires while a folder picker is pending', async () => {
+    let resolveFirstSelect!: (value: string | null) => void
+    let callCount = 0
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {},
+      {
+        workspaces: {
+          'C:\\wiki\\first': { 'first.md': '# First' },
+          'C:\\wiki\\second': { 'second.md': '# Second' }
+        }
+      }
+    )
+    const selectFolderSpy = vi.fn(async () => {
+      callCount += 1
+      if (callCount === 1) {
+        return await new Promise<string | null>((resolve) => {
+          resolveFirstSelect = resolve
+        })
+      }
+      return 'C:\\wiki\\second'
+    })
+    api.workspace.selectFolder = selectFolderSpy
+    window.wikiApi = api
+
+    render(<App />)
+
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(selectFolderSpy).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveFirstSelect('C:\\wiki\\first')
+    })
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    expect(await within(sidebar).findByText('first.md')).toBeInTheDocument()
+
+    // Once the first folder picker resolves, subsequent open-folder calls work normally
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(selectFolderSpy).toHaveBeenCalledTimes(2)
+    expect(await within(sidebar).findByText('second.md')).toBeInTheDocument()
   })
 })
 

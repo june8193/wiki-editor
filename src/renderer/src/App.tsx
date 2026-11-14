@@ -47,6 +47,9 @@ export function App() {
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
   const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(async () => [])
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
+  const isDialogOpenRef = useRef<boolean>(false)
+  isDialogOpenRef.current = pendingDialog !== null
+  const isSelectingFolderRef = useRef<boolean>(false)
   const tabCloseActionsRef = useRef<{
     saveAndCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => Promise<boolean>
     forceCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => void
@@ -254,17 +257,24 @@ export function App() {
   )
 
   const handleSelectFolder = useCallback((): void => {
+    if (isDialogOpenRef.current || isSelectingFolderRef.current) {
+      return
+    }
+
+    isSelectingFolderRef.current = true
     setErrorMessage(null)
-    void window.wikiApi.workspace
-      .selectFolder()
-      .then((selectedPath) => {
-        if (selectedPath) {
+    void window.wikiApi.workspace.selectFolder().then(
+      (selectedPath) => {
+        isSelectingFolderRef.current = false
+        if (selectedPath && !isDialogOpenRef.current) {
           handleSwitchWorkspace(selectedPath)
         }
-      })
-      .catch((error: unknown) => {
+      },
+      (error: unknown) => {
+        isSelectingFolderRef.current = false
         setErrorMessage(toErrorMessage(error, '폴더 선택에 실패했습니다.'))
-      })
+      }
+    )
   }, [handleSwitchWorkspace])
 
   const handleOpenFile = useCallback(
@@ -286,6 +296,9 @@ export function App() {
 
   useEffect(() => {
     return window.wikiApi.menu.onCommand((command) => {
+      if (isDialogOpenRef.current) {
+        return
+      }
       menuHandlersRef.current[command]?.()
     })
   }, [])
