@@ -3,6 +3,68 @@ import type { FavoriteWorkspace } from '@shared/config'
 import { getWorkspaceDisplayName, isSameWorkspacePath, WorkspaceSummary } from '@shared/workspace'
 import { useDismissable } from '../hooks/useDismissable'
 
+interface WorkspaceSwitcherOption {
+  path: string
+  label: string
+  removeAriaLabel?: string
+  onRemove?: () => void
+}
+
+interface WorkspaceSwitcherSectionProps {
+  title: string
+  emptyMessage: string
+  activeWorkspaceRootPath: string | null
+  options: readonly WorkspaceSwitcherOption[]
+  onSelect: (path: string) => void
+}
+
+function WorkspaceSwitcherSection({
+  title,
+  emptyMessage,
+  activeWorkspaceRootPath,
+  options,
+  onSelect
+}: WorkspaceSwitcherSectionProps) {
+  return (
+    <div className="workspace-switcher-section">
+      <div className="workspace-switcher-section-title">{title}</div>
+      {options.length === 0 ? (
+        <p className="workspace-switcher-empty">{emptyMessage}</p>
+      ) : (
+        <ul className="workspace-switcher-list">
+          {options.map((option) => {
+            const active =
+              activeWorkspaceRootPath !== null &&
+              isSameWorkspacePath(activeWorkspaceRootPath, option.path)
+            return (
+              <li key={option.path} className="workspace-switcher-item">
+                <button
+                  type="button"
+                  className={`workspace-switcher-item-btn${active ? ' is-active' : ''}`}
+                  onClick={() => onSelect(option.path)}
+                >
+                  <span className="workspace-switcher-item-name">{option.label}</span>
+                  <span className="workspace-switcher-item-path">{option.path}</span>
+                </button>
+                {option.onRemove && option.removeAriaLabel && (
+                  <button
+                    type="button"
+                    className="workspace-switcher-remove-btn"
+                    aria-label={option.removeAriaLabel}
+                    onClick={option.onRemove}
+                  >
+                    ×
+                  </button>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 interface WorkspaceSwitcherProps {
   workspace: WorkspaceSummary | null
   favoriteWorkspaces: readonly FavoriteWorkspace[]
@@ -29,6 +91,18 @@ export function WorkspaceSwitcher({
     onSwitchWorkspace(targetPath)
   }
 
+  const favoriteOptions: WorkspaceSwitcherOption[] = favoriteWorkspaces.map((fav) => ({
+    path: fav.path,
+    label: `★ ${fav.name}`,
+    removeAriaLabel: `${fav.name} 즐겨찾기 해제`,
+    onRemove: () => onRemoveFavorite(fav.path)
+  }))
+
+  const recentOptions: WorkspaceSwitcherOption[] = recentWorkspaces.map((recentPath) => ({
+    path: recentPath,
+    label: getWorkspaceDisplayName(recentPath)
+  }))
+
   return (
     <div className="workspace-switcher" ref={containerRef}>
       <button
@@ -48,68 +122,25 @@ export function WorkspaceSwitcher({
       </button>
 
       {isOpen && (
-        <section className="launcher-popover" role="region" aria-label="워크스페이스 목록">
-          <div className="launcher-section">
-            <div className="launcher-section-title">즐겨찾기 워크스페이스</div>
-            {favoriteWorkspaces.length === 0 ? (
-              <p className="launcher-empty">등록된 즐겨찾기가 없습니다.</p>
-            ) : (
-              <ul className="launcher-list">
-                {favoriteWorkspaces.map((fav) => {
-                  const active =
-                    workspace !== null && isSameWorkspacePath(workspace.rootPath, fav.path)
-                  return (
-                    <li key={fav.path} className="launcher-item">
-                      <button
-                        type="button"
-                        className={`launcher-item-btn${active ? ' is-active' : ''}`}
-                        onClick={() => handleChooseWorkspace(fav.path)}
-                      >
-                        <span className="launcher-item-name">★ {fav.name}</span>
-                        <span className="launcher-item-path">{fav.path}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="launcher-remove-btn"
-                        aria-label={`${fav.name} 즐겨찾기 해제`}
-                        onClick={() => onRemoveFavorite(fav.path)}
-                      >
-                        ×
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </div>
-
-          <div className="launcher-section">
-            <div className="launcher-section-title">최근 워크스페이스</div>
-            {recentWorkspaces.length === 0 ? (
-              <p className="launcher-empty">최근 연 폴더가 없습니다.</p>
-            ) : (
-              <ul className="launcher-list">
-                {recentWorkspaces.map((recentPath) => {
-                  const active =
-                    workspace !== null && isSameWorkspacePath(workspace.rootPath, recentPath)
-                  return (
-                    <li key={recentPath} className="launcher-item">
-                      <button
-                        type="button"
-                        className={`launcher-item-btn${active ? ' is-active' : ''}`}
-                        onClick={() => handleChooseWorkspace(recentPath)}
-                      >
-                        <span className="launcher-item-name">
-                          {getWorkspaceDisplayName(recentPath)}
-                        </span>
-                        <span className="launcher-item-path">{recentPath}</span>
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </div>
+        <section
+          className="workspace-switcher-popover"
+          role="region"
+          aria-label="워크스페이스 목록"
+        >
+          <WorkspaceSwitcherSection
+            title="즐겨찾기 워크스페이스"
+            emptyMessage="등록된 즐겨찾기가 없습니다."
+            activeWorkspaceRootPath={workspace?.rootPath ?? null}
+            options={favoriteOptions}
+            onSelect={handleChooseWorkspace}
+          />
+          <WorkspaceSwitcherSection
+            title="최근 워크스페이스"
+            emptyMessage="최근 연 폴더가 없습니다."
+            activeWorkspaceRootPath={workspace?.rootPath ?? null}
+            options={recentOptions}
+            onSelect={handleChooseWorkspace}
+          />
         </section>
       )}
     </div>

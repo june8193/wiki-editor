@@ -3,12 +3,12 @@ import {
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  ReactNode,
   useCallback,
   useEffect,
   useRef,
   useState
 } from 'react'
-import type { FavoriteWorkspace } from '@shared/config'
 import {
   isSameWorkspacePath,
   WorkspaceEntry,
@@ -17,7 +17,6 @@ import {
 } from '@shared/workspace'
 import { useDismissable } from '../hooks/useDismissable'
 import type { WorkspaceTreeState } from '../hooks/useWorkspaceTree'
-import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
 interface InlineCreateState {
   parentDirPath: string
@@ -85,12 +84,9 @@ function treeIndentStyle(depth: number): CSSProperties {
 interface FolderTreeSidebarProps {
   workspace: WorkspaceSummary | null
   isFavorite: boolean
-  favoriteWorkspaces: readonly FavoriteWorkspace[]
-  recentWorkspaces: readonly string[]
+  workspaceSwitcher: ReactNode
   tree: WorkspaceTreeState
   activeFilePath: string | null
-  onSwitchWorkspace: (path: string) => void
-  onRemoveFavorite: (path: string) => void
   onToggleFavorite: () => void
   onSelectPath: (path: string | null) => void
   onToggleDirectory: (entry: WorkspaceEntry) => void
@@ -106,12 +102,9 @@ interface FolderTreeSidebarProps {
 export function FolderTreeSidebar({
   workspace,
   isFavorite,
-  favoriteWorkspaces,
-  recentWorkspaces,
+  workspaceSwitcher,
   tree,
   activeFilePath,
-  onSwitchWorkspace,
-  onRemoveFavorite,
   onToggleFavorite,
   onSelectPath,
   onToggleDirectory,
@@ -312,13 +305,7 @@ export function FolderTreeSidebar({
     <section className="workspace-sidebar" aria-label="워크스페이스 탐색기">
       <div className="sidebar-header">
         <div className="sidebar-title-row">
-          <WorkspaceSwitcher
-            workspace={workspace}
-            favoriteWorkspaces={favoriteWorkspaces}
-            recentWorkspaces={recentWorkspaces}
-            onSwitchWorkspace={onSwitchWorkspace}
-            onRemoveFavorite={onRemoveFavorite}
-          />
+          {workspaceSwitcher}
           {workspace && (
             <button
               type="button"

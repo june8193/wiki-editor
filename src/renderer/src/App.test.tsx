@@ -881,7 +881,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toBeInTheDocument()
   })
 
-  it('displays unified workspace dropdown and favorite toggle in sidebar without duplicate name and confirms unsaved edits on switch', async () => {
+  it('displays unified workspace switcher and favorite toggle in sidebar without duplicate name and confirms unsaved edits on switch', async () => {
     const user = userEvent.setup()
     const favoriteAlpha = addFavoriteWorkspace(
       [],
@@ -906,15 +906,20 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     render(<App />)
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    const selectFromWorkspaceSwitcher = async (itemPattern: RegExp): Promise<void> => {
+      await user.click(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i }))
+      const workspaceList = await within(sidebar).findByRole('region', {
+        name: /워크스페이스 목록/i
+      })
+      await user.click(within(workspaceList).getByRole('button', { name: itemPattern }))
+    }
 
     // Open favorite workspace directly from initial unopened state
-    await user.click(await within(sidebar).findByRole('button', { name: /워크스페이스 전환/i }))
-    const initialMenu = await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })
-    await user.click(within(initialMenu).getByRole('button', { name: /★\s*alpha/i }))
+    await selectFromWorkspaceSwitcher(/★\s*alpha/i)
 
     expect(await within(sidebar).findByText('alpha.md')).toBeInTheDocument()
 
-    // Dropdown shows "{workspace.name} ▾" with favorite toggle alongside and no duplicate workspace name
+    // Workspace switcher shows "{workspace.name} ▾" with favorite toggle alongside and no duplicate workspace name
     const switcherTrigger = within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })
     expect(switcherTrigger).toHaveTextContent('alpha ▾')
     expect(within(sidebar).getAllByText(/^alpha(?:\s*▾)?$/)).toHaveLength(1)
@@ -928,7 +933,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     appendRawEditorText(await screen.findByTestId('document-editor'), ' unsaved')
     expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
 
-    // Escape closes sidebar popover without switching
+    // Escape closes sidebar workspace switcher popover without switching
     await user.click(switcherTrigger)
     expect(await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })).toBeInTheDocument()
     await user.keyboard('{Escape}')
@@ -937,22 +942,14 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     ).not.toBeInTheDocument()
 
     // Switch to recent workspace -> triggers unsaved confirmation dialog; cancel keeps current workspace
-    await user.click(switcherTrigger)
-    const menuBeforeCancel = await within(sidebar).findByRole('region', {
-      name: /워크스페이스 목록/i
-    })
-    await user.click(within(menuBeforeCancel).getByRole('button', { name: /recent-ws/i }))
+    await selectFromWorkspaceSwitcher(/recent-ws/i)
     const cancelDialog = await screen.findByRole('alertdialog')
     await user.click(within(cancelDialog).getByRole('button', { name: '취소' }))
     expect(within(sidebar).getByText('alpha.md')).toBeInTheDocument()
     expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Alpha unsaved')
 
     // Retry switching to recent workspace and discard unsaved changes
-    await user.click(switcherTrigger)
-    const menuBeforeDiscard = await within(sidebar).findByRole('region', {
-      name: /워크스페이스 목록/i
-    })
-    await user.click(within(menuBeforeDiscard).getByRole('button', { name: /recent-ws/i }))
+    await selectFromWorkspaceSwitcher(/recent-ws/i)
     const discardDialog = await screen.findByRole('alertdialog')
     await user.click(within(discardDialog).getByRole('button', { name: /버리고 이동/i }))
 

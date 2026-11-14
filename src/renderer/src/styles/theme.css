@@ -159,15 +159,10 @@ body,
 }
 
 .workspace-switcher {
-  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-}
-
-.sidebar-title-row .workspace-switcher {
-  position: static;
 }
 
 .workspace-switcher-trigger {
@@ -219,12 +214,12 @@ body,
   color: var(--text-secondary);
 }
 
-.launcher-popover {
+.workspace-switcher-popover {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
   z-index: 50;
-  width: 236px;
+  width: 100%;
   max-width: calc(100vw - 24px);
   max-height: min(400px, calc(100vh - 100px));
   overflow-y: auto;
@@ -235,30 +230,26 @@ body,
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
 }
 
-.sidebar-title-row .launcher-popover {
-  width: 100%;
-}
-
-.launcher-section + .launcher-section {
+.workspace-switcher-section + .workspace-switcher-section {
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--border-color);
 }
 
-.launcher-section-title {
+.workspace-switcher-section-title {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
 
-.launcher-empty {
+.workspace-switcher-empty {
   margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
 }
 
-.launcher-list {
+.workspace-switcher-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -267,13 +258,13 @@ body,
   gap: 4px;
 }
 
-.launcher-item {
+.workspace-switcher-item {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.launcher-item-btn {
+.workspace-switcher-item-btn {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -288,13 +279,13 @@ body,
   text-align: left;
 }
 
-.launcher-item-btn:hover,
-.launcher-item-btn.is-active {
+.workspace-switcher-item-btn:hover,
+.workspace-switcher-item-btn.is-active {
   background-color: var(--bg-elevated);
   border-color: var(--border-color);
 }
 
-.launcher-item-name {
+.workspace-switcher-item-name {
   font-size: 13px;
   font-weight: 500;
   width: 100%;
@@ -303,7 +294,7 @@ body,
   white-space: nowrap;
 }
 
-.launcher-item-path {
+.workspace-switcher-item-path {
   font-size: 11px;
   color: var(--text-secondary);
   width: 100%;
@@ -312,7 +303,7 @@ body,
   white-space: nowrap;
 }
 
-.launcher-remove-btn {
+.workspace-switcher-remove-btn {
   flex-shrink: 0;
   border: none;
   background: transparent;
@@ -322,7 +313,7 @@ body,
   border-radius: 4px;
 }
 
-.launcher-remove-btn:hover {
+.workspace-switcher-remove-btn:hover {
   background-color: var(--bg-elevated);
   color: var(--danger-color);
 }

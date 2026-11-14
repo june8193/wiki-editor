@@ -8,6 +8,7 @@ import { GitSidebarPanel } from './components/GitSidebarPanel'
 import { PaneInteractionActions } from './components/PaneTabBar'
 import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
+import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { isMarkdownDocument } from './editor/editorModes'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
@@ -430,12 +431,17 @@ export function App() {
           <FolderTreeSidebar
             workspace={workspace}
             isFavorite={isCurrentWorkspaceFavorite}
-            favoriteWorkspaces={config.favoriteWorkspaces}
-            recentWorkspaces={config.recentWorkspaces}
+            workspaceSwitcher={
+              <WorkspaceSwitcher
+                workspace={workspace}
+                favoriteWorkspaces={config.favoriteWorkspaces}
+                recentWorkspaces={config.recentWorkspaces}
+                onSwitchWorkspace={handleSwitchWorkspace}
+                onRemoveFavorite={removeFavoriteWorkspace}
+              />
+            }
             tree={treeState}
             activeFilePath={activeFilePath}
-            onSwitchWorkspace={handleSwitchWorkspace}
-            onRemoveFavorite={removeFavoriteWorkspace}
             onToggleFavorite={() => {
               if (workspace) {
                 toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
