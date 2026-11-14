@@ -2361,3 +2361,224 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     }
   })
 })
+
+describe('Custom slash commands, Settings UI management, and direct config.json sync', () => {
+  it('manages custom slash commands in Settings UI with validation, live preview, config.json persistence, and real-time editor sync', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\slash-settings',
+        workspaces: {
+          'C:\\wiki\\slash-settings': {
+            'notes.md': '# Notes\n\n'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(within(sidebar).getByText('notes.md'))
+
+    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    const settingsPanel = screen.getByLabelText('전역 설정 패널')
+
+    // Built-in default seed commands appear in Settings UI
+    const commandList = within(settingsPanel).getByRole('list', { name: '커스텀 명령어 목록' })
+    expect(within(commandList).getByText('/function')).toBeInTheDocument()
+    expect(within(commandList).getByText('/struct')).toBeInTheDocument()
+    expect(within(commandList).getByText('/table')).toBeInTheDocument()
+    expect(within(commandList).getByText('/mermaid')).toBeInTheDocument()
+    expect(within(commandList).getByText('/toc')).toBeInTheDocument()
+
+    // Rejects whitespace in trigger and does not emit role="alert"
+    const triggerInput = within(settingsPanel).getByLabelText(/트리거명/i)
+    const labelInput = within(settingsPanel).getByLabelText(/^라벨$/i)
+    const descInput = within(settingsPanel).getByLabelText(/설명/i)
+    const templateInput = within(settingsPanel).getByLabelText(/마크다운 템플릿/i)
+
+    await user.type(triggerInput, 'bad cmd')
+    await user.type(labelInput, '잘못된 명령어')
+    await user.click(within(settingsPanel).getByRole('button', { name: '명령어 추가' }))
+    expect(within(settingsPanel).getByTestId('custom-command-error')).toHaveTextContent('공백')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    // Rejects duplicate trigger
+    await user.clear(triggerInput)
+    await user.type(triggerInput, 'function')
+    await user.click(within(settingsPanel).getByRole('button', { name: '명령어 추가' }))
+    expect(within(settingsPanel).getByTestId('custom-command-error')).toHaveTextContent('이미 존재')
+
+    // Add valid multiline command with live preview using active document title
+    await user.clear(triggerInput)
+    await user.type(triggerInput, 'note')
+    await user.clear(labelInput)
+    await user.type(labelInput, '노트 박스')
+    await user.type(descInput, '문서 메모 블록')
+    fireEvent.change(templateInput, {
+      target: { value: '> **{{title}}**\n>\n> {{cursor}}내용' }
+    })
+
+    const preview = within(settingsPanel).getByTestId('custom-command-preview')
+    expect(preview).toHaveTextContent('notes')
+    expect(preview).toHaveTextContent('내용')
+
+    await user.click(within(settingsPanel).getByRole('button', { name: '명령어 추가' }))
+    expect(within(commandList).getByText('/note')).toBeInTheDocument()
+
+    // Edit existing /struct command and delete /table command
+    await user.click(within(commandList).getByRole('button', { name: '/struct 수정' }))
+    fireEvent.change(templateInput, {
+      target: { value: '### CustomStruct: {{cursor}}' }
+    })
+    await user.click(within(settingsPanel).getByRole('button', { name: '명령어 저장' }))
+
+    await user.click(within(commandList).getByRole('button', { name: '/table 삭제' }))
+    expect(within(commandList).queryByText('/table')).not.toBeInTheDocument()
+
+    const persistedRaw = JSON.parse(await api.config.readRaw()) as AppConfig
+    expect(persistedRaw.customCommands.some((c) => c.trigger === 'note')).toBe(true)
+    expect(persistedRaw.customCommands.some((c) => c.trigger === 'table')).toBe(false)
+    expect(
+      persistedRaw.customCommands.find((c) => c.trigger === 'struct')?.template
+    ).toBe('### CustomStruct: {{cursor}}')
+
+    // Close settings and verify active Raw editor reflects changes immediately
+    await user.click(within(settingsPanel).getByRole('button', { name: '닫기' }))
+
+    const rawEditor = screen.getByTestId('document-editor')
+    const rawEnd = getRawEditorText(rawEditor).length
+    setRawEditorSelection(rawEditor, rawEnd, rawEnd)
+    rawEditor.focus()
+
+    await user.keyboard('/ta')
+    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
+
+    await user.keyboard('{Backspace}{Backspace}{Backspace}/no')
+    const listbox = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
+    expect(within(listbox).getByRole('option', { name: /\/note/ })).toBeInTheDocument()
+    await user.click(within(listbox).getByRole('option', { name: /\/note/ }))
+
+    expect(getRawEditorText(rawEditor)).toContain('> **notes**')
+    expect(getRawEditorText(rawEditor)).toContain('> 내용')
+
+    // Switch to WYSIWYG mode and verify edited custom command is live there too
+    await user.click(
+      within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+        name: '위지윅'
+      })
+    )
+    const wysiwygEl = screen.getByTestId('document-editor')
+    expect(wysiwygEl).toHaveTextContent('notes')
+    const pEls = wysiwygEl.querySelectorAll('p')
+    const lastP = pEls[pEls.length - 1]
+    const range = document.createRange()
+    range.selectNodeContents(lastP)
+    range.collapse(false)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+    wysiwygEl.focus()
+    document.dispatchEvent(new Event('selectionchange'))
+
+    await user.keyboard(' /str')
+    const wysiwygListbox = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
+    await user.click(within(wysiwygListbox).getByRole('option', { name: /\/struct/ }))
+    await waitFor(() => {
+      expect(wysiwygEl).toHaveTextContent('CustomStruct:')
+    })
+  })
+
+  it('validates direct config.json edits on Ctrl+S, preserves last valid config on error, and applies valid new commands', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\raw-config-slash',
+        workspaces: {
+          'C:\\wiki\\raw-config-slash': {
+            'guide.md': '# Guide\n\n'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await user.click(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('guide.md'))
+
+    await user.click(await screen.findByRole('button', { name: /설정/i }))
+    await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
+    await user.click(within(screen.getByLabelText('전역 설정 패널')).getByRole('button', { name: '닫기' }))
+
+    const configEditor = await screen.findByTestId('document-editor')
+    const beforeConfig = await api.config.get()
+
+    // Invalid duplicate custom command trigger -> Ctrl+S shows alert and preserves previous valid config
+    const invalidJsonConfig = JSON.stringify(
+      {
+        ...beforeConfig,
+        customCommands: [
+          { trigger: 'dup', label: 'First', template: 'one' },
+          { trigger: 'dup', label: 'Second', template: 'two' }
+        ]
+      },
+      null,
+      2
+    )
+    setRawEditorText(configEditor, invalidJsonConfig)
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('customCommands')
+    expect((await api.config.get()).customCommands).toEqual(beforeConfig.customCommands)
+
+    // Invalid JSON syntax also shows alert and keeps last valid config
+    setRawEditorText(configEditor, '{ invalid json')
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect((await api.config.get()).customCommands).toEqual(beforeConfig.customCommands)
+
+    // Fix config.json with valid new /api command -> Ctrl+S clears error and activates /api in guide.md
+    const validJsonConfig = JSON.stringify(
+      {
+        ...beforeConfig,
+        customCommands: [
+          ...beforeConfig.customCommands,
+          {
+            trigger: 'api',
+            label: 'API 엔드포인트',
+            description: 'REST API 문서',
+            template: '#### API ({{title}}): {{cursor}}'
+          }
+        ]
+      },
+      null,
+      2
+    )
+    setRawEditorText(configEditor, validJsonConfig)
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'guide.md' }))
+    const mdEditor = screen.getByTestId('document-editor')
+    const endPos = getRawEditorText(mdEditor).length
+    setRawEditorSelection(mdEditor, endPos, endPos)
+    mdEditor.focus()
+
+    await user.keyboard('/ap')
+    const listbox = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
+    expect(within(listbox).getByRole('option', { name: /\/api/ })).toBeInTheDocument()
+    await user.click(within(listbox).getByRole('option', { name: /\/api/ }))
+
+    expect(getRawEditorText(mdEditor)).toContain('#### API (guide): ')
+  })
+})

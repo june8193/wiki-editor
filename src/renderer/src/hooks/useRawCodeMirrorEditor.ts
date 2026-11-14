@@ -4,7 +4,7 @@ import { json } from '@codemirror/lang-json'
 import { markdown } from '@codemirror/lang-markdown'
 import { bracketMatching, HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
-import { Annotation, Compartment, EditorState, Extension, StateEffect } from '@codemirror/state'
+import { Annotation, Compartment, EditorState, Extension, Prec, StateEffect } from '@codemirror/state'
 import {
   drawSelection,
   EditorView,
@@ -14,7 +14,11 @@ import {
   lineNumbers
 } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
-import type { ThemeMode } from '@shared/config'
+import {
+  DEFAULT_CUSTOM_COMMANDS,
+  type CustomCommandConfig,
+  type ThemeMode
+} from '@shared/config'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
 import {
@@ -22,11 +26,23 @@ import {
   insertOrUpdateTocBlock,
   tryReplaceSlashTocAtLine
 } from '../editor/MarkdownTocEngine'
+import { detectSlashQuery, resolveSlashCommandSnippet } from '../editor/SlashCommandEngine'
 import type { CursorPosition } from '../stores/PaneTabStore'
 import { useOneShotScroll } from './useOneShotScroll'
+import { type CaretRectCoords, useSlashMenu } from './useSlashMenu'
 import { syncElementScrollTop } from './useSyncScrollTop'
 
 const externalSyncAnnotation = Annotation.define<boolean>()
+const slashInsertAnnotation = Annotation.define<boolean>()
+
+function safeCoordsAtPos(view: EditorView, pos: number): CaretRectCoords | null {
+  try {
+    const rect = view.coordsAtPos(pos)
+    return rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : null
+  } catch {
+    return null
+  }
+}
 
 function applyRawTocCommand(view: EditorView, requireSlashTocLine: boolean): boolean {
   const sel = view.state.selection.main
@@ -68,6 +84,8 @@ export interface UseRawCodeMirrorEditorOptions {
   cursor: CursorPosition
   scrollTop: number
   showTableToolbar: boolean
+  customCommands?: readonly CustomCommandConfig[]
+  documentTitle?: string
   scrollRequest?: RawScrollRequest | null
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
@@ -171,12 +189,23 @@ export function useRawCodeMirrorEditor({
   cursor,
   scrollTop,
   showTableToolbar,
+  customCommands = DEFAULT_CUSTOM_COMMANDS,
+  documentTitle,
   scrollRequest,
   onChangeContent,
   onUpdateViewState
 }: UseRawCodeMirrorEditorOptions) {
+  const shellRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const {
+    menuState: slashMenuState,
+    stateRef: slashStateRef,
+    updateFromMatch: updateSlashFromMatch,
+    moveSelection: moveSlashSelection,
+    setSelectedIndex: setSlashSelectedIndex,
+    dismiss: dismissSlashMenu
+  } = useSlashMenu(customCommands)
   const compartmentsRef = useRef({
     language: new Compartment(),
     theme: new Compartment(),
@@ -189,6 +218,8 @@ export function useRawCodeMirrorEditor({
     cursor,
     scrollTop,
     showTableToolbar,
+    customCommands,
+    documentTitle,
     onChangeContent,
     onUpdateViewState
   })
@@ -199,8 +230,88 @@ export function useRawCodeMirrorEditor({
     cursor,
     scrollTop,
     showTableToolbar,
+    customCommands,
+    documentTitle,
     onChangeContent,
     onUpdateViewState
+  }
+
+  const applySlashCommandToView = useCallback(
+    (
+      view: EditorView,
+      command: CustomCommandConfig,
+      explicitRangeFrom?: number,
+      explicitRangeTo?: number
+    ): boolean => {
+      if (runtimeRef.current.language !== 'markdown') {
+        return false
+      }
+      const docText = view.state.doc.toString()
+      const match =
+        explicitRangeFrom !== undefined &&
+        explicitRangeTo !== undefined &&
+        explicitRangeFrom >= 0 &&
+        explicitRangeTo <= docText.length &&
+        explicitRangeFrom <= explicitRangeTo
+          ? { query: '', rangeFrom: explicitRangeFrom, rangeTo: explicitRangeTo }
+          : detectSlashQuery(docText, view.state.selection.main.head, { ignoreCodeFences: true })
+      if (!match) {
+        return false
+      }
+
+      const normalizedCommand: CustomCommandConfig = {
+        ...command,
+        template: normalizeDocText(command.template)
+      }
+      const expanded = resolveSlashCommandSnippet(docText, normalizedCommand, {
+        title: runtimeRef.current.documentTitle
+      })
+      const nextDocLength = docText.length - (match.rangeTo - match.rangeFrom) + expanded.text.length
+      const nextCursor = Math.max(0, Math.min(nextDocLength, match.rangeFrom + expanded.cursorOffset))
+
+      view.dispatch({
+        changes: { from: match.rangeFrom, to: match.rangeTo, insert: expanded.text },
+        selection: { anchor: nextCursor },
+        annotations: slashInsertAnnotation.of(true)
+      })
+      dismissSlashMenu()
+      view.focus()
+      return true
+    },
+    [dismissSlashMenu]
+  )
+
+  const slashControlsRef = useRef({
+    stateRef: slashStateRef,
+    updateFromMatch: updateSlashFromMatch,
+    moveSelection: moveSlashSelection,
+    dismiss: dismissSlashMenu,
+    applySelected: (view: EditorView): boolean => {
+      const current = slashStateRef.current
+      if (!current.isOpen || current.items.length === 0) {
+        return false
+      }
+      const selected = current.items[current.selectedIndex] ?? current.items[0]
+      if (!selected) {
+        return false
+      }
+      return applySlashCommandToView(view, selected, current.rangeFrom, current.rangeTo)
+    }
+  })
+  slashControlsRef.current.stateRef = slashStateRef
+  slashControlsRef.current.updateFromMatch = updateSlashFromMatch
+  slashControlsRef.current.moveSelection = moveSlashSelection
+  slashControlsRef.current.dismiss = dismissSlashMenu
+  slashControlsRef.current.applySelected = (view: EditorView): boolean => {
+    const current = slashStateRef.current
+    if (!current.isOpen || current.items.length === 0) {
+      return false
+    }
+    const selected = current.items[current.selectedIndex] ?? current.items[0]
+    if (!selected) {
+      return false
+    }
+    return applySlashCommandToView(view, selected, current.rangeFrom, current.rangeTo)
   }
 
   const lineEndingRef = useRef<'\r\n' | '\n'>(detectDocumentLineEnding(content))
@@ -244,6 +355,15 @@ export function useRawCodeMirrorEditor({
         compartments.language.of(createLanguageExtension(initial.language)),
         compartments.theme.of(createEditorThemeExtension(initial.theme)),
         compartments.tableKeymap.of(initial.showTableToolbar ? rawTableKeymap : []),
+        Prec.highest(
+          keymap.of([
+            { key: 'ArrowDown', run: () => slashControlsRef.current.moveSelection(1) },
+            { key: 'ArrowUp', run: () => slashControlsRef.current.moveSelection(-1) },
+            { key: 'Enter', run: (cmView) => slashControlsRef.current.applySelected(cmView) },
+            { key: 'Tab', run: (cmView) => slashControlsRef.current.applySelected(cmView) },
+            { key: 'Escape', run: () => slashControlsRef.current.dismiss() }
+          ])
+        ),
         keymap.of([
           { key: 'Enter', run: handleSlashTocEnter },
           ...defaultKeymap,
@@ -273,6 +393,29 @@ export function useRawCodeMirrorEditor({
             runtimeRef.current.onUpdateViewState({ cursor: nextCursor })
             if (runtimeRef.current.showTableToolbar) {
               setInTable(isViewCursorInRawTable(update.view))
+            }
+          }
+
+          const isSlashInsert = update.transactions.some((tr) => tr.annotation(slashInsertAnnotation))
+          if (isSlashInsert) {
+            return
+          }
+          if (update.docChanged) {
+            const sel = update.state.selection.main
+            if (runtimeRef.current.language === 'markdown' && sel.empty) {
+              const match = detectSlashQuery(update.state.doc.toString(), sel.head, {
+                ignoreCodeFences: true
+              })
+              const coords = match ? safeCoordsAtPos(update.view, match.rangeFrom) : null
+              slashControlsRef.current.updateFromMatch(match, coords, shellRef.current)
+            } else {
+              slashControlsRef.current.dismiss()
+            }
+          } else if (update.selectionSet && slashControlsRef.current.stateRef.current.isOpen) {
+            const sel = update.state.selection.main
+            const activeMenu = slashControlsRef.current.stateRef.current
+            if (!sel.empty || sel.head < activeMenu.rangeFrom || sel.head > activeMenu.rangeTo) {
+              slashControlsRef.current.dismiss()
             }
           }
         })
@@ -306,6 +449,9 @@ export function useRawCodeMirrorEditor({
 
     if (prev.language !== language) {
       effects.push(compartments.language.reconfigure(createLanguageExtension(language)))
+      if (language !== 'markdown') {
+        dismissSlashMenu()
+      }
     }
     if (prev.theme !== theme) {
       effects.push(compartments.theme.reconfigure(createEditorThemeExtension(theme)))
@@ -349,6 +495,9 @@ export function useRawCodeMirrorEditor({
         selection: docChanged || (cursorPropChanged && selectionDiffers) ? targetSelection : undefined,
         annotations: externalSyncAnnotation.of(true)
       })
+      if (docChanged) {
+        dismissSlashMenu()
+      }
       lastCursorPropRef.current = cursor
       syncSelectionAttrs(view)
     }
@@ -393,5 +542,35 @@ export function useRawCodeMirrorEditor({
     applyRawTocCommand(view, false)
   }, [])
 
-  return { hostRef, inTable, runTableAction, insertToc }
+  const selectSlashCommand = useCallback(
+    (command: CustomCommandConfig): void => {
+      const view = viewRef.current
+      if (!view) return
+      const current = slashStateRef.current
+      applySlashCommandToView(
+        view,
+        command,
+        current.isOpen ? current.rangeFrom : undefined,
+        current.isOpen ? current.rangeTo : undefined
+      )
+    },
+    [applySlashCommandToView, slashStateRef]
+  )
+
+  return {
+    shellRef,
+    hostRef,
+    inTable,
+    runTableAction,
+    insertToc,
+    slashMenuProps: {
+      isOpen: slashMenuState.isOpen,
+      items: slashMenuState.items,
+      selectedIndex: slashMenuState.selectedIndex,
+      position: slashMenuState.position,
+      onSelect: selectSlashCommand,
+      onHoverIndex: setSlashSelectedIndex,
+      onDismiss: dismissSlashMenu
+    }
+  }
 }

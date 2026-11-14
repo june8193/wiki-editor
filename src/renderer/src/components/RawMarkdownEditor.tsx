@@ -1,7 +1,8 @@
-import type { ThemeMode } from '@shared/config'
+import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
 import type { CursorPosition } from '../stores/PaneTabStore'
+import { SlashCommandMenu } from './SlashCommandMenu'
 
 interface RawMarkdownEditorProps {
   content: string
@@ -10,6 +11,8 @@ interface RawMarkdownEditorProps {
   cursor: CursorPosition
   scrollTop: number
   showTableToolbar?: boolean
+  customCommands?: readonly CustomCommandConfig[]
+  documentTitle?: string
   scrollRequest?: RawScrollRequest | null
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
@@ -39,24 +42,29 @@ export function RawMarkdownEditor({
   cursor,
   scrollTop,
   showTableToolbar = false,
+  customCommands,
+  documentTitle,
   scrollRequest,
   onChangeContent,
   onUpdateViewState
 }: RawMarkdownEditorProps) {
-  const { hostRef, inTable, runTableAction, insertToc } = useRawCodeMirrorEditor({
-    content,
-    language,
-    theme,
-    cursor,
-    scrollTop,
-    showTableToolbar,
-    scrollRequest,
-    onChangeContent,
-    onUpdateViewState
-  })
+  const { shellRef, hostRef, inTable, runTableAction, insertToc, slashMenuProps } =
+    useRawCodeMirrorEditor({
+      content,
+      language,
+      theme,
+      cursor,
+      scrollTop,
+      showTableToolbar,
+      customCommands,
+      documentTitle,
+      scrollRequest,
+      onChangeContent,
+      onUpdateViewState
+    })
 
   return (
-    <div className="raw-editor-shell">
+    <div ref={shellRef} className="raw-editor-shell">
       {showTableToolbar && (
         <div className="editor-toolbar" role="toolbar" aria-label="Raw 표 편집 툴바">
           {RAW_TABLE_BUTTONS.map((btn) => (
@@ -82,6 +90,7 @@ export function RawMarkdownEditor({
         </div>
       )}
       <div ref={hostRef} className="codemirror-host" />
+      {language === 'markdown' ? <SlashCommandMenu {...slashMenuProps} /> : null}
     </div>
   )
 }

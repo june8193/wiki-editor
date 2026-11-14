@@ -1,25 +1,38 @@
-import { ThemeMode } from '@shared/config'
+import {
+  type CustomCommandConfig,
+  DEFAULT_CUSTOM_COMMANDS,
+  ThemeMode
+} from '@shared/config'
+import { CustomCommandsSection } from './CustomCommandsSection'
 
 interface SettingsPanelProps {
   theme: ThemeMode
   autoSave: boolean
   showHeadingNumbers?: boolean
   configPath: string
+  customCommands?: readonly CustomCommandConfig[]
+  previewTitle?: string
   onToggleTheme: () => void
   onToggleAutoSave: () => void
   onToggleShowHeadingNumbers?: () => void
+  onSaveCustomCommands?: (nextCommands: CustomCommandConfig[]) => Promise<boolean> | boolean
   onOpenConfigEditor: () => void
   onClose: () => void
 }
+
+const NOOP_SAVE_CUSTOM_COMMANDS = async (): Promise<boolean> => true
 
 export function SettingsPanel({
   theme,
   autoSave,
   showHeadingNumbers = true,
   configPath,
+  customCommands = DEFAULT_CUSTOM_COMMANDS,
+  previewTitle,
   onToggleTheme,
   onToggleAutoSave,
   onToggleShowHeadingNumbers,
+  onSaveCustomCommands = NOOP_SAVE_CUSTOM_COMMANDS,
   onOpenConfigEditor,
   onClose
 }: SettingsPanelProps) {
@@ -61,6 +74,13 @@ export function SettingsPanel({
           <span>헤딩 자동 넘버링 표시</span>
         </label>
       </section>
+
+      <CustomCommandsSection
+        customCommands={customCommands}
+        theme={theme}
+        previewTitle={previewTitle}
+        onSaveCustomCommands={onSaveCustomCommands}
+      />
 
       <section className="settings-section">
         <h3 className="settings-section-title">전역 설정 파일 (config.json)</h3>

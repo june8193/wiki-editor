@@ -1,5 +1,5 @@
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
-import type { ThemeMode } from '@shared/config'
+import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { PaneLayoutState } from '../stores/PaneTabStore'
 import type { OutlineScrollRequest } from './DocumentEditor'
@@ -12,6 +12,7 @@ interface PaneWorkspaceProps {
   theme: ThemeMode
   autoSave: boolean
   showHeadingNumbers?: boolean
+  customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   onSetSplitRatio: (ratio: number) => void
@@ -26,6 +27,7 @@ export function PaneWorkspace({
   theme,
   autoSave,
   showHeadingNumbers = true,
+  customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
   onSetSplitRatio,
@@ -84,6 +86,7 @@ export function PaneWorkspace({
     theme,
     autoSave,
     showHeadingNumbers,
+    customCommands,
     scrollRequest,
     isShortcutDisabled,
     buffers,

@@ -573,6 +573,7 @@ body,
 
 .raw-editor-shell,
 .wysiwyg-shell {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -823,7 +824,7 @@ body,
 }
 
 .settings-panel {
-  width: 340px;
+  width: 400px;
   max-width: 100%;
   padding: 16px 20px;
   background-color: var(--bg-surface);
@@ -1325,4 +1326,219 @@ body,
 
 .mermaid-node-preview {
   display: block;
+}
+
+.slash-command-menu {
+  position: absolute;
+  z-index: 40;
+  min-width: 240px;
+  max-width: 320px;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--bg-elevated, var(--bg-surface));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.slash-command-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.slash-command-item:hover,
+.slash-command-item.is-selected {
+  background-color: var(--accent-soft, rgba(59, 130, 246, 0.16));
+}
+
+.slash-command-trigger {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-color);
+}
+
+.slash-command-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.slash-command-label {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.slash-command-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.custom-commands-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.custom-commands-header .settings-section-title {
+  margin: 0;
+}
+
+.custom-command-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.custom-command-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--bg-app);
+}
+
+.custom-command-item.is-editing {
+  border-color: var(--accent-color);
+}
+
+.custom-command-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.custom-command-trigger {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-color);
+}
+
+.custom-command-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.custom-command-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.custom-command-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.custom-command-empty {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-color);
+  border-radius: 6px;
+}
+
+.custom-command-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.custom-command-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.custom-command-field label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.custom-command-field input,
+.custom-command-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.custom-command-field textarea {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  resize: vertical;
+}
+
+.custom-command-preview-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.custom-command-preview-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.custom-command-preview {
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--bg-app);
+  font-size: 12px;
+}
+
+.custom-command-preview .markdown-preview-scroll {
+  padding: 0;
+}
+
+.settings-validation-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger-color);
+}
+
+.custom-command-form-actions {
+  display: flex;
+  gap: 8px;
 }

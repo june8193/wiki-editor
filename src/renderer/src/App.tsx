@@ -9,6 +9,7 @@ import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { isMarkdownDocument } from './editor/editorModes'
+import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
   applyHeadingNumbers,
   findFirstNonFencedSlashTocLine,
@@ -63,6 +64,7 @@ export function App() {
     toggleTheme,
     toggleAutoSave,
     toggleShowHeadingNumbers,
+    updateCustomCommands,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     saveRawConfig
@@ -421,6 +423,7 @@ export function App() {
           theme={config.theme}
           autoSave={config.autoSave}
           showHeadingNumbers={config.showHeadingNumbers}
+          customCommands={config.customCommands}
           scrollRequest={outlineScrollRequest}
           isShortcutDisabled={pendingDialog !== null}
           onSetSplitRatio={setSplitRatio}
@@ -433,9 +436,12 @@ export function App() {
             autoSave={config.autoSave}
             showHeadingNumbers={config.showHeadingNumbers}
             configPath={configPath}
+            customCommands={config.customCommands}
+            previewTitle={activeBuffer ? deriveDocumentTitle(activeBuffer.name) : undefined}
             onToggleTheme={toggleTheme}
             onToggleAutoSave={toggleAutoSave}
             onToggleShowHeadingNumbers={toggleShowHeadingNumbers}
+            onSaveCustomCommands={updateCustomCommands}
             onOpenConfigEditor={handleOpenConfigEditor}
             onClose={() => setIsSettingsOpen(false)}
           />

@@ -1,8 +1,20 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { CustomCommandConfig } from '@shared/config'
 import { describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
+
+function placeCaretInProseMirror(editorEl: HTMLElement, targetEl: Element): void {
+  const range = document.createRange()
+  range.selectNodeContents(targetEl)
+  range.collapse(false)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  editorEl.focus()
+  document.dispatchEvent(new Event('selectionchange'))
+}
 
 describe('WysiwygMarkdownEditor', () => {
   it('mounts without firing onChangeContent on unchanged markdown and syncs external updates cleanly', () => {
@@ -381,5 +393,124 @@ describe('WysiwygMarkdownEditor', () => {
     expect(headings).toHaveLength(1)
     const suppressed = headings[0]?.querySelector('.heading-number-suppressed')
     expect(suppressed?.textContent).toBe('1. ')
+  })
+
+  it('opens slash autocomplete on /, supports keyboard navigation & click, places cursor at {{cursor}}, and supports /toc', async () => {
+    const user = userEvent.setup()
+    const commands: CustomCommandConfig[] = [
+      {
+        trigger: 'function',
+        label: 'Function 문서',
+        description: '함수 템플릿',
+        template: '### Function: {{cursor}}()\nTitle: {{title}}'
+      },
+      {
+        trigger: 'struct',
+        label: 'Struct 정의',
+        description: '구조체 템플릿',
+        template: '### Struct: {{cursor}}'
+      },
+      {
+        trigger: 'func-async',
+        label: 'Async Function',
+        description: '비동기 함수',
+        template: 'async function {{cursor}}() {}'
+      },
+      {
+        trigger: 'toc',
+        label: '목차 (TOC)',
+        template: '<!-- toc -->\n<!-- /toc -->'
+      }
+    ]
+    let latestMd = '# DocTitle\n\n'
+    const onChangeContent = vi.fn((next: string) => {
+      latestMd = next
+    })
+
+    render(
+      <WysiwygMarkdownEditor
+        content={latestMd}
+        scrollTop={0}
+        customCommands={commands}
+        documentTitle="api-spec"
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const paragraphs = editorEl.querySelectorAll('p')
+    const targetP = paragraphs[paragraphs.length - 1]
+    placeCaretInProseMirror(editorEl, targetP)
+    await user.keyboard('/fun')
+
+    const listbox = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
+    expect(within(listbox).getByRole('option', { name: /\/function/ })).toBeInTheDocument()
+    expect(within(listbox).getByRole('option', { name: /\/func-async/ })).toBeInTheDocument()
+    expect(within(listbox).queryByRole('option', { name: /\/struct/ })).not.toBeInTheDocument()
+
+    fireEvent.keyDown(editorEl, { key: 'ArrowDown' })
+    expect(within(listbox).getByRole('option', { name: /\/func-async/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    fireEvent.keyDown(editorEl, { key: 'ArrowUp' })
+    expect(within(listbox).getByRole('option', { name: /\/function/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    fireEvent.keyDown(editorEl, { key: 'Enter' })
+    await waitFor(() => {
+      expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
+    })
+
+    expect(latestMd).toContain('### Function: ()')
+    expect(latestMd).toContain('Title: api-spec')
+    expect(latestMd).not.toContain('/fun')
+
+    // Subsequent typing lands at {{cursor}} right before ()
+    await user.keyboard('buildTree')
+    await waitFor(() => {
+      expect(latestMd).toContain('### Function: buildTree()')
+    })
+
+    // Escape dismisses, and mouse click inserts /toc
+    await user.keyboard('{Enter}/to')
+    await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
+    fireEvent.keyDown(editorEl, { key: 'Escape' })
+    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
+
+    await user.keyboard('{Backspace}')
+    const tocListbox2 = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
+    await user.click(within(tocListbox2).getByRole('option', { name: /\/toc/ }))
+    await waitFor(() => {
+      expect(latestMd).toContain('<!-- toc -->')
+      expect(latestMd).toContain('- [DocTitle](#doctitle)')
+      expect(latestMd).toContain('<!-- /toc -->')
+    })
+  })
+
+  it('does not open slash popup inside code blocks or after URLs in WYSIWYG mode', async () => {
+    const user = userEvent.setup()
+    render(
+      <WysiwygMarkdownEditor
+        content={'```ts\nconst a = 1\n```\n\nhttps:/'}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const codeTextEl = await within(editorEl).findByText(/const a = 1/)
+    placeCaretInProseMirror(editorEl, codeTextEl)
+    await user.keyboard('\n/fun')
+    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
+
+    const urlParagraph = Array.from(editorEl.querySelectorAll('p')).find((p) =>
+      p.textContent?.includes('https:/')
+    )!
+    placeCaretInProseMirror(editorEl, urlParagraph)
+    await user.keyboard('/')
+    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
   })
 })

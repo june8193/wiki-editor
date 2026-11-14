@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { DEFAULT_APP_CONFIG, DEFAULT_CUSTOM_COMMANDS } from '@shared/config'
 import { ConfigService } from './ConfigService'
 
 describe('ConfigService', () => {
@@ -31,7 +32,7 @@ describe('ConfigService', () => {
       showHeadingNumbers: true,
       favoriteWorkspaces: [],
       recentWorkspaces: [],
-      customCommands: []
+      customCommands: DEFAULT_CUSTOM_COMMANDS
     })
 
     const rawOnDisk = await readFile(configPath, 'utf8')
@@ -62,7 +63,7 @@ describe('ConfigService', () => {
       showHeadingNumbers: true,
       favoriteWorkspaces: [],
       recentWorkspaces: ['C:\\docs'],
-      customCommands: []
+      customCommands: DEFAULT_CUSTOM_COMMANDS
     })
   })
 
@@ -184,9 +185,29 @@ describe('ConfigService', () => {
     await expect(service.saveRaw('{ invalid json')).rejects.toThrow(/JSON/i)
     await expect(service.saveRaw('{"theme": "neon"}')).rejects.toThrow(/theme/i)
     await expect(service.saveRaw('{"unknown": 1}')).rejects.toThrow(/unknown config key/i)
+    await expect(
+      service.saveRaw(
+        JSON.stringify({
+          ...DEFAULT_APP_CONFIG,
+          customCommands: [
+            { trigger: 'dup', label: 'One', template: '1' },
+            { trigger: 'dup', label: 'Two', template: '2' }
+          ]
+        })
+      )
+    ).rejects.toThrow(/customCommands/i)
+    await expect(
+      service.saveRaw(
+        JSON.stringify({
+          ...DEFAULT_APP_CONFIG,
+          customCommands: [{ trigger: 'bad space', label: 'One', template: '1' }]
+        })
+      )
+    ).rejects.toThrow(/customCommands/i)
 
     expect(notifications).toEqual([])
     expect((await service.get()).theme).toBe('light')
+    expect((await service.get()).customCommands).toEqual(DEFAULT_CUSTOM_COMMANDS)
 
     const validRaw = JSON.stringify({
       version: 1,
@@ -228,5 +249,26 @@ describe('ConfigService', () => {
     await service.recordRecentWorkspace(wsB)
     const afterMru = await service.recordRecentWorkspace(`${wsA}/`)
     expect(afterMru.recentWorkspaces).toEqual([wsA, wsB])
+  })
+
+  it('persists custom command edits and deletions including clearing all commands across restarts', async () => {
+    const service = new ConfigService(configPath)
+    const initial = await service.get()
+    expect(initial.customCommands.length).toBeGreaterThanOrEqual(4)
+
+    await service.update({
+      customCommands: [
+        { trigger: 'custom', label: 'Custom', description: 'Desc', template: '## {{title}}\n{{cursor}}' }
+      ]
+    })
+
+    const afterEdit = await new ConfigService(configPath).get()
+    expect(afterEdit.customCommands).toEqual([
+      { trigger: 'custom', label: 'Custom', description: 'Desc', template: '## {{title}}\n{{cursor}}' }
+    ])
+
+    await service.update({ customCommands: [] })
+    const afterClear = await new ConfigService(configPath).get()
+    expect(afterClear.customCommands).toEqual([])
   })
 })

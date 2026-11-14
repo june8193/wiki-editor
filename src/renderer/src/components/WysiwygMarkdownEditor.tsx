@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ThemeMode } from '@shared/config'
+import {
+  DEFAULT_CUSTOM_COMMANDS,
+  type CustomCommandConfig,
+  type ThemeMode
+} from '@shared/config'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
@@ -8,14 +12,31 @@ import {
   addTableRowBeforeSafely,
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
+  detectProseMirrorSlashQuery,
   headingNumberingPluginKey,
+  insertWysiwygMarkdownWithCursor,
   prepareMarkdownForTiptap,
-  sanitizeHtmlWithRehype
+  sanitizeHtmlWithRehype,
+  slashInsertPluginKey
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
 import { useOneShotScroll } from '../hooks/useOneShotScroll'
+import { type CaretRectCoords, useSlashMenu } from '../hooks/useSlashMenu'
 import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
+import { SlashCommandMenu } from './SlashCommandMenu'
+
+function safeProseMirrorCoords(
+  view: Editor['view'],
+  pos: number
+): CaretRectCoords | null {
+  try {
+    const coords = view.coordsAtPos(pos)
+    return { left: coords.left, top: coords.top, bottom: coords.bottom }
+  } catch {
+    return null
+  }
+}
 
 export interface WysiwygScrollRequest {
   index: number
@@ -28,6 +49,8 @@ interface WysiwygMarkdownEditorProps {
   theme?: ThemeMode
   showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
+  customCommands?: readonly CustomCommandConfig[]
+  documentTitle?: string
   scrollRequest?: WysiwygScrollRequest | null
   onChangeContent: (nextContent: string) => void
   onScrollTopChange?: (scrollTop: number) => void
@@ -201,10 +224,13 @@ export function WysiwygMarkdownEditor({
   theme = 'light',
   showHeadingNumbers = false,
   mermaidRenderer,
+  customCommands = DEFAULT_CUSTOM_COMMANDS,
+  documentTitle,
   scrollRequest,
   onChangeContent,
   onScrollTopChange
 }: WysiwygMarkdownEditorProps) {
+  const shellRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const contextMenuRef = useRef<HTMLDivElement | null>(null)
   const isProgrammaticSyncRef = useRef(false)
@@ -212,9 +238,84 @@ export function WysiwygMarkdownEditor({
   const contentRef = useRef(content)
   contentRef.current = content
   const lastEmittedMarkdownRef = useRef(content)
+  const lastSyncedContentPropRef = useRef(content)
   const onChangeContentRef = useRef(onChangeContent)
   onChangeContentRef.current = onChangeContent
+  const documentTitleRef = useRef(documentTitle)
+  documentTitleRef.current = documentTitle
   const insertTocRef = useRef<() => void>(() => undefined)
+  const editorRef = useRef<Editor | null>(null)
+
+  const {
+    menuState: slashMenuState,
+    stateRef: slashStateRef,
+    updateFromMatch: updateSlashFromMatch,
+    moveSelection: moveSlashSelection,
+    setSelectedIndex: setSlashSelectedIndex,
+    dismiss: dismissSlashMenu
+  } = useSlashMenu(customCommands)
+
+  const applySlashCommand = useCallback(
+    (
+      instance: Editor | null,
+      command: CustomCommandConfig,
+      explicitRange?: { rangeFrom: number; rangeTo: number }
+    ): boolean => {
+      if (!instance) return false
+      const range = explicitRange ?? detectProseMirrorSlashQuery(instance.state)
+      if (!range) return false
+
+      const applied = insertWysiwygMarkdownWithCursor(instance, command, range, {
+        title: documentTitleRef.current
+      })
+      if (applied) {
+        dismissSlashMenu()
+      }
+      return applied
+    },
+    [dismissSlashMenu]
+  )
+
+  const slashControlsRef = useRef({
+    stateRef: slashStateRef,
+    updateFromMatch: updateSlashFromMatch,
+    moveSelection: moveSlashSelection,
+    dismiss: dismissSlashMenu,
+    applySelected: (): boolean => {
+      const current = slashStateRef.current
+      const instance = editorRef.current
+      if (!current.isOpen || current.items.length === 0 || !instance) {
+        return false
+      }
+      const selected = current.items[current.selectedIndex] ?? current.items[0]
+      if (!selected) {
+        return false
+      }
+      return applySlashCommand(instance, selected, {
+        rangeFrom: current.rangeFrom,
+        rangeTo: current.rangeTo
+      })
+    }
+  })
+  slashControlsRef.current.stateRef = slashStateRef
+  slashControlsRef.current.updateFromMatch = updateSlashFromMatch
+  slashControlsRef.current.moveSelection = moveSlashSelection
+  slashControlsRef.current.dismiss = dismissSlashMenu
+  slashControlsRef.current.applySelected = (): boolean => {
+    const current = slashStateRef.current
+    const instance = editorRef.current
+    if (!current.isOpen || current.items.length === 0 || !instance) {
+      return false
+    }
+    const selected = current.items[current.selectedIndex] ?? current.items[0]
+    if (!selected) {
+      return false
+    }
+    return applySlashCommand(instance, selected, {
+      rangeFrom: current.rangeFrom,
+      rangeTo: current.rangeTo
+    })
+  }
 
   const [cellMenuPos, setCellMenuPos] = useState<{ x: number; y: number } | null>(null)
   const closeCellMenu = useCallback(() => setCellMenuPos(null), [])
@@ -234,13 +335,29 @@ export function WysiwygMarkdownEditor({
         },
         transformPastedHTML: sanitizeHtmlWithRehype,
         handleKeyDown: (view, event) => {
-          if (
-            event.key === 'Enter' &&
-            !event.shiftKey &&
-            !event.ctrlKey &&
-            !event.metaKey &&
-            !event.altKey
-          ) {
+          const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
+          if (slashControlsRef.current.stateRef.current.isOpen) {
+            if (event.key === 'ArrowDown' && !hasModifier) {
+              event.preventDefault()
+              return slashControlsRef.current.moveSelection(1)
+            }
+            if (event.key === 'ArrowUp' && !hasModifier) {
+              event.preventDefault()
+              return slashControlsRef.current.moveSelection(-1)
+            }
+            if ((event.key === 'Enter' || event.key === 'Tab') && !hasModifier) {
+              if (slashControlsRef.current.applySelected()) {
+                event.preventDefault()
+                return true
+              }
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              return slashControlsRef.current.dismiss()
+            }
+          }
+
+          if (event.key === 'Enter' && !hasModifier) {
             const { $from, empty } = view.state.selection
             if (
               empty &&
@@ -263,10 +380,29 @@ export function WysiwygMarkdownEditor({
         const serialized = instance.getMarkdown()
         lastEmittedMarkdownRef.current = serialized
         onChangeContentRef.current(serialized)
+
+        if (transaction.getMeta(slashInsertPluginKey)) {
+          slashControlsRef.current.dismiss()
+          return
+        }
+        const match = detectProseMirrorSlashQuery(instance.state)
+        const coords = match ? safeProseMirrorCoords(instance.view, match.rangeFrom) : null
+        slashControlsRef.current.updateFromMatch(match, coords, shellRef.current)
+      },
+      onSelectionUpdate: ({ editor: instance, transaction }) => {
+        if (transaction.docChanged || !slashControlsRef.current.stateRef.current.isOpen) {
+          return
+        }
+        const { from, to, empty } = instance.state.selection
+        const active = slashControlsRef.current.stateRef.current
+        if (!empty || from < active.rangeFrom || to > active.rangeTo) {
+          slashControlsRef.current.dismiss()
+        }
       }
     },
     []
   )
+  editorRef.current = editor
 
   const syncEditorContent = useCallback(
     (markdown: string, markLocalEdit: boolean): void => {
@@ -279,11 +415,12 @@ export function WysiwygMarkdownEditor({
         })
         hasLocalEditRef.current = markLocalEdit
         lastEmittedMarkdownRef.current = markdown
+        dismissSlashMenu()
       } finally {
         isProgrammaticSyncRef.current = false
       }
     },
-    [editor]
+    [dismissSlashMenu, editor]
   )
 
   const handleInsertToc = useCallback((): void => {
@@ -301,6 +438,8 @@ export function WysiwygMarkdownEditor({
 
   useEffect(() => {
     if (!editor) return
+    if (content === lastSyncedContentPropRef.current) return
+    lastSyncedContentPropRef.current = content
     if (content === lastEmittedMarkdownRef.current) return
     syncEditorContent(content, false)
   }, [content, editor, syncEditorContent])
@@ -361,8 +500,20 @@ export function WysiwygMarkdownEditor({
     [mermaidRenderer, theme]
   )
 
+  const handleSelectSlashCommand = useCallback(
+    (command: CustomCommandConfig): void => {
+      const current = slashStateRef.current
+      applySlashCommand(
+        editor,
+        command,
+        current.isOpen ? { rangeFrom: current.rangeFrom, rangeTo: current.rangeTo } : undefined
+      )
+    },
+    [applySlashCommand, editor, slashStateRef]
+  )
+
   return (
-    <div className="wysiwyg-shell">
+    <div ref={shellRef} className="wysiwyg-shell">
       <div className="editor-toolbar" role="toolbar" aria-label="위지윅 서식 툴바">
         {FORMAT_TOOLBAR_ITEMS.map((item) => {
           if (item.kind === 'divider') {
@@ -471,6 +622,16 @@ export function WysiwygMarkdownEditor({
           ))}
         </div>
       )}
+
+      <SlashCommandMenu
+        isOpen={slashMenuState.isOpen}
+        items={slashMenuState.items}
+        selectedIndex={slashMenuState.selectedIndex}
+        position={slashMenuState.position}
+        onSelect={handleSelectSlashCommand}
+        onHoverIndex={setSlashSelectedIndex}
+        onDismiss={dismissSlashMenu}
+      />
     </div>
   )
 }

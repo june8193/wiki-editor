@@ -1,14 +1,21 @@
-import { AnyExtension, Editor, Extension, Node as TiptapNode } from '@tiptap/core'
+import { AnyExtension, createNodeFromContent, Editor, Extension, Node as TiptapNode } from '@tiptap/core'
 import CodeBlock from '@tiptap/extension-code-block'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { TableKit } from '@tiptap/extension-table'
 import { Markdown } from '@tiptap/markdown'
-import type { Schema } from '@tiptap/pm/model'
-import { Plugin, PluginKey, type Transaction } from '@tiptap/pm/state'
+import { Fragment, type Mark, type Schema, Slice } from '@tiptap/pm/model'
+import {
+  type EditorState,
+  Plugin,
+  PluginKey,
+  TextSelection,
+  type Transaction
+} from '@tiptap/pm/state'
 import { deleteRow as pmDeleteRow, isInTable } from '@tiptap/pm/tables'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { ReactNodeViewRenderer } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
+import type { CustomCommandConfig } from '@shared/config'
 import rehypeParse from 'rehype-parse'
 import rehypeSanitize from 'rehype-sanitize'
 import rehypeStringify from 'rehype-stringify'
@@ -17,6 +24,13 @@ import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 import { MermaidCodeBlockNodeView } from '../components/MermaidCodeBlockNodeView'
 import { isSafeMarkdownUrl, MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
+import {
+  detectSlashQuery,
+  expandSlashTemplate,
+  isDefaultTocCommand,
+  resolveSlashCommandSnippet,
+  type SlashQueryMatch
+} from './SlashCommandEngine'
 import {
   createHeadingNumberTracker,
   hasHeadingNumberPrefix,
@@ -44,6 +58,7 @@ export interface WysiwygExtensionOptions {
 }
 
 export const headingNumberingPluginKey = new PluginKey<boolean>('headingNumbering')
+export const slashInsertPluginKey = new PluginKey<boolean>('wysiwygSlashInsert')
 
 const HeadingNumberingExtension = Extension.create<{ showHeadingNumbers: boolean }>({
   name: 'headingNumbering',
@@ -394,4 +409,159 @@ export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): 
       nested: true
     })
   ]
+}
+
+/**
+ * Detects an active `/query` token before the ProseMirror caret outside code blocks, inline code marks, and URLs.
+ */
+export function detectProseMirrorSlashQuery(state: EditorState): SlashQueryMatch | null {
+  const { $from, empty } = state.selection
+  if (!empty || !$from.parent.isTextblock || $from.parent.type.name === 'codeBlock') {
+    return null
+  }
+  if ($from.marks().some((mark) => mark.type.name === 'code')) {
+    return null
+  }
+
+  const textBefore = $from.parent.textBetween(0, $from.parentOffset, undefined, '\uFFFC')
+  const localMatch = detectSlashQuery(textBefore, textBefore.length, { ignoreCodeFences: false })
+  if (!localMatch) {
+    return null
+  }
+
+  const tokenLength = localMatch.rangeTo - localMatch.rangeFrom
+  const nodeBefore = $from.nodeBefore
+  if (!nodeBefore || !nodeBefore.isText || (nodeBefore.text?.length ?? 0) < tokenLength) {
+    return null
+  }
+
+  return {
+    query: localMatch.query,
+    rangeFrom: $from.pos - tokenLength,
+    rangeTo: $from.pos
+  }
+}
+
+function pickCursorSentinel(text: string): string {
+  let index = 0
+  while (text.includes(`WIKICURSOR${index}`)) {
+    index += 1
+  }
+  return `WIKICURSOR${index}`
+}
+
+/**
+ * Replaces the active `/query` ProseMirror range with sanitized Markdown nodes in a single
+ * transaction and moves the cursor to the expanded `{{cursor}}` position.
+ */
+export function insertWysiwygMarkdownWithCursor(
+  editor: Editor,
+  command: CustomCommandConfig,
+  range: Pick<SlashQueryMatch, 'rangeFrom' | 'rangeTo'>,
+  context?: { title?: string; date?: string; now?: Date }
+): boolean {
+  const { state } = editor
+  const { rangeFrom, rangeTo } = range
+  if (rangeFrom < 0 || rangeTo > state.doc.content.size || rangeFrom > rangeTo) {
+    return false
+  }
+
+  let markdownToInsert: string
+  let sentinel: string | null = null
+
+  if (isDefaultTocCommand(command)) {
+    const currentMd = editor.getMarkdown()
+    const resolved = resolveSlashCommandSnippet(currentMd, command, context)
+    markdownToInsert = resolved.text
+  } else {
+    const expanded = expandSlashTemplate(command.template, context)
+    if (expanded.hasCursorPlaceholder) {
+      sentinel = pickCursorSentinel(expanded.text)
+      markdownToInsert =
+        expanded.text.slice(0, expanded.cursorOffset) +
+        sentinel +
+        expanded.text.slice(expanded.cursorOffset)
+    } else {
+      markdownToInsert = expanded.text
+    }
+  }
+
+  const prepared = prepareMarkdownForTiptap(markdownToInsert)
+  const parsedDoc = editor.markdown?.parse(prepared)
+  const jsonBlocks = Array.isArray(parsedDoc?.content) ? parsedDoc.content : []
+  const created =
+    jsonBlocks.length > 0
+      ? createNodeFromContent(jsonBlocks, state.schema, { slice: false })
+      : Fragment.empty
+  const fragment = created instanceof Fragment ? created : Fragment.from(created)
+
+  const $from = state.doc.resolve(rangeFrom)
+  const isStandaloneTopParagraph =
+    $from.depth === 1 &&
+    $from.parent.type.name === 'paragraph' &&
+    rangeTo <= $from.end(1) &&
+    $from.parent.textBetween(0, rangeFrom - $from.start(1), undefined, '\uFFFC').trim() === '' &&
+    $from.parent.textBetween(rangeTo - $from.start(1), $from.parent.content.size, undefined, '\uFFFC').trim() ===
+      ''
+
+  const tr = state.tr
+  let fallbackEndPos: number
+
+  if (isStandaloneTopParagraph) {
+    const replaceFrom = $from.before(1)
+    const replaceTo = $from.after(1)
+    const replacement =
+      fragment.childCount === 0
+        ? Fragment.from(state.schema.nodes.paragraph.create())
+        : fragment
+    tr.replaceWith(replaceFrom, replaceTo, replacement)
+    fallbackEndPos = replaceFrom + replacement.size
+  } else if (fragment.childCount === 1 && fragment.firstChild?.type.name === 'paragraph') {
+    const inlineContent = fragment.firstChild.content
+    tr.replaceWith(rangeFrom, rangeTo, inlineContent)
+    fallbackEndPos = rangeFrom + inlineContent.size
+  } else if (fragment.childCount === 0) {
+    tr.delete(rangeFrom, rangeTo)
+    fallbackEndPos = rangeFrom
+  } else {
+    tr.replaceRange(rangeFrom, rangeTo, new Slice(fragment, 0, 0))
+    fallbackEndPos = Math.min(tr.doc.content.size, rangeFrom + fragment.size)
+  }
+
+  let cursorPos: number | null = null
+  let marksAtCursor: readonly Mark[] = []
+
+  if (sentinel) {
+    let foundFrom: number | null = null
+    let foundTo: number | null = null
+    tr.doc.descendants((node, pos) => {
+      if (foundFrom !== null) return false
+      if (node.isText && node.text) {
+        const idx = node.text.indexOf(sentinel)
+        if (idx !== -1) {
+          foundFrom = pos + idx
+          foundTo = foundFrom + sentinel.length
+          marksAtCursor = node.marks
+          return false
+        }
+      }
+      return true
+    })
+
+    if (foundFrom !== null && foundTo !== null) {
+      tr.delete(foundFrom, foundTo)
+      cursorPos = foundFrom
+    }
+  }
+
+  const targetPos = Math.max(0, Math.min(cursorPos ?? fallbackEndPos, tr.doc.content.size))
+  tr.setSelection(TextSelection.near(tr.doc.resolve(targetPos), cursorPos !== null ? 1 : -1))
+  if (cursorPos !== null && marksAtCursor.length > 0) {
+    tr.setStoredMarks(marksAtCursor)
+  }
+  tr.setMeta(slashInsertPluginKey, true)
+
+  editor.view.dispatch(tr)
+  editor.view.focus()
+  return true
 }

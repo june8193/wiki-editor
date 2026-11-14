@@ -71,6 +71,16 @@ export function resolveRawCursorLine(markdown: string, lfOffset: number): number
 }
 
 /**
+ * Returns true if the given character offset sits inside a fenced code block (``` or ~~~).
+ */
+export function isOffsetInCodeFence(markdown: string, offset: number): boolean {
+  if (!markdown) return false
+  const lineNumber = getLineNumberAtOffset(markdown, offset)
+  const lines = scanMarkdownLines(markdown)
+  return lines[lineNumber - 1]?.inCodeFence ?? false
+}
+
+/**
  * Formats an Outline heading label consistently with dynamic numbering settings.
  */
 export function formatOutlineHeadingTitle(

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AppConfig, DEFAULT_APP_CONFIG, ThemeMode } from '@shared/config'
+import { AppConfig, type CustomCommandConfig, DEFAULT_APP_CONFIG, ThemeMode } from '@shared/config'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
 interface UseConfigControllerOptions {
@@ -100,7 +100,7 @@ export function useConfigController({
       optimisticUpdate: (prev: AppConfig) => AppConfig,
       perform: () => Promise<AppConfig>,
       fallbackError: string
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       const seq = ++mutationSeqRef.current
       inFlightUpdatesRef.current += 1
       onErrorRef.current(null)
@@ -110,17 +110,19 @@ export function useConfigController({
 
       try {
         const saved = await perform()
-        if (!mountedRef.current) return
+        if (!mountedRef.current) return false
         inFlightUpdatesRef.current -= 1
         hasMutationCommitRef.current = true
         recordCommittedConfig(saved, seq === mutationSeqRef.current)
+        return true
       } catch (error: unknown) {
-        if (!mountedRef.current) return
+        if (!mountedRef.current) return false
         inFlightUpdatesRef.current -= 1
         if (seq === mutationSeqRef.current) {
           applyUiConfig(lastCommittedConfigRef.current)
           onErrorRef.current(toErrorMessage(error, fallbackError))
         }
+        return false
       }
     },
     [applyUiConfig, recordCommittedConfig]
@@ -154,6 +156,18 @@ export function useConfigController({
   const toggleShowHeadingNumbers = useCallback((): void => {
     toggleBooleanConfig('showHeadingNumbers', '헤딩 자동 넘버링 설정 변경에 실패했습니다.')
   }, [toggleBooleanConfig])
+
+  const updateCustomCommands = useCallback(
+    async (customCommands: CustomCommandConfig[]): Promise<boolean> => {
+      const nextCommands = customCommands.map((command) => ({ ...command }))
+      return runConfigMutation(
+        (prev) => ({ ...prev, customCommands: nextCommands }),
+        () => window.wikiApi.config.update({ customCommands: nextCommands }),
+        '커스텀 명령어 저장에 실패했습니다.'
+      )
+    },
+    [runConfigMutation]
+  )
 
   const toggleFavoriteWorkspace = useCallback(
     (workspacePath: string, name: string): void => {
@@ -200,6 +214,7 @@ export function useConfigController({
     toggleTheme,
     toggleAutoSave,
     toggleShowHeadingNumbers,
+    updateCustomCommands,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     saveRawConfig

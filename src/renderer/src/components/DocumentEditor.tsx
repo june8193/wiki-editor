@@ -1,7 +1,8 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
-import type { ThemeMode } from '@shared/config'
+import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
+import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
 import { EditorMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
@@ -24,6 +25,7 @@ interface DocumentEditorProps {
   theme: ThemeMode
   autoSave: boolean
   showHeadingNumbers?: boolean
+  customCommands?: readonly CustomCommandConfig[]
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
@@ -49,6 +51,7 @@ export function DocumentEditor({
   theme,
   autoSave,
   showHeadingNumbers = true,
+  customCommands,
   mermaidRenderer,
   scrollRequest = null,
   isShortcutDisabled = false,
@@ -59,6 +62,7 @@ export function DocumentEditor({
   const allowRichModes = isMarkdownDocument(activeDoc)
   const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
   const rawLanguage = getRawEditorLanguage(activeDoc)
+  const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
   const matchedScrollRequest =
     scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
 
@@ -171,6 +175,8 @@ export function DocumentEditor({
           cursor={tab.cursor}
           scrollTop={tab.scrollTop}
           showTableToolbar={allowRichModes}
+          customCommands={customCommands}
+          documentTitle={documentTitle}
           scrollRequest={
             matchedScrollRequest
               ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
@@ -187,6 +193,8 @@ export function DocumentEditor({
           scrollTop={tab.scrollTop}
           theme={theme}
           showHeadingNumbers={showHeadingNumbers}
+          customCommands={customCommands}
+          documentTitle={documentTitle}
           mermaidRenderer={mermaidRenderer}
           scrollRequest={
             matchedScrollRequest
