@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { getWorkspacePathKey, WorkspaceEntry } from '@shared/workspace'
+import { isMarkdownDocument, resolveModeShortcut } from '../editor/editorModes'
 import { DocumentBuffer, DocumentBufferStore } from '../stores/DocumentBufferStore'
 import { PaneId, PaneTabStore } from '../stores/PaneTabStore'
 import { toErrorMessage } from '../utils/toErrorMessage'
@@ -178,7 +179,7 @@ export function useEditorWorkspace({
     return `${dirty[0].name} 외 ${dirty.length - 1}개`
   }, [bufferStore])
 
-  // Global fallback Ctrl+S handler when focus is outside a specific pane editor
+  // Global fallback Ctrl+S and mode-switch shortcut handler when focus is outside a specific pane editor
   useEffect(() => {
     const handleGlobalKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || isAutoSavePausedRef.current) return
@@ -186,13 +187,33 @@ export function useEditorWorkspace({
         if (!tabStore.getActiveTab()) return
         event.preventDefault()
         saveActivePaneDocument()
+        return
+      }
+
+      const activeTab = tabStore.getActiveTab()
+      if (!activeTab) return
+      const activeBuffer = bufferStore.getBuffer(activeTab.bufferKey)
+      if (!activeBuffer) return
+
+      const nextMode = resolveModeShortcut(
+        event,
+        activeTab.mode,
+        isMarkdownDocument(activeBuffer)
+      )
+      if (nextMode) {
+        event.preventDefault()
+        if (nextMode !== activeTab.mode) {
+          tabStore.updateTabViewState(tabStore.getSnapshot().activePaneId, activeTab.id, {
+            mode: nextMode
+          })
+        }
       }
     }
     window.addEventListener('keydown', handleGlobalKeyDown)
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown)
     }
-  }, [saveActivePaneDocument, tabStore])
+  }, [bufferStore, saveActivePaneDocument, tabStore])
 
   // Per-buffer debounced auto-save for dirty workspace files
   useEffect(() => {

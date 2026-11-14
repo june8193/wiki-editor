@@ -1,71 +1,81 @@
-import { useLayoutEffect, useRef } from 'react'
+import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
+import type { ThemeMode } from '@shared/config'
+import { getRawEditorLanguage, isMarkdownDocument, resolveModeShortcut } from '../editor/editorModes'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
-import { CursorPosition, TabItem } from '../stores/PaneTabStore'
+import { EditorMode, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import { MarkdownPreview } from './MarkdownPreview'
+import { RawMarkdownEditor } from './RawMarkdownEditor'
+import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 interface DocumentEditorProps {
   document: DocumentBuffer
   tab: TabItem
+  theme: ThemeMode
   autoSave: boolean
   isShortcutDisabled?: boolean
   onChangeContent: (nextContent: string) => void
   onSave: () => void
-  onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
+  onUpdateViewState: (patch: TabViewPatch) => void
 }
+
+const EDITOR_MODE_OPTIONS: ReadonlyArray<{
+  mode: EditorMode
+  label: string
+  shortcutHint: string
+  requiresMarkdown: boolean
+}> = [
+  { mode: 'raw', label: 'Raw', shortcutHint: 'Ctrl+1', requiresMarkdown: false },
+  { mode: 'wysiwyg', label: '위지윅', shortcutHint: 'Ctrl+2', requiresMarkdown: true },
+  { mode: 'preview', label: 'Preview', shortcutHint: 'Ctrl+3', requiresMarkdown: true }
+]
 
 export function DocumentEditor({
   document: activeDoc,
   tab,
+  theme,
   autoSave,
   isShortcutDisabled = false,
   onChangeContent,
   onSave,
   onUpdateViewState
 }: DocumentEditorProps) {
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-  const lastRestoredKeyRef = useRef<string | null>(null)
-  const lastContentRef = useRef<string>(activeDoc.content)
+  const allowRichModes = isMarkdownDocument(activeDoc)
+  const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
+  const rawLanguage = getRawEditorLanguage(activeDoc)
 
-  useLayoutEffect(() => {
-    const textarea = textareaRef.current
-    if (!textarea) return
-
-    const restoreKey = `${tab.id}:${tab.mode}`
-    const isUnfocusedContentSync =
-      document.activeElement !== textarea && lastContentRef.current !== activeDoc.content
-    lastContentRef.current = activeDoc.content
-
-    if (lastRestoredKeyRef.current !== restoreKey || isUnfocusedContentSync) {
-      lastRestoredKeyRef.current = restoreKey
-      const maxOffset = activeDoc.content.length
-      const start = Math.max(0, Math.min(tab.cursor.selectionStart, maxOffset))
-      const end = Math.max(start, Math.min(tab.cursor.selectionEnd, maxOffset))
-      textarea.scrollTop = tab.scrollTop
-      if (textarea.selectionStart !== start || textarea.selectionEnd !== end) {
-        textarea.setSelectionRange(start, end)
+  const handleModeSelect = useCallback(
+    (nextMode: EditorMode): void => {
+      if (!allowRichModes && nextMode !== 'raw') return
+      if (nextMode !== tab.mode) {
+        onUpdateViewState({ mode: nextMode })
       }
+    },
+    [allowRichModes, onUpdateViewState, tab.mode]
+  )
+
+  const handleScrollTopChange = useCallback(
+    (scrollTop: number): void => {
+      onUpdateViewState({ scrollTop })
+    },
+    [onUpdateViewState]
+  )
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
+    if (isShortcutDisabled) return
+
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault()
+      event.stopPropagation()
+      onSave()
+      return
     }
-  }, [
-    tab.id,
-    tab.mode,
-    tab.cursor.selectionStart,
-    tab.cursor.selectionEnd,
-    tab.scrollTop,
-    activeDoc.content
-  ])
 
-  const syncCursor = (el: HTMLTextAreaElement): void => {
-    onUpdateViewState({
-      cursor: {
-        selectionStart: el.selectionStart ?? 0,
-        selectionEnd: el.selectionEnd ?? 0
-      }
-    })
-  }
-
-  const syncScroll = (el: HTMLTextAreaElement): void => {
-    onUpdateViewState({
-      scrollTop: el.scrollTop
-    })
+    const nextMode = resolveModeShortcut(event, effectiveMode, allowRichModes)
+    if (nextMode) {
+      event.preventDefault()
+      event.stopPropagation()
+      handleModeSelect(nextMode)
+    }
   }
 
   const saveStatusText = activeDoc.isSaving
@@ -80,14 +90,7 @@ export function DocumentEditor({
     <section
       className="editor-pane"
       aria-label="문서 편집 영역"
-      onKeyDown={(event) => {
-        if (isShortcutDisabled) return
-        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-          event.preventDefault()
-          event.stopPropagation()
-          onSave()
-        }
-      }}
+      onKeyDown={handleKeyDown}
     >
       <div className="editor-header">
         <div className="editor-doc-meta">
@@ -106,6 +109,30 @@ export function DocumentEditor({
           </span>
         </div>
 
+        <div className="editor-mode-switcher" role="group" aria-label="에디터 모드 전환">
+          {EDITOR_MODE_OPTIONS.map((option) => {
+            const isDisabled = option.requiresMarkdown && !allowRichModes
+            const isActive = effectiveMode === option.mode
+            return (
+              <button
+                key={option.mode}
+                type="button"
+                className={`mode-btn${isActive ? ' is-active' : ''}`}
+                aria-pressed={isActive}
+                disabled={isDisabled}
+                title={
+                  isDisabled
+                    ? '마크다운 파일에서만 사용할 수 있습니다.'
+                    : `${option.label} 모드 (${option.shortcutHint}, 순환 Ctrl+Shift+M)`
+                }
+                onClick={() => handleModeSelect(option.mode)}
+              >
+                {option.label}
+              </button>
+            )
+          })}
+        </div>
+
         <div className="editor-header-actions">
           <span className="editor-save-status">{saveStatusText}</span>
           <button
@@ -120,29 +147,35 @@ export function DocumentEditor({
         </div>
       </div>
 
-      <textarea
-        ref={textareaRef}
-        className="document-textarea"
-        aria-label="문서 에디터"
-        data-testid="document-editor"
-        value={activeDoc.content}
-        onChange={(event) => {
-          onChangeContent(event.target.value)
-          onUpdateViewState({
-            cursor: {
-              selectionStart: event.currentTarget.selectionStart ?? 0,
-              selectionEnd: event.currentTarget.selectionEnd ?? 0
-            },
-            scrollTop: event.currentTarget.scrollTop
-          })
-        }}
-        onSelect={(event) => syncCursor(event.currentTarget)}
-        onKeyUp={(event) => syncCursor(event.currentTarget)}
-        onMouseUp={(event) => syncCursor(event.currentTarget)}
-        onScroll={(event) => syncScroll(event.currentTarget)}
-        onBlur={(event) => syncCursor(event.currentTarget)}
-        spellCheck={false}
-      />
+      {effectiveMode === 'raw' && (
+        <RawMarkdownEditor
+          content={activeDoc.content}
+          language={rawLanguage}
+          theme={theme}
+          cursor={tab.cursor}
+          scrollTop={tab.scrollTop}
+          showTableToolbar={allowRichModes}
+          onChangeContent={onChangeContent}
+          onUpdateViewState={onUpdateViewState}
+        />
+      )}
+
+      {effectiveMode === 'wysiwyg' && (
+        <WysiwygMarkdownEditor
+          content={activeDoc.content}
+          scrollTop={tab.scrollTop}
+          onChangeContent={onChangeContent}
+          onScrollTopChange={handleScrollTopChange}
+        />
+      )}
+
+      {effectiveMode === 'preview' && (
+        <MarkdownPreview
+          content={activeDoc.content}
+          scrollTop={tab.scrollTop}
+          onScrollTopChange={handleScrollTopChange}
+        />
+      )}
     </section>
   )
 }

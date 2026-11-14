@@ -1,4 +1,5 @@
 import { CSSProperties } from 'react'
+import type { ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { DocumentEditor } from './DocumentEditor'
@@ -14,6 +15,7 @@ interface PaneViewProps {
   splitMode: SplitMode
   isActivePane: boolean
   flexRatio?: number
+  theme: ThemeMode
   autoSave: boolean
   isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
@@ -28,6 +30,7 @@ export function PaneView({
   splitMode,
   isActivePane,
   flexRatio,
+  theme,
   autoSave,
   isShortcutDisabled = false,
   buffers,
@@ -80,6 +83,7 @@ export function PaneView({
           key={activeTab.id}
           document={activeBuffer}
           tab={activeTab}
+          theme={theme}
           autoSave={autoSave}
           isShortcutDisabled={isShortcutDisabled}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}

@@ -1,7 +1,7 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
 import { useDismissable } from '../hooks/useDismissable'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
-import { CursorPosition, PaneId, TabItem } from '../stores/PaneTabStore'
+import { PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 
 export interface DraggingTabPayload {
   paneId: PaneId
@@ -21,11 +21,7 @@ export interface PaneInteractionActions {
   onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
   onChangeContent: (bufferKey: string, nextContent: string) => void
   onSaveBuffer: (bufferKey: string) => void
-  onUpdateTabViewState: (
-    paneId: PaneId,
-    tabId: string,
-    patch: { cursor?: CursorPosition; scrollTop?: number }
-  ) => void
+  onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
 }
 
 interface TabContextMenuState {

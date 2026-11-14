@@ -319,6 +319,7 @@ export function App() {
         <PaneWorkspace
           layout={layout}
           buffers={buffers}
+          theme={config.theme}
           autoSave={config.autoSave}
           isShortcutDisabled={pendingDialog !== null}
           onSetSplitRatio={setSplitRatio}

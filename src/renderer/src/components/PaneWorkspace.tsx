@@ -1,4 +1,5 @@
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
+import type { ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { PaneLayoutState } from '../stores/PaneTabStore'
 import { DraggingTabPayload, handleTabDrop, PaneInteractionActions } from './PaneTabBar'
@@ -7,6 +8,7 @@ import { PaneView } from './PaneView'
 interface PaneWorkspaceProps {
   layout: PaneLayoutState
   buffers: DocumentBufferSnapshot
+  theme: ThemeMode
   autoSave: boolean
   isShortcutDisabled?: boolean
   onSetSplitRatio: (ratio: number) => void
@@ -18,6 +20,7 @@ const KEYBOARD_RESIZE_STEP = 0.05
 export function PaneWorkspace({
   layout,
   buffers,
+  theme,
   autoSave,
   isShortcutDisabled = false,
   onSetSplitRatio,
@@ -84,6 +87,7 @@ export function PaneWorkspace({
         splitMode={layout.splitMode}
         isActivePane={layout.activePaneId === 'primary'}
         flexRatio={isSplit ? layout.splitRatio : undefined}
+        theme={theme}
         autoSave={autoSave}
         isShortcutDisabled={isShortcutDisabled}
         buffers={buffers}
@@ -129,6 +133,7 @@ export function PaneWorkspace({
             splitMode={layout.splitMode}
             isActivePane={layout.activePaneId === 'secondary'}
             flexRatio={1 - layout.splitRatio}
+            theme={theme}
             autoSave={autoSave}
             isShortcutDisabled={isShortcutDisabled}
             buffers={buffers}

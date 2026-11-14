@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { EditorView } from '@codemirror/view'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -27,6 +28,58 @@ interface VirtualFsOptions {
 
 function normalizePosix(pathValue: string): string {
   return pathValue.replace(/\\/g, '/').replace(/\/+$/, '') || '/'
+}
+
+function getRawEditorView(editorEl: HTMLElement): EditorView {
+  const view = EditorView.findFromDOM(editorEl)
+  if (!view) {
+    throw new Error('Could not resolve CodeMirror EditorView for element')
+  }
+  return view
+}
+
+function getRawEditorText(editorEl: HTMLElement): string {
+  return getRawEditorView(editorEl).state.doc.toString()
+}
+
+function setRawEditorText(editorEl: HTMLElement, nextText: string): void {
+  const view = getRawEditorView(editorEl)
+  act(() => {
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: nextText }
+    })
+  })
+}
+
+function appendRawEditorText(editorEl: HTMLElement, suffix: string): void {
+  const view = getRawEditorView(editorEl)
+  const end = view.state.doc.length
+  act(() => {
+    view.dispatch({
+      changes: { from: end, to: end, insert: suffix },
+      selection: { anchor: end + suffix.length }
+    })
+  })
+}
+
+function setRawEditorSelection(editorEl: HTMLElement, start: number, end: number): void {
+  const view = getRawEditorView(editorEl)
+  act(() => {
+    view.dispatch({
+      selection: { anchor: start, head: end }
+    })
+  })
+}
+
+function getRawEditorSelection(editorEl: HTMLElement): { start: number; end: number } {
+  return {
+    start: Number(editorEl.getAttribute('data-selection-start') ?? 0),
+    end: Number(editorEl.getAttribute('data-selection-end') ?? 0)
+  }
+}
+
+function getRawEditorScroller(editorEl: HTMLElement): HTMLElement {
+  return getRawEditorView(editorEl).scrollDOM
 }
 
 function parentDirOf(pathValue: string): string {
@@ -379,9 +432,9 @@ describe('App shell, theme persistence, and settings panel', () => {
     const openConfigButton = screen.getByRole('button', { name: /설정 파일 직접 열기/i })
     await user.click(openConfigButton)
 
-    const editor = (await screen.findByTestId('document-editor')) as HTMLTextAreaElement
-    expect(editor.value).toContain('"theme": "dark"')
-    expect(editor.value).toContain('"autoSave": true')
+    const editor = await screen.findByTestId('document-editor')
+    expect(getRawEditorText(editor)).toContain('"theme": "dark"')
+    expect(getRawEditorText(editor)).toContain('"autoSave": true')
   })
 
   it('reacts to external config change broadcasts and cleans up listener on unmount', async () => {
@@ -416,15 +469,13 @@ describe('App shell, theme persistence, and settings panel', () => {
     await user.click(await screen.findByRole('button', { name: /설정/i }))
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
 
-    const editor = (await screen.findByTestId('document-editor')) as HTMLTextAreaElement
-    expect(editor.value).toContain('"theme": "light"')
+    const editor = await screen.findByTestId('document-editor')
+    expect(getRawEditorText(editor)).toContain('"theme": "light"')
 
     emitExternalChange({ theme: 'dark' })
 
     await waitFor(() => {
-      expect((screen.getByTestId('document-editor') as HTMLTextAreaElement).value).toContain(
-        '"theme": "dark"'
-      )
+      expect(getRawEditorText(screen.getByTestId('document-editor'))).toContain('"theme": "dark"')
     })
   })
 
@@ -791,12 +842,12 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     await user.click(await within(sidebar).findByText('note.md'))
 
-    const editor = (await screen.findByTestId('document-editor')) as HTMLTextAreaElement
-    expect(editor.value).toBe('# Initial')
+    const editor = await screen.findByTestId('document-editor')
+    expect(getRawEditorText(editor)).toBe('# Initial')
     expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
 
     // Edit content -> dirty ● appears
-    await user.type(editor, '\nUpdated line')
+    appendRawEditorText(editor, '\nUpdated line')
     expect(screen.getByTestId('dirty-indicator')).toHaveTextContent('●')
 
     // Ctrl+S saves and clears dirty ●
@@ -815,7 +866,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     })
 
     // Type again and wait for debounced auto-save
-    await user.type(editor, '\nAuto saved')
+    appendRawEditorText(editor, '\nAuto saved')
     expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
 
     await act(async () => {
@@ -840,11 +891,11 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     await user.click(await screen.findByRole('button', { name: /설정/i }))
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
 
-    const editor = (await screen.findByTestId('document-editor')) as HTMLTextAreaElement
-    expect(editor.value).toContain('"theme": "light"')
+    const editor = await screen.findByTestId('document-editor')
+    expect(getRawEditorText(editor)).toContain('"theme": "light"')
 
     // Invalid JSON must be rejected and keep dirty indicator
-    fireEvent.change(editor, { target: { value: '{ broken json' } })
+    setRawEditorText(editor, '{ broken json')
     fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/JSON/i)
@@ -866,7 +917,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
       null,
       2
     )
-    fireEvent.change(editor, { target: { value: nextConfigJson } })
+    setRawEditorText(editor, nextConfigJson)
     fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
 
     await waitFor(() => {
@@ -897,19 +948,19 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
 
     await user.click(await within(sidebar).findByText('first.md'))
-    const editor = (await screen.findByTestId('document-editor')) as HTMLTextAreaElement
-    await user.type(editor, ' edited')
+    const editor = await screen.findByTestId('document-editor')
+    appendRawEditorText(editor, ' edited')
     expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
 
     // Clicking second.md opens a second tab while first.md stays open and dirty; closing first.md prompts -> 저장 후 닫기
     await user.click(within(sidebar).getByText('second.md'))
-    expect((screen.getByTestId('document-editor') as HTMLTextAreaElement).value).toBe('# Second')
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Second')
     await user.click(screen.getByRole('button', { name: 'first.md 탭 닫기' }))
     const dirtyDialog = await screen.findByRole('alertdialog')
     await user.click(within(dirtyDialog).getByRole('button', { name: /저장 후 닫기/i }))
 
     await waitFor(() => {
-      expect((screen.getByTestId('document-editor') as HTMLTextAreaElement).value).toBe('# Second')
+      expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Second')
       expect(screen.queryByRole('tab', { name: /first\.md/i })).not.toBeInTheDocument()
     })
     expect(getFilesSnapshot().get('C:/wiki/sync/first.md')).toBe('# First edited')
@@ -925,7 +976,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     await waitFor(() => {
       expect(screen.getByText('renamed-second.md', { selector: '.editor-doc-title' })).toBeInTheDocument()
     })
-    await user.type(screen.getByTestId('document-editor'), '!')
+    appendRawEditorText(screen.getByTestId('document-editor'), '!')
     fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 's', ctrlKey: true })
     await waitFor(() => {
       expect(getFilesSnapshot().get('C:/wiki/sync/renamed-second.md')).toBe('# Second!')
@@ -986,7 +1037,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     // Rapid Ctrl+S while save is in flight must NOT fire overlapping writeFile calls
     const editor = await screen.findByTestId('document-editor')
-    await user.type(editor, 'hello')
+    appendRawEditorText(editor, 'hello')
     fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
     fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
     expect(writeCount).toBe(1)
@@ -996,7 +1047,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     })
 
     // While dirty-confirmation dialog is open, auto-save is paused and must not auto-write before choice
-    await user.type(editor, ' unsaved')
+    appendRawEditorText(editor, ' unsaved')
     await user.click(screen.getByRole('button', { name: 'top-level.md 탭 닫기' }))
     const dirtyDialog = await screen.findByRole('alertdialog')
     await act(async () => {
@@ -1006,14 +1057,14 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     await user.click(within(dirtyDialog).getByRole('button', { name: /버리고 닫기/i }))
     await user.click(within(sidebar).getByText('other.md'))
     await waitFor(() => {
-      expect((screen.getByTestId('document-editor') as HTMLTextAreaElement).value).toBe('# Other')
+      expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Other')
     })
 
     // Auto-save must NOT fire on invalid mid-edit config.json
     await user.click(screen.getByRole('button', { name: /설정/i }))
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
     const configEditor = await screen.findByTestId('document-editor')
-    fireEvent.change(configEditor, { target: { value: '{ invalid json' } })
+    setRawEditorText(configEditor, '{ invalid json')
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 120))
     })
@@ -1065,12 +1116,12 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     await user.click(await within(sidebar).findByText('a.md'))
     const editor = await screen.findByTestId('document-editor')
-    await user.type(editor, ' v1')
+    appendRawEditorText(editor, ' v1')
 
     // Wait for auto-save to enter in-flight state
     await waitFor(() => expect(callNum).toBe(1))
     // Type more while first save is still in flight, then switch workspace and choose 저장 후 이동
-    await user.type(editor, ' v2')
+    appendRawEditorText(editor, ' v2')
     await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
     const launcherMenu = await screen.findByRole('region', { name: /워크스페이스 목록/i })
     await user.click(within(launcherMenu).getByRole('button', { name: /★\s*inflight-next/i }))
@@ -1121,7 +1172,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     expect(tabs[2]).toHaveAttribute('aria-selected', 'true')
 
     // Edit three.md so it becomes dirty
-    await user.type(within(primaryPane).getByTestId('document-editor'), ' edited')
+    appendRawEditorText(within(primaryPane).getByTestId('document-editor'), ' edited')
     expect(within(tabs[2]).getByTestId('tab-dirty-indicator')).toHaveTextContent('●')
 
     // Click one.md tab to switch cleanly without losing three.md edits
@@ -1130,9 +1181,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
       'aria-selected',
       'true'
     )
-    expect((within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement).value).toBe(
-      '# One'
-    )
+    expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toBe('# One')
 
     // Middle-click clean two.md tab closes it immediately
     const twoTab = within(primaryPane).getByRole('tab', { name: /two\.md/i })
@@ -1195,11 +1244,11 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     expect(within(secondaryPane).getByRole('tab', { name: /shared\.md/i })).toBeInTheDocument()
 
     // Editing in primary immediately syncs content and dirty ● to secondary
-    const primaryEditor = within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement
-    const secondaryEditor = within(secondaryPane).getByTestId('document-editor') as HTMLTextAreaElement
-    await user.type(primaryEditor, ' synced!')
+    const primaryEditor = within(primaryPane).getByTestId('document-editor')
+    const secondaryEditor = within(secondaryPane).getByTestId('document-editor')
+    appendRawEditorText(primaryEditor, ' synced!')
 
-    expect(secondaryEditor.value).toBe('# Shared synced!')
+    expect(getRawEditorText(secondaryEditor)).toBe('# Shared synced!')
     expect(within(primaryPane).getByTestId('dirty-indicator')).toHaveTextContent('●')
     expect(within(secondaryPane).getByTestId('dirty-indicator')).toHaveTextContent('●')
 
@@ -1341,24 +1390,23 @@ describe('Multi-tab and 2-pane Split View layout', () => {
 
     // Switch to doc-01.md, set selection range and scrollTop, then switch to doc-02.md and back
     await user.click(within(primaryPane).getByRole('tab', { name: 'doc-01.md' }))
-    const editor01 = within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement
-    editor01.setSelectionRange(4, 11)
-    fireEvent.select(editor01)
-    editor01.scrollTop = 180
-    fireEvent.scroll(editor01)
+    const editor01 = within(primaryPane).getByTestId('document-editor')
+    setRawEditorSelection(editor01, 4, 11)
+    const scroller01 = getRawEditorScroller(editor01)
+    scroller01.scrollTop = 180
+    fireEvent.scroll(scroller01)
 
     await user.click(within(primaryPane).getByRole('tab', { name: 'doc-02.md' }))
     expect(screen.getAllByTestId('document-editor')).toHaveLength(1)
-    expect((within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement).value).toContain(
+    expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toContain(
       '# Document 02'
     )
 
     // Switch back to doc-01.md -> restored cursor & scrollTop
     await user.click(within(primaryPane).getByRole('tab', { name: 'doc-01.md' }))
-    const restored01 = within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement
-    expect(restored01.selectionStart).toBe(4)
-    expect(restored01.selectionEnd).toBe(11)
-    expect(restored01.scrollTop).toBe(180)
+    const restored01 = within(primaryPane).getByTestId('document-editor')
+    expect(getRawEditorSelection(restored01)).toEqual({ start: 4, end: 11 })
+    expect(getRawEditorScroller(restored01).scrollTop).toBe(180)
 
     // Move doc-25.md to secondary pane -> still at most 2 editor DOM instances across 25 tabs
     fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: 'doc-25.md' }))
@@ -1477,25 +1525,22 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     )
 
     const secondaryPane = screen.getByTestId('pane-secondary')
-    const primaryEditor = within(primaryPane).getByTestId('document-editor') as HTMLTextAreaElement
-    const secondaryEditor = within(secondaryPane).getByTestId(
-      'document-editor'
-    ) as HTMLTextAreaElement
+    const primaryEditor = within(primaryPane).getByTestId('document-editor')
+    const secondaryEditor = within(secondaryPane).getByTestId('document-editor')
 
     secondaryEditor.focus()
-    secondaryEditor.setSelectionRange(2, 5)
-    fireEvent.select(secondaryEditor)
+    setRawEditorSelection(secondaryEditor, 2, 5)
 
     primaryEditor.focus()
-    secondaryEditor.scrollTop = 90
-    fireEvent.scroll(secondaryEditor)
+    const secondaryScroller = getRawEditorScroller(secondaryEditor)
+    secondaryScroller.scrollTop = 90
+    fireEvent.scroll(secondaryScroller)
 
-    fireEvent.change(primaryEditor, { target: { value: 'Hello World! Edited' } })
+    setRawEditorText(primaryEditor, 'Hello World! Edited')
 
-    expect(secondaryEditor.value).toBe('Hello World! Edited')
-    expect(secondaryEditor.selectionStart).toBe(2)
-    expect(secondaryEditor.selectionEnd).toBe(5)
-    expect(secondaryEditor.scrollTop).toBe(90)
+    expect(getRawEditorText(secondaryEditor)).toBe('Hello World! Edited')
+    expect(getRawEditorSelection(secondaryEditor)).toEqual({ start: 2, end: 5 })
+    expect(getRawEditorScroller(secondaryEditor).scrollTop).toBe(90)
   })
 
   it('stops auto-save retries after a write failure until the next edit', async () => {
@@ -1521,7 +1566,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     await user.click(await screen.findByText('fail.md'))
 
     const editor = screen.getByTestId('document-editor')
-    fireEvent.change(editor, { target: { value: '# First failed edit' } })
+    setRawEditorText(editor, '# First failed edit')
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Disk full')
     expect(writeSpy).toHaveBeenCalledTimes(1)
@@ -1531,7 +1576,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     })
     expect(writeSpy).toHaveBeenCalledTimes(1)
 
-    fireEvent.change(editor, { target: { value: '# Recovered edit' } })
+    setRawEditorText(editor, '# Recovered edit')
     await waitFor(() => {
       expect(writeSpy).toHaveBeenCalledTimes(2)
       expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
@@ -1559,7 +1604,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     await user.click(await screen.findByText('dirty.md'))
 
     const editor = screen.getByTestId('document-editor')
-    fireEvent.change(editor, { target: { value: 'unsaved changes' } })
+    setRawEditorText(editor, 'unsaved changes')
 
     await user.click(screen.getByRole('button', { name: 'dirty.md 탭 닫기' }))
     const dialog = await screen.findByRole('alertdialog')
@@ -1598,7 +1643,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     await user.click(await within(sidebar).findByText('slow.md'))
 
-    fireEvent.change(screen.getByTestId('document-editor'), { target: { value: '# Slow edited' } })
+    setRawEditorText(screen.getByTestId('document-editor'), '# Slow edited')
     await user.click(screen.getByRole('button', { name: '저장' }))
     expect(screen.getByText('저장 중...')).toBeInTheDocument()
 
@@ -1664,6 +1709,213 @@ describe('Multi-tab and 2-pane Split View layout', () => {
       'aria-selected',
       'true'
     )
-    expect(screen.getByTestId('document-editor')).toHaveValue('# B')
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# B')
+  })
+})
+
+describe('Three-mode markdown editor, split mode sync, and table editing', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('supports Left Raw + Right Preview live sync in split view and lossless Raw <-> WYSIWYG <-> Preview roundtrips', async () => {
+    const user = userEvent.setup()
+    const initialMd = '# Title\n\n*   kept   spacing\n\n- [x] Done'
+    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\modes',
+        workspaces: {
+          'C:\\wiki\\modes': {
+            'doc.md': initialMd
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await user.click(await screen.findByText('doc.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /doc\.md/i }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역에 복제 열기'
+      })
+    )
+
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    const secondaryModeGroup = within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })
+    await user.click(within(secondaryModeGroup).getByRole('button', { name: 'Preview' }))
+
+    expect(within(secondaryPane).getByLabelText('마크다운 미리보기')).toBeInTheDocument()
+    expect(
+      within(secondaryPane).getByRole('heading', { level: 1, name: 'Title' })
+    ).toBeInTheDocument()
+    expect(within(secondaryPane).getByRole('checkbox')).toBeChecked()
+
+    // Edit Left Raw -> Right Preview reflects edit live via shared DocumentBufferStore
+    const primaryEditor = within(primaryPane).getByTestId('document-editor')
+    appendRawEditorText(primaryEditor, '\n\nLive Paragraph')
+
+    expect(within(secondaryPane).getByText('Live Paragraph')).toBeInTheDocument()
+    expect(within(primaryPane).getByTestId('dirty-indicator')).toBeInTheDocument()
+    expect(within(secondaryPane).getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    // Save via Ctrl+S
+    fireEvent.keyDown(primaryEditor, { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    })
+    expect(getFilesSnapshot().get('C:/wiki/modes/doc.md')).toContain('Live Paragraph')
+
+    // Roundtrip Raw -> 위지윅 -> Preview -> Raw without editing must keep buffer clean and formatting intact
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '2', ctrlKey: true })
+    expect(
+      within(primaryPane).getByRole('toolbar', { name: '위지윅 서식 툴바' })
+    ).toBeInTheDocument()
+
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '3', ctrlKey: true })
+    expect(within(primaryPane).getByLabelText('마크다운 미리보기')).toBeInTheDocument()
+
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), {
+      key: 'M',
+      ctrlKey: true,
+      shiftKey: true
+    })
+    const roundtrippedRaw = within(primaryPane).getByTestId('document-editor')
+    expect(getRawEditorText(roundtrippedRaw)).toContain('*   kept   spacing')
+    expect(within(primaryPane).queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+  })
+
+  it('supports GFM table insertion and row/column add/delete in both Raw mode and WYSIWYG mode', async () => {
+    const user = userEvent.setup()
+    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\tables',
+        workspaces: {
+          'C:\\wiki\\tables': {
+            'raw-table.md': '',
+            'wysiwyg-table.md': '# Table Demo\n\n'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+
+    // 1) Raw mode table manipulation via TableMarkdownManipulator toolbar
+    await user.click(await within(sidebar).findByText('raw-table.md'))
+    const rawToolbar = screen.getByRole('toolbar', { name: 'Raw 표 편집 툴바' })
+    await user.click(within(rawToolbar).getByRole('button', { name: '표 삽입' }))
+
+    const rawEditor = screen.getByTestId('document-editor')
+    const insertedText = getRawEditorText(rawEditor)
+    expect(insertedText).toContain('| 열 1 | 열 2 | 열 3 |')
+
+    const bodyCellOffset = insertedText.indexOf('|  |') + 2
+    setRawEditorSelection(rawEditor, bodyCellOffset, bodyCellOffset)
+    await user.click(within(rawToolbar).getByRole('button', { name: '행 아래 추가' }))
+    await user.click(within(rawToolbar).getByRole('button', { name: '열 우 추가' }))
+
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    })
+    const savedRawTable = getFilesSnapshot().get('C:/wiki/tables/raw-table.md') ?? ''
+    const rawTableLines = savedRawTable
+      .trim()
+      .split('\n')
+      .filter((line) => line.startsWith('|'))
+    // Initially 4 lines (header + separator + 2 body rows) -> +1 row = 5 lines, 3 cols -> +1 col = 4 cols
+    expect(rawTableLines).toHaveLength(5)
+    expect(rawTableLines[0].split('|').slice(1, -1)).toHaveLength(4)
+
+    // 2) WYSIWYG mode table insertion + row/column add/delete
+    await user.click(within(sidebar).getByText('wysiwyg-table.md'))
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+
+    const formatToolbar = screen.getByRole('toolbar', { name: '위지윅 서식 툴바' })
+    await user.click(within(formatToolbar).getByRole('button', { name: '표 삽입' }))
+
+    const tableToolbar = await screen.findByRole('toolbar', { name: '표 편집 툴바' })
+    await user.click(within(tableToolbar).getByRole('button', { name: '행 아래 추가' }))
+    await user.click(within(tableToolbar).getByRole('button', { name: '열 우 추가' }))
+
+    const wysiwygEl = screen.getByTestId('document-editor')
+    const tableEl = wysiwygEl.querySelector('table')
+    expect(tableEl).not.toBeNull()
+    expect(tableEl?.querySelectorAll('tr')).toHaveLength(4)
+    expect(tableEl?.querySelector('tr')?.querySelectorAll('th, td')).toHaveLength(4)
+
+    await user.click(within(tableToolbar).getByRole('button', { name: '현재 행 삭제' }))
+    await user.click(within(tableToolbar).getByRole('button', { name: '현재 열 삭제' }))
+
+    expect(wysiwygEl.querySelectorAll('table tr')).toHaveLength(3)
+    expect(wysiwygEl.querySelector('table tr')?.querySelectorAll('th, td')).toHaveLength(3)
+
+    fireEvent.keyDown(wysiwygEl, { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    })
+    expect(getFilesSnapshot().get('C:/wiki/tables/wysiwyg-table.md')).toContain('|')
+
+    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+    const previewTable = screen.getByTestId('document-editor').querySelector('table')
+    expect(previewTable?.querySelectorAll('tr')).toHaveLength(3)
+  })
+
+  it('sanitizes XSS payloads in Preview mode and syncs editor theme across Light and Dark modes', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\xss',
+        workspaces: {
+          'C:\\wiki\\xss': {
+            'xss.md':
+              '# Safe Title\n\n<script>alert(1)</script>\n\n<img src="x" onerror="alert(2)" />\n\n[Bad](javascript:alert(3))\n\n[Good](https://example.com)'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /폴더 열기/i }))
+    await user.click(await screen.findByText('xss.md'))
+
+    // Verify theme sync on CodeMirror 6 in Raw mode
+    expect(document.querySelector('.cm-editor')?.getAttribute('data-theme-mode')).toBe('light')
+    await user.click(screen.getByRole('button', { name: /테마 전환/i }))
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
+      expect(document.querySelector('.cm-editor')?.getAttribute('data-theme-mode')).toBe('dark')
+    })
+
+    // Switch to Preview and verify XSS sanitization
+    await user.click(
+      within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+        name: 'Preview'
+      })
+    )
+    const previewEl = screen.getByTestId('document-editor')
+    expect(previewEl.querySelector('script')).toBeNull()
+    const imgEl = previewEl.querySelector('img')
+    expect(imgEl?.getAttribute('onerror')).toBeNull()
+    const badLink = screen.getByText('Bad').closest('a')
+    expect(badLink?.getAttribute('href')).toBeNull()
+    expect(screen.getByRole('link', { name: 'Good' })).toHaveAttribute(
+      'href',
+      'https://example.com'
+    )
   })
 })
