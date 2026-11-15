@@ -8,7 +8,7 @@ import {
   DEFAULT_APP_CONFIG,
   validateConfigRaw
 } from '@shared/config'
-import { createEmptyGitStatus } from '@shared/git'
+import { createEmptyGitStatus, type GitFileStatusCode } from '@shared/git'
 import type { AppMenuCommand, WikiApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import {
@@ -451,13 +451,22 @@ async function triggerMenuCommand(
   })
 }
 
+async function clickActivityBarButton(
+  user: ReturnType<typeof userEvent.setup>,
+  label: '탐색기' | 'Git' | '워크스페이스'
+): Promise<void> {
+  const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+  await user.click(within(activityBar).getByRole('button', { name: label }))
+}
+
 describe('App shell, theme persistence, and settings panel', () => {
   beforeEach(() => {
     document.documentElement.removeAttribute('data-theme')
     vi.useRealTimers()
   })
 
-  it('removes the internal app-header completely and updates folder tree empty-state guidance', async () => {
+  it('removes the internal app-header completely and updates empty-state guidance in workspace and explorer views', async () => {
+    const user = userEvent.setup()
     const { api } = createInMemoryWikiApi()
     window.wikiApi = api
 
@@ -470,14 +479,22 @@ describe('App shell, theme persistence, and settings panel', () => {
     expect(screen.queryByRole('banner')).not.toBeInTheDocument()
     expect(document.querySelector('header.app-header')).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Wiki Editor' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /폴더 열기/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /테마 전환/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^설정$/i })).not.toBeInTheDocument()
 
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    expect(within(workspaceView).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: '폴더 열기...' })).toBeInTheDocument()
+    expect(within(workspaceView).getByText('등록된 즐겨찾기가 없습니다.')).toBeInTheDocument()
+    expect(within(workspaceView).getByText('최근 연 폴더가 없습니다.')).toBeInTheDocument()
+
+    await clickActivityBarButton(user, '탐색기')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    expect(within(sidebar).queryByRole('button', { name: /폴더 열기/i })).not.toBeInTheDocument()
+    expect(within(sidebar).queryByRole('button', { name: /워크스페이스 전환/i })).not.toBeInTheDocument()
     expect(within(sidebar).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
     expect(
-      within(sidebar).getByText("File 메뉴의 '폴더 열기' 또는 상단 워크스페이스 선택으로 시작하세요.")
+      within(sidebar).getByText("File 메뉴의 '폴더 열기' 또는 워크스페이스 뷰에서 폴더를 열어 시작하세요.")
     ).toBeInTheDocument()
   })
 
@@ -540,6 +557,7 @@ describe('App shell, theme persistence, and settings panel', () => {
     const openConfigButton = screen.getByRole('button', { name: /설정 파일 직접 열기/i })
     await user.click(openConfigButton)
 
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
     const editor = await screen.findByTestId('document-editor')
     expect(getRawEditorText(editor)).toContain('"theme": "dark"')
     expect(getRawEditorText(editor)).toContain('"autoSave": true')
@@ -661,10 +679,10 @@ describe('App shell, theme persistence, and settings panel', () => {
     const view = render(<App />)
 
     await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
-    expect(screen.getByLabelText('전역 설정 패널')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toHaveAttribute('aria-modal', 'true')
 
     await user.click(screen.getByRole('button', { name: /닫기/i }))
-    expect(screen.queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
 
     view.unmount()
 
@@ -793,10 +811,10 @@ describe('App shell, theme persistence, and settings panel', () => {
     expect((await api.config.get()).theme).toBe('dark')
 
     await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
-    expect(screen.getByLabelText('전역 설정 패널')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
 
     await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
-    expect(screen.queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
 
     view.unmount()
     expect(getMenuListenerCount()).toBe(0)
@@ -892,6 +910,7 @@ describe('App shell, theme persistence, and settings panel', () => {
     await user.click(await within(sidebar).findByText('dirty.md'))
     appendRawEditorText(await screen.findByTestId('document-editor'), ' unsaved')
 
+    await clickActivityBarButton(user, 'Git')
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
     const gitDialog = await screen.findByRole('alertdialog')
@@ -1063,7 +1082,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     expect(getFilesSnapshot().has('C:/wiki/notes/guides/getting-started.md')).toBe(false)
   })
 
-  it('renders workspace switcher inside the left sidebar when no workspace is open and opens a recent workspace directly', async () => {
+  it('renders workspace view inside the left sidebar when no workspace is open, supports open-folder button, opens recent workspace directly, and simplifies explorer header', async () => {
     const user = userEvent.setup()
     const favoriteAlpha = addFavoriteWorkspace(
       [],
@@ -1077,44 +1096,69 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
         recentWorkspaces: ['C:/wiki/deleted-ws', 'C:/wiki/gamma']
       },
       {
+        selectedFolder: 'C:\\wiki\\alpha',
         workspaces: {
           'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
           'C:\\wiki\\gamma': { 'gamma.md': '# Gamma' }
         }
       }
     )
+    const selectFolderSpy = vi.fn(api.workspace.selectFolder)
+    api.workspace.selectFolder = selectFolderSpy
     window.wikiApi = api
 
     render(<App />)
     await screen.findByText('열린 워크스페이스 없음')
+    await waitFor(async () => {
+      const cfg = await api.config.get()
+      expect(cfg.recentWorkspaces).toEqual(['C:/wiki/gamma'])
+    })
 
     expect(screen.queryByRole('banner')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
-    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
-    const switcherTrigger = within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })
-    expect(switcherTrigger).toHaveTextContent('워크스페이스 선택 ▾')
-    expect(switcherTrigger).toHaveAttribute('aria-expanded', 'false')
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    expect(within(workspaceView).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
+    expect(
+      within(workspaceView).getByText(/폴더를 열거나.*선택하세요/i)
+    ).toBeInTheDocument()
+    expect(
+      within(workspaceView).queryByRole('button', { name: /^(?:즐겨찾기 추가|즐겨찾기 해제)$/ })
+    ).not.toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: /★\s*alpha/i })).toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: /gamma/i })).toBeInTheDocument()
+    expect(within(workspaceView).queryByRole('button', { name: /deleted-ws/i })).not.toBeInTheDocument()
+
+    // Clicking '폴더 열기...' triggers the same folder selection handler as File > Open Folder
+    await user.click(within(workspaceView).getByRole('button', { name: '폴더 열기...' }))
+    expect(selectFolderSpy).toHaveBeenCalledTimes(1)
+    const explorerAfterOpen = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorerAfterOpen).findByText('alpha.md')).toBeInTheDocument()
+
+    // Return to Workspace View and click recent workspace directly -> opens gamma and transitions to Explorer
+    await clickActivityBarButton(user, '워크스페이스')
+    const reopenedWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(reopenedWorkspaceView).getByRole('button', { name: /gamma/i }))
+
+    const sidebar = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(sidebar).findByText('gamma.md')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '워크스페이스 뷰' })).not.toBeInTheDocument()
+
+    // Explorer header only displays workspace name (with path tooltip) and create/refresh actions
+    const titleEl = within(sidebar).getByText('gamma')
+    expect(titleEl).toHaveAttribute('title', 'C:/wiki/gamma')
+    expect(
+      within(sidebar).queryByRole('button', { name: /워크스페이스 전환/i })
+    ).not.toBeInTheDocument()
     expect(
       within(sidebar).queryByRole('button', { name: /즐겨찾기 추가|즐겨찾기 해제/i })
     ).not.toBeInTheDocument()
-    expect(within(sidebar).queryByRole('button', { name: /새 파일/i })).not.toBeInTheDocument()
-    expect(within(sidebar).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
-
-    await user.click(switcherTrigger)
-    const switcherMenu = await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })
-
-    await user.click(within(switcherMenu).getByRole('button', { name: /gamma/i }))
-    expect(await within(sidebar).findByText('gamma.md')).toBeInTheDocument()
-    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
-      'gamma ▾'
-    )
-    expect(
-      within(sidebar).queryByRole('region', { name: /워크스페이스 목록/i })
-    ).not.toBeInTheDocument()
-    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /새 파일/i })).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /새 폴더/i })).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /새로고침/i })).toBeInTheDocument()
   })
 
-  it('displays unified workspace switcher and favorite toggle in sidebar without duplicate name and confirms unsaved edits on switch', async () => {
+  it('displays current workspace card with favorite toggle in workspace view, highlights active item, confirms unsaved edits, and keeps workspace view on cancel or error', async () => {
     const user = userEvent.setup()
     const favoriteAlpha = addFavoriteWorkspace(
       [],
@@ -1126,7 +1170,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
       {
         autoSave: false,
         favoriteWorkspaces: favoriteAlpha,
-        recentWorkspaces: ['C:/wiki/recent-ws']
+        recentWorkspaces: ['C:/wiki/recent-ws', 'C:/wiki/broken-ws']
       },
       {
         workspaces: {
@@ -1135,69 +1179,79 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
         }
       }
     )
+    const defaultOpen = api.workspace.open
+    api.workspace.open = async (rootPath) => {
+      if (rootPath.replace(/\\/g, '/') === 'C:/wiki/broken-ws') {
+        throw new Error('Workspace open failed')
+      }
+      return defaultOpen(rootPath)
+    }
     window.wikiApi = api
 
     render(<App />)
-    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
-    const selectFromWorkspaceSwitcher = async (itemPattern: RegExp): Promise<void> => {
-      await user.click(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i }))
-      const workspaceList = await within(sidebar).findByRole('region', {
-        name: /워크스페이스 목록/i
-      })
-      await user.click(within(workspaceList).getByRole('button', { name: itemPattern }))
-    }
 
-    // Switch to favorite workspace after startup restore finishes
-    expect(await within(sidebar).findByText('recent.md')).toBeInTheDocument()
-    await selectFromWorkspaceSwitcher(/★\s*alpha/i)
+    // Startup restore opens recent-ws automatically into Explorer View; switch to Workspace View to verify switcher flows
+    const initialExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(initialExplorer).findByText('recent.md')).toBeInTheDocument()
+    await clickActivityBarButton(user, '워크스페이스')
 
-    expect(await within(sidebar).findByText('alpha.md')).toBeInTheDocument()
+    // Switch failure keeps Workspace View active and displays error banner
+    const initialWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(initialWorkspaceView).getByRole('button', { name: /broken-ws/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Workspace open failed')
+    expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
 
-    // Workspace switcher shows "{workspace.name} ▾" with favorite toggle alongside and no duplicate workspace name
-    const switcherTrigger = within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })
-    expect(switcherTrigger).toHaveTextContent('alpha ▾')
-    expect(within(sidebar).getAllByText(/^alpha(?:\s*▾)?$/)).toHaveLength(1)
-    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 해제/i })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    )
+    // Open favorite workspace from Workspace View -> switches to Explorer
+    await user.click(within(initialWorkspaceView).getByRole('button', { name: /★\s*alpha/i }))
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('alpha.md')).toBeInTheDocument()
 
     // Edit alpha.md so workspace has unsaved changes
-    await user.click(within(sidebar).getByText('alpha.md'))
+    await user.click(within(explorer).getByText('alpha.md'))
     appendRawEditorText(await screen.findByTestId('document-editor'), ' unsaved')
     expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
 
-    // Escape closes sidebar workspace switcher popover without switching
-    await user.click(switcherTrigger)
-    expect(await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })).toBeInTheDocument()
-    await user.keyboard('{Escape}')
-    expect(
-      within(sidebar).queryByRole('region', { name: /워크스페이스 목록/i })
-    ).not.toBeInTheDocument()
+    // Open Workspace View -> shows current workspace name/path, favorite toggle (pressed), open folder, and active highlight
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    expect(within(workspaceView).getByText('C:/wiki/alpha')).toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: '폴더 열기...' })).toBeInTheDocument()
+    const activeFavoriteBtn = within(workspaceView).getByRole('button', { name: '즐겨찾기 해제' })
+    expect(activeFavoriteBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(activeFavoriteBtn).toHaveAttribute('title', '즐겨찾기 해제')
+    const activeAlphaBtn = within(workspaceView).getByRole('button', { name: /★\s*alpha/i })
+    expect(activeAlphaBtn).toHaveAttribute('aria-current', 'true')
+    expect(activeAlphaBtn).toHaveClass('is-active')
 
-    // Switch to recent workspace -> triggers unsaved confirmation dialog; cancel keeps current workspace
-    await selectFromWorkspaceSwitcher(/recent-ws/i)
+    // Switch to recent workspace -> triggers unsaved confirmation dialog; cancel keeps Workspace View & current workspace
+    await user.click(within(workspaceView).getByRole('button', { name: /recent-ws/i }))
     const cancelDialog = await screen.findByRole('alertdialog')
     await user.click(within(cancelDialog).getByRole('button', { name: '취소' }))
-    expect(within(sidebar).getByText('alpha.md')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
     expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Alpha unsaved')
 
-    // Retry switching to recent workspace and discard unsaved changes
-    await selectFromWorkspaceSwitcher(/recent-ws/i)
+    // Retry switching to recent workspace and discard unsaved changes -> transitions to Explorer
+    await user.click(within(workspaceView).getByRole('button', { name: /recent-ws/i }))
     const discardDialog = await screen.findByRole('alertdialog')
     await user.click(within(discardDialog).getByRole('button', { name: /버리고 이동/i }))
 
-    expect(await within(sidebar).findByText('recent.md')).toBeInTheDocument()
-    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
-      'recent-ws ▾'
-    )
-    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toHaveAttribute(
-      'aria-pressed',
-      'false'
+    const nextExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(nextExplorer).findByText('recent.md')).toBeInTheDocument()
+
+    // Return to Workspace View -> shows recent-ws current card, unpressed favorite toggle, and highlighted recent item
+    await clickActivityBarButton(user, '워크스페이스')
+    const nextWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    expect(within(nextWorkspaceView).getByText('C:/wiki/recent-ws')).toBeInTheDocument()
+    const nextFavoriteBtn = within(nextWorkspaceView).getByRole('button', { name: '즐겨찾기 추가' })
+    expect(nextFavoriteBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(nextFavoriteBtn).toHaveAttribute('title', '즐겨찾기 추가')
+    expect(within(nextWorkspaceView).getByRole('button', { name: /^recent-ws$/i })).toHaveAttribute(
+      'aria-current',
+      'true'
     )
   })
 
-  it('toggles current workspace in favorites and switches workspaces in one click from launcher dropdown', async () => {
+  it('toggles current workspace in favorites and switches or removes favorites directly from workspace view', async () => {
     const user = userEvent.setup()
     const favoriteBeta = addFavoriteWorkspace([], 'C:/wiki/beta', 'beta', '2026-11-14T00:00:00.000Z')
     const { api, emitMenuCommand } = createInMemoryWikiApi(
@@ -1218,35 +1272,101 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     expect(await within(sidebar).findByText('alpha.md')).toBeInTheDocument()
 
-    // Add alpha to favorites
-    const favToggle = within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })
-    await user.click(favToggle)
+    // Switch to Workspace View and add alpha to favorites
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(workspaceView).getByRole('button', { name: '즐겨찾기 추가' }))
     await waitFor(() => {
-      expect(within(sidebar).getByRole('button', { name: /즐겨찾기 해제/i })).toHaveAttribute(
+      expect(within(workspaceView).getByRole('button', { name: '즐겨찾기 해제' })).toHaveAttribute(
         'aria-pressed',
         'true'
       )
     })
+    expect(within(workspaceView).getByRole('button', { name: /★\s*alpha/i })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
 
-    // Open launcher dropdown and switch to beta in one click
-    await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
-    const launcherMenu = await screen.findByRole('region', { name: /워크스페이스 목록/i })
-    await user.click(within(launcherMenu).getByRole('button', { name: /★\s*beta/i }))
+    // Click ★ beta in Workspace View to switch workspaces and transition to Explorer
+    await user.click(within(workspaceView).getByRole('button', { name: /★\s*beta/i }))
 
-    expect(await within(sidebar).findByText('beta.md')).toBeInTheDocument()
-    expect(within(sidebar).queryByText('alpha.md')).not.toBeInTheDocument()
+    const betaExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(betaExplorer).findByText('beta.md')).toBeInTheDocument()
+    expect(within(betaExplorer).queryByText('alpha.md')).not.toBeInTheDocument()
 
-    // Remove beta from favorites via launcher dropdown button
-    await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
-    const updatedMenu = await screen.findByRole('region', { name: /워크스페이스 목록/i })
-    await user.click(within(updatedMenu).getByRole('button', { name: 'beta 즐겨찾기 해제' }))
+    // Return to Workspace View and remove beta from favorites via × button
+    await clickActivityBarButton(user, '워크스페이스')
+    const updatedWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    const removeBetaBtn = within(updatedWorkspaceView).getByRole('button', {
+      name: 'beta 즐겨찾기 해제'
+    })
+    expect(removeBetaBtn).toHaveAttribute('title', 'beta 즐겨찾기 해제')
+    await user.click(removeBetaBtn)
 
     await waitFor(() => {
-      expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toHaveAttribute(
-        'aria-pressed',
-        'false'
-      )
+      expect(
+        within(updatedWorkspaceView).getByRole('button', { name: '즐겨찾기 추가' })
+      ).toHaveAttribute('aria-pressed', 'false')
     })
+    expect(
+      within(updatedWorkspaceView).queryByRole('button', { name: /★\s*beta/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it('does not overwrite user-selected activity bar view when async config resolves or workspace opens from another view', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { recentWorkspaces: ['C:/wiki/alpha'] },
+      {
+        selectedFolder: 'C:\\wiki\\beta',
+        workspaces: {
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
+          'C:\\wiki\\beta': { 'beta.md': '# Beta' }
+        }
+      }
+    )
+    let resolveConfigGet!: (value: Awaited<ReturnType<typeof api.config.get>>) => void
+    const defaultConfigGet = api.config.get
+    api.config.get = async () => {
+      const resolved = await defaultConfigGet()
+      return await new Promise((resolve) => {
+        resolveConfigGet = () => resolve(resolved)
+      })
+    }
+    const openSpy = vi.spyOn(api.workspace, 'open')
+    window.wikiApi = api
+
+    render(<App />)
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    expect(within(activityBar).getByRole('button', { name: '워크스페이스' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+
+    // User switches to Git view before config.get() resolves
+    await clickActivityBarButton(user, 'Git')
+    expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
+
+    // Resolving config.get() triggers startup restore, which must NOT overwrite the user's Git view selection
+    await act(async () => {
+      resolveConfigGet(undefined as never)
+    })
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith('C:/wiki/alpha')
+    })
+    expect(within(activityBar).getByRole('button', { name: 'Git' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
+
+    // Opening another folder while user is in Git view preserves Git view instead of forcing Explorer
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(within(activityBar).getByRole('button', { name: 'Git' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
   })
 
   it('tracks dirty ● indicator, saves manually with Ctrl+S, and auto-saves when autoSave is enabled', async () => {
@@ -1547,16 +1667,17 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     // Wait for auto-save to enter in-flight state
     await waitFor(() => expect(callNum).toBe(1))
-    // Type more while first save is still in flight, then switch workspace and choose 저장 후 이동
+    // Type more while first save is still in flight, then switch workspace via Workspace View and choose 저장 후 이동
     appendRawEditorText(editor, ' v2')
-    await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
-    const launcherMenu = await screen.findByRole('region', { name: /워크스페이스 목록/i })
-    await user.click(within(launcherMenu).getByRole('button', { name: /★\s*inflight-next/i }))
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(workspaceView).getByRole('button', { name: /★\s*inflight-next/i }))
     const dirtyDialog = await screen.findByRole('alertdialog')
     await user.click(within(dirtyDialog).getByRole('button', { name: /저장 후 이동/i }))
 
     releaseFirstSave()
-    expect(await within(sidebar).findByText('next.md')).toBeInTheDocument()
+    const updatedSidebar = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(updatedSidebar).findByText('next.md')).toBeInTheDocument()
     expect(getFilesSnapshot().get('C:/wiki/inflight/a.md')).toBe('# A v1 v2')
   })
 })
@@ -2028,14 +2149,12 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     })
 
     // Switching workspace closes workspace tabs (keep.md) while preserving config.json tab
-    await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
-    await user.click(
-      within(await screen.findByRole('region', { name: /워크스페이스 목록/i })).getByRole('button', {
-        name: /★\s*ws2/i
-      })
-    )
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(workspaceView).getByRole('button', { name: /★\s*ws2/i }))
 
-    expect(await within(sidebar).findByText('ws2.md')).toBeInTheDocument()
+    const updatedSidebar = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(updatedSidebar).findByText('ws2.md')).toBeInTheDocument()
     expect(within(primaryPane).queryByRole('tab', { name: /keep\.md/i })).not.toBeInTheDocument()
     expect(within(primaryPane).getByRole('tab', { name: /config\.json/i })).toBeInTheDocument()
   })
@@ -2607,7 +2726,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       await triggerMenuCommand(emitMenuCommand, 'open-folder')
       await user.click(await screen.findByText('guide.md'))
 
-      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+      const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
       const items = within(within(outline).getByRole('list')).getAllByRole('listitem')
       expect(items).toHaveLength(3)
       expect(items[0].textContent).toContain('1.')
@@ -2733,7 +2853,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
     // Focus primary pane and run "본문 헤딩 번호 쓰기"
     await user.click(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
-    const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
 
     await user.click(within(outline).getByRole('button', { name: '본문 헤딩 번호 쓰기' }))
     expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toContain(
@@ -2796,7 +2917,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       })
     )
 
-    const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
     await user.click(within(outline).getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
 
     await user.click(
@@ -2853,7 +2975,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         })
       )
 
-      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+      const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
       await user.click(within(outline).getByRole('button', { name: /Target Heading/i }))
       expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
 
@@ -2878,6 +3001,96 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
       }
     }
+  })
+
+  it('renders Document Outline in expanded right sidebar (240px) to the right of PaneWorkspace instead of left sidebar', async () => {
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const paneWorkspace = screen.getByTestId('pane-workspace')
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+
+    expect(
+      leftSidebar.compareDocumentPosition(paneWorkspace) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      paneWorkspace.compareDocumentPosition(rightSidebar) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    expect(
+      within(leftSidebar).queryByRole('region', { name: '문서 목차 (Outline)' })
+    ).not.toBeInTheDocument()
+
+    expect(rightSidebar).toHaveStyle({ width: '240px' })
+    const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
+    expect(within(outline).getByText('Outline')).toBeInTheDocument()
+    expect(within(outline).getByRole('button', { name: '문서 목차 접기' })).toBeInTheDocument()
+    expect(within(outline).getByText('열린 문서 없음')).toBeInTheDocument()
+  })
+
+  it('keeps right sidebar mounted with empty-state messages when no document, non-markdown, or headingless document is active', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\outline-empty',
+        workspaces: {
+          'C:\\wiki\\outline-empty': {
+            'notes.txt': 'Plain text file',
+            'blank.md': 'Just paragraph text without headings',
+            'guide.md': '# Guide Heading\n\n## Sub Heading'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+
+    expect(within(rightSidebar).getByText('열린 문서 없음')).toBeInTheDocument()
+    expect(
+      within(rightSidebar).getByRole('button', { name: '본문에 목차(/toc) 삽입' })
+    ).toBeDisabled()
+
+    await user.click(await within(explorer).findByText('notes.txt'))
+    expect(screen.getByRole('complementary', { name: '우측 사이드바' })).toBe(rightSidebar)
+    expect(
+      within(rightSidebar).getByText('마크다운 문서에서만 목차를 지원합니다.')
+    ).toBeInTheDocument()
+    expect(
+      within(rightSidebar).getByRole('button', { name: '본문에 목차(/toc) 삽입' })
+    ).toBeDisabled()
+    expect(
+      within(rightSidebar).getByRole('button', { name: '본문 헤딩 번호 쓰기' })
+    ).toBeDisabled()
+    expect(
+      within(rightSidebar).getByRole('button', { name: '본문 헤딩 번호 제거' })
+    ).toBeDisabled()
+
+    await user.click(within(explorer).getByText('blank.md'))
+    expect(within(rightSidebar).getByText('표시할 헤딩이 없습니다.')).toBeInTheDocument()
+
+    await user.click(within(explorer).getByText('guide.md'))
+    const items = within(within(rightSidebar).getByRole('list')).getAllByRole('listitem')
+    expect(items).toHaveLength(2)
+    expect(items[0].textContent).toContain('Guide Heading')
+
+    await user.click(screen.getByRole('button', { name: 'guide.md 탭 닫기' }))
+    await user.click(screen.getByRole('button', { name: 'blank.md 탭 닫기' }))
+    await user.click(screen.getByRole('button', { name: 'notes.txt 탭 닫기' }))
+    expect(screen.getByRole('complementary', { name: '우측 사이드바' })).toBe(rightSidebar)
+    expect(within(rightSidebar).getByText('열린 문서 없음')).toBeInTheDocument()
   })
 })
 
@@ -3034,7 +3247,7 @@ describe('Custom slash commands, Settings UI management, and direct config.json 
 
     await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
-    await user.click(within(screen.getByLabelText('전역 설정 패널')).getByRole('button', { name: '닫기' }))
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
 
     const configEditor = await screen.findByTestId('document-editor')
     const beforeConfig = await api.config.get()
@@ -3192,13 +3405,20 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     window.wikiApi = api
     render(<App />)
 
-    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
-    expect(within(gitRegion).getByText(/워크스페이스를 먼저 열어주세요/)).toBeInTheDocument()
+    await clickActivityBarButton(user, 'Git')
+    const gitRegionInitial = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(
+      within(gitRegionInitial).getByText(/워크스페이스를 먼저 열어주세요/)
+    ).toBeInTheDocument()
 
+    await clickActivityBarButton(user, '탐색기')
     const explorer = screen.getByLabelText('워크스페이스 탐색기')
 
     await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await within(explorer).findByText('guide.md')
+
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     expect(within(gitRegion).getByRole('button', { name: /Git 저장소 초기화/i })).toBeInTheDocument()
     await user.click(within(gitRegion).getByRole('button', { name: /Git 저장소 초기화/i }))
 
@@ -3209,21 +3429,29 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(gitMocks.commit).toHaveBeenCalledWith('C:/wiki', 'feat: stage guide')
 
     // Open guide.md cleanly in editor, then trigger Pull -> clean buffer & tree refresh automatically
-    await user.click(within(explorer).getByText('guide.md'))
+    await clickActivityBarButton(user, '탐색기')
+    await user.click(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('guide.md'))
     const editorEl = await screen.findByTestId('document-editor')
     expect(getRawEditorText(editorEl)).toBe('# Initial Guide')
 
-    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    await clickActivityBarButton(user, 'Git')
+    const gitRegionAfterOpen = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(within(gitRegionAfterOpen).getByRole('button', { name: 'Pull' }))
 
     await waitFor(() => {
       expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Pulled From Remote')
     })
-    expect(await within(explorer).findByText('pulled.md')).toBeInTheDocument()
+    await clickActivityBarButton(user, '탐색기')
+    expect(
+      await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('pulled.md')
+    ).toBeInTheDocument()
 
     // Edit guide.md without saving -> Checkout prompts confirmation
     appendRawEditorText(screen.getByTestId('document-editor'), '\nUnsaved draft line')
-    await user.selectOptions(within(gitRegion).getByLabelText('브랜치 선택'), 'docs-v2')
-    await user.click(within(gitRegion).getByRole('button', { name: '브랜치 전환' }))
+    await clickActivityBarButton(user, 'Git')
+    const gitRegionForBranch = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.selectOptions(within(gitRegionForBranch).getByLabelText('브랜치 선택'), 'docs-v2')
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: '브랜치 전환' }))
 
     const confirmDialog = await screen.findByRole('alertdialog')
     expect(within(confirmDialog).getByText(/guide.md/)).toBeInTheDocument()
@@ -3233,7 +3461,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(gitMocks.checkout).not.toHaveBeenCalled()
 
     // Trigger checkout again and proceed without saving -> dirty edit is preserved & conflict warning appears
-    await user.click(within(gitRegion).getByRole('button', { name: '브랜치 전환' }))
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: '브랜치 전환' }))
     const secondDialog = await screen.findByRole('alertdialog')
     await user.click(within(secondDialog).getByRole('button', { name: '저장 없이 진행' }))
 
@@ -3241,19 +3469,21 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       expect(gitMocks.checkout).toHaveBeenCalledWith('C:/wiki', 'docs-v2')
     })
     expect(getRawEditorText(screen.getByTestId('document-editor'))).toContain('Unsaved draft line')
-    expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(/충돌할 수 있습니다 \(guide\.md\)/)
+    expect(await within(gitRegionForBranch).findByRole('alert')).toHaveTextContent(
+      /충돌할 수 있습니다 \(guide\.md\)/
+    )
 
     // Dismiss Git error and trigger real Git error -> displayed safely inside Git panel
-    await user.click(within(gitRegion).getByRole('button', { name: 'Git 오류 닫기' }))
-    expect(within(gitRegion).queryByRole('alert')).not.toBeInTheDocument()
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: 'Git 오류 닫기' }))
+    expect(within(gitRegionForBranch).queryByRole('alert')).not.toBeInTheDocument()
 
     // Save dirty edits via saving dialog path, then test Git pull failure
     pullFailure = new Error('원격 저장소 인증에 실패했습니다.')
-    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: 'Pull' }))
     const saveDialog = await screen.findByRole('alertdialog')
     await user.click(within(saveDialog).getByRole('button', { name: '저장 후 진행' }))
 
-    expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(
+    expect(await within(gitRegionForBranch).findByRole('alert')).toHaveTextContent(
       '원격 저장소 인증에 실패했습니다.'
     )
   })
@@ -3302,9 +3532,8 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     window.wikiApi = api
     render(<App />)
 
-    const explorer = screen.getByLabelText('워크스페이스 탐색기')
-    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
 
     // Open both files: leave obsolete.md clean and make keep-dirty.md dirty
     await user.click(await within(explorer).findByText('obsolete.md'))
@@ -3313,7 +3542,9 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     await user.click(within(explorer).getByText('keep-dirty.md'))
     appendRawEditorText(await screen.findByTestId('document-editor'), '\nImportant local edit')
 
-    // Click Sync -> proceed without saving -> obsolete.md clean tab closes, dirty keep-dirty.md stays open with warning
+    // Switch to Git view and click Sync -> proceed without saving -> obsolete.md clean tab closes, dirty keep-dirty.md stays open with warning
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     await user.click(within(gitRegion).getByRole('button', { name: 'Sync' }))
     const dialog = await screen.findByRole('alertdialog')
     await user.click(within(dialog).getByRole('button', { name: '저장 없이 진행' }))
@@ -3471,6 +3702,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Disk full')
 
+    await clickActivityBarButton(user, 'Git')
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     await user.click(within(gitRegion).getByRole('button', { name: 'Push' }))
     expect(await within(gitRegion).findByRole('alert')).toHaveTextContent('Remote auth failed')
@@ -3656,16 +3888,18 @@ describe('Renderer error logging & UI breadcrumbs', () => {
 
     render(<App />)
 
-    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
-    expect(await within(sidebar).findByText('gamma.md')).toBeInTheDocument()
-    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
-      'gamma ▾'
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('gamma.md')).toBeInTheDocument()
+    expect(within(explorer).getByText('gamma')).toHaveAttribute('title', 'C:/wiki/gamma')
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    expect(within(activityBar).getByRole('button', { name: '탐색기' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
     )
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('starts silently in empty workspace state and removes invalid path from recentWorkspaces when startup workspace open fails', async () => {
-    const user = userEvent.setup()
     const { api } = createInMemoryWikiApi(
       {
         recentWorkspaces: ['C:/wiki/missing', 'C:/wiki/gamma']
@@ -3680,22 +3914,981 @@ describe('Renderer error logging & UI breadcrumbs', () => {
 
     render(<App />)
 
-    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
-    expect(await within(sidebar).findByText('열린 워크스페이스 없음')).toBeInTheDocument()
+    const workspaceView = await screen.findByRole('region', { name: '워크스페이스 뷰' })
+    expect(within(workspaceView).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    expect(within(activityBar).getByRole('button', { name: '워크스페이스' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
     await waitFor(async () => {
       const cfg = await api.config.get()
       expect(cfg.recentWorkspaces).toEqual(['C:/wiki/gamma'])
     })
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
-      '워크스페이스 선택 ▾'
+    expect(within(workspaceView).getByRole('button', { name: /gamma/i })).toBeInTheDocument()
+    expect(within(workspaceView).queryByRole('button', { name: /missing/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('Activity bar and left sidebar view switching', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('renders activity bar with 탐색기, Git, and 워크스페이스 buttons, defaults to Workspace view without open workspace, and switches single views on click', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const paneWorkspace = screen.getByTestId('pane-workspace')
+
+    expect(
+      activityBar.compareDocumentPosition(leftSidebar) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      leftSidebar.compareDocumentPosition(paneWorkspace) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    const explorerBtn = within(activityBar).getByRole('button', { name: '탐색기' })
+    const gitBtn = within(activityBar).getByRole('button', { name: 'Git' })
+    const workspaceBtn = within(activityBar).getByRole('button', { name: '워크스페이스' })
+
+    expect(explorerBtn).toHaveAttribute('title', '탐색기')
+    expect(gitBtn).toHaveAttribute('title', 'Git')
+    expect(workspaceBtn).toHaveAttribute('title', '워크스페이스')
+    expect(explorerBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(gitBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(workspaceBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    // Initial view without an open workspace is Workspace View
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(workspaceBtn).toHaveClass('is-active')
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(explorerBtn).not.toHaveClass('is-active')
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(gitBtn).not.toHaveClass('is-active')
+    expect(within(leftSidebar).getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
+    expect(
+      within(leftSidebar).queryByRole('region', { name: '워크스페이스 탐색기' })
+    ).not.toBeInTheDocument()
+    expect(
+      within(leftSidebar).queryByRole('region', { name: 'Git 소스 제어' })
+    ).not.toBeInTheDocument()
+
+    // Click Explorer -> switches left sidebar to Explorer view only
+    await user.click(explorerBtn)
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(explorerBtn).toHaveClass('is-active')
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(workspaceBtn).not.toHaveClass('is-active')
+    expect(within(leftSidebar).getByRole('region', { name: '워크스페이스 탐색기' })).toBeInTheDocument()
+    expect(
+      within(leftSidebar).queryByRole('region', { name: '워크스페이스 뷰' })
+    ).not.toBeInTheDocument()
+
+    // Click Git -> switches left sidebar to Git panel only
+    await user.click(gitBtn)
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(gitBtn).toHaveClass('is-active')
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(explorerBtn).not.toHaveClass('is-active')
+    expect(within(leftSidebar).getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
+    expect(
+      within(leftSidebar).queryByRole('region', { name: '워크스페이스 탐색기' })
+    ).not.toBeInTheDocument()
+
+    // Click Workspace -> switches back to Workspace View only
+    await user.click(workspaceBtn)
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(workspaceBtn).toHaveClass('is-active')
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(within(leftSidebar).getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
+    expect(
+      within(leftSidebar).queryByRole('region', { name: 'Git 소스 제어' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('collapses and expands left sidebar via activity bar transitions for all three views and keeps sidebar state session-only', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    const view = render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    const explorerBtn = within(activityBar).getByRole('button', { name: '탐색기' })
+    const gitBtn = within(activityBar).getByRole('button', { name: 'Git' })
+    const workspaceBtn = within(activityBar).getByRole('button', { name: '워크스페이스' })
+
+    // Collapse from Workspace by clicking active Workspace button
+    await user.click(workspaceBtn)
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '워크스페이스 뷰' })).not.toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: '액티비티 바' })).toBeInTheDocument()
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(workspaceBtn).not.toHaveClass('is-active')
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
+
+    // Click Git while collapsed -> expands straight into Git view
+    await user.click(gitBtn)
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(gitBtn).toHaveClass('is-active')
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'false')
+
+    // Collapse from Git by clicking active Git button
+    await user.click(gitBtn)
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
+
+    // Click Explorer while collapsed -> expands straight into Explorer view
+    await user.click(explorerBtn)
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '워크스페이스 탐색기' })).toBeInTheDocument()
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'true')
+
+    // Collapse from Explorer, then expand straight into Workspace view
+    await user.click(explorerBtn)
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    await user.click(workspaceBtn)
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'true')
+
+    // Collapse again and verify nothing is persisted to config.json; remount starts expanded on Workspace
+    await user.click(workspaceBtn)
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+
+    view.unmount()
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+    const restartedBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    expect(within(restartedBar).getByRole('button', { name: '워크스페이스' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
+  })
+
+  it('preserves folder tree expansion and Git state across view switches and collapse/expand, and keeps context menu and branch selector functional', async () => {
+    const user = userEvent.setup()
+    let staged: Array<{ path: string; status: 'M' }> = []
+    let unstaged: Array<{ path: string; status: 'M' }> = [{ path: 'notes.md', status: 'M' }]
+    const buildStatus = () => ({
+      ...createEmptyGitStatus(true, 'C:/wiki/preserve'),
+      branch: 'main',
+      hasUpstream: true,
+      staged,
+      unstaged,
+      untracked: []
+    })
+    const gitStatusSpy = vi.fn(async () => buildStatus())
+    const gitStageSpy = vi.fn(async (_ws: string, paths: string[]) => {
+      for (const p of paths) {
+        unstaged = unstaged.filter((item) => item.path !== p)
+        staged = [...staged, { path: p, status: 'M' }]
+      }
+      return buildStatus()
+    })
+
+    const { api, emitMenuCommand, readDirCalls } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\preserve',
+        workspaces: {
+          'C:\\wiki\\preserve': {
+            'docs/intro.md': '# Intro',
+            'notes.md': '# Notes'
+          }
+        },
+        git: {
+          status: gitStatusSpy,
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [
+              { name: 'main', current: true, upstream: 'origin/main' },
+              { name: 'feature/sidebar', current: false, upstream: null }
+            ]
+          })),
+          stage: gitStageSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('docs'))
+    expect(await within(explorer).findByText('intro.md')).toBeInTheDocument()
+    expect(readDirCalls).toEqual(['C:/wiki/preserve', 'C:/wiki/preserve/docs'])
+
+    // Context menu opens and executes on tree entry inside Explorer view
+    fireEvent.contextMenu(within(explorer).getByText('intro.md'))
+    const contextMenu = await screen.findByRole('menu')
+    await user.click(within(contextMenu).getByRole('menuitem', { name: '열기' }))
+    expect(await screen.findByRole('tab', { name: 'intro.md' })).toBeInTheDocument()
+
+    // Switch to Git view -> Git state & branch dropdown work, stage notes.md
+    const statusCallsBeforeSwitch = gitStatusSpy.mock.calls.length
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const branchSelect = within(gitRegion).getByLabelText('브랜치 선택') as HTMLSelectElement
+    expect(Array.from(branchSelect.options).map((o) => o.value)).toEqual([
+      'main',
+      'feature/sidebar'
+    ])
+    await user.selectOptions(branchSelect, 'feature/sidebar')
+    expect(branchSelect.value).toBe('feature/sidebar')
+
+    await user.click(within(gitRegion).getByRole('button', { name: 'notes.md Stage' }))
+    expect(await within(gitRegion).findByRole('button', { name: 'notes.md Unstage' })).toBeInTheDocument()
+
+    // Switch back to Explorer, collapse, and reopen Explorer -> expansion & selection preserved without re-reading dir
+    await clickActivityBarButton(user, '탐색기')
+    const reopenedExplorer = screen.getByLabelText('워크스페이스 탐색기')
+    expect(within(reopenedExplorer).getByText('intro.md')).toBeInTheDocument()
+    expect(within(reopenedExplorer).getByRole('treeitem', { name: 'docs' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(reopenedExplorer).getByRole('treeitem', { name: 'intro.md' })).toHaveAttribute(
+      'aria-selected',
+      'true'
     )
 
-    await user.click(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i }))
-    const switcherMenu = await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })
-    expect(within(switcherMenu).getByRole('button', { name: /gamma/i })).toBeInTheDocument()
-    expect(within(switcherMenu).queryByRole('button', { name: /missing/i })).not.toBeInTheDocument()
+    await clickActivityBarButton(user, '탐색기')
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    await clickActivityBarButton(user, '탐색기')
+    expect(
+      within(screen.getByLabelText('워크스페이스 탐색기')).getByText('intro.md')
+    ).toBeInTheDocument()
+    expect(readDirCalls).toEqual(['C:/wiki/preserve', 'C:/wiki/preserve/docs'])
+
+    // Switch back to Git -> staged state preserved without extra git.status fetch
+    await clickActivityBarButton(user, 'Git')
+    const reopenedGit = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(within(reopenedGit).getByRole('button', { name: 'notes.md Unstage' })).toBeInTheDocument()
+    expect(gitStatusSpy).toHaveBeenCalledTimes(statusCallsBeforeSwitch)
+  })
+
+  it('displays Git badge for staged + unstaged + untracked changes (>0, capped at 99+) and hides it when 0, non-repo, or no workspace', async () => {
+    const user = userEvent.setup()
+    const makeFiles = (prefix: string, count: number, status: GitFileStatusCode = 'M') =>
+      Array.from({ length: count }, (_, idx) => ({
+        path: `${prefix}-${idx}.md`,
+        status
+      }))
+
+    let currentStatusByRoot: Record<string, ReturnType<typeof createEmptyGitStatus>> = {
+      'C:/wiki/repo': {
+        ...createEmptyGitStatus(true, 'C:/wiki/repo'),
+        branch: 'main',
+        staged: makeFiles('staged', 1),
+        unstaged: makeFiles('unstaged', 2),
+        untracked: makeFiles('new', 1, '?')
+      },
+      'C:/wiki/plain': {
+        ...createEmptyGitStatus(false, 'C:/wiki/plain'),
+        // Even if arrays were non-empty, isRepo=false must never render a badge
+        unstaged: makeFiles('ignored', 2)
+      }
+    }
+
+    let nextSelectedFolder = 'C:/wiki/repo'
+    const { api, emitMenuCommand, emitWorkspaceChange } = createInMemoryWikiApi(
+      {},
+      {
+        workspaces: {
+          'C:\\wiki\\repo': { 'a.md': '# A' },
+          'C:\\wiki\\plain': { 'b.md': '# B' }
+        },
+        git: {
+          status: vi.fn(async (rootPath) => {
+            const norm = rootPath.replace(/\\/g, '/')
+            return currentStatusByRoot[norm] ?? createEmptyGitStatus(false, rootPath)
+          })
+        }
+      }
+    )
+    api.workspace.selectFolder = async () => nextSelectedFolder
+    window.wikiApi = api
+
+    render(<App />)
+
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    const gitBtn = within(activityBar).getByRole('button', { name: 'Git' })
+
+    // 1. No workspace open -> no badge
+    expect(gitBtn).toHaveTextContent('')
+
+    // 2. Open Git repo with 1 + 2 + 1 = 4 changes (while Explorer view is still active)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(await within(gitBtn).findByText('4')).toBeInTheDocument()
+
+    // Badge remains visible when sidebar is collapsed
+    await clickActivityBarButton(user, '탐색기')
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    expect(within(gitBtn).getByText('4')).toBeInTheDocument()
+
+    const triggerRepoChange = (): void => {
+      act(() => {
+        emitWorkspaceChange({ rootPath: 'C:/wiki/repo', eventType: 'change', relativePath: 'a.md' })
+      })
+    }
+
+    // 3. Exactly 99 changes -> '99'
+    currentStatusByRoot['C:/wiki/repo'] = {
+      ...createEmptyGitStatus(true, 'C:/wiki/repo'),
+      branch: 'main',
+      staged: makeFiles('s', 33),
+      unstaged: makeFiles('u', 33),
+      untracked: makeFiles('n', 33, '?')
+    }
+    triggerRepoChange()
+    expect(await within(gitBtn).findByText('99')).toBeInTheDocument()
+
+    // 4. Over 99 changes (100) -> '99+'
+    currentStatusByRoot['C:/wiki/repo'] = {
+      ...createEmptyGitStatus(true, 'C:/wiki/repo'),
+      branch: 'main',
+      staged: makeFiles('s', 34),
+      unstaged: makeFiles('u', 33),
+      untracked: makeFiles('n', 33, '?')
+    }
+    triggerRepoChange()
+    expect(await within(gitBtn).findByText('99+')).toBeInTheDocument()
+
+    // 5. Clean repo (0 changes) -> badge disappears
+    currentStatusByRoot['C:/wiki/repo'] = {
+      ...createEmptyGitStatus(true, 'C:/wiki/repo'),
+      branch: 'main'
+    }
+    triggerRepoChange()
+    await waitFor(() => {
+      expect(gitBtn).toHaveTextContent('')
+    })
+
+    // Restore changes, then switch to non-git workspace -> badge disappears
+    currentStatusByRoot['C:/wiki/repo'] = {
+      ...createEmptyGitStatus(true, 'C:/wiki/repo'),
+      branch: 'main',
+      unstaged: makeFiles('u', 3)
+    }
+    triggerRepoChange()
+    expect(await within(gitBtn).findByText('3')).toBeInTheDocument()
+
+    nextSelectedFolder = 'C:/wiki/plain'
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await waitFor(() => {
+      expect(gitBtn).toHaveTextContent('')
+    })
+  })
+})
+
+describe('Left sidebar resizing', () => {
+  const initialInnerWidth = window.innerWidth
+
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: initialInnerWidth
+    })
+  })
+
+  it('renders vertical separator with bounds and resizes left sidebar via ArrowLeft/ArrowRight clamped to [180, 512]', async () => {
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const resizer = screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+
+    expect(leftSidebar).toHaveStyle({ width: '260px' })
+    expect(resizer).toHaveAttribute('aria-orientation', 'vertical')
+    expect(resizer).toHaveAttribute('aria-valuemin', '180')
+    expect(resizer).toHaveAttribute('aria-valuemax', '512')
+    expect(resizer).toHaveAttribute('aria-valuenow', '260')
+    expect(resizer).toHaveAttribute('tabindex', '0')
+
+    fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+    const widened = Number(resizer.getAttribute('aria-valuenow'))
+    expect(widened).toBeGreaterThan(260)
+    expect(leftSidebar).toHaveStyle({ width: `${widened}px` })
+
+    fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '260')
+    expect(leftSidebar).toHaveStyle({ width: '260px' })
+
+    for (let i = 0; i < 10; i += 1) {
+      fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    }
+    expect(resizer).toHaveAttribute('aria-valuenow', '180')
+    expect(leftSidebar).toHaveStyle({ width: '180px' })
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+
+    for (let i = 0; i < 25; i += 1) {
+      fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+    }
+    expect(resizer).toHaveAttribute('aria-valuenow', '512')
+    expect(leftSidebar).toHaveStyle({ width: '512px' })
+  })
+
+  it('resizes via pointer/mouse drag with col-resize cursor & selection lock, stays expanded at min 180px, and resets to 260px on double-click', async () => {
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const resizer = screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+
+    // Pointer drag: start at 260px, drag +100px -> 360px, then drag far left -> clamped at 180px without collapsing
+    fireEvent.pointerDown(resizer, { button: 0, clientX: 306 })
+    expect(document.body.style.cursor).toBe('col-resize')
+    expect(document.body.style.userSelect).toBe('none')
+    expect(document.body).toHaveClass('is-resizing-sidebar')
+
+    fireEvent.pointerMove(window, { clientX: 406 })
+    expect(leftSidebar).toHaveStyle({ width: '360px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '360')
+
+    fireEvent.pointerMove(window, { clientX: 20 })
+    expect(leftSidebar).toHaveStyle({ width: '180px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '180')
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+
+    fireEvent.pointerUp(window)
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+    expect(document.body).not.toHaveClass('is-resizing-sidebar')
+
+    // Moving after pointerUp does not resize
+    fireEvent.pointerMove(window, { clientX: 350 })
+    expect(leftSidebar).toHaveStyle({ width: '180px' })
+
+    // Double-click restores default 260px
+    fireEvent.doubleClick(resizer)
+    expect(leftSidebar).toHaveStyle({ width: '260px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '260')
+
+    // Mouse drag fallback (compatible with mouse-only events)
+    fireEvent.mouseDown(resizer, { button: 0, clientX: 306 })
+    expect(document.body.style.cursor).toBe('col-resize')
+    fireEvent.mouseMove(window, { clientX: 386 })
+    expect(leftSidebar).toHaveStyle({ width: '340px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '340')
+    fireEvent.mouseUp(window)
+    expect(document.body.style.cursor).toBe('')
+
+    fireEvent.doubleClick(resizer)
+    expect(leftSidebar).toHaveStyle({ width: '260px' })
+  })
+
+  it('clamps width when window shrinks below current width, hides resizer when collapsed, preserves width across views/expand, and resets on remount without persisting config', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:/wiki/resize-ws',
+        workspaces: {
+          'C:/wiki/resize-ws': { 'note.md': '# Note' }
+        }
+      }
+    )
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    const view = render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const resizer = screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+
+    // Drag to 460px
+    fireEvent.pointerDown(resizer, { button: 0, clientX: 306 })
+    fireEvent.pointerMove(window, { clientX: 506 })
+    fireEvent.pointerUp(window)
+    expect(leftSidebar).toHaveStyle({ width: '460px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '460')
+
+    // Shrink window width to 640px -> max becomes 320px, current width clamps to 320px
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: 640
+    })
+    fireEvent(window, new Event('resize'))
+
+    expect(resizer).toHaveAttribute('aria-valuemax', '320')
+    expect(resizer).toHaveAttribute('aria-valuenow', '320')
+    expect(leftSidebar).toHaveStyle({ width: '320px' })
+
+    // Stepping down from clamped 320px decreases immediately (no stale 460px state)
+    fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    const narrowed = Number(resizer.getAttribute('aria-valuenow'))
+    expect(narrowed).toBeLessThan(320)
+    expect(leftSidebar).toHaveStyle({ width: `${narrowed}px` })
+
+    // View switch preserves resized width
+    await clickActivityBarButton(user, '탐색기')
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toHaveStyle({
+      width: `${narrowed}px`
+    })
+
+    // Collapsing hides both sidebar and resizer
+    await clickActivityBarButton(user, '탐색기')
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+    ).not.toBeInTheDocument()
+
+    // Re-expanding restores resizer and previous session width
+    await clickActivityBarButton(user, 'Git')
+    const reopenedSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const reopenedResizer = screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+    expect(reopenedSidebar).toHaveStyle({ width: `${narrowed}px` })
+    expect(reopenedResizer).toHaveAttribute('aria-valuenow', String(narrowed))
+
+    // Opening workspace preserves width across automatic switch to explorer
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toHaveStyle({
+      width: `${narrowed}px`
+    })
+
+    // Session-only: config.json untouched, remount resets to 260px
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: initialInnerWidth
+    })
+    view.unmount()
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toHaveStyle({
+      width: '260px'
+    })
+    expect(screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })).toHaveAttribute(
+      'aria-valuenow',
+      '260'
+    )
+  })
+})
+
+describe('Right sidebar collapse, expand, and resizing', () => {
+  it('collapses right sidebar via header button to thin vertical expand tab and re-expands cleanly', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:/wiki/right-collapse',
+        workspaces: {
+          'C:/wiki/right-collapse': {
+            'first.md': '# First Heading\n\n## Sub Heading',
+            'second.md': '# Second Heading'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('first.md'))
+
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    expect(rightSidebar).toHaveStyle({ width: '240px' })
+    expect(screen.queryByRole('button', { name: '문서 목차 펼치기' })).not.toBeInTheDocument()
+
+    const collapseBtn = within(rightSidebar).getByRole('button', { name: '문서 목차 접기' })
+    expect(collapseBtn).toHaveAttribute('title', '문서 목차 접기')
+    expect(collapseBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    await user.click(collapseBtn)
+
+    expect(screen.queryByRole('complementary', { name: '우측 사이드바' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '문서 목차 (Outline)' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('separator', { name: '우측 사이드바 너비 조절' })).not.toBeInTheDocument()
+
+    const expandTab = screen.getByRole('button', { name: '문서 목차 펼치기' })
+    expect(expandTab).toHaveAttribute('title', '문서 목차 펼치기')
+    expect(expandTab.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    // Switching files while collapsed keeps right sidebar collapsed
+    await user.click(within(explorer).getByText('second.md'))
+    expect(screen.queryByRole('complementary', { name: '우측 사이드바' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '문서 목차 펼치기' })).toBeInTheDocument()
+
+    // Re-expand via vertical tab restores right sidebar and reflects active document
+    await user.click(screen.getByRole('button', { name: '문서 목차 펼치기' }))
+    expect(screen.queryByRole('button', { name: '문서 목차 펼치기' })).not.toBeInTheDocument()
+    const reopenedSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    expect(reopenedSidebar).toHaveStyle({ width: '240px' })
+    expect(within(reopenedSidebar).getByText('Second Heading')).toBeInTheDocument()
+  })
+
+  it('renders vertical separator with bounds [180, 500] and resizes right sidebar via ArrowLeft/ArrowRight and double-click', async () => {
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const paneWorkspace = screen.getByTestId('pane-workspace')
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const resizer = screen.getByRole('separator', { name: '우측 사이드바 너비 조절' })
+
+    expect(
+      paneWorkspace.compareDocumentPosition(resizer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      resizer.compareDocumentPosition(rightSidebar) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    expect(rightSidebar).toHaveStyle({ width: '240px' })
+    expect(resizer).toHaveAttribute('aria-orientation', 'vertical')
+    expect(resizer).toHaveAttribute('aria-valuemin', '180')
+    expect(resizer).toHaveAttribute('aria-valuemax', '500')
+    expect(resizer).toHaveAttribute('aria-valuenow', '240')
+    expect(resizer).toHaveAttribute('tabindex', '0')
+
+    // ArrowLeft widens the right sidebar (left boundary moves left)
+    fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    const widened = Number(resizer.getAttribute('aria-valuenow'))
+    expect(widened).toBeGreaterThan(240)
+    expect(rightSidebar).toHaveStyle({ width: `${widened}px` })
+
+    // ArrowRight narrows it back
+    fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '240')
+    expect(rightSidebar).toHaveStyle({ width: '240px' })
+
+    // Repeated ArrowRight clamps at minimum 180px without collapsing
+    for (let i = 0; i < 10; i += 1) {
+      fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+    }
+    expect(resizer).toHaveAttribute('aria-valuenow', '180')
+    expect(rightSidebar).toHaveStyle({ width: '180px' })
+    expect(screen.getByRole('complementary', { name: '우측 사이드바' })).toBeInTheDocument()
+
+    // Repeated ArrowLeft clamps at maximum 500px
+    for (let i = 0; i < 20; i += 1) {
+      fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    }
+    expect(resizer).toHaveAttribute('aria-valuenow', '500')
+    expect(rightSidebar).toHaveStyle({ width: '500px' })
+
+    // Double-click restores default 240px
+    fireEvent.doubleClick(resizer)
+    expect(resizer).toHaveAttribute('aria-valuenow', '240')
+    expect(rightSidebar).toHaveStyle({ width: '240px' })
+  })
+
+  it('resizes right sidebar via pointer drag, preserves width across collapse/expand, and resets session-only on remount', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    const view = render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const resizer = screen.getByRole('separator', { name: '우측 사이드바 너비 조절' })
+
+    // Pointer drag left widens, right narrows, clamped to [180, 500]
+    fireEvent.pointerDown(resizer, { button: 0, clientX: 784 })
+    expect(document.body).toHaveClass('is-resizing-sidebar')
+    fireEvent.pointerMove(window, { clientX: 684 })
+    expect(rightSidebar).toHaveStyle({ width: '340px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '340')
+
+    fireEvent.pointerMove(window, { clientX: 900 })
+    expect(rightSidebar).toHaveStyle({ width: '180px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '180')
+
+    fireEvent.pointerMove(window, { clientX: 704 })
+    expect(rightSidebar).toHaveStyle({ width: '320px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '320')
+
+    fireEvent.pointerUp(window)
+    expect(document.body).not.toHaveClass('is-resizing-sidebar')
+
+    // Collapse hides resizer and sidebar, expand restores previous 320px width
+    await user.click(within(rightSidebar).getByRole('button', { name: '문서 목차 접기' }))
+    expect(screen.queryByRole('separator', { name: '우측 사이드바 너비 조절' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '문서 목차 펼치기' }))
+    const reopenedSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const reopenedResizer = screen.getByRole('separator', { name: '우측 사이드바 너비 조절' })
+    expect(reopenedSidebar).toHaveStyle({ width: '320px' })
+    expect(reopenedResizer).toHaveAttribute('aria-valuenow', '320')
+
+    // Session-only: config.json untouched, remount resets to expanded 240px
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+    view.unmount()
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+    expect(screen.getByRole('complementary', { name: '우측 사이드바' })).toHaveStyle({
+      width: '240px'
+    })
+    expect(screen.getByRole('separator', { name: '우측 사이드바 너비 조절' })).toHaveAttribute(
+      'aria-valuenow',
+      '240'
+    )
+  })
+})
+
+describe('Settings Panel centered modal', () => {
+  it('opens as a centered modal dialog outside main layout, toggles with toggle-settings, and closes via 닫기 button', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+
+    // Open via toggle-settings menu command
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+
+    const dialog = screen.getByRole('dialog', { name: '전역 설정 패널' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(screen.getByLabelText('전역 설정 패널')).toBe(dialog)
+
+    // Modal is rendered outside <main> layout so it does not consume workspace/sidebar width
+    const main = screen.getByRole('main')
+    expect(within(main).queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
+    expect(within(main).getAllByRole('complementary')).toHaveLength(2)
+
+    // Clicking inside the dialog does not close it
+    await user.click(within(dialog).getByRole('heading', { name: '전역 설정' }))
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    // Clicking 닫기 closes the modal
+    await user.click(within(dialog).getByRole('button', { name: '닫기' }))
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+
+    // toggle-settings toggles open and closed again
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+  })
+
+  it('closes Settings Panel on backdrop click and Esc key without closing on inner clicks', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    // Backdrop click closes modal, inner dialog click does not
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    const dialog = screen.getByRole('dialog', { name: '전역 설정 패널' })
+    await user.click(dialog)
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    const backdrop = dialog.parentElement!
+    await user.click(backdrop)
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+
+    // Esc via user keyboard closes modal
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+
+    // Esc dispatched on window closes modal too
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+  })
+
+  it('disables editor save and mode-switch shortcuts while Settings Panel is open', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\modal-shortcuts',
+        workspaces: {
+          'C:\\wiki\\modal-shortcuts': {
+            'note.md': '# Note'
+          }
+        }
+      }
+    )
+    const writeSpy = vi.spyOn(api.workspace, 'writeFile')
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('note.md'))
+
+    const editor = await screen.findByTestId('document-editor')
+    setRawEditorText(editor, '# Updated')
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    const dialog = screen.getByRole('dialog', { name: '전역 설정 패널' })
+
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(dialog, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(editor, { key: '2', ctrlKey: true })
+    fireEvent.keyDown(window, { key: '3', ctrlKey: true })
+
+    expect(writeSpy).not.toHaveBeenCalled()
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    expect(within(modeGroup).getByRole('button', { name: 'Raw' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+
+    // Closing modal re-enables editor shortcuts
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(writeSpy).toHaveBeenCalledTimes(1)
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    })
+  })
+
+  it('closes Settings Panel when opening config.json directly and renders ConfirmDialog above Settings Panel', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\modal-layer',
+        workspaces: {
+          'C:\\wiki\\modal-layer': {
+            'dirty.md': '# Dirty'
+          },
+          'C:\\wiki\\modal-next': {
+            'next.md': '# Next'
+          }
+        }
+      }
+    )
+    let nextFolder = 'C:\\wiki\\modal-layer'
+    api.workspace.selectFolder = async () => nextFolder
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('dirty.md'))
+
+    const editor = await screen.findByTestId('document-editor')
+    setRawEditorText(editor, '# Dirty edited')
+
+    // Open Settings modal, then trigger ConfirmDialog while settings modal is open
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    const settingsDialog = screen.getByRole('dialog', { name: '전역 설정 패널' })
+
+    nextFolder = 'C:\\wiki\\modal-next'
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const confirmDialog = await screen.findByRole('alertdialog')
+    expect(settingsDialog).toBeInTheDocument()
+    expect(
+      settingsDialog.compareDocumentPosition(confirmDialog) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    // Esc while ConfirmDialog is on top must not dismiss Settings modal underneath
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    // Dismiss ConfirmDialog via 취소 -> Settings modal remains open and interactive
+    await user.click(within(confirmDialog).getByRole('button', { name: '취소' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    // Clicking 설정 파일 직접 열기 opens config.json and closes the Settings modal
+    await user.click(within(settingsDialog).getByRole('button', { name: /설정 파일 직접 열기/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+    })
+    const configEditor = await screen.findByTestId('document-editor')
+    expect(getRawEditorText(configEditor)).toContain('"theme": "light"')
+  })
+})
+
+describe('Split editor mode and bidirectional scroll sync', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
   })
 
   it('integrates Split mode live preview/Mermaid, per-tab clamped splitter ratio, 2-pane workspace independence, non-markdown lock, Outline TOC cursor insertion, and split breadcrumbs', async () => {

@@ -1,0 +1,26 @@
+# 04 — 왼쪽 사이드바 너비 조절 (사이드바 리사이저)
+
+**Spec:** [spec.md](../spec.md)
+
+**What to build:** 왼쪽 사이드바 오른쪽 경계에 재사용 가능한 사이드바 리사이저를 두어, 드래그하거나 키보드로 너비를 조절하고 더블클릭으로 기본 너비 260px로 복원합니다. 너비는 180px와 min(600px, 창 너비의 50%) 사이로 제한하며 세션 메모리에만 유지합니다.
+
+**Blocked by:** 02-activity-bar-and-view-switching
+
+**Status:** resolved
+
+- [x] 너비 제한 순수 함수가 최소(180), 최대(min(600, 창 너비×0.5)), 기본값(260)을 계산하며, 경계값 단위 테스트가 있습니다.
+- [x] 리사이저는 `role="separator"`, `aria-orientation="vertical"`, `aria-valuenow/min/max`, 접근 가능한 이름(예: `왼쪽 사이드바 너비 조절`)을 갖습니다.
+- [x] 포인터 드래그로 너비가 바뀌고, 드래그 중에는 텍스트 선택이 막히며 커서가 `col-resize`로 고정됩니다.
+- [x] 좌·우 방향키로 너비를 일정 간격만큼 조절할 수 있고, 더블클릭하면 260px로 복원됩니다.
+- [x] 최소 너비 아래로 끌어도 자동으로 접히지 않고 180px에 머뭅니다.
+- [x] 창 크기가 줄어 최대값이 현재 너비보다 작아지면 최대값으로 보정됩니다.
+- [x] 사이드바가 접혀 있으면 리사이저도 렌더링되지 않고, 다시 펼치면 직전 너비가 유지됩니다(세션 내).
+- [x] 리사이저 컴포넌트는 05번 티켓에서 우측 사이드바에 재사용할 수 있도록 방향(핸들이 놓이는 쪽)과 제한값을 매개변수로 받습니다.
+- [x] `<App />` 통합 테스트가 키보드 조절에 따른 `aria-valuenow` 변화와 더블클릭 복원을 검증합니다.
+- [x] `CONTEXT.md`에 **사이드바 리사이저** 용어를 추가합니다(**분할 구분자**와 구분).
+- [x] `npm run typecheck`, `npm test`, `npm run build`가 통과합니다.
+
+## Comments
+
+- Commits: `1a23006`, `2df0ec6`
+- Verification: `npm run typecheck`, `npm test` (`38 passed (38)`, `228 passed (228)`), `npm run build` passed; parallel `/code-review` converged to 0 Standards and 0 Spec findings after 2 iterations.

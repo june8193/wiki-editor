@@ -32,6 +32,7 @@ describe('DocumentOutlinePanel', () => {
         onInsertToc={vi.fn()}
         onApplyHeadingNumbers={vi.fn()}
         onStripHeadingNumbers={vi.fn()}
+        onCollapse={vi.fn()}
       />
     )
 
@@ -83,6 +84,7 @@ describe('DocumentOutlinePanel', () => {
         onInsertToc={vi.fn()}
         onApplyHeadingNumbers={vi.fn()}
         onStripHeadingNumbers={vi.fn()}
+        onCollapse={vi.fn()}
       />
     )
     expect(within(list).queryByText('1.1.1.')).not.toBeInTheDocument()
@@ -106,6 +108,7 @@ describe('DocumentOutlinePanel', () => {
         onInsertToc={onInsertToc}
         onApplyHeadingNumbers={onApplyHeadingNumbers}
         onStripHeadingNumbers={onStripHeadingNumbers}
+        onCollapse={vi.fn()}
       />
     )
 
@@ -129,6 +132,7 @@ describe('DocumentOutlinePanel', () => {
         onInsertToc={onInsertToc}
         onApplyHeadingNumbers={onApplyHeadingNumbers}
         onStripHeadingNumbers={onStripHeadingNumbers}
+        onCollapse={vi.fn()}
       />
     )
 
@@ -138,8 +142,9 @@ describe('DocumentOutlinePanel', () => {
     expect(screen.getByText('마크다운 문서에서만 목차를 지원합니다.')).toBeInTheDocument()
   })
 
-  it('supports collapsing and expanding the outline body', async () => {
+  it('always renders the outline body without internal collapse and delegates collapsing via header button', async () => {
     const user = userEvent.setup()
+    const onCollapse = vi.fn()
     render(
       <DocumentOutlinePanel
         documentName="note.md"
@@ -151,19 +156,19 @@ describe('DocumentOutlinePanel', () => {
         onInsertToc={vi.fn()}
         onApplyHeadingNumbers={vi.fn()}
         onStripHeadingNumbers={vi.fn()}
+        onCollapse={onCollapse}
       />
     )
 
-    const collapseBtn = screen.getByRole('button', { name: /Outline/i })
-    expect(collapseBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.queryByRole('button', { name: /Outline/i })).not.toBeInTheDocument()
+    expect(screen.getByText('Outline')).toBeInTheDocument()
     expect(screen.getByRole('list')).toBeInTheDocument()
 
+    const collapseBtn = screen.getByRole('button', { name: '문서 목차 접기' })
+    expect(collapseBtn).toHaveAttribute('title', '문서 목차 접기')
     await user.click(collapseBtn)
-    expect(collapseBtn).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByRole('list')).not.toBeInTheDocument()
 
-    await user.click(collapseBtn)
-    expect(collapseBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(onCollapse).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('list')).toBeInTheDocument()
   })
 })

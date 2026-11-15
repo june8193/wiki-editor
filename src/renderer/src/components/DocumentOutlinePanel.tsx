@@ -1,4 +1,5 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useMemo } from 'react'
+import { PanelRightClose } from 'lucide-react'
 import {
   formatOutlineHeadingTitle,
   type MarkdownHeading,
@@ -15,11 +16,13 @@ export interface DocumentOutlinePanelProps {
   onInsertToc: () => void
   onApplyHeadingNumbers: () => void
   onStripHeadingNumbers: () => void
+  onCollapse: () => void
 }
 
 /**
- * Collapsible sidebar panel displaying the live document heading outline,
- * dynamic numbering toggle, click-to-scroll triggers, and explicit TOC/numbering actions.
+ * Right sidebar panel displaying the live document heading outline,
+ * dynamic numbering toggle, sidebar collapse trigger, click-to-scroll triggers,
+ * and explicit TOC/numbering actions.
  */
 export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   documentName,
@@ -30,9 +33,9 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   onSelectHeading,
   onInsertToc,
   onApplyHeadingNumbers,
-  onStripHeadingNumbers
+  onStripHeadingNumbers,
+  onCollapse
 }: DocumentOutlinePanelProps) {
-  const [isCollapsed, setIsCollapsed] = useState(false)
 
   const headings = useMemo(() => {
     if (!documentName || !isMarkdownDocument) return []
@@ -80,60 +83,64 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   return (
     <section className="outline-sidebar" aria-label="문서 목차 (Outline)">
       <div className="outline-header">
-        <button
-          type="button"
-          className="outline-collapse-btn"
-          aria-expanded={!isCollapsed}
-          onClick={() => setIsCollapsed((prev) => !prev)}
-        >
-          <span aria-hidden="true">{isCollapsed ? '▸' : '▾'}</span>
+        <div className="outline-title-group">
           <span>Outline</span>
           <span className="outline-count">{headings.length}</span>
-        </button>
+        </div>
 
-        <button
-          type="button"
-          className={`btn btn-sm outline-number-toggle${showHeadingNumbers ? ' is-active' : ''}`}
-          aria-label="헤딩 번호 표시"
-          aria-pressed={showHeadingNumbers}
-          title="동적 헤딩 번호 표시 토글 (원본 파일 미변경)"
-          onClick={onToggleHeadingNumbers}
-        >
-          1.1
-        </button>
+        <div className="outline-header-actions">
+          <button
+            type="button"
+            className={`btn btn-sm outline-number-toggle${showHeadingNumbers ? ' is-active' : ''}`}
+            aria-label="헤딩 번호 표시"
+            aria-pressed={showHeadingNumbers}
+            title="동적 헤딩 번호 표시 토글 (원본 파일 미변경)"
+            onClick={onToggleHeadingNumbers}
+          >
+            1.1
+          </button>
+
+          <button
+            type="button"
+            className="icon-btn outline-collapse-btn"
+            aria-label="문서 목차 접기"
+            title="문서 목차 접기"
+            onClick={onCollapse}
+          >
+            <PanelRightClose size={16} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
-      {!isCollapsed && (
-        <div className="outline-body">
-          <div className="outline-actions">
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={!documentName || !isMarkdownDocument}
-              onClick={onInsertToc}
-            >
-              본문에 목차(/toc) 삽입
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={!documentName || !isMarkdownDocument}
-              onClick={onApplyHeadingNumbers}
-            >
-              본문 헤딩 번호 쓰기
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={!documentName || !isMarkdownDocument}
-              onClick={onStripHeadingNumbers}
-            >
-              본문 헤딩 번호 제거
-            </button>
-          </div>
-          <div className="outline-list-container">{renderBodyContent()}</div>
+      <div className="outline-body">
+        <div className="outline-actions">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!documentName || !isMarkdownDocument}
+            onClick={onInsertToc}
+          >
+            본문에 목차(/toc) 삽입
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!documentName || !isMarkdownDocument}
+            onClick={onApplyHeadingNumbers}
+          >
+            본문 헤딩 번호 쓰기
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!documentName || !isMarkdownDocument}
+            onClick={onStripHeadingNumbers}
+          >
+            본문 헤딩 번호 제거
+          </button>
         </div>
-      )}
+        <div className="outline-list-container">{renderBodyContent()}</div>
+      </div>
     </section>
   )
 })

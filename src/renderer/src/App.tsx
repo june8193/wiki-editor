@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand } from '@shared/ipc'
+import type { GitStatus } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
 import type { OutlineScrollRequest } from './components/DocumentEditor'
 import { DocumentOutlinePanel } from './components/DocumentOutlinePanel'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
@@ -10,7 +13,8 @@ import { GitSidebarPanel } from './components/GitSidebarPanel'
 import { PaneInteractionActions } from './components/PaneTabBar'
 import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
-import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
+import { SidebarResizer } from './components/SidebarResizer'
+import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
@@ -24,10 +28,46 @@ import {
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
+import { useWindowWidth } from './hooks/useWindowWidth'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
 import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
+import {
+  clampSidebarWidth,
+  getLeftSidebarWidthBounds,
+  LEFT_SIDEBAR_DEFAULT_WIDTH,
+  RIGHT_SIDEBAR_DEFAULT_WIDTH,
+  RIGHT_SIDEBAR_WIDTH_BOUNDS
+} from './utils/sidebarWidth'
 import { toErrorMessage } from './utils/toErrorMessage'
+
+interface LeftSidebarState {
+  activeView: LeftSidebarView
+  isCollapsed: boolean
+  width: number
+}
+
+interface RightSidebarState {
+  isCollapsed: boolean
+  width: number
+}
+
+function selectLeftSidebarView(
+  prev: LeftSidebarState,
+  view: LeftSidebarView
+): LeftSidebarState {
+  if (!prev.isCollapsed && prev.activeView === view) {
+    return { ...prev, isCollapsed: true }
+  }
+  return { ...prev, activeView: view, isCollapsed: false }
+}
+
+function getGitChangedCount(workspaceRootPath: string | null, status: GitStatus | null): number {
+  if (!workspaceRootPath || !status || !status.isRepo) {
+    return 0
+  }
+  return status.staged.length + status.unstaged.length + status.untracked.length
+}
 
 interface PendingDialogState {
   title: string
@@ -41,7 +81,50 @@ interface PendingDialogState {
 
 export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
+  const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
+    activeView: 'workspace',
+    isCollapsed: false,
+    width: LEFT_SIDEBAR_DEFAULT_WIDTH
+  })
+  const [rightSidebar, setRightSidebar] = useState<RightSidebarState>({
+    isCollapsed: false,
+    width: RIGHT_SIDEBAR_DEFAULT_WIDTH
+  })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  const windowWidth = useWindowWidth()
+  const leftSidebarBounds = getLeftSidebarWidthBounds(windowWidth)
+  const leftSidebarWidth = clampSidebarWidth(leftSidebar.width, leftSidebarBounds)
+
+  useEffect(() => {
+    setLeftSidebar((prev) =>
+      prev.width === leftSidebarWidth ? prev : { ...prev, width: leftSidebarWidth }
+    )
+  }, [leftSidebarWidth])
+
+  const handleSelectLeftSidebarView = useCallback((view: LeftSidebarView): void => {
+    hasUserSelectedSidebarViewRef.current = true
+    setLeftSidebar((prev) => selectLeftSidebarView(prev, view))
+  }, [])
+
+  const handleResizeLeftSidebar = useCallback((nextWidth: number): void => {
+    setLeftSidebar((prev) => (prev.width === nextWidth ? prev : { ...prev, width: nextWidth }))
+  }, [])
+
+  const handleCollapseRightSidebar = useCallback((): void => {
+    setRightSidebar((prev) => (prev.isCollapsed ? prev : { ...prev, isCollapsed: true }))
+  }, [])
+
+  const handleExpandRightSidebar = useCallback((): void => {
+    setRightSidebar((prev) => (prev.isCollapsed ? { ...prev, isCollapsed: false } : prev))
+  }, [])
+
+  const handleResizeRightSidebar = useCallback((nextWidth: number): void => {
+    const clampedWidth = clampSidebarWidth(nextWidth, RIGHT_SIDEBAR_WIDTH_BOUNDS)
+    setRightSidebar((prev) =>
+      prev.width === clampedWidth ? prev : { ...prev, width: clampedWidth }
+    )
+  }, [])
 
   const reportErrorBanner = useCallback((message: string | null, error?: unknown): void => {
     setErrorMessage(message)
@@ -61,8 +144,11 @@ export function App() {
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const isDialogOpenRef = useRef<boolean>(false)
   isDialogOpenRef.current = pendingDialog !== null
+  const isEditorShortcutDisabled = pendingDialog !== null || isSettingsOpen
   const isSelectingFolderRef = useRef<boolean>(false)
   const hasWorkspaceInteractionRef = useRef<boolean>(false)
+  const hasUserSelectedSidebarViewRef = useRef<boolean>(false)
+  const isStartupRestoreRef = useRef<boolean>(false)
   const handleInitialConfigLoadedRef = useRef<(loadedConfig: AppConfig) => void>(() => undefined)
   const tabCloseActionsRef = useRef<{
     saveAndCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => Promise<boolean>
@@ -140,6 +226,7 @@ export function App() {
     autoSave: config.autoSave,
     autoSaveDelayMs: config.autoSaveDelayMs,
     isAutoSavePaused: pendingDialog !== null,
+    isShortcutDisabled: isEditorShortcutDisabled,
     onSaveConfigRaw: saveRawConfig,
     onWorkspaceSaved: () => void refreshGitStatusRef.current(),
     onError: reportErrorBanner,
@@ -164,7 +251,21 @@ export function App() {
     deleteEntry
   } = useWorkspaceTree({
     onError: reportErrorBanner,
-    onWorkspaceOpened: clearWorkspaceBuffers,
+    onWorkspaceOpened: () => {
+      clearWorkspaceBuffers()
+      if (isStartupRestoreRef.current) {
+        isStartupRestoreRef.current = false
+        if (!hasUserSelectedSidebarViewRef.current) {
+          setLeftSidebar((prev) => ({ ...prev, activeView: 'explorer', isCollapsed: false }))
+        }
+        return
+      }
+      setLeftSidebar((prev) =>
+        prev.activeView === 'workspace' && !prev.isCollapsed
+          ? { ...prev, activeView: 'explorer', isCollapsed: false }
+          : prev
+      )
+    },
     onWorkspaceChanged: () => {
       void reconcileBuffersRef.current().then((warnings) => {
         if (warnings.length > 0) {
@@ -191,9 +292,12 @@ export function App() {
       return
     }
     hasWorkspaceInteractionRef.current = true
+    isStartupRestoreRef.current = true
     void openWorkspace(lastWorkspacePath, {
       silentError: true,
       onSilentError: () => removeRecentWorkspace(lastWorkspacePath)
+    }).finally(() => {
+      isStartupRestoreRef.current = false
     })
   }
 
@@ -291,6 +395,7 @@ export function App() {
   const handleSwitchWorkspace = useCallback(
     (targetPath: string): void => {
       hasWorkspaceInteractionRef.current = true
+      isStartupRestoreRef.current = false
       guardUnsavedWorkspaceChanges(() => openWorkspace(targetPath))
     },
     [guardUnsavedWorkspaceChanges, openWorkspace]
@@ -303,6 +408,7 @@ export function App() {
 
     isSelectingFolderRef.current = true
     hasWorkspaceInteractionRef.current = true
+    isStartupRestoreRef.current = false
     reportErrorBanner(null)
     void window.wikiApi.workspace.selectFolder().then(
       (selectedPath) => {
@@ -326,6 +432,7 @@ export function App() {
   )
 
   const handleOpenConfigEditor = useCallback((): void => {
+    setIsSettingsOpen(false)
     void openConfigDocument()
   }, [openConfigDocument])
 
@@ -460,6 +567,7 @@ export function App() {
 
   const isCurrentWorkspaceFavorite =
     workspace !== null && isFavoriteWorkspacePath(config.favoriteWorkspaces, workspace.rootPath)
+  const gitChangedCount = getGitChangedCount(workspace?.rootPath ?? null, git.status)
 
   return (
     <div className="app-shell" data-theme={config.theme}>
@@ -470,69 +578,84 @@ export function App() {
       )}
 
       <main className="app-main">
-        <aside className="left-sidebar">
-          <FolderTreeSidebar
-            workspace={workspace}
-            isFavorite={isCurrentWorkspaceFavorite}
-            workspaceSwitcher={
-              <WorkspaceSwitcher
-                workspace={workspace}
-                favoriteWorkspaces={config.favoriteWorkspaces}
-                recentWorkspaces={config.recentWorkspaces}
-                onSwitchWorkspace={handleSwitchWorkspace}
-                onRemoveFavorite={removeFavoriteWorkspace}
-              />
-            }
-            tree={treeState}
-            activeFilePath={activeFilePath}
-            onToggleFavorite={() => {
-              if (workspace) {
-                toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
-              }
-            }}
-            onSelectPath={setSelectedTreePath}
-            onToggleDirectory={toggleDirectory}
-            onEnsureExpanded={ensureExpanded}
-            onResolveCreateParentDir={resolveCreateParentDir}
-            onOpenFile={handleOpenFile}
-            onRefreshTree={() => void refreshTree()}
-            onCreateEntry={createEntry}
-            onRenameEntry={renameEntry}
-            onRequestDelete={handleRequestDelete}
-          />
+        <ActivityBar
+          activeView={leftSidebar.activeView}
+          isCollapsed={leftSidebar.isCollapsed}
+          gitChangedCount={gitChangedCount}
+          onSelectView={handleSelectLeftSidebarView}
+        />
 
-          <GitSidebarPanel
-            workspaceRootPath={workspace?.rootPath ?? null}
-            status={git.status}
-            branchList={git.branchList}
-            pendingAction={git.pendingAction}
-            errorMessage={git.errorMessage}
-            onDismissError={git.dismissError}
-            onRefresh={() => void git.refreshStatus()}
-            onInitRepo={() => void git.initRepo()}
-            onStageFile={(path) => void git.stageFile(path)}
-            onStageAll={() => void git.stageAll()}
-            onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
-            onUnstageAll={() => void git.unstageAll()}
-            onCommit={git.commit}
-            onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
-            onPull={() => void git.pull()}
-            onPush={() => void git.push()}
-            onSync={() => void git.sync()}
-          />
+        {!leftSidebar.isCollapsed && (
+          <>
+            <aside
+              className="left-sidebar"
+              aria-label="왼쪽 사이드바"
+              style={{ width: `${leftSidebarWidth}px` }}
+            >
+              {leftSidebar.activeView === 'workspace' && (
+                <WorkspaceView
+                  workspace={workspace}
+                  isFavorite={isCurrentWorkspaceFavorite}
+                  favoriteWorkspaces={config.favoriteWorkspaces}
+                  recentWorkspaces={config.recentWorkspaces}
+                  onOpenFolder={handleSelectFolder}
+                  onSwitchWorkspace={handleSwitchWorkspace}
+                  onToggleFavorite={() => {
+                    if (workspace) {
+                      toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
+                    }
+                  }}
+                  onRemoveFavorite={removeFavoriteWorkspace}
+                />
+              )}
+              {leftSidebar.activeView === 'explorer' && (
+                <FolderTreeSidebar
+                  workspace={workspace}
+                  tree={treeState}
+                  activeFilePath={activeFilePath}
+                  onSelectPath={setSelectedTreePath}
+                  onToggleDirectory={toggleDirectory}
+                  onEnsureExpanded={ensureExpanded}
+                  onResolveCreateParentDir={resolveCreateParentDir}
+                  onOpenFile={handleOpenFile}
+                  onRefreshTree={() => void refreshTree()}
+                  onCreateEntry={createEntry}
+                  onRenameEntry={renameEntry}
+                  onRequestDelete={handleRequestDelete}
+                />
+              )}
 
-          <DocumentOutlinePanel
-            documentName={activeBuffer?.name ?? null}
-            content={activeBuffer?.content ?? ''}
-            isMarkdownDocument={isActiveMarkdown}
-            showHeadingNumbers={config.showHeadingNumbers}
-            onToggleHeadingNumbers={toggleShowHeadingNumbers}
-            onSelectHeading={handleSelectOutlineHeading}
-            onInsertToc={handleOutlineInsertToc}
-            onApplyHeadingNumbers={handleOutlineApplyHeadingNumbers}
-            onStripHeadingNumbers={handleOutlineStripHeadingNumbers}
-          />
-        </aside>
+              {leftSidebar.activeView === 'git' && (
+                <GitSidebarPanel
+                  workspaceRootPath={workspace?.rootPath ?? null}
+                  status={git.status}
+                  branchList={git.branchList}
+                  pendingAction={git.pendingAction}
+                  errorMessage={git.errorMessage}
+                  onDismissError={git.dismissError}
+                  onRefresh={() => void git.refreshStatus()}
+                  onInitRepo={() => void git.initRepo()}
+                  onStageFile={(path) => void git.stageFile(path)}
+                  onStageAll={() => void git.stageAll()}
+                  onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
+                  onUnstageAll={() => void git.unstageAll()}
+                  onCommit={git.commit}
+                  onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
+                  onPull={() => void git.pull()}
+                  onPush={() => void git.push()}
+                  onSync={() => void git.sync()}
+                />
+              )}
+            </aside>
+            <SidebarResizer
+              edge="right"
+              width={leftSidebarWidth}
+              bounds={leftSidebarBounds}
+              ariaLabel="왼쪽 사이드바 너비 조절"
+              onResize={handleResizeLeftSidebar}
+            />
+          </>
+        )}
 
         <PaneWorkspace
           layout={layout}
@@ -542,29 +665,70 @@ export function App() {
           showHeadingNumbers={config.showHeadingNumbers}
           customCommands={config.customCommands}
           scrollRequest={outlineScrollRequest}
-          isShortcutDisabled={pendingDialog !== null}
+          isShortcutDisabled={isEditorShortcutDisabled}
           onSetSplitRatio={setSplitRatio}
           onSplitWithTab={splitWithTab}
           actions={paneActions}
         />
 
-        {isSettingsOpen && (
-          <SettingsPanel
-            theme={config.theme}
-            autoSave={config.autoSave}
-            showHeadingNumbers={config.showHeadingNumbers}
-            configPath={configPath}
-            customCommands={config.customCommands}
-            previewTitle={activeBuffer ? deriveDocumentTitle(activeBuffer.name) : undefined}
-            onToggleTheme={toggleTheme}
-            onToggleAutoSave={toggleAutoSave}
-            onToggleShowHeadingNumbers={toggleShowHeadingNumbers}
-            onSaveCustomCommands={updateCustomCommands}
-            onOpenConfigEditor={handleOpenConfigEditor}
-            onClose={() => setIsSettingsOpen(false)}
-          />
+        {!rightSidebar.isCollapsed ? (
+          <>
+            <SidebarResizer
+              edge="left"
+              width={rightSidebar.width}
+              bounds={RIGHT_SIDEBAR_WIDTH_BOUNDS}
+              ariaLabel="우측 사이드바 너비 조절"
+              onResize={handleResizeRightSidebar}
+            />
+            <aside
+              className="right-sidebar"
+              aria-label="우측 사이드바"
+              style={{ width: `${rightSidebar.width}px` }}
+            >
+              <DocumentOutlinePanel
+                documentName={activeBuffer?.name ?? null}
+                content={activeBuffer?.content ?? ''}
+                isMarkdownDocument={isActiveMarkdown}
+                showHeadingNumbers={config.showHeadingNumbers}
+                onToggleHeadingNumbers={toggleShowHeadingNumbers}
+                onSelectHeading={handleSelectOutlineHeading}
+                onInsertToc={handleOutlineInsertToc}
+                onApplyHeadingNumbers={handleOutlineApplyHeadingNumbers}
+                onStripHeadingNumbers={handleOutlineStripHeadingNumbers}
+                onCollapse={handleCollapseRightSidebar}
+              />
+            </aside>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="right-sidebar-expand-tab"
+            aria-label="문서 목차 펼치기"
+            title="문서 목차 펼치기"
+            onClick={handleExpandRightSidebar}
+          >
+            <ListTree size={18} strokeWidth={1.75} aria-hidden="true" />
+          </button>
         )}
       </main>
+
+      {isSettingsOpen && (
+        <SettingsPanel
+          theme={config.theme}
+          autoSave={config.autoSave}
+          showHeadingNumbers={config.showHeadingNumbers}
+          configPath={configPath}
+          customCommands={config.customCommands}
+          previewTitle={activeBuffer ? deriveDocumentTitle(activeBuffer.name) : undefined}
+          isDismissDisabled={pendingDialog !== null}
+          onToggleTheme={toggleTheme}
+          onToggleAutoSave={toggleAutoSave}
+          onToggleShowHeadingNumbers={toggleShowHeadingNumbers}
+          onSaveCustomCommands={updateCustomCommands}
+          onOpenConfigEditor={handleOpenConfigEditor}
+          onClose={() => setIsSettingsOpen(false)}
+        />
+      )}
 
       {pendingDialog && (
         <ConfirmDialog
