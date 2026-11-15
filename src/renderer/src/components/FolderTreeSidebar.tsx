@@ -15,7 +15,7 @@ import {
   WorkspaceEntryKind,
   WorkspaceSummary
 } from '@shared/workspace'
-import { WORKSPACE_IMAGE_DRAG_MIME } from '../editor/imageIngestion'
+import { WORKSPACE_IMAGE_DRAG_MIME } from '../dragMimeTypes'
 import { useDismissable } from '../hooks/useDismissable'
 import type { WorkspaceTreeState } from '../hooks/useWorkspaceTree'
 

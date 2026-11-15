@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { CustomCommandConfig } from '@shared/config'
+import { ImageTransferContext } from '../hooks/useEditorImageTransfer'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 
 describe('RawMarkdownEditor (CodeMirror 6)', () => {
@@ -816,23 +817,28 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
       file.name === 'copied.png' ? 'C:\\vault\\img\\tree pic.png' : ''
     )
 
+    const transferContextValue = {
+      draggingWorkspaceImagePath: 'C:\\vault\\img\\tree pic.png',
+      clearDraggingWorkspaceImage: onClearDraggingWorkspaceImage,
+      reportImageError: onReportError,
+      ingestImage,
+      getPathForFile
+    }
+
     const { rerender } = render(
-      <RawMarkdownEditor
-        content={'Start end'}
-        language="markdown"
-        theme="light"
-        cursor={{ selectionStart: 6, selectionEnd: 6 }}
-        scrollTop={0}
-        documentPath="C:\\vault\\docs\\note.md"
-        enableImageInsertion
-        draggingWorkspaceImagePath="C:\\vault\\img\\tree pic.png"
-        onChangeContent={onChangeContent}
-        onUpdateViewState={vi.fn()}
-        onClearDraggingWorkspaceImage={onClearDraggingWorkspaceImage}
-        onReportError={onReportError}
-        ingestImage={ingestImage}
-        getPathForFile={getPathForFile}
-      />
+      <ImageTransferContext.Provider value={transferContextValue}>
+        <RawMarkdownEditor
+          content={'Start end'}
+          language="markdown"
+          theme="light"
+          cursor={{ selectionStart: 6, selectionEnd: 6 }}
+          scrollTop={0}
+          documentPath="C:\\vault\\docs\\note.md"
+          enableImageInsertion
+          onChangeContent={onChangeContent}
+          onUpdateViewState={vi.fn()}
+        />
+      </ImageTransferContext.Provider>
     )
 
     const editorEl = screen.getByTestId('document-editor')
@@ -883,6 +889,23 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     const afterDrop = onChangeContent.mock.calls.at(-1)?.[0] as string
     expect(afterDrop).toContain('![tree pic](../img/tree%20pic.png)\n\n![extra](./assets/extra.webp)')
 
+    // 3b. Empty getData() falls back to ImageTransferContext.draggingWorkspaceImagePath without null-shadowing
+    fireEvent.drop(editorEl, {
+      dataTransfer: {
+        types: ['application/x-wiki-workspace-image'],
+        files: [],
+        getData: () => ''
+      }
+    })
+    await waitFor(() => {
+      expect(ingestImage).toHaveBeenCalledTimes(4)
+    })
+    expect(ingestImage).toHaveBeenLastCalledWith({
+      documentPath: 'C:\\\\vault\\\\docs\\\\note.md',
+      source: { kind: 'filePath', filePath: 'C:\\vault\\img\\tree pic.png' }
+    })
+    expect(onClearDraggingWorkspaceImage).toHaveBeenCalledTimes(2)
+
     // 4. Tab dragover does NOT call preventDefault, while non-image drop prevents default without ingesting
     const tabDrag = new Event('dragover', { bubbles: true, cancelable: true })
     Object.defineProperty(tabDrag, 'dataTransfer', {
@@ -898,7 +921,7 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     })
     editorEl.dispatchEvent(txtDrop)
     expect(txtDrop.defaultPrevented).toBe(true)
-    expect(ingestImage).toHaveBeenCalledTimes(3)
+    expect(ingestImage).toHaveBeenCalledTimes(4)
 
     // 5. Copied file with native path ingests even if text/plain accompanies clipboard, unless disabled for json
     const copiedFile = new File([new Uint8Array([1])], 'copied.png', { type: 'image/png' })
@@ -911,24 +934,23 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
       }
     })
     await waitFor(() => {
-      expect(ingestImage).toHaveBeenCalledTimes(4)
+      expect(ingestImage).toHaveBeenCalledTimes(5)
     })
 
     rerender(
-      <RawMarkdownEditor
-        content={'{}'}
-        language="json"
-        theme="light"
-        cursor={{ selectionStart: 1, selectionEnd: 1 }}
-        scrollTop={0}
-        documentPath="C:\\vault\\config.json"
-        enableImageInsertion={false}
-        onChangeContent={onChangeContent}
-        onUpdateViewState={vi.fn()}
-        onReportError={onReportError}
-        ingestImage={ingestImage}
-        getPathForFile={getPathForFile}
-      />
+      <ImageTransferContext.Provider value={transferContextValue}>
+        <RawMarkdownEditor
+          content={'{}'}
+          language="json"
+          theme="light"
+          cursor={{ selectionStart: 1, selectionEnd: 1 }}
+          scrollTop={0}
+          documentPath="C:\\vault\\config.json"
+          enableImageInsertion={false}
+          onChangeContent={onChangeContent}
+          onUpdateViewState={vi.fn()}
+        />
+      </ImageTransferContext.Provider>
     )
     fireEvent.paste(screen.getByTestId('document-editor'), {
       clipboardData: {
@@ -938,24 +960,23 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
         getData: () => ''
       }
     })
-    expect(ingestImage).toHaveBeenCalledTimes(4)
+    expect(ingestImage).toHaveBeenCalledTimes(5)
 
-    // 6. Ingestion failure reports error via onReportError
+    // 6. Ingestion failure reports error via context reportImageError
     rerender(
-      <RawMarkdownEditor
-        content={'# Doc'}
-        language="markdown"
-        theme="light"
-        cursor={{ selectionStart: 5, selectionEnd: 5 }}
-        scrollTop={0}
-        documentPath="C:\\vault\\docs\\note.md"
-        enableImageInsertion
-        onChangeContent={onChangeContent}
-        onUpdateViewState={vi.fn()}
-        onReportError={onReportError}
-        ingestImage={ingestImage}
-        getPathForFile={getPathForFile}
-      />
+      <ImageTransferContext.Provider value={transferContextValue}>
+        <RawMarkdownEditor
+          content={'# Doc'}
+          language="markdown"
+          theme="light"
+          cursor={{ selectionStart: 5, selectionEnd: 5 }}
+          scrollTop={0}
+          documentPath="C:\\vault\\docs\\note.md"
+          enableImageInsertion
+          onChangeContent={onChangeContent}
+          onUpdateViewState={vi.fn()}
+        />
+      </ImageTransferContext.Provider>
     )
     ingestImage.mockRejectedValueOnce(new Error('permission denied'))
     fireEvent.paste(screen.getByTestId('document-editor'), {

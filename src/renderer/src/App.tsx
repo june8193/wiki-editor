@@ -98,34 +98,24 @@ export function App() {
   draggingWorkspaceImagePathRef.current = draggingWorkspaceImagePath
 
   useEffect(() => {
-    const handleWindowDragOver = (event: DragEvent): void => {
-      if (event.defaultPrevented) {
-        return
-      }
+    const blockUnsafeFileTransfer = (event: DragEvent, isDrop: boolean): void => {
       const inspected = inspectDropTransfer(event.dataTransfer, {
         draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
       })
-      if (inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
-        return
-      }
-      event.preventDefault()
-      if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = 'none'
-      }
-    }
-
-    const handleWindowDrop = (event: DragEvent): void => {
-      const inspected = inspectDropTransfer(event.dataTransfer, {
-        draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
-      })
-      if (inspected.isWorkspaceOrFileDrag) {
+      if (isDrop && inspected.isWorkspaceOrFileDrag) {
         setDraggingWorkspaceImagePath(null)
       }
       if (event.defaultPrevented || inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
         return
       }
       event.preventDefault()
+      if (!isDrop && event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'none'
+      }
     }
+
+    const handleWindowDragOver = (event: DragEvent): void => blockUnsafeFileTransfer(event, false)
+    const handleWindowDrop = (event: DragEvent): void => blockUnsafeFileTransfer(event, true)
 
     window.addEventListener('dragover', handleWindowDragOver)
     window.addEventListener('drop', handleWindowDrop)

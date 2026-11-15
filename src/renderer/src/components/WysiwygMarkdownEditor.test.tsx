@@ -4,6 +4,7 @@ import type { CustomCommandConfig } from '@shared/config'
 import { describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { buildWikiAssetUrl } from '@shared/assets'
+import { ImageTransferContext } from '../hooks/useEditorImageTransfer'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 function placeCaretInProseMirror(editorEl: HTMLElement, targetEl: Element): void {
@@ -826,15 +827,20 @@ describe('WysiwygMarkdownEditor local image rendering and path sync', () => {
     )
 
     render(
-      <WysiwygMarkdownEditor
-        content={'# Guide\n\n'}
-        scrollTop={0}
-        documentPath="C:\\vault\\docs\\guide.md"
-        onChangeContent={onChangeContent}
-        onReportError={onReportError}
-        ingestImage={ingestImage}
-        getPathForFile={getPathForFile}
-      />
+      <ImageTransferContext.Provider
+        value={{
+          reportImageError: onReportError,
+          ingestImage,
+          getPathForFile
+        }}
+      >
+        <WysiwygMarkdownEditor
+          content={'# Guide\n\n'}
+          scrollTop={0}
+          documentPath="C:\\vault\\docs\\guide.md"
+          onChangeContent={onChangeContent}
+        />
+      </ImageTransferContext.Provider>
     )
 
     const editorEl = screen.getByRole('textbox', { name: '위지윅 문서 에디터' })

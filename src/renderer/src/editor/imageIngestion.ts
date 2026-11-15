@@ -6,9 +6,7 @@ import {
   type WorkspaceImageIngestInput,
   type WorkspaceImageIngestResult
 } from '@shared/assets'
-import { TAB_DRAG_MIME } from '../stores/PaneTabStore'
-
-export const WORKSPACE_IMAGE_DRAG_MIME = 'application/x-wiki-workspace-image'
+import { TAB_DRAG_MIME, WORKSPACE_IMAGE_DRAG_MIME } from '../dragMimeTypes'
 
 export type ImageIngestor = (
   input: WorkspaceImageIngestInput
@@ -91,11 +89,13 @@ export function extractClipboardImageSources(
   }
 
   const getPathForFile = resolveGetPathForFile(options.getPathForFile)
-  const files = collectClipboardFiles(clipboardData)
+  const resolvedFiles = collectClipboardFiles(clipboardData).map((file) => ({
+    file,
+    nativePath: getPathForFile?.(file) ?? ''
+  }))
 
   const pathBackedImages: PendingImageSource[] = []
-  for (const file of files) {
-    const nativePath = getPathForFile?.(file) ?? ''
+  for (const { nativePath } of resolvedFiles) {
     if (nativePath && isSupportedImageFile(nativePath)) {
       pathBackedImages.push({ kind: 'filePath', filePath: nativePath })
     }
@@ -110,8 +110,7 @@ export function extractClipboardImageSources(
   }
 
   const bitmapSources: PendingImageSource[] = []
-  for (const file of files) {
-    const nativePath = getPathForFile?.(file) ?? ''
+  for (const { file, nativePath } of resolvedFiles) {
     if (nativePath && !isSupportedImageFile(nativePath)) {
       continue
     }

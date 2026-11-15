@@ -6,7 +6,6 @@ import {
 } from '@shared/config'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
-import type { ImageIngestor } from '../editor/imageIngestion'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
@@ -49,16 +48,11 @@ interface WysiwygMarkdownEditorProps {
   documentTitle?: string
   documentPath?: string
   enableImageInsertion?: boolean
-  draggingWorkspaceImagePath?: string | null
   scrollRequest?: WysiwygScrollRequest | null
   isActive?: boolean
   onChangeContent: (nextContent: string) => void
   onScrollTopChange?: (scrollTop: number) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
-  onClearDraggingWorkspaceImage?: () => void
-  onReportError?: (title: string, error: unknown) => void
-  ingestImage?: ImageIngestor
-  getPathForFile?: (file: File) => string
 }
 
 interface ToolbarStateSnapshot {
@@ -233,16 +227,11 @@ export function WysiwygMarkdownEditor({
   documentTitle,
   documentPath,
   enableImageInsertion = Boolean(documentPath),
-  draggingWorkspaceImagePath,
   scrollRequest,
   isActive = true,
   onChangeContent,
   onScrollTopChange,
-  onActiveHeadingChange,
-  onClearDraggingWorkspaceImage,
-  onReportError,
-  ingestImage,
-  getPathForFile
+  onActiveHeadingChange
 }: WysiwygMarkdownEditorProps) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
@@ -269,12 +258,7 @@ export function WysiwygMarkdownEditor({
   } = useEditorImageTransfer<Editor['view']>({
     documentPath: documentPath ?? null,
     enableImageInsertion,
-    draggingWorkspaceImagePath,
-    onClearDraggingWorkspaceImage,
-    onReportError,
-    ingestImage,
-    getPathForFile,
-    onTabDrag: () => true,
+    suppressNativeTabDrop: true,
     getTarget: () => {
       const instance = editorRef.current
       return instance && !instance.isDestroyed ? instance.view : null

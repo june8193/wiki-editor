@@ -1,5 +1,5 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
-import { TAB_DRAG_MIME } from '../stores/PaneTabStore'
+import { TAB_DRAG_MIME } from '../dragMimeTypes'
 import { useDismissable } from '../hooks/useDismissable'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'

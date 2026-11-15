@@ -12,6 +12,8 @@ export interface ImageTransferContextValue {
   draggingWorkspaceImagePath?: string | null
   clearDraggingWorkspaceImage?: () => void
   reportImageError?: (title: string, error: unknown) => void
+  ingestImage?: ImageIngestor
+  getPathForFile?: (file: File) => string
 }
 
 export const ImageTransferContext = createContext<ImageTransferContextValue>({})
@@ -24,12 +26,8 @@ export interface TextInsertionRange {
 export interface EditorImageTransferOptions<TTarget> {
   documentPath: string | null
   enableImageInsertion: boolean
-  draggingWorkspaceImagePath?: string | null
-  onClearDraggingWorkspaceImage?: () => void
-  onReportError?: (title: string, error: unknown) => void
-  ingestImage?: ImageIngestor
-  getPathForFile?: (file: File) => string
-  onTabDrag?: () => boolean
+  /** Return true on tab drags to prevent ProseMirror's native drop behavior without calling preventDefault(). */
+  suppressNativeTabDrop?: boolean
   getTarget: () => TTarget | null
   posAtCoords: (target: TTarget, clientX: number, clientY: number) => number | null
   getSelectionRange: (target: TTarget) => TextInsertionRange
@@ -53,19 +51,8 @@ export function useEditorImageTransfer<TTarget>(
   options: EditorImageTransferOptions<TTarget>
 ): EditorImageTransferHandlers<TTarget> {
   const context = useContext(ImageTransferContext)
-  const mergedOptions = {
-    ...options,
-    draggingWorkspaceImagePath:
-      options.draggingWorkspaceImagePath !== undefined
-        ? options.draggingWorkspaceImagePath
-        : (context.draggingWorkspaceImagePath ?? null),
-    onClearDraggingWorkspaceImage:
-      options.onClearDraggingWorkspaceImage ?? context.clearDraggingWorkspaceImage,
-    onReportError: options.onReportError ?? context.reportImageError
-  }
-
-  const optionsRef = useRef(mergedOptions)
-  optionsRef.current = mergedOptions
+  const optionsRef = useRef({ options, context })
+  optionsRef.current = { options, context }
 
   const isMountedRef = useRef(true)
   useEffect(() => {
@@ -81,22 +68,26 @@ export function useEditorImageTransfer<TTarget>(
       sources: readonly PendingImageSource[],
       range: TextInsertionRange
     ): void => {
-      const current = optionsRef.current
-      void resolvePendingImageSources(targetDocumentPath, sources, current.ingestImage)
+      const { context: ctx } = optionsRef.current
+      void resolvePendingImageSources(targetDocumentPath, sources, ctx.ingestImage)
         .then((results) => {
-          const latest = optionsRef.current
+          const { options: latestOpts } = optionsRef.current
           if (!isMountedRef.current || results.length === 0) {
             return
           }
-          const target = latest.getTarget()
-          if (!target || !latest.enableImageInsertion || latest.documentPath !== targetDocumentPath) {
+          const target = latestOpts.getTarget()
+          if (
+            !target ||
+            !latestOpts.enableImageInsertion ||
+            latestOpts.documentPath !== targetDocumentPath
+          ) {
             return
           }
-          latest.insertImages(target, results, range)
+          latestOpts.insertImages(target, results, range)
         })
         .catch((error: unknown) => {
           if (isMountedRef.current) {
-            optionsRef.current.onReportError?.('이미지 삽입에 실패했습니다.', error)
+            optionsRef.current.context.reportImageError?.('이미지 삽입에 실패했습니다.', error)
           }
         })
     },
@@ -105,25 +96,25 @@ export function useEditorImageTransfer<TTarget>(
 
   const handlePaste = useCallback(
     (event: ClipboardEvent, targetOverride?: TTarget | null): boolean => {
-      const current = optionsRef.current
-      if (!current.enableImageInsertion || !current.documentPath) {
+      const { options: opts, context: ctx } = optionsRef.current
+      if (!opts.enableImageInsertion || !opts.documentPath) {
         return false
       }
 
       const sources = extractClipboardImageSources(event.clipboardData, {
-        getPathForFile: current.getPathForFile
+        getPathForFile: ctx.getPathForFile
       })
       if (sources.length === 0) {
         return false
       }
 
-      const target = targetOverride ?? current.getTarget()
+      const target = targetOverride ?? opts.getTarget()
       if (!target) {
         return false
       }
 
       event.preventDefault()
-      runImageInsertion(current.documentPath, sources, current.getSelectionRange(target))
+      runImageInsertion(opts.documentPath, sources, opts.getSelectionRange(target))
       return true
     },
     [runImageInsertion]
@@ -133,13 +124,13 @@ export function useEditorImageTransfer<TTarget>(
     if (event.defaultPrevented) {
       return false
     }
-    const current = optionsRef.current
+    const { options: opts, context: ctx } = optionsRef.current
     const inspected = inspectDropTransfer(event.dataTransfer, {
-      getPathForFile: current.getPathForFile,
-      draggingWorkspaceImagePath: current.draggingWorkspaceImagePath
+      getPathForFile: ctx.getPathForFile,
+      draggingWorkspaceImagePath: ctx.draggingWorkspaceImagePath ?? null
     })
     if (inspected.isTabDrag) {
-      return current.onTabDrag ? current.onTabDrag() : false
+      return Boolean(opts.suppressNativeTabDrop)
     }
     if (!inspected.isWorkspaceOrFileDrag) {
       return false
@@ -148,7 +139,7 @@ export function useEditorImageTransfer<TTarget>(
     event.preventDefault()
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect =
-        current.enableImageInsertion && current.documentPath ? 'copy' : 'none'
+        opts.enableImageInsertion && opts.documentPath ? 'copy' : 'none'
     }
     return true
   }, [])
@@ -158,13 +149,13 @@ export function useEditorImageTransfer<TTarget>(
       if (event.defaultPrevented) {
         return false
       }
-      const current = optionsRef.current
+      const { options: opts, context: ctx } = optionsRef.current
       const inspected = inspectDropTransfer(event.dataTransfer, {
-        getPathForFile: current.getPathForFile,
-        draggingWorkspaceImagePath: current.draggingWorkspaceImagePath
+        getPathForFile: ctx.getPathForFile,
+        draggingWorkspaceImagePath: ctx.draggingWorkspaceImagePath ?? null
       })
       if (inspected.isTabDrag) {
-        return current.onTabDrag ? current.onTabDrag() : false
+        return Boolean(opts.suppressNativeTabDrop)
       }
       if (!inspected.isWorkspaceOrFileDrag) {
         return false
@@ -172,17 +163,13 @@ export function useEditorImageTransfer<TTarget>(
 
       event.preventDefault()
       event.stopPropagation()
-      current.onClearDraggingWorkspaceImage?.()
+      ctx.clearDraggingWorkspaceImage?.()
 
-      if (
-        !current.enableImageInsertion ||
-        !current.documentPath ||
-        inspected.sources.length === 0
-      ) {
+      if (!opts.enableImageInsertion || !opts.documentPath || inspected.sources.length === 0) {
         return true
       }
 
-      const target = targetOverride ?? current.getTarget()
+      const target = targetOverride ?? opts.getTarget()
       if (!target) {
         return true
       }
@@ -193,16 +180,16 @@ export function useEditorImageTransfer<TTarget>(
         (event.clientX > 0 || event.clientY > 0)
       ) {
         try {
-          dropPos = current.posAtCoords(target, event.clientX, event.clientY)
+          dropPos = opts.posAtCoords(target, event.clientX, event.clientY)
         } catch {
           dropPos = null
         }
       }
 
       const targetRange =
-        dropPos !== null ? { from: dropPos, to: dropPos } : current.getSelectionRange(target)
+        dropPos !== null ? { from: dropPos, to: dropPos } : opts.getSelectionRange(target)
 
-      runImageInsertion(current.documentPath, inspected.sources, targetRange)
+      runImageInsertion(opts.documentPath, inspected.sources, targetRange)
       return true
     },
     [runImageInsertion]

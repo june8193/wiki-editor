@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkspaceImageIngestInput, WorkspaceImageIngestResult } from '@shared/assets'
-import { TAB_DRAG_MIME } from '../stores/PaneTabStore'
+import { TAB_DRAG_MIME, WORKSPACE_IMAGE_DRAG_MIME } from '../dragMimeTypes'
 import {
   extractClipboardImageSources,
   formatRawMarkdownImages,
   inspectDropTransfer,
-  resolvePendingImageSources,
-  WORKSPACE_IMAGE_DRAG_MIME
+  resolvePendingImageSources
 } from './imageIngestion'
 
 function createDataTransferStub(options: {
@@ -41,26 +40,30 @@ describe('imageIngestion helpers', () => {
 
     // Plain-text / HTML copy with accompanying image should NOT hijack clipboard text paste
     const htmlBitmap = new File([new Uint8Array([1, 2])], 'image.png', { type: 'image/png' })
+    const bitmapGetPath = vi.fn(() => '')
     expect(
       extractClipboardImageSources(
         createDataTransferStub({
           files: [htmlBitmap],
           dataByMime: { 'text/plain': 'copied paragraph text' }
         }),
-        { getPathForFile: () => '' }
+        { getPathForFile: bitmapGetPath }
       )
     ).toEqual([])
+    expect(bitmapGetPath).toHaveBeenCalledTimes(1)
 
-    // Pure bitmap paste via DataTransfer.items fallback
+    // Pure bitmap paste via DataTransfer.items fallback (verifying single getPathForFile lookup per file)
     const screenshot = new File([new Uint8Array([9, 8, 7])], 'screenshot.png', { type: 'image/png' })
+    const screenshotGetPath = vi.fn(() => '')
     expect(
       extractClipboardImageSources(
         createDataTransferStub({
           items: [{ kind: 'file', getAsFile: () => screenshot }]
         }),
-        { getPathForFile: () => '' }
+        { getPathForFile: screenshotGetPath }
       )
     ).toEqual([{ kind: 'clipboardFile', file: screenshot, mimeType: 'image/png' }])
+    expect(screenshotGetPath).toHaveBeenCalledTimes(1)
   })
 
   it('inspectDropTransfer distinguishes tab drags, workspace tree drags, OS file drops, and text drags', () => {

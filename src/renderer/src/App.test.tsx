@@ -6564,7 +6564,30 @@ describe('Split editor mode and bidirectional scroll sync', () => {
       'src',
       buildWikiAssetUrl('C:/wiki/img-app/docs/assets/os-shot.png')
     )
-    expect(getRawEditorText(screen.getByTestId('document-editor'))).not.toContain('wiki-asset:')
+    const splitRawEditor = screen.getByTestId('document-editor')
+    expect(getRawEditorText(splitRawEditor)).not.toContain('wiki-asset:')
+
+    // Split left Raw editor falls back to ImageTransferContext.draggingWorkspaceImagePath when getData() is empty
+    appendRawEditorText(splitRawEditor, '\n\n')
+    const splitIngestsBefore = ingestSpy.mock.calls.length
+    fireEvent.dragStart(archTreeItem, {
+      dataTransfer: {
+        effectAllowed: 'none',
+        setData: () => undefined
+      }
+    })
+    fireEvent.drop(splitRawEditor, {
+      dataTransfer: {
+        types: ['application/x-wiki-workspace-image'],
+        files: [],
+        getData: () => ''
+      }
+    })
+    fireEvent.dragEnd(archTreeItem)
+    await waitFor(() => {
+      expect(ingestSpy).toHaveBeenCalledTimes(splitIngestsBefore + 1)
+      expect(within(splitPreview).getAllByRole('img', { name: 'arch (1)' })).toHaveLength(2)
+    })
 
     // 5. Window-level drop outside editors prevents accidental Electron file navigation
     const outerDropEvent = new Event('drop', { bubbles: true, cancelable: true })

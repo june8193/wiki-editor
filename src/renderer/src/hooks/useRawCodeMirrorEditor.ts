@@ -19,10 +19,7 @@ import {
   type CustomCommandConfig,
   type ThemeMode
 } from '@shared/config'
-import {
-  formatRawMarkdownImages,
-  type ImageIngestor
-} from '../editor/imageIngestion'
+import { formatRawMarkdownImages } from '../editor/imageIngestion'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
 import {
@@ -89,19 +86,13 @@ export interface UseRawCodeMirrorEditorOptions {
   documentTitle?: string
   documentPath?: string
   enableImageInsertion?: boolean
-  draggingWorkspaceImagePath?: string | null
   scrollRequest?: RawScrollRequest | null
   isActive?: boolean
   editorViewRef?: { current: EditorView | null }
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
-  onRawScroll?: () => void
-  onClearDraggingWorkspaceImage?: () => void
-  onReportError?: (title: string, error: unknown) => void
-  ingestImage?: ImageIngestor
-  getPathForFile?: (file: File) => string
-}
+  onRawScroll?: () => void}
 
 const markdownHighlightStyle = HighlightStyle.define([
   { tag: [tags.heading, tags.heading1, tags.heading2, tags.heading3], color: 'var(--cm-heading)', fontWeight: '700' },
@@ -206,18 +197,13 @@ export function useRawCodeMirrorEditor({
   documentTitle,
   documentPath,
   enableImageInsertion = language === 'markdown' && Boolean(documentPath),
-  draggingWorkspaceImagePath,
   scrollRequest,
   isActive = true,
   editorViewRef,
   onChangeContent,
   onUpdateViewState,
   onActiveHeadingChange,
-  onRawScroll,
-  onClearDraggingWorkspaceImage,
-  onReportError,
-  ingestImage,
-  getPathForFile
+  onRawScroll
 }: UseRawCodeMirrorEditorOptions) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -268,11 +254,6 @@ export function useRawCodeMirrorEditor({
   } = useEditorImageTransfer<EditorView>({
     documentPath: documentPath ?? null,
     enableImageInsertion,
-    draggingWorkspaceImagePath,
-    onClearDraggingWorkspaceImage,
-    onReportError,
-    ingestImage,
-    getPathForFile,
     getTarget: () => viewRef.current,
     posAtCoords: (view, clientX, clientY) => view.posAtCoords({ x: clientX, y: clientY }),
     getSelectionRange: (view) => {
