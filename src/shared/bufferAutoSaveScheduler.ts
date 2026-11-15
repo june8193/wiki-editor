@@ -6,9 +6,13 @@ interface AutoSaveTimerEntry {
   timerId: ReturnType<typeof setTimeout>
 }
 
+export interface AutoSaveConfig {
+  autoSave?: boolean
+  autoSaveDelayMs?: number
+}
+
 export interface BufferAutoSaveSchedulerOptions {
-  initialAutoSave?: boolean
-  initialAutoSaveDelayMs?: number
+  initialConfig?: AutoSaveConfig
 }
 
 export interface ReconcileAutoSaveInput {
@@ -31,11 +35,12 @@ export class BufferAutoSaveScheduler {
   private disposed = false
 
   constructor(options: BufferAutoSaveSchedulerOptions = {}) {
-    this.autoSave = options.initialAutoSave ?? DEFAULT_APP_CONFIG.autoSave
-    this.autoSaveDelayMs = options.initialAutoSaveDelayMs ?? DEFAULT_APP_CONFIG.autoSaveDelayMs
+    this.autoSave = options.initialConfig?.autoSave ?? DEFAULT_APP_CONFIG.autoSave
+    this.autoSaveDelayMs =
+      options.initialConfig?.autoSaveDelayMs ?? DEFAULT_APP_CONFIG.autoSaveDelayMs
   }
 
-  setConfig(config: { autoSave?: boolean; autoSaveDelayMs?: number }): void {
+  setConfig(config: AutoSaveConfig): void {
     if (typeof config.autoSave === 'boolean') {
       this.autoSave = config.autoSave
     }

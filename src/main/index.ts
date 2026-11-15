@@ -119,8 +119,10 @@ void app.whenReady().then(async () => {
     configService,
     getTargets,
     logService,
-    initialAutoSave: initialConfig.autoSave,
-    initialAutoSaveDelayMs: initialConfig.autoSaveDelayMs
+    initialAutoSaveConfig: {
+      autoSave: initialConfig.autoSave,
+      autoSaveDelayMs: initialConfig.autoSaveDelayMs
+    }
   })
   disposeGitIpc = registerGitIpc({
     ipcMain,

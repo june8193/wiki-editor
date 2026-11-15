@@ -23,6 +23,39 @@ function areDocumentBuffersEqual(left: DocumentBuffer, right: DocumentBuffer): b
   )
 }
 
+/** Creates an initialized DocumentBuffer from open input without requiring store mutation. */
+export function createDocumentBuffer(input: OpenBufferInput): DocumentBuffer {
+  const key = getWorkspacePathKey(input.path)
+  if (!key) {
+    throw new Error('Buffer path must not be empty')
+  }
+
+  return {
+    key,
+    kind: input.kind,
+    path: input.path,
+    name: input.name?.trim() || getWorkspaceDisplayName(input.path),
+    content: input.content,
+    savedContent: input.content,
+    isDirty: false,
+    version: 1,
+    isSaving: false
+  }
+}
+
+/** Merges unacknowledged local editor edits on top of a newer authoritative hub buffer. */
+export function mergePendingLocalBuffer(
+  hubBuffer: DocumentBuffer,
+  localBuffer: DocumentBuffer
+): DocumentBuffer {
+  return {
+    ...hubBuffer,
+    content: localBuffer.content,
+    isDirty: localBuffer.content !== hubBuffer.savedContent,
+    version: Math.max(localBuffer.version, hubBuffer.version)
+  }
+}
+
 /**
  * Centralized document buffer store keyed by normalized file path.
  * Multiple tabs across split panes and windows subscribe to the same buffer entry for real-time sync.
@@ -92,6 +125,16 @@ export class DocumentBufferStore {
     return Object.values(this.buffers)
   }
 
+  /** Returns the singleton config.json buffer if currently open in the store. */
+  getConfigBuffer(): DocumentBuffer | undefined {
+    for (const buffer of Object.values(this.buffers)) {
+      if (buffer.kind === 'config') {
+        return buffer
+      }
+    }
+    return undefined
+  }
+
   getDirtyBuffers(kind?: DocumentKind): readonly DocumentBuffer[] {
     return Object.values(this.buffers).filter(
       (buffer) => buffer.isDirty && (kind === undefined || buffer.kind === kind)
@@ -109,17 +152,7 @@ export class DocumentBufferStore {
       return existing
     }
 
-    const created: DocumentBuffer = {
-      key,
-      kind: input.kind,
-      path: input.path,
-      name: input.name?.trim() || getWorkspaceDisplayName(input.path),
-      content: input.content,
-      savedContent: input.content,
-      isDirty: false,
-      version: 1,
-      isSaving: false
-    }
+    const created = createDocumentBuffer(input)
     this.commit({ ...this.buffers, [key]: created })
     return created
   }

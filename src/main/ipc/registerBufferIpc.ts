@@ -1,3 +1,4 @@
+import type { AutoSaveConfig } from '@shared/bufferAutoSaveScheduler'
 import { BUFFER_IPC_CHANNELS } from '@shared/ipc'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import type { ConfigService } from '../config/ConfigService'
@@ -21,8 +22,7 @@ export interface RegisterBufferIpcDependencies {
   configService: ConfigService
   getTargets: () => BufferWebContentsLike[]
   logService?: LogService
-  initialAutoSave?: boolean
-  initialAutoSaveDelayMs?: number
+  initialAutoSaveConfig?: AutoSaveConfig
 }
 
 interface IpcEventWithSender {
@@ -46,16 +46,14 @@ export function registerBufferIpc({
   configService,
   getTargets,
   logService,
-  initialAutoSave,
-  initialAutoSaveDelayMs
+  initialAutoSaveConfig
 }: RegisterBufferIpcDependencies): () => void {
   let disposed = false
   let fallbackWindowId = 1
   const trackedSenders = new WeakMap<object, number>()
 
   const hub = new SharedDocumentBufferHub({
-    initialAutoSave,
-    initialAutoSaveDelayMs,
+    initialAutoSaveConfig,
     storage: {
       readWorkspaceFile: (filePath) => workspaceService.readFile(filePath),
       writeWorkspaceFile: (filePath, content) => workspaceService.writeFile(filePath, content),
@@ -94,13 +92,16 @@ export function registerBufferIpc({
     })
   })
 
-  if (initialAutoSave === undefined || initialAutoSaveDelayMs === undefined) {
+  if (
+    initialAutoSaveConfig?.autoSave === undefined ||
+    initialAutoSaveConfig?.autoSaveDelayMs === undefined
+  ) {
     void configService.get().then(
       (config) => {
         if (!disposed && !hasConfigUpdate) {
           hub.setAutoSaveConfig({
-            autoSave: initialAutoSave ?? config.autoSave,
-            autoSaveDelayMs: initialAutoSaveDelayMs ?? config.autoSaveDelayMs
+            autoSave: initialAutoSaveConfig?.autoSave ?? config.autoSave,
+            autoSaveDelayMs: initialAutoSaveConfig?.autoSaveDelayMs ?? config.autoSaveDelayMs
           })
         }
       },

@@ -168,8 +168,10 @@ export function createMultiWindowWikiHarness(
   let primaryApi: WikiApi | null = null
 
   const hub = new SharedDocumentBufferHub({
-    initialAutoSave: state.autoSave,
-    initialAutoSaveDelayMs: state.autoSaveDelayMs,
+    initialAutoSaveConfig: {
+      autoSave: state.autoSave,
+      autoSaveDelayMs: state.autoSaveDelayMs
+    },
     storage: {
       readWorkspaceFile: (filePath) => primaryApi!.workspace.readFile(filePath),
       writeWorkspaceFile: (filePath, content) => primaryApi!.workspace.writeFile(filePath, content),
@@ -563,6 +565,7 @@ export function createInMemoryWikiApi(
   getMenuListenerCount: () => number
   getFilesSnapshot: () => Map<string, string>
   readDirCalls: string[]
+  dispose: () => void
 } {
   const harness = createMultiWindowWikiHarness(initialOverrides, fsOptions)
   const primaryWindow = harness.createWindow()
@@ -575,6 +578,7 @@ export function createInMemoryWikiApi(
     getListenerCount: harness.getListenerCount,
     getMenuListenerCount: primaryWindow.getMenuListenerCount,
     getFilesSnapshot: harness.getFilesSnapshot,
-    readDirCalls: harness.readDirCalls
+    readDirCalls: harness.readDirCalls,
+    dispose: harness.dispose
   }
 }
