@@ -1,1 +1,1 @@
-export { toErrorMessage } from '@shared/documentBuffer'
+export { toErrorMessage } from '@shared/errors'

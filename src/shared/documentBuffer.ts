@@ -1,3 +1,4 @@
+import { toErrorMessage } from './errors'
 import { normalizeWorkspacePath } from './workspace'
 
 export type DocumentKind = 'workspace' | 'config'
@@ -71,10 +72,6 @@ export type SharedBufferHubEvent =
       path: string
       message: string
     }
-
-export function toErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback
-}
 
 // Electron contextBridge strips Error subclasses/errno codes, so deleted workspace files match localized/ENOENT messages.
 export function isMissingWorkspaceFileError(error: unknown): boolean {

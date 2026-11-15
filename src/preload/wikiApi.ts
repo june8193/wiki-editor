@@ -151,11 +151,8 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
         ) as Promise<DocumentBuffer>,
       openConfigDocument: () =>
         ipcRenderer.invoke(BUFFER_IPC_CHANNELS.openConfigDocument) as Promise<DocumentBuffer>,
-      refreshCleanConfig: (rawContent) =>
-        ipcRenderer.invoke(
-          BUFFER_IPC_CHANNELS.refreshCleanConfig,
-          rawContent
-        ) as Promise<DocumentBuffer | null>,
+      refreshCleanConfig: () =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.refreshCleanConfig) as Promise<DocumentBuffer | null>,
       updateContent: (key, nextContent) =>
         ipcRenderer.invoke(
           BUFFER_IPC_CHANNELS.updateContent,
@@ -179,8 +176,6 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
         ) as Promise<BufferKeyRemap[]>,
       syncDeletedPath: (targetPath) =>
         ipcRenderer.invoke(BUFFER_IPC_CHANNELS.syncDeletedPath, targetPath) as Promise<string[]>,
-      clearWorkspaceBuffers: () =>
-        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.clearWorkspaceBuffers) as Promise<string[]>,
       reconcileWorkspaceBuffersWithDisk: () =>
         ipcRenderer.invoke(
           BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk

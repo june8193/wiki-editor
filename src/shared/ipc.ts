@@ -73,7 +73,6 @@ export const BUFFER_IPC_CHANNELS = {
   setAutoSavePaused: 'buffer:set-auto-save-paused',
   syncRenamedPath: 'buffer:sync-renamed-path',
   syncDeletedPath: 'buffer:sync-deleted-path',
-  clearWorkspaceBuffers: 'buffer:clear-workspace-buffers',
   reconcileWorkspaceBuffersWithDisk: 'buffer:reconcile-workspace-buffers-with-disk',
   event: 'buffer:event'
 } as const
@@ -139,14 +138,13 @@ export interface WikiBufferApi {
     initialContent?: string
   ): Promise<DocumentBuffer>
   openConfigDocument(): Promise<DocumentBuffer>
-  refreshCleanConfig(rawContent?: string): Promise<DocumentBuffer | null>
+  refreshCleanConfig(): Promise<DocumentBuffer | null>
   updateContent(key: string, nextContent: string): Promise<DocumentBuffer | null>
   saveBuffer(key: string): Promise<SaveBufferResult>
   syncWindowTabs(bufferKeys: string[]): Promise<SharedBufferStateSnapshot>
   setAutoSavePaused(paused: boolean): Promise<void>
   syncRenamedPath(oldPath: string, newPath: string): Promise<BufferKeyRemap[]>
   syncDeletedPath(targetPath: string): Promise<string[]>
-  clearWorkspaceBuffers(): Promise<string[]>
   reconcileWorkspaceBuffersWithDisk(): Promise<ReconcileBuffersResult>
   onEvent(listener: (event: SharedBufferHubEvent) => void): () => void
 }

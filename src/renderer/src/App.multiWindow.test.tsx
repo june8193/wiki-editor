@@ -422,4 +422,138 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     await user.click(within(rendered1.container).getByRole('button', { name: 'destroy.md 탭 닫기' }))
     expect(await within(rendered1.container).findByRole('alertdialog')).toBeInTheDocument()
   })
+
+  it('routes edits and saves to a recreated file instead of the previously renamed buffer', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'a.md': '# Original A'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const win1 = harness.createWindow()
+    const rendered1 = render(<App wikiApi={win1.api} />)
+
+    await openFolderAndNoteInWindow(user, rendered1.container, win1.emitMenuCommand, 'a.md')
+
+    // Rename a.md -> b.md
+    const sidebar = within(rendered1.container).getByLabelText('워크스페이스 탐색기')
+    const itemA = within(sidebar).getByRole('treeitem', { name: 'a.md' })
+    itemA.focus()
+    fireEvent.keyDown(itemA, { key: 'F2' })
+    const renameInput = await within(sidebar).findByLabelText('새 이름 입력')
+    await user.clear(renameInput)
+    await user.type(renameInput, 'b.md{Enter}')
+
+    await waitFor(() => {
+      expect(within(rendered1.container).getByRole('tab', { name: /b\.md/ })).toBeInTheDocument()
+    })
+
+    // Recreate a.md and wait for its new tab to become active before editing + saving it
+    await user.click(within(sidebar).getByRole('button', { name: /새 파일/i }))
+    await user.type(await within(sidebar).findByLabelText('새 파일 이름'), 'a.md{Enter}')
+
+    const tabA = await within(rendered1.container).findByRole('tab', { name: /a\.md/ })
+    await waitFor(() => {
+      expect(tabA).toHaveAttribute('aria-selected', 'true')
+    })
+
+    const editorA = await within(rendered1.container).findByTestId('document-editor')
+    expect(getRawEditorText(editorA)).toBe('')
+    setRawEditorText(editorA, '# Brand new A')
+    await waitFor(() => {
+      expect(within(rendered1.container).getByText('미저장')).toBeInTheDocument()
+    })
+
+    await user.click(within(rendered1.container).getByRole('button', { name: '저장' }))
+
+    await waitFor(() => {
+      expect(within(rendered1.container).getByText('저장됨')).toBeInTheDocument()
+    })
+
+    expect(harness.getFilesSnapshot().get('C:/wiki/docs/a.md')).toBe('# Brand new A')
+    expect(harness.getFilesSnapshot().get('C:/wiki/docs/b.md')).toBe('# Original A')
+  })
+
+  it('prompts before closing the last remaining pane of a dirty split document even while syncWindowTabs is pending', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'split.md': '# Initial'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const win1 = harness.createWindow()
+    const rendered1 = render(<App wikiApi={win1.api} />)
+
+    const editor1 = await openFolderAndNoteInWindow(
+      user,
+      rendered1.container,
+      win1.emitMenuCommand,
+      'split.md'
+    )
+
+    // Duplicate split.md into the secondary pane
+    fireEvent.contextMenu(within(rendered1.container).getByRole('tab', { name: /split\.md/ }))
+    await user.click(
+      await within(rendered1.container).findByRole('menuitem', { name: '분할 영역에 복제 열기' })
+    )
+    await waitFor(() => {
+      expect(within(rendered1.container).getAllByRole('button', { name: 'split.md 탭 닫기' })).toHaveLength(
+        2
+      )
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/split.md']).toBe(2)
+    })
+
+    setRawEditorText(editor1, '# Unsaved split edits')
+    await waitFor(() => {
+      expect(within(rendered1.container).getAllByTestId('dirty-indicator').length).toBeGreaterThanOrEqual(
+        1
+      )
+    })
+
+    // Hold the next syncWindowTabs IPC call unresolved while closing both split panes rapidly
+    const originalSyncWindowTabs = win1.api.buffer.syncWindowTabs
+    const deferredResolvers: Array<() => void> = []
+    win1.api.buffer.syncWindowTabs = (keys) =>
+      new Promise((resolve) => {
+        deferredResolvers.push(() => {
+          void originalSyncWindowTabs(keys).then(resolve)
+        })
+      })
+
+    const closeButtonsBeforeFirst = within(rendered1.container).getAllByRole('button', {
+      name: 'split.md 탭 닫기'
+    })
+    await user.click(closeButtonsBeforeFirst[0])
+
+    expect(within(rendered1.container).queryByRole('alertdialog')).not.toBeInTheDocument()
+    const closeButtonsBeforeSecond = within(rendered1.container).getAllByRole('button', {
+      name: 'split.md 탭 닫기'
+    })
+    expect(closeButtonsBeforeSecond).toHaveLength(1)
+
+    // Closing the remaining local pane while syncWindowTabs is still unresolved must prompt
+    await user.click(closeButtonsBeforeSecond[0])
+    expect(within(rendered1.container).getByRole('alertdialog')).toBeInTheDocument()
+
+    win1.api.buffer.syncWindowTabs = originalSyncWindowTabs
+    for (const flush of deferredResolvers) {
+      flush()
+    }
+  })
 })

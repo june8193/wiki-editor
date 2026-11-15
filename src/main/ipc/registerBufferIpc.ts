@@ -130,10 +130,7 @@ export function registerBufferIpc({
         BUFFER_IPC_CHANNELS.openConfigDocument,
         (event) => hub.openConfigDocument(resolveWindowId(event))
       ],
-      [
-        BUFFER_IPC_CHANNELS.refreshCleanConfig,
-        (_event, rawContent) => hub.refreshCleanConfig(rawContent as string | undefined)
-      ],
+      [BUFFER_IPC_CHANNELS.refreshCleanConfig, () => hub.refreshCleanConfig()],
       [
         BUFFER_IPC_CHANNELS.updateContent,
         (_event, key, nextContent) => hub.updateContent(key as string, nextContent as string)
@@ -161,7 +158,6 @@ export function registerBufferIpc({
         BUFFER_IPC_CHANNELS.syncDeletedPath,
         (_event, targetPath) => hub.syncDeletedPath(targetPath as string)
       ],
-      [BUFFER_IPC_CHANNELS.clearWorkspaceBuffers, () => hub.clearWorkspaceBuffers()],
       [
         BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk,
         () => hub.reconcileWorkspaceBuffersWithDisk()

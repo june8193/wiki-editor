@@ -223,14 +223,13 @@ describe('createWikiApi', () => {
     await api.buffer.getSnapshot()
     await api.buffer.openWorkspaceFile('C:\\wiki\\note.md', 'note.md', '')
     await api.buffer.openConfigDocument()
-    await api.buffer.refreshCleanConfig('{"version":1}')
+    await api.buffer.refreshCleanConfig()
     await api.buffer.updateContent('c:/wiki/note.md', '# Updated')
     await api.buffer.saveBuffer('c:/wiki/note.md')
     await api.buffer.syncWindowTabs(['c:/wiki/note.md'])
     await api.buffer.setAutoSavePaused(true)
     await api.buffer.syncRenamedPath('C:\\wiki\\note.md', 'C:\\wiki\\renamed.md')
     await api.buffer.syncDeletedPath('C:\\wiki\\renamed.md')
-    await api.buffer.clearWorkspaceBuffers()
     await api.buffer.reconcileWorkspaceBuffersWithDisk()
 
     expect(ipc.lastInvoked).toEqual([
@@ -240,7 +239,7 @@ describe('createWikiApi', () => {
         args: ['C:\\wiki\\note.md', 'note.md', '']
       },
       { channel: BUFFER_IPC_CHANNELS.openConfigDocument, args: [] },
-      { channel: BUFFER_IPC_CHANNELS.refreshCleanConfig, args: ['{"version":1}'] },
+      { channel: BUFFER_IPC_CHANNELS.refreshCleanConfig, args: [] },
       { channel: BUFFER_IPC_CHANNELS.updateContent, args: ['c:/wiki/note.md', '# Updated'] },
       { channel: BUFFER_IPC_CHANNELS.saveBuffer, args: ['c:/wiki/note.md'] },
       { channel: BUFFER_IPC_CHANNELS.syncWindowTabs, args: [['c:/wiki/note.md']] },
@@ -250,7 +249,6 @@ describe('createWikiApi', () => {
         args: ['C:\\wiki\\note.md', 'C:\\wiki\\renamed.md']
       },
       { channel: BUFFER_IPC_CHANNELS.syncDeletedPath, args: ['C:\\wiki\\renamed.md'] },
-      { channel: BUFFER_IPC_CHANNELS.clearWorkspaceBuffers, args: [] },
       { channel: BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk, args: [] }
     ])
 

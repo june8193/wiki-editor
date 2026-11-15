@@ -37,6 +37,11 @@ export class DocumentBufferStore {
     this.commit({ ...nextBuffers })
   }
 
+  /** Inserts or updates a single buffer entry in place without exposing mutable internals. */
+  upsertBuffer(buffer: DocumentBuffer): void {
+    this.commit({ ...this.buffers, [buffer.key]: { ...buffer } })
+  }
+
   private resolveKey(pathOrKey: string): string {
     if (pathOrKey in this.buffers) {
       return pathOrKey

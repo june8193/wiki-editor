@@ -1,4 +1,4 @@
-import { DEFAULT_APP_CONFIG } from './config'
+import { BufferAutoSaveScheduler } from './bufferAutoSaveScheduler'
 import {
   type BufferKeyRemap,
   type DocumentBuffer,
@@ -6,10 +6,10 @@ import {
   type ReconcileBuffersResult,
   type SaveBufferResult,
   type SharedBufferHubEvent,
-  type SharedBufferStateSnapshot,
-  toErrorMessage
+  type SharedBufferStateSnapshot
 } from './documentBuffer'
 import { DocumentBufferStore } from './documentBufferStore'
+import { toErrorMessage } from './errors'
 import { getWorkspacePathKey } from './workspace'
 
 export interface SharedDocumentBufferStorage {
@@ -32,11 +32,6 @@ interface InFlightSaveEntry {
   promise: Promise<SaveBufferResult>
 }
 
-interface AutoSaveTimerEntry {
-  version: number
-  timerId: ReturnType<typeof setTimeout>
-}
-
 function areTabCountMapsEqual(
   left: Readonly<Record<string, number>>,
   right: Readonly<Record<string, number>>
@@ -52,7 +47,7 @@ function areTabCountMapsEqual(
 
 /**
  * Single authoritative coordinator for document buffers shared across windows.
- * Owns canonical DocumentBuffer state, per-window tab reference counting, unified debounced auto-save,
+ * Owns canonical DocumentBuffer state, per-window tab reference counting,
  * path rename/delete synchronization, and disk reconciliation.
  */
 export class SharedDocumentBufferHub {
@@ -62,21 +57,19 @@ export class SharedDocumentBufferHub {
   private readonly unregisteredOpenOwners = new Map<string, number>()
   private readonly inFlightOpens = new Map<string, Promise<DocumentBuffer>>()
   private readonly inFlightSaves = new Map<string, InFlightSaveEntry>()
-  private readonly autoSaveTimers = new Map<string, AutoSaveTimerEntry>()
-  private readonly lastAutoSaveAttemptVersion = new Map<string, number>()
-  private readonly pausedWindows = new Set<number>()
+  private readonly autoSaveScheduler: BufferAutoSaveScheduler
   private readonly storage: SharedDocumentBufferStorage
   private readonly logError?: (message: string, details?: Record<string, unknown>) => void
 
   private tabCounts: Record<string, number> = {}
-  private autoSave: boolean
-  private autoSaveDelayMs: number
   private disposed = false
 
   constructor(options: SharedDocumentBufferHubOptions) {
     this.storage = options.storage
-    this.autoSave = options.initialAutoSave ?? DEFAULT_APP_CONFIG.autoSave
-    this.autoSaveDelayMs = options.initialAutoSaveDelayMs ?? DEFAULT_APP_CONFIG.autoSaveDelayMs
+    this.autoSaveScheduler = new BufferAutoSaveScheduler({
+      initialAutoSave: options.initialAutoSave,
+      initialAutoSaveDelayMs: options.initialAutoSaveDelayMs
+    })
     this.logError = options.logError
   }
 
@@ -101,25 +94,22 @@ export class SharedDocumentBufferHub {
     }
   }
 
-  private clearTimerForKey(key: string): void {
-    const existing = this.autoSaveTimers.get(key)
-    if (existing) {
-      clearTimeout(existing.timerId)
-      this.autoSaveTimers.delete(key)
-    }
-  }
-
-  private clearAllTimers(): void {
-    for (const entry of this.autoSaveTimers.values()) {
-      clearTimeout(entry.timerId)
-    }
-    this.autoSaveTimers.clear()
+  private reconcileAutoSaveTimers(): void {
+    if (this.disposed) return
+    this.autoSaveScheduler.reconcile({
+      buffers: this.store.getSnapshot(),
+      isSaveInFlight: (key) => this.inFlightSaves.has(key),
+      getLatestBuffer: (key) => this.store.getBuffer(key),
+      onTriggerSave: (buffer) => {
+        void this.executeSave(buffer)
+      }
+    })
   }
 
   private cleanupTrackingForKeys(keys: Iterable<string>): void {
-    for (const key of keys) {
-      this.clearTimerForKey(key)
-      this.lastAutoSaveAttemptVersion.delete(key)
+    const keyList = [...keys]
+    this.autoSaveScheduler.clearForKeys(keyList)
+    for (const key of keyList) {
       this.unregisteredOpenOwners.delete(key)
     }
   }
@@ -146,6 +136,31 @@ export class SharedDocumentBufferHub {
     this.tabCounts = this.computeTabCounts()
   }
 
+  private removeOrphanedBuffers(
+    prevCounts: Readonly<Record<string, number>>,
+    nextCounts: Readonly<Record<string, number>>,
+    extraCandidateKeys: Iterable<string> = []
+  ): boolean {
+    const orphanKeys = new Set<string>(extraCandidateKeys)
+    for (const [key, prevCount] of Object.entries(prevCounts)) {
+      if (prevCount > 0 && (nextCounts[key] ?? 0) === 0) {
+        orphanKeys.add(key)
+      }
+    }
+    if (orphanKeys.size === 0) {
+      return false
+    }
+
+    let removedAnyBuffer = false
+    for (const key of orphanKeys) {
+      if (this.store.removeBuffer(key)) {
+        removedAnyBuffer = true
+      }
+    }
+    this.cleanupTrackingForKeys(orphanKeys)
+    return removedAnyBuffer
+  }
+
   syncWindowTabs(windowId: number, bufferKeys: readonly string[]): SharedBufferStateSnapshot {
     const perWindow = new Map<string, number>()
     for (const key of bufferKeys) {
@@ -157,17 +172,7 @@ export class SharedDocumentBufferHub {
     const prevCounts = this.tabCounts
     this.windowTabs.set(windowId, perWindow)
     const nextCounts = this.computeTabCounts()
-
-    let removedAnyBuffer = false
-    for (const [key, prevCount] of Object.entries(prevCounts)) {
-      if (prevCount > 0 && (nextCounts[key] ?? 0) === 0) {
-        if (this.store.removeBuffer(key)) {
-          removedAnyBuffer = true
-        }
-        this.cleanupTrackingForKeys([key])
-      }
-    }
-
+    const removedAnyBuffer = this.removeOrphanedBuffers(prevCounts, nextCounts)
     const countsChanged = !areTabCountMapsEqual(prevCounts, nextCounts)
     this.tabCounts = nextCounts
 
@@ -180,31 +185,23 @@ export class SharedDocumentBufferHub {
   }
 
   unregisterWindow(windowId: number): void {
-    const wasPaused = this.pausedWindows.delete(windowId)
+    const wasPaused = this.autoSaveScheduler.removePausedWindow(windowId)
     const hadTabs = this.windowTabs.delete(windowId)
     const prevCounts = this.tabCounts
     const nextCounts = this.computeTabCounts()
 
-    const orphanKeys = new Set<string>()
+    const unregisteredOwnerOrphans: string[] = []
     for (const [key, ownerId] of this.unregisteredOpenOwners.entries()) {
       if (ownerId === windowId && (nextCounts[key] ?? 0) === 0) {
-        orphanKeys.add(key)
-      }
-    }
-    for (const [key, prevCount] of Object.entries(prevCounts)) {
-      if (prevCount > 0 && (nextCounts[key] ?? 0) === 0) {
-        orphanKeys.add(key)
+        unregisteredOwnerOrphans.push(key)
       }
     }
 
-    let removedAnyBuffer = false
-    for (const key of orphanKeys) {
-      if (this.store.removeBuffer(key)) {
-        removedAnyBuffer = true
-      }
-    }
-    this.cleanupTrackingForKeys(orphanKeys)
-
+    const removedAnyBuffer = this.removeOrphanedBuffers(
+      prevCounts,
+      nextCounts,
+      unregisteredOwnerOrphans
+    )
     const countsChanged = hadTabs && !areTabCountMapsEqual(prevCounts, nextCounts)
     this.tabCounts = nextCounts
 
@@ -313,13 +310,13 @@ export class SharedDocumentBufferHub {
     })
   }
 
-  async refreshCleanConfig(rawContent?: string): Promise<DocumentBuffer | null> {
+  async refreshCleanConfig(): Promise<DocumentBuffer | null> {
     const existing = this.store.getAllBuffers().find((buffer) => buffer.kind === 'config')
     if (!existing || existing.isDirty) {
       return existing ? { ...existing } : null
     }
 
-    const freshRaw = rawContent !== undefined ? rawContent : await this.storage.readConfigRaw()
+    const freshRaw = await this.storage.readConfigRaw()
     const latest = this.store.getBuffer(existing.key)
     if (!latest || latest.isDirty) {
       return latest ? { ...latest } : null
@@ -342,7 +339,7 @@ export class SharedDocumentBufferHub {
 
     if (changed) {
       if (!updated.isDirty) {
-        this.lastAutoSaveAttemptVersion.delete(updated.key)
+        this.autoSaveScheduler.clearAttempt(updated.key)
       }
       this.reconcileAutoSaveTimers()
       this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
@@ -450,82 +447,13 @@ export class SharedDocumentBufferHub {
   }
 
   setAutoSaveConfig(config: { autoSave?: boolean; autoSaveDelayMs?: number }): void {
-    if (typeof config.autoSave === 'boolean') {
-      this.autoSave = config.autoSave
-    }
-    if (typeof config.autoSaveDelayMs === 'number' && Number.isFinite(config.autoSaveDelayMs)) {
-      this.autoSaveDelayMs = Math.max(0, config.autoSaveDelayMs)
-    }
+    this.autoSaveScheduler.setConfig(config)
     this.reconcileAutoSaveTimers()
   }
 
   setAutoSavePaused(windowId: number, paused: boolean): void {
-    const changed = paused ? !this.pausedWindows.has(windowId) : this.pausedWindows.has(windowId)
-    if (!changed) return
-    if (paused) {
-      this.pausedWindows.add(windowId)
-    } else {
-      this.pausedWindows.delete(windowId)
-    }
-    this.reconcileAutoSaveTimers()
-  }
-
-  private reconcileAutoSaveTimers(): void {
-    if (this.disposed || !this.autoSave || this.pausedWindows.size > 0) {
-      this.clearAllTimers()
-      return
-    }
-
-    const currentBuffers = this.store.getSnapshot()
-
-    for (const [key, entry] of this.autoSaveTimers.entries()) {
-      const buf = currentBuffers[key]
-      if (
-        !buf ||
-        buf.kind !== 'workspace' ||
-        !buf.isDirty ||
-        buf.isSaving ||
-        buf.version !== entry.version
-      ) {
-        clearTimeout(entry.timerId)
-        this.autoSaveTimers.delete(key)
-      }
-    }
-
-    for (const attemptedKey of this.lastAutoSaveAttemptVersion.keys()) {
-      const buf = currentBuffers[attemptedKey]
-      if (!buf || !buf.isDirty) {
-        this.lastAutoSaveAttemptVersion.delete(attemptedKey)
-      }
-    }
-
-    for (const buf of Object.values(currentBuffers)) {
-      if (buf.kind !== 'workspace' || !buf.isDirty || buf.isSaving) continue
-      if (this.lastAutoSaveAttemptVersion.get(buf.key) === buf.version) continue
-      if (this.autoSaveTimers.has(buf.key)) continue
-
-      const scheduledVersion = buf.version
-      const timerId = setTimeout(() => {
-        this.autoSaveTimers.delete(buf.key)
-        if (this.disposed || !this.autoSave || this.pausedWindows.size > 0) return
-
-        const latest = this.store.getBuffer(buf.key)
-        if (
-          !latest ||
-          latest.kind !== 'workspace' ||
-          !latest.isDirty ||
-          latest.isSaving ||
-          latest.version !== scheduledVersion ||
-          this.inFlightSaves.has(latest.key)
-        ) {
-          return
-        }
-
-        this.lastAutoSaveAttemptVersion.set(latest.key, scheduledVersion)
-        void this.executeSave({ ...latest })
-      }, this.autoSaveDelayMs)
-
-      this.autoSaveTimers.set(buf.key, { version: scheduledVersion, timerId })
+    if (this.autoSaveScheduler.setPaused(windowId, paused)) {
+      this.reconcileAutoSaveTimers()
     }
   }
 
@@ -548,16 +476,9 @@ export class SharedDocumentBufferHub {
       }
     }
     this.tabCounts = this.computeTabCounts()
+    this.autoSaveScheduler.remapKeys(remappings)
 
     for (const [oldKey, newKey] of remapLookup.entries()) {
-      this.clearTimerForKey(oldKey)
-
-      const attemptedVersion = this.lastAutoSaveAttemptVersion.get(oldKey)
-      if (attemptedVersion !== undefined) {
-        this.lastAutoSaveAttemptVersion.delete(oldKey)
-        this.lastAutoSaveAttemptVersion.set(newKey, attemptedVersion)
-      }
-
       const ownerId = this.unregisteredOpenOwners.get(oldKey)
       if (ownerId !== undefined) {
         this.unregisteredOpenOwners.delete(oldKey)
@@ -606,11 +527,6 @@ export class SharedDocumentBufferHub {
     return this.closeRemovedKeys(removedKeys)
   }
 
-  clearWorkspaceBuffers(): string[] {
-    const removedKeys = this.store.clearWorkspaceBuffers()
-    return this.closeRemovedKeys(removedKeys)
-  }
-
   async reconcileWorkspaceBuffersWithDisk(): Promise<ReconcileBuffersResult> {
     const openWorkspaceBuffers = this.store
       .getAllBuffers()
@@ -639,7 +555,7 @@ export class SharedDocumentBufferHub {
           if (current.isSaving || this.inFlightSaves.has(current.key)) return
 
           if (!current.isDirty) {
-            this.clearTimerForKey(current.key)
+            this.autoSaveScheduler.clearTimer(current.key)
             if (this.store.refreshCleanContent(current.key, diskContent)) {
               refreshedClean = true
             }
@@ -669,14 +585,7 @@ export class SharedDocumentBufferHub {
     }
 
     if (closedKeys.length > 0) {
-      this.cleanupTrackingForKeys(closedKeys)
-      this.pruneAndRemoveTabReferences(new Set(closedKeys))
-      this.reconcileAutoSaveTimers()
-      this.emit({
-        type: 'buffers-closed',
-        snapshot: this.getSnapshot(),
-        closedKeys
-      })
+      this.closeRemovedKeys(closedKeys)
     } else if (refreshedClean) {
       this.emit({
         type: 'state-changed',
@@ -701,12 +610,10 @@ export class SharedDocumentBufferHub {
 
   dispose(): void {
     this.disposed = true
-    this.clearAllTimers()
+    this.autoSaveScheduler.dispose()
     this.listeners.clear()
     this.windowTabs.clear()
     this.unregisteredOpenOwners.clear()
-    this.pausedWindows.clear()
-    this.lastAutoSaveAttemptVersion.clear()
     this.inFlightOpens.clear()
     this.inFlightSaves.clear()
   }

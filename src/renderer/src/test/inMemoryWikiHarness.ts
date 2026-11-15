@@ -243,8 +243,8 @@ export function createMultiWindowWikiHarness(
       async openConfigDocument() {
         return hub.openConfigDocument(windowId)
       },
-      async refreshCleanConfig(rawContent) {
-        return hub.refreshCleanConfig(rawContent)
+      async refreshCleanConfig() {
+        return hub.refreshCleanConfig()
       },
       async updateContent(key, nextContent) {
         return hub.updateContent(key, nextContent)
@@ -263,9 +263,6 @@ export function createMultiWindowWikiHarness(
       },
       async syncDeletedPath(targetPath) {
         return hub.syncDeletedPath(targetPath)
-      },
-      async clearWorkspaceBuffers() {
-        return hub.clearWorkspaceBuffers()
       },
       async reconcileWorkspaceBuffersWithDisk() {
         return hub.reconcileWorkspaceBuffersWithDisk()

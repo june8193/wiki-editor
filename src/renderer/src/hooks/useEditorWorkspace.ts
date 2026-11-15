@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import {
+  type BufferKeyRemap,
   type DocumentBuffer,
   type DocumentBufferSnapshot,
   type SharedBufferHubEvent,
-  type SharedBufferStateSnapshot,
-  toErrorMessage
+  type SharedBufferStateSnapshot
 } from '@shared/documentBuffer'
+import { toErrorMessage } from '@shared/errors'
 import { getWorkspacePathKey, WorkspaceEntry } from '@shared/workspace'
 import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
@@ -36,6 +37,15 @@ function extractLayoutBufferKeys(layout: PaneLayoutState): string[] {
   return keys
 }
 
+function countBufferKeys(keys: readonly string[]): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const key of keys) {
+    if (!key) continue
+    counts[key] = (counts[key] ?? 0) + 1
+  }
+  return counts
+}
+
 function movePendingCount(
   counts: Map<string, number>,
   oldKey: string,
@@ -50,6 +60,19 @@ function movePendingCount(
 function moveTrackedKey(set: Set<string>, oldKey: string, newKey: string): void {
   if (set.delete(oldKey)) {
     set.add(newKey)
+  }
+}
+
+function clearRemappingsTouchingKeys(
+  remappings: Map<string, string>,
+  keys: Iterable<string>
+): void {
+  const keySet = keys instanceof Set ? keys : new Set(keys)
+  if (keySet.size === 0 || remappings.size === 0) return
+  for (const [oldKey, newKey] of remappings.entries()) {
+    if (keySet.has(oldKey) || keySet.has(newKey)) {
+      remappings.delete(oldKey)
+    }
   }
 }
 
@@ -141,25 +164,12 @@ export function useEditorWorkspace({
   onConfirmCloseDirtyTab
 }: UseEditorWorkspaceOptions) {
   const wikiApi = useWikiApi()
-  const bufferStoreRef = useRef<DocumentBufferStore | null>(null)
-  if (!bufferStoreRef.current) {
-    bufferStoreRef.current = new DocumentBufferStore()
-  }
-  const bufferStore = bufferStoreRef.current
-  const tabStoreRef = useRef<PaneTabStore | null>(null)
-  if (!tabStoreRef.current) {
-    tabStoreRef.current = new PaneTabStore({
-      onTransition: (transition) => logPaneTabTransition(bufferStore, transition)
-    })
-  }
-  const tabStore = tabStoreRef.current
-
-  const buffers = useSyncExternalStore(bufferStore.subscribe, bufferStore.getSnapshot)
-  const layout = useSyncExternalStore(tabStore.subscribe, tabStore.getSnapshot)
-
   const mountedRef = useRef<boolean>(true)
   const isShortcutDisabledRef = useRef<boolean>(isShortcutDisabled)
   const hubTabCountsRef = useRef<Record<string, number>>({})
+  const localTabCountsRef = useRef<Record<string, number>>({})
+  const inFlightTabSyncCountRef = useRef<number>(0)
+  const suppressLocalTabCountDeltaRef = useRef<boolean>(false)
   const latestHubBuffersRef = useRef<DocumentBufferSnapshot>({})
   const pendingLocalEditCountsRef = useRef<Map<string, number>>(new Map())
   const creatingKeysRef = useRef<Set<string>>(new Set())
@@ -179,25 +189,119 @@ export function useEditorWorkspace({
     onConfirmCloseDirtyTab
   }
 
-  const resolveLatestBufferKey = useCallback((initialKey: string): string => {
-    let cursor = initialKey
-    const seen = new Set<string>()
-    while (remappedKeysRef.current.has(cursor) && !seen.has(cursor)) {
-      seen.add(cursor)
-      cursor = remappedKeysRef.current.get(cursor)!
+  const bufferStoreRef = useRef<DocumentBufferStore | null>(null)
+  if (!bufferStoreRef.current) {
+    bufferStoreRef.current = new DocumentBufferStore()
+  }
+  const bufferStore = bufferStoreRef.current
+
+  const tabStoreRef = useRef<PaneTabStore | null>(null)
+  if (!tabStoreRef.current) {
+    const store = new PaneTabStore({
+      onTransition: (transition) => logPaneTabTransition(bufferStore, transition)
+    })
+    // Maintain synchronous optimistic tab counts across rapid local open/split/close edits
+    // until in-flight syncWindowTabs roundtrips confirm authoritative counts from the hub.
+    store.subscribe(() => {
+      const nextLocalCounts = countBufferKeys(extractLayoutBufferKeys(store.getSnapshot()))
+      if (!suppressLocalTabCountDeltaRef.current) {
+        const prevLocalCounts = localTabCountsRef.current
+        const nextHubCounts = { ...hubTabCountsRef.current }
+        const touchedKeys = new Set([
+          ...Object.keys(prevLocalCounts),
+          ...Object.keys(nextLocalCounts)
+        ])
+        for (const key of touchedKeys) {
+          const delta = (nextLocalCounts[key] ?? 0) - (prevLocalCounts[key] ?? 0)
+          if (delta === 0) continue
+          const updated = Math.max(0, (nextHubCounts[key] ?? 0) + delta)
+          if (updated === 0) {
+            delete nextHubCounts[key]
+          } else {
+            nextHubCounts[key] = updated
+          }
+        }
+        hubTabCountsRef.current = nextHubCounts
+      }
+      localTabCountsRef.current = nextLocalCounts
+    })
+    tabStoreRef.current = store
+  }
+  const tabStore = tabStoreRef.current
+
+  const buffers = useSyncExternalStore(bufferStore.subscribe, bufferStore.getSnapshot)
+  const layout = useSyncExternalStore(tabStore.subscribe, tabStore.getSnapshot)
+
+  const runWithSuppressedTabDelta = useCallback((fn: () => void): void => {
+    suppressLocalTabCountDeltaRef.current = true
+    try {
+      fn()
+    } finally {
+      suppressLocalTabCountDeltaRef.current = false
     }
-    return cursor
   }, [])
+
+  const resolveLatestBufferKey = useCallback(
+    (initialKey: string): string => {
+      if (bufferStore.hasBuffer(initialKey)) {
+        return initialKey
+      }
+      let cursor = initialKey
+      const seen = new Set<string>()
+      while (remappedKeysRef.current.has(cursor) && !seen.has(cursor)) {
+        seen.add(cursor)
+        cursor = remappedKeysRef.current.get(cursor)!
+      }
+      return cursor
+    },
+    [bufferStore]
+  )
+
+  const applyKeyRemappings = useCallback(
+    (
+      remappings: readonly BufferKeyRemap[],
+      options: { suppressTabDelta?: boolean } = {}
+    ): void => {
+      if (remappings.length === 0) return
+      for (const { oldKey, newKey } of remappings) {
+        if (oldKey === newKey) continue
+        remappedKeysRef.current.set(oldKey, newKey)
+        movePendingCount(pendingLocalEditCountsRef.current, oldKey, newKey)
+        moveTrackedKey(creatingKeysRef.current, oldKey, newKey)
+        moveTrackedKey(pendingManualSaveKeysRef.current, oldKey, newKey)
+      }
+      if (options.suppressTabDelta) {
+        if (inFlightTabSyncCountRef.current > 0) {
+          const nextHubCounts = { ...hubTabCountsRef.current }
+          for (const { oldKey, newKey } of remappings) {
+            if (oldKey === newKey || !(oldKey in nextHubCounts)) continue
+            nextHubCounts[newKey] = (nextHubCounts[newKey] ?? 0) + nextHubCounts[oldKey]
+            delete nextHubCounts[oldKey]
+          }
+          hubTabCountsRef.current = nextHubCounts
+        }
+        runWithSuppressedTabDelta(() => {
+          tabStore.remapBufferKeys(remappings)
+        })
+      } else {
+        tabStore.remapBufferKeys(remappings)
+      }
+    },
+    [runWithSuppressedTabDelta, tabStore]
+  )
 
   const applyHubSnapshot = useCallback(
     (snapshot: SharedBufferStateSnapshot): void => {
-      hubTabCountsRef.current = { ...snapshot.tabCounts }
+      if (inFlightTabSyncCountRef.current === 0) {
+        hubTabCountsRef.current = { ...snapshot.tabCounts }
+      }
       latestHubBuffersRef.current = snapshot.buffers
 
       const currentLocal = bufferStore.getSnapshot()
       const merged: Record<string, DocumentBuffer> = {}
 
       for (const [key, hubBuf] of Object.entries(snapshot.buffers)) {
+        remappedKeysRef.current.delete(key)
         const pendingCount = pendingLocalEditCountsRef.current.get(key) ?? 0
         const localBuf = currentLocal[key]
         if (pendingCount > 0 && localBuf) {
@@ -223,6 +327,29 @@ export function useEditorWorkspace({
     [bufferStore]
   )
 
+  const pushWindowTabs = useCallback(
+    (keys: string[]): void => {
+      const signature = keys.join('\0')
+      if (lastSyncedTabSignatureRef.current === signature) {
+        return
+      }
+      lastSyncedTabSignatureRef.current = signature
+      inFlightTabSyncCountRef.current += 1
+      void wikiApi.buffer
+        .syncWindowTabs(keys)
+        .then((snapshot) => {
+          inFlightTabSyncCountRef.current = Math.max(0, inFlightTabSyncCountRef.current - 1)
+          if (mountedRef.current && inFlightTabSyncCountRef.current === 0) {
+            applyHubSnapshot(snapshot)
+          }
+        })
+        .catch(() => {
+          inFlightTabSyncCountRef.current = Math.max(0, inFlightTabSyncCountRef.current - 1)
+        })
+    },
+    [applyHubSnapshot, wikiApi]
+  )
+
   useEffect(() => {
     mountedRef.current = true
     const bufferApi = wikiApi.buffer
@@ -235,23 +362,26 @@ export function useEditorWorkspace({
           applyHubSnapshot(event.snapshot)
           return
         case 'paths-remapped':
-          for (const { oldKey, newKey } of event.remappings) {
-            if (oldKey === newKey) continue
-            remappedKeysRef.current.set(oldKey, newKey)
-            movePendingCount(pendingLocalEditCountsRef.current, oldKey, newKey)
-            moveTrackedKey(creatingKeysRef.current, oldKey, newKey)
-            moveTrackedKey(pendingManualSaveKeysRef.current, oldKey, newKey)
-          }
-          tabStore.remapBufferKeys(event.remappings)
+          applyKeyRemappings(event.remappings, { suppressTabDelta: true })
           applyHubSnapshot(event.snapshot)
           return
         case 'buffers-closed':
+          clearRemappingsTouchingKeys(remappedKeysRef.current, event.closedKeys)
           for (const closedKey of event.closedKeys) {
             pendingLocalEditCountsRef.current.delete(closedKey)
             creatingKeysRef.current.delete(closedKey)
             pendingManualSaveKeysRef.current.delete(closedKey)
           }
-          tabStore.closeTabsByBufferKeys(event.closedKeys)
+          if (inFlightTabSyncCountRef.current > 0) {
+            const nextHubCounts = { ...hubTabCountsRef.current }
+            for (const closedKey of event.closedKeys) {
+              delete nextHubCounts[closedKey]
+            }
+            hubTabCountsRef.current = nextHubCounts
+          }
+          runWithSuppressedTabDelta(() => {
+            tabStore.closeTabsByBufferKeys(event.closedKeys)
+          })
           applyHubSnapshot(event.snapshot)
           return
         case 'workspace-saved':
@@ -286,27 +416,19 @@ export function useEditorWorkspace({
       void bufferApi.setAutoSavePaused(false).catch(() => undefined)
       void bufferApi.syncWindowTabs([]).catch(() => undefined)
     }
-  }, [applyHubSnapshot, tabStore, wikiApi])
+  }, [applyHubSnapshot, applyKeyRemappings, runWithSuppressedTabDelta, tabStore, wikiApi])
 
   useEffect(() => {
     void wikiApi.buffer.setAutoSavePaused(isAutoSavePaused).catch(() => undefined)
   }, [isAutoSavePaused, wikiApi])
 
   useEffect(() => {
-    const keys = extractLayoutBufferKeys(layout)
-    const signature = keys.join('\0')
-    if (lastSyncedTabSignatureRef.current === signature) {
-      return
-    }
-    lastSyncedTabSignatureRef.current = signature
-    void wikiApi.buffer.syncWindowTabs(keys).catch(() => undefined)
-  }, [layout, wikiApi])
+    pushWindowTabs(extractLayoutBufferKeys(layout))
+  }, [layout, pushWindowTabs])
 
   const syncTabsNow = useCallback((): void => {
-    const keys = extractLayoutBufferKeys(tabStore.getSnapshot())
-    lastSyncedTabSignatureRef.current = keys.join('\0')
-    void wikiApi.buffer.syncWindowTabs(keys).catch(() => undefined)
-  }, [tabStore, wikiApi])
+    pushWindowTabs(extractLayoutBufferKeys(tabStore.getSnapshot()))
+  }, [pushWindowTabs, tabStore])
 
   const saveBufferByKey = useCallback(
     (bufferKey: string): void => {
@@ -420,6 +542,7 @@ export function useEditorWorkspace({
   const openWorkspaceFile = useCallback(
     async (entry: WorkspaceEntry, targetPaneId?: PaneId): Promise<void> => {
       const key = getWorkspacePathKey(entry.path)
+      remappedKeysRef.current.delete(key)
       if (bufferStore.hasBuffer(key)) {
         tabStore.openTab(key, { paneId: targetPaneId })
         return
@@ -429,8 +552,9 @@ export function useEditorWorkspace({
       try {
         const buf = await wikiApi.buffer.openWorkspaceFile(entry.path, entry.name)
         if (!mountedRef.current) return
+        remappedKeysRef.current.delete(buf.key)
         if (!bufferStore.hasBuffer(buf.key)) {
-          bufferStore.replaceSnapshot({ ...bufferStore.getSnapshot(), [buf.key]: buf })
+          bufferStore.upsertBuffer(buf)
         }
         tabStore.openTab(buf.key, { paneId: targetPaneId })
       } catch (error: unknown) {
@@ -457,7 +581,7 @@ export function useEditorWorkspace({
         const buf = await wikiApi.buffer.openConfigDocument()
         if (!mountedRef.current) return
         if (!bufferStore.hasBuffer(buf.key)) {
-          bufferStore.replaceSnapshot({ ...bufferStore.getSnapshot(), [buf.key]: buf })
+          bufferStore.upsertBuffer(buf)
         }
         tabStore.openTab(buf.key, { paneId: targetPaneId })
       } catch (error: unknown) {
@@ -482,6 +606,8 @@ export function useEditorWorkspace({
 
   const openCreatedFile = useCallback(
     (created: WorkspaceEntry): void => {
+      const key = getWorkspacePathKey(created.path)
+      remappedKeysRef.current.delete(key)
       const buf = bufferStore.openBuffer({
         kind: 'workspace',
         path: created.path,
@@ -521,10 +647,7 @@ export function useEditorWorkspace({
           if (!mountedRef.current) return
           const latestHubBuf = latestHubBuffersRef.current[finalKey]
           if (latestHubBuf) {
-            bufferStore.replaceSnapshot({
-              ...bufferStore.getSnapshot(),
-              [finalKey]: latestHubBuf
-            })
+            bufferStore.upsertBuffer(latestHubBuf)
           }
         })
     },
@@ -534,12 +657,13 @@ export function useEditorWorkspace({
   const forceCloseTab = useCallback(
     (paneId: PaneId, tabId: string): void => {
       const result = tabStore.closeTab(paneId, tabId)
-      if (
-        result?.isLastReferenceForBuffer &&
-        (hubTabCountsRef.current[result.closedTab.bufferKey] ?? 1) <= 1
-      ) {
-        pendingLocalEditCountsRef.current.delete(result.closedTab.bufferKey)
-        bufferStore.removeBuffer(result.closedTab.bufferKey)
+      if (result?.isLastReferenceForBuffer) {
+        const closedKey = result.closedTab.bufferKey
+        clearRemappingsTouchingKeys(remappedKeysRef.current, [closedKey])
+        if ((hubTabCountsRef.current[closedKey] ?? 0) === 0) {
+          pendingLocalEditCountsRef.current.delete(closedKey)
+          bufferStore.removeBuffer(closedKey)
+        }
       }
       syncTabsNow()
     },
@@ -582,42 +706,35 @@ export function useEditorWorkspace({
     })
     if (localWorkspaceKeys.length === 0) return
 
+    clearRemappingsTouchingKeys(remappedKeysRef.current, localWorkspaceKeys)
+    tabStore.closeTabsByBufferKeys(localWorkspaceKeys)
     for (const key of localWorkspaceKeys) {
-      if ((hubTabCountsRef.current[key] ?? 1) <= 1) {
+      if ((hubTabCountsRef.current[key] ?? 0) === 0) {
         pendingLocalEditCountsRef.current.delete(key)
         creatingKeysRef.current.delete(key)
         bufferStore.removeBuffer(key)
       }
     }
-    tabStore.closeTabsByBufferKeys(localWorkspaceKeys)
     syncTabsNow()
   }, [bufferStore, syncTabsNow, tabStore])
 
   const syncRenamedPath = useCallback(
     (oldPath: string, renamed: WorkspaceEntry): void => {
       const remappings = bufferStore.syncRenamedPath(oldPath, renamed.path)
-      for (const { oldKey, newKey } of remappings) {
-        if (oldKey !== newKey) {
-          remappedKeysRef.current.set(oldKey, newKey)
-          movePendingCount(pendingLocalEditCountsRef.current, oldKey, newKey)
-          moveTrackedKey(creatingKeysRef.current, oldKey, newKey)
-          moveTrackedKey(pendingManualSaveKeysRef.current, oldKey, newKey)
-        }
-      }
-      if (remappings.length > 0) {
-        tabStore.remapBufferKeys(remappings)
-      }
+      applyKeyRemappings(remappings)
       void wikiApi.buffer.syncRenamedPath(oldPath, renamed.path).catch(() => undefined)
     },
-    [bufferStore, tabStore, wikiApi]
+    [applyKeyRemappings, bufferStore, wikiApi]
   )
 
   const syncDeletedPath = useCallback(
     (deletedPath: string): void => {
       const removedKeys = bufferStore.removeBuffersUnderPath(deletedPath)
+      clearRemappingsTouchingKeys(remappedKeysRef.current, removedKeys)
       for (const key of removedKeys) {
         pendingLocalEditCountsRef.current.delete(key)
         creatingKeysRef.current.delete(key)
+        pendingManualSaveKeysRef.current.delete(key)
       }
       if (removedKeys.length > 0) {
         tabStore.closeTabsByBufferKeys(removedKeys)

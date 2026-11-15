@@ -45,10 +45,6 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
     hasInitialContent: typeof initialContent === 'string',
     contentLength: typeof initialContent === 'string' ? initialContent.length : 0
   }),
-  [BUFFER_IPC_CHANNELS.refreshCleanConfig]: ([rawContent]) => ({
-    hasRawContent: typeof rawContent === 'string',
-    contentLength: typeof rawContent === 'string' ? rawContent.length : 0
-  }),
   [BUFFER_IPC_CHANNELS.updateContent]: ([key, nextContent]) => ({
     key,
     contentLength: typeof nextContent === 'string' ? nextContent.length : 0
