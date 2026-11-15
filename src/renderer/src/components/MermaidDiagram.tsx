@@ -3,7 +3,8 @@ import type { ThemeMode } from '@shared/config'
 import {
   defaultMermaidRenderer,
   mapThemeToMermaidTheme,
-  type MermaidRenderer
+  type MermaidRenderer,
+  type MermaidTheme
 } from '../editor/mermaidRenderer'
 import { logRendererWarn } from '../logging/rendererLogger'
 
@@ -15,14 +16,62 @@ interface MermaidDiagramProps {
   className?: string
 }
 
+interface ValidDiagramSnapshot {
+  code: string
+  mermaidTheme: MermaidTheme
+  svg: string
+}
+
 interface AsyncRenderState {
-  key: string
-  svg: string | null
+  lastValid: ValidDiagramSnapshot | null
   error: string | null
 }
 
 const DEFAULT_DEBOUNCE_MS = 250
 
+function logMermaidRenderFailure(theme: ThemeMode, codeLength: number, errorMessage: string): void {
+  logRendererWarn('ui', 'Mermaid diagram rendering failed', {
+    data: {
+      theme,
+      codeLength,
+      errorMessage
+    },
+    error: {
+      name: 'MermaidRenderError',
+      message: errorMessage
+    }
+  })
+}
+
+/**
+ * Re-renders the retained valid diagram in the active theme when the current source has syntax errors.
+ */
+async function syncLastValidTheme(
+  previousValid: ValidDiagramSnapshot | null,
+  theme: ThemeMode,
+  mermaidTheme: MermaidTheme,
+  renderer: MermaidRenderer
+): Promise<ValidDiagramSnapshot | null> {
+  if (!previousValid || previousValid.mermaidTheme === mermaidTheme) {
+    return previousValid
+  }
+
+  const cachedValidSvg = renderer.getCachedSvg(previousValid.code, theme)
+  if (cachedValidSvg !== null) {
+    return { code: previousValid.code, mermaidTheme, svg: cachedValidSvg }
+  }
+
+  const syncResult = await renderer.render(previousValid.code, theme)
+  if (syncResult.ok) {
+    return { code: previousValid.code, mermaidTheme, svg: syncResult.svg }
+  }
+  return previousValid
+}
+
+/**
+ * Renders a Mermaid diagram block with debounced live updates, theme synchronization,
+ * and last-valid SVG retention paired with a compact inline alert on syntax errors.
+ */
 export function MermaidDiagram({
   code,
   theme,
@@ -31,72 +80,91 @@ export function MermaidDiagram({
   className
 }: MermaidDiagramProps) {
   const mermaidTheme = mapThemeToMermaidTheme(theme)
-  const renderKey = `${mermaidTheme}\0${code}`
   const cachedSvg = renderer.getCachedSvg(code, theme)
 
-  const [asyncState, setAsyncState] = useState<AsyncRenderState>({
-    key: '',
-    svg: null,
+  const [asyncState, setAsyncState] = useState<AsyncRenderState>(() => ({
+    lastValid: cachedSvg !== null ? { code, mermaidTheme, svg: cachedSvg } : null,
     error: null
-  })
+  }))
+  const lastValidRef = useRef<ValidDiagramSnapshot | null>(asyncState.lastValid)
   const mountedThemeRef = useRef<ThemeMode | null>(null)
 
   useEffect(() => {
-    const isInitialOrThemeSwitch =
-      mountedThemeRef.current === null || mountedThemeRef.current !== theme
+    lastValidRef.current = asyncState.lastValid
+  }, [asyncState.lastValid])
+
+  useEffect(() => {
+    const previousTheme = mountedThemeRef.current
+    const isInitialOrThemeSwitch = previousTheme === null || previousTheme !== theme
     mountedThemeRef.current = theme
 
     if (cachedSvg !== null) {
+      setAsyncState((prev) =>
+        prev.lastValid?.code === code &&
+        prev.lastValid.mermaidTheme === mermaidTheme &&
+        prev.lastValid.svg === cachedSvg &&
+        prev.error === null
+          ? prev
+          : { lastValid: { code, mermaidTheme, svg: cachedSvg }, error: null }
+      )
       return
     }
 
     let cancelled = false
-    const executeRender = (): void => {
-      void renderer.render(code, theme).then((result) => {
-        if (cancelled) return
-        if (result.ok) {
-          setAsyncState({ key: renderKey, svg: result.svg, error: null })
-        } else {
-          setAsyncState({ key: renderKey, svg: null, error: result.errorMessage })
-          logRendererWarn('ui', 'Mermaid diagram rendering failed', {
-            data: {
-              theme,
-              codeLength: code.length,
-              errorMessage: result.errorMessage
-            },
-            error: {
-              name: 'MermaidRenderError',
-              message: result.errorMessage
-            }
-          })
-        }
+    let settled = false
+    const executeRender = async (): Promise<void> => {
+      const result = await renderer.render(code, theme)
+      if (cancelled) return
+      if (result.ok) {
+        settled = true
+        setAsyncState({
+          lastValid: { code, mermaidTheme, svg: result.svg },
+          error: null
+        })
+        return
+      }
+
+      logMermaidRenderFailure(theme, code.length, result.errorMessage)
+      const nextLastValid = await syncLastValidTheme(
+        lastValidRef.current,
+        theme,
+        mermaidTheme,
+        renderer
+      )
+      if (cancelled) return
+      settled = true
+      setAsyncState({
+        lastValid: nextLastValid,
+        error: result.errorMessage
       })
     }
 
-    if (isInitialOrThemeSwitch || debounceMs <= 0) {
-      executeRender()
-      return () => {
-        cancelled = true
-      }
+    const timerId =
+      isInitialOrThemeSwitch || debounceMs <= 0
+        ? undefined
+        : window.setTimeout(() => {
+            void executeRender()
+          }, debounceMs)
+
+    if (timerId === undefined) {
+      void executeRender()
     }
 
-    const timerId = window.setTimeout(executeRender, debounceMs)
     return () => {
       cancelled = true
-      window.clearTimeout(timerId)
+      // Restore previous theme if interrupted (e.g. StrictMode remount) so the next effect still runs immediately
+      if (!settled) {
+        mountedThemeRef.current = previousTheme
+      }
+      if (timerId !== undefined) {
+        window.clearTimeout(timerId)
+      }
     }
-  }, [cachedSvg, code, debounceMs, renderKey, renderer, theme])
+  }, [cachedSvg, code, debounceMs, mermaidTheme, renderer, theme])
 
-  const displaySvg =
-    cachedSvg !== null
-      ? cachedSvg
-      : asyncState.key === renderKey
-        ? asyncState.svg
-        : asyncState.error === null
-          ? asyncState.svg
-          : null
-  const displayError =
-    cachedSvg !== null ? null : asyncState.key === renderKey ? asyncState.error : null
+  const displaySvg = cachedSvg ?? asyncState.lastValid?.svg ?? null
+  const displayError = cachedSvg !== null ? null : asyncState.error
+  const showFallbackErrorBox = displayError !== null && displaySvg === null
 
   return (
     <div
@@ -104,7 +172,7 @@ export function MermaidDiagram({
       data-testid="mermaid-diagram"
       data-mermaid-theme={mermaidTheme}
     >
-      {displayError !== null ? (
+      {showFallbackErrorBox ? (
         <div className="mermaid-error-box" role="alert">
           <div className="mermaid-error-title">Mermaid 다이어그램 문법 오류</div>
           <p className="mermaid-error-message">{displayError}</p>
@@ -112,14 +180,27 @@ export function MermaidDiagram({
             <code>{code}</code>
           </pre>
         </div>
-      ) : displaySvg !== null ? (
-        <div
-          className="mermaid-svg-container"
-          data-testid="mermaid-svg"
-          dangerouslySetInnerHTML={{ __html: displaySvg }}
-        />
       ) : (
-        <div className="mermaid-loading">Mermaid 다이어그램 렌더링 중...</div>
+        <>
+          {displayError !== null && (
+            <div className="mermaid-inline-error-banner" role="alert">
+              <span className="mermaid-inline-error-title">Mermaid 문법 오류</span>
+              <span className="mermaid-inline-error-message">{displayError}</span>
+            </div>
+          )}
+          {displaySvg !== null ? (
+            <div
+              key="mermaid-svg"
+              className="mermaid-svg-container"
+              data-testid="mermaid-svg"
+              dangerouslySetInnerHTML={{ __html: displaySvg }}
+            />
+          ) : (
+            <div key="mermaid-loading" className="mermaid-loading">
+              Mermaid 다이어그램 렌더링 중...
+            </div>
+          )}
+        </>
       )}
     </div>
   )

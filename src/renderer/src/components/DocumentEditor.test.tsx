@@ -589,4 +589,92 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     fireEvent.doubleClick(separator)
     expect(onUpdateViewState).toHaveBeenLastCalledWith({ splitPreviewRatio: 0.5 })
   })
+
+  it('retains the last valid Mermaid SVG alongside an inline error banner without <pre> during live Split mode edits and clears on recovery', async () => {
+    const initialContent = '# Arch\n\n```mermaid\nflowchart LR\n  A --> B\n```\n'
+    let doc = createDoc({
+      content: initialContent,
+      savedContent: initialContent
+    })
+    const tab = createTab('split', 0.5)
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => {
+        if (text.includes('broken')) {
+          throw new Error('Syntax error near broken')
+        }
+        return { svg: `<svg><text>${text.trim()}</text></svg>` }
+      })
+    }
+    const mermaidRenderer = createMermaidRenderer(driver)
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={doc}
+        tab={tab}
+        theme="light"
+        autoSave={false}
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const previewRegion = screen.getByTestId('split-markdown-preview')
+    await waitFor(() => {
+      expect(within(previewRegion).getByTestId('mermaid-svg')).toHaveTextContent('A --> B')
+    })
+    const initialSvgNode = within(previewRegion).getByTestId('mermaid-svg')
+
+    // Introduce temporary syntax error while typing in Split mode
+    doc = {
+      ...doc,
+      content: '# Arch\n\n```mermaid\nflowchart LR\n  broken\n```\n',
+      isDirty: true
+    }
+    rerender(
+      <DocumentEditor
+        document={doc}
+        tab={tab}
+        theme="light"
+        autoSave={false}
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    await waitFor(() => {
+      expect(within(previewRegion).getByRole('alert')).toHaveTextContent('Syntax error near broken')
+    })
+    expect(within(previewRegion).getByTestId('mermaid-svg')).toBe(initialSvgNode)
+    expect(within(previewRegion).getByTestId('mermaid-svg')).toHaveTextContent('A --> B')
+    expect(previewRegion.querySelector('pre.mermaid-error-source')).toBeNull()
+
+    // Fix syntax -> updates SVG and removes inline error banner
+    doc = {
+      ...doc,
+      content: '# Arch\n\n```mermaid\nflowchart LR\n  A --> C\n```\n',
+      isDirty: true
+    }
+    rerender(
+      <DocumentEditor
+        document={doc}
+        tab={tab}
+        theme="light"
+        autoSave={false}
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    await waitFor(() => {
+      expect(within(previewRegion).queryByRole('alert')).not.toBeInTheDocument()
+      expect(within(previewRegion).getByTestId('mermaid-svg')).toHaveTextContent('A --> C')
+    })
+  })
 })

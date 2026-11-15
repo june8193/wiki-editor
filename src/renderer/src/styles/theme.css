@@ -1330,6 +1330,31 @@ body,
   overflow-x: auto;
 }
 
+.mermaid-inline-error-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--danger-color);
+  border-radius: 6px;
+  background-color: var(--bg-elevated);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.mermaid-inline-error-title {
+  color: var(--danger-color);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mermaid-inline-error-message {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
 .wysiwyg-mermaid-node {
   margin: 12px 0;
   border: 1px solid var(--border-color);
