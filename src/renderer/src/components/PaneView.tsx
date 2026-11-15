@@ -118,9 +118,13 @@ export function PaneView({
             onActiveHeadingChange
               ? (update) =>
                   onActiveHeadingChange({
-                    paneId: pane.id,
-                    tabId: activeTab.id,
-                    ...update
+                    context: {
+                      paneId: pane.id,
+                      tabId: activeTab.id,
+                      mode: update.mode
+                    },
+                    headingIndex: update.headingIndex,
+                    isUserScroll: update.isUserScroll
                   })
               : undefined
           }

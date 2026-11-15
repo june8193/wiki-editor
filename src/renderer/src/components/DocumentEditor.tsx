@@ -10,6 +10,12 @@ import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
+export interface OutlineContextTarget {
+  paneId: PaneId
+  tabId: string
+  mode: EditorMode
+}
+
 export interface OutlineScrollRequest {
   paneId: PaneId
   tabId: string
@@ -24,9 +30,8 @@ export interface DocumentOutlineSpyUpdate extends HeadingScrollSpySample {
   mode: EditorMode
 }
 
-export interface OutlineActiveHeadingReport extends DocumentOutlineSpyUpdate {
-  paneId: PaneId
-  tabId: string
+export interface OutlineActiveHeadingReport extends HeadingScrollSpySample {
+  context: OutlineContextTarget
 }
 
 interface DocumentEditorProps {

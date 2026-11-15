@@ -1,13 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../components/DocumentEditor'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type {
+  OutlineActiveHeadingReport,
+  OutlineContextTarget,
+  OutlineScrollRequest
+} from '../components/DocumentEditor'
 import type { MarkdownHeading } from '../editor/MarkdownTocEngine'
-import type { EditorMode, PaneId } from '../stores/PaneTabStore'
-
-export interface OutlineContextTarget {
-  paneId: PaneId
-  tabId: string
-  mode: EditorMode
-}
 
 interface ActiveOutlineHeadingState {
   context: OutlineContextTarget
@@ -21,10 +18,7 @@ interface PinnedOutlineHeadingState {
 }
 
 export interface UseOutlineScrollSpyOptions {
-  paneId: PaneId
-  tabId: string | null
-  mode: EditorMode | null
-  isMarkdownDocument: boolean
+  activeContext: OutlineContextTarget | null
   bufferContent: string
 }
 
@@ -37,15 +31,32 @@ function isSameOutlineContext(
   return a.paneId === b.paneId && a.tabId === b.tabId && a.mode === b.mode
 }
 
+function isPinValidForContext(
+  pin: PinnedOutlineHeadingState | null,
+  activeContext: OutlineContextTarget | null,
+  bufferContent: string
+): pin is PinnedOutlineHeadingState {
+  return (
+    pin !== null &&
+    activeContext !== null &&
+    isSameOutlineContext(pin.context, activeContext) &&
+    pin.content === bufferContent
+  )
+}
+
+function isSpyValidForContext(
+  spy: ActiveOutlineHeadingState | null,
+  activeContext: OutlineContextTarget | null
+): spy is ActiveOutlineHeadingState {
+  return spy !== null && activeContext !== null && isSameOutlineContext(spy.context, activeContext)
+}
+
 /**
  * Coordinates active Document Outline heading state across scroll-spy reports,
  * one-shot click-to-scroll protection, and context/content transitions.
  */
 export function useOutlineScrollSpy({
-  paneId,
-  tabId,
-  mode,
-  isMarkdownDocument,
+  activeContext,
   bufferContent
 }: UseOutlineScrollSpyOptions) {
   const [outlineScrollRequest, setOutlineScrollRequest] = useState<OutlineScrollRequest | null>(null)
@@ -54,36 +65,25 @@ export function useOutlineScrollSpy({
     useState<PinnedOutlineHeadingState | null>(null)
   const scrollNonceRef = useRef(0)
 
-  const activeContext = useMemo<OutlineContextTarget | null>(() => {
-    if (!tabId || !mode || !isMarkdownDocument) return null
-    return { paneId, tabId, mode }
-  }, [isMarkdownDocument, mode, paneId, tabId])
-
   const activeContextRef = useRef<OutlineContextTarget | null>(activeContext)
   activeContextRef.current = activeContext
 
-  const isPinnedOutlineActive =
-    activeContext !== null &&
-    pinnedOutlineHeading !== null &&
-    isSameOutlineContext(pinnedOutlineHeading.context, activeContext) &&
-    pinnedOutlineHeading.content === bufferContent
-
-  const activeHeadingIndex = isPinnedOutlineActive
+  const activeHeadingIndex = isPinValidForContext(
+    pinnedOutlineHeading,
+    activeContext,
+    bufferContent
+  )
     ? pinnedOutlineHeading.index
-    : activeContext !== null &&
-        spyOutlineHeading !== null &&
-        isSameOutlineContext(spyOutlineHeading.context, activeContext)
+    : isSpyValidForContext(spyOutlineHeading, activeContext)
       ? spyOutlineHeading.index
       : null
 
   useEffect(() => {
     setPinnedOutlineHeading((prev) =>
-      prev && isSameOutlineContext(prev.context, activeContext) && prev.content === bufferContent
-        ? prev
-        : null
+      isPinValidForContext(prev, activeContext, bufferContent) ? prev : null
     )
     setSpyOutlineHeading((prev) =>
-      prev && isSameOutlineContext(prev.context, activeContext) ? prev : null
+      isSpyValidForContext(prev, activeContext) ? prev : null
     )
   }, [activeContext, bufferContent])
 
@@ -94,22 +94,16 @@ export function useOutlineScrollSpy({
   }, [outlineScrollRequest])
 
   const handleActiveHeadingReport = useCallback((report: OutlineActiveHeadingReport): void => {
-    const currentContext = activeContextRef.current
-    const reportContext: OutlineContextTarget = {
-      paneId: report.paneId,
-      tabId: report.tabId,
-      mode: report.mode
-    }
-    if (!isSameOutlineContext(currentContext, reportContext)) {
+    if (!isSameOutlineContext(activeContextRef.current, report.context)) {
       return
     }
     if (report.isUserScroll) {
       setPinnedOutlineHeading((prev) => (prev === null ? prev : null))
     }
     setSpyOutlineHeading((prev) =>
-      prev && isSameOutlineContext(prev.context, reportContext) && prev.index === report.headingIndex
+      prev && isSameOutlineContext(prev.context, report.context) && prev.index === report.headingIndex
         ? prev
-        : { context: reportContext, index: report.headingIndex }
+        : { context: report.context, index: report.headingIndex }
     )
   }, [])
 

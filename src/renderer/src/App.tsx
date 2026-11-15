@@ -6,6 +6,7 @@ import type { GitStatus } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
+import type { OutlineContextTarget } from './components/DocumentEditor'
 import { DocumentOutlinePanel } from './components/DocumentOutlinePanel'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
 import { GitSidebarPanel } from './components/GitSidebarPanel'
@@ -469,6 +470,16 @@ export function App() {
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
   const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
   const activeBufferContent = activeBuffer?.content ?? ''
+  const activeTabId = activeTab?.id ?? null
+  const activeTabMode = activeTab?.mode ?? null
+
+  const activeOutlineContext = useMemo<OutlineContextTarget | null>(
+    () =>
+      activeTabId && activeTabMode && isActiveMarkdown
+        ? { paneId: activePane.id, tabId: activeTabId, mode: activeTabMode }
+        : null,
+    [activePane.id, activeTabId, activeTabMode, isActiveMarkdown]
+  )
 
   const {
     outlineScrollRequest,
@@ -477,10 +488,7 @@ export function App() {
     selectHeading: handleSelectOutlineHeading,
     clearScrollRequest: clearOutlineScrollRequest
   } = useOutlineScrollSpy({
-    paneId: activePane.id,
-    tabId: activeTab?.id ?? null,
-    mode: activeTab?.mode ?? null,
-    isMarkdownDocument: isActiveMarkdown,
+    activeContext: activeOutlineContext,
     bufferContent: activeBufferContent
   })
 
