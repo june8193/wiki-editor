@@ -9,7 +9,7 @@ import {
   validateConfigRaw
 } from '@shared/config'
 import { createEmptyGitStatus, type GitFileStatusCode } from '@shared/git'
-import type { AppMenuCommand, WikiApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
+import type { AppMenuCommand, WikiApi, WikiGitApi, WikiLogApi, WikiWorkspaceApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import {
   addFavoriteWorkspace,
@@ -22,7 +22,14 @@ import {
   WorkspaceEntryKind
 } from '@shared/workspace'
 import { defaultMermaidRenderer } from './editor/mermaidRenderer'
-import { buildWikiAssetUrl } from '@shared/assets'
+import {
+  buildWikiAssetUrl,
+  getImageExtensionForMimeType,
+  isSupportedImageFile,
+  toMarkdownRelativeImagePath,
+  type WorkspaceImageIngestInput,
+  type WorkspaceImageIngestResult
+} from '@shared/assets'
 import { App } from './App'
 import themeCss from './styles/theme.css?raw'
 
@@ -85,6 +92,8 @@ interface VirtualFsOptions {
   selectedFolder?: string | null
   git?: Partial<WikiGitApi>
   log?: WikiLogApi
+  ingestImage?: WikiWorkspaceApi['ingestImage']
+  getPathForFile?: WikiWorkspaceApi['getPathForFile']
 }
 
 function normalizePosix(pathValue: string): string {
@@ -400,6 +409,88 @@ function createInMemoryWikiApi(
           return
         }
         throw new Error(`경로를 찾을 수 없습니다: ${targetPath}`)
+      },
+      async ingestImage(input: WorkspaceImageIngestInput): Promise<WorkspaceImageIngestResult> {
+        if (fsOptions.ingestImage) {
+          return fsOptions.ingestImage(input)
+        }
+        if (!activeRoot) {
+          throw new Error('열린 워크스페이스가 없습니다.')
+        }
+        const docPosix = normalizePosix(input.documentPath)
+        const docDir = parentDirOf(docPosix)
+
+        const saveAsset = (stem: string, ext: string): WorkspaceImageIngestResult => {
+          const assetsDir = `${docDir}/assets`
+          dirs.add(assetsDir)
+          for (let index = 0; index < 100; index += 1) {
+            const nextStem = index === 0 ? stem : `${stem}-${index}`
+            const fileName = `${nextStem}${ext}`
+            const savedPath = `${assetsDir}/${fileName}`
+            if (!files.has(savedPath)) {
+              files.set(savedPath, `<binary:${fileName}>`)
+              return {
+                markdownPath: toMarkdownRelativeImagePath(`assets/${fileName}`),
+                altText: nextStem,
+                savedPath
+              }
+            }
+          }
+          throw new Error('collision limit')
+        }
+
+        if (input.source.kind === 'clipboard') {
+          const ext = getImageExtensionForMimeType(input.source.mimeType)
+          if (!ext) {
+            throw new Error(`지원하지 않는 이미지 형식입니다: ${input.source.mimeType}`)
+          }
+          const docName = baseNameOf(docPosix)
+          const docStem = docName.replace(/\.[^.]+$/, '') || 'image'
+          return saveAsset(`${docStem}-20260402-090507`, ext)
+        }
+
+        if (input.source.kind === 'fileBytes') {
+          const base = baseNameOf(input.source.fileName)
+          if (!isSupportedImageFile(base)) {
+            throw new Error(`지원하지 않는 이미지 파일입니다: ${base}`)
+          }
+          const dot = base.lastIndexOf('.')
+          return saveAsset(base.slice(0, dot), base.slice(dot).toLowerCase())
+        }
+
+        const candidate = normalizePosix(input.source.filePath)
+        if (!isSupportedImageFile(candidate)) {
+          throw new Error(`지원하지 않는 이미지 파일입니다: ${candidate}`)
+        }
+        if (candidate === activeRoot || candidate.startsWith(`${activeRoot}/`)) {
+          const docParts = docDir.split('/').filter(Boolean)
+          const targetParts = candidate.split('/').filter(Boolean)
+          let common = 0
+          while (
+            common < docParts.length &&
+            common < targetParts.length &&
+            docParts[common].toLowerCase() === targetParts[common].toLowerCase()
+          ) {
+            common += 1
+          }
+          const relParts = [
+            ...Array(docParts.length - common).fill('..'),
+            ...targetParts.slice(common)
+          ]
+          const base = baseNameOf(candidate)
+          const dot = base.lastIndexOf('.')
+          return {
+            markdownPath: toMarkdownRelativeImagePath(relParts.join('/')),
+            altText: dot > 0 ? base.slice(0, dot) : base,
+            savedPath: candidate
+          }
+        }
+        const base = baseNameOf(candidate)
+        const dot = base.lastIndexOf('.')
+        return saveAsset(base.slice(0, dot), base.slice(dot).toLowerCase())
+      },
+      getPathForFile(file: File): string {
+        return fsOptions.getPathForFile?.(file) ?? ''
       },
       async watch() {},
       async unwatch() {},
@@ -6344,5 +6435,177 @@ describe('Split editor mode and bidirectional scroll sync', () => {
     } finally {
       cleanup()
     }
+  })
+
+  it('ingests clipboard pastes and FolderTree/OS drops end-to-end across Raw, WYSIWYG, and Split while blocking window navigation and surfacing Error Banner failures', async () => {
+    const pathMap = new Map<string, string>([['os-shot.png', 'D:/outside/os-shot.png']])
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/img-app',
+        workspaces: {
+          'C:/wiki/img-app': {
+            'docs/guide.md': '# Guide\n\n',
+            'shared/arch (1).png': '<binary:arch>',
+            'docs/notes.txt': 'plain note'
+          }
+        },
+        getPathForFile: (file) => pathMap.get(file.name) ?? ''
+      }
+    )
+    const ingestSpy = vi.spyOn(api.workspace, 'ingestImage')
+    window.wikiApi = api
+
+    const user = userEvent.setup()
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    const docsTreeItem = await within(explorer).findByRole('treeitem', { name: 'docs' })
+    await user.click(within(docsTreeItem).getByText('docs'))
+    const guideItem = await within(explorer).findByRole('treeitem', { name: 'guide.md' })
+    await user.click(within(guideItem).getByText('guide.md'))
+
+    // Open shared directory to expose FolderTree image item
+    const sharedTreeItem = await within(explorer).findByRole('treeitem', { name: 'shared' })
+    await user.click(within(sharedTreeItem).getByText('shared'))
+    const archTreeItem = await within(explorer).findByRole('treeitem', { name: 'arch (1).png' })
+    expect(archTreeItem).toHaveAttribute('draggable', 'true')
+    expect(guideItem).toHaveAttribute('draggable', 'false')
+
+    // 1. FolderTree drag -> drop onto Raw editor references ../shared/arch%20%281%29.png without copying to assets/
+    const dragTransferStore = new Map<string, string>()
+    fireEvent.dragStart(archTreeItem, {
+      dataTransfer: {
+        effectAllowed: 'none',
+        setData: (type: string, value: string) => {
+          dragTransferStore.set(type, value)
+        }
+      }
+    })
+    // PaneWorkspace split drop zones stay inactive during FolderTree image drag
+    expect(screen.queryByTestId('split-drop-zone-horizontal')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('split-drop-zone-vertical')).not.toBeInTheDocument()
+
+    const rawEditor = await screen.findByTestId('document-editor')
+    fireEvent.drop(rawEditor, {
+      dataTransfer: {
+        types: [...dragTransferStore.keys()],
+        files: [],
+        getData: (type: string) => dragTransferStore.get(type) ?? ''
+      }
+    })
+    fireEvent.dragEnd(archTreeItem)
+
+    await waitFor(() => {
+      expect(getRawEditorText(rawEditor)).toContain('![arch (1)](../shared/arch%20%281%29.png)')
+    })
+    expect(getFilesSnapshot().has('C:/wiki/img-app/docs/assets/arch (1).png')).toBe(false)
+
+    // 2. Clipboard bitmap paste in Raw mode saves under docs/assets/ and preserves normal text+bitmap paste
+    const clipFile = new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' })
+    fireEvent.paste(rawEditor, {
+      clipboardData: {
+        types: ['Files'],
+        files: [clipFile],
+        items: [],
+        getData: () => ''
+      }
+    })
+
+    await waitFor(() => {
+      expect(getRawEditorText(rawEditor)).toContain(
+        '![guide-20260402-090507](./assets/guide-20260402-090507.png)'
+      )
+    })
+    expect(getFilesSnapshot().has('C:/wiki/img-app/docs/assets/guide-20260402-090507.png')).toBe(
+      true
+    )
+
+    const callsAfterClip = ingestSpy.mock.calls.length
+    fireEvent.paste(rawEditor, {
+      clipboardData: {
+        types: ['text/plain', 'Files'],
+        files: [clipFile],
+        items: [],
+        getData: (type: string) => (type === 'text/plain' ? 'a\tb\tc' : '')
+      }
+    })
+    expect(ingestSpy).toHaveBeenCalledTimes(callsAfterClip)
+
+    // 3. Switch to 위지윅 (Ctrl+2) and drop multi-file OS Explorer payload (path + bytes fallback)
+    fireEvent.keyDown(rawEditor, { key: '2', ctrlKey: true })
+    const wysiwygEditor = await screen.findByRole('textbox', { name: '위지윅 문서 에디터' })
+    const osShot = new File([new Uint8Array([4, 5])], 'os-shot.png', { type: 'image/png' })
+    const byteShot = new File([new Uint8Array([6, 7])], 'bytes-shot.webp', { type: 'image/webp' })
+    fireEvent.drop(wysiwygEditor, {
+      dataTransfer: {
+        types: ['Files'],
+        files: [osShot, byteShot],
+        getData: () => ''
+      }
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'os-shot' })).toHaveAttribute(
+        'src',
+        buildWikiAssetUrl('C:/wiki/img-app/docs/assets/os-shot.png')
+      )
+      expect(screen.getByRole('img', { name: 'bytes-shot' })).toHaveAttribute(
+        'src',
+        buildWikiAssetUrl('C:/wiki/img-app/docs/assets/bytes-shot.webp')
+      )
+    })
+
+    // 4. Switch to Split (Ctrl+4) and verify immediate Preview render & zero wiki-asset: leak
+    fireEvent.keyDown(wysiwygEditor, { key: '4', ctrlKey: true })
+    const splitPreview = await screen.findByTestId('split-markdown-preview')
+    expect(within(splitPreview).getByRole('img', { name: 'os-shot' })).toHaveAttribute(
+      'src',
+      buildWikiAssetUrl('C:/wiki/img-app/docs/assets/os-shot.png')
+    )
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).not.toContain('wiki-asset:')
+
+    // 5. Window-level drop outside editors prevents accidental Electron file navigation
+    const outerDropEvent = new Event('drop', { bubbles: true, cancelable: true })
+    Object.defineProperty(outerDropEvent, 'dataTransfer', {
+      value: { types: ['Files'], files: [osShot], getData: () => '' }
+    })
+    explorer.dispatchEvent(outerDropEvent)
+    expect(outerDropEvent.defaultPrevented).toBe(true)
+
+    // 6. Config/non-markdown buffer disables clipboard image ingestion
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    await user.click(await screen.findByRole('button', { name: /설정 파일 직접 열기/i }))
+    await waitFor(() => {
+      expect(screen.getByTestId('document-editor')).toHaveAttribute('data-language', 'json')
+    })
+    const callsBeforeConfigPaste = ingestSpy.mock.calls.length
+    fireEvent.paste(screen.getByTestId('document-editor'), {
+      clipboardData: {
+        types: ['Files'],
+        files: [clipFile],
+        items: [],
+        getData: () => ''
+      }
+    })
+    expect(ingestSpy).toHaveBeenCalledTimes(callsBeforeConfigPaste)
+
+    // 7. Ingestion failure surfaces via Error Banner (role="alert")
+    const guideTab = screen.getByRole('tab', { name: /guide\.md/i })
+    await user.click(guideTab)
+    ingestSpy.mockRejectedValueOnce(new Error('디스크 공간 부족'))
+    fireEvent.paste(await screen.findByTestId('document-editor'), {
+      clipboardData: {
+        types: ['Files'],
+        files: [clipFile],
+        items: [],
+        getData: () => ''
+      }
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/이미지 삽입에 실패했습니다.*디스크 공간 부족/)
+    })
   })
 })

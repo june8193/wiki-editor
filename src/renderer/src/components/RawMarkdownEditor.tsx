@@ -1,4 +1,5 @@
 import type { EditorView } from '@codemirror/view'
+import type { WorkspaceImageIngestInput, WorkspaceImageIngestResult } from '@shared/assets'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
 import type { RawTableAction } from '../editor/rawTableCommands'
@@ -16,6 +17,9 @@ interface RawMarkdownEditorProps {
   enableSlashCommands?: boolean
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
+  documentPath?: string
+  enableImageInsertion?: boolean
+  draggingWorkspaceImagePath?: string | null
   scrollRequest?: RawScrollRequest | null
   isActive?: boolean
   editorViewRef?: { current: EditorView | null }
@@ -23,6 +27,10 @@ interface RawMarkdownEditorProps {
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
   onRawScroll?: () => void
+  onClearDraggingWorkspaceImage?: () => void
+  onReportError?: (title: string, error: unknown) => void
+  ingestImage?: (input: WorkspaceImageIngestInput) => Promise<WorkspaceImageIngestResult>
+  getPathForFile?: (file: File) => string
 }
 
 const RAW_TABLE_BUTTONS: ReadonlyArray<{
@@ -52,15 +60,22 @@ export function RawMarkdownEditor({
   enableSlashCommands = language === 'markdown',
   customCommands,
   documentTitle,
+  documentPath,
+  enableImageInsertion = language === 'markdown' && Boolean(documentPath),
+  draggingWorkspaceImagePath = null,
   scrollRequest,
   isActive = true,
   editorViewRef,
   onChangeContent,
   onUpdateViewState,
   onActiveHeadingChange,
-  onRawScroll
+  onRawScroll,
+  onClearDraggingWorkspaceImage,
+  onReportError,
+  ingestImage,
+  getPathForFile
 }: RawMarkdownEditorProps) {
-  const { shellRef, hostRef, inTable, runTableAction, insertToc, slashMenuProps } =
+  const { shellRef, hostRef, inTable, runTableAction, insertToc, slashMenuProps, shellDragProps } =
     useRawCodeMirrorEditor({
       content,
       language,
@@ -71,17 +86,24 @@ export function RawMarkdownEditor({
       enableSlashCommands,
       customCommands,
       documentTitle,
+      documentPath,
+      enableImageInsertion,
+      draggingWorkspaceImagePath,
       scrollRequest,
       isActive,
       editorViewRef,
       onChangeContent,
       onUpdateViewState,
       onActiveHeadingChange,
-      onRawScroll
+      onRawScroll,
+      onClearDraggingWorkspaceImage,
+      onReportError,
+      ingestImage,
+      getPathForFile
     })
 
   return (
-    <div ref={shellRef} className="raw-editor-shell">
+    <div ref={shellRef} className="raw-editor-shell" {...shellDragProps}>
       {showTableToolbar && (
         <div className="editor-toolbar" role="toolbar" aria-label="Raw 표 편집 툴바">
           {RAW_TABLE_BUTTONS.map((btn) => (

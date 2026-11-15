@@ -10,7 +10,14 @@ import {
   stat,
   writeFile
 } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import {
+  getImageExtensionForMimeType,
+  isSupportedImageFile,
+  toMarkdownRelativeImagePath,
+  WorkspaceImageIngestInput,
+  WorkspaceImageIngestResult
+} from '@shared/assets'
 import {
   getWorkspaceDisplayName,
   isSameWorkspacePath,
@@ -43,7 +50,30 @@ export interface WorkspaceFsServiceOptions {
 export type WorkspaceWatchListener = (event: WorkspaceChangeEvent) => void
 
 const INVALID_ENTRY_NAME_RE = /[<>:"/\\|?*\x00-\x1f]/
+const INVALID_IMAGE_STEM_CHARS_RE = /[<>:"/\\|?*\x00-\x1f]+/g
+const WINDOWS_RESERVED_IMAGE_STEM_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
 const DEFAULT_WATCH_DEBOUNCE_MS = 120
+const MAX_IMAGE_COLLISION_INDEX = 10000
+
+function normalizeImageStem(rawStem: string): string {
+  const cleaned = rawStem
+    .replace(INVALID_IMAGE_STEM_CHARS_RE, '-')
+    .replace(/^[.\s]+|[.\s]+$/g, '')
+  if (!cleaned || cleaned === '.' || cleaned === '..' || WINDOWS_RESERVED_IMAGE_STEM_RE.test(cleaned)) {
+    return 'image'
+  }
+  return cleaned
+}
+
+function formatLocalTimestamp(nowMs?: number): string {
+  const candidate = typeof nowMs === 'number' ? new Date(nowMs) : new Date()
+  const date = Number.isNaN(candidate.getTime()) ? new Date() : candidate
+  const pad2 = (value: number): string => String(value).padStart(2, '0')
+  return (
+    `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}` +
+    `-${pad2(date.getHours())}${pad2(date.getMinutes())}${pad2(date.getSeconds())}`
+  )
+}
 
 function toPosixRelativePath(rootPath: string, targetPath: string): string {
   const rel = relative(rootPath, targetPath)
@@ -360,6 +390,145 @@ export class WorkspaceFsService {
       }
       return { status: 'forbidden' }
     }
+  }
+
+  /**
+   * Ingests a pasted or dropped image into the document's workspace asset folder or references an
+   * existing in-workspace image cleanly.
+   */
+  async ingestImage(input: WorkspaceImageIngestInput): Promise<WorkspaceImageIngestResult> {
+    const root = this.requireWorkspaceRoot()
+    if (!input.documentPath.trim()) {
+      throw new Error('유효한 문서 경로가 필요합니다.')
+    }
+
+    const resolvedDocPath = await this.resolveWritablePath(input.documentPath)
+    if (isSameWorkspacePath(root, resolvedDocPath)) {
+      throw new Error('문서 경로가 유효하지 않습니다.')
+    }
+    const docDir = dirname(resolvedDocPath)
+
+    if (input.source.kind === 'clipboard') {
+      if (input.source.bytes.byteLength === 0) {
+        throw new Error('빈 이미지 데이터는 삽입할 수 없습니다.')
+      }
+      const extension = getImageExtensionForMimeType(input.source.mimeType)
+      if (!extension) {
+        throw new Error(`지원하지 않는 이미지 형식입니다: ${input.source.mimeType}`)
+      }
+      const rawDocStem = basename(resolvedDocPath, extname(resolvedDocPath))
+      const stem = `${normalizeImageStem(rawDocStem)}-${formatLocalTimestamp(input.source.now)}`
+      return this.saveUniqueAssetToDocAssets(docDir, stem, extension, input.source.bytes)
+    }
+
+    if (input.source.kind === 'fileBytes') {
+      if (input.source.bytes.byteLength === 0) {
+        throw new Error('빈 이미지 파일은 삽입할 수 없습니다.')
+      }
+      const safeName = basename(input.source.fileName)
+      if (!isSupportedImageFile(safeName)) {
+        throw new Error(`지원하지 않는 이미지 파일입니다: ${safeName}`)
+      }
+      const rawExt = extname(safeName).toLowerCase()
+      const stem = normalizeImageStem(basename(safeName, extname(safeName)))
+      return this.saveUniqueAssetToDocAssets(docDir, stem, rawExt, input.source.bytes)
+    }
+
+    return this.ingestFromFilePath(root, docDir, input.source.filePath)
+  }
+
+  private async ingestFromFilePath(
+    root: string,
+    docDir: string,
+    rawFilePath: string
+  ): Promise<WorkspaceImageIngestResult> {
+    if (!rawFilePath.trim() || rawFilePath.includes('\0')) {
+      throw new Error('유효하지 않은 이미지 경로입니다.')
+    }
+
+    const candidate = isAbsolute(rawFilePath) ? resolve(rawFilePath) : resolve(root, rawFilePath)
+    const inWorkspaceLexical = isPathInsideRoot(root, candidate)
+
+    let sourceReal: string
+    try {
+      sourceReal = await realpath(candidate)
+    } catch (error) {
+      if (isErrnoCode(error, 'ENOENT') || isErrnoCode(error, 'ENOTDIR')) {
+        throw new Error(`이미지 파일을 찾을 수 없습니다: ${rawFilePath}`)
+      }
+      throw error
+    }
+
+    const inWorkspaceReal = isPathInsideRoot(root, sourceReal)
+    if (inWorkspaceLexical && !inWorkspaceReal) {
+      throw new Error('워크스페이스 루트 밖을 가리키는 심볼릭 링크 이미지는 사용할 수 없습니다.')
+    }
+
+    const stats = await stat(sourceReal)
+    if (!stats.isFile()) {
+      throw new Error(`이미지 파일이 아닙니다: ${rawFilePath}`)
+    }
+    if (stats.size === 0) {
+      throw new Error('빈 이미지 파일은 삽입할 수 없습니다.')
+    }
+
+    const candidateBase = basename(candidate)
+    if (!isSupportedImageFile(candidateBase)) {
+      throw new Error(`지원하지 않는 이미지 파일입니다: ${candidateBase}`)
+    }
+
+    if (inWorkspaceReal) {
+      if (inWorkspaceLexical) {
+        this.assertWithinWorkspaceAndAllowed(root, candidate)
+      }
+      this.assertWithinWorkspaceAndAllowed(root, sourceReal)
+      const realBase = basename(sourceReal)
+      if (!isSupportedImageFile(realBase)) {
+        throw new Error(`지원하지 않는 이미지 파일입니다: ${realBase}`)
+      }
+      const relPosix = toPosixRelativePath(docDir, sourceReal)
+      return {
+        markdownPath: toMarkdownRelativeImagePath(relPosix),
+        altText: basename(realBase, extname(realBase)),
+        savedPath: sourceReal
+      }
+    }
+
+    const bytes = await readFile(sourceReal)
+    const rawExt = extname(candidateBase).toLowerCase()
+    const stem = normalizeImageStem(basename(candidateBase, extname(candidateBase)))
+    return this.saveUniqueAssetToDocAssets(docDir, stem, rawExt, bytes)
+  }
+
+  private async saveUniqueAssetToDocAssets(
+    docDir: string,
+    stem: string,
+    extension: string,
+    bytes: Uint8Array
+  ): Promise<WorkspaceImageIngestResult> {
+    const assetsDir = await this.resolveWritablePath(join(docDir, 'assets'))
+    await mkdir(assetsDir, { recursive: true })
+
+    for (let suffixIndex = 0; suffixIndex <= MAX_IMAGE_COLLISION_INDEX; suffixIndex += 1) {
+      const targetStem = suffixIndex === 0 ? stem : `${stem}-${suffixIndex}`
+      const fileName = `${targetStem}${extension}`
+      const targetPath = join(assetsDir, fileName)
+      try {
+        await writeFile(targetPath, bytes, { flag: 'wx' })
+        return {
+          markdownPath: toMarkdownRelativeImagePath(`assets/${fileName}`),
+          altText: targetStem,
+          savedPath: targetPath
+        }
+      } catch (error) {
+        if (isErrnoCode(error, 'EEXIST')) {
+          continue
+        }
+        throw error
+      }
+    }
+
+    throw new Error(`동일한 이름의 이미지 파일을 저장할 수 없습니다: ${stem}${extension}`)
   }
 
   private requireWorkspaceRoot(): string {

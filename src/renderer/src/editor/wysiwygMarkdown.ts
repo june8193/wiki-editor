@@ -12,7 +12,7 @@ import Image, { type ImageOptions } from '@tiptap/extension-image'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { TableKit } from '@tiptap/extension-table'
 import { Markdown } from '@tiptap/markdown'
-import { resolveImageDisplaySrc } from '@shared/assets'
+import { resolveImageDisplaySrc, type WorkspaceImageIngestResult } from '@shared/assets'
 import { isSafeImageUri } from '@shared/urlSecurity'
 import { Fragment, type Mark, type Schema, Slice } from '@tiptap/pm/model'
 import {
@@ -820,4 +820,37 @@ export function extractWysiwygHeadingCandidates(
     return node.type.name !== 'codeBlock' && node.type.name !== 'blockquote'
   })
   return candidates
+}
+
+/**
+ * Inserts ingested images at the given range (or current selection), placing multi-image
+ * batches into ordered paragraphs while preserving clean relative Markdown URLs.
+ */
+export function insertWysiwygImages(
+  editor: Editor,
+  images: readonly WorkspaceImageIngestResult[],
+  range?: { from: number; to: number }
+): boolean {
+  if (editor.isDestroyed || images.length === 0) {
+    return false
+  }
+
+  const docSize = editor.state.doc.content.size
+  const rawFrom = range?.from ?? editor.state.selection.from
+  const rawTo = range?.to ?? editor.state.selection.to
+  const from = Math.max(0, Math.min(rawFrom, docSize))
+  const to = Math.max(from, Math.min(rawTo, docSize))
+
+  const content =
+    images.length === 1
+      ? {
+          type: 'image',
+          attrs: { src: images[0].markdownPath, alt: images[0].altText }
+        }
+      : images.map((image) => ({
+          type: 'paragraph',
+          content: [{ type: 'image', attrs: { src: image.markdownPath, alt: image.altText } }]
+        }))
+
+  return editor.chain().focus().insertContentAt({ from, to }, content).run()
 }

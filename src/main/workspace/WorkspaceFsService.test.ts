@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -198,5 +198,246 @@ describe('WorkspaceFsService', () => {
     await writeFile(join(workspaceDir, 'after-stop.md'), '# Later', 'utf8')
     await new Promise((resolve) => setTimeout(resolve, 250))
     expect(events.length).toBe(countAfterStop)
+  })
+
+  it('ingests clipboard images lazily into <docDir>/assets with local timestamps and -1/-2 collision suffixes', async () => {
+    const docDir = join(workspaceDir, 'docs')
+    const docPath = join(docDir, 'guide (1).md')
+    await mkdir(docDir, { recursive: true })
+    await writeFile(docPath, '# Guide\n', 'utf8')
+    await service.openWorkspace(workspaceDir)
+
+    const now = new Date(2026, 3, 2, 9, 5, 7).getTime()
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+    const first = await service.ingestImage({
+      documentPath: docPath,
+      source: { kind: 'clipboard', bytes: pngBytes, mimeType: 'image/png', now }
+    })
+
+    expect(first).toEqual({
+      markdownPath: './assets/guide%20%281%29-20260402-090507.png',
+      altText: 'guide (1)-20260402-090507',
+      savedPath: join(docDir, 'assets', 'guide (1)-20260402-090507.png')
+    })
+    expect(await readFile(first.savedPath)).toEqual(Buffer.from(pngBytes))
+
+    const secondBytes = new Uint8Array([1, 2, 3, 4])
+    const second = await service.ingestImage({
+      documentPath: docPath,
+      source: { kind: 'clipboard', bytes: secondBytes, mimeType: 'image/png', now }
+    })
+    const third = await service.ingestImage({
+      documentPath: docPath,
+      source: { kind: 'clipboard', bytes: new Uint8Array([5, 6]), mimeType: 'image/png', now }
+    })
+
+    expect(second.savedPath).toBe(join(docDir, 'assets', 'guide (1)-20260402-090507-1.png'))
+    expect(third.savedPath).toBe(join(docDir, 'assets', 'guide (1)-20260402-090507-2.png'))
+    expect(await readFile(first.savedPath)).toEqual(Buffer.from(pngBytes))
+    expect(await readFile(second.savedPath)).toEqual(Buffer.from(secondBytes))
+
+    // Normalizes Windows-reserved document stems to "image" and resolves image/jpeg -> .jpg
+    const reservedDocPath = join(workspaceDir, 'con.md')
+    await writeFile(reservedDocPath, '# Reserved\n', 'utf8')
+    const jpeg = await service.ingestImage({
+      documentPath: reservedDocPath,
+      source: { kind: 'clipboard', bytes: new Uint8Array([0xff, 0xd8]), mimeType: 'IMAGE/JPEG', now }
+    })
+    expect(jpeg).toEqual({
+      markdownPath: './assets/image-20260402-090507.jpg',
+      altText: 'image-20260402-090507',
+      savedPath: join(workspaceDir, 'assets', 'image-20260402-090507.jpg')
+    })
+  })
+
+  it('copies external filePath and fileBytes drops into <docDir>/assets preserving sanitized filenames and incrementing collisions', async () => {
+    const docDir = join(workspaceDir, 'notes')
+    const docPath = join(docDir, 'readme.md')
+    await mkdir(docDir, { recursive: true })
+    await writeFile(docPath, '# Notes\n', 'utf8')
+    await service.openWorkspace(workspaceDir)
+
+    const outsideImg = join(outsideDir, 'diagram (1).png')
+    const outsideBytes = new Uint8Array([9, 8, 7, 6])
+    await writeFile(outsideImg, outsideBytes)
+
+    const fromPath = await service.ingestImage({
+      documentPath: docPath,
+      source: { kind: 'filePath', filePath: outsideImg }
+    })
+    expect(fromPath).toEqual({
+      markdownPath: './assets/diagram%20%281%29.png',
+      altText: 'diagram (1)',
+      savedPath: join(docDir, 'assets', 'diagram (1).png')
+    })
+    expect(await readFile(fromPath.savedPath)).toEqual(Buffer.from(outsideBytes))
+
+    const fromBytes = await service.ingestImage({
+      documentPath: docPath,
+      source: {
+        kind: 'fileBytes',
+        fileName: '../evil/diagram (1).png',
+        bytes: new Uint8Array([4, 3, 2, 1])
+      }
+    })
+    expect(fromBytes).toEqual({
+      markdownPath: './assets/diagram%20%281%29-1.png',
+      altText: 'diagram (1)-1',
+      savedPath: join(docDir, 'assets', 'diagram (1)-1.png')
+    })
+
+    const reservedBytes = await service.ingestImage({
+      documentPath: docPath,
+      source: {
+        kind: 'fileBytes',
+        fileName: 'nul.webp',
+        bytes: new Uint8Array([7, 7, 7])
+      }
+    })
+    expect(reservedBytes).toEqual({
+      markdownPath: './assets/image.webp',
+      altText: 'image',
+      savedPath: join(docDir, 'assets', 'image.webp')
+    })
+    expect((await stat(reservedBytes.savedPath)).isFile()).toBe(true)
+  })
+
+  it('references in-workspace images via POSIX relative CommonMark paths without copying or creating assets/', async () => {
+    const docDir = join(workspaceDir, 'docs', 'sub folder')
+    const docPath = join(docDir, 'page.md')
+    const sharedDir = join(workspaceDir, 'shared images')
+    const siblingImg = join(sharedDir, 'hero (1).png')
+    const sameDirImg = join(docDir, 'local [icon].svg')
+
+    await mkdir(docDir, { recursive: true })
+    await mkdir(sharedDir, { recursive: true })
+    await writeFile(docPath, '# Page\n', 'utf8')
+    await writeFile(siblingImg, new Uint8Array([1, 2, 3]))
+    await writeFile(sameDirImg, '<svg></svg>', 'utf8')
+    await service.openWorkspace(workspaceDir)
+
+    const fromSibling = await service.ingestImage({
+      documentPath: docPath,
+      source: { kind: 'filePath', filePath: siblingImg }
+    })
+    expect(fromSibling).toEqual({
+      markdownPath: '../../shared%20images/hero%20%281%29.png',
+      altText: 'hero (1)',
+      savedPath: await lstat(siblingImg).then(() => siblingImg).catch(() => siblingImg)
+    })
+
+    const fromSameDir = await service.ingestImage({
+      documentPath: docPath,
+      source: { kind: 'filePath', filePath: sameDirImg }
+    })
+    expect(fromSameDir).toEqual({
+      markdownPath: './local%20%5Bicon%5D.svg',
+      altText: 'local [icon]',
+      savedPath: sameDirImg
+    })
+
+    await expect(lstat(join(docDir, 'assets'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects unsupported formats, empty payloads, ignored system folders, and symlink escapes without creating assets/', async () => {
+    const docDir = join(workspaceDir, 'docs')
+    const docPath = join(docDir, 'guide.md')
+    await mkdir(docDir, { recursive: true })
+    await writeFile(docPath, '# Guide\n', 'utf8')
+
+    // Rejects before workspace is opened
+    await expect(
+      service.ingestImage({
+        documentPath: docPath,
+        source: { kind: 'clipboard', bytes: new Uint8Array([1, 2]), mimeType: 'image/png' }
+      })
+    ).rejects.toThrow()
+
+    await service.openWorkspace(workspaceDir)
+
+    // Non-image, unsupported MIME, and empty bytes
+    await expect(
+      service.ingestImage({
+        documentPath: docPath,
+        source: { kind: 'fileBytes', fileName: 'notes.txt', bytes: new Uint8Array([1, 2]) }
+      })
+    ).rejects.toThrow()
+    await expect(
+      service.ingestImage({
+        documentPath: docPath,
+        source: { kind: 'clipboard', bytes: new Uint8Array([1, 2]), mimeType: 'image/tiff' }
+      })
+    ).rejects.toThrow()
+    await expect(
+      service.ingestImage({
+        documentPath: docPath,
+        source: { kind: 'clipboard', bytes: new Uint8Array(0), mimeType: 'image/png' }
+      })
+    ).rejects.toThrow()
+
+    // Document outside workspace or inside .git
+    const outsideDoc = join(outsideDir, 'outside.md')
+    await writeFile(outsideDoc, '# Outside\n', 'utf8')
+    await expect(
+      service.ingestImage({
+        documentPath: outsideDoc,
+        source: { kind: 'clipboard', bytes: new Uint8Array([1]), mimeType: 'image/png' }
+      })
+    ).rejects.toThrow()
+
+    // In-workspace image inside ignored system folder (.git)
+    const gitImg = join(workspaceDir, '.git', 'hidden.png')
+    await mkdir(join(workspaceDir, '.git'), { recursive: true })
+    await writeFile(gitImg, new Uint8Array([1, 2, 3]))
+    await expect(
+      service.ingestImage({
+        documentPath: docPath,
+        source: { kind: 'filePath', filePath: gitImg }
+      })
+    ).rejects.toThrow()
+
+    // External image path pointing to directory / missing file
+    await expect(
+      service.ingestImage({
+        documentPath: docPath,
+        source: { kind: 'filePath', filePath: outsideDir }
+      })
+    ).rejects.toThrow()
+
+    // Workspace-internal symlink escaping outside workspace root
+    const outsideImg = join(outsideDir, 'secret.png')
+    await writeFile(outsideImg, new Uint8Array([1, 2, 3]))
+    const escapeSymlink = join(workspaceDir, 'escape-image.png')
+    try {
+      await symlink(outsideImg, escapeSymlink)
+      await expect(
+        service.ingestImage({
+          documentPath: docPath,
+          source: { kind: 'filePath', filePath: escapeSymlink }
+        })
+      ).rejects.toThrow()
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM') {
+        throw error
+      }
+    }
+
+    await expect(lstat(join(docDir, 'assets'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    // Symlinked <docDir>/assets directory escaping outside workspace root
+    const symlinkedAssets = join(docDir, 'assets')
+    try {
+      await symlink(outsideDir, symlinkedAssets, 'dir')
+      await expect(
+        service.ingestImage({
+          documentPath: docPath,
+          source: { kind: 'clipboard', bytes: new Uint8Array([1, 2]), mimeType: 'image/png' }
+        })
+      ).rejects.toThrow()
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM') {
+        throw error
+      }
+    }
   })
 })

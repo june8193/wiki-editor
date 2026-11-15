@@ -1,3 +1,7 @@
+import type {
+  WorkspaceImageIngestInput,
+  WorkspaceImageIngestResult
+} from '@shared/assets'
 import type { AppConfig } from '@shared/config'
 import type { GitBranchList, GitStatus, GitSyncResult } from '@shared/git'
 import {
@@ -21,6 +25,10 @@ export interface IpcRendererLike {
   removeListener(channel: string, listener: (event: unknown, ...args: unknown[]) => void): void
 }
 
+export interface CreateWikiApiOptions {
+  getPathForFile?: (file: File) => string
+}
+
 function subscribeChannel<T>(
   ipcRenderer: IpcRendererLike,
   channel: string,
@@ -38,7 +46,10 @@ function subscribeChannel<T>(
 /**
  * Builds the type-safe window.wikiApi bridge exposed through Electron's contextBridge.
  */
-export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
+export function createWikiApi(
+  ipcRenderer: IpcRendererLike,
+  options: CreateWikiApiOptions = {}
+): Required<WikiApi> {
   return {
     config: {
       get: () => ipcRenderer.invoke(CONFIG_IPC_CHANNELS.get) as Promise<AppConfig>,
@@ -87,6 +98,18 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
         ) as Promise<WorkspaceEntry>,
       deleteEntry: (targetPath) =>
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.deleteEntry, targetPath) as Promise<void>,
+      ingestImage: (input) =>
+        ipcRenderer.invoke(
+          WORKSPACE_IPC_CHANNELS.ingestImage,
+          input
+        ) as Promise<WorkspaceImageIngestResult>,
+      getPathForFile: (file) => {
+        try {
+          return options.getPathForFile?.(file) ?? ''
+        } catch {
+          return ''
+        }
+      },
       watch: () => ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.watch) as Promise<void>,
       unwatch: () => ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.unwatch) as Promise<void>,
       onChanged: (listener) =>

@@ -213,4 +213,25 @@ describe('createWikiApi', () => {
     ipc.emit(MENU_IPC_CHANNELS.command, 'open-folder')
     expect(commands).toHaveLength(3)
   })
+
+  it('exposes workspace.ingestImage via IPC and workspace.getPathForFile via injected resolver', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc, {
+      getPathForFile: (file) => `C:\\drops\\${file.name}`
+    })
+
+    const ingestInput = {
+      documentPath: 'C:\\wiki\\note.md',
+      source: { kind: 'filePath' as const, filePath: 'C:\\drops\\pic.png' }
+    }
+    await api.workspace.ingestImage(ingestInput)
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: WORKSPACE_IPC_CHANNELS.ingestImage, args: [ingestInput] }
+    ])
+    expect(api.workspace.getPathForFile({ name: 'pic.png' } as File)).toBe('C:\\drops\\pic.png')
+
+    const fallbackApi = createWikiApi(ipc)
+    expect(fallbackApi.workspace.getPathForFile({ name: 'pic.png' } as File)).toBe('')
+  })
 })

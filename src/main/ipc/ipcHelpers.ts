@@ -33,7 +33,26 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
   }),
   [CONFIG_IPC_CHANNELS.saveRaw]: ([raw]) => ({
     contentLength: typeof raw === 'string' ? raw.length : 0
-  })
+  }),
+  [WORKSPACE_IPC_CHANNELS.ingestImage]: ([input]) => {
+    const payload =
+      input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
+    const source =
+      payload.source && typeof payload.source === 'object'
+        ? (payload.source as Record<string, unknown>)
+        : {}
+    const bytes = source.bytes
+    const byteLength =
+      bytes instanceof Uint8Array || ArrayBuffer.isView(bytes) ? bytes.byteLength : undefined
+    return {
+      documentPath: payload.documentPath,
+      sourceKind: source.kind,
+      ...(typeof source.mimeType === 'string' ? { mimeType: source.mimeType } : {}),
+      ...(typeof source.fileName === 'string' ? { fileName: source.fileName } : {}),
+      ...(typeof source.filePath === 'string' ? { filePath: source.filePath } : {}),
+      ...(byteLength !== undefined ? { byteLength } : {})
+    }
+  }
 }
 
 function extractIpcMetadata(channel: string, args: unknown[]): Record<string, unknown> {

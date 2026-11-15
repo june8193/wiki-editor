@@ -8,6 +8,7 @@ import {
   deleteTableRowPreservingHeader,
   detectProseMirrorSlashQuery,
   extractWysiwygHeadingCandidates,
+  insertWysiwygImages,
   insertWysiwygMarkdownWithCursor,
   prepareMarkdownForTiptap,
   sanitizeHtmlWithRehype
@@ -487,5 +488,46 @@ describe('wysiwygMarkdown local image rendering and roundtrip', () => {
       }
     })
     expect(insertedImageSrc).toBe('./assets/typed.png')
+  })
+
+  it('inserts single and multiple ingested images in order while preserving safe markdown paths', () => {
+    const editor = createImageTestEditor('Hello world', {
+      documentPath: '/vault/docs/guide.md'
+    })
+    const insertPos = findTextPos(editor, 'world')
+    expect(
+      insertWysiwygImages(
+        editor,
+        [{ markdownPath: './assets/one.png', altText: 'one', savedPath: '/vault/docs/assets/one.png' }],
+        { from: insertPos, to: insertPos }
+      )
+    ).toBe(true)
+    expect(editor.getMarkdown()).toContain('![one](./assets/one.png)')
+
+    const multiEditor = createImageTestEditor('', {
+      documentPath: '/vault/docs/guide.md'
+    })
+    expect(
+      insertWysiwygImages(multiEditor, [
+        {
+          markdownPath: './assets/a%20%281%29.png',
+          altText: 'a (1)',
+          savedPath: '/vault/docs/assets/a (1).png'
+        },
+        {
+          markdownPath: '../shared/b.svg',
+          altText: 'b',
+          savedPath: '/vault/shared/b.svg'
+        }
+      ])
+    ).toBe(true)
+
+    const markdown = multiEditor.getMarkdown()
+    expect(markdown).toContain('![a (1)](./assets/a%20%281%29.png)')
+    expect(markdown).toContain('![b](../shared/b.svg)')
+    expect(markdown.indexOf('![a (1)](./assets/a%20%281%29.png)')).toBeLessThan(
+      markdown.indexOf('![b](../shared/b.svg)')
+    )
+    expect(markdown).not.toContain('wiki-asset:')
   })
 })

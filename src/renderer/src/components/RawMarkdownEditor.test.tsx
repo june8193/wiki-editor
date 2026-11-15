@@ -786,4 +786,188 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
       isUserScroll: false
     })
   })
+
+  it('inserts ingested clipboard and dropped images in Raw markdown, preserves text/json behavior, and blocks unsafe drops', async () => {
+    const onChangeContent = vi.fn()
+    const onReportError = vi.fn()
+    const onClearDraggingWorkspaceImage = vi.fn()
+    const ingestImage = vi.fn(async (input) => {
+      if (input.source.kind === 'clipboard') {
+        return {
+          markdownPath: './assets/note-20260402-090507.png',
+          altText: 'note-20260402-090507',
+          savedPath: 'C:\\vault\\note-20260402-090507.png'
+        }
+      }
+      if (input.source.kind === 'filePath') {
+        return {
+          markdownPath: '../img/tree%20pic.png',
+          altText: 'tree pic',
+          savedPath: input.source.filePath
+        }
+      }
+      return {
+        markdownPath: `./assets/${encodeURIComponent(input.source.fileName)}`,
+        altText: input.source.fileName.replace(/\.[^.]+$/, ''),
+        savedPath: `C:\\vault\\assets\\${input.source.fileName}`
+      }
+    })
+    const getPathForFile = vi.fn((file: File) =>
+      file.name === 'copied.png' ? 'C:\\vault\\img\\tree pic.png' : ''
+    )
+
+    const { rerender } = render(
+      <RawMarkdownEditor
+        content={'Start end'}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 6, selectionEnd: 6 }}
+        scrollTop={0}
+        documentPath="C:\\vault\\docs\\note.md"
+        enableImageInsertion
+        draggingWorkspaceImagePath="C:\\vault\\img\\tree pic.png"
+        onChangeContent={onChangeContent}
+        onUpdateViewState={vi.fn()}
+        onClearDraggingWorkspaceImage={onClearDraggingWorkspaceImage}
+        onReportError={onReportError}
+        ingestImage={ingestImage}
+        getPathForFile={getPathForFile}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+
+    // 1. Bitmap paste without text/plain inserts at cursor
+    const clipFile = new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' })
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        types: ['Files'],
+        files: [clipFile],
+        items: [],
+        getData: () => ''
+      }
+    })
+
+    await waitFor(() => {
+      expect(onChangeContent).toHaveBeenCalledWith(
+        'Start ![note-20260402-090507](./assets/note-20260402-090507.png)end'
+      )
+    })
+
+    // 2. Bitmap + text/plain paste without path-backed file ignores image ingestion
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        types: ['text/plain', 'Files'],
+        files: [clipFile],
+        items: [],
+        getData: (type: string) => (type === 'text/plain' ? 'plain code' : '')
+      }
+    })
+    expect(ingestImage).toHaveBeenCalledTimes(1)
+
+    // 3. Multi-image drop (workspace MIME + external fileBytes) inserts ordered paragraphs
+    const bytesFile = new File([new Uint8Array([4, 5])], 'extra.webp', { type: 'image/webp' })
+    fireEvent.drop(editorEl, {
+      dataTransfer: {
+        types: ['application/x-wiki-workspace-image', 'Files'],
+        files: [bytesFile],
+        getData: (type: string) =>
+          type === 'application/x-wiki-workspace-image' ? 'C:\\vault\\img\\tree pic.png' : ''
+      }
+    })
+
+    await waitFor(() => {
+      expect(ingestImage).toHaveBeenCalledTimes(3)
+    })
+    expect(onClearDraggingWorkspaceImage).toHaveBeenCalledTimes(1)
+    const afterDrop = onChangeContent.mock.calls.at(-1)?.[0] as string
+    expect(afterDrop).toContain('![tree pic](../img/tree%20pic.png)\n\n![extra](./assets/extra.webp)')
+
+    // 4. Tab dragover does NOT call preventDefault, while non-image drop prevents default without ingesting
+    const tabDrag = new Event('dragover', { bubbles: true, cancelable: true })
+    Object.defineProperty(tabDrag, 'dataTransfer', {
+      value: { types: ['application/x-wiki-tab'], files: [], getData: () => 'tab-1' }
+    })
+    editorEl.dispatchEvent(tabDrag)
+    expect(tabDrag.defaultPrevented).toBe(false)
+
+    const txtFile = new File([new Uint8Array([9])], 'notes.txt', { type: 'text/plain' })
+    const txtDrop = new Event('drop', { bubbles: true, cancelable: true })
+    Object.defineProperty(txtDrop, 'dataTransfer', {
+      value: { types: ['Files'], files: [txtFile], getData: () => '' }
+    })
+    editorEl.dispatchEvent(txtDrop)
+    expect(txtDrop.defaultPrevented).toBe(true)
+    expect(ingestImage).toHaveBeenCalledTimes(3)
+
+    // 5. Copied file with native path ingests even if text/plain accompanies clipboard, unless disabled for json
+    const copiedFile = new File([new Uint8Array([1])], 'copied.png', { type: 'image/png' })
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        types: ['text/plain', 'Files'],
+        files: [copiedFile],
+        items: [],
+        getData: (type: string) => (type === 'text/plain' ? 'copied.png' : '')
+      }
+    })
+    await waitFor(() => {
+      expect(ingestImage).toHaveBeenCalledTimes(4)
+    })
+
+    rerender(
+      <RawMarkdownEditor
+        content={'{}'}
+        language="json"
+        theme="light"
+        cursor={{ selectionStart: 1, selectionEnd: 1 }}
+        scrollTop={0}
+        documentPath="C:\\vault\\config.json"
+        enableImageInsertion={false}
+        onChangeContent={onChangeContent}
+        onUpdateViewState={vi.fn()}
+        onReportError={onReportError}
+        ingestImage={ingestImage}
+        getPathForFile={getPathForFile}
+      />
+    )
+    fireEvent.paste(screen.getByTestId('document-editor'), {
+      clipboardData: {
+        types: ['Files'],
+        files: [clipFile],
+        items: [],
+        getData: () => ''
+      }
+    })
+    expect(ingestImage).toHaveBeenCalledTimes(4)
+
+    // 6. Ingestion failure reports error via onReportError
+    rerender(
+      <RawMarkdownEditor
+        content={'# Doc'}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 5, selectionEnd: 5 }}
+        scrollTop={0}
+        documentPath="C:\\vault\\docs\\note.md"
+        enableImageInsertion
+        onChangeContent={onChangeContent}
+        onUpdateViewState={vi.fn()}
+        onReportError={onReportError}
+        ingestImage={ingestImage}
+        getPathForFile={getPathForFile}
+      />
+    )
+    ingestImage.mockRejectedValueOnce(new Error('permission denied'))
+    fireEvent.paste(screen.getByTestId('document-editor'), {
+      clipboardData: {
+        types: ['Files'],
+        files: [clipFile],
+        items: [],
+        getData: () => ''
+      }
+    })
+    await waitFor(() => {
+      expect(onReportError).toHaveBeenCalledWith('이미지 삽입에 실패했습니다.', expect.any(Error))
+    })
+  })
 })

@@ -15,6 +15,7 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { SidebarResizer } from './components/SidebarResizer'
 import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
+import { inspectDropTransfer } from './editor/imageIngestion'
 import type { OutlineContextTarget } from './editor/outlineScrollSpy'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
@@ -91,6 +92,47 @@ export function App() {
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
   })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [draggingWorkspaceImagePath, setDraggingWorkspaceImagePath] = useState<string | null>(null)
+  const draggingWorkspaceImagePathRef = useRef<string | null>(null)
+  draggingWorkspaceImagePathRef.current = draggingWorkspaceImagePath
+
+  useEffect(() => {
+    const handleWindowDragOver = (event: DragEvent): void => {
+      if (event.defaultPrevented) {
+        return
+      }
+      const inspected = inspectDropTransfer(event.dataTransfer, {
+        draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
+      })
+      if (inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
+        return
+      }
+      event.preventDefault()
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'none'
+      }
+    }
+
+    const handleWindowDrop = (event: DragEvent): void => {
+      const inspected = inspectDropTransfer(event.dataTransfer, {
+        draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
+      })
+      if (inspected.isWorkspaceOrFileDrag) {
+        setDraggingWorkspaceImagePath(null)
+      }
+      if (event.defaultPrevented || inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
+        return
+      }
+      event.preventDefault()
+    }
+
+    window.addEventListener('dragover', handleWindowDragOver)
+    window.addEventListener('drop', handleWindowDrop)
+    return () => {
+      window.removeEventListener('dragover', handleWindowDragOver)
+      window.removeEventListener('drop', handleWindowDrop)
+    }
+  }, [])
 
   const windowWidth = useWindowWidth()
   const leftSidebarBounds = getLeftSidebarWidthBounds(windowWidth)
@@ -539,6 +581,18 @@ export function App() {
     [clearOutlineScrollRequest, updateTabViewState]
   )
 
+  const handleReportImageError = useCallback(
+    (title: string, error: unknown): void => {
+      const detail = toErrorMessage(error, '')
+      reportErrorBanner(detail ? `${title}: ${detail}` : title, error)
+    },
+    [reportErrorBanner]
+  )
+
+  const handleClearDraggingWorkspaceImage = useCallback((): void => {
+    setDraggingWorkspaceImagePath(null)
+  }, [])
+
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       onFocusPane: focusPane,
@@ -548,7 +602,8 @@ export function App() {
       onDuplicateTab: duplicateTabToOtherPane,
       onChangeContent: handlePaneChangeContent,
       onSaveBuffer: saveBufferByKey,
-      onUpdateTabViewState: handlePaneUpdateTabViewState
+      onUpdateTabViewState: handlePaneUpdateTabViewState,
+      onReportError: handleReportImageError
     }),
     [
       activateTab,
@@ -556,6 +611,7 @@ export function App() {
       focusPane,
       handlePaneChangeContent,
       handlePaneUpdateTabViewState,
+      handleReportImageError,
       moveTab,
       requestCloseTab,
       saveBufferByKey
@@ -619,6 +675,8 @@ export function App() {
                   onCreateEntry={createEntry}
                   onRenameEntry={renameEntry}
                   onRequestDelete={handleRequestDelete}
+                  onDragStartWorkspaceImage={setDraggingWorkspaceImagePath}
+                  onDragEndWorkspaceImage={handleClearDraggingWorkspaceImage}
                 />
               )}
 
@@ -663,6 +721,8 @@ export function App() {
           customCommands={config.customCommands}
           scrollRequest={outlineScrollRequest}
           isShortcutDisabled={isEditorShortcutDisabled}
+          draggingWorkspaceImagePath={draggingWorkspaceImagePath}
+          onClearDraggingWorkspaceImage={handleClearDraggingWorkspaceImage}
           onSetSplitRatio={setSplitRatio}
           onSplitWithTab={splitWithTab}
           onActiveHeadingChange={handleActiveHeadingReport}

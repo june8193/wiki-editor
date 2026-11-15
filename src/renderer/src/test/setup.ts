@@ -35,6 +35,10 @@ if (typeof Element !== 'undefined' && typeof Element.prototype.getClientRects !=
   Element.prototype.getClientRects = createEmptyDOMRectList
 }
 
+if (typeof document !== 'undefined' && typeof document.elementFromPoint !== 'function') {
+  document.elementFromPoint = () => null
+}
+
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
     observe(): void {}

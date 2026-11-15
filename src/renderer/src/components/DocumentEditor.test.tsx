@@ -984,4 +984,107 @@ describe('DocumentEditor local markdown image rendering across modes', () => {
     expect(screen.getByTestId('document-editor').textContent).not.toContain('wiki-asset:')
     expect(onChangeContent).not.toHaveBeenCalled()
   })
+
+  it('inserts images from Split left Raw editor and renders preview without wiki-asset leak while disabling non-markdown ingestion', async () => {
+    const ingestImage = vi.fn(async () => ({
+      markdownPath: './assets/doc-20260402-090507.png',
+      altText: 'doc-20260402-090507',
+      savedPath: 'C:/wiki/assets/doc-20260402-090507.png'
+    }))
+    const prevWikiApi = (window as unknown as { wikiApi?: unknown }).wikiApi
+    ;(window as unknown as { wikiApi?: unknown }).wikiApi = {
+      workspace: {
+        ingestImage,
+        getPathForFile: () => ''
+      }
+    }
+
+    try {
+      let doc = createDoc({ content: '# Heading\n\n' })
+      const onChangeContent = vi.fn((next: string) => {
+        doc = { ...doc, content: next }
+      })
+
+      const { rerender } = render(
+        <DocumentEditor
+          document={doc}
+          tab={{ ...createTab('split'), cursor: { selectionStart: 11, selectionEnd: 11 } }}
+          theme="light"
+          autoSave={false}
+          onChangeContent={onChangeContent}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      const clipFile = new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' })
+      fireEvent.paste(screen.getByTestId('document-editor'), {
+        clipboardData: {
+          types: ['Files'],
+          files: [clipFile],
+          items: [],
+          getData: () => ''
+        }
+      })
+
+      await waitFor(() => {
+        expect(ingestImage).toHaveBeenCalledTimes(1)
+      })
+
+      rerender(
+        <DocumentEditor
+          document={doc}
+          tab={{
+            ...createTab('split'),
+            cursor: { selectionStart: doc.content.length, selectionEnd: doc.content.length }
+          }}
+          theme="light"
+          autoSave={false}
+          onChangeContent={onChangeContent}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      const splitPreview = screen.getByTestId('split-markdown-preview')
+      expect(within(splitPreview).getByRole('img', { name: 'doc-20260402-090507' })).toHaveAttribute(
+        'src',
+        buildWikiAssetUrl('C:/wiki/assets/doc-20260402-090507.png')
+      )
+      expect(doc.content).toContain('![doc-20260402-090507](./assets/doc-20260402-090507.png)')
+      expect(doc.content).not.toContain('wiki-asset:')
+
+      // Non-markdown config buffer disables ingestion on paste while blocking drop navigation
+      const configDoc = createDoc({
+        key: 'config:app',
+        kind: 'config',
+        path: 'C:/appdata/config.json',
+        name: 'config.json',
+        content: '{"theme":"light"}',
+        savedContent: '{"theme":"light"}'
+      })
+      rerender(
+        <DocumentEditor
+          document={configDoc}
+          tab={{ ...createTab('raw'), bufferKey: 'config:app' }}
+          theme="light"
+          autoSave={false}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+      fireEvent.paste(screen.getByTestId('document-editor'), {
+        clipboardData: {
+          types: ['Files'],
+          files: [clipFile],
+          items: [],
+          getData: () => ''
+        }
+      })
+      expect(ingestImage).toHaveBeenCalledTimes(1)
+    } finally {
+      ;(window as unknown as { wikiApi?: unknown }).wikiApi = prevWikiApi
+    }
+  })
 })

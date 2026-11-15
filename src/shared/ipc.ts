@@ -1,3 +1,7 @@
+import type {
+  WorkspaceImageIngestInput,
+  WorkspaceImageIngestResult
+} from './assets'
 import type { AppConfig } from './config'
 import type { GitBranchList, GitStatus, GitSyncResult } from './git'
 import type { RendererLogPayload } from './logging'
@@ -28,6 +32,7 @@ export const WORKSPACE_IPC_CHANNELS = {
   createEntry: 'workspace:create-entry',
   renameEntry: 'workspace:rename-entry',
   deleteEntry: 'workspace:delete-entry',
+  ingestImage: 'workspace:ingest-image',
   watch: 'workspace:watch',
   unwatch: 'workspace:unwatch',
   changed: 'workspace:changed'
@@ -83,6 +88,8 @@ export interface WikiWorkspaceApi {
   ): Promise<WorkspaceEntry>
   renameEntry(targetPath: string, newName: string): Promise<WorkspaceEntry>
   deleteEntry(targetPath: string): Promise<void>
+  ingestImage(input: WorkspaceImageIngestInput): Promise<WorkspaceImageIngestResult>
+  getPathForFile(file: File): string
   watch(): Promise<void>
   unwatch(): Promise<void>
   onChanged(listener: (event: WorkspaceChangeEvent) => void): () => void

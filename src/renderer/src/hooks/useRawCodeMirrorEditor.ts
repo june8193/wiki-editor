@@ -19,6 +19,15 @@ import {
   type CustomCommandConfig,
   type ThemeMode
 } from '@shared/config'
+import type { WorkspaceImageIngestInput, WorkspaceImageIngestResult } from '@shared/assets'
+import {
+  extractClipboardImageSources,
+  formatRawMarkdownImages,
+  type ImageIngestor,
+  inspectDropTransfer,
+  type PendingImageSource,
+  resolvePendingImageSources
+} from '../editor/imageIngestion'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
 import {
@@ -82,6 +91,9 @@ export interface UseRawCodeMirrorEditorOptions {
   enableSlashCommands?: boolean
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
+  documentPath?: string
+  enableImageInsertion?: boolean
+  draggingWorkspaceImagePath?: string | null
   scrollRequest?: RawScrollRequest | null
   isActive?: boolean
   editorViewRef?: { current: EditorView | null }
@@ -89,6 +101,10 @@ export interface UseRawCodeMirrorEditorOptions {
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
   onRawScroll?: () => void
+  onClearDraggingWorkspaceImage?: () => void
+  onReportError?: (title: string, error: unknown) => void
+  ingestImage?: ImageIngestor
+  getPathForFile?: (file: File) => string
 }
 
 const markdownHighlightStyle = HighlightStyle.define([
@@ -192,13 +208,20 @@ export function useRawCodeMirrorEditor({
   enableSlashCommands = language === 'markdown',
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
+  documentPath,
+  enableImageInsertion = language === 'markdown' && Boolean(documentPath),
+  draggingWorkspaceImagePath = null,
   scrollRequest,
   isActive = true,
   editorViewRef,
   onChangeContent,
   onUpdateViewState,
   onActiveHeadingChange,
-  onRawScroll
+  onRawScroll,
+  onClearDraggingWorkspaceImage,
+  onReportError,
+  ingestImage,
+  getPathForFile
 }: UseRawCodeMirrorEditorOptions) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -223,9 +246,16 @@ export function useRawCodeMirrorEditor({
     enableSlashCommands,
     customCommands,
     documentTitle,
+    documentPath,
+    enableImageInsertion,
+    draggingWorkspaceImagePath,
     onChangeContent,
     onUpdateViewState,
-    onRawScroll
+    onRawScroll,
+    onClearDraggingWorkspaceImage,
+    onReportError,
+    ingestImage,
+    getPathForFile
   })
   runtimeRef.current = {
     content,
@@ -237,10 +267,125 @@ export function useRawCodeMirrorEditor({
     enableSlashCommands,
     customCommands,
     documentTitle,
+    documentPath,
+    enableImageInsertion,
+    draggingWorkspaceImagePath,
     onChangeContent,
     onUpdateViewState,
-    onRawScroll
+    onRawScroll,
+    onClearDraggingWorkspaceImage,
+    onReportError,
+    ingestImage,
+    getPathForFile
   }
+
+  const runImageInsertion = useCallback(
+    (
+      targetDocumentPath: string,
+      sources: PendingImageSource[],
+      range: { from: number; to: number }
+    ): void => {
+      const ingestOverride = runtimeRef.current.ingestImage
+      void (async () => {
+        try {
+          const results = await resolvePendingImageSources(
+            targetDocumentPath,
+            sources,
+            ingestOverride
+          )
+          const activeView = viewRef.current
+          if (
+            !activeView ||
+            runtimeRef.current.documentPath !== targetDocumentPath ||
+            !runtimeRef.current.enableImageInsertion
+          ) {
+            return
+          }
+          const docLen = activeView.state.doc.length
+          const clampedFrom = Math.max(0, Math.min(range.from, docLen))
+          const clampedTo = Math.max(clampedFrom, Math.min(range.to, docLen))
+          const markdownText = formatRawMarkdownImages(results)
+          activeView.dispatch({
+            changes: { from: clampedFrom, to: clampedTo, insert: markdownText },
+            selection: { anchor: clampedFrom + markdownText.length }
+          })
+          activeView.focus()
+        } catch (error) {
+          runtimeRef.current.onReportError?.('이미지 삽입에 실패했습니다.', error)
+        }
+      })()
+    },
+    []
+  )
+
+  const handleImageDragOver = useCallback((event: DragEvent): boolean => {
+    if (event.defaultPrevented) {
+      return false
+    }
+    const runtime = runtimeRef.current
+    const inspected = inspectDropTransfer(event.dataTransfer, {
+      getPathForFile: runtime.getPathForFile,
+      draggingWorkspaceImagePath: runtime.draggingWorkspaceImagePath
+    })
+    if (inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
+      return false
+    }
+    event.preventDefault()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect =
+        runtime.enableImageInsertion && runtime.documentPath ? 'copy' : 'none'
+    }
+    return true
+  }, [])
+
+  const handleImageDrop = useCallback(
+    (event: DragEvent, view: EditorView | null): boolean => {
+      if (event.defaultPrevented) {
+        return false
+      }
+      const runtime = runtimeRef.current
+      const inspected = inspectDropTransfer(event.dataTransfer, {
+        getPathForFile: runtime.getPathForFile,
+        draggingWorkspaceImagePath: runtime.draggingWorkspaceImagePath
+      })
+      if (inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
+        return false
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      runtime.onClearDraggingWorkspaceImage?.()
+
+      if (!runtime.enableImageInsertion || !runtime.documentPath || inspected.sources.length === 0) {
+        return true
+      }
+
+      const activeView = view ?? viewRef.current
+      if (!activeView) {
+        return true
+      }
+
+      let dropPos: number | null = null
+      if (
+        typeof document.elementFromPoint === 'function' &&
+        (event.clientX > 0 || event.clientY > 0)
+      ) {
+        try {
+          dropPos = activeView.posAtCoords({ x: event.clientX, y: event.clientY })
+        } catch {
+          dropPos = null
+        }
+      }
+      const sel = activeView.state.selection.main
+      const range =
+        dropPos !== null
+          ? { from: dropPos, to: dropPos }
+          : { from: sel.from, to: sel.to }
+
+      runImageInsertion(runtime.documentPath, inspected.sources, range)
+      return true
+    },
+    [runImageInsertion]
+  )
 
   const {
     controlsRef: slashControlsRef,
@@ -343,6 +488,28 @@ export function useRawCodeMirrorEditor({
           'aria-label': '문서 에디터',
           spellcheck: 'false'
         }),
+        Prec.high(
+          EditorView.domEventHandlers({
+            paste: (event, view) => {
+              const runtime = runtimeRef.current
+              if (!runtime.enableImageInsertion || !runtime.documentPath) {
+                return false
+              }
+              const sources = extractClipboardImageSources(event.clipboardData, {
+                getPathForFile: runtime.getPathForFile
+              })
+              if (sources.length === 0) {
+                return false
+              }
+              event.preventDefault()
+              const sel = view.state.selection.main
+              runImageInsertion(runtime.documentPath, sources, { from: sel.from, to: sel.to })
+              return true
+            },
+            dragover: (event) => handleImageDragOver(event),
+            drop: (event, view) => handleImageDrop(event, view)
+          })
+        ),
         EditorView.updateListener.of((update) => {
           syncSelectionAttrs(update.view)
           if (update.transactions.some((tr) => tr.annotation(externalSyncAnnotation))) {
@@ -545,6 +712,14 @@ export function useRawCodeMirrorEditor({
     inTable,
     runTableAction,
     insertToc,
-    slashMenuProps
+    slashMenuProps,
+    shellDragProps: {
+      onDragOver: (event: { nativeEvent: DragEvent }) => {
+        handleImageDragOver(event.nativeEvent)
+      },
+      onDrop: (event: { nativeEvent: DragEvent }) => {
+        handleImageDrop(event.nativeEvent, viewRef.current)
+      }
+    }
   }
 }

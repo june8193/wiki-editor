@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildWikiAssetUrl,
+  formatMarkdownImage,
+  getImageExtensionForMimeType,
   getImageMimeType,
+  isSupportedImageFile,
+  isSupportedImageMimeType,
   parseWikiAssetUrl,
   resolveImageDisplaySrc,
+  toMarkdownRelativeImagePath,
   WIKI_ASSET_SCHEME
 } from './assets'
 
@@ -87,5 +92,53 @@ describe('shared assets helpers', () => {
     expect(resolveImageDisplaySrc('/abs/a.png', docPath)).toBe('')
     expect(resolveImageDisplaySrc('//evil.com/a.png')).toBe('')
     expect(resolveImageDisplaySrc('/abs/a.png')).toBe('')
+  })
+
+  it('resolves supported MIME types to canonical image extensions and checks image files', () => {
+    expect(getImageExtensionForMimeType('image/png')).toBe('.png')
+    expect(getImageExtensionForMimeType('IMAGE/JPEG; charset=utf-8')).toBe('.jpg')
+    expect(getImageExtensionForMimeType('image/gif')).toBe('.gif')
+    expect(getImageExtensionForMimeType('image/webp')).toBe('.webp')
+    expect(getImageExtensionForMimeType('image/svg+xml')).toBe('.svg')
+    expect(getImageExtensionForMimeType('image/bmp')).toBe('.bmp')
+    expect(getImageExtensionForMimeType('image/avif')).toBe('.avif')
+    expect(getImageExtensionForMimeType('text/plain')).toBeNull()
+    expect(getImageExtensionForMimeType('image/tiff')).toBeNull()
+
+    expect(isSupportedImageMimeType('image/png')).toBe(true)
+    expect(isSupportedImageMimeType('application/pdf')).toBe(false)
+    expect(isSupportedImageFile('photo.PNG')).toBe(true)
+    expect(isSupportedImageFile('notes.md')).toBe(false)
+  })
+
+  it('percent-encodes CommonMark delimiters in relative POSIX paths and roundtrips through resolveImageDisplaySrc', () => {
+    expect(toMarkdownRelativeImagePath('assets/logo (1).png')).toBe(
+      './assets/logo%20%281%29.png'
+    )
+    expect(toMarkdownRelativeImagePath('pic.png')).toBe('./pic.png')
+    expect(toMarkdownRelativeImagePath('../shared folder/diagram [v2]#1?.svg')).toBe(
+      '../shared%20folder/diagram%20%5Bv2%5D%231%3F.svg'
+    )
+    expect(toMarkdownRelativeImagePath('assets/100% ready.png')).toBe(
+      './assets/100%25%20ready.png'
+    )
+    expect(toMarkdownRelativeImagePath('assets/가이드 (초안).png')).toBe(
+      './assets/가이드%20%28초안%29.png'
+    )
+
+    const encoded = toMarkdownRelativeImagePath('../shared folder/diagram (1)#v2?.svg')
+    expect(parseWikiAssetUrl(resolveImageDisplaySrc(encoded, 'C:\\vault\\docs\\guide.md'))).toBe(
+      'C:\\vault\\shared folder\\diagram (1)#v2?.svg'
+    )
+
+    expect(
+      formatMarkdownImage({ altText: 'diagram', markdownPath: './assets/diagram.png' })
+    ).toBe('![diagram](./assets/diagram.png)')
+    expect(
+      formatMarkdownImage({
+        altText: 'step [1]\nnext',
+        markdownPath: './assets/step%20%5B1%5D.png'
+      })
+    ).toBe('![step \\[1\\] next](./assets/step%20%5B1%5D.png)')
   })
 })

@@ -29,11 +29,12 @@ import { LogService } from './logging/LogService'
 import { registerProcessLifecycleLogging } from './logging/processLifecycleLogging'
 import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
-import { createMainWindowOptions } from './window'
+import { createMainWindowOptions, hardenWindowNavigation } from './window'
 
 function createMainWindow(): BrowserWindow {
   const preloadPath = join(__dirname, '../preload/index.js')
   const mainWindow = new BrowserWindow(createMainWindowOptions(preloadPath))
+  hardenWindowNavigation(mainWindow.webContents)
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
