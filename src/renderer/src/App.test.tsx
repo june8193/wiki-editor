@@ -3997,7 +3997,6 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
 
   it('expands inline commit detail with files, switches/collapses commits, copies full hash, and clears on scope switch', async () => {
     const user = userEvent.setup()
-    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
     const firstHash = '1111111111111111111111111111111111111111'
     const emptyHash = '2222222222222222222222222222222222222222'
 
@@ -4126,8 +4125,13 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(firstDetailRegion).toHaveTextContent('old.md → renamed.md')
 
     // Copy full commit hash
-    await user.click(within(firstDetailRegion).getByRole('button', { name: '해시 복사' }))
-    expect(writeTextSpy).toHaveBeenCalledWith(firstHash)
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    try {
+      await user.click(within(firstDetailRegion).getByRole('button', { name: '해시 복사' }))
+      expect(writeTextSpy).toHaveBeenCalledWith(firstHash)
+    } finally {
+      writeTextSpy.mockRestore()
+    }
 
     // Click another commit -> replaces inline detail and collapses previous row
     const secondRowBtn = within(graphRegion).getByRole('button', {

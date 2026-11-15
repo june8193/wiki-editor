@@ -569,7 +569,6 @@ describe('GitSidebarPanel', () => {
 
   it('toggles inline commit detail panel, displays metadata and changed files, and copies full hash', async () => {
     const user = userEvent.setup()
-    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
     const onToggleCommitDetail = vi.fn()
     const fullHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     const baseGraph = createInitialGitGraphState()
@@ -700,10 +699,15 @@ describe('GitSidebarPanel', () => {
     expect(detailRegion).toHaveTextContent('old/title.md → new/title.md')
 
     // Copy full hash button preserves accessible label while showing feedback
-    const copyBtn = within(detailRegion).getByRole('button', { name: '해시 복사' })
-    await user.click(copyBtn)
-    expect(writeTextSpy).toHaveBeenCalledWith(fullHash)
-    expect(within(detailRegion).getByRole('button', { name: '해시 복사' })).toHaveTextContent('복사됨')
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    try {
+      const copyBtn = within(detailRegion).getByRole('button', { name: '해시 복사' })
+      await user.click(copyBtn)
+      expect(writeTextSpy).toHaveBeenCalledWith(fullHash)
+      expect(within(detailRegion).getByRole('button', { name: '해시 복사' })).toHaveTextContent('복사됨')
+    } finally {
+      writeTextSpy.mockRestore()
+    }
 
     // Read-only guarantee: no checkout/reset/branch creation actions inside detail panel
     expect(within(detailRegion).queryByRole('button', { name: /checkout|reset|revert|branch/i })).toBeNull()

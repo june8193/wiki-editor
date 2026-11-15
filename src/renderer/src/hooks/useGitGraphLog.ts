@@ -16,6 +16,17 @@ export interface GitCommitDetailState {
   errorMessage: string | null
 }
 
+/** Returns true when the given commit hash owns the expanded inline detail panel. */
+export function isCommitDetailRowExpanded(
+  detailState: GitCommitDetailState,
+  commitHash: string
+): boolean {
+  return (
+    detailState.selectedHash === commitHash &&
+    (detailState.isLoading || detailState.detail !== null || detailState.errorMessage !== null)
+  )
+}
+
 /** Aggregated commit-graph UI state for the Graph accordion section. */
 export interface GitGraphState {
   commits: readonly GitGraphCommit[]

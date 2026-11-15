@@ -78,6 +78,21 @@ function buildCommitRefs(
 }
 
 /**
+ * Builds shared commit identity fields (`hash`, `shortHash`, `parents`) from Git format tokens.
+ */
+export function parseCommitIdentityFields(
+  hash: string,
+  shortHash: string,
+  parentsRaw: string
+): Pick<GitGraphCommit, 'hash' | 'shortHash' | 'parents'> {
+  return {
+    hash,
+    shortHash: shortHash || hash.slice(0, 7),
+    parents: parentsRaw ? parentsRaw.split(' ').filter(Boolean) : []
+  }
+}
+
+/**
  * Parses NUL-delimited `git log` records formatted with `\x1f` unit separators into GitGraphCommit entries.
  */
 export function parseGitLogOutput(
@@ -100,9 +115,7 @@ export function parseGitLogOutput(
     if (!hash) continue
 
     commits.push({
-      hash,
-      shortHash: shortHash || hash.slice(0, 7),
-      parents: parentsRaw ? parentsRaw.split(' ').filter(Boolean) : [],
+      ...parseCommitIdentityFields(hash, shortHash, parentsRaw),
       subject,
       authorName,
       committedAt,

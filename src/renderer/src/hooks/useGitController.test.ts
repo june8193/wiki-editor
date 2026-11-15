@@ -45,6 +45,28 @@ function makeCommitDetail(hash: string): GitCommitDetail {
   }
 }
 
+function installMockGitWikiApi(overrides: Partial<WikiApi['git']> = {}): void {
+  window.wikiApi = {
+    git: {
+      status: vi.fn(async () => makeStatus('main')),
+      init: vi.fn(),
+      stage: vi.fn(),
+      stageAll: vi.fn(),
+      unstage: vi.fn(),
+      unstageAll: vi.fn(),
+      commit: vi.fn(),
+      branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
+      checkout: vi.fn(),
+      pull: vi.fn(),
+      push: vi.fn(),
+      sync: vi.fn(),
+      log: vi.fn(async () => ({ commits: [], hasMore: false })),
+      commitDetail: vi.fn(async (_ws: string, hash: string) => makeCommitDetail(hash)),
+      ...overrides
+    }
+  } as unknown as WikiApi
+}
+
 describe('useGitController', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
@@ -477,27 +499,13 @@ describe('useGitController', () => {
       return Promise.resolve(makeCommitDetail(hash))
     })
 
-    window.wikiApi = {
-      git: {
-        status: vi.fn(async () => makeStatus('main')),
-        init: vi.fn(),
-        stage: vi.fn(),
-        stageAll: vi.fn(),
-        unstage: vi.fn(),
-        unstageAll: vi.fn(),
-        commit: vi.fn(),
-        branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
-        checkout: vi.fn(),
-        pull: vi.fn(),
-        push: vi.fn(),
-        sync: vi.fn(),
-        log: vi.fn(async () => ({
-          commits: [makeCommit('aaaa111'), makeCommit('bbbb222'), makeCommit('err3333')],
-          hasMore: false
-        })),
-        commitDetail: detailMock
-      }
-    } as unknown as WikiApi
+    installMockGitWikiApi({
+      log: vi.fn(async () => ({
+        commits: [makeCommit('aaaa111'), makeCommit('bbbb222'), makeCommit('err3333')],
+        hasMore: false
+      })),
+      commitDetail: detailMock
+    })
 
     const { result } = renderHook(() => useGitController({ workspaceRootPath: 'C:/wiki' }))
     await waitFor(() => {
@@ -579,30 +587,17 @@ describe('useGitController', () => {
       return Promise.resolve(makeCommitDetail(hash))
     })
 
-    window.wikiApi = {
-      git: {
-        status: vi.fn(async (ws) => makeStatus(ws === 'C:/repo-a' ? 'main' : 'other')),
-        init: vi.fn(),
-        stage: vi.fn(),
-        stageAll: vi.fn(),
-        unstage: vi.fn(),
-        unstageAll: vi.fn(),
-        commit: vi.fn(),
-        branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
-        checkout: vi.fn(),
-        pull: vi.fn(),
-        push: vi.fn(),
-        sync: vi.fn(),
-        log: vi.fn(async (_ws: string, options?: { scope?: 'all' | 'current' }) => {
-          scopeMode = options?.scope ?? 'all'
-          if (scopeMode === 'current') {
-            return { commits: [makeCommit('main111')], hasMore: false }
-          }
-          return { commits: currentCommits, hasMore: false }
-        }),
-        commitDetail: detailMock
-      }
-    } as unknown as WikiApi
+    installMockGitWikiApi({
+      status: vi.fn(async (ws) => makeStatus(ws === 'C:/repo-a' ? 'main' : 'other')),
+      log: vi.fn(async (_ws: string, options?: { scope?: 'all' | 'current' }) => {
+        scopeMode = options?.scope ?? 'all'
+        if (scopeMode === 'current') {
+          return { commits: [makeCommit('main111')], hasMore: false }
+        }
+        return { commits: currentCommits, hasMore: false }
+      }),
+      commitDetail: detailMock
+    })
 
     const { result, rerender } = renderHook(
       ({ ws }: { ws: string | null }) => useGitController({ workspaceRootPath: ws }),

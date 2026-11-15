@@ -6,7 +6,11 @@ import type {
   GitRefBadge,
   GitRefKind
 } from '@shared/git'
-import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
+import {
+  isCommitDetailRowExpanded,
+  type GitCommitDetailState,
+  type GitGraphState
+} from '../hooks/useGitGraphLog'
 import { formatGitFileLabel, getGitFileBadgeModifier } from '../utils/gitFilePresentation'
 import {
   buildGitGraphConnectionPath,
@@ -380,12 +384,7 @@ export const GitGraphSection = memo(function GitGraphSection({
       )}
       <ul className="git-graph-list" aria-label="커밋 그래프">
         {layout.rows.map((row) => {
-          const isSelected = commitDetail.selectedHash === row.commit.hash
-          const isExpanded =
-            isSelected &&
-            (commitDetail.isLoading ||
-              commitDetail.detail !== null ||
-              commitDetail.errorMessage !== null)
+          const isExpanded = isCommitDetailRowExpanded(commitDetail, row.commit.hash)
 
           return (
             <li

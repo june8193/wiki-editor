@@ -2208,7 +2208,7 @@ body.is-resizing-git-sections * {
 }
 
 .git-graph-row-btn:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--accent-color);
   outline-offset: -1px;
 }
 
@@ -2330,7 +2330,7 @@ body.is-resizing-git-sections * {
   margin: 2px 4px 6px 14px;
   padding: 8px 10px;
   border: 1px solid var(--border-color);
-  border-left: 2px solid var(--accent);
+  border-left: 2px solid var(--accent-color);
   border-radius: 6px;
   background-color: var(--bg-surface);
   display: flex;
@@ -2352,7 +2352,7 @@ body.is-resizing-git-sections * {
 }
 
 .git-commit-detail-error {
-  color: var(--danger);
+  color: var(--danger-color);
 }
 
 .git-commit-detail-top {
@@ -2380,7 +2380,7 @@ body.is-resizing-git-sections * {
 }
 
 .git-commit-detail-copy-btn:hover {
-  border-color: var(--accent);
+  border-color: var(--accent-color);
 }
 
 .git-commit-detail-subject {

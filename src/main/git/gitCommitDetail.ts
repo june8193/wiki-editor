@@ -1,4 +1,5 @@
 import type { GitChangedFile, GitCommitDetail, GitFileStatusCode } from '@shared/git'
+import { parseCommitIdentityFields } from './gitLog'
 
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,64}$/i
 
@@ -90,9 +91,7 @@ export function parseCommitDetailOutput(raw: string): GitCommitDetail {
   const body = header.slice(cursor).replace(/(?:\r?\n)+$/, '')
 
   return {
-    hash,
-    shortHash: shortHash || hash.slice(0, 7),
-    parents: parentsRaw ? parentsRaw.split(' ').filter(Boolean) : [],
+    ...parseCommitIdentityFields(hash, shortHash, parentsRaw),
     subject,
     body,
     authorName,
