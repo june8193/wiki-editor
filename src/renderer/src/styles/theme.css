@@ -982,6 +982,54 @@ body.is-resizing-sidebar .pane-workspace {
   margin-top: 2px;
 }
 
+.error-banner {
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--danger-color);
+  background-color: var(--bg-elevated);
+  color: var(--danger-color);
+  font-size: 12px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.45);
+}
+
+.modal-dialog {
+  width: 380px;
+  max-width: calc(100% - 32px);
+  padding: 16px 20px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-surface);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+.modal-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.modal-message {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Layered below ConfirmDialog (.modal-backdrop z-index: 80) */
 .settings-modal-backdrop {
   z-index: 70;
 }
@@ -1053,53 +1101,6 @@ body.is-resizing-sidebar .pane-workspace {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   word-break: break-all;
-}
-
-.error-banner {
-  margin: 8px 16px 0;
-  padding: 8px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--danger-color);
-  background-color: var(--bg-elevated);
-  color: var(--danger-color);
-  font-size: 12px;
-}
-
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: rgba(0, 0, 0, 0.45);
-}
-
-.modal-dialog {
-  width: 380px;
-  max-width: calc(100% - 32px);
-  padding: 16px 20px;
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
-  background-color: var(--bg-surface);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-}
-
-.modal-title {
-  margin: 0 0 8px;
-  font-size: 15px;
-}
-
-.modal-message {
-  margin: 0 0 16px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 

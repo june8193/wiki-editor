@@ -4614,7 +4614,7 @@ describe('Right sidebar collapse, expand, and resizing', () => {
   })
 })
 
-describe('Settings modal dialog', () => {
+describe('Settings Panel centered modal', () => {
   it('opens as a centered modal dialog outside main layout, toggles with toggle-settings, and closes via 닫기 button', async () => {
     const user = userEvent.setup()
     const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
@@ -4656,7 +4656,7 @@ describe('Settings modal dialog', () => {
     expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
   })
 
-  it('closes settings modal on backdrop click and Esc key without closing on inner clicks', async () => {
+  it('closes Settings Panel on backdrop click and Esc key without closing on inner clicks', async () => {
     const user = userEvent.setup()
     const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
     window.wikiApi = api
@@ -4690,7 +4690,7 @@ describe('Settings modal dialog', () => {
     expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
   })
 
-  it('disables editor save and mode-switch shortcuts while settings modal is open', async () => {
+  it('disables editor save and mode-switch shortcuts while Settings Panel is open', async () => {
     const user = userEvent.setup()
     const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false },
@@ -4742,7 +4742,7 @@ describe('Settings modal dialog', () => {
     })
   })
 
-  it('closes settings modal when opening config.json directly and renders ConfirmDialog above settings modal', async () => {
+  it('closes Settings Panel when opening config.json directly and renders ConfirmDialog above Settings Panel', async () => {
     const user = userEvent.setup()
     const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false, theme: 'light' },
