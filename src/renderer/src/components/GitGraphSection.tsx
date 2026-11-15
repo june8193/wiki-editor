@@ -6,11 +6,7 @@ import type {
   GitRefBadge,
   GitRefKind
 } from '@shared/git'
-import {
-  isCommitDetailRowExpanded,
-  type GitCommitDetailState,
-  type GitGraphState
-} from '../hooks/useGitGraphLog'
+import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
 import { formatGitFileLabel, getGitFileBadgeModifier } from '../utils/gitFilePresentation'
 import {
   buildGitGraphConnectionPath,
@@ -291,9 +287,9 @@ function GitCommitDetailPanel({ shortHash, detailState }: GitCommitDetailPanelPr
     }
   }
 
-  const { detail, isLoading, errorMessage } = detailState
-  const isCopied = detail !== null && copiedHash === detail.hash
-  const bodyText = detail?.body.trim() ?? ''
+  const loadedDetail = detailState.status === 'loaded' ? detailState.detail : null
+  const isCopied = loadedDetail !== null && copiedHash === loadedDetail.hash
+  const hasBody = loadedDetail !== null && loadedDetail.body.trim().length > 0
 
   return (
     <div
@@ -303,40 +299,42 @@ function GitCommitDetailPanel({ shortHash, detailState }: GitCommitDetailPanelPr
       // Clear inherited commit-row tooltip while hovering inside the expanded detail box.
       title=""
     >
-      {isLoading && <p className="git-commit-detail-status">커밋 상세를 불러오는 중...</p>}
-      {!isLoading && errorMessage && (
+      {detailState.status === 'loading' && (
+        <p className="git-commit-detail-status">커밋 상세를 불러오는 중...</p>
+      )}
+      {detailState.status === 'error' && (
         <p className="git-commit-detail-error" role="alert">
-          {errorMessage}
+          {detailState.errorMessage}
         </p>
       )}
-      {!isLoading && !errorMessage && detail && (
+      {loadedDetail && (
         <>
           <div className="git-commit-detail-top">
-            <code className="git-commit-detail-hash" title={detail.hash}>
-              {detail.shortHash}
+            <code className="git-commit-detail-hash" title={loadedDetail.hash}>
+              {loadedDetail.shortHash}
             </code>
             <button
               type="button"
               className="git-commit-detail-copy-btn"
               aria-label="해시 복사"
-              onClick={() => void handleCopyHash(detail.hash)}
+              onClick={() => void handleCopyHash(loadedDetail.hash)}
             >
               {isCopied ? '복사됨' : '복사'}
             </button>
           </div>
-          <div className="git-commit-detail-subject">{detail.subject}</div>
-          {bodyText.length > 0 && <div className="git-commit-detail-body">{detail.body}</div>}
+          <div className="git-commit-detail-subject">{loadedDetail.subject}</div>
+          {hasBody && <div className="git-commit-detail-body">{loadedDetail.body}</div>}
           <div className="git-commit-detail-meta">
             <span className="git-commit-detail-author">
-              {detail.authorEmail
-                ? `${detail.authorName} <${detail.authorEmail}>`
-                : detail.authorName}
+              {loadedDetail.authorEmail
+                ? `${loadedDetail.authorName} <${loadedDetail.authorEmail}>`
+                : loadedDetail.authorName}
             </span>
             <span className="git-commit-detail-date">
-              {formatGitCommitTimestamp(detail.committedAt)}
+              {formatGitCommitTimestamp(loadedDetail.committedAt)}
             </span>
           </div>
-          <GitCommitDetailFiles detail={detail} />
+          <GitCommitDetailFiles detail={loadedDetail} />
         </>
       )}
     </div>
@@ -384,7 +382,8 @@ export const GitGraphSection = memo(function GitGraphSection({
       )}
       <ul className="git-graph-list" aria-label="커밋 그래프">
         {layout.rows.map((row) => {
-          const isExpanded = isCommitDetailRowExpanded(commitDetail, row.commit.hash)
+          const isExpanded =
+            commitDetail.status !== 'idle' && commitDetail.selectedHash === row.commit.hash
 
           return (
             <li

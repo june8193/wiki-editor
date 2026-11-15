@@ -620,10 +620,8 @@ describe('GitSidebarPanel', () => {
             ...baseGraph,
             commits,
             commitDetail: {
-              selectedHash: fullHash,
-              detail: null,
-              isLoading: true,
-              errorMessage: null
+              status: 'loading',
+              selectedHash: fullHash
             }
           }
         })}
@@ -640,9 +638,8 @@ describe('GitSidebarPanel', () => {
             ...baseGraph,
             commits,
             commitDetail: {
+              status: 'error',
               selectedHash: fullHash,
-              detail: null,
-              isLoading: false,
               errorMessage: '상세 조회 실패'
             }
           }
@@ -660,6 +657,7 @@ describe('GitSidebarPanel', () => {
             ...baseGraph,
             commits,
             commitDetail: {
+              status: 'loaded',
               selectedHash: fullHash,
               detail: {
                 hash: fullHash,
@@ -676,9 +674,7 @@ describe('GitSidebarPanel', () => {
                   { status: 'D', path: 'legacy.md' },
                   { status: 'R', origPath: 'old/title.md', path: 'new/title.md' }
                 ]
-              },
-              isLoading: false,
-              errorMessage: null
+              }
             }
           }
         })}
@@ -721,6 +717,7 @@ describe('GitSidebarPanel', () => {
             ...baseGraph,
             commits,
             commitDetail: {
+              status: 'loaded',
               selectedHash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
               detail: {
                 hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
@@ -732,9 +729,7 @@ describe('GitSidebarPanel', () => {
                 authorEmail: 'bob@example.com',
                 committedAt: '2026-11-14T09:00:00+09:00',
                 files: []
-              },
-              isLoading: false,
-              errorMessage: null
+              }
             }
           }
         })}

@@ -1,6 +1,14 @@
 import type { GitChangedFile, GitCommitDetail, GitFileStatusCode } from '@shared/git'
 import { parseCommitIdentityFields } from './gitLog'
 
+const COMMIT_DETAIL_HEADER_TOKENS = ['%H', '%h', '%P', '%s', '%an', '%ae', '%cI'] as const
+
+/**
+ * Git `--format` flag for `git show --name-status -z`, co-located with {@link parseCommitDetailOutput}
+ * so field order and delimiters stay coupled in one place.
+ */
+export const GIT_COMMIT_DETAIL_FORMAT = `--format=${COMMIT_DETAIL_HEADER_TOKENS.join('%x1f')}%x1f%b%x1e`
+
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,64}$/i
 
 /**
@@ -75,7 +83,7 @@ export function parseCommitDetailOutput(raw: string): GitCommitDetail {
 
   const fields: string[] = []
   let cursor = 0
-  for (let i = 0; i < 7; i += 1) {
+  for (let i = 0; i < COMMIT_DETAIL_HEADER_TOKENS.length; i += 1) {
     const sepIdx = header.indexOf('\x1f', cursor)
     if (sepIdx === -1) {
       throw new Error('커밋 상세 정보를 파싱하지 못했습니다.')

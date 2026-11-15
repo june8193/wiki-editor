@@ -8,24 +8,12 @@ import {
 import { logRendererError } from '../logging/rendererLogger'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
-/** Inline detail state for the currently expanded commit row in the Graph section. */
-export interface GitCommitDetailState {
-  selectedHash: string | null
-  detail: GitCommitDetail | null
-  isLoading: boolean
-  errorMessage: string | null
-}
-
-/** Returns true when the given commit hash owns the expanded inline detail panel. */
-export function isCommitDetailRowExpanded(
-  detailState: GitCommitDetailState,
-  commitHash: string
-): boolean {
-  return (
-    detailState.selectedHash === commitHash &&
-    (detailState.isLoading || detailState.detail !== null || detailState.errorMessage !== null)
-  )
-}
+/** Discriminated union for the expanded commit detail panel in the Graph section. */
+export type GitCommitDetailState =
+  | { status: 'idle' }
+  | { status: 'loading'; selectedHash: string }
+  | { status: 'loaded'; selectedHash: string; detail: GitCommitDetail }
+  | { status: 'error'; selectedHash: string; errorMessage: string }
 
 /** Aggregated commit-graph UI state for the Graph accordion section. */
 export interface GitGraphState {
@@ -40,12 +28,7 @@ export interface GitGraphState {
 
 /** Creates empty inline commit-detail state. */
 export function createInitialGitCommitDetailState(): GitCommitDetailState {
-  return {
-    selectedHash: null,
-    detail: null,
-    isLoading: false,
-    errorMessage: null
-  }
+  return { status: 'idle' }
 }
 
 /** Creates default commit-graph state starting in `'all'` scope. */
@@ -164,11 +147,11 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
           const nextCommits = append
             ? appendUniqueCommits(prev.commits, result.commits)
             : result.commits
-          const selectedHash = prev.commitDetail.selectedHash
+          const currentDetail = prev.commitDetail
           const shouldClearDetail =
             !append &&
-            selectedHash !== null &&
-            !nextCommits.some((commit) => commit.hash === selectedHash)
+            currentDetail.status !== 'idle' &&
+            !nextCommits.some((commit) => commit.hash === currentDetail.selectedHash)
           if (shouldClearDetail) {
             detailRequestSeqRef.current += 1
           }
@@ -178,7 +161,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
             hasMore: result.hasMore,
             commitDetail: shouldClearDetail
               ? createInitialGitCommitDetailState()
-              : prev.commitDetail
+              : currentDetail
           }
         })
       } catch (error: unknown) {
@@ -246,7 +229,8 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
 
   const toggleCommitDetail = useCallback(
     async (commitHash: string): Promise<void> => {
-      if (graphStateRef.current.commitDetail.selectedHash === commitHash) {
+      const currentDetail = graphStateRef.current.commitDetail
+      if (currentDetail.status !== 'idle' && currentDetail.selectedHash === commitHash) {
         detailRequestSeqRef.current += 1
         updateGraphState((prev) => ({
           ...prev,
@@ -261,19 +245,19 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
       }
       const epoch = optionsRef.current.getWorkspaceEpoch()
       const detailSeq = ++detailRequestSeqRef.current
-      const isCurrentDetailRequest = (): boolean =>
-        optionsRef.current.isCurrentRequest(rootPath, epoch) &&
-        detailRequestSeqRef.current === detailSeq &&
-        graphStateRef.current.commitDetail.selectedHash === commitHash
+      const isCurrentDetailRequest = (): boolean => {
+        const latestDetail = graphStateRef.current.commitDetail
+        return (
+          optionsRef.current.isCurrentRequest(rootPath, epoch) &&
+          detailRequestSeqRef.current === detailSeq &&
+          latestDetail.status !== 'idle' &&
+          latestDetail.selectedHash === commitHash
+        )
+      }
 
       updateGraphState((prev) => ({
         ...prev,
-        commitDetail: {
-          selectedHash: commitHash,
-          detail: null,
-          isLoading: true,
-          errorMessage: null
-        }
+        commitDetail: { status: 'loading', selectedHash: commitHash }
       }))
 
       try {
@@ -283,12 +267,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
         }
         updateGraphState((prev) => ({
           ...prev,
-          commitDetail: {
-            selectedHash: commitHash,
-            detail,
-            isLoading: false,
-            errorMessage: null
-          }
+          commitDetail: { status: 'loaded', selectedHash: commitHash, detail }
         }))
       } catch (error: unknown) {
         if (!isCurrentDetailRequest()) {
@@ -297,12 +276,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
         const message = toErrorMessage(error, '커밋 상세 정보를 불러오지 못했습니다.')
         updateGraphState((prev) => ({
           ...prev,
-          commitDetail: {
-            selectedHash: commitHash,
-            detail: null,
-            isLoading: false,
-            errorMessage: message
-          }
+          commitDetail: { status: 'error', selectedHash: commitHash, errorMessage: message }
         }))
         logRendererError('git', 'Git commit detail fetch failed', {
           data: { workspaceRootPath: rootPath, commitHash, errorMessage: message },

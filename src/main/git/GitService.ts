@@ -26,7 +26,11 @@ import {
   formatGitError,
   GitFormattedError
 } from './gitErrors'
-import { assertValidCommitHash, parseCommitDetailOutput } from './gitCommitDetail'
+import {
+  assertValidCommitHash,
+  GIT_COMMIT_DETAIL_FORMAT,
+  parseCommitDetailOutput
+} from './gitCommitDetail'
 import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
 import { parsePorcelainV2Z } from './gitPorcelain'
 
@@ -362,7 +366,7 @@ export class GitService {
         '-M',
         '--name-status',
         '-z',
-        '--format=%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%cI%x1f%b%x1e',
+        GIT_COMMIT_DETAIL_FORMAT,
         `${validatedHash}^{commit}`
       ])
       return parseCommitDetailOutput(raw)

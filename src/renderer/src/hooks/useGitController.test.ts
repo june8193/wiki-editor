@@ -511,35 +511,37 @@ describe('useGitController', () => {
     await waitFor(() => {
       expect(result.current.graphState.commits).toHaveLength(3)
     })
-    expect(result.current.graphState.commitDetail).toEqual({
-      selectedHash: null,
-      detail: null,
-      isLoading: false,
-      errorMessage: null
-    })
+    expect(result.current.graphState.commitDetail).toEqual({ status: 'idle' })
 
     // Start loading detail for aaaa111, then immediately switch to bbbb222
     let pendingFirst!: Promise<void>
     act(() => {
       pendingFirst = result.current.toggleCommitDetail('aaaa111')
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBe('aaaa111')
-    expect(result.current.graphState.commitDetail.isLoading).toBe(true)
+    expect(result.current.graphState.commitDetail).toEqual({
+      status: 'loading',
+      selectedHash: 'aaaa111'
+    })
 
     await act(async () => {
       await result.current.toggleCommitDetail('bbbb222')
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBe('bbbb222')
-    expect(result.current.graphState.commitDetail.detail?.hash).toBe('bbbb222')
-    expect(result.current.graphState.commitDetail.isLoading).toBe(false)
+    expect(result.current.graphState.commitDetail).toEqual({
+      status: 'loaded',
+      selectedHash: 'bbbb222',
+      detail: makeCommitDetail('bbbb222')
+    })
 
     // Stale slow response for aaaa111 must be ignored
     await act(async () => {
       resolveSlowDetail1(makeCommitDetail('aaaa111'))
       await pendingFirst
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBe('bbbb222')
-    expect(result.current.graphState.commitDetail.detail?.hash).toBe('bbbb222')
+    expect(result.current.graphState.commitDetail).toEqual({
+      status: 'loaded',
+      selectedHash: 'bbbb222',
+      detail: makeCommitDetail('bbbb222')
+    })
 
     // Clicking bbbb222 again collapses it without re-fetching
     const callsBeforeCollapse = detailMock.mock.calls.length
@@ -547,27 +549,22 @@ describe('useGitController', () => {
       await result.current.toggleCommitDetail('bbbb222')
     })
     expect(detailMock).toHaveBeenCalledTimes(callsBeforeCollapse)
-    expect(result.current.graphState.commitDetail).toEqual({
-      selectedHash: null,
-      detail: null,
-      isLoading: false,
-      errorMessage: null
-    })
+    expect(result.current.graphState.commitDetail).toEqual({ status: 'idle' })
 
     // Error state is preserved on selected commit until collapsed
     await act(async () => {
       await result.current.toggleCommitDetail('err3333')
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBe('err3333')
-    expect(result.current.graphState.commitDetail.detail).toBeNull()
-    expect(result.current.graphState.commitDetail.isLoading).toBe(false)
-    expect(result.current.graphState.commitDetail.errorMessage).toBe('커밋 상세 조회 실패')
+    expect(result.current.graphState.commitDetail).toEqual({
+      status: 'error',
+      selectedHash: 'err3333',
+      errorMessage: '커밋 상세 조회 실패'
+    })
 
     await act(async () => {
       await result.current.toggleCommitDetail('err3333')
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBeNull()
-    expect(result.current.graphState.commitDetail.errorMessage).toBeNull()
+    expect(result.current.graphState.commitDetail).toEqual({ status: 'idle' })
   })
 
   it('clears expanded commit detail on scope filter switch, workspace switch, and when refreshed log drops selected commit', async () => {
@@ -611,13 +608,16 @@ describe('useGitController', () => {
     await act(async () => {
       await result.current.toggleCommitDetail('side222')
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBe('side222')
+    expect(result.current.graphState.commitDetail).toEqual({
+      status: 'loaded',
+      selectedHash: 'side222',
+      detail: makeCommitDetail('side222')
+    })
 
     await act(async () => {
       await result.current.changeLogScope('current')
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBeNull()
-    expect(result.current.graphState.commitDetail.detail).toBeNull()
+    expect(result.current.graphState.commitDetail).toEqual({ status: 'idle' })
 
     // Expand main111 while switching back to 'all', keeping main111 when refreshed list still includes it
     await act(async () => {
@@ -626,19 +626,27 @@ describe('useGitController', () => {
     await act(async () => {
       await result.current.toggleCommitDetail('main111')
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBe('main111')
+    expect(result.current.graphState.commitDetail).toEqual({
+      status: 'loaded',
+      selectedHash: 'main111',
+      detail: makeCommitDetail('main111')
+    })
 
     await act(async () => {
       await result.current.refreshStatus()
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBe('main111')
+    expect(result.current.graphState.commitDetail).toEqual({
+      status: 'loaded',
+      selectedHash: 'main111',
+      detail: makeCommitDetail('main111')
+    })
 
     // If refresh drops main111 (e.g. rewritten/different history), selection clears cleanly
     currentCommits = [makeCommit('other999')]
     await act(async () => {
       await result.current.refreshStatus()
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBeNull()
+    expect(result.current.graphState.commitDetail).toEqual({ status: 'idle' })
 
     // Start delayed detail fetch in repo-a, then switch to repo-b -> clears & ignores stale response
     delayNextDetail = true
@@ -646,19 +654,21 @@ describe('useGitController', () => {
     act(() => {
       pendingStaleDetail = result.current.toggleCommitDetail('other999')
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBe('other999')
+    expect(result.current.graphState.commitDetail).toEqual({
+      status: 'loading',
+      selectedHash: 'other999'
+    })
 
     rerender({ ws: 'C:/repo-b' })
     await waitFor(() => {
       expect(result.current.status?.branch).toBe('other')
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBeNull()
+    expect(result.current.graphState.commitDetail).toEqual({ status: 'idle' })
 
     await act(async () => {
       resolveDelayedDetail(makeCommitDetail('other999'))
       await pendingStaleDetail
     })
-    expect(result.current.graphState.commitDetail.selectedHash).toBeNull()
-    expect(result.current.graphState.commitDetail.detail).toBeNull()
+    expect(result.current.graphState.commitDetail).toEqual({ status: 'idle' })
   })
 })
