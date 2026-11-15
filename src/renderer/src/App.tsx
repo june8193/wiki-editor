@@ -28,6 +28,8 @@ import { logRendererError, registerRendererGlobalErrorLogging } from './logging/
 import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
 import { toErrorMessage } from './utils/toErrorMessage'
 
+const RIGHT_SIDEBAR_DEFAULT_WIDTH = 240
+
 interface PendingDialogState {
   title: string
   message: string
@@ -444,7 +446,7 @@ export function App() {
       )}
 
       <main className="app-main">
-        <aside className="left-sidebar">
+        <aside className="left-sidebar" aria-label="왼쪽 사이드바">
           <FolderTreeSidebar
             workspace={workspace}
             isFavorite={isCurrentWorkspaceFavorite}
@@ -494,18 +496,6 @@ export function App() {
             onPush={() => void git.push()}
             onSync={() => void git.sync()}
           />
-
-          <DocumentOutlinePanel
-            documentName={activeBuffer?.name ?? null}
-            content={activeBuffer?.content ?? ''}
-            isMarkdownDocument={isActiveMarkdown}
-            showHeadingNumbers={config.showHeadingNumbers}
-            onToggleHeadingNumbers={toggleShowHeadingNumbers}
-            onSelectHeading={handleSelectOutlineHeading}
-            onInsertToc={handleOutlineInsertToc}
-            onApplyHeadingNumbers={handleOutlineApplyHeadingNumbers}
-            onStripHeadingNumbers={handleOutlineStripHeadingNumbers}
-          />
         </aside>
 
         <PaneWorkspace
@@ -521,6 +511,24 @@ export function App() {
           onSplitWithTab={splitWithTab}
           actions={paneActions}
         />
+
+        <aside
+          className="right-sidebar"
+          aria-label="우측 사이드바"
+          style={{ width: `${RIGHT_SIDEBAR_DEFAULT_WIDTH}px` }}
+        >
+          <DocumentOutlinePanel
+            documentName={activeBuffer?.name ?? null}
+            content={activeBuffer?.content ?? ''}
+            isMarkdownDocument={isActiveMarkdown}
+            showHeadingNumbers={config.showHeadingNumbers}
+            onToggleHeadingNumbers={toggleShowHeadingNumbers}
+            onSelectHeading={handleSelectOutlineHeading}
+            onInsertToc={handleOutlineInsertToc}
+            onApplyHeadingNumbers={handleOutlineApplyHeadingNumbers}
+            onStripHeadingNumbers={handleOutlineStripHeadingNumbers}
+          />
+        </aside>
 
         {isSettingsOpen && (
           <SettingsPanel

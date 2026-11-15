@@ -2598,7 +2598,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       await triggerMenuCommand(emitMenuCommand, 'open-folder')
       await user.click(await screen.findByText('guide.md'))
 
-      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+      const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
       const items = within(within(outline).getByRole('list')).getAllByRole('listitem')
       expect(items).toHaveLength(3)
       expect(items[0].textContent).toContain('1.')
@@ -2724,7 +2725,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
     // Focus primary pane and run "본문 헤딩 번호 쓰기"
     await user.click(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
-    const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
 
     await user.click(within(outline).getByRole('button', { name: '본문 헤딩 번호 쓰기' }))
     expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toContain(
@@ -2787,7 +2789,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       })
     )
 
-    const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
     await user.click(within(outline).getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
 
     await user.click(
@@ -2844,7 +2847,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         })
       )
 
-      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+      const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
       await user.click(within(outline).getByRole('button', { name: /Target Heading/i }))
       expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
 
@@ -2869,6 +2873,98 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
       }
     }
+  })
+
+  it('renders Document Outline in expanded right sidebar (240px) to the right of PaneWorkspace instead of left sidebar', async () => {
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const paneWorkspace = screen.getByTestId('pane-workspace')
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+
+    expect(
+      leftSidebar.compareDocumentPosition(paneWorkspace) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      paneWorkspace.compareDocumentPosition(rightSidebar) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    expect(
+      within(leftSidebar).queryByRole('region', { name: '문서 목차 (Outline)' })
+    ).not.toBeInTheDocument()
+
+    expect(rightSidebar).toHaveStyle({ width: '240px' })
+    const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
+    expect(within(outline).getByRole('button', { name: /Outline/i })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(outline).getByText('열린 문서 없음')).toBeInTheDocument()
+  })
+
+  it('keeps right sidebar mounted with empty-state messages when no document, non-markdown, or headingless document is active', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\outline-empty',
+        workspaces: {
+          'C:\\wiki\\outline-empty': {
+            'notes.txt': 'Plain text file',
+            'blank.md': 'Just paragraph text without headings',
+            'guide.md': '# Guide Heading\n\n## Sub Heading'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+
+    expect(within(rightSidebar).getByText('열린 문서 없음')).toBeInTheDocument()
+    expect(
+      within(rightSidebar).getByRole('button', { name: '본문에 목차(/toc) 삽입' })
+    ).toBeDisabled()
+
+    await user.click(await within(explorer).findByText('notes.txt'))
+    expect(screen.getByRole('complementary', { name: '우측 사이드바' })).toBe(rightSidebar)
+    expect(
+      within(rightSidebar).getByText('마크다운 문서에서만 목차를 지원합니다.')
+    ).toBeInTheDocument()
+    expect(
+      within(rightSidebar).getByRole('button', { name: '본문에 목차(/toc) 삽입' })
+    ).toBeDisabled()
+    expect(
+      within(rightSidebar).getByRole('button', { name: '본문 헤딩 번호 쓰기' })
+    ).toBeDisabled()
+    expect(
+      within(rightSidebar).getByRole('button', { name: '본문 헤딩 번호 제거' })
+    ).toBeDisabled()
+
+    await user.click(within(explorer).getByText('blank.md'))
+    expect(within(rightSidebar).getByText('표시할 헤딩이 없습니다.')).toBeInTheDocument()
+
+    await user.click(within(explorer).getByText('guide.md'))
+    const items = within(within(rightSidebar).getByRole('list')).getAllByRole('listitem')
+    expect(items).toHaveLength(2)
+    expect(items[0].textContent).toContain('Guide Heading')
+
+    await user.click(screen.getByRole('button', { name: 'guide.md 탭 닫기' }))
+    await user.click(screen.getByRole('button', { name: 'blank.md 탭 닫기' }))
+    await user.click(screen.getByRole('button', { name: 'notes.txt 탭 닫기' }))
+    expect(screen.getByRole('complementary', { name: '우측 사이드바' })).toBe(rightSidebar)
+    expect(within(rightSidebar).getByText('열린 문서 없음')).toBeInTheDocument()
   })
 })
 
