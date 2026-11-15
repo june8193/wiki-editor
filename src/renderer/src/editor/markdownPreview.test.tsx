@@ -270,4 +270,97 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
       Element.prototype.scrollIntoView = origScrollIntoView
     }
   })
+
+  it('annotates top-level markdown blocks (including table wrapper and mermaid block) with 1-based source lines after sanitization without HTML spoofing', () => {
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({ svg: '<svg><text>Diagram</text></svg>' }))
+    }
+    const mermaidRenderer = createMermaidRenderer(driver)
+
+    const md = [
+      '# Main Heading',
+      '',
+      'First line of paragraph',
+      'Second line of paragraph',
+      '',
+      '- Item 1',
+      '- Item 2',
+      '',
+      '> Quote line 1',
+      '> Quote line 2',
+      '',
+      '| Col A | Col B |',
+      '| ----- | ----- |',
+      '| Val 1 | Val 2 |',
+      '',
+      '```ts',
+      'const a = 1',
+      '```',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  A --> B',
+      '```',
+      '',
+      '<div data-source-line="999" data-source-end-line="1000">Raw Div</div>',
+      '',
+      'Inline <span data-source-line="888">spoof</span> text',
+      '',
+      '<div><p data-source-line="777">Nested</p></div>'
+    ].join('\n')
+
+    const { container } = render(
+      <MarkdownPreview content={md} scrollTop={0} mermaidRenderer={mermaidRenderer} />
+    )
+
+    const heading = container.querySelector('h1')
+    expect(heading).toHaveAttribute('data-source-line', '1')
+    expect(heading).toHaveAttribute('data-source-end-line', '1')
+
+    const paragraphs = container.querySelectorAll('p')
+    expect(paragraphs[0]).toHaveAttribute('data-source-line', '3')
+    expect(paragraphs[0]).toHaveAttribute('data-source-end-line', '4')
+
+    const list = container.querySelector('ul')
+    expect(list).toHaveAttribute('data-source-line', '6')
+    expect(list).toHaveAttribute('data-source-end-line', '7')
+
+    const quote = container.querySelector('blockquote')
+    expect(quote).toHaveAttribute('data-source-line', '9')
+    expect(quote).toHaveAttribute('data-source-end-line', '10')
+
+    const tableWrapper = container.querySelector('.md-table-wrapper')
+    expect(tableWrapper).toHaveAttribute('data-source-line', '12')
+    expect(tableWrapper).toHaveAttribute('data-source-end-line', '14')
+    expect(tableWrapper?.querySelector('table')).not.toHaveAttribute('data-source-line')
+
+    const codePre = container.querySelector('pre')
+    expect(codePre).toHaveAttribute('data-source-line', '16')
+    expect(codePre).toHaveAttribute('data-source-end-line', '18')
+
+    const mermaidBlock = screen.getByTestId('mermaid-diagram')
+    expect(mermaidBlock).toHaveAttribute('data-source-line', '20')
+    expect(mermaidBlock).toHaveAttribute('data-source-end-line', '23')
+
+    // Raw HTML spoofed attributes must be stripped by sanitize and replaced/omitted accurately
+    expect(container.querySelector('[data-source-line="999"]')).toBeNull()
+    expect(container.querySelector('[data-source-end-line="1000"]')).toBeNull()
+    expect(container.querySelector('[data-source-line="888"]')).toBeNull()
+    expect(container.querySelector('[data-source-line="777"]')).toBeNull()
+
+    const rawDiv = screen.getByText('Raw Div')
+    expect(rawDiv).toHaveAttribute('data-source-line', '25')
+    expect(rawDiv).toHaveAttribute('data-source-end-line', '25')
+
+    const spoofSpan = screen.getByText('spoof')
+    expect(spoofSpan).not.toHaveAttribute('data-source-line')
+    expect(spoofSpan.closest('p')).toHaveAttribute('data-source-line', '27')
+    expect(spoofSpan.closest('p')).toHaveAttribute('data-source-end-line', '27')
+
+    const nestedP = screen.getByText('Nested')
+    expect(nestedP).not.toHaveAttribute('data-source-line')
+    expect(nestedP.parentElement).toHaveAttribute('data-source-line', '29')
+    expect(nestedP.parentElement).toHaveAttribute('data-source-end-line', '29')
+  })
 })

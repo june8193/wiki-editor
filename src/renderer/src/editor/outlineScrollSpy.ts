@@ -1,0 +1,340 @@
+import type { EditorMode, PaneId } from '../stores/PaneTabStore'
+import {
+  type MarkdownHeading,
+  stripHeadingNumberPrefix,
+  stripInlineMarkdown
+} from './MarkdownTocEngine'
+
+export const OUTLINE_SPY_TOP_THRESHOLD_PX = 24
+export const OUTLINE_SPY_BOTTOM_EPSILON_PX = 2
+
+export interface HeadingScrollSpySample {
+  headingIndex: number | null
+  isUserScroll: boolean
+}
+
+export interface OutlineContextTarget {
+  paneId: PaneId
+  tabId: string
+  mode: EditorMode
+}
+
+export interface OutlineScrollRequest extends OutlineContextTarget {
+  line: number
+  slug: string
+  index: number
+  nonce: number
+}
+
+export interface DocumentOutlineSpyUpdate extends HeadingScrollSpySample {
+  mode: EditorMode
+}
+
+export interface OutlineActiveHeadingReport extends HeadingScrollSpySample {
+  context: OutlineContextTarget
+}
+
+export interface ScrollContainerMetrics {
+  scrollTop: number
+  scrollHeight: number
+  clientHeight: number
+}
+
+export interface OffsetActiveHeadingInput extends ScrollContainerMetrics {
+  /** Heading top positions relative to the scroll container's visible top edge */
+  headingTopOffsets: readonly number[]
+}
+
+export interface LineActiveHeadingInput extends ScrollContainerMetrics {
+  /** Parsed markdown headings in document order */
+  headings: readonly Pick<MarkdownHeading, 'line'>[]
+  /** 1-based line number at the scroll container's visible top baseline */
+  topLine: number
+}
+
+/**
+ * Returns true when a scrollable container has actually been scrolled (`scrollTop > 0`)
+ * to within `OUTLINE_SPY_BOTTOM_EPSILON_PX` of its bottom edge.
+ */
+function isScrollAtBottom(metrics: ScrollContainerMetrics): boolean {
+  const { scrollTop, scrollHeight, clientHeight } = metrics
+  return (
+    scrollTop > 0 &&
+    scrollHeight > clientHeight &&
+    scrollHeight - scrollTop - clientHeight <= OUTLINE_SPY_BOTTOM_EPSILON_PX
+  )
+}
+
+function resolveLastMatchingHeadingIndex<T>(
+  items: readonly T[],
+  metrics: ScrollContainerMetrics,
+  matchesBaseline: (item: T) => boolean
+): number | null {
+  if (items.length === 0) return null
+  if (isScrollAtBottom(metrics)) {
+    return items.length - 1
+  }
+
+  let activeIndex: number | null = null
+  for (let i = 0; i < items.length; i += 1) {
+    if (matchesBaseline(items[i])) {
+      activeIndex = i
+    }
+  }
+  return activeIndex
+}
+
+/**
+ * Resolves the active 0-based heading index from DOM heading top offsets relative to
+ * the visible scroll container top edge, accounting for prefaces and manual bottom scrolling.
+ */
+export function resolveActiveHeadingIndexByOffsets(
+  input: OffsetActiveHeadingInput
+): number | null {
+  return resolveLastMatchingHeadingIndex(
+    input.headingTopOffsets,
+    input,
+    (topOffset) => topOffset <= OUTLINE_SPY_TOP_THRESHOLD_PX
+  )
+}
+
+/**
+ * Resolves the active 0-based heading index from a 1-based visible top line number,
+ * accounting for prefaces and manual bottom scrolling.
+ */
+export function resolveActiveHeadingIndexByLine(input: LineActiveHeadingInput): number | null {
+  return resolveLastMatchingHeadingIndex(
+    input.headings,
+    input,
+    (heading) => heading.line <= input.topLine
+  )
+}
+
+const HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6'
+
+function collectVisibleHeadingText(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent ?? ''
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return ''
+  }
+  const element = node as Element
+  if (
+    element.classList.contains('heading-number') ||
+    element.classList.contains('heading-number-suppressed')
+  ) {
+    return ''
+  }
+  if (element.tagName === 'IMG') {
+    return element.getAttribute('alt') ?? ''
+  }
+  let text = ''
+  for (const child of Array.from(element.childNodes)) {
+    text += collectVisibleHeadingText(child)
+  }
+  return text
+}
+
+function normalizeHeadingTitleText(text: string): string {
+  const withoutNumber = stripHeadingNumberPrefix(text)
+  return (stripInlineMarkdown(withoutNumber) || withoutNumber).replace(/\s+/g, ' ').trim()
+}
+
+function matchHeadingsBySlugId(
+  allHeadings: readonly HTMLElement[],
+  headings: readonly MarkdownHeading[]
+): HTMLElement[] | null {
+  const byId = new Map<string, HTMLElement>()
+  for (const el of allHeadings) {
+    if (el.id && !byId.has(el.id)) {
+      byId.set(el.id, el)
+    }
+  }
+  if (byId.size === 0) {
+    return null
+  }
+
+  const matched: HTMLElement[] = []
+  for (const heading of headings) {
+    const match = byId.get(heading.slug)
+    if (match) {
+      matched.push(match)
+    }
+  }
+  return matched.length === headings.length ? matched : null
+}
+
+export interface OutlineHeadingCandidate {
+  level: number
+  text: string
+  hasMedia?: boolean
+}
+
+/**
+ * Aligns un-id'd heading candidates (such as rendered TipTap DOM headings or ProseMirror
+ * heading nodes) against parsed Document Outline ATX headings, excluding empty `# `,
+ * blockquote, and Setext headings omitted by `parseMarkdownHeadings`.
+ */
+export function resolveMatchingOutlineCandidates<T extends OutlineHeadingCandidate>(
+  candidates: readonly T[],
+  headings: readonly MarkdownHeading[]
+): T[] {
+  if (candidates.length === headings.length) {
+    return [...candidates]
+  }
+
+  const matched: T[] = []
+  let cursor = 0
+  for (const heading of headings) {
+    const expectedTitle = heading.title.replace(/\s+/g, ' ').trim()
+    while (cursor < candidates.length) {
+      const candidate = candidates[cursor]
+      cursor += 1
+      if (candidate.level === heading.level && normalizeHeadingTitleText(candidate.text) === expectedTitle) {
+        matched.push(candidate)
+        break
+      }
+    }
+  }
+  if (matched.length === headings.length) {
+    return matched
+  }
+
+  const nonEmpty = candidates.filter(
+    (candidate) => normalizeHeadingTitleText(candidate.text).length > 0 || candidate.hasMedia === true
+  )
+  return nonEmpty.length === headings.length ? nonEmpty : [...candidates]
+}
+
+function resolveMatchingHeadingElements(
+  container: HTMLElement,
+  headings: readonly MarkdownHeading[]
+): HTMLElement[] {
+  const allHeadings = Array.from(container.querySelectorAll<HTMLElement>(HEADING_SELECTOR))
+  const matchedById = matchHeadingsBySlugId(allHeadings, headings)
+  if (matchedById) {
+    return matchedById
+  }
+
+  // TipTap headings lack id attributes and may include empty `# `, blockquote, or Setext headings
+  // omitted by `parseMarkdownHeadings`; align monotonically on visible heading level and title.
+  const outlineCandidates = allHeadings
+    .filter((el) => !el.closest('blockquote, pre, svg'))
+    .map((el) => ({
+      el,
+      level: Number(el.tagName[1]),
+      text: collectVisibleHeadingText(el),
+      hasMedia: el.querySelector('img') !== null
+    }))
+  const matched = resolveMatchingOutlineCandidates(outlineCandidates, headings)
+  return matched.length === headings.length ? matched.map((item) => item.el) : allHeadings
+}
+
+function hasMeasuredElementBox(
+  el: HTMLElement,
+  rect: DOMRect = el.getBoundingClientRect()
+): boolean {
+  return el.clientHeight > 0 || el.scrollHeight > 0 || rect.height > 0
+}
+
+function resolveDocumentPaddingTop(
+  documentPaddingTop: number | undefined,
+  contentDOM: HTMLElement
+): number {
+  if (typeof documentPaddingTop === 'number' && documentPaddingTop > 0) {
+    return documentPaddingTop
+  }
+  const parsed = Number.parseFloat(getComputedStyle(contentDOM).paddingTop)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
+export interface RawScrollViewportLike {
+  scrollDOM: HTMLElement
+  contentDOM: HTMLElement
+  documentPaddingTop?: number
+  defaultLineHeight?: number
+  lineCount: number
+  lineNumberAt: (pos: number) => number
+  lineBlockAtHeight: (height: number) => { from: number; top?: number; bottom?: number }
+}
+
+/**
+ * Measures heading positions inside a scrollable rendered markdown container (Preview / WYSIWYG)
+ * and resolves the active 0-based outline heading index, returning `null` when layout geometry
+ * is absent (e.g., unmocked jsdom) or when the scroll position sits in the preface.
+ */
+export function measureActiveHeadingIndexInContainer(
+  container: HTMLElement,
+  headings: readonly MarkdownHeading[]
+): number | null {
+  if (headings.length === 0) return null
+
+  const headingEls = resolveMatchingHeadingElements(container, headings)
+  if (headingEls.length === 0) return null
+
+  const containerRect = container.getBoundingClientRect()
+  const headingRects = headingEls.map((el) => el.getBoundingClientRect())
+  const hasLayoutGeometry =
+    hasMeasuredElementBox(container, containerRect) ||
+    headingRects.some((rect) => rect.height > 0 || rect.top !== containerRect.top)
+
+  if (!hasLayoutGeometry) {
+    return null
+  }
+
+  const headingTopOffsets = headingRects.map((rect) => rect.top - containerRect.top)
+  return resolveActiveHeadingIndexByOffsets({
+    headingTopOffsets,
+    scrollTop: container.scrollTop,
+    scrollHeight: container.scrollHeight,
+    clientHeight: container.clientHeight
+  })
+}
+
+/**
+ * Resolves the active 0-based outline heading index from a CodeMirror 6 Raw editor viewport,
+ * returning `null` when layout geometry is absent (e.g., unmocked jsdom) or when the top
+ * visible line sits in the preface.
+ */
+export function measureActiveHeadingIndexInRawEditor(
+  view: RawScrollViewportLike,
+  headings: readonly Pick<MarkdownHeading, 'line'>[]
+): number | null {
+  if (headings.length === 0) return null
+
+  const { scrollDOM, contentDOM } = view
+  if (!hasMeasuredElementBox(scrollDOM)) {
+    return null
+  }
+
+  const paddingTop = resolveDocumentPaddingTop(view.documentPaddingTop, contentDOM)
+  const baselineHeight = Math.max(
+    0,
+    scrollDOM.scrollTop + OUTLINE_SPY_TOP_THRESHOLD_PX - paddingTop
+  )
+  const topBlock = view.lineBlockAtHeight(baselineHeight)
+  let topLine = view.lineNumberAt(topBlock.from)
+  // In headless jsdom after a CM6 DOM measure cycle, zero-height `.cm-line` rects collapse
+  // `heightMap` blocks to zero height (`bottom <= top`); fall back to `defaultLineHeight`.
+  const isZeroHeightBlock =
+    typeof topBlock.bottom === 'number' && topBlock.bottom <= (topBlock.top ?? 0)
+  if (isZeroHeightBlock && baselineHeight > 0) {
+    const fallbackLineHeight =
+      typeof view.defaultLineHeight === 'number' && view.defaultLineHeight > 0
+        ? view.defaultLineHeight
+        : 14
+    topLine = Math.max(
+      1,
+      Math.min(view.lineCount, Math.floor(baselineHeight / fallbackLineHeight) + 1)
+    )
+  }
+
+  return resolveActiveHeadingIndexByLine({
+    headings,
+    topLine,
+    scrollTop: scrollDOM.scrollTop,
+    scrollHeight: scrollDOM.scrollHeight,
+    clientHeight: scrollDOM.clientHeight
+  })
+}

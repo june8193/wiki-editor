@@ -1,5 +1,7 @@
+import type { EditorView } from '@codemirror/view'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
+import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
 import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
 import type { CursorPosition } from '../stores/PaneTabStore'
@@ -21,9 +23,13 @@ interface RawMarkdownEditorProps {
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   activeFilePath?: string | null
   scrollRequest?: RawScrollRequest | null
+  isActive?: boolean
+  editorViewRef?: { current: EditorView | null }
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onLinkNavigate?: (href: string) => void
+  onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
+  onRawScroll?: () => void
 }
 
 const RAW_TABLE_BUTTONS: ReadonlyArray<{
@@ -58,9 +64,13 @@ export function RawMarkdownEditor({
   workspaceMarkdownFiles,
   activeFilePath,
   scrollRequest,
+  isActive = true,
+  editorViewRef,
   onChangeContent,
   onUpdateViewState,
-  onLinkNavigate
+  onLinkNavigate,
+  onActiveHeadingChange,
+  onRawScroll
 }: RawMarkdownEditorProps) {
   const { shellRef, hostRef, inTable, runTableAction, insertToc, slashMenuProps, linkMenuProps } =
     useRawCodeMirrorEditor({
@@ -78,9 +88,13 @@ export function RawMarkdownEditor({
       workspaceMarkdownFiles,
       activeFilePath,
       scrollRequest,
+      isActive,
+      editorViewRef,
       onChangeContent,
       onUpdateViewState,
-      onLinkNavigate
+      onLinkNavigate,
+      onActiveHeadingChange,
+      onRawScroll
     })
 
   return (

@@ -11,12 +11,17 @@ import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { isLinkNavigationClick } from '../editor/editorModes'
 import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
+  type HeadingScrollSpySample,
+  resolveMatchingOutlineCandidates
+} from '../editor/outlineScrollSpy'
+import {
   addTableRowBeforeSafely,
   applyWysiwygCtrlK,
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
   detectProseMirrorLinkQuery,
   detectProseMirrorSlashQuery,
+  extractWysiwygHeadingCandidates,
   headingNumberingPluginKey,
   insertWysiwygLink,
   insertWysiwygMarkdownWithCursor,
@@ -27,10 +32,9 @@ import {
   slashInsertPluginKey
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
+import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
 import { useLinkMenu } from '../hooks/useLinkMenu'
-import { useOneShotScroll } from '../hooks/useOneShotScroll'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from '../hooks/useSlashMenu'
-import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
 import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
 import { SlashCommandMenu } from './SlashCommandMenu'
@@ -53,9 +57,11 @@ interface WysiwygMarkdownEditorProps {
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   activeFilePath?: string | null
   scrollRequest?: WysiwygScrollRequest | null
+  isActive?: boolean
   onChangeContent: (nextContent: string) => void
   onScrollTopChange?: (scrollTop: number) => void
   onLinkNavigate?: (href: string) => void
+  onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
 }
 
 interface ToolbarStateSnapshot {
@@ -233,9 +239,11 @@ export function WysiwygMarkdownEditor({
   workspaceMarkdownFiles,
   activeFilePath,
   scrollRequest,
+  isActive = true,
   onChangeContent,
   onScrollTopChange,
-  onLinkNavigate
+  onLinkNavigate,
+  onActiveHeadingChange
 }: WysiwygMarkdownEditorProps) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
@@ -475,30 +483,31 @@ export function WysiwygMarkdownEditor({
     }
   }, [editor, showHeadingNumbers])
 
-  useOneShotScroll(scrollRequest, Boolean(editor), (req) => {
-    if (!editor) return false
+  useContainerOutlineSpy({
+    containerRef: scrollContainerRef,
+    content,
+    scrollTop,
+    isReady: Boolean(editor),
+    isActive,
+    scrollRequest,
+    onScrollRequest: (req, headings) => {
+      if (!editor) return false
 
-    const headingPositions: number[] = []
-    editor.state.doc.descendants((node, pos) => {
-      if (node.type.name === 'heading') {
-        headingPositions.push(pos)
-        return false
+      const candidates = extractWysiwygHeadingCandidates(editor.state.doc)
+      const matchedHeadings = resolveMatchingOutlineCandidates(candidates, headings)
+      const targetPos = matchedHeadings[req.index]?.pos
+      if (targetPos === undefined) return true
+
+      const dom = editor.view.nodeDOM(targetPos)
+      if (dom instanceof Element && typeof dom.scrollIntoView === 'function') {
+        dom.scrollIntoView({ block: 'start' })
       }
-      return node.type.name !== 'codeBlock'
-    })
-
-    const targetPos = headingPositions[req.index]
-    if (targetPos === undefined) return true
-
-    const dom = editor.view.nodeDOM(targetPos)
-    if (dom instanceof Element && typeof dom.scrollIntoView === 'function') {
-      dom.scrollIntoView({ block: 'start' })
-    }
-    editor.commands.setTextSelection(targetPos + 1)
-    return true
+      editor.commands.setTextSelection(targetPos + 1)
+      return true
+    },
+    onScrollTopChange,
+    onActiveHeadingChange
   })
-
-  useSyncScrollTop(scrollContainerRef, scrollTop)
 
   const toolbarState = useEditorState({
     editor,
@@ -530,13 +539,13 @@ export function WysiwygMarkdownEditor({
           if (item.kind === 'divider') {
             return <span key={item.id} className="toolbar-divider" aria-hidden="true" />
           }
-          const isActive = item.activeKey ? toolbarState[item.activeKey] : false
+          const isItemActive = item.activeKey ? toolbarState[item.activeKey] : false
           return (
             <button
               key={item.id}
               type="button"
-              className={`toolbar-btn${isActive ? ' is-active' : ''}`}
-              aria-pressed={item.activeKey ? isActive : undefined}
+              className={`toolbar-btn${isItemActive ? ' is-active' : ''}`}
+              aria-pressed={item.activeKey ? isItemActive : undefined}
               onClick={() => item.run(editor)}
             >
               {item.label}
@@ -556,7 +565,6 @@ export function WysiwygMarkdownEditor({
       <div
         ref={scrollContainerRef}
         className="wysiwyg-scroll-container"
-        onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
         onContextMenu={(event) => {
           const target = event.target as HTMLElement | null
           const cellEl = target?.closest('td, th')

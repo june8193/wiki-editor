@@ -1,40 +1,46 @@
-import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
+import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
-import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
+import { getRawEditorLanguage, resolveEditorShortcut, resolveEffectiveEditorMode } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
+import type {
+  DocumentOutlineSpyUpdate,
+  HeadingScrollSpySample,
+  OutlineScrollRequest
+} from '../editor/outlineScrollSpy'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
+import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
-import { EditorMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import {
+  DEFAULT_SPLIT_RATIO,
+  DocumentTabItem,
+  EditorMode,
+  normalizeSplitRatio,
+  roundSplitRatio,
+  TabViewPatch
+} from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
+import { SplitSplitter } from './SplitSplitter'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
-
-export interface OutlineScrollRequest {
-  paneId: PaneId
-  tabId: string
-  mode: EditorMode
-  line: number
-  slug: string
-  index: number
-  nonce: number
-}
 
 interface DocumentEditorProps {
   document: DocumentBuffer
-  tab: TabItem
+  tab: DocumentTabItem
   theme: ThemeMode
   autoSave: boolean
   showHeadingNumbers?: boolean
   customCommands?: readonly CustomCommandConfig[]
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: OutlineScrollRequest | null
+  isActive?: boolean
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   onChangeContent: (nextContent: string) => void
   onSave: () => void
   onUpdateViewState: (patch: TabViewPatch) => void
   onNavigateLink?: (href: string) => void
+  onActiveHeadingChange?: (update: DocumentOutlineSpyUpdate) => void
 }
 
 const EDITOR_MODE_OPTIONS: ReadonlyArray<{
@@ -45,7 +51,8 @@ const EDITOR_MODE_OPTIONS: ReadonlyArray<{
 }> = [
   { mode: 'raw', label: 'Raw', shortcutHint: 'Ctrl+1', requiresMarkdown: false },
   { mode: 'wysiwyg', label: '위지윅', shortcutHint: 'Ctrl+2', requiresMarkdown: true },
-  { mode: 'preview', label: 'Preview', shortcutHint: 'Ctrl+3', requiresMarkdown: true }
+  { mode: 'preview', label: 'Preview', shortcutHint: 'Ctrl+3', requiresMarkdown: true },
+  { mode: 'split', label: 'Split', shortcutHint: 'Ctrl+4', requiresMarkdown: true }
 ]
 
 export function DocumentEditor({
@@ -57,20 +64,63 @@ export function DocumentEditor({
   customCommands,
   mermaidRenderer,
   scrollRequest = null,
+  isActive = true,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   onChangeContent,
   onSave,
   onUpdateViewState,
-  onNavigateLink
+  onNavigateLink,
+  onActiveHeadingChange
 }: DocumentEditorProps) {
   const activeFilePath = activeDoc.kind === 'workspace' ? activeDoc.path : null
-  const allowRichModes = isMarkdownDocument(activeDoc)
-  const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
+  const { allowRichModes, effectiveMode } = resolveEffectiveEditorMode(activeDoc, tab.mode)
+  const rawRatio = normalizeSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
+  const previewRatio = roundSplitRatio(1 - rawRatio)
   const rawLanguage = getRawEditorLanguage(activeDoc)
   const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
   const matchedScrollRequest =
     scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
+  const previewScrollRequest = matchedScrollRequest
+    ? {
+        slug: matchedScrollRequest.slug,
+        index: matchedScrollRequest.index,
+        nonce: matchedScrollRequest.nonce
+      }
+    : null
+  const splitContainerRef = useRef<HTMLDivElement | null>(null)
+  const {
+    rawEditorViewRef,
+    splitPreviewContainerRef,
+    handleSplitRawScroll,
+    handleSplitPreviewScroll
+  } = useSplitScrollSync({
+    effectiveMode,
+    matchedScrollRequest,
+    onUpdateViewState
+  })
+
+  const handleSplitRatioChange = useCallback(
+    (nextRatio: number): void => {
+      onUpdateViewState({ splitPreviewRatio: nextRatio })
+    },
+    [onUpdateViewState]
+  )
+
+  const modeHeadingChangeHandlers = useMemo(() => {
+    if (!onActiveHeadingChange) return null
+    const createReporter =
+      (mode: EditorMode) =>
+      (sample: HeadingScrollSpySample): void => {
+        onActiveHeadingChange({ mode, ...sample })
+      }
+    return {
+      raw: allowRichModes ? createReporter('raw') : undefined,
+      wysiwyg: createReporter('wysiwyg'),
+      preview: createReporter('preview'),
+      split: allowRichModes ? createReporter('split') : undefined
+    }
+  }, [allowRichModes, onActiveHeadingChange])
 
   const handleModeSelect = useCallback(
     (nextMode: EditorMode): void => {
@@ -111,6 +161,41 @@ export function DocumentEditor({
         ? '자동 저장 대기'
         : '미저장'
       : '저장됨'
+
+  const rawEditorElement =
+    effectiveMode === 'raw' || effectiveMode === 'split' ? (
+      <RawMarkdownEditor
+        content={activeDoc.content}
+        language={rawLanguage}
+        theme={theme}
+        cursor={tab.cursor}
+        scrollTop={tab.scrollTop}
+        showTableToolbar={allowRichModes}
+        enableSlashCommands={allowRichModes}
+        enableLinkAutocomplete={allowRichModes}
+        isShortcutDisabled={isShortcutDisabled}
+        customCommands={customCommands}
+        documentTitle={documentTitle}
+        workspaceMarkdownFiles={workspaceMarkdownFiles}
+        activeFilePath={activeFilePath}
+        scrollRequest={
+          matchedScrollRequest && (effectiveMode === 'raw' || effectiveMode === 'split')
+            ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
+            : null
+        }
+        isActive={isActive}
+        editorViewRef={rawEditorViewRef}
+        onChangeContent={onChangeContent}
+        onUpdateViewState={onUpdateViewState}
+        onActiveHeadingChange={
+          effectiveMode === 'split'
+            ? modeHeadingChangeHandlers?.split
+            : modeHeadingChangeHandlers?.raw
+        }
+        onRawScroll={effectiveMode === 'split' ? handleSplitRawScroll : undefined}
+        onLinkNavigate={allowRichModes ? onNavigateLink : undefined}
+      />
+    ) : null
 
   return (
     <section
@@ -173,31 +258,7 @@ export function DocumentEditor({
         </div>
       </div>
 
-      {effectiveMode === 'raw' && (
-        <RawMarkdownEditor
-          content={activeDoc.content}
-          language={rawLanguage}
-          theme={theme}
-          cursor={tab.cursor}
-          scrollTop={tab.scrollTop}
-          showTableToolbar={allowRichModes}
-          enableSlashCommands={allowRichModes}
-          enableLinkAutocomplete={allowRichModes}
-          isShortcutDisabled={isShortcutDisabled}
-          customCommands={customCommands}
-          documentTitle={documentTitle}
-          workspaceMarkdownFiles={workspaceMarkdownFiles}
-          activeFilePath={activeFilePath}
-          scrollRequest={
-            matchedScrollRequest
-              ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
-              : null
-          }
-          onChangeContent={onChangeContent}
-          onUpdateViewState={onUpdateViewState}
-          onLinkNavigate={allowRichModes ? onNavigateLink : undefined}
-        />
-      )}
+      {effectiveMode === 'raw' && rawEditorElement}
 
       {effectiveMode === 'wysiwyg' && (
         <WysiwygMarkdownEditor
@@ -217,9 +278,11 @@ export function DocumentEditor({
               ? { index: matchedScrollRequest.index, nonce: matchedScrollRequest.nonce }
               : null
           }
+          isActive={isActive}
           onChangeContent={onChangeContent}
           onScrollTopChange={handleScrollTopChange}
           onLinkNavigate={onNavigateLink}
+          onActiveHeadingChange={modeHeadingChangeHandlers?.wysiwyg}
         />
       )}
 
@@ -230,18 +293,46 @@ export function DocumentEditor({
           theme={theme}
           showHeadingNumbers={showHeadingNumbers}
           mermaidRenderer={mermaidRenderer}
-          scrollRequest={
-            matchedScrollRequest
-              ? {
-                  slug: matchedScrollRequest.slug,
-                  index: matchedScrollRequest.index,
-                  nonce: matchedScrollRequest.nonce
-                }
-              : null
-          }
+          scrollRequest={previewScrollRequest}
+          isActive={isActive}
           onScrollTopChange={handleScrollTopChange}
           onLinkNavigate={onNavigateLink}
+          onActiveHeadingChange={modeHeadingChangeHandlers?.preview}
         />
+      )}
+      {effectiveMode === 'split' && (
+        <div
+          ref={splitContainerRef}
+          className="editor-split-container"
+          data-testid="editor-split-container"
+        >
+          <div className="editor-split-region is-raw" style={{ flex: `${rawRatio} 1 0%` }}>
+            {rawEditorElement}
+          </div>
+          <SplitSplitter
+            containerRef={splitContainerRef}
+            direction="horizontal"
+            ratio={rawRatio}
+            ariaLabel="에디터 분할 크기 조절"
+            onChangeRatio={handleSplitRatioChange}
+            allowReset
+          />
+          <div className="editor-split-region is-preview" style={{ flex: `${previewRatio} 1 0%` }}>
+            <MarkdownPreview
+              scrollContainerRef={splitPreviewContainerRef}
+              content={activeDoc.content}
+              scrollTop={0}
+              theme={theme}
+              showHeadingNumbers={showHeadingNumbers}
+              mermaidRenderer={mermaidRenderer}
+              scrollRequest={previewScrollRequest}
+              isActive={isActive}
+              onScrollTopChange={handleSplitPreviewScroll}
+              onLinkNavigate={onNavigateLink}
+              testId="split-markdown-preview"
+            />
+          </div>
+        </div>
       )}
     </section>
   )

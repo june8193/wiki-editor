@@ -1,6 +1,7 @@
 import {
   getWorkspaceDisplayName,
   getWorkspacePathKey,
+  matchPathSeparators,
   normalizeWorkspacePath
 } from '@shared/workspace'
 
@@ -47,8 +48,7 @@ function buildRemappedPath(currentPath: string, oldPrefix: string, newPrefix: st
   if (!suffix) {
     return newPrefix
   }
-  const usePosixSep = newPrefix.includes('/') && !newPrefix.includes('\\')
-  const normalizedSuffix = usePosixSep ? suffix.replace(/\\/g, '/') : suffix.replace(/\//g, '\\')
+  const normalizedSuffix = matchPathSeparators(suffix, newPrefix)
   return `${newPrefix.replace(/[\\/]+$/, '')}${normalizedSuffix}`
 }
 

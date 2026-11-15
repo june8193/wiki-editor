@@ -630,6 +630,163 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
 
     expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
   })
+
+  it('reports active heading on scroll, code-fence ignore, content edit, click-to-scroll pin reset, and isActive activation', () => {
+    const onActiveHeadingChange = vi.fn()
+    const content = [
+      'Preface line 1',
+      '# First Heading',
+      '```sh',
+      '# comment inside fence',
+      'echo test',
+      '```',
+      '## Second Heading',
+      'Body line 8',
+      '### Third Heading',
+      'End line 10'
+    ].join('\n')
+
+    const scrollTopSpy = { current: 0 }
+    const { container, rerender } = render(
+      <RawMarkdownEditor
+        content={content}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        isActive={false}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+        onActiveHeadingChange={onActiveHeadingChange}
+      />
+    )
+
+    // Unmeasured jsdom box (zero height/scrollTop) reports null
+    expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+      headingIndex: null,
+      isUserScroll: false
+    })
+
+    const scroller = container.querySelector('.cm-scroller') as HTMLElement
+    expect(scroller).toBeTruthy()
+    // CM6 HeightOracle uses 14px lineHeight in jsdom; line n starts at (n - 1) * 14px (plus paddingTop)
+    Object.defineProperties(scroller, {
+      clientHeight: { value: 200, configurable: true },
+      scrollHeight: { value: 500, configurable: true },
+      scrollTop: {
+        get: () => scrollTopSpy.current,
+        set: (val: number) => {
+          scrollTopSpy.current = val
+        },
+        configurable: true
+      }
+    })
+
+    onActiveHeadingChange.mockClear()
+
+    // Becoming active immediately measures current scroll position (top of preface -> null)
+    rerender(
+      <RawMarkdownEditor
+        content={content}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        isActive
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+        onActiveHeadingChange={onActiveHeadingChange}
+      />
+    )
+    expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+      headingIndex: null,
+      isUserScroll: false
+    })
+
+    // User wheel + scroll onto line 4 (`# comment inside fence`) remains on `# First Heading` (index 0)
+    // Scroll onto line 4: topLine = 4 -> heading 0 (line 2 <= 4), code fence comment ignored
+    onActiveHeadingChange.mockClear()
+    fireEvent.wheel(scroller)
+    scrollTopSpy.current = 42
+    fireEvent.scroll(scroller)
+    expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+      headingIndex: 0,
+      isUserScroll: true
+    })
+
+    // User wheel + scroll onto line 7 (`## Second Heading`) -> headingIndex 1
+    onActiveHeadingChange.mockClear()
+    fireEvent.wheel(scroller)
+    scrollTopSpy.current = 84
+    fireEvent.scroll(scroller)
+    expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+      headingIndex: 1,
+      isUserScroll: true
+    })
+
+    // Scroll to bottom -> last heading (index 2)
+    onActiveHeadingChange.mockClear()
+    fireEvent.wheel(scroller)
+    scrollTopSpy.current = 299
+    fireEvent.scroll(scroller)
+    expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+      headingIndex: 2,
+      isUserScroll: true
+    })
+
+    // scrollRequest resets armed user scroll intent so programmatic scroll reports isUserScroll: false
+    onActiveHeadingChange.mockClear()
+    fireEvent.wheel(scroller)
+    rerender(
+      <RawMarkdownEditor
+        content={content}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={299}
+        isActive
+        scrollRequest={{ line: 2, nonce: 1 }}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+        onActiveHeadingChange={onActiveHeadingChange}
+      />
+    )
+    scrollTopSpy.current = 14
+    fireEvent.scroll(scroller)
+    expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+      headingIndex: 0,
+      isUserScroll: false
+    })
+
+    // Content edit inserts an earlier heading, immediately shifting active heading index at the same scrollTop
+    fireEvent.wheel(scroller)
+    scrollTopSpy.current = 98
+    fireEvent.scroll(scroller)
+    expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+      headingIndex: 1,
+      isUserScroll: true
+    })
+
+    onActiveHeadingChange.mockClear()
+    const editedContent = '# Zero Heading\n' + content
+    rerender(
+      <RawMarkdownEditor
+        content={editedContent}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={98}
+        isActive
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+        onActiveHeadingChange={onActiveHeadingChange}
+      />
+    )
+    expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+      headingIndex: 2,
+      isUserScroll: false
+    })
+  })
 })
 
 describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {

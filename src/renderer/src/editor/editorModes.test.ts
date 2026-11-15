@@ -5,6 +5,7 @@ import {
   isLinkNavigationClick,
   isMarkdownDocument,
   resolveEditorShortcut,
+  resolveEffectiveEditorMode,
   resolveModeShortcut
 } from './editorModes'
 
@@ -20,12 +21,26 @@ describe('editorModes helpers', () => {
     expect(getRawEditorLanguage({ kind: 'config', name: 'config.json' })).toBe('json')
     expect(getRawEditorLanguage({ kind: 'workspace', name: 'data.json' })).toBe('json')
     expect(getRawEditorLanguage({ kind: 'workspace', name: 'doc.md' })).toBe('markdown')
+
+    expect(resolveEffectiveEditorMode({ kind: 'workspace', name: 'readme.md' }, 'split')).toEqual({
+      allowRichModes: true,
+      effectiveMode: 'split'
+    })
+    expect(resolveEffectiveEditorMode({ kind: 'workspace', name: 'notes.txt' }, 'split')).toEqual({
+      allowRichModes: false,
+      effectiveMode: 'raw'
+    })
+    expect(resolveEffectiveEditorMode(undefined, 'split')).toEqual({
+      allowRichModes: false,
+      effectiveMode: 'raw'
+    })
   })
 
-  it('cycles modes and resolves Ctrl+1/2/3 and Ctrl+Shift+M shortcuts', () => {
+  it('cycles modes and resolves Ctrl/Cmd+1/2/3/4 and Ctrl/Cmd+Shift+M shortcuts', () => {
     expect(cycleEditorMode('raw')).toBe('wysiwyg')
     expect(cycleEditorMode('wysiwyg')).toBe('preview')
-    expect(cycleEditorMode('preview')).toBe('raw')
+    expect(cycleEditorMode('preview')).toBe('split')
+    expect(cycleEditorMode('split')).toBe('raw')
 
     expect(
       resolveModeShortcut({ key: '1', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', true)
@@ -37,12 +52,27 @@ describe('editorModes helpers', () => {
       resolveModeShortcut({ key: '3', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', true)
     ).toBe('preview')
     expect(
+      resolveModeShortcut({ key: '4', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', true)
+    ).toBe('split')
+    expect(
+      resolveModeShortcut({ key: '4', ctrlKey: false, metaKey: true, shiftKey: false, altKey: false }, 'raw', true)
+    ).toBe('split')
+    expect(
       resolveModeShortcut({ key: 'M', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, 'wysiwyg', true)
     ).toBe('preview')
+    expect(
+      resolveModeShortcut({ key: 'M', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, 'preview', true)
+    ).toBe('split')
+    expect(
+      resolveModeShortcut({ key: 'M', ctrlKey: false, metaKey: true, shiftKey: true, altKey: false }, 'split', true)
+    ).toBe('raw')
 
-    // Non-markdown docs cannot switch to wysiwyg/preview via shortcuts
+    // Non-markdown docs cannot switch to wysiwyg/preview/split via shortcuts
     expect(
       resolveModeShortcut({ key: '2', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false)
+    ).toBeNull()
+    expect(
+      resolveModeShortcut({ key: '4', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false)
     ).toBeNull()
     expect(
       resolveModeShortcut({ key: 'M', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, 'raw', false)
@@ -69,6 +99,9 @@ describe('editorModes helpers', () => {
       resolveEditorShortcut({ key: '2', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', true)
     ).toEqual({ type: 'mode', mode: 'wysiwyg' })
     expect(
+      resolveEditorShortcut({ key: '4', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', true)
+    ).toEqual({ type: 'mode', mode: 'split' })
+    expect(
       resolveEditorShortcut({ key: 'm', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, 'wysiwyg', true)
     ).toEqual({ type: 'mode', mode: 'preview' })
     expect(
@@ -76,6 +109,9 @@ describe('editorModes helpers', () => {
     ).toEqual({ type: 'mode', mode: 'raw' })
     expect(
       resolveEditorShortcut({ key: '2', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false)
+    ).toBeNull()
+    expect(
+      resolveEditorShortcut({ key: '4', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false)
     ).toBeNull()
     expect(
       resolveEditorShortcut({ key: 'k', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', true)

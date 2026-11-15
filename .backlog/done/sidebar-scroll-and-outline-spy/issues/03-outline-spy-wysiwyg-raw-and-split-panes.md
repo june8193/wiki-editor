@@ -1,0 +1,21 @@
+# 03 — 위지윅·Raw 모드 스크롤 추적 및 화면 분할·모드 전환 동기화
+
+**Spec:** [spec.md](../spec.md)
+
+**What to build:** **위지윅** 모드와 **Raw** 모드에도 상단 스크롤 위치 기준 활성 헤딩 추적을 확장 연결하고, **에디터 모드** 전환·탭 전환·문서 편집·**화면 분할 모드**에서의 활성 **편집기 영역** 전환 시 **문서 목차** 활성 헤딩이 일관되게 동기화되도록 완성합니다.
+
+**Blocked by:** 02-outline-active-heading-and-preview-spy
+
+**Status:** resolved
+
+- [x] **위지윅** 모드에서 본문 스크롤 컨테이너를 스크롤하거나 문서를 편집해 헤딩 구성이 바뀔 때, 상단 기준선 규칙에 따라 **문서 목차**의 활성 헤딩(`aria-current="location"`)이 갱신됩니다.
+- [x] **Raw** 모드에서 원문 에디터 뷰포트를 스크롤하거나 문서를 편집할 때, 뷰포트 상단 줄 번호와 마크다운 헤딩 줄 번호를 대조해 **문서 목차**의 활성 헤딩(`aria-current="location"`)이 갱신됩니다(코드 펜스 내부 `#` 주석은 헤딩에서 제외).
+- [x] **에디터 모드**(`Raw` ↔ `위지윅` ↔ `Preview`)를 전환하거나 같은 **편집기 영역**에서 다른 탭으로 전환하면, 전환된 뷰의 현재 스크롤 위치에 맞춰 **문서 목차** 활성 헤딩이 즉시 재계산됩니다(비마크다운 탭 전환 시 활성 헤딩 해제).
+- [x] **화면 분할 모드**에서 **주 편집기 영역**과 **보조 편집기 영역**이 서로 다른 문서나 스크롤 위치를 보고 있을 때, 비활성 영역 스크롤은 무시하고 활성 **편집기 영역** 포커스를 전환할 때마다 해당 영역의 활성 헤딩으로 **문서 목차**가 즉시 동기화됩니다.
+- [x] 세 **에디터 모드** 모두에서 **문서 목차** 항목 클릭 이동 시 클릭한 헤딩 즉시 강조 보호와 이후 수동 스크롤 복귀가 동일하게 동작합니다.
+- [x] `npm run typecheck`, `npm test`, `npm run build`가 모두 통과합니다.
+
+## Comments
+
+- Commits: `597fe07`, `6549049`, `89fcba1`, `ba4df51`, `59a1f08`
+- Verification: `npm run typecheck`, `npm test` (`39 passed (39)`, `254 passed (254)`), `npm run build` passed; parallel `/code-review` converged in 5 iterations with 0 Spec findings, 0 hard Standards violations, and only minor subjective judgement calls remaining.

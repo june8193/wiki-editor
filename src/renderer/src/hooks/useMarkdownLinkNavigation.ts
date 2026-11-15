@@ -2,15 +2,10 @@ import { useCallback, useRef } from 'react'
 import { isMarkdownDocument } from '../editor/editorModes'
 import { resolveMarkdownLinkTarget } from '../editor/MarkdownLinkNavigation'
 import { findMarkdownHeadingBySlug, type MarkdownHeading } from '../editor/MarkdownTocEngine'
+import type { OutlineContextTarget } from '../editor/outlineScrollSpy'
 import type { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
-import type { PaneId, PaneLayoutState, TabItem } from '../stores/PaneTabStore'
+import type { PaneId, PaneLayoutState } from '../stores/PaneTabStore'
 import type { OpenedWorkspaceDocument } from './useEditorWorkspace'
-
-/** Target tab and editor mode for a resolved heading scroll request. */
-export interface HeadingScrollTarget {
-  paneId: PaneId
-  tab: Pick<TabItem, 'id' | 'mode'>
-}
 
 export interface UseMarkdownLinkNavigationOptions {
   panes: PaneLayoutState['panes']
@@ -21,7 +16,12 @@ export interface UseMarkdownLinkNavigationOptions {
     targetPaneId?: PaneId,
     explicitName?: string
   ) => Promise<OpenedWorkspaceDocument | null>
-  dispatchHeadingScroll: (target: HeadingScrollTarget, heading: MarkdownHeading, index: number) => void
+  dispatchHeadingScroll: (
+    context: OutlineContextTarget,
+    content: string,
+    heading: MarkdownHeading,
+    index: number
+  ) => void
   reportErrorBanner: (message: string | null, error?: unknown) => void
 }
 
@@ -42,13 +42,13 @@ export function useMarkdownLinkNavigation({
   workspaceRootRef.current = workspaceRootPath
 
   const scrollToHeadingOrReport = useCallback(
-    (target: HeadingScrollTarget, content: string, slug: string): void => {
+    (context: OutlineContextTarget, content: string, slug: string): void => {
       const match = findMarkdownHeadingBySlug(content, slug)
       if (!match) {
         reportErrorBanner(`섹션을 찾을 수 없습니다: #${slug}`)
         return
       }
-      dispatchHeadingScroll(target, match.heading, match.index)
+      dispatchHeadingScroll(context, content, match.heading, match.index)
       reportErrorBanner(null)
     },
     [dispatchHeadingScroll, reportErrorBanner]
@@ -57,8 +57,11 @@ export function useMarkdownLinkNavigation({
   return useCallback(
     (paneId: PaneId, tabId: string, href: string): void => {
       const sourceTab = panes[paneId].tabs.find((tab) => tab.id === tabId)
-      const sourceBuffer = sourceTab ? buffers[sourceTab.bufferKey] : undefined
-      if (!sourceTab || !sourceBuffer || !isMarkdownDocument(sourceBuffer)) {
+      if (!sourceTab || sourceTab.kind !== 'document') {
+        return
+      }
+      const sourceBuffer = buffers[sourceTab.bufferKey]
+      if (!sourceBuffer || !isMarkdownDocument(sourceBuffer)) {
         return
       }
 
@@ -79,7 +82,11 @@ export function useMarkdownLinkNavigation({
       }
 
       if (resolved.kind === 'same-doc-section') {
-        scrollToHeadingOrReport({ paneId, tab: sourceTab }, sourceBuffer.content, resolved.slug)
+        scrollToHeadingOrReport(
+          { paneId, tabId: sourceTab.id, mode: sourceTab.mode },
+          sourceBuffer.content,
+          resolved.slug
+        )
         return
       }
 
@@ -96,7 +103,11 @@ export function useMarkdownLinkNavigation({
           return
         }
         if (resolved.slug !== null) {
-          scrollToHeadingOrReport({ paneId, tab: opened.tab }, opened.buffer.content, resolved.slug)
+          scrollToHeadingOrReport(
+            { paneId, tabId: opened.tab.id, mode: opened.tab.mode },
+            opened.buffer.content,
+            resolved.slug
+          )
         }
       })()
     },

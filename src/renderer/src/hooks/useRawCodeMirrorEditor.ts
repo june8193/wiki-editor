@@ -35,10 +35,14 @@ import {
   isOffsetInCodeFence,
   tryReplaceSlashTocAtLine
 } from '../editor/MarkdownTocEngine'
+import {
+  type HeadingScrollSpySample,
+  measureActiveHeadingIndexInRawEditor
+} from '../editor/outlineScrollSpy'
 import { detectSlashQuery, resolveSlashCommandSnippet } from '../editor/SlashCommandEngine'
 import type { CursorPosition } from '../stores/PaneTabStore'
+import { useEditorOutlineSpy } from './useEditorOutlineSpy'
 import { useLinkMenu } from './useLinkMenu'
-import { useOneShotScroll } from './useOneShotScroll'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from './useSlashMenu'
 import { syncElementScrollTop } from './useSyncScrollTop'
 
@@ -94,9 +98,13 @@ export interface UseRawCodeMirrorEditorOptions {
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   activeFilePath?: string | null
   scrollRequest?: RawScrollRequest | null
+  isActive?: boolean
+  editorViewRef?: { current: EditorView | null }
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onLinkNavigate?: (href: string) => void
+  onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
+  onRawScroll?: () => void
 }
 
 const markdownHighlightStyle = HighlightStyle.define([
@@ -239,13 +247,22 @@ export function useRawCodeMirrorEditor({
   workspaceMarkdownFiles,
   activeFilePath,
   scrollRequest,
+  isActive = true,
+  editorViewRef,
   onChangeContent,
   onUpdateViewState,
-  onLinkNavigate
+  onLinkNavigate,
+  onActiveHeadingChange,
+  onRawScroll
 }: UseRawCodeMirrorEditorOptions) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const outlineSpyRef = useRef<{
+    attachScrollElement: (element: HTMLElement) => () => void
+  }>({
+    attachScrollElement: () => () => {}
+  })
   const compartmentsRef = useRef({
     language: new Compartment(),
     theme: new Compartment(),
@@ -265,7 +282,8 @@ export function useRawCodeMirrorEditor({
     documentTitle,
     onChangeContent,
     onUpdateViewState,
-    onLinkNavigate
+    onLinkNavigate,
+    onRawScroll
   })
   runtimeRef.current = {
     content,
@@ -281,7 +299,8 @@ export function useRawCodeMirrorEditor({
     documentTitle,
     onChangeContent,
     onUpdateViewState,
-    onLinkNavigate
+    onLinkNavigate,
+    onRawScroll
   }
 
   const {
@@ -552,16 +571,19 @@ export function useRawCodeMirrorEditor({
     syncSelectionAttrs(view)
     view.scrollDOM.scrollTop = initial.scrollTop
     viewRef.current = view
-
-    const handleScroll = (): void => {
-      runtimeRef.current.onUpdateViewState({ scrollTop: view.scrollDOM.scrollTop })
+    if (editorViewRef) {
+      editorViewRef.current = view
     }
-    view.scrollDOM.addEventListener('scroll', handleScroll)
+
+    const detachOutlineScroll = outlineSpyRef.current.attachScrollElement(view.scrollDOM)
 
     return () => {
-      view.scrollDOM.removeEventListener('scroll', handleScroll)
+      detachOutlineScroll()
       view.destroy()
       viewRef.current = null
+      if (editorViewRef) {
+        editorViewRef.current = null
+      }
     }
   }, [])
 
@@ -651,21 +673,50 @@ export function useRawCodeMirrorEditor({
     syncElementScrollTop(view.scrollDOM, scrollTop)
   }, [scrollTop])
 
-  useOneShotScroll(scrollRequest, true, (req) => {
-    const view = viewRef.current
-    if (!view) return false
+  const outlineSpy = useEditorOutlineSpy({
+    content,
+    isReady: language === 'markdown',
+    isActive,
+    scrollRequest,
+    onScrollRequest: (req) => {
+      const view = viewRef.current
+      if (!view) return false
 
-    const lineCount = view.state.doc.lines
-    const clampedLine = Math.max(1, Math.min(req.line, lineCount))
-    const lineInfo = view.state.doc.line(clampedLine)
-    view.dispatch({
-      selection: { anchor: lineInfo.from },
-      effects: EditorView.scrollIntoView(lineInfo.from, { y: 'start' })
-    })
-    syncSelectionAttrs(view)
-    view.focus()
-    return true
+      const lineCount = view.state.doc.lines
+      const clampedLine = Math.max(1, Math.min(req.line, lineCount))
+      const lineInfo = view.state.doc.line(clampedLine)
+      view.dispatch({
+        selection: { anchor: lineInfo.from },
+        effects: EditorView.scrollIntoView(lineInfo.from, { y: 'start' })
+      })
+      syncSelectionAttrs(view)
+      view.focus()
+      return true
+    },
+    onScrollTopChange: (nextScrollTop) => {
+      runtimeRef.current.onUpdateViewState({ scrollTop: nextScrollTop })
+      runtimeRef.current.onRawScroll?.()
+    },
+    measure: (headings) => {
+      const view = viewRef.current
+      if (!view) return null
+      const { doc } = view.state
+      return measureActiveHeadingIndexInRawEditor(
+        {
+          scrollDOM: view.scrollDOM,
+          contentDOM: view.contentDOM,
+          documentPaddingTop: view.documentPadding.top,
+          defaultLineHeight: view.defaultLineHeight,
+          lineCount: doc.lines,
+          lineNumberAt: (pos) => doc.lineAt(pos).number,
+          lineBlockAtHeight: (height) => view.lineBlockAtHeight(height)
+        },
+        headings
+      )
+    },
+    onActiveHeadingChange
   })
+  outlineSpyRef.current = outlineSpy
 
   const runTableAction = useCallback((action: RawTableAction): void => {
     const view = viewRef.current

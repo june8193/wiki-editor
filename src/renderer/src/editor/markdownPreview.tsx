@@ -43,6 +43,11 @@ interface PreviewRenderContextValue {
   onLinkNavigate?: (href: string) => void
 }
 
+interface SourceLineDataProps {
+  'data-source-line'?: string
+  'data-source-end-line'?: string
+}
+
 const PreviewRenderContext = createContext<PreviewRenderContextValue>({ theme: 'light' })
 
 function extractHastText(node: HastElement | HastRootContent): string {
@@ -72,6 +77,27 @@ function stripLeadingNumberFromFirstTextLeaf(children: HastRootContent[]): boole
     }
   }
   return false
+}
+
+function rehypeSourceLineAnnotation() {
+  return (tree: HastRoot): void => {
+    for (const child of tree.children) {
+      if (child.type !== 'element') continue
+      const startLine = child.position?.start?.line
+      if (typeof startLine !== 'number' || !Number.isFinite(startLine) || startLine < 1) continue
+      const rawEndLine = child.position?.end?.line
+      const endLine =
+        typeof rawEndLine === 'number' && Number.isFinite(rawEndLine) && rawEndLine >= startLine
+          ? rawEndLine
+          : startLine
+
+      child.properties = {
+        ...child.properties,
+        'data-source-line': String(startLine),
+        'data-source-end-line': String(endLine)
+      }
+    }
+  }
 }
 
 function rehypeHeadingEnhancer(options: { showHeadingNumbers: boolean }) {
@@ -187,7 +213,7 @@ function PreviewCheckbox(props: ComponentPropsWithoutRef<'input'>) {
   )
 }
 
-function PreviewPre(props: ComponentPropsWithoutRef<'pre'>) {
+function PreviewPre(props: ComponentPropsWithoutRef<'pre'> & SourceLineDataProps) {
   const { theme, mermaidRenderer } = useContext(PreviewRenderContext)
   const childrenArray = Children.toArray(props.children)
 
@@ -199,17 +225,34 @@ function PreviewPre(props: ComponentPropsWithoutRef<'pre'>) {
       hasLanguageMermaidClass(onlyChild.props.className)
     ) {
       const diagramCode = extractReactText(onlyChild.props.children).replace(/\n$/, '')
-      return <MermaidDiagram code={diagramCode} theme={theme} renderer={mermaidRenderer} />
+      return (
+        <MermaidDiagram
+          code={diagramCode}
+          theme={theme}
+          renderer={mermaidRenderer}
+          sourceLine={props['data-source-line']}
+          sourceEndLine={props['data-source-end-line']}
+        />
+      )
     }
   }
 
   return <pre {...props} />
 }
 
-function PreviewTable(props: ComponentPropsWithoutRef<'table'>) {
+function PreviewTable(props: ComponentPropsWithoutRef<'table'> & SourceLineDataProps) {
+  const {
+    'data-source-line': sourceLine,
+    'data-source-end-line': sourceEndLine,
+    ...tableProps
+  } = props
   return (
-    <div className="md-table-wrapper">
-      <table {...props} />
+    <div
+      className="md-table-wrapper"
+      data-source-line={sourceLine}
+      data-source-end-line={sourceEndLine}
+    >
+      <table {...tableProps} />
     </div>
   )
 }
@@ -221,6 +264,7 @@ function buildPreviewProcessor(showHeadingNumbers: boolean) {
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)
     .use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA)
+    .use(rehypeSourceLineAnnotation)
     .use(rehypeHeadingEnhancer, { showHeadingNumbers })
     .use(rehypeReact, {
       Fragment,

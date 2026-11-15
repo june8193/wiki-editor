@@ -1,5 +1,14 @@
 import type { AppConfig } from './config'
-import type { GitBranchList, GitStatus, GitSyncResult } from './git'
+import type {
+  GitBranchList,
+  GitCommitDetail,
+  GitDiffRequest,
+  GitFileDiff,
+  GitLogOptions,
+  GitLogResult,
+  GitStatus,
+  GitSyncResult
+} from './git'
 import type { RendererLogPayload } from './logging'
 import type {
   WorkspaceChangeEvent,
@@ -46,7 +55,10 @@ export const GIT_IPC_CHANNELS = {
   checkout: 'git:checkout',
   pull: 'git:pull',
   push: 'git:push',
-  sync: 'git:sync'
+  sync: 'git:sync',
+  log: 'git:log',
+  commitDetail: 'git:commit-detail',
+  diff: 'git:diff'
 } as const
 
 export type AppMenuCommand = 'open-folder' | 'toggle-theme' | 'toggle-settings'
@@ -57,6 +69,10 @@ export const MENU_IPC_CHANNELS = {
 
 export const LOG_IPC_CHANNELS = {
   write: 'log:write'
+} as const
+
+export const CLIPBOARD_IPC_CHANNELS = {
+  writeText: 'clipboard:write-text'
 } as const
 
 export interface WikiConfigApi {
@@ -103,6 +119,9 @@ export interface WikiGitApi {
   pull(workspacePath: string): Promise<GitStatus>
   push(workspacePath: string): Promise<GitStatus>
   sync(workspacePath: string): Promise<GitSyncResult>
+  log(workspacePath: string, options?: GitLogOptions): Promise<GitLogResult>
+  commitDetail(workspacePath: string, commitHash: string): Promise<GitCommitDetail>
+  diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff>
 }
 
 export interface WikiMenuApi {
@@ -113,10 +132,15 @@ export interface WikiLogApi {
   write(payload: RendererLogPayload): Promise<void>
 }
 
+export interface WikiClipboardApi {
+  writeText(text: string): Promise<void>
+}
+
 export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
   git: WikiGitApi
   menu: WikiMenuApi
   log?: WikiLogApi
+  clipboard?: WikiClipboardApi
 }

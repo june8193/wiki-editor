@@ -175,4 +175,49 @@ describe('registerIpcHandlers logging wrapper', () => {
     expect(await logService.readEntries()).toHaveLength(0)
     dispose()
   })
+
+  it('logs git:diff request metadata without exposing rawPatch or file contents', async () => {
+    const ipcMain = createFakeIpcMain()
+    const secretPatchBody = 'SUPER_SECRET_DIFF_PATCH_CONTENT'
+    const dispose = registerIpcHandlers(
+      ipcMain,
+      [
+        [
+          GIT_IPC_CHANNELS.diff,
+          async () => ({
+            path: 'docs/secret.md',
+            status: 'M',
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: `@@ -1 +1 @@\n-${secretPatchBody}\n+updated\n`
+          })
+        ]
+      ],
+      { logService }
+    )
+
+    await ipcMain.invoke(GIT_IPC_CHANNELS.diff, 'C:\\wiki', {
+      kind: 'staged',
+      path: 'docs/secret.md',
+      origPath: 'docs/old.md',
+      status: 'R'
+    })
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(1)
+    expect(JSON.stringify(entries)).not.toContain(secretPatchBody)
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: GIT_IPC_CHANNELS.diff,
+        success: true,
+        workspacePath: 'C:\\wiki',
+        kind: 'staged',
+        path: 'docs/secret.md'
+      }
+    })
+    dispose()
+  })
 })

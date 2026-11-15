@@ -124,6 +124,40 @@ export function remapPathPrefix(targetPath: string, oldPrefix: string, newPrefix
   return targetPath
 }
 
+export function toWorkspaceRelativePath(rootPath: string, targetPath: string): string {
+  const normRoot = normalizeWorkspacePath(rootPath)
+  const normTarget = normalizeWorkspacePath(targetPath)
+  if (!normRoot || !normTarget || isSameWorkspacePath(normRoot, normTarget)) {
+    return ''
+  }
+
+  const rootSlash = normRoot.replace(/\\/g, '/')
+  const targetSlash = normTarget.replace(/\\/g, '/')
+  const rootPrefix = rootSlash.endsWith('/') ? rootSlash : `${rootSlash}/`
+  const matchesRoot = isWindowsPathStyle(normRoot)
+    ? targetSlash.toLowerCase().startsWith(rootPrefix.toLowerCase())
+    : targetSlash.startsWith(rootPrefix)
+
+  return matchesRoot ? targetSlash.slice(rootPrefix.length) : ''
+}
+
+export function formatRelativeEntryPath(
+  entry: Pick<WorkspaceEntry, 'path' | 'relativePath'>,
+  workspaceRootPath?: string | null
+): string {
+  if (workspaceRootPath) {
+    const computed = toWorkspaceRelativePath(workspaceRootPath, entry.path)
+    if (computed) {
+      return computed
+    }
+  }
+  return entry.relativePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+}
+
+export function formatAbsoluteEntryPath(entry: Pick<WorkspaceEntry, 'path'>): string {
+  return normalizeWorkspacePath(entry.path) || entry.path
+}
+
 export function isFavoriteWorkspacePath(
   favorites: readonly FavoriteWorkspace[],
   workspacePath: string
@@ -355,4 +389,56 @@ export function resolveRelativeWorkspacePath(
       : `${parsedRoot.rootPrefix}${parsedRoot.sep}${stack.join(parsedRoot.sep)}`
 
   return { ok: true, targetPath }
+}
+
+/**
+ * Converts path separators in `fragment` to match `referencePath`'s separator style.
+ */
+export function matchPathSeparators(fragment: string, referencePath: string): string {
+  const usePosixSep = referencePath.includes('/') && !referencePath.includes('\\')
+  return usePosixSep ? fragment.replace(/\\/g, '/') : fragment.replace(/\//g, '\\')
+}
+
+/**
+ * Joins a workspace or repository root with a relative path using the root's separator style.
+ */
+export function joinWorkspacePath(baseRoot: string, relativePath: string): string {
+  const cleanRoot = baseRoot.replace(/[\\/]+$/, '')
+  const sep = baseRoot.includes('/') && !baseRoot.includes('\\') ? '/' : '\\'
+  const cleanRel = relativePath.replace(/^[\\/]+/, '')
+  return cleanRel ? `${cleanRoot}${sep}${matchPathSeparators(cleanRel, baseRoot)}` : cleanRoot
+}
+
+/**
+ * Resolves a repository-relative target file path within an optional workspace root.
+ * Returns `null` when the resolved file lies outside the open workspace.
+ */
+export function resolveRepoFileInWorkspace(
+  repoRoot: string | null | undefined,
+  workspaceRoot: string | null | undefined,
+  repoRelativePath: string
+): { path: string; relativePath: string } | null {
+  const baseRoot = repoRoot ?? workspaceRoot
+  if (!baseRoot) return null
+
+  const fullPath = joinWorkspacePath(baseRoot, repoRelativePath)
+  let relativePath = repoRelativePath
+
+  if (workspaceRoot) {
+    const normFull = normalizeWorkspacePath(fullPath)
+    const normWorkspace = normalizeWorkspacePath(workspaceRoot)
+    const keyFull = getWorkspacePathKey(normFull)
+    const keyWorkspace = getWorkspacePathKey(normWorkspace)
+    if (!isNestedOrSamePath(keyFull, keyWorkspace)) {
+      return null
+    }
+    if (keyFull.length > keyWorkspace.length) {
+      relativePath = normFull
+        .slice(normWorkspace.length)
+        .replace(/^[\\/]+/, '')
+        .replace(/\\/g, '/')
+    }
+  }
+
+  return { path: fullPath, relativePath }
 }

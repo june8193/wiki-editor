@@ -20,10 +20,17 @@ export interface LinkClickModifierState {
   altKey: boolean
 }
 
-const MODE_ORDER: readonly EditorMode[] = ['raw', 'wysiwyg', 'preview']
+const MODE_ORDER: readonly EditorMode[] = ['raw', 'wysiwyg', 'preview', 'split']
+
+const DIGIT_SHORTCUT_MODES: Readonly<Record<string, EditorMode>> = {
+  '1': 'raw',
+  '2': 'wysiwyg',
+  '3': 'preview',
+  '4': 'split'
+}
 
 /**
- * Determines whether rich Markdown modes (WYSIWYG / Preview) are enabled for a buffer.
+ * Determines whether rich Markdown modes (WYSIWYG / Preview / Split) are enabled for a buffer.
  * Extensionless files default to Markdown, while `.json`, `.txt`, and `config` stay Raw-only.
  */
 export function isMarkdownDocument(doc: Pick<DocumentBuffer, 'kind' | 'name'>): boolean {
@@ -39,6 +46,20 @@ export function isMarkdownDocument(doc: Pick<DocumentBuffer, 'kind' | 'name'>): 
 }
 
 /**
+ * Resolves whether rich Markdown modes are enabled alongside the effective editor mode for a buffer.
+ */
+export function resolveEffectiveEditorMode(
+  doc: Pick<DocumentBuffer, 'kind' | 'name'> | null | undefined,
+  requestedMode: EditorMode
+): { allowRichModes: boolean; effectiveMode: EditorMode } {
+  const allowRichModes = doc ? isMarkdownDocument(doc) : false
+  return {
+    allowRichModes,
+    effectiveMode: allowRichModes ? requestedMode : 'raw'
+  }
+}
+
+/**
  * Resolves the CodeMirror syntax language for Raw mode.
  */
 export function getRawEditorLanguage(doc: Pick<DocumentBuffer, 'kind' | 'name'>): 'markdown' | 'json' {
@@ -49,7 +70,7 @@ export function getRawEditorLanguage(doc: Pick<DocumentBuffer, 'kind' | 'name'>)
 }
 
 /**
- * Cycles editor modes in order: Raw -> WYSIWYG -> Preview -> Raw.
+ * Cycles editor modes in order: Raw -> WYSIWYG -> Preview -> Split -> Raw.
  */
 export function cycleEditorMode(current: EditorMode): EditorMode {
   const index = MODE_ORDER.indexOf(current)
@@ -57,7 +78,7 @@ export function cycleEditorMode(current: EditorMode): EditorMode {
 }
 
 /**
- * Resolves Ctrl/Cmd+1/2/3 and Ctrl/Cmd+Shift+M mode-switching keyboard shortcuts.
+ * Resolves Ctrl/Cmd+1/2/3/4 and Ctrl/Cmd+Shift+M mode-switching keyboard shortcuts.
  */
 export function resolveModeShortcut(
   event: ModeShortcutEvent,
@@ -78,17 +99,12 @@ export function resolveModeShortcut(
     return null
   }
 
-  if (normalizedKey === '1') {
-    return 'raw'
-  }
-  if (normalizedKey === '2') {
-    return allowRichModes ? 'wysiwyg' : null
-  }
-  if (normalizedKey === '3') {
-    return allowRichModes ? 'preview' : null
+  const mappedMode = DIGIT_SHORTCUT_MODES[normalizedKey]
+  if (!mappedMode) {
+    return null
   }
 
-  return null
+  return mappedMode === 'raw' || allowRichModes ? mappedMode : null
 }
 
 /**

@@ -1,20 +1,26 @@
 import { describe, expect, it } from 'vitest'
 import {
   addFavoriteWorkspace,
+  formatAbsoluteEntryPath,
+  formatRelativeEntryPath,
   getParentPath,
   getWorkspaceDisplayName,
   isFavoriteWorkspacePath,
   isMarkdownFileName,
   isNestedOrSamePath,
   isSameWorkspacePath,
+  joinWorkspacePath,
+  matchPathSeparators,
   normalizeWorkspacePath,
   recordRecentWorkspace,
   remapPathPrefix,
   removeFavoriteWorkspace,
   removeRecentWorkspace,
   resolveRelativeWorkspacePath,
+  resolveRepoFileInWorkspace,
   stripMarkdownExtension,
-  toggleFavoriteWorkspace
+  toggleFavoriteWorkspace,
+  toWorkspaceRelativePath
 } from './workspace'
 
 describe('shared workspace path and favorites helpers', () => {
@@ -89,6 +95,64 @@ describe('shared workspace path and favorites helpers', () => {
     expect(remapPathPrefix('C:\\wiki\\docs\\a.md', 'C:\\wiki\\docs', 'C:\\wiki\\guides')).toBe(
       'C:\\wiki\\guides\\a.md'
     )
+    expect(matchPathSeparators('sub/a.md', 'C:\\wiki\\root')).toBe('sub\\a.md')
+    expect(matchPathSeparators('sub\\a.md', '/repo/root')).toBe('sub/a.md')
+    expect(joinWorkspacePath('C:\\wiki\\root\\', 'sub/doc.md')).toBe('C:\\wiki\\root\\sub\\doc.md')
+    expect(joinWorkspacePath('/repo/root/', 'sub\\doc.md')).toBe('/repo/root/sub/doc.md')
+    expect(resolveRepoFileInWorkspace('C:/repo', 'C:/repo/sub', 'sub/doc.md')).toEqual({
+      path: 'C:/repo/sub/doc.md',
+      relativePath: 'doc.md'
+    })
+    expect(resolveRepoFileInWorkspace('C:/repo', 'C:/repo/sub', 'other.md')).toBeNull()
+  })
+
+  it('computes workspace-relative POSIX paths and formatted entry paths without trailing separators', () => {
+    expect(toWorkspaceRelativePath('C:\\wiki\\notes', 'C:\\wiki\\notes\\Guides\\Setup.md')).toBe(
+      'Guides/Setup.md'
+    )
+    expect(toWorkspaceRelativePath('c:\\wiki\\notes', 'C:\\Wiki\\Notes\\guides\\a.md')).toBe(
+      'guides/a.md'
+    )
+    expect(toWorkspaceRelativePath('C:\\', 'C:\\notes\\a.md')).toBe('notes/a.md')
+    expect(toWorkspaceRelativePath('C:\\wiki\\notes', 'C:\\wiki\\notes\\guides\\')).toBe('guides')
+    expect(toWorkspaceRelativePath('/Users/june/wiki', '/Users/june/wiki/guides/setup.md')).toBe(
+      'guides/setup.md'
+    )
+    expect(toWorkspaceRelativePath('/', '/guides/setup.md')).toBe('guides/setup.md')
+    expect(toWorkspaceRelativePath('C:\\wiki', 'C:\\wiki')).toBe('')
+    expect(toWorkspaceRelativePath('C:\\wiki', 'D:\\other\\a.md')).toBe('')
+
+    expect(
+      formatRelativeEntryPath(
+        {
+          path: 'C:\\wiki\\notes\\handbook\\setup.md',
+          relativePath: 'guides/setup.md'
+        },
+        'C:\\wiki\\notes'
+      )
+    ).toBe('handbook/setup.md')
+    expect(
+      formatRelativeEntryPath({
+        path: 'C:\\wiki\\notes\\guides\\setup.md',
+        relativePath: '\\guides\\setup.md\\'
+      })
+    ).toBe('guides/setup.md')
+
+    expect(
+      formatAbsoluteEntryPath({
+        path: 'C:/wiki/notes/guides/setup.md'
+      })
+    ).toBe('C:\\wiki\\notes\\guides\\setup.md')
+    expect(
+      formatAbsoluteEntryPath({
+        path: 'C:\\wiki\\notes\\guides\\'
+      })
+    ).toBe('C:\\wiki\\notes\\guides')
+    expect(
+      formatAbsoluteEntryPath({
+        path: '/tmp/wiki/guides/'
+      })
+    ).toBe('/tmp/wiki/guides')
   })
 
   it('identifies and strips .md and .markdown extensions case-insensitively', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_APP_CONFIG } from '@shared/config'
 import {
   type AppMenuCommand,
+  CLIPBOARD_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
@@ -160,6 +161,10 @@ describe('createWikiApi', () => {
     await api.git.pull('C:\\wiki')
     await api.git.push('C:\\wiki')
     await api.git.sync('C:\\wiki')
+    await api.git.log('C:\\wiki')
+    await api.git.log('C:\\wiki', { scope: 'current', limit: 50, skip: 20 })
+    await api.git.commitDetail('C:\\wiki', 'abc1234')
+    await api.git.diff('C:\\wiki', { kind: 'staged', path: 'a.md', status: 'M' })
 
     expect(ipc.lastInvoked).toEqual([
       { channel: GIT_IPC_CHANNELS.status, args: ['C:\\wiki'] },
@@ -173,7 +178,17 @@ describe('createWikiApi', () => {
       { channel: GIT_IPC_CHANNELS.checkout, args: ['C:\\wiki', 'main'] },
       { channel: GIT_IPC_CHANNELS.pull, args: ['C:\\wiki'] },
       { channel: GIT_IPC_CHANNELS.push, args: ['C:\\wiki'] },
-      { channel: GIT_IPC_CHANNELS.sync, args: ['C:\\wiki'] }
+      { channel: GIT_IPC_CHANNELS.sync, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.log, args: ['C:\\wiki', undefined] },
+      {
+        channel: GIT_IPC_CHANNELS.log,
+        args: ['C:\\wiki', { scope: 'current', limit: 50, skip: 20 }]
+      },
+      { channel: GIT_IPC_CHANNELS.commitDetail, args: ['C:\\wiki', 'abc1234'] },
+      {
+        channel: GIT_IPC_CHANNELS.diff,
+        args: ['C:\\wiki', { kind: 'staged', path: 'a.md', status: 'M' }]
+      }
     ])
   })
 
@@ -191,6 +206,17 @@ describe('createWikiApi', () => {
     await api.log.write(payload)
 
     expect(ipc.lastInvoked).toEqual([{ channel: LOG_IPC_CHANNELS.write, args: [payload] }])
+  })
+
+  it('routes clipboard.writeText through clipboard:write-text IPC channel with exact text', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+
+    await api.clipboard.writeText('guides/setup.md')
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: CLIPBOARD_IPC_CHANNELS.writeText, args: ['guides/setup.md'] }
+    ])
   })
 
   it('subscribes to menu:command without exposing Electron event and cleans up on unsubscribe', () => {

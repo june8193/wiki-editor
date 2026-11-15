@@ -1,9 +1,12 @@
 import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
+import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
-import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
+import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
+import { DocumentEditor } from './DocumentEditor'
+import { type GitDiffContentState, GitDiffViewer } from './GitDiffViewer'
 import {
   DraggingTabPayload,
   handleTabMoveDrop,
@@ -25,9 +28,11 @@ interface PaneViewProps {
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   buffers: DocumentBufferSnapshot
+  diffsByKey: Record<string, GitDiffContentState>
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
   onDragEndTab: () => void
+  onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
   actions: PaneInteractionActions
 }
 
@@ -44,13 +49,20 @@ export function PaneView({
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   buffers,
+  diffsByKey,
   draggingTab,
   onDragStartTab,
   onDragEndTab,
+  onActiveHeadingChange,
   actions
 }: PaneViewProps) {
   const activeTab = getPaneActiveTab(pane)
-  const activeBuffer = activeTab ? (buffers[activeTab.bufferKey] ?? null) : null
+  const activeBuffer =
+    activeTab?.kind === 'document' ? (buffers[activeTab.bufferKey] ?? null) : null
+  const activeDiffState =
+    activeTab?.kind === 'diff'
+      ? (diffsByKey[formatGitDiffTabKey(activeTab.diff.request)] ?? { status: 'loading' as const })
+      : null
   const activeScrollRequest =
     activeTab && scrollRequest && scrollRequest.paneId === pane.id && scrollRequest.tabId === activeTab.id
       ? scrollRequest
@@ -97,7 +109,17 @@ export function PaneView({
         />
       )}
 
-      {activeTab && activeBuffer ? (
+      {activeTab?.kind === 'diff' && activeDiffState ? (
+        <GitDiffViewer
+          request={activeTab.diff.request}
+          viewMode={activeTab.diff.viewMode}
+          state={activeDiffState}
+          onChangeViewMode={(nextMode) =>
+            actions.onChangeDiffViewMode(pane.id, activeTab.id, nextMode)
+          }
+          onOpenFile={actions.onOpenDiffTargetFile}
+        />
+      ) : activeTab?.kind === 'document' && activeBuffer ? (
         <DocumentEditor
           key={activeTab.id}
           document={activeBuffer}
@@ -107,12 +129,27 @@ export function PaneView({
           showHeadingNumbers={showHeadingNumbers}
           customCommands={customCommands}
           scrollRequest={activeScrollRequest}
+          isActive={isActivePane}
           isShortcutDisabled={isShortcutDisabled}
           workspaceMarkdownFiles={workspaceMarkdownFiles}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}
           onNavigateLink={(href) => actions.onNavigateLink?.(pane.id, activeTab.id, href)}
+          onActiveHeadingChange={
+            onActiveHeadingChange
+              ? (update) =>
+                  onActiveHeadingChange({
+                    context: {
+                      paneId: pane.id,
+                      tabId: activeTab.id,
+                      mode: update.mode
+                    },
+                    headingIndex: update.headingIndex,
+                    isUserScroll: update.isUserScroll
+                  })
+              : undefined
+          }
         />
       ) : (
         <section className="workspace-placeholder">
