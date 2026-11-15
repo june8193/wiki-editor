@@ -18,17 +18,11 @@ import remarkRehype from 'remark-rehype'
 import { unified } from 'unified'
 import { MermaidDiagram } from '../components/MermaidDiagram'
 import { MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
-import {
-  createHeadingNumberTracker,
-  createHeadingSlugTracker,
-  hasHeadingNumberPrefix,
-  LEADING_HEADING_NUMBER_RE
-} from './MarkdownTocEngine'
+import { createHeadingSlugTracker } from './MarkdownTocEngine'
 import type { MermaidRenderer } from './mermaidRenderer'
 
 export interface MarkdownPreviewRenderOptions {
   theme?: ThemeMode
-  showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
   onAnchorNavigate?: (slug: string) => void
 }
@@ -64,25 +58,6 @@ function extractHastText(node: HastElement | HastRootContent): string {
   return ''
 }
 
-function stripLeadingNumberFromFirstTextLeaf(children: HastRootContent[]): boolean {
-  for (let i = 0; i < children.length; i += 1) {
-    const child = children[i]
-    if (child.type === 'text') {
-      if (child.value.length === 0) continue
-      const stripped = child.value.replace(LEADING_HEADING_NUMBER_RE, '')
-      if (stripped !== child.value) {
-        child.value = stripped
-        return true
-      }
-      return false
-    }
-    if (child.type === 'element' && stripLeadingNumberFromFirstTextLeaf(child.children)) {
-      return true
-    }
-  }
-  return false
-}
-
 function rehypeSourceLineAnnotation() {
   return (tree: HastRoot): void => {
     for (const child of tree.children) {
@@ -104,35 +79,17 @@ function rehypeSourceLineAnnotation() {
   }
 }
 
-function rehypeHeadingEnhancer(options: { showHeadingNumbers: boolean }) {
+function rehypeHeadingEnhancer() {
   return (tree: HastRoot): void => {
     const slugTracker = createHeadingSlugTracker()
-    const numberTracker = createHeadingNumberTracker()
 
     const visit = (node: HastRoot | HastRootContent): void => {
       if (node.type === 'element' && /^h[1-6]$/.test(node.tagName)) {
-        const level = Number(node.tagName[1])
         const fullText = extractHastText(node)
         const slug = slugTracker.next(fullText)
         node.properties = {
           ...node.properties,
           id: slug
-        }
-
-        const { number } = numberTracker.next(level)
-        if (options.showHeadingNumbers && fullText.trim().length > 0) {
-          if (hasHeadingNumberPrefix(fullText)) {
-            stripLeadingNumberFromFirstTextLeaf(node.children)
-          }
-          node.children.unshift({
-            type: 'element',
-            tagName: 'span',
-            properties: {
-              className: ['heading-number'],
-              ariaHidden: 'true'
-            },
-            children: [{ type: 'text', value: `${number} ` }]
-          })
         }
         return
       }
@@ -253,7 +210,7 @@ function PreviewTable(props: ComponentPropsWithoutRef<'table'> & SourceLineDataP
   )
 }
 
-function buildPreviewProcessor(showHeadingNumbers: boolean) {
+function buildPreviewProcessor() {
   return unified()
     .use(remarkParse)
     .use(remarkGfm)
@@ -261,7 +218,7 @@ function buildPreviewProcessor(showHeadingNumbers: boolean) {
     .use(rehypeRaw)
     .use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA)
     .use(rehypeSourceLineAnnotation)
-    .use(rehypeHeadingEnhancer, { showHeadingNumbers })
+    .use(rehypeHeadingEnhancer)
     .use(rehypeReact, {
       Fragment,
       jsx,
@@ -275,19 +232,17 @@ function buildPreviewProcessor(showHeadingNumbers: boolean) {
     })
 }
 
-const previewProcessorPlain = buildPreviewProcessor(false)
-const previewProcessorNumbered = buildPreviewProcessor(true)
+const previewProcessor = buildPreviewProcessor()
 
 /**
- * Parses GFM Markdown, sanitizes unsafe HTML/URIs, applies dynamic heading numbering & slugs,
+ * Parses GFM Markdown, sanitizes unsafe HTML/URIs, applies heading anchor slugs,
  * and renders Mermaid code blocks and safe React elements.
  */
 export function renderMarkdownToReact(
   markdown: string,
   options: MarkdownPreviewRenderOptions = {}
 ): ReactNode {
-  const processor = options.showHeadingNumbers ? previewProcessorNumbered : previewProcessorPlain
-  const file = processor.processSync(markdown)
+  const file = previewProcessor.processSync(markdown)
   const contextValue: PreviewRenderContextValue = {
     theme: options.theme ?? 'light',
     mermaidRenderer: options.mermaidRenderer,

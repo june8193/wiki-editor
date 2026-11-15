@@ -1376,6 +1376,12 @@ body.is-resizing-sidebar .pane-workspace {
   font-weight: 600;
 }
 
+.outline-title-group > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .outline-header-actions {
   display: flex;
   align-items: center;
@@ -1397,6 +1403,13 @@ body.is-resizing-sidebar .pane-workspace {
   border-radius: 10px;
 }
 
+.outline-number-toggle {
+  padding: 2px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .outline-number-toggle.is-active {
   background-color: var(--accent-color);
   border-color: var(--accent-color);
@@ -1409,15 +1422,6 @@ body.is-resizing-sidebar .pane-workspace {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-}
-
-.outline-actions {
-  flex-shrink: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-color);
 }
 
 .outline-list-container {
@@ -1485,26 +1489,6 @@ body.is-resizing-sidebar .pane-workspace {
   padding: 10px 8px;
   font-size: 12px;
   color: var(--text-secondary);
-}
-
-/* Dynamic heading numbers (Preview & WYSIWYG) */
-.heading-number {
-  color: var(--text-secondary);
-  font-weight: 500;
-  margin-right: 0.35em;
-  user-select: none;
-}
-
-.heading-number-suppressed {
-  display: none;
-}
-
-.wysiwyg-toc-marker {
-  height: 0;
-  overflow: hidden;
-  margin: 0;
-  padding: 0;
-  pointer-events: none;
 }
 
 /* Mermaid diagram rendering & error isolation */

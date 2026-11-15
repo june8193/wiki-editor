@@ -21,16 +21,12 @@ import {
 } from '@shared/config'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
-import {
-  detectDocumentLineEnding,
-  insertOrUpdateTocBlock,
-  tryReplaceSlashTocAtLine
-} from '../editor/MarkdownTocEngine'
+import { detectDocumentLineEnding } from '../editor/MarkdownTocEngine'
 import {
   type HeadingScrollSpySample,
   measureActiveHeadingIndexInRawEditor
 } from '../editor/outlineScrollSpy'
-import { detectSlashQuery, resolveSlashCommandSnippet } from '../editor/SlashCommandEngine'
+import { detectSlashQuery, expandSlashTemplate } from '../editor/SlashCommandEngine'
 import type { CursorPosition } from '../stores/PaneTabStore'
 import { useEditorOutlineSpy } from './useEditorOutlineSpy'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from './useSlashMenu'
@@ -38,34 +34,6 @@ import { syncElementScrollTop } from './useSyncScrollTop'
 
 const externalSyncAnnotation = Annotation.define<boolean>()
 const slashInsertAnnotation = Annotation.define<boolean>()
-
-function applyRawTocCommand(view: EditorView, requireSlashTocLine: boolean): boolean {
-  const sel = view.state.selection.main
-  if (requireSlashTocLine && !sel.empty) {
-    return false
-  }
-
-  const line = view.state.doc.lineAt(sel.from)
-  const docText = view.state.doc.toString()
-  const nextDoc = requireSlashTocLine
-    ? tryReplaceSlashTocAtLine(docText, line.number)
-    : insertOrUpdateTocBlock(docText, line.number)
-
-  if (!nextDoc || nextDoc === docText) {
-    return false
-  }
-
-  const baseAnchor = requireSlashTocLine ? line.from + line.text.length : sel.from
-  const nextCursor = Math.min(
-    nextDoc.length,
-    Math.max(0, baseAnchor + (nextDoc.length - docText.length))
-  )
-  view.dispatch({
-    changes: { from: 0, to: view.state.doc.length, insert: nextDoc },
-    selection: { anchor: nextCursor }
-  })
-  return true
-}
 
 export interface RawScrollRequest {
   line: number
@@ -263,11 +231,7 @@ export function useRawCodeMirrorEditor({
       return false
     }
 
-    const normalizedCommand: CustomCommandConfig = {
-      ...command,
-      template: normalizeDocText(command.template)
-    }
-    const expanded = resolveSlashCommandSnippet(docText, normalizedCommand, {
+    const expanded = expandSlashTemplate(normalizeDocText(command.template), {
       title: runtimeRef.current.documentTitle
     })
     const nextDocLength = docText.length - (match.rangeTo - match.rangeFrom) + expanded.text.length
@@ -303,11 +267,6 @@ export function useRawCodeMirrorEditor({
     const initialSelection = clampSelection(normalizedInitial.length, initial.cursor)
     lastCursorPropRef.current = initial.cursor
 
-    const handleSlashTocEnter = (view: EditorView): boolean => {
-      if (runtimeRef.current.language !== 'markdown') return false
-      return applyRawTocCommand(view, true)
-    }
-
     const state = EditorState.create({
       doc: normalizedInitial,
       selection: initialSelection,
@@ -333,7 +292,6 @@ export function useRawCodeMirrorEditor({
           ])
         ),
         keymap.of([
-          { key: 'Enter', run: handleSlashTocEnter },
           ...defaultKeymap,
           ...historyKeymap,
           indentWithTab
@@ -533,18 +491,11 @@ export function useRawCodeMirrorEditor({
     }
   }, [])
 
-  const insertToc = useCallback((): void => {
-    const view = viewRef.current
-    if (!view || runtimeRef.current.language !== 'markdown') return
-    applyRawTocCommand(view, false)
-  }, [])
-
   return {
     shellRef,
     hostRef,
     inTable,
     runTableAction,
-    insertToc,
     slashMenuProps
   }
 }

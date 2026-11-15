@@ -29,9 +29,6 @@ describe('DocumentOutlinePanel', () => {
         showHeadingNumbers
         onToggleHeadingNumbers={onToggleHeadingNumbers}
         onSelectHeading={onSelectHeading}
-        onInsertToc={vi.fn()}
-        onApplyHeadingNumbers={vi.fn()}
-        onStripHeadingNumbers={vi.fn()}
         onCollapse={vi.fn()}
       />
     )
@@ -68,8 +65,10 @@ describe('DocumentOutlinePanel', () => {
     })
     expect(onSelectHeading.mock.calls[0][1]).toBe(2)
 
-    // Toggle heading numbers callback
-    await user.click(within(outline).getByRole('button', { name: '헤딩 번호 표시' }))
+    // Toggle heading numbers callback via "목차 번호 표시" header button
+    const toggleBtn = within(outline).getByRole('button', { name: '목차 번호 표시' })
+    expect(toggleBtn).toHaveAttribute('aria-pressed', 'true')
+    await user.click(toggleBtn)
     expect(onToggleHeadingNumbers).toHaveBeenCalledTimes(1)
 
     // Turning showHeadingNumbers off hides dynamic numbers
@@ -81,22 +80,18 @@ describe('DocumentOutlinePanel', () => {
         showHeadingNumbers={false}
         onToggleHeadingNumbers={onToggleHeadingNumbers}
         onSelectHeading={onSelectHeading}
-        onInsertToc={vi.fn()}
-        onApplyHeadingNumbers={vi.fn()}
-        onStripHeadingNumbers={vi.fn()}
         onCollapse={vi.fn()}
       />
+    )
+    expect(within(outline).getByRole('button', { name: '목차 번호 표시' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
     )
     expect(within(list).queryByText('1.1.1.')).not.toBeInTheDocument()
     expect(within(list).getByText('Mermaid Cache')).toBeInTheDocument()
   })
 
-  it('invokes explicit TOC and heading numbering mutation callbacks and disables them on non-markdown files', async () => {
-    const user = userEvent.setup()
-    const onInsertToc = vi.fn()
-    const onApplyHeadingNumbers = vi.fn()
-    const onStripHeadingNumbers = vi.fn()
-
+  it('does not render removed TOC/heading-mutation buttons and shows non-markdown empty message cleanly', () => {
     const { rerender } = render(
       <DocumentOutlinePanel
         documentName="note.md"
@@ -105,22 +100,17 @@ describe('DocumentOutlinePanel', () => {
         showHeadingNumbers
         onToggleHeadingNumbers={vi.fn()}
         onSelectHeading={vi.fn()}
-        onInsertToc={onInsertToc}
-        onApplyHeadingNumbers={onApplyHeadingNumbers}
-        onStripHeadingNumbers={onStripHeadingNumbers}
         onCollapse={vi.fn()}
       />
     )
 
-    await user.click(screen.getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
-    await user.click(screen.getByRole('button', { name: '본문 헤딩 번호 쓰기' }))
-    await user.click(screen.getByRole('button', { name: '본문 헤딩 번호 제거' }))
+    expect(screen.queryByRole('button', { name: '본문에 목차(/toc) 삽입' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '본문 헤딩 번호 쓰기' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '본문 헤딩 번호 제거' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '1.1' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '목차 번호 표시' })).toBeInTheDocument()
 
-    expect(onInsertToc).toHaveBeenCalledTimes(1)
-    expect(onApplyHeadingNumbers).toHaveBeenCalledTimes(1)
-    expect(onStripHeadingNumbers).toHaveBeenCalledTimes(1)
-
-    // Non-markdown document disables explicit markdown actions
+    // Non-markdown document shows empty message while preserving header controls
     rerender(
       <DocumentOutlinePanel
         documentName="config.json"
@@ -129,16 +119,10 @@ describe('DocumentOutlinePanel', () => {
         showHeadingNumbers
         onToggleHeadingNumbers={vi.fn()}
         onSelectHeading={vi.fn()}
-        onInsertToc={onInsertToc}
-        onApplyHeadingNumbers={onApplyHeadingNumbers}
-        onStripHeadingNumbers={onStripHeadingNumbers}
         onCollapse={vi.fn()}
       />
     )
 
-    expect(screen.getByRole('button', { name: '본문에 목차(/toc) 삽입' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '본문 헤딩 번호 쓰기' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '본문 헤딩 번호 제거' })).toBeDisabled()
     expect(screen.getByText('마크다운 문서에서만 목차를 지원합니다.')).toBeInTheDocument()
   })
 
@@ -153,9 +137,6 @@ describe('DocumentOutlinePanel', () => {
         showHeadingNumbers
         onToggleHeadingNumbers={vi.fn()}
         onSelectHeading={vi.fn()}
-        onInsertToc={vi.fn()}
-        onApplyHeadingNumbers={vi.fn()}
-        onStripHeadingNumbers={vi.fn()}
         onCollapse={onCollapse}
       />
     )
@@ -192,9 +173,6 @@ describe('DocumentOutlinePanel', () => {
         showHeadingNumbers: true,
         onToggleHeadingNumbers: vi.fn(),
         onSelectHeading: vi.fn(),
-        onInsertToc: vi.fn(),
-        onApplyHeadingNumbers: vi.fn(),
-        onStripHeadingNumbers: vi.fn(),
         onCollapse: vi.fn()
       }
 

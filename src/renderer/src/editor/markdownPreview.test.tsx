@@ -197,7 +197,7 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
     expect(container.querySelector('[data-mermaid-theme="dark"]')).not.toBeNull()
   })
 
-  it('displays dynamic hierarchical heading numbers without double-numbering and scrolls on TOC anchor click or scrollRequest', () => {
+  it('renders plain heading text with anchor IDs and scrolls on TOC anchor click or scrollRequest', () => {
     const md = [
       '- [Intro](#intro)',
       '- [Details](#1-details)',
@@ -217,20 +217,23 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
           content={md}
           scrollTop={0}
           theme="light"
-          showHeadingNumbers
         />
       )
 
       const h1 = container.querySelector('h1')!
       const h2 = container.querySelector('h2')!
       const h3 = container.querySelector('h3')!
-      expect(h1).toHaveTextContent('1. Intro')
+      expect(h1).toHaveTextContent('Intro')
       expect(h1).toHaveAttribute('id', 'intro')
-      expect(h2).toHaveTextContent('1.1. Sub Topic')
-      expect(h3).toHaveTextContent('1.1.1. Details')
-      expect(h3.textContent).not.toContain('1.1.1. 1.')
+      expect(h1.querySelector('.heading-number')).toBeNull()
+      expect(h2).toHaveTextContent('Sub Topic')
+      expect(h2).toHaveAttribute('id', 'sub-topic')
+      expect(h2.querySelector('.heading-number')).toBeNull()
+      expect(h3).toHaveTextContent('1. Details')
+      expect(h3).toHaveAttribute('id', '1-details')
+      expect(h3.querySelector('.heading-number')).toBeNull()
 
-      // Accessible name preserves title without decorative dynamic number prefix
+      // Accessible name preserves heading text
       expect(screen.getByRole('heading', { level: 1, name: 'Intro' })).toBeInTheDocument()
 
       // Clicking TOC anchor scrolls target heading into view
@@ -238,21 +241,17 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
       expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
       expect(scrollIntoViewMock.mock.instances[0]).toBe(h1)
 
-      // Disabling showHeadingNumbers removes dynamic numbers cleanly
+      // Triggering scrollRequest scrolls the matching heading into view once
       rerender(
         <MarkdownPreview
           content={md}
           scrollTop={0}
           theme="light"
-          showHeadingNumbers={false}
           scrollRequest={{ slug: 'sub-topic', index: 1, nonce: 1 }}
         />
       )
-      expect(container.querySelector('h1')).toHaveTextContent('Intro')
-      expect(container.querySelector('h1')?.textContent).not.toContain('1.')
-      expect(container.querySelector('h3')).toHaveTextContent('1. Details')
       expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
-      expect(scrollIntoViewMock.mock.instances[1]).toBe(container.querySelector('h2'))
+      expect(scrollIntoViewMock.mock.instances[1]).toBe(h2)
 
       // Rerendering with new scrollTop or content and the same scrollRequest object/nonce must NOT re-trigger scrolling
       scrollIntoViewMock.mockClear()
@@ -261,7 +260,6 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
           content={`${md}\n\nMore text`}
           scrollTop={120}
           theme="light"
-          showHeadingNumbers={false}
           scrollRequest={{ slug: 'sub-topic', index: 1, nonce: 1 }}
         />
       )

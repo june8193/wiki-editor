@@ -15,9 +15,6 @@ export interface DocumentOutlinePanelProps {
   showHeadingNumbers: boolean
   onToggleHeadingNumbers: () => void
   onSelectHeading: (heading: MarkdownHeading, index: number) => void
-  onInsertToc: () => void
-  onApplyHeadingNumbers: () => void
-  onStripHeadingNumbers: () => void
   onCollapse: () => void
 }
 
@@ -28,8 +25,8 @@ interface ActiveOutlineScrollTarget {
 
 /**
  * Right sidebar panel displaying the live document heading outline,
- * active heading indicator and auto-scroll, dynamic numbering toggle,
- * sidebar collapse trigger, click-to-scroll triggers, and explicit TOC/numbering actions.
+ * active heading indicator and auto-scroll, outline numbering toggle,
+ * sidebar collapse trigger, and click-to-scroll triggers.
  */
 export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   documentName,
@@ -40,9 +37,6 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   showHeadingNumbers,
   onToggleHeadingNumbers,
   onSelectHeading,
-  onInsertToc,
-  onApplyHeadingNumbers,
-  onStripHeadingNumbers,
   onCollapse
 }: DocumentOutlinePanelProps) {
   const itemButtonRefs = useRef<Map<number, HTMLButtonElement>>(new Map())
@@ -142,12 +136,11 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
           <button
             type="button"
             className={`btn btn-sm outline-number-toggle${showHeadingNumbers ? ' is-active' : ''}`}
-            aria-label="헤딩 번호 표시"
             aria-pressed={showHeadingNumbers}
-            title="동적 헤딩 번호 표시 토글 (원본 파일 미변경)"
+            title="목차 헤딩 번호 표시 토글 (원본 파일 미변경)"
             onClick={onToggleHeadingNumbers}
           >
-            1.1
+            목차 번호 표시
           </button>
 
           <button
@@ -163,32 +156,6 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
       </div>
 
       <div className="outline-body">
-        <div className="outline-actions">
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={!documentName || !isMarkdownDocument}
-            onClick={onInsertToc}
-          >
-            본문에 목차(/toc) 삽입
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={!documentName || !isMarkdownDocument}
-            onClick={onApplyHeadingNumbers}
-          >
-            본문 헤딩 번호 쓰기
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={!documentName || !isMarkdownDocument}
-            onClick={onStripHeadingNumbers}
-          >
-            본문 헤딩 번호 제거
-          </button>
-        </div>
         <div className="outline-list-container">{renderBodyContent()}</div>
       </div>
     </section>

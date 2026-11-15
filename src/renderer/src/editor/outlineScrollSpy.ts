@@ -120,12 +120,6 @@ function collectVisibleHeadingText(node: Node): string {
     return ''
   }
   const element = node as Element
-  if (
-    element.classList.contains('heading-number') ||
-    element.classList.contains('heading-number-suppressed')
-  ) {
-    return ''
-  }
   if (element.tagName === 'IMG') {
     return element.getAttribute('alt') ?? ''
   }

@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyHeadingNumbers,
-  generateTocMarkdown,
-  insertOrUpdateTocBlock,
+  createHeadingSlugTracker,
+  formatOutlineHeadingTitle,
   parseMarkdownHeadings,
-  slugifyHeading,
-  stripHeadingNumbers
+  slugifyHeading
 } from './MarkdownTocEngine'
 
 describe('MarkdownTocEngine', () => {
@@ -71,151 +69,29 @@ describe('MarkdownTocEngine', () => {
     ])
   })
 
-  it('generates Unicode-safe anchor slugs with duplicate disambiguation and nested /toc markdown', () => {
+  it('generates Unicode-safe anchor slugs with duplicate disambiguation', () => {
     expect(slugifyHeading('시작하기 (Getting Started)')).toBe('시작하기-getting-started')
     expect(slugifyHeading('API `v2` & **Guide**')).toBe('api-v2-guide')
 
-    const md = [
-      '# Overview',
-      '## Setup',
-      '### Details',
-      '# Overview',
-      '## Setup'
-    ].join('\n')
-
-    expect(generateTocMarkdown(md)).toBe(
-      [
-        '- [Overview](#overview)',
-        '  - [Setup](#setup)',
-        '    - [Details](#details)',
-        '- [Overview](#overview-1)',
-        '  - [Setup](#setup-1)'
-      ].join('\n')
-    )
-
-    expect(generateTocMarkdown(md, { includeNumbers: true })).toBe(
-      [
-        '- [1. Overview](#overview)',
-        '  - [1.1. Setup](#setup)',
-        '    - [1.1.1. Details](#details)',
-        '- [2. Overview](#overview-1)',
-        '  - [2.1. Setup](#setup-1)'
-      ].join('\n')
-    )
+    const tracker = createHeadingSlugTracker()
+    expect([
+      tracker.next('Overview'),
+      tracker.next('Setup'),
+      tracker.next('Details'),
+      tracker.next('Overview'),
+      tracker.next('Setup')
+    ]).toEqual(['overview', 'setup', 'details', 'overview-1', 'setup-1'])
   })
 
-  it('inserts a /toc block at cursor or after the first H1 and updates an existing TOC block in place', () => {
-    const md = [
-      '# Main Title',
-      '',
-      '/toc',
-      '',
-      '## First Section',
-      '### Child',
-      '## Second Section'
-    ].join('\n')
+  it('formats Outline heading titles consistently with showHeadingNumbers toggle and explicit prefixes', () => {
+    const headings = parseMarkdownHeadings([
+      '# Plain Heading',
+      '## 9. **Explicit** Prefix'
+    ].join('\n'))
 
-    const inserted = insertOrUpdateTocBlock(md, 3)
-    expect(inserted).toBe(
-      [
-        '# Main Title',
-        '',
-        '<!-- toc -->',
-        '- [Main Title](#main-title)',
-        '  - [First Section](#first-section)',
-        '    - [Child](#child)',
-        '  - [Second Section](#second-section)',
-        '<!-- /toc -->',
-        '',
-        '## First Section',
-        '### Child',
-        '## Second Section'
-      ].join('\n')
-    )
-
-    // Add a new heading and update existing <!-- toc --> block in place without duplicating it
-    const edited = inserted.replace('## Second Section', '## Second Section\n### New Sub')
-    const updated = insertOrUpdateTocBlock(edited)
-
-    expect(updated.match(/<!-- toc -->/g)).toHaveLength(1)
-    expect(updated).toContain('    - [New Sub](#new-sub)')
-  })
-
-  it('does not treat <!-- toc --> markers inside fenced code blocks as the active TOC block', () => {
-    const md = [
-      '# Guide',
-      '',
-      '```markdown',
-      '<!-- toc -->',
-      '- fake',
-      '<!-- /toc -->',
-      '```',
-      '',
-      '## Real Section'
-    ].join('\n')
-
-    const result = insertOrUpdateTocBlock(md)
-    expect(result).toBe(
-      [
-        '# Guide',
-        '',
-        '<!-- toc -->',
-        '- [Guide](#guide)',
-        '  - [Real Section](#real-section)',
-        '<!-- /toc -->',
-        '',
-        '```markdown',
-        '<!-- toc -->',
-        '- fake',
-        '<!-- /toc -->',
-        '```',
-        '',
-        '## Real Section'
-      ].join('\n')
-    )
-  })
-
-  it('applies and strips hierarchical heading numbers only outside code blocks while preserving CRLF and trailing whitespace', () => {
-    const crlfMd = [
-      '# Intro  ',
-      '```python',
-      '# keep this comment untouched',
-      '## keep this too',
-      '```',
-      '##   Details   ',
-      '### Sub-item',
-      '# 9. Old Numbered Title  '
-    ].join('\r\n')
-
-    const numbered = applyHeadingNumbers(crlfMd)
-    expect(numbered).toBe(
-      [
-        '# 1. Intro  ',
-        '```python',
-        '# keep this comment untouched',
-        '## keep this too',
-        '```',
-        '##   1.1. Details   ',
-        '### 1.1.1. Sub-item',
-        '# 2. Old Numbered Title  '
-      ].join('\r\n')
-    )
-
-    // Idempotent when applied twice
-    expect(applyHeadingNumbers(numbered)).toBe(numbered)
-
-    const stripped = stripHeadingNumbers(numbered)
-    expect(stripped).toBe(
-      [
-        '# Intro  ',
-        '```python',
-        '# keep this comment untouched',
-        '## keep this too',
-        '```',
-        '##   Details   ',
-        '### Sub-item',
-        '# Old Numbered Title  '
-      ].join('\r\n')
-    )
+    expect(formatOutlineHeadingTitle(headings[0], true)).toBe('Plain Heading')
+    expect(formatOutlineHeadingTitle(headings[0], false)).toBe('Plain Heading')
+    expect(formatOutlineHeadingTitle(headings[1], true)).toBe('Explicit Prefix')
+    expect(formatOutlineHeadingTitle(headings[1], false)).toBe('9. Explicit Prefix')
   })
 })

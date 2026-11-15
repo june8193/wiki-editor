@@ -7,7 +7,6 @@ import {
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
   type HeadingScrollSpySample,
   resolveMatchingOutlineCandidates
@@ -18,7 +17,6 @@ import {
   deleteTableRowPreservingHeader,
   detectProseMirrorSlashQuery,
   extractWysiwygHeadingCandidates,
-  headingNumberingPluginKey,
   insertWysiwygMarkdownWithCursor,
   prepareMarkdownForTiptap,
   sanitizeHtmlWithRehype,
@@ -39,7 +37,6 @@ interface WysiwygMarkdownEditorProps {
   content: string
   scrollTop: number
   theme?: ThemeMode
-  showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
@@ -216,7 +213,6 @@ export function WysiwygMarkdownEditor({
   content,
   scrollTop,
   theme = 'light',
-  showHeadingNumbers = false,
   mermaidRenderer,
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
@@ -230,16 +226,12 @@ export function WysiwygMarkdownEditor({
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const contextMenuRef = useRef<HTMLDivElement | null>(null)
   const isProgrammaticSyncRef = useRef(false)
-  const hasLocalEditRef = useRef(false)
-  const contentRef = useRef(content)
-  contentRef.current = content
   const lastEmittedMarkdownRef = useRef(content)
   const lastSyncedContentPropRef = useRef(content)
   const onChangeContentRef = useRef(onChangeContent)
   onChangeContentRef.current = onChangeContent
   const documentTitleRef = useRef(documentTitle)
   documentTitleRef.current = documentTitle
-  const insertTocRef = useRef<() => void>(() => undefined)
   const editorRef = useRef<Editor | null>(null)
 
   const {
@@ -264,7 +256,7 @@ export function WysiwygMarkdownEditor({
   const editor = useEditor(
     {
       immediatelyRender: true,
-      extensions: createWysiwygExtensions({ showHeadingNumbers }),
+      extensions: createWysiwygExtensions(),
       content: prepareMarkdownForTiptap(content),
       contentType: 'markdown',
       editorProps: {
@@ -274,7 +266,7 @@ export function WysiwygMarkdownEditor({
           'aria-label': '위지윅 문서 에디터'
         },
         transformPastedHTML: sanitizeHtmlWithRehype,
-        handleKeyDown: (view, event) => {
+        handleKeyDown: (_view, event) => {
           const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
           if (slashControlsRef.current.stateRef.current.isOpen) {
             if (event.key === 'ArrowDown' && !hasModifier) {
@@ -296,19 +288,6 @@ export function WysiwygMarkdownEditor({
               return slashControlsRef.current.dismiss()
             }
           }
-
-          if (event.key === 'Enter' && !hasModifier) {
-            const { $from, empty } = view.state.selection
-            if (
-              empty &&
-              $from.parent.type.name === 'paragraph' &&
-              $from.parent.textContent.trim() === '/toc'
-            ) {
-              event.preventDefault()
-              insertTocRef.current()
-              return true
-            }
-          }
           return false
         }
       },
@@ -316,7 +295,6 @@ export function WysiwygMarkdownEditor({
         if (isProgrammaticSyncRef.current || !transaction.docChanged) {
           return
         }
-        hasLocalEditRef.current = true
         const serialized = instance.getMarkdown()
         lastEmittedMarkdownRef.current = serialized
         onChangeContentRef.current(serialized)
@@ -342,7 +320,7 @@ export function WysiwygMarkdownEditor({
   editorRef.current = editor
 
   const syncEditorContent = useCallback(
-    (markdown: string, markLocalEdit: boolean): void => {
+    (markdown: string): void => {
       if (!editor) return
       isProgrammaticSyncRef.current = true
       try {
@@ -350,7 +328,6 @@ export function WysiwygMarkdownEditor({
           emitUpdate: false,
           contentType: 'markdown'
         })
-        hasLocalEditRef.current = markLocalEdit
         lastEmittedMarkdownRef.current = markdown
         dismissSlashMenu()
       } finally {
@@ -360,34 +337,13 @@ export function WysiwygMarkdownEditor({
     [dismissSlashMenu, editor]
   )
 
-  const handleInsertToc = useCallback((): void => {
-    if (!editor) return
-    const currentMd = hasLocalEditRef.current ? editor.getMarkdown() : contentRef.current
-    const cursorLine = findFirstNonFencedSlashTocLine(currentMd)
-    const nextMd = insertOrUpdateTocBlock(currentMd, cursorLine)
-    if (nextMd === currentMd) return
-
-    syncEditorContent(nextMd, true)
-    onChangeContentRef.current(nextMd)
-  }, [editor, syncEditorContent])
-
-  insertTocRef.current = handleInsertToc
-
   useEffect(() => {
     if (!editor) return
     if (content === lastSyncedContentPropRef.current) return
     lastSyncedContentPropRef.current = content
     if (content === lastEmittedMarkdownRef.current) return
-    syncEditorContent(content, false)
+    syncEditorContent(content)
   }, [content, editor, syncEditorContent])
-
-  useEffect(() => {
-    if (!editor) return
-    const current = headingNumberingPluginKey.getState(editor.state)
-    if (current !== showHeadingNumbers) {
-      editor.view.dispatch(editor.state.tr.setMeta(headingNumberingPluginKey, showHeadingNumbers))
-    }
-  }, [editor, showHeadingNumbers])
 
   useContainerOutlineSpy({
     containerRef: scrollContainerRef,
@@ -458,14 +414,6 @@ export function WysiwygMarkdownEditor({
             </button>
           )
         })}
-        <button
-          type="button"
-          className="toolbar-btn"
-          title="본문에 목차(/toc) 삽입"
-          onClick={handleInsertToc}
-        >
-          목차 삽입
-        </button>
       </div>
 
       <div
