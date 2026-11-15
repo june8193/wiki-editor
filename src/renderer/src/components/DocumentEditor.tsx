@@ -1,8 +1,12 @@
-import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
+import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import type { DocumentOutlineSpyUpdate, OutlineScrollRequest } from '../editor/outlineScrollSpy'
+import type {
+  DocumentOutlineSpyUpdate,
+  HeadingScrollSpySample,
+  OutlineScrollRequest
+} from '../editor/outlineScrollSpy'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
 import { EditorMode, TabItem, TabViewPatch } from '../stores/PaneTabStore'
@@ -60,6 +64,20 @@ export function DocumentEditor({
   const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
   const matchedScrollRequest =
     scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
+
+  const modeHeadingChangeHandlers = useMemo(() => {
+    if (!onActiveHeadingChange) return null
+    const createReporter =
+      (mode: EditorMode) =>
+      (sample: HeadingScrollSpySample): void => {
+        onActiveHeadingChange({ mode, ...sample })
+      }
+    return {
+      raw: allowRichModes ? createReporter('raw') : undefined,
+      wysiwyg: createReporter('wysiwyg'),
+      preview: createReporter('preview')
+    }
+  }, [allowRichModes, onActiveHeadingChange])
 
   const handleModeSelect = useCallback(
     (nextMode: EditorMode): void => {
@@ -181,11 +199,7 @@ export function DocumentEditor({
           isActive={isActive}
           onChangeContent={onChangeContent}
           onUpdateViewState={onUpdateViewState}
-          onActiveHeadingChange={
-            allowRichModes && onActiveHeadingChange
-              ? (sample) => onActiveHeadingChange({ mode: 'raw', ...sample })
-              : undefined
-          }
+          onActiveHeadingChange={modeHeadingChangeHandlers?.raw}
         />
       )}
 
@@ -206,11 +220,7 @@ export function DocumentEditor({
           isActive={isActive}
           onChangeContent={onChangeContent}
           onScrollTopChange={handleScrollTopChange}
-          onActiveHeadingChange={
-            onActiveHeadingChange
-              ? (sample) => onActiveHeadingChange({ mode: 'wysiwyg', ...sample })
-              : undefined
-          }
+          onActiveHeadingChange={modeHeadingChangeHandlers?.wysiwyg}
         />
       )}
 
@@ -232,11 +242,7 @@ export function DocumentEditor({
           }
           isActive={isActive}
           onScrollTopChange={handleScrollTopChange}
-          onActiveHeadingChange={
-            onActiveHeadingChange
-              ? (sample) => onActiveHeadingChange({ mode: 'preview', ...sample })
-              : undefined
-          }
+          onActiveHeadingChange={modeHeadingChangeHandlers?.preview}
         />
       )}
     </section>

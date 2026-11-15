@@ -52,6 +52,15 @@ function isSpyValidForContext(
   return spy !== null && activeContext !== null && isSameOutlineContext(spy.context, activeContext)
 }
 
+function readValidCachedSpyForPane(
+  latestSpyByPane: Partial<Record<PaneId, ActiveOutlineHeadingState>>,
+  activeContext: OutlineContextTarget | null
+): ActiveOutlineHeadingState | null {
+  if (!activeContext) return null
+  const cached = latestSpyByPane[activeContext.paneId] ?? null
+  return isSpyValidForContext(cached, activeContext) ? cached : null
+}
+
 /**
  * Coordinates active Document Outline heading state across scroll-spy reports,
  * one-shot click-to-scroll protection, and context/content transitions.
@@ -70,14 +79,9 @@ export function useOutlineScrollSpy({
   const activeContextRef = useRef<OutlineContextTarget | null>(activeContext)
   activeContextRef.current = activeContext
 
-  const cachedSpyForActivePane = activeContext
-    ? (latestSpyByPaneRef.current[activeContext.paneId] ?? null)
-    : null
   const activeSpy = isSpyValidForContext(spyOutlineHeading, activeContext)
     ? spyOutlineHeading
-    : isSpyValidForContext(cachedSpyForActivePane, activeContext)
-      ? cachedSpyForActivePane
-      : null
+    : readValidCachedSpyForPane(latestSpyByPaneRef.current, activeContext)
 
   const activeHeadingIndex = isPinValidForContext(
     pinnedOutlineHeading,
@@ -93,15 +97,11 @@ export function useOutlineScrollSpy({
     setPinnedOutlineHeading((prev) =>
       isPinValidForContext(prev, activeContext, bufferContent) ? prev : null
     )
-    setSpyOutlineHeading((prev) => {
-      if (isSpyValidForContext(prev, activeContext)) {
-        return prev
-      }
-      const nextCached = activeContext
-        ? (latestSpyByPaneRef.current[activeContext.paneId] ?? null)
-        : null
-      return isSpyValidForContext(nextCached, activeContext) ? nextCached : null
-    })
+    setSpyOutlineHeading((prev) =>
+      isSpyValidForContext(prev, activeContext)
+        ? prev
+        : readValidCachedSpyForPane(latestSpyByPaneRef.current, activeContext)
+    )
   }, [activeContext, bufferContent])
 
   useEffect(() => {

@@ -5572,33 +5572,17 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
         ['Summary', 880]
       ])
 
-      Object.defineProperties(scrollContainer, {
-        clientHeight: { value: 400, configurable: true },
-        scrollHeight: { value: 1000, configurable: true },
-        scrollTop: {
-          get: () => currentScrollTop,
-          set: () => undefined,
-          configurable: true
-        }
-      })
+      stubScrollLayout(scrollContainer, () => ({
+        scrollTop: currentScrollTop,
+        scrollHeight: 1000,
+        clientHeight: 400,
+        top: 100
+      }))
 
       const originalRect = HTMLElement.prototype.getBoundingClientRect
       const rectSpy = vi
         .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
         .mockImplementation(function (this: HTMLElement) {
-          if (this === scrollContainer) {
-            return {
-              top: 100,
-              bottom: 500,
-              left: 0,
-              right: 600,
-              width: 600,
-              height: 400,
-              x: 0,
-              y: 100,
-              toJSON: () => ({})
-            } as DOMRect
-          }
           if (/^H[1-6]$/.test(this.tagName) && scrollContainer.contains(this)) {
             const text = this.textContent?.trim() ?? ''
             const offset = headingOffsets.get(text) ?? 0

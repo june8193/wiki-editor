@@ -33,7 +33,6 @@ import {
 import { detectSlashQuery, resolveSlashCommandSnippet } from '../editor/SlashCommandEngine'
 import type { CursorPosition } from '../stores/PaneTabStore'
 import { useEditorOutlineSpy } from './useEditorOutlineSpy'
-import { useOneShotScroll } from './useOneShotScroll'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from './useSlashMenu'
 import { syncElementScrollTop } from './useSyncScrollTop'
 
@@ -201,11 +200,9 @@ export function useRawCodeMirrorEditor({
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const outlineSpyRef = useRef<{
-    handleContainerScroll: () => void
-    attachScrollIntentListeners: (element: HTMLElement) => () => void
+    attachScrollElement: (element: HTMLElement) => () => void
   }>({
-    handleContainerScroll: () => {},
-    attachScrollIntentListeners: () => () => {}
+    attachScrollElement: () => () => {}
   })
   const compartmentsRef = useRef({
     language: new Compartment(),
@@ -389,16 +386,10 @@ export function useRawCodeMirrorEditor({
     view.scrollDOM.scrollTop = initial.scrollTop
     viewRef.current = view
 
-    const handleScroll = (): void => {
-      runtimeRef.current.onUpdateViewState({ scrollTop: view.scrollDOM.scrollTop })
-      outlineSpyRef.current.handleContainerScroll()
-    }
-    view.scrollDOM.addEventListener('scroll', handleScroll)
-    const detachScrollIntent = outlineSpyRef.current.attachScrollIntentListeners(view.scrollDOM)
+    const detachOutlineScroll = outlineSpyRef.current.attachScrollElement(view.scrollDOM)
 
     return () => {
-      detachScrollIntent()
-      view.scrollDOM.removeEventListener('scroll', handleScroll)
+      detachOutlineScroll()
       view.destroy()
       viewRef.current = null
     }
@@ -482,30 +473,46 @@ export function useRawCodeMirrorEditor({
     content,
     isReady: language === 'markdown',
     isActive,
+    scrollRequest,
+    isScrollRequestReady: true,
+    onScrollRequest: (req) => {
+      const view = viewRef.current
+      if (!view) return false
+
+      const lineCount = view.state.doc.lines
+      const clampedLine = Math.max(1, Math.min(req.line, lineCount))
+      const lineInfo = view.state.doc.line(clampedLine)
+      view.dispatch({
+        selection: { anchor: lineInfo.from },
+        effects: EditorView.scrollIntoView(lineInfo.from, { y: 'start' })
+      })
+      syncSelectionAttrs(view)
+      view.focus()
+      return true
+    },
+    onScrollTopChange: (nextScrollTop) => {
+      runtimeRef.current.onUpdateViewState({ scrollTop: nextScrollTop })
+    },
     measure: (headings) => {
       const view = viewRef.current
-      return view ? measureActiveHeadingIndexInRawEditor(view, headings) : null
+      if (!view) return null
+      const { doc } = view.state
+      return measureActiveHeadingIndexInRawEditor(
+        {
+          scrollDOM: view.scrollDOM,
+          contentDOM: view.contentDOM,
+          documentPaddingTop: view.documentPadding.top,
+          defaultLineHeight: view.defaultLineHeight,
+          lineCount: doc.lines,
+          lineNumberAt: (pos) => doc.lineAt(pos).number,
+          lineBlockAtHeight: (height) => view.lineBlockAtHeight(height)
+        },
+        headings
+      )
     },
     onActiveHeadingChange
   })
   outlineSpyRef.current = outlineSpy
-
-  useOneShotScroll(scrollRequest, true, (req) => {
-    const view = viewRef.current
-    if (!view) return false
-
-    const lineCount = view.state.doc.lines
-    const clampedLine = Math.max(1, Math.min(req.line, lineCount))
-    const lineInfo = view.state.doc.line(clampedLine)
-    outlineSpy.resetScrollIntent()
-    view.dispatch({
-      selection: { anchor: lineInfo.from },
-      effects: EditorView.scrollIntoView(lineInfo.from, { y: 'start' })
-    })
-    syncSelectionAttrs(view)
-    view.focus()
-    return true
-  })
 
   const runTableAction = useCallback((action: RawTableAction): void => {
     const view = viewRef.current

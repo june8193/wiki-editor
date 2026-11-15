@@ -1,5 +1,4 @@
 import {
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   useCallback,
@@ -71,14 +70,14 @@ export function useUserScrollIntent() {
   }, [clearPointerDown])
 
   const applyPointerStart = useCallback(
-    (container: HTMLElement, target: EventTarget | null, clientX: number, clientY: number): void => {
+    (container: HTMLElement, event: Pick<MouseEvent, 'target' | 'clientX' | 'clientY'>): void => {
       isPointerDownRef.current = true
-      if (target === container) {
+      if (event.target === container) {
         const rect = container.getBoundingClientRect()
         const isOnScrollbarOrUnmeasured =
           rect.width === 0 ||
-          clientX - rect.left >= container.clientWidth ||
-          clientY - rect.top >= container.clientHeight
+          event.clientX - rect.left >= container.clientWidth ||
+          event.clientY - rect.top >= container.clientHeight
         if (isOnScrollbarOrUnmeasured) {
           markUserScrollIntent()
         }
@@ -89,13 +88,13 @@ export function useUserScrollIntent() {
 
   const handlePointerStart = useCallback(
     (event: ReactPointerEvent<HTMLElement> | ReactMouseEvent<HTMLElement>): void => {
-      applyPointerStart(event.currentTarget, event.target, event.clientX, event.clientY)
+      applyPointerStart(event.currentTarget, event)
     },
     [applyPointerStart]
   )
 
   const handleKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLElement>): void => {
+    (event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'metaKey' | 'key'>): void => {
       if (isScrollNavigationKey(event)) {
         markUserScrollIntent()
       }
@@ -106,35 +105,31 @@ export function useUserScrollIntent() {
   const attachScrollIntentListeners = useCallback(
     (element: HTMLElement): (() => void) => {
       const onPointerStart = (event: MouseEvent | PointerEvent): void => {
-        applyPointerStart(element, event.target, event.clientX, event.clientY)
+        applyPointerStart(element, event)
       }
-      const onKeyDown = (event: KeyboardEvent): void => {
-        if (isScrollNavigationKey(event)) {
-          markUserScrollIntent()
+      const bindings: ReadonlyArray<
+        readonly [keyof HTMLElementEventMap, EventListener, AddEventListenerOptions?]
+      > = [
+        ['wheel', markUserScrollIntent, { passive: true }],
+        ['touchstart', markUserScrollIntent, { passive: true }],
+        ['pointerdown', onPointerStart as EventListener],
+        ['mousedown', onPointerStart as EventListener],
+        ['pointerup', clearPointerDown],
+        ['pointercancel', clearPointerDown],
+        ['mouseup', clearPointerDown],
+        ['keydown', handleKeyDown as unknown as EventListener]
+      ]
+
+      for (const [eventName, handler, options] of bindings) {
+        element.addEventListener(eventName, handler, options)
+      }
+      return () => {
+        for (const [eventName, handler] of bindings) {
+          element.removeEventListener(eventName, handler)
         }
       }
-
-      element.addEventListener('wheel', markUserScrollIntent, { passive: true })
-      element.addEventListener('touchstart', markUserScrollIntent, { passive: true })
-      element.addEventListener('pointerdown', onPointerStart)
-      element.addEventListener('mousedown', onPointerStart)
-      element.addEventListener('pointerup', clearPointerDown)
-      element.addEventListener('pointercancel', clearPointerDown)
-      element.addEventListener('mouseup', clearPointerDown)
-      element.addEventListener('keydown', onKeyDown)
-
-      return () => {
-        element.removeEventListener('wheel', markUserScrollIntent)
-        element.removeEventListener('touchstart', markUserScrollIntent)
-        element.removeEventListener('pointerdown', onPointerStart)
-        element.removeEventListener('mousedown', onPointerStart)
-        element.removeEventListener('pointerup', clearPointerDown)
-        element.removeEventListener('pointercancel', clearPointerDown)
-        element.removeEventListener('mouseup', clearPointerDown)
-        element.removeEventListener('keydown', onKeyDown)
-      }
     },
-    [applyPointerStart, clearPointerDown, markUserScrollIntent]
+    [applyPointerStart, clearPointerDown, handleKeyDown, markUserScrollIntent]
   )
 
   const scrollIntentHandlers = useMemo(

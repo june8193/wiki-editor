@@ -1,5 +1,5 @@
 import type { EditorMode, PaneId } from '../stores/PaneTabStore'
-import type { MarkdownHeading } from './MarkdownTocEngine'
+import { type MarkdownHeading, stripHeadingNumberPrefix } from './MarkdownTocEngine'
 
 export const OUTLINE_SPY_TOP_THRESHOLD_PX = 24
 export const OUTLINE_SPY_BOTTOM_EPSILON_PX = 2
@@ -108,20 +108,43 @@ export function resolveActiveHeadingIndexByLine(input: LineActiveHeadingInput): 
 
 const HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6'
 
-function resolveMatchingHeadingElements(
-  container: HTMLElement,
-  headings: readonly MarkdownHeading[]
-): HTMLElement[] {
-  const allHeadings = Array.from(container.querySelectorAll<HTMLElement>(HEADING_SELECTOR))
-  if (allHeadings.length === headings.length) {
-    return allHeadings
+function collectVisibleHeadingText(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent ?? ''
   }
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return ''
+  }
+  const element = node as Element
+  if (
+    element.classList.contains('heading-number') ||
+    element.classList.contains('heading-number-suppressed')
+  ) {
+    return ''
+  }
+  let text = ''
+  for (const child of Array.from(element.childNodes)) {
+    text += collectVisibleHeadingText(child)
+  }
+  return text
+}
 
+function normalizeDomHeadingText(el: HTMLElement): string {
+  return stripHeadingNumberPrefix(collectVisibleHeadingText(el)).replace(/\s+/g, ' ').trim()
+}
+
+function matchHeadingsBySlugId(
+  allHeadings: readonly HTMLElement[],
+  headings: readonly MarkdownHeading[]
+): HTMLElement[] | null {
   const byId = new Map<string, HTMLElement>()
   for (const el of allHeadings) {
     if (el.id && !byId.has(el.id)) {
       byId.set(el.id, el)
     }
+  }
+  if (byId.size === 0) {
+    return null
   }
 
   const matched: HTMLElement[] = []
@@ -131,7 +154,56 @@ function resolveMatchingHeadingElements(
       matched.push(match)
     }
   }
-  return matched.length === headings.length ? matched : allHeadings
+  return matched.length === headings.length ? matched : null
+}
+
+function matchHeadingsSequentially(
+  candidates: readonly HTMLElement[],
+  headings: readonly MarkdownHeading[]
+): HTMLElement[] | null {
+  const matched: HTMLElement[] = []
+  let cursor = 0
+  for (const heading of headings) {
+    const expectedTitle = heading.title.replace(/\s+/g, ' ').trim()
+    while (cursor < candidates.length) {
+      const candidate = candidates[cursor]
+      cursor += 1
+      const level = Number(candidate.tagName[1])
+      if (level === heading.level && normalizeDomHeadingText(candidate) === expectedTitle) {
+        matched.push(candidate)
+        break
+      }
+    }
+  }
+  return matched.length === headings.length ? matched : null
+}
+
+function resolveMatchingHeadingElements(
+  container: HTMLElement,
+  headings: readonly MarkdownHeading[]
+): HTMLElement[] {
+  const allHeadings = Array.from(container.querySelectorAll<HTMLElement>(HEADING_SELECTOR))
+  if (allHeadings.length === headings.length) {
+    return allHeadings
+  }
+
+  const matchedById = matchHeadingsBySlugId(allHeadings, headings)
+  if (matchedById) {
+    return matchedById
+  }
+
+  // TipTap headings lack id attributes and may include empty `# `, blockquote, or Setext headings
+  // omitted by `parseMarkdownHeadings`; align monotonically on visible heading level and title.
+  const outlineCandidates = allHeadings.filter((el) => !el.closest('blockquote, pre, svg'))
+  const matchedByText = matchHeadingsSequentially(outlineCandidates, headings)
+  if (matchedByText) {
+    return matchedByText
+  }
+
+  const nonEmptyCandidates = outlineCandidates.filter(
+    (el) => normalizeDomHeadingText(el).length > 0 || el.querySelector('img') !== null
+  )
+  return nonEmptyCandidates.length === headings.length ? nonEmptyCandidates : allHeadings
 }
 
 function hasMeasuredElementBox(
@@ -155,14 +227,10 @@ function resolveDocumentPaddingTop(
 export interface RawScrollViewportLike {
   scrollDOM: HTMLElement
   contentDOM: HTMLElement
-  documentPadding?: { top: number }
+  documentPaddingTop?: number
   defaultLineHeight?: number
-  state: {
-    doc: {
-      lines: number
-      lineAt: (pos: number) => { number: number }
-    }
-  }
+  lineCount: number
+  lineNumberAt: (pos: number) => number
   lineBlockAtHeight: (height: number) => { from: number; top?: number; bottom?: number }
 }
 
@@ -215,13 +283,13 @@ export function measureActiveHeadingIndexInRawEditor(
     return null
   }
 
-  const paddingTop = resolveDocumentPaddingTop(view.documentPadding?.top, contentDOM)
+  const paddingTop = resolveDocumentPaddingTop(view.documentPaddingTop, contentDOM)
   const baselineHeight = Math.max(
     0,
     scrollDOM.scrollTop + OUTLINE_SPY_TOP_THRESHOLD_PX - paddingTop
   )
   const topBlock = view.lineBlockAtHeight(baselineHeight)
-  let topLine = view.state.doc.lineAt(topBlock.from).number
+  let topLine = view.lineNumberAt(topBlock.from)
   // In headless jsdom after a CM6 DOM measure cycle, zero-height `.cm-line` rects collapse
   // `heightMap` blocks to zero height (`bottom <= top`); fall back to `defaultLineHeight`.
   const isZeroHeightBlock =
@@ -233,7 +301,7 @@ export function measureActiveHeadingIndexInRawEditor(
         : 14
     topLine = Math.max(
       1,
-      Math.min(view.state.doc.lines, Math.floor(baselineHeight / fallbackLineHeight) + 1)
+      Math.min(view.lineCount, Math.floor(baselineHeight / fallbackLineHeight) + 1)
     )
   }
 

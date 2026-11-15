@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseMarkdownHeadings } from './MarkdownTocEngine'
 import {
+  measureActiveHeadingIndexInContainer,
   measureActiveHeadingIndexInRawEditor,
   resolveActiveHeadingIndexByLine,
   resolveActiveHeadingIndexByOffsets
@@ -214,20 +215,16 @@ describe('outlineScrollSpy', () => {
       return {
         scrollDOM,
         contentDOM,
-        documentPadding: { top: metrics.paddingTop ?? 16 },
-        state: {
-          doc: {
-            lines: lines.length,
-            lineAt: (pos: number) => {
-              let lineNumber = 1
-              for (let i = 0; i < lineStarts.length; i += 1) {
-                if (lineStarts[i] <= pos) {
-                  lineNumber = i + 1
-                }
-              }
-              return { number: lineNumber }
+        documentPaddingTop: metrics.paddingTop ?? 16,
+        lineCount: lines.length,
+        lineNumberAt: (pos: number) => {
+          let lineNumber = 1
+          for (let i = 0; i < lineStarts.length; i += 1) {
+            if (lineStarts[i] <= pos) {
+              lineNumber = i + 1
             }
           }
+          return lineNumber
         },
         lineBlockAtHeight: (height: number) => {
           const lineIdx = Math.max(0, Math.min(lines.length - 1, Math.floor(height / lineHeight)))
@@ -291,5 +288,71 @@ describe('outlineScrollSpy', () => {
       lineBlockAtHeight: () => ({ from: lineStarts[lines.length - 1], top: 14, bottom: 14 })
     }
     expect(measureActiveHeadingIndexInRawEditor(collapsedViewport, headings)).toBe(0)
+  })
+
+  it('matches un-id WYSIWYG container headings accurately when empty, blockquote, or Setext headings appear alongside dynamic numbering', () => {
+    const markdown = ['# 1. Alpha', '', '## Beta'].join('\n')
+    const headings = parseMarkdownHeadings(markdown)
+
+    const container = document.createElement('div')
+    const hAlpha = document.createElement('h1')
+    const suppressedSpan = document.createElement('span')
+    suppressedSpan.className = 'heading-number-suppressed'
+    suppressedSpan.textContent = '1. '
+    const numberSpan = document.createElement('span')
+    numberSpan.className = 'heading-number'
+    numberSpan.textContent = '1. '
+    hAlpha.append(suppressedSpan, numberSpan, document.createTextNode('Alpha'))
+
+    const hEmpty = document.createElement('h1')
+    hEmpty.appendChild(document.createElement('br'))
+
+    const quote = document.createElement('blockquote')
+    const hQuoted = document.createElement('h1')
+    hQuoted.textContent = 'Quoted Heading'
+    quote.appendChild(hQuoted)
+
+    const hSetext = document.createElement('h2')
+    hSetext.textContent = 'Setext Only'
+
+    const hBeta = document.createElement('h2')
+    hBeta.textContent = 'Beta'
+
+    container.append(hAlpha, hEmpty, quote, hSetext, hBeta)
+
+    const stubRect = (top: number, height: number): DOMRect =>
+      ({
+        top,
+        bottom: top + height,
+        left: 0,
+        right: 500,
+        width: 500,
+        height,
+        x: 0,
+        y: top,
+        toJSON: () => ({})
+      }) as DOMRect
+
+    let scrollTop = 0
+    Object.defineProperties(container, {
+      scrollTop: { get: () => scrollTop, configurable: true },
+      scrollHeight: { value: 1200, configurable: true },
+      clientHeight: { value: 400, configurable: true }
+    })
+
+    container.getBoundingClientRect = () => stubRect(100, 400)
+    hAlpha.getBoundingClientRect = () => stubRect(100 + 80 - scrollTop, 28)
+    hEmpty.getBoundingClientRect = () => stubRect(100 + 220 - scrollTop, 28)
+    hQuoted.getBoundingClientRect = () => stubRect(100 + 340 - scrollTop, 28)
+    hSetext.getBoundingClientRect = () => stubRect(100 + 460 - scrollTop, 28)
+    hBeta.getBoundingClientRect = () => stubRect(100 + 620 - scrollTop, 28)
+
+    // Scrolled past Alpha, Empty, Quoted, Setext — right at Beta (offset 0 from container top)
+    scrollTop = 620
+    expect(measureActiveHeadingIndexInContainer(container, headings)).toBe(1)
+
+    // Scrolled at Empty heading (Alpha already passed, Beta not reached) — stays on Alpha (0)
+    scrollTop = 220
+    expect(measureActiveHeadingIndexInContainer(container, headings)).toBe(0)
   })
 })
