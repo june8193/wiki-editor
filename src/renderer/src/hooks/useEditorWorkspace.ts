@@ -136,12 +136,6 @@ export function useEditorWorkspace({
   }
   const { bufferStore, tabStore, syncClient } = storesRef.current
 
-  syncClient.updateCallbacks({
-    onWorkspaceSaved: () => callbacksRef.current.onWorkspaceSaved?.(),
-    onError: (message, error) => callbacksRef.current.onError(message, error),
-    onConfirmCloseDirtyTab: (request) => callbacksRef.current.onConfirmCloseDirtyTab(request)
-  })
-
   const buffers = useSyncExternalStore(bufferStore.subscribe, bufferStore.getSnapshot)
   const layout = useSyncExternalStore(tabStore.subscribe, tabStore.getSnapshot)
 

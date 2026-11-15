@@ -191,6 +191,29 @@ export class SharedDocumentBufferHub {
     return removedAnyBuffer
   }
 
+  private reconcileTabCountChanges(
+    prevCounts: Readonly<Record<string, number>>,
+    extraCandidateKeys: Iterable<string> = [],
+    options: { checkCountChange?: boolean; forceTimerReconcile?: boolean } = {}
+  ): void {
+    const nextCounts = this.computeTabCounts()
+    const removedAnyBuffer = this.removeOrphanedBuffers(
+      prevCounts,
+      nextCounts,
+      extraCandidateKeys
+    )
+    const countsChanged =
+      (options.checkCountChange ?? true) && !areTabCountMapsEqual(prevCounts, nextCounts)
+    this.tabCounts = nextCounts
+
+    if (options.forceTimerReconcile || removedAnyBuffer || countsChanged) {
+      this.reconcileAutoSaveTimers()
+      if (removedAnyBuffer || countsChanged) {
+        this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
+      }
+    }
+  }
+
   syncWindowTabs(windowId: number, bufferKeys: readonly string[]): SharedBufferStateSnapshot {
     const perWindow = new Map<string, number>()
     for (const key of bufferKeys) {
@@ -201,15 +224,7 @@ export class SharedDocumentBufferHub {
 
     const prevCounts = this.tabCounts
     this.windowTabs.set(windowId, perWindow)
-    const nextCounts = this.computeTabCounts()
-    const removedAnyBuffer = this.removeOrphanedBuffers(prevCounts, nextCounts)
-    const countsChanged = !areTabCountMapsEqual(prevCounts, nextCounts)
-    this.tabCounts = nextCounts
-
-    if (removedAnyBuffer || countsChanged) {
-      this.reconcileAutoSaveTimers()
-      this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
-    }
+    this.reconcileTabCountChanges(prevCounts)
 
     return this.getSnapshot()
   }
@@ -218,7 +233,6 @@ export class SharedDocumentBufferHub {
     const wasPaused = this.autoSaveScheduler.removePausedWindow(windowId)
     const hadTabs = this.windowTabs.delete(windowId)
     const prevCounts = this.tabCounts
-    const nextCounts = this.computeTabCounts()
 
     const depletedPendingKeys: string[] = []
     for (const key of [...this.pendingOpenWindows.keys()]) {
@@ -227,20 +241,10 @@ export class SharedDocumentBufferHub {
       }
     }
 
-    const removedAnyBuffer = this.removeOrphanedBuffers(
-      prevCounts,
-      nextCounts,
-      depletedPendingKeys
-    )
-    const countsChanged = hadTabs && !areTabCountMapsEqual(prevCounts, nextCounts)
-    this.tabCounts = nextCounts
-
-    if (wasPaused || removedAnyBuffer || countsChanged) {
-      this.reconcileAutoSaveTimers()
-      if (removedAnyBuffer || countsChanged) {
-        this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
-      }
-    }
+    this.reconcileTabCountChanges(prevCounts, depletedPendingKeys, {
+      checkCountChange: hadTabs,
+      forceTimerReconcile: wasPaused
+    })
   }
 
   private openOrGetBuffer(

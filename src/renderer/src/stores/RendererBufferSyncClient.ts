@@ -100,16 +100,6 @@ export class RendererBufferSyncClient {
     this.tabStore.subscribe(() => this.handleLocalTabStoreChange())
   }
 
-  updateCallbacks(callbacks: {
-    onWorkspaceSaved?: () => void
-    onError: (message: string | null, error?: unknown) => void
-    onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
-  }): void {
-    this.onWorkspaceSaved = callbacks.onWorkspaceSaved
-    this.onError = callbacks.onError
-    this.onConfirmCloseDirtyTab = callbacks.onConfirmCloseDirtyTab
-  }
-
   start(): () => void {
     this.mounted = true
     this.lastSyncedTabSignature = null
@@ -335,17 +325,14 @@ export class RendererBufferSyncClient {
     }
   }
 
-  openWorkspaceFile = async (entry: WorkspaceEntry, targetPaneId?: PaneId): Promise<void> => {
-    const key = getWorkspacePathKey(entry.path)
-    this.remappedKeys.delete(key)
-    if ((this.localTabCounts[key] ?? 0) > 0 && this.bufferStore.hasBuffer(key)) {
-      this.tabStore.openTab(key, { paneId: targetPaneId })
-      return
-    }
-
+  private async openRemoteBuffer(
+    loadBuffer: () => Promise<DocumentBuffer>,
+    targetPaneId: PaneId | undefined,
+    fallbackError: string
+  ): Promise<void> {
     this.onError(null)
     try {
-      const buf = await this.bufferApi.openWorkspaceFile(entry.path, entry.name)
+      const buf = await loadBuffer()
       if (!this.mounted) return
       this.remappedKeys.delete(buf.key)
       if (!this.pendingLocalEditCounts.has(buf.key)) {
@@ -355,9 +342,24 @@ export class RendererBufferSyncClient {
       this.syncCurrentLayoutTabs()
     } catch (error: unknown) {
       if (this.mounted) {
-        this.onError(toErrorMessage(error, '파일을 열지 못했습니다.'), error)
+        this.onError(toErrorMessage(error, fallbackError), error)
       }
     }
+  }
+
+  openWorkspaceFile = async (entry: WorkspaceEntry, targetPaneId?: PaneId): Promise<void> => {
+    const key = getWorkspacePathKey(entry.path)
+    this.remappedKeys.delete(key)
+    if ((this.localTabCounts[key] ?? 0) > 0 && this.bufferStore.hasBuffer(key)) {
+      this.tabStore.openTab(key, { paneId: targetPaneId })
+      return
+    }
+
+    await this.openRemoteBuffer(
+      () => this.bufferApi.openWorkspaceFile(entry.path, entry.name),
+      targetPaneId,
+      '파일을 열지 못했습니다.'
+    )
   }
 
   openConfigDocument = async (targetPaneId?: PaneId): Promise<void> => {
@@ -369,20 +371,11 @@ export class RendererBufferSyncClient {
       return
     }
 
-    this.onError(null)
-    try {
-      const buf = await this.bufferApi.openConfigDocument()
-      if (!this.mounted) return
-      if (!this.pendingLocalEditCounts.has(buf.key)) {
-        this.bufferStore.upsertBuffer(buf)
-      }
-      this.tabStore.openTab(buf.key, { paneId: targetPaneId })
-      this.syncCurrentLayoutTabs()
-    } catch (error: unknown) {
-      if (this.mounted) {
-        this.onError(toErrorMessage(error, '설정 파일을 읽지 못했습니다.'), error)
-      }
-    }
+    await this.openRemoteBuffer(
+      () => this.bufferApi.openConfigDocument(),
+      targetPaneId,
+      '설정 파일을 읽지 못했습니다.'
+    )
   }
 
   refreshCleanConfig = async (): Promise<void> => {
@@ -440,23 +433,28 @@ export class RendererBufferSyncClient {
       })
   }
 
+  private async runSaveBufferRequest(key: string): Promise<boolean> {
+    this.pendingManualSaveKeys.add(key)
+    try {
+      const result = await this.bufferApi.saveBuffer(key)
+      return result.ok
+    } catch (error: unknown) {
+      if (this.mounted) {
+        this.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'), error)
+      }
+      return false
+    } finally {
+      this.pendingManualSaveKeys.delete(key)
+    }
+  }
+
   saveBufferByKey = (bufferKey: string): void => {
     const current = this.bufferStore.getBuffer(bufferKey)
     if (!current || !current.isDirty || current.isSaving) {
       return
     }
     this.onError(null)
-    this.pendingManualSaveKeys.add(current.key)
-    void this.bufferApi
-      .saveBuffer(current.key)
-      .catch((error: unknown) => {
-        if (this.mounted) {
-          this.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'), error)
-        }
-      })
-      .finally(() => {
-        this.pendingManualSaveKeys.delete(current.key)
-      })
+    void this.runSaveBufferRequest(current.key)
   }
 
   saveActivePaneDocument = (): void => {
@@ -472,18 +470,7 @@ export class RendererBufferSyncClient {
       return true
     }
 
-    this.pendingManualSaveKeys.add(resolvedKey)
-    try {
-      const result = await this.bufferApi.saveBuffer(resolvedKey)
-      return result.ok
-    } catch (error: unknown) {
-      if (this.mounted) {
-        this.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'), error)
-      }
-      return false
-    } finally {
-      this.pendingManualSaveKeys.delete(resolvedKey)
-    }
+    return this.runSaveBufferRequest(resolvedKey)
   }
 
   ensureAllWorkspaceBuffersSaved = async (): Promise<boolean> => {
