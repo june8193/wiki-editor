@@ -16,14 +16,6 @@ export interface NormalizedMermaidSvg {
   height: number
 }
 
-export interface DiagramSvgRasterRequest {
-  svgDataUri: string
-  pixelWidth: number
-  pixelHeight: number
-}
-
-export type DiagramPngRasterAdapter = (request: DiagramSvgRasterRequest) => Promise<Uint8Array>
-
 interface SvgBounds {
   minX: number
   minY: number
@@ -249,13 +241,18 @@ function canvasToPngBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
 }
 
 /**
- * Default browser offscreen canvas rasterizer decoding an offline SVG data URI into PNG bytes.
+ * Normalizes a Mermaid SVG with active theme background and 16px outer padding,
+ * encodes it as an offline UTF-8 SVG data URI, clamps oversized dimensions, and
+ * rasterizes to 2x PNG bytes via an offscreen HTML canvas.
  */
-export const defaultCanvasPngRasterAdapter: DiagramPngRasterAdapter = async ({
-  svgDataUri,
-  pixelWidth,
-  pixelHeight
-}) => {
+export async function rasterizeMermaidSvgToPng(
+  svgMarkup: string,
+  theme: ThemeMode
+): Promise<Uint8Array> {
+  const normalized = normalizeMermaidSvg(svgMarkup, theme)
+  const { pixelWidth, pixelHeight } = computeRasterDimensions(normalized.width, normalized.height)
+  const svgDataUri = encodeSvgDataUri(normalized.svg)
+
   const img = await loadSvgImage(svgDataUri)
   const canvas = document.createElement('canvas')
   canvas.width = pixelWidth
@@ -269,25 +266,4 @@ export const defaultCanvasPngRasterAdapter: DiagramPngRasterAdapter = async ({
   ctx.clearRect(0, 0, pixelWidth, pixelHeight)
   ctx.drawImage(img, 0, 0, pixelWidth, pixelHeight)
   return await canvasToPngBytes(canvas)
-}
-
-/**
- * Normalizes a Mermaid SVG with active theme background and 16px outer padding,
- * encodes it as an offline UTF-8 SVG data URI, clamps oversized dimensions, and
- * rasterizes to 2x PNG bytes through the provided raster adapter.
- */
-export async function rasterizeMermaidSvgToPng(
-  svgMarkup: string,
-  theme: ThemeMode,
-  rasterAdapter: DiagramPngRasterAdapter = defaultCanvasPngRasterAdapter
-): Promise<Uint8Array> {
-  const normalized = normalizeMermaidSvg(svgMarkup, theme)
-  const { pixelWidth, pixelHeight } = computeRasterDimensions(normalized.width, normalized.height)
-  const svgDataUri = encodeSvgDataUri(normalized.svg)
-
-  return await rasterAdapter({
-    svgDataUri,
-    pixelWidth,
-    pixelHeight
-  })
 }

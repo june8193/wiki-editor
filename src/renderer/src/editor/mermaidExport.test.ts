@@ -1,11 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
-import {
-  defaultCanvasPngRasterAdapter,
-  type DiagramSvgRasterRequest,
-  normalizeMermaidSvg,
-  rasterizeMermaidSvgToPng
-} from './mermaidExport'
+import { normalizeMermaidSvg, rasterizeMermaidSvgToPng } from './mermaidExport'
 
 describe('mermaidExport', () => {
   it('normalizes Mermaid SVG with 16px padded viewBox, explicit dimensions, stripped max-width, bottom theme background rect, and valid XML foreignObject serialization', () => {
@@ -68,77 +63,47 @@ describe('mermaidExport', () => {
     expect(() => normalizeMermaidSvg('<div>not svg</div>', 'light')).toThrow()
   })
 
-  it('rasterizes normalized SVG to 2x PNG via offline data URI and clamps oversized diagrams within 8192px / 67,108,864px limits preserving aspect ratio', async () => {
-    const requests: DiagramSvgRasterRequest[] = []
-    const expectedPng = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
-    const rasterAdapter = vi.fn(async (request: DiagramSvgRasterRequest) => {
-      requests.push(request)
-      return expectedPng
-    })
-
-    // 1. Standard 200x100 SVG -> padded 232x132 -> 2x raster 464x264 with dark #161b22 surface
-    const standardSvg = '<svg viewBox="0 0 200 100"><rect width="200" height="100"/></svg>'
-    const bytes = await rasterizeMermaidSvgToPng(standardSvg, 'dark', rasterAdapter)
-    expect(bytes).toBe(expectedPng)
-    expect(requests).toHaveLength(1)
-    expect(requests[0].svgDataUri.startsWith('data:image/svg+xml;charset=utf-8,')).toBe(true)
-    const decodedStandardSvg = decodeURIComponent(
-      requests[0].svgDataUri.slice('data:image/svg+xml;charset=utf-8,'.length)
-    )
-    expect(decodedStandardSvg).toContain('width="232"')
-    expect(decodedStandardSvg).toContain('height="132"')
-    expect(decodedStandardSvg).toContain('fill="#161b22"')
-    expect(requests[0]).toMatchObject({
-      pixelWidth: 464,
-      pixelHeight: 264
-    })
-
-    // 2. Extremely wide diagram (padded 10000 x 2000) -> clamped to max side 8192 keeping 5:1 aspect ratio
-    const wideSvg = '<svg viewBox="0 0 9968 1968"><rect width="9968" height="1968"/></svg>'
-    await rasterizeMermaidSvgToPng(wideSvg, 'light', rasterAdapter)
-    expect(requests[1].pixelWidth).toBe(8192)
-    expect(requests[1].pixelHeight).toBe(1638)
-    expect(requests[1].pixelWidth * requests[1].pixelHeight).toBeLessThanOrEqual(67_108_864)
-
-    // 3. Oversized square diagram (padded 5000 x 5000 -> 2x would exceed 8192px and 67,108,864px) -> clamped to 8192 x 8192
-    const squareSvg = '<svg viewBox="0 0 4968 4968"><rect width="4968" height="4968"/></svg>'
-    await rasterizeMermaidSvgToPng(squareSvg, 'light', rasterAdapter)
-    expect(requests[2].pixelWidth).toBe(8192)
-    expect(requests[2].pixelHeight).toBe(8192)
-    expect(requests[2].pixelWidth * requests[2].pixelHeight).toBe(67_108_864)
-  })
-
-  it('decodes SVG data URI into an offscreen canvas and extracts PNG bytes via defaultCanvasPngRasterAdapter', async () => {
+  it('rasterizes normalized SVG to 2x PNG via offline data URI, clamps oversized diagrams within 8192px / 67,108,864px preserving aspect ratio, and surfaces decode/blob failures', async () => {
     const stub = installSvgCanvasStub()
 
     try {
-      const pngBytes = await defaultCanvasPngRasterAdapter({
-        svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
-        pixelWidth: 200,
-        pixelHeight: 100
+      // 1. Standard 200x100 SVG -> padded 232x132 -> 2x raster 464x264 with dark #161b22 surface
+      const standardSvg = '<svg viewBox="0 0 200 100"><rect width="200" height="100"/></svg>'
+      const bytes = await rasterizeMermaidSvgToPng(standardSvg, 'dark')
+      expect(Array.from(bytes)).toEqual([137, 80, 78, 71, 2, 464 & 0xff])
+      expect(stub.calls).toHaveLength(1)
+      expect(stub.calls[0].svgDataUri.startsWith('data:image/svg+xml;charset=utf-8,')).toBe(true)
+      expect(stub.calls[0].decodedSvg).toContain('width="232"')
+      expect(stub.calls[0].decodedSvg).toContain('height="132"')
+      expect(stub.calls[0].decodedSvg).toContain('fill="#161b22"')
+      expect(stub.calls[0]).toMatchObject({
+        pixelWidth: 464,
+        pixelHeight: 264
       })
-      expect(Array.from(pngBytes)).toEqual([137, 80, 78, 71, 1, 200])
-      expect(stub.clearRectSpy).toHaveBeenCalledWith(0, 0, 200, 100)
-      expect(stub.drawImageSpy).toHaveBeenCalledWith(expect.anything(), 0, 0, 200, 100)
+      expect(stub.clearRectSpy).toHaveBeenCalledWith(0, 0, 464, 264)
+      expect(stub.drawImageSpy).toHaveBeenCalledWith(expect.anything(), 0, 0, 464, 264)
 
+      // 2. Extremely wide diagram (padded 10000 x 2000) -> clamped to max side 8192 keeping 5:1 aspect ratio
+      const wideSvg = '<svg viewBox="0 0 9968 1968"><rect width="9968" height="1968"/></svg>'
+      await rasterizeMermaidSvgToPng(wideSvg, 'light')
+      expect(stub.calls[1].pixelWidth).toBe(8192)
+      expect(stub.calls[1].pixelHeight).toBe(1638)
+      expect(stub.calls[1].pixelWidth * stub.calls[1].pixelHeight).toBeLessThanOrEqual(67_108_864)
+
+      // 3. Oversized square diagram (padded 5000 x 5000 -> 2x would exceed 8192px and 67,108,864px) -> clamped to 8192 x 8192
+      const squareSvg = '<svg viewBox="0 0 4968 4968"><rect width="4968" height="4968"/></svg>'
+      await rasterizeMermaidSvgToPng(squareSvg, 'light')
+      expect(stub.calls[2].pixelWidth).toBe(8192)
+      expect(stub.calls[2].pixelHeight).toBe(8192)
+      expect(stub.calls[2].pixelWidth * stub.calls[2].pixelHeight).toBe(67_108_864)
+
+      // 4. Decode and empty-blob failures propagate as rejections
       stub.setFailDecode(true)
-      await expect(
-        defaultCanvasPngRasterAdapter({
-          svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
-          pixelWidth: 200,
-          pixelHeight: 100
-        })
-      ).rejects.toThrow()
+      await expect(rasterizeMermaidSvgToPng(standardSvg, 'light')).rejects.toThrow()
 
       stub.setFailDecode(false)
       stub.setEmitNullBlob(true)
-      await expect(
-        defaultCanvasPngRasterAdapter({
-          svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
-          pixelWidth: 200,
-          pixelHeight: 100
-        })
-      ).rejects.toThrow()
+      await expect(rasterizeMermaidSvgToPng(standardSvg, 'light')).rejects.toThrow()
     } finally {
       stub.restore()
     }
