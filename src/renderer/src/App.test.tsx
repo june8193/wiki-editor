@@ -23,6 +23,7 @@ import {
 } from '@shared/workspace'
 import { defaultMermaidRenderer } from './editor/mermaidRenderer'
 import { App } from './App'
+import themeCss from './styles/theme.css?raw'
 
 const mermaidMockState = vi.hoisted(() => {
   let activeTheme = 'default'
@@ -4874,5 +4875,300 @@ describe('Settings Panel centered modal', () => {
     })
     const configEditor = await screen.findByTestId('document-editor')
     expect(getRawEditorText(configEditor)).toContain('"theme": "light"')
+  })
+})
+
+function mountThemeStylesAndRoot(): { rootEl: HTMLDivElement; cleanup: () => void } {
+  const styleEl = document.createElement('style')
+  styleEl.setAttribute('data-test-theme', 'true')
+  styleEl.textContent = themeCss
+  document.head.appendChild(styleEl)
+
+  const rootEl = document.createElement('div')
+  rootEl.id = 'root'
+  document.body.appendChild(rootEl)
+
+  return {
+    rootEl,
+    cleanup: () => {
+      rootEl.remove()
+      styleEl.remove()
+    }
+  }
+}
+
+function isZeroCssLength(value: string): boolean {
+  return value === '0px' || value === '0'
+}
+
+describe('App shell viewport scroll isolation and left sidebar overflow contracts', () => {
+  it('enforces viewport overflow isolation, min-height: 0 flex chain, and non-shrinking headers/toolbars across Raw, 위지윅, Preview, and single/horizontal/vertical split modes', async () => {
+    const user = userEvent.setup()
+    const longMarkdown = Array.from({ length: 40 }, (_, idx) => `## Section ${idx + 1}\n\nParagraph ${idx + 1}`).join('\n\n')
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\scroll-layout',
+        workspaces: {
+          'C:\\wiki\\scroll-layout': {
+            'long-a.md': longMarkdown,
+            'long-b.md': longMarkdown
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { rootEl, cleanup } = mountThemeStylesAndRoot()
+    try {
+      render(<App />, { container: rootEl })
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('long-a.md'))
+
+      // Root document, #root, app shell, and main layout lock to viewport without whole-page scroll
+      const mainEl = screen.getByRole('main')
+      const appShell = mainEl.parentElement as HTMLElement
+      for (const el of [document.documentElement, document.body, rootEl, appShell]) {
+        expect(getComputedStyle(el).overflow).toBe('hidden')
+      }
+      expect(isZeroCssLength(getComputedStyle(appShell).minHeight)).toBe(true)
+
+      const mainStyle = getComputedStyle(mainEl)
+      expect(mainStyle.display).toBe('flex')
+      expect(isZeroCssLength(mainStyle.minHeight)).toBe(true)
+      expect(isZeroCssLength(mainStyle.minWidth)).toBe(true)
+      expect(mainStyle.overflow).toBe('hidden')
+
+      // Activity bar, left sidebar, right sidebar, and Document Outline scroll isolation
+      expect(getComputedStyle(screen.getByRole('navigation', { name: '액티비티 바' })).flexShrink).toBe('0')
+
+      const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+      expect(getComputedStyle(leftSidebar).flexShrink).toBe('0')
+      expect(isZeroCssLength(getComputedStyle(leftSidebar).minHeight)).toBe(true)
+      expect(getComputedStyle(leftSidebar).overflow).toBe('hidden')
+
+      const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+      expect(getComputedStyle(rightSidebar).flexShrink).toBe('0')
+      expect(isZeroCssLength(getComputedStyle(rightSidebar).minHeight)).toBe(true)
+      expect(getComputedStyle(rightSidebar).overflow).toBe('hidden')
+
+      const outlineRegion = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      expect(isZeroCssLength(getComputedStyle(outlineRegion).minHeight)).toBe(true)
+      expect(getComputedStyle(outlineRegion).overflow).toBe('hidden')
+      expect(getComputedStyle(outlineRegion.firstElementChild as HTMLElement).flexShrink).toBe('0')
+      const outlineActions = within(outlineRegion)
+        .getByRole('button', { name: '본문에 목차(/toc) 삽입' })
+        .parentElement as HTMLElement
+      expect(getComputedStyle(outlineActions).flexShrink).toBe('0')
+      const outlineListContainer = within(outlineRegion).getByRole('list').parentElement as HTMLElement
+      expect(isZeroCssLength(getComputedStyle(outlineListContainer).minHeight)).toBe(true)
+      expect(getComputedStyle(outlineListContainer).overflowY).toBe('auto')
+
+      const paneWorkspace = screen.getByTestId('pane-workspace')
+      expect(isZeroCssLength(getComputedStyle(paneWorkspace).minHeight)).toBe(true)
+      expect(isZeroCssLength(getComputedStyle(paneWorkspace).minWidth)).toBe(true)
+      expect(getComputedStyle(paneWorkspace).overflow).toBe('hidden')
+
+      const assertPaneIsolation = (pane: HTMLElement, mode: 'raw' | 'wysiwyg' | 'preview'): void => {
+        const paneStyle = getComputedStyle(pane)
+        expect(isZeroCssLength(paneStyle.minHeight)).toBe(true)
+        expect(isZeroCssLength(paneStyle.minWidth)).toBe(true)
+        expect(paneStyle.overflow).toBe('hidden')
+
+        const tabBar = within(pane).getByRole('tablist')
+        expect(getComputedStyle(tabBar).flexShrink).toBe('0')
+
+        const docEditor = within(pane).getByRole('region', { name: '문서 편집 영역' })
+        const docEditorStyle = getComputedStyle(docEditor)
+        expect(isZeroCssLength(docEditorStyle.minHeight)).toBe(true)
+        expect(isZeroCssLength(docEditorStyle.minWidth)).toBe(true)
+        expect(docEditorStyle.overflow).toBe('hidden')
+
+        const editorHeader = within(docEditor)
+          .getByRole('group', { name: '에디터 모드 전환' })
+          .parentElement as HTMLElement
+        expect(getComputedStyle(editorHeader).flexShrink).toBe('0')
+
+        if (mode === 'raw') {
+          const tableToolbar = within(docEditor).getByRole('toolbar', { name: 'Raw 표 편집 툴바' })
+          expect(getComputedStyle(tableToolbar).flexShrink).toBe('0')
+          const rawShell = tableToolbar.parentElement as HTMLElement
+          expect(isZeroCssLength(getComputedStyle(rawShell).minHeight)).toBe(true)
+          expect(getComputedStyle(rawShell).overflow).toBe('hidden')
+          const rawEditorEl = within(docEditor).getByTestId('document-editor')
+          const cmHost = rawEditorEl.closest('.codemirror-host') as HTMLElement
+          expect(isZeroCssLength(getComputedStyle(cmHost).minHeight)).toBe(true)
+          expect(getComputedStyle(cmHost).overflow).toBe('hidden')
+          const rawScroller = getRawEditorScroller(rawEditorEl)
+          expect(isZeroCssLength(getComputedStyle(rawScroller).minHeight)).toBe(true)
+          expect(getComputedStyle(rawScroller).overflowY).toBe('auto')
+        } else if (mode === 'wysiwyg') {
+          const formatToolbar = within(docEditor).getByRole('toolbar', { name: '위지윅 서식 툴바' })
+          expect(getComputedStyle(formatToolbar).flexShrink).toBe('0')
+          const wysiwygShell = formatToolbar.parentElement as HTMLElement
+          expect(isZeroCssLength(getComputedStyle(wysiwygShell).minHeight)).toBe(true)
+          expect(getComputedStyle(wysiwygShell).overflow).toBe('hidden')
+          const scrollContainer = within(docEditor)
+            .getByTestId('document-editor')
+            .closest('.wysiwyg-scroll-container') as HTMLElement
+          expect(isZeroCssLength(getComputedStyle(scrollContainer).minHeight)).toBe(true)
+          expect(getComputedStyle(scrollContainer).overflowY).toBe('auto')
+        } else {
+          const preview = within(docEditor).getByLabelText('마크다운 미리보기')
+          expect(isZeroCssLength(getComputedStyle(preview).minHeight)).toBe(true)
+          expect(getComputedStyle(preview).overflowY).toBe('auto')
+        }
+      }
+
+      const primaryPane = screen.getByRole('region', { name: '주 편집기 영역' })
+      assertPaneIsolation(primaryPane, 'raw')
+
+      // Switch to 위지윅 mode in single pane
+      await user.click(
+        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: '위지윅'
+        })
+      )
+      assertPaneIsolation(primaryPane, 'wysiwyg')
+
+      // Switch to Preview mode in single pane
+      await user.click(
+        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: 'Preview'
+        })
+      )
+      assertPaneIsolation(primaryPane, 'preview')
+
+      // Open second file and split horizontally (좌우 분할)
+      await user.click(within(explorer).getByText('long-b.md'))
+      const secondTab = within(primaryPane).getByRole('tab', { name: /long-b\.md/i })
+      fireEvent.dragStart(secondTab)
+      fireEvent.drop(await screen.findByTestId('split-drop-zone-horizontal'))
+      expect(paneWorkspace).toHaveAttribute('data-split-mode', 'horizontal')
+
+      const secondaryPane = screen.getByRole('region', { name: '보조 편집기 영역' })
+      await user.click(
+        within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: '위지윅'
+        })
+      )
+      assertPaneIsolation(primaryPane, 'preview')
+      assertPaneIsolation(secondaryPane, 'wysiwyg')
+
+      // Switch to vertical split (상하 분할)
+      fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /long-b\.md/i }))
+      fireEvent.drop(await screen.findByTestId('split-drop-zone-vertical'))
+      expect(paneWorkspace).toHaveAttribute('data-split-mode', 'vertical')
+      assertPaneIsolation(primaryPane, 'preview')
+      assertPaneIsolation(secondaryPane, 'wysiwyg')
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('isolates overflow for all three left sidebar views without clipping folder tree context menu or git branch selector', async () => {
+    const user = userEvent.setup()
+    const checkoutSpy = vi.fn(async (_workspacePath: string, branchName: string) => ({
+      ...createEmptyGitStatus(true, 'C:/wiki/sidebar-overflow'),
+      branch: branchName
+    }))
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\sidebar-overflow',
+        workspaces: {
+          'C:\\wiki\\sidebar-overflow': {
+            'doc.md': '# Doc'
+          }
+        },
+        git: {
+          status: async () => ({
+            ...createEmptyGitStatus(true, 'C:/wiki/sidebar-overflow'),
+            branch: 'main',
+            ahead: 1,
+            behind: 0,
+            unstaged: [{ path: 'doc.md', status: 'M' }]
+          }),
+          branches: async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [
+              { name: 'main', current: true, upstream: 'origin/main' },
+              { name: 'feature/layout', current: false, upstream: null }
+            ]
+          }),
+          checkout: checkoutSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { rootEl, cleanup } = mountThemeStylesAndRoot()
+    try {
+      render(<App />, { container: rootEl })
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+      // 1. Explorer view (Folder Tree)
+      const explorer = await screen.findByRole('region', { name: '워크스페이스 탐색기' })
+      expect(isZeroCssLength(getComputedStyle(explorer).minHeight)).toBe(true)
+      expect(getComputedStyle(explorer).overflow).toBe('hidden')
+      expect(getComputedStyle(explorer.firstElementChild as HTMLElement).flexShrink).toBe('0')
+      const tree = within(explorer).getByRole('tree')
+      expect(isZeroCssLength(getComputedStyle(tree).minHeight)).toBe(true)
+      expect(getComputedStyle(tree).overflowY).toBe('auto')
+
+      // Context menu uses fixed positioning with no transform/filter containing block on ancestors
+      fireEvent.contextMenu(await within(explorer).findByText('doc.md'), { clientX: 80, clientY: 120 })
+      const contextMenu = await screen.findByRole('menu')
+      expect(getComputedStyle(contextMenu).position).toBe('fixed')
+      for (const ancestor of [
+        explorer,
+        screen.getByRole('complementary', { name: '왼쪽 사이드바' }),
+        screen.getByRole('main')
+      ]) {
+        const style = getComputedStyle(ancestor)
+        expect(['', 'none']).toContain(style.transform)
+        expect(['', 'none']).toContain(style.filter)
+        expect(['', 'none']).toContain(style.contain)
+      }
+      await user.click(within(contextMenu).getByRole('menuitem', { name: '열기' }))
+      expect(await screen.findByRole('tab', { name: 'doc.md' })).toBeInTheDocument()
+
+      // 2. Git view (Git Panel)
+      await clickActivityBarButton(user, 'Git')
+      const gitPanel = screen.getByRole('region', { name: 'Git 소스 제어' })
+      expect(isZeroCssLength(getComputedStyle(gitPanel).minHeight)).toBe(true)
+      expect(getComputedStyle(gitPanel).overflow).toBe('hidden')
+      const gitTitle = within(gitPanel).getByText('Git')
+      const gitHeader = gitTitle.closest('.git-header') as HTMLElement
+      expect(getComputedStyle(gitHeader).flexShrink).toBe('0')
+      for (const btn of within(gitPanel).getAllByRole('button')) {
+        expect(btn).not.toHaveAttribute('aria-expanded')
+      }
+      const gitBody = gitPanel.lastElementChild as HTMLElement
+      expect(isZeroCssLength(getComputedStyle(gitBody).minHeight)).toBe(true)
+      expect(getComputedStyle(gitBody).overflowY).toBe('auto')
+
+      const branchSelect = within(gitPanel).getByLabelText('브랜치 선택') as HTMLSelectElement
+      await user.selectOptions(branchSelect, 'feature/layout')
+      await user.click(within(gitPanel).getByRole('button', { name: '브랜치 전환' }))
+      await waitFor(() => {
+        expect(checkoutSpy).toHaveBeenCalledWith('C:/wiki/sidebar-overflow', 'feature/layout')
+      })
+
+      // 3. Workspace view
+      await clickActivityBarButton(user, '워크스페이스')
+      const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+      expect(isZeroCssLength(getComputedStyle(workspaceView).minHeight)).toBe(true)
+      expect(getComputedStyle(workspaceView).overflow).toBe('hidden')
+      expect(getComputedStyle(workspaceView.firstElementChild as HTMLElement).flexShrink).toBe('0')
+      const workspaceBody = workspaceView.lastElementChild as HTMLElement
+      expect(isZeroCssLength(getComputedStyle(workspaceBody).minHeight)).toBe(true)
+      expect(getComputedStyle(workspaceBody).overflowY).toBe('auto')
+    } finally {
+      cleanup()
+    }
   })
 })

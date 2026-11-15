@@ -102,7 +102,7 @@ function GitFileSection({
 }
 
 /**
- * Collapsible sidebar panel for workspace Git status, staging, committing, branch switching, and sync.
+ * Sidebar panel for workspace Git status, staging, committing, branch switching, and sync.
  */
 export const GitSidebarPanel = memo(function GitSidebarPanel({
   workspaceRootPath,
@@ -123,7 +123,6 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onPush,
   onSync
 }: GitSidebarPanelProps) {
-  const [isCollapsed, setIsCollapsed] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
   const [validationMessage, setValidationMessage] = useState<string | null>(null)
 
@@ -308,13 +307,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   return (
     <section className="git-sidebar" aria-label="Git 소스 제어">
       <div className="git-header">
-        <button
-          type="button"
-          className="git-collapse-btn"
-          aria-expanded={!isCollapsed}
-          onClick={() => setIsCollapsed((prev) => !prev)}
-        >
-          <span aria-hidden="true">{isCollapsed ? '▸' : '▾'}</span>
+        <div className="git-title-group">
           <span>Git</span>
           {branchLabel && (
             <span className="git-branch-pill" aria-label={`현재 브랜치 ${branchLabel}`}>
@@ -326,7 +319,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
               ↑{status.ahead} ↓{status.behind}
             </span>
           )}
-        </button>
+        </div>
 
         <button
           type="button"
@@ -340,31 +333,29 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
         </button>
       </div>
 
-      {!isCollapsed && (
-        <div className="git-body">
-          {pendingAction && (
-            <div className="git-loading-banner" role="status" aria-live="polite">
-              {pendingAction} 실행 중...
-            </div>
-          )}
+      <div className="git-body">
+        {pendingAction && (
+          <div className="git-loading-banner" role="status" aria-live="polite">
+            {pendingAction} 실행 중...
+          </div>
+        )}
 
-          {errorMessage && (
-            <div className="git-error-banner" role="alert">
-              <span className="git-error-text">{errorMessage}</span>
-              <button
-                type="button"
-                className="git-error-close-btn"
-                aria-label="Git 오류 닫기"
-                onClick={onDismissError}
-              >
-                ×
-              </button>
-            </div>
-          )}
+        {errorMessage && (
+          <div className="git-error-banner" role="alert">
+            <span className="git-error-text">{errorMessage}</span>
+            <button
+              type="button"
+              className="git-error-close-btn"
+              aria-label="Git 오류 닫기"
+              onClick={onDismissError}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
-          {renderBody()}
-        </div>
-      )}
+        {renderBody()}
+      </div>
     </section>
   )
 })

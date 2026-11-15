@@ -218,4 +218,56 @@ describe('GitSidebarPanel', () => {
     await user.click(within(alert).getByRole('button', { name: 'Git 오류 닫기' }))
     expect(onDismissError).toHaveBeenCalledTimes(1)
   })
+
+  it('renders Git panel with a fixed non-collapsible header and always keeps the body visible', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn()
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          onRefresh
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    for (const button of within(region).getAllByRole('button')) {
+      expect(button).not.toHaveAttribute('aria-expanded')
+    }
+    expect(within(region).queryByText('▾')).not.toBeInTheDocument()
+    expect(within(region).queryByText('▸')).not.toBeInTheDocument()
+
+    const title = within(region).getByText('Git')
+    const branchBadge = within(region).getByLabelText('현재 브랜치 main')
+    const syncBadge = within(region).getByLabelText('Ahead 2 Behind 1')
+    expect(title.closest('button')).toBeNull()
+    expect(branchBadge.closest('button')).toBeNull()
+    expect(syncBadge.closest('button')).toBeNull()
+
+    await user.click(title)
+    await user.click(branchBadge)
+    expect(within(region).getByLabelText('브랜치 선택')).toBeInTheDocument()
+    expect(within(region).getByLabelText('커밋 메시지')).toBeInTheDocument()
+    expect(within(region).getByText('스테이지됨 (1)')).toBeInTheDocument()
+    expect(within(region).getByText('변경 사항 (2)')).toBeInTheDocument()
+
+    await user.click(within(region).getByRole('button', { name: 'Git 상태 새로고침' }))
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          workspaceRootPath: null,
+          status: null,
+          branchList: null
+        })}
+      />
+    )
+    expect(within(region).getByText('Git')).toBeInTheDocument()
+    expect(within(region).getByText(/워크스페이스를 먼저 열어주세요/)).toBeInTheDocument()
+    for (const button of within(region).getAllByRole('button')) {
+      expect(button).not.toHaveAttribute('aria-expanded')
+    }
+  })
 })
