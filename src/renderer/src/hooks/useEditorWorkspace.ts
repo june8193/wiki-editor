@@ -2,10 +2,13 @@ import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
 import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
-import { PaneTabStore, type PaneTabTransition } from '../stores/PaneTabStore'
+import {
+  extractLayoutBufferKeys,
+  PaneTabStore,
+  type PaneTabTransition
+} from '../stores/PaneTabStore'
 import {
   type DirtyTabClosePrompt,
-  extractLayoutBufferKeys,
   RendererBufferSyncClient
 } from '../stores/RendererBufferSyncClient'
 import { useWikiApi } from './useWikiApi'

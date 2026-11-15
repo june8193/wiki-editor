@@ -9,24 +9,12 @@ import { DocumentBufferStore } from '@shared/documentBufferStore'
 import { toErrorMessage } from '@shared/errors'
 import type { WikiBufferApi } from '@shared/ipc'
 import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
-import { type PaneId, type PaneLayoutState, PaneTabStore } from './PaneTabStore'
+import { type PaneId, PaneTabStore } from './PaneTabStore'
 
 export interface DirtyTabClosePrompt {
   paneId: PaneId
   tabId: string
   buffer: DocumentBuffer
-}
-
-export function extractLayoutBufferKeys(layout: PaneLayoutState): string[] {
-  const keys: string[] = []
-  for (const paneId of ['primary', 'secondary'] as const) {
-    const pane = layout.panes[paneId]
-    if (!pane) continue
-    for (const tab of pane.tabs) {
-      keys.push(tab.bufferKey)
-    }
-  }
-  return keys
 }
 
 function countBufferKeys(keys: readonly string[]): Record<string, number> {
@@ -53,6 +41,30 @@ function moveTrackedKey(set: Set<string>, oldKey: string, newKey: string): void 
   if (set.delete(oldKey)) {
     set.add(newKey)
   }
+}
+
+function movePendingFlush(
+  flushes: Map<string, Promise<void>>,
+  oldKey: string,
+  newKey: string
+): void {
+  const pending = flushes.get(oldKey)
+  if (!pending) return
+  flushes.delete(oldKey)
+  const existing = flushes.get(newKey)
+  if (!existing) {
+    flushes.set(newKey, pending)
+    return
+  }
+  let combined!: Promise<void>
+  combined = Promise.all([existing, pending])
+    .then(() => undefined)
+    .finally(() => {
+      if (flushes.get(newKey) === combined) {
+        flushes.delete(newKey)
+      }
+    })
+  flushes.set(newKey, combined)
 }
 
 export interface RendererBufferSyncClientOptions {
@@ -82,6 +94,7 @@ export class RendererBufferSyncClient {
   private suppressLocalTabCountDelta = false
   private latestHubBuffers: DocumentBufferSnapshot = {}
   private readonly pendingLocalEditCounts = new Map<string, number>()
+  private readonly pendingEditFlushes = new Map<string, Promise<void>>()
   private readonly creatingKeys = new Set<string>()
   private readonly pendingManualSaveKeys = new Set<string>()
   private readonly remappedKeys = new Map<string, string>()
@@ -96,7 +109,7 @@ export class RendererBufferSyncClient {
     this.onError = options.onError
     this.onConfirmCloseDirtyTab = options.onConfirmCloseDirtyTab
 
-    this.localTabCounts = countBufferKeys(extractLayoutBufferKeys(this.tabStore.getSnapshot()))
+    this.localTabCounts = countBufferKeys(this.tabStore.getBufferKeys())
     this.tabStore.subscribe(() => this.handleLocalTabStoreChange())
   }
 
@@ -123,7 +136,7 @@ export class RendererBufferSyncClient {
   }
 
   private handleLocalTabStoreChange(): void {
-    const nextLocalCounts = countBufferKeys(extractLayoutBufferKeys(this.tabStore.getSnapshot()))
+    const nextLocalCounts = countBufferKeys(this.tabStore.getBufferKeys())
     if (!this.suppressLocalTabCountDelta) {
       const prevLocalCounts = this.localTabCounts
       const nextHubCounts = { ...this.hubTabCounts }
@@ -174,6 +187,7 @@ export class RendererBufferSyncClient {
 
     for (const key of keySet) {
       this.pendingLocalEditCounts.delete(key)
+      this.pendingEditFlushes.delete(key)
       this.creatingKeys.delete(key)
       this.pendingManualSaveKeys.delete(key)
     }
@@ -204,6 +218,7 @@ export class RendererBufferSyncClient {
       if (oldKey === newKey) continue
       this.remappedKeys.set(oldKey, newKey)
       movePendingCount(this.pendingLocalEditCounts, oldKey, newKey)
+      movePendingFlush(this.pendingEditFlushes, oldKey, newKey)
       moveTrackedKey(this.creatingKeys, oldKey, newKey)
       moveTrackedKey(this.pendingManualSaveKeys, oldKey, newKey)
     }
@@ -282,7 +297,7 @@ export class RendererBufferSyncClient {
   }
 
   private syncCurrentLayoutTabs(): void {
-    this.syncWindowTabs(extractLayoutBufferKeys(this.tabStore.getSnapshot()))
+    this.syncWindowTabs(this.tabStore.getBufferKeys())
   }
 
   private handleHubEvent(event: SharedBufferHubEvent): void {
@@ -314,7 +329,7 @@ export class RendererBufferSyncClient {
         this.onWorkspaceSaved?.()
         return
       case 'save-error': {
-        const openKeys = extractLayoutBufferKeys(this.tabStore.getSnapshot())
+        const openKeys = this.tabStore.getBufferKeys()
         const hasTabInWindow = openKeys.includes(event.key)
         const initiatedByWindow = this.pendingManualSaveKeys.has(event.key)
         if (hasTabInWindow || initiatedByWindow) {
@@ -414,9 +429,14 @@ export class RendererBufferSyncClient {
     )
     this.bufferStore.updateContent(resolvedKey, nextContent)
 
-    void this.bufferApi
+    const prevHubBuffers = this.latestHubBuffers
+    const previousFlush = this.pendingEditFlushes.get(resolvedKey)
+    const requestPromise = this.bufferApi
       .updateContent(resolvedKey, nextContent)
-      .catch(() => undefined)
+      .then(
+        () => undefined,
+        () => undefined
+      )
       .finally(() => {
         const finalKey = this.resolveLatestKey(resolvedKey)
         const remaining = (this.pendingLocalEditCounts.get(finalKey) ?? 1) - 1
@@ -431,12 +451,43 @@ export class RendererBufferSyncClient {
           this.bufferStore.upsertBuffer(latestHubBuf)
         }
       })
+
+    // Only track a pending flush when the hub snapshot did not already receive this edit synchronously
+    // (real async IPC or deferred tests), so synchronous manual Ctrl+S saves run immediately.
+    const syncedSynchronously =
+      !previousFlush &&
+      this.latestHubBuffers !== prevHubBuffers &&
+      this.latestHubBuffers[resolvedKey]?.content === nextContent
+    if (!syncedSynchronously) {
+      let chainedFlush!: Promise<void>
+      chainedFlush = (previousFlush ?? Promise.resolve())
+        .then(
+          () => requestPromise,
+          () => requestPromise
+        )
+        .finally(() => {
+          const finalKey = this.resolveLatestKey(resolvedKey)
+          if (this.pendingEditFlushes.get(finalKey) === chainedFlush) {
+            this.pendingEditFlushes.delete(finalKey)
+          }
+          if (this.pendingEditFlushes.get(resolvedKey) === chainedFlush) {
+            this.pendingEditFlushes.delete(resolvedKey)
+          }
+        })
+      this.pendingEditFlushes.set(resolvedKey, chainedFlush)
+    }
   }
 
   private async runSaveBufferRequest(key: string): Promise<boolean> {
-    this.pendingManualSaveKeys.add(key)
+    const initialKey = this.resolveLatestKey(key)
+    this.pendingManualSaveKeys.add(initialKey)
     try {
-      const result = await this.bufferApi.saveBuffer(key)
+      let currentKey = initialKey
+      while (this.pendingEditFlushes.has(currentKey)) {
+        await this.pendingEditFlushes.get(currentKey)
+        currentKey = this.resolveLatestKey(currentKey)
+      }
+      const result = await this.bufferApi.saveBuffer(currentKey)
       return result.ok
     } catch (error: unknown) {
       if (this.mounted) {
@@ -444,7 +495,8 @@ export class RendererBufferSyncClient {
       }
       return false
     } finally {
-      this.pendingManualSaveKeys.delete(key)
+      this.pendingManualSaveKeys.delete(initialKey)
+      this.pendingManualSaveKeys.delete(this.resolveLatestKey(initialKey))
     }
   }
 
@@ -463,10 +515,22 @@ export class RendererBufferSyncClient {
     this.saveBufferByKey(activeTab.bufferKey)
   }
 
+  private needsBufferSave(key: string): boolean {
+    const localBuf = this.bufferStore.getBuffer(key)
+    const hubBuf = this.latestHubBuffers[key]
+    return Boolean(
+      localBuf?.isDirty ||
+        localBuf?.isSaving ||
+        hubBuf?.isDirty ||
+        hubBuf?.isSaving ||
+        (this.pendingLocalEditCounts.get(key) ?? 0) > 0 ||
+        this.pendingEditFlushes.has(key)
+    )
+  }
+
   private async ensureSavedBuffer(bufferKey: string): Promise<boolean> {
     const resolvedKey = this.resolveLatestKey(bufferKey)
-    const current = this.latestHubBuffers[resolvedKey] ?? this.bufferStore.getBuffer(resolvedKey)
-    if (!current || (!current.isDirty && !current.isSaving)) {
+    if (!this.needsBufferSave(resolvedKey)) {
       return true
     }
 
@@ -474,12 +538,14 @@ export class RendererBufferSyncClient {
   }
 
   ensureAllWorkspaceBuffersSaved = async (): Promise<boolean> => {
-    const localKeys = new Set(extractLayoutBufferKeys(this.tabStore.getSnapshot()))
+    const localKeys = new Set(this.tabStore.getBufferKeys())
     const targetKeys = new Set<string>()
     for (const key of localKeys) {
-      const buf = this.latestHubBuffers[key] ?? this.bufferStore.getBuffer(key)
-      if (buf && buf.kind === 'workspace' && (buf.isDirty || buf.isSaving)) {
-        targetKeys.add(buf.key)
+      const resolvedKey = this.resolveLatestKey(key)
+      const kind =
+        this.bufferStore.getBuffer(resolvedKey)?.kind ?? this.latestHubBuffers[resolvedKey]?.kind
+      if (kind === 'workspace' && this.needsBufferSave(resolvedKey)) {
+        targetKeys.add(resolvedKey)
       }
     }
 
@@ -490,7 +556,7 @@ export class RendererBufferSyncClient {
   }
 
   getDirtyWorkspaceSummary = (): string | null => {
-    const localKeys = new Set(extractLayoutBufferKeys(this.tabStore.getSnapshot()))
+    const localKeys = new Set(this.tabStore.getBufferKeys())
     const dirty = this.bufferStore
       .getDirtyBuffers('workspace')
       .filter((buf) => localKeys.has(buf.key))
@@ -532,7 +598,7 @@ export class RendererBufferSyncClient {
   }
 
   clearWorkspaceBuffers = (): void => {
-    const localWorkspaceKeys = extractLayoutBufferKeys(this.tabStore.getSnapshot()).filter(
+    const localWorkspaceKeys = this.tabStore.getBufferKeys().filter(
       (key) => this.bufferStore.getBuffer(key)?.kind === 'workspace'
     )
     if (localWorkspaceKeys.length === 0) return

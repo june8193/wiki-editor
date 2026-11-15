@@ -1,6 +1,7 @@
 import { fireEvent, render, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { addFavoriteWorkspace } from '@shared/workspace'
 import { App } from './App'
 import {
   createMultiWindowWikiHarness,
@@ -616,5 +617,134 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     expect(openSpy).toHaveBeenCalledWith('C:/wiki/docs/race.md', 'race.md')
     const editor2 = await within(rendered2.container).findByTestId('document-editor')
     expect(getRawEditorText(editor2)).toBe('# From Disk')
+  })
+
+  it('flushes pending updateContent edits before saving on 저장 후 닫기 when the hub snapshot is still clean', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'draft.md': '# Initial'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const win1 = harness.createWindow()
+    const rendered1 = render(<App wikiApi={win1.api} />)
+
+    const editor1 = await openFolderAndNoteInWindow(
+      user,
+      rendered1.container,
+      win1.emitMenuCommand,
+      'draft.md'
+    )
+    await waitFor(() => {
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/draft.md']).toBe(1)
+    })
+
+    // Hold bufferApi.updateContent unresolved so latestHubBuffers still reports isDirty === false
+    const originalUpdateContent = win1.api.buffer.updateContent
+    const deferredEdits: Array<() => void> = []
+    win1.api.buffer.updateContent = (key, nextContent) =>
+      new Promise((resolve) => {
+        deferredEdits.push(() => {
+          void originalUpdateContent(key, nextContent).then(resolve)
+        })
+      })
+
+    setRawEditorText(editor1, '# Flushed before close')
+    expect(deferredEdits).toHaveLength(1)
+    expect(harness.hub.getSnapshot().buffers['c:/wiki/docs/draft.md']?.isDirty).toBe(false)
+
+    await user.click(within(rendered1.container).getByRole('button', { name: 'draft.md 탭 닫기' }))
+    const dialog = await within(rendered1.container).findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: '저장 후 닫기' }))
+
+    // Flush the in-flight edit after saveAndCloseTab has started
+    win1.api.buffer.updateContent = originalUpdateContent
+    for (const flush of deferredEdits) {
+      flush()
+    }
+
+    await waitFor(() => {
+      expect(within(rendered1.container).queryByRole('tab', { name: /draft\.md/ })).not.toBeInTheDocument()
+    })
+    expect(harness.getFilesSnapshot().get('C:/wiki/docs/draft.md')).toBe('# Flushed before close')
+  })
+
+  it('flushes pending updateContent edits before saving on 저장 후 이동 when switching workspaces', async () => {
+    const user = userEvent.setup()
+    const favorites = addFavoriteWorkspace(
+      [],
+      'C:/wiki/next',
+      'next',
+      '2026-11-14T00:00:00.000Z'
+    )
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light', favoriteWorkspaces: favorites },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'note.md': '# Initial'
+          },
+          'C:\\wiki\\next': {
+            'next.md': '# Next'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const win1 = harness.createWindow()
+    const rendered1 = render(<App wikiApi={win1.api} />)
+
+    const editor1 = await openFolderAndNoteInWindow(
+      user,
+      rendered1.container,
+      win1.emitMenuCommand,
+      'note.md'
+    )
+    await waitFor(() => {
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/note.md']).toBe(1)
+    })
+
+    const originalUpdateContent = win1.api.buffer.updateContent
+    const deferredEdits: Array<() => void> = []
+    win1.api.buffer.updateContent = (key, nextContent) =>
+      new Promise((resolve) => {
+        deferredEdits.push(() => {
+          void originalUpdateContent(key, nextContent).then(resolve)
+        })
+      })
+
+    setRawEditorText(editor1, '# Flushed before workspace switch')
+    expect(deferredEdits).toHaveLength(1)
+
+    const activityBar = within(rendered1.container).getByRole('navigation', { name: '액티비티 바' })
+    await user.click(within(activityBar).getByRole('button', { name: '워크스페이스' }))
+    const workspaceView = within(rendered1.container).getByRole('region', {
+      name: '워크스페이스 뷰'
+    })
+    await user.click(within(workspaceView).getByRole('button', { name: /★\s*next/i }))
+
+    const dialog = await within(rendered1.container).findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: /저장 후 이동/i }))
+
+    win1.api.buffer.updateContent = originalUpdateContent
+    for (const flush of deferredEdits) {
+      flush()
+    }
+
+    const updatedSidebar = await within(rendered1.container).findByLabelText('워크스페이스 탐색기')
+    expect(await within(updatedSidebar).findByText('next.md')).toBeInTheDocument()
+    expect(harness.getFilesSnapshot().get('C:/wiki/docs/note.md')).toBe(
+      '# Flushed before workspace switch'
+    )
   })
 })

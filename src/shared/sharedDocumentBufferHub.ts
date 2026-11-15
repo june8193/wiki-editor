@@ -247,6 +247,11 @@ export class SharedDocumentBufferHub {
     })
   }
 
+  private claimExistingBuffer(existing: DocumentBuffer, windowId?: number): DocumentBuffer {
+    this.registerPendingOpenOwner(existing.key, windowId)
+    return { ...existing }
+  }
+
   private openOrGetBuffer(
     kind: DocumentKind,
     filePath: string,
@@ -257,8 +262,7 @@ export class SharedDocumentBufferHub {
     const key = getWorkspacePathKey(filePath)
     const existing = this.store.getBuffer(key)
     if (existing) {
-      this.registerPendingOpenOwner(existing.key, windowId)
-      return { ...existing }
+      return this.claimExistingBuffer(existing, windowId)
     }
 
     const created = this.store.openBuffer({
@@ -300,8 +304,7 @@ export class SharedDocumentBufferHub {
     const key = getWorkspacePathKey(filePath)
     const existing = this.store.getBuffer(key)
     if (existing) {
-      this.registerPendingOpenOwner(existing.key, windowId)
-      return { ...existing }
+      return this.claimExistingBuffer(existing, windowId)
     }
 
     this.registerPendingOpenOwner(key, windowId)
@@ -350,8 +353,7 @@ export class SharedDocumentBufferHub {
   async openConfigDocument(windowId?: number): Promise<DocumentBuffer> {
     const existingConfig = this.store.getAllBuffers().find((buffer) => buffer.kind === 'config')
     if (existingConfig) {
-      this.registerPendingOpenOwner(existingConfig.key, windowId)
-      return { ...existingConfig }
+      return this.claimExistingBuffer(existingConfig, windowId)
     }
 
     const configPath = await this.storage.getConfigPath()

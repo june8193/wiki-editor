@@ -197,6 +197,18 @@ function hasPopulatedSplitPanes(layout: PaneLayoutState): boolean {
 export function canSplitWithTab(layout: PaneLayoutState): boolean {
   return layout.panes.primary.tabs.length > 1 || hasPopulatedSplitPanes(layout)
 }
+
+export function extractLayoutBufferKeys(layout: PaneLayoutState): string[] {
+  const keys: string[] = []
+  for (const paneId of ['primary', 'secondary'] as const) {
+    const pane = layout.panes[paneId]
+    if (!pane) continue
+    for (const tab of pane.tabs) {
+      keys.push(tab.bufferKey)
+    }
+  }
+  return keys
+}
 /**
  * Manages up to 2 split panes, independent per-pane tab bars, and lightweight inactive tab state.
  */
@@ -256,6 +268,10 @@ export class PaneTabStore {
 
   hasOtherTabForBuffer(bufferKey: string, excludeTabId?: string): boolean {
     return hasBufferReferenceInPanes(this.state.panes, bufferKey, excludeTabId)
+  }
+
+  getBufferKeys(): string[] {
+    return extractLayoutBufferKeys(this.state)
   }
 
   openTab = (bufferKey: string, options: OpenTabOptions = {}): TabItem =>
