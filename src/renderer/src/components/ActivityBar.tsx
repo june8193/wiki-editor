@@ -1,6 +1,6 @@
-import { Files, GitBranch, type LucideIcon } from 'lucide-react'
+import { Files, Folders, GitBranch, type LucideIcon } from 'lucide-react'
 
-export type LeftSidebarView = 'explorer' | 'git'
+export type LeftSidebarView = 'explorer' | 'git' | 'workspace'
 
 interface ActivityBarItem {
   id: LeftSidebarView
@@ -10,7 +10,8 @@ interface ActivityBarItem {
 
 const ACTIVITY_BAR_ITEMS: readonly ActivityBarItem[] = [
   { id: 'explorer', label: '탐색기', Icon: Files },
-  { id: 'git', label: 'Git', Icon: GitBranch }
+  { id: 'git', label: 'Git', Icon: GitBranch },
+  { id: 'workspace', label: '워크스페이스', Icon: Folders }
 ]
 
 const MAX_BADGE_COUNT = 99

@@ -11,7 +11,7 @@ import { GitSidebarPanel } from './components/GitSidebarPanel'
 import { PaneInteractionActions } from './components/PaneTabBar'
 import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
-import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
+import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
@@ -67,7 +67,7 @@ interface PendingDialogState {
 export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
-    activeView: 'explorer',
+    activeView: 'workspace',
     isCollapsed: false
   })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -193,7 +193,12 @@ export function App() {
     deleteEntry
   } = useWorkspaceTree({
     onError: reportErrorBanner,
-    onWorkspaceOpened: clearWorkspaceBuffers,
+    onWorkspaceOpened: () => {
+      clearWorkspaceBuffers()
+      setLeftSidebar((prev) =>
+        prev.activeView === 'workspace' ? { activeView: 'explorer', isCollapsed: false } : prev
+      )
+    },
     onWorkspaceChanged: () => {
       void reconcileBuffersRef.current().then((warnings) => {
         if (warnings.length > 0) {
@@ -488,26 +493,27 @@ export function App() {
 
         {!leftSidebar.isCollapsed && (
           <aside className="left-sidebar" aria-label="왼쪽 사이드바">
-            {leftSidebar.activeView === 'explorer' && (
-              <FolderTreeSidebar
+            {leftSidebar.activeView === 'workspace' && (
+              <WorkspaceView
                 workspace={workspace}
                 isFavorite={isCurrentWorkspaceFavorite}
-                workspaceSwitcher={
-                  <WorkspaceSwitcher
-                    workspace={workspace}
-                    favoriteWorkspaces={config.favoriteWorkspaces}
-                    recentWorkspaces={config.recentWorkspaces}
-                    onSwitchWorkspace={handleSwitchWorkspace}
-                    onRemoveFavorite={removeFavoriteWorkspace}
-                  />
-                }
-                tree={treeState}
-                activeFilePath={activeFilePath}
+                favoriteWorkspaces={config.favoriteWorkspaces}
+                recentWorkspaces={config.recentWorkspaces}
+                onOpenFolder={handleSelectFolder}
+                onSwitchWorkspace={handleSwitchWorkspace}
                 onToggleFavorite={() => {
                   if (workspace) {
                     toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
                   }
                 }}
+                onRemoveFavorite={removeFavoriteWorkspace}
+              />
+            )}
+            {leftSidebar.activeView === 'explorer' && (
+              <FolderTreeSidebar
+                workspace={workspace}
+                tree={treeState}
+                activeFilePath={activeFilePath}
                 onSelectPath={setSelectedTreePath}
                 onToggleDirectory={toggleDirectory}
                 onEnsureExpanded={ensureExpanded}

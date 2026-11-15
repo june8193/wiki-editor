@@ -3,7 +3,6 @@ import {
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
-  ReactNode,
   useCallback,
   useEffect,
   useRef,
@@ -83,11 +82,8 @@ function treeIndentStyle(depth: number): CSSProperties {
 
 interface FolderTreeSidebarProps {
   workspace: WorkspaceSummary | null
-  isFavorite: boolean
-  workspaceSwitcher: ReactNode
   tree: WorkspaceTreeState
   activeFilePath: string | null
-  onToggleFavorite: () => void
   onSelectPath: (path: string | null) => void
   onToggleDirectory: (entry: WorkspaceEntry) => void
   onEnsureExpanded: (dirPath: string) => Promise<void>
@@ -101,11 +97,8 @@ interface FolderTreeSidebarProps {
 
 export function FolderTreeSidebar({
   workspace,
-  isFavorite,
-  workspaceSwitcher,
   tree,
   activeFilePath,
-  onToggleFavorite,
   onSelectPath,
   onToggleDirectory,
   onEnsureExpanded,
@@ -305,18 +298,12 @@ export function FolderTreeSidebar({
     <section className="workspace-sidebar" aria-label="워크스페이스 탐색기">
       <div className="sidebar-header">
         <div className="sidebar-title-row">
-          {workspaceSwitcher}
-          {workspace && (
-            <button
-              type="button"
-              className={`icon-btn${isFavorite ? ' is-favorite' : ''}`}
-              aria-label={isFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'}
-              aria-pressed={isFavorite}
-              onClick={onToggleFavorite}
-            >
-              {isFavorite ? '★' : '☆'}
-            </button>
-          )}
+          <span
+            className="sidebar-title sidebar-workspace-name"
+            title={workspace?.rootPath}
+          >
+            {workspace ? workspace.name : '탐색기'}
+          </span>
         </div>
         {workspace && (
           <div className="sidebar-actions">
@@ -352,7 +339,7 @@ export function FolderTreeSidebar({
         <div className="sidebar-empty">
           <p className="sidebar-empty-text">열린 워크스페이스 없음</p>
           <p className="workspace-placeholder-hint">
-            File 메뉴의 &apos;폴더 열기&apos; 또는 상단 워크스페이스 선택으로 시작하세요.
+            File 메뉴의 &apos;폴더 열기&apos; 또는 워크스페이스 뷰에서 폴더를 열어 시작하세요.
           </p>
         </div>
       ) : (

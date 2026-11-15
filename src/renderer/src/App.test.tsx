@@ -453,7 +453,7 @@ async function triggerMenuCommand(
 
 async function clickActivityBarButton(
   user: ReturnType<typeof userEvent.setup>,
-  label: '탐색기' | 'Git'
+  label: '탐색기' | 'Git' | '워크스페이스'
 ): Promise<void> {
   const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
   await user.click(within(activityBar).getByRole('button', { name: label }))
@@ -465,7 +465,8 @@ describe('App shell, theme persistence, and settings panel', () => {
     vi.useRealTimers()
   })
 
-  it('removes the internal app-header completely and updates folder tree empty-state guidance', async () => {
+  it('removes the internal app-header completely and updates empty-state guidance in workspace and explorer views', async () => {
+    const user = userEvent.setup()
     const { api } = createInMemoryWikiApi()
     window.wikiApi = api
 
@@ -478,14 +479,22 @@ describe('App shell, theme persistence, and settings panel', () => {
     expect(screen.queryByRole('banner')).not.toBeInTheDocument()
     expect(document.querySelector('header.app-header')).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Wiki Editor' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /폴더 열기/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /테마 전환/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^설정$/i })).not.toBeInTheDocument()
 
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    expect(within(workspaceView).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: '폴더 열기...' })).toBeInTheDocument()
+    expect(within(workspaceView).getByText('등록된 즐겨찾기가 없습니다.')).toBeInTheDocument()
+    expect(within(workspaceView).getByText('최근 연 폴더가 없습니다.')).toBeInTheDocument()
+
+    await clickActivityBarButton(user, '탐색기')
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    expect(within(sidebar).queryByRole('button', { name: /폴더 열기/i })).not.toBeInTheDocument()
+    expect(within(sidebar).queryByRole('button', { name: /워크스페이스 전환/i })).not.toBeInTheDocument()
     expect(within(sidebar).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
     expect(
-      within(sidebar).getByText("File 메뉴의 '폴더 열기' 또는 상단 워크스페이스 선택으로 시작하세요.")
+      within(sidebar).getByText("File 메뉴의 '폴더 열기' 또는 워크스페이스 뷰에서 폴더를 열어 시작하세요.")
     ).toBeInTheDocument()
   })
 
@@ -1072,7 +1081,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     expect(getFilesSnapshot().has('C:/wiki/notes/guides/getting-started.md')).toBe(false)
   })
 
-  it('renders workspace switcher inside the left sidebar when no workspace is open and opens a recent workspace directly', async () => {
+  it('renders workspace view inside the left sidebar when no workspace is open, supports open-folder button, opens recent workspace directly, and simplifies explorer header', async () => {
     const user = userEvent.setup()
     const favoriteAlpha = addFavoriteWorkspace(
       [],
@@ -1086,12 +1095,15 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
         recentWorkspaces: ['C:/wiki/gamma']
       },
       {
+        selectedFolder: 'C:\\wiki\\alpha',
         workspaces: {
           'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
           'C:\\wiki\\gamma': { 'gamma.md': '# Gamma' }
         }
       }
     )
+    const selectFolderSpy = vi.fn(api.workspace.selectFolder)
+    api.workspace.selectFolder = selectFolderSpy
     window.wikiApi = api
 
     render(<App />)
@@ -1099,31 +1111,47 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     expect(screen.queryByRole('banner')).not.toBeInTheDocument()
 
-    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
-    const switcherTrigger = within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })
-    expect(switcherTrigger).toHaveTextContent('워크스페이스 선택 ▾')
-    expect(switcherTrigger).toHaveAttribute('aria-expanded', 'false')
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    expect(within(workspaceView).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
+    expect(
+      within(workspaceView).getByText(/폴더를 열거나.*선택하세요/i)
+    ).toBeInTheDocument()
+    expect(
+      within(workspaceView).queryByRole('button', { name: /^(?:즐겨찾기 추가|즐겨찾기 해제)$/ })
+    ).not.toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: /★\s*alpha/i })).toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: /gamma/i })).toBeInTheDocument()
+
+    // Clicking '폴더 열기...' triggers the same folder selection handler as File > Open Folder
+    await user.click(within(workspaceView).getByRole('button', { name: '폴더 열기...' }))
+    expect(selectFolderSpy).toHaveBeenCalledTimes(1)
+    const explorerAfterOpen = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorerAfterOpen).findByText('alpha.md')).toBeInTheDocument()
+
+    // Return to Workspace View and click recent workspace directly -> opens gamma and transitions to Explorer
+    await clickActivityBarButton(user, '워크스페이스')
+    const reopenedWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(reopenedWorkspaceView).getByRole('button', { name: /gamma/i }))
+
+    const sidebar = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(sidebar).findByText('gamma.md')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '워크스페이스 뷰' })).not.toBeInTheDocument()
+
+    // Explorer header only displays workspace name (with path tooltip) and create/refresh actions
+    const titleEl = within(sidebar).getByText('gamma')
+    expect(titleEl).toHaveAttribute('title', 'C:/wiki/gamma')
+    expect(
+      within(sidebar).queryByRole('button', { name: /워크스페이스 전환/i })
+    ).not.toBeInTheDocument()
     expect(
       within(sidebar).queryByRole('button', { name: /즐겨찾기 추가|즐겨찾기 해제/i })
     ).not.toBeInTheDocument()
-    expect(within(sidebar).queryByRole('button', { name: /새 파일/i })).not.toBeInTheDocument()
-    expect(within(sidebar).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
-
-    await user.click(switcherTrigger)
-    const switcherMenu = await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })
-
-    await user.click(within(switcherMenu).getByRole('button', { name: /gamma/i }))
-    expect(await within(sidebar).findByText('gamma.md')).toBeInTheDocument()
-    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
-      'gamma ▾'
-    )
-    expect(
-      within(sidebar).queryByRole('region', { name: /워크스페이스 목록/i })
-    ).not.toBeInTheDocument()
-    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /새 파일/i })).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /새 폴더/i })).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /새로고침/i })).toBeInTheDocument()
   })
 
-  it('displays unified workspace switcher and favorite toggle in sidebar without duplicate name and confirms unsaved edits on switch', async () => {
+  it('displays current workspace card with favorite toggle in workspace view, highlights active item, confirms unsaved edits, and keeps workspace view on cancel or error', async () => {
     const user = userEvent.setup()
     const favoriteAlpha = addFavoriteWorkspace(
       [],
@@ -1135,7 +1163,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
       {
         autoSave: false,
         favoriteWorkspaces: favoriteAlpha,
-        recentWorkspaces: ['C:/wiki/recent-ws']
+        recentWorkspaces: ['C:/wiki/recent-ws', 'C:/wiki/broken-ws']
       },
       {
         workspaces: {
@@ -1144,68 +1172,76 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
         }
       }
     )
+    const defaultOpen = api.workspace.open
+    api.workspace.open = async (rootPath) => {
+      if (rootPath.replace(/\\/g, '/') === 'C:/wiki/broken-ws') {
+        throw new Error('Workspace open failed')
+      }
+      return defaultOpen(rootPath)
+    }
     window.wikiApi = api
 
     render(<App />)
-    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
-    const selectFromWorkspaceSwitcher = async (itemPattern: RegExp): Promise<void> => {
-      await user.click(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i }))
-      const workspaceList = await within(sidebar).findByRole('region', {
-        name: /워크스페이스 목록/i
-      })
-      await user.click(within(workspaceList).getByRole('button', { name: itemPattern }))
-    }
 
-    // Open favorite workspace directly from initial unopened state
-    await selectFromWorkspaceSwitcher(/★\s*alpha/i)
+    // Switch failure keeps Workspace View active and displays error banner
+    const initialWorkspaceView = await screen.findByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(initialWorkspaceView).getByRole('button', { name: /broken-ws/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Workspace open failed')
+    expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
 
-    expect(await within(sidebar).findByText('alpha.md')).toBeInTheDocument()
-
-    // Workspace switcher shows "{workspace.name} ▾" with favorite toggle alongside and no duplicate workspace name
-    const switcherTrigger = within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })
-    expect(switcherTrigger).toHaveTextContent('alpha ▾')
-    expect(within(sidebar).getAllByText(/^alpha(?:\s*▾)?$/)).toHaveLength(1)
-    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 해제/i })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    )
+    // Open favorite workspace directly from initial unopened state -> switches to Explorer
+    await user.click(within(initialWorkspaceView).getByRole('button', { name: /★\s*alpha/i }))
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('alpha.md')).toBeInTheDocument()
 
     // Edit alpha.md so workspace has unsaved changes
-    await user.click(within(sidebar).getByText('alpha.md'))
+    await user.click(within(explorer).getByText('alpha.md'))
     appendRawEditorText(await screen.findByTestId('document-editor'), ' unsaved')
     expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
 
-    // Escape closes sidebar workspace switcher popover without switching
-    await user.click(switcherTrigger)
-    expect(await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })).toBeInTheDocument()
-    await user.keyboard('{Escape}')
-    expect(
-      within(sidebar).queryByRole('region', { name: /워크스페이스 목록/i })
-    ).not.toBeInTheDocument()
+    // Open Workspace View -> shows current workspace name/path, favorite toggle (pressed), open folder, and active highlight
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    expect(within(workspaceView).getByText('C:/wiki/alpha')).toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: '폴더 열기...' })).toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: '즐겨찾기 해제' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    const activeAlphaBtn = within(workspaceView).getByRole('button', { name: /★\s*alpha/i })
+    expect(activeAlphaBtn).toHaveAttribute('aria-current', 'true')
+    expect(activeAlphaBtn).toHaveClass('is-active')
 
-    // Switch to recent workspace -> triggers unsaved confirmation dialog; cancel keeps current workspace
-    await selectFromWorkspaceSwitcher(/recent-ws/i)
+    // Switch to recent workspace -> triggers unsaved confirmation dialog; cancel keeps Workspace View & current workspace
+    await user.click(within(workspaceView).getByRole('button', { name: /recent-ws/i }))
     const cancelDialog = await screen.findByRole('alertdialog')
     await user.click(within(cancelDialog).getByRole('button', { name: '취소' }))
-    expect(within(sidebar).getByText('alpha.md')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
     expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Alpha unsaved')
 
-    // Retry switching to recent workspace and discard unsaved changes
-    await selectFromWorkspaceSwitcher(/recent-ws/i)
+    // Retry switching to recent workspace and discard unsaved changes -> transitions to Explorer
+    await user.click(within(workspaceView).getByRole('button', { name: /recent-ws/i }))
     const discardDialog = await screen.findByRole('alertdialog')
     await user.click(within(discardDialog).getByRole('button', { name: /버리고 이동/i }))
 
-    expect(await within(sidebar).findByText('recent.md')).toBeInTheDocument()
-    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
-      'recent-ws ▾'
-    )
-    expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toHaveAttribute(
+    const nextExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(nextExplorer).findByText('recent.md')).toBeInTheDocument()
+
+    // Return to Workspace View -> shows recent-ws current card, unpressed favorite toggle, and highlighted recent item
+    await clickActivityBarButton(user, '워크스페이스')
+    const nextWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    expect(within(nextWorkspaceView).getByText('C:/wiki/recent-ws')).toBeInTheDocument()
+    expect(within(nextWorkspaceView).getByRole('button', { name: '즐겨찾기 추가' })).toHaveAttribute(
       'aria-pressed',
       'false'
     )
+    expect(within(nextWorkspaceView).getByRole('button', { name: /^recent-ws$/i })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
   })
 
-  it('toggles current workspace in favorites and switches workspaces in one click from launcher dropdown', async () => {
+  it('toggles current workspace in favorites and switches or removes favorites directly from workspace view', async () => {
     const user = userEvent.setup()
     const favoriteBeta = addFavoriteWorkspace([], 'C:/wiki/beta', 'beta', '2026-11-14T00:00:00.000Z')
     const { api, emitMenuCommand } = createInMemoryWikiApi(
@@ -1226,35 +1262,92 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     const sidebar = screen.getByLabelText('워크스페이스 탐색기')
     expect(await within(sidebar).findByText('alpha.md')).toBeInTheDocument()
 
-    // Add alpha to favorites
-    const favToggle = within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })
-    await user.click(favToggle)
+    // Switch to Workspace View and add alpha to favorites
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(workspaceView).getByRole('button', { name: '즐겨찾기 추가' }))
     await waitFor(() => {
-      expect(within(sidebar).getByRole('button', { name: /즐겨찾기 해제/i })).toHaveAttribute(
+      expect(within(workspaceView).getByRole('button', { name: '즐겨찾기 해제' })).toHaveAttribute(
         'aria-pressed',
         'true'
       )
     })
+    expect(within(workspaceView).getByRole('button', { name: /★\s*alpha/i })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
 
-    // Open launcher dropdown and switch to beta in one click
-    await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
-    const launcherMenu = await screen.findByRole('region', { name: /워크스페이스 목록/i })
-    await user.click(within(launcherMenu).getByRole('button', { name: /★\s*beta/i }))
+    // Click ★ beta in Workspace View to switch workspaces and transition to Explorer
+    await user.click(within(workspaceView).getByRole('button', { name: /★\s*beta/i }))
 
-    expect(await within(sidebar).findByText('beta.md')).toBeInTheDocument()
-    expect(within(sidebar).queryByText('alpha.md')).not.toBeInTheDocument()
+    const betaExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(betaExplorer).findByText('beta.md')).toBeInTheDocument()
+    expect(within(betaExplorer).queryByText('alpha.md')).not.toBeInTheDocument()
 
-    // Remove beta from favorites via launcher dropdown button
-    await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
-    const updatedMenu = await screen.findByRole('region', { name: /워크스페이스 목록/i })
-    await user.click(within(updatedMenu).getByRole('button', { name: 'beta 즐겨찾기 해제' }))
+    // Return to Workspace View and remove beta from favorites via × button
+    await clickActivityBarButton(user, '워크스페이스')
+    const updatedWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(updatedWorkspaceView).getByRole('button', { name: 'beta 즐겨찾기 해제' }))
 
     await waitFor(() => {
-      expect(within(sidebar).getByRole('button', { name: /즐겨찾기 추가/i })).toHaveAttribute(
-        'aria-pressed',
-        'false'
-      )
+      expect(
+        within(updatedWorkspaceView).getByRole('button', { name: '즐겨찾기 추가' })
+      ).toHaveAttribute('aria-pressed', 'false')
     })
+    expect(
+      within(updatedWorkspaceView).queryByRole('button', { name: /★\s*beta/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it('does not overwrite user-selected activity bar view when async config resolves or workspace opens from another view', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:\\wiki\\alpha',
+        workspaces: {
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' }
+        }
+      }
+    )
+    let resolveConfigGet!: (value: Awaited<ReturnType<typeof api.config.get>>) => void
+    const defaultConfigGet = api.config.get
+    api.config.get = async () => {
+      const resolved = await defaultConfigGet()
+      return await new Promise((resolve) => {
+        resolveConfigGet = () => resolve(resolved)
+      })
+    }
+    window.wikiApi = api
+
+    render(<App />)
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    expect(within(activityBar).getByRole('button', { name: '워크스페이스' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+
+    // User switches to Git view before config.get() resolves
+    await clickActivityBarButton(user, 'Git')
+    expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
+
+    // Resolving config.get() must NOT reset activeView back to Workspace View
+    await act(async () => {
+      resolveConfigGet(undefined as never)
+    })
+    expect(within(activityBar).getByRole('button', { name: 'Git' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
+
+    // Opening a folder while user is in Git view preserves Git view instead of forcing Explorer
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(within(activityBar).getByRole('button', { name: 'Git' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
   })
 
   it('tracks dirty ● indicator, saves manually with Ctrl+S, and auto-saves when autoSave is enabled', async () => {
@@ -1555,16 +1648,17 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     // Wait for auto-save to enter in-flight state
     await waitFor(() => expect(callNum).toBe(1))
-    // Type more while first save is still in flight, then switch workspace and choose 저장 후 이동
+    // Type more while first save is still in flight, then switch workspace via Workspace View and choose 저장 후 이동
     appendRawEditorText(editor, ' v2')
-    await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
-    const launcherMenu = await screen.findByRole('region', { name: /워크스페이스 목록/i })
-    await user.click(within(launcherMenu).getByRole('button', { name: /★\s*inflight-next/i }))
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(workspaceView).getByRole('button', { name: /★\s*inflight-next/i }))
     const dirtyDialog = await screen.findByRole('alertdialog')
     await user.click(within(dirtyDialog).getByRole('button', { name: /저장 후 이동/i }))
 
     releaseFirstSave()
-    expect(await within(sidebar).findByText('next.md')).toBeInTheDocument()
+    const updatedSidebar = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(updatedSidebar).findByText('next.md')).toBeInTheDocument()
     expect(getFilesSnapshot().get('C:/wiki/inflight/a.md')).toBe('# A v1 v2')
   })
 })
@@ -2036,14 +2130,12 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     })
 
     // Switching workspace closes workspace tabs (keep.md) while preserving config.json tab
-    await user.click(screen.getByRole('button', { name: /워크스페이스 전환/i }))
-    await user.click(
-      within(await screen.findByRole('region', { name: /워크스페이스 목록/i })).getByRole('button', {
-        name: /★\s*ws2/i
-      })
-    )
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(workspaceView).getByRole('button', { name: /★\s*ws2/i }))
 
-    expect(await within(sidebar).findByText('ws2.md')).toBeInTheDocument()
+    const updatedSidebar = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(updatedSidebar).findByText('ws2.md')).toBeInTheDocument()
     expect(within(primaryPane).queryByRole('tab', { name: /keep\.md/i })).not.toBeInTheDocument()
     expect(within(primaryPane).getByRole('tab', { name: /config\.json/i })).toBeInTheDocument()
   })
@@ -3415,8 +3507,8 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     window.wikiApi = api
     render(<App />)
 
-    const explorer = screen.getByLabelText('워크스페이스 탐색기')
     await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
 
     // Open both files: leave obsolete.md clean and make keep-dirty.md dirty
     await user.click(await within(explorer).findByText('obsolete.md'))
@@ -3762,7 +3854,7 @@ describe('Activity bar and left sidebar view switching', () => {
     vi.useRealTimers()
   })
 
-  it('renders activity bar with 탐색기 and Git buttons, shows only Explorer view initially, and switches to Git view on click', async () => {
+  it('renders activity bar with 탐색기, Git, and 워크스페이스 buttons, defaults to Workspace view without open workspace, and switches single views on click', async () => {
     const user = userEvent.setup()
     const { api } = createInMemoryWikiApi({ theme: 'light' })
     window.wikiApi = api
@@ -3786,20 +3878,39 @@ describe('Activity bar and left sidebar view switching', () => {
 
     const explorerBtn = within(activityBar).getByRole('button', { name: '탐색기' })
     const gitBtn = within(activityBar).getByRole('button', { name: 'Git' })
+    const workspaceBtn = within(activityBar).getByRole('button', { name: '워크스페이스' })
 
     expect(explorerBtn).toHaveAttribute('title', '탐색기')
     expect(gitBtn).toHaveAttribute('title', 'Git')
+    expect(workspaceBtn).toHaveAttribute('title', '워크스페이스')
     expect(explorerBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
     expect(gitBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(workspaceBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
 
-    // Initial view is Explorer: only FolderTreeSidebar is rendered
-    expect(explorerBtn).toHaveAttribute('aria-pressed', 'true')
-    expect(explorerBtn).toHaveClass('is-active')
+    // Initial view without an open workspace is Workspace View
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(workspaceBtn).toHaveClass('is-active')
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(explorerBtn).not.toHaveClass('is-active')
     expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
     expect(gitBtn).not.toHaveClass('is-active')
-    expect(within(leftSidebar).getByRole('region', { name: '워크스페이스 탐색기' })).toBeInTheDocument()
+    expect(within(leftSidebar).getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
+    expect(
+      within(leftSidebar).queryByRole('region', { name: '워크스페이스 탐색기' })
+    ).not.toBeInTheDocument()
     expect(
       within(leftSidebar).queryByRole('region', { name: 'Git 소스 제어' })
+    ).not.toBeInTheDocument()
+
+    // Click Explorer -> switches left sidebar to Explorer view only
+    await user.click(explorerBtn)
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(explorerBtn).toHaveClass('is-active')
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(workspaceBtn).not.toHaveClass('is-active')
+    expect(within(leftSidebar).getByRole('region', { name: '워크스페이스 탐색기' })).toBeInTheDocument()
+    expect(
+      within(leftSidebar).queryByRole('region', { name: '워크스페이스 뷰' })
     ).not.toBeInTheDocument()
 
     // Click Git -> switches left sidebar to Git panel only
@@ -3812,9 +3923,19 @@ describe('Activity bar and left sidebar view switching', () => {
     expect(
       within(leftSidebar).queryByRole('region', { name: '워크스페이스 탐색기' })
     ).not.toBeInTheDocument()
+
+    // Click Workspace -> switches back to Workspace View only
+    await user.click(workspaceBtn)
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(workspaceBtn).toHaveClass('is-active')
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(within(leftSidebar).getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
+    expect(
+      within(leftSidebar).queryByRole('region', { name: 'Git 소스 제어' })
+    ).not.toBeInTheDocument()
   })
 
-  it('collapses and expands left sidebar via activity bar transitions and keeps sidebar state session-only', async () => {
+  it('collapses and expands left sidebar via activity bar transitions for all three views and keeps sidebar state session-only', async () => {
     const user = userEvent.setup()
     const { api } = createInMemoryWikiApi({ theme: 'light' })
     const configUpdateSpy = vi.spyOn(api.config, 'update')
@@ -3829,17 +3950,17 @@ describe('Activity bar and left sidebar view switching', () => {
     const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
     const explorerBtn = within(activityBar).getByRole('button', { name: '탐색기' })
     const gitBtn = within(activityBar).getByRole('button', { name: 'Git' })
+    const workspaceBtn = within(activityBar).getByRole('button', { name: '워크스페이스' })
 
-    // Collapse from Explorer by clicking active Explorer button
-    await user.click(explorerBtn)
+    // Collapse from Workspace by clicking active Workspace button
+    await user.click(workspaceBtn)
     expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: '워크스페이스 탐색기' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: 'Git 소스 제어' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '워크스페이스 뷰' })).not.toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: '액티비티 바' })).toBeInTheDocument()
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(workspaceBtn).not.toHaveClass('is-active')
     expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
-    expect(explorerBtn).not.toHaveClass('is-active')
     expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
-    expect(gitBtn).not.toHaveClass('is-active')
 
     // Click Git while collapsed -> expands straight into Git view
     await user.click(gitBtn)
@@ -3847,13 +3968,12 @@ describe('Activity bar and left sidebar view switching', () => {
     expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
     expect(gitBtn).toHaveAttribute('aria-pressed', 'true')
     expect(gitBtn).toHaveClass('is-active')
-    expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'false')
 
     // Collapse from Git by clicking active Git button
     await user.click(gitBtn)
     expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
     expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
-    expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
 
     // Click Explorer while collapsed -> expands straight into Explorer view
     await user.click(explorerBtn)
@@ -3861,8 +3981,16 @@ describe('Activity bar and left sidebar view switching', () => {
     expect(screen.getByRole('region', { name: '워크스페이스 탐색기' })).toBeInTheDocument()
     expect(explorerBtn).toHaveAttribute('aria-pressed', 'true')
 
-    // Collapse again and verify nothing is persisted to config.json; remount starts expanded on Explorer
+    // Collapse from Explorer, then expand straight into Workspace view
     await user.click(explorerBtn)
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    await user.click(workspaceBtn)
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
+    expect(workspaceBtn).toHaveAttribute('aria-pressed', 'true')
+
+    // Collapse again and verify nothing is persisted to config.json; remount starts expanded on Workspace
+    await user.click(workspaceBtn)
     expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
     expect(configUpdateSpy).not.toHaveBeenCalled()
 
@@ -3873,12 +4001,12 @@ describe('Activity bar and left sidebar view switching', () => {
       expect(document.documentElement).toHaveAttribute('data-theme', 'light')
     })
     const restartedBar = screen.getByRole('navigation', { name: '액티비티 바' })
-    expect(within(restartedBar).getByRole('button', { name: '탐색기' })).toHaveAttribute(
+    expect(within(restartedBar).getByRole('button', { name: '워크스페이스' })).toHaveAttribute(
       'aria-pressed',
       'true'
     )
     expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: '워크스페이스 탐색기' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
   })
 
   it('preserves folder tree expansion and Git state across view switches and collapse/expand, and keeps context menu and branch selector functional', async () => {
