@@ -5,6 +5,19 @@
 
 ---
 
+## [1.3.0] - 2026-11-16
+
+### Added
+- 문서 탭을 창 밖으로 드래그하거나 탭 컨텍스트 메뉴(`새 창으로 이동`)로 분리해 독립된 보조 창(Auxiliary Window)에서 편집하고, 다시 메인 창·다른 보조 창의 탭 바나 화면 분할 드롭 영역으로 드래그해 재결합·병합하는 다중 창 문서 편집 지원 ([상세 스펙](.backlog/done/detach-document-tab-window/spec.md), [티켓 02](.backlog/done/detach-document-tab-window/issues/02-auxiliary-window-shell-and-context-detach.md), [티켓 03](.backlog/done/detach-document-tab-window/issues/03-drag-out-to-auxiliary-window.md), [티켓 04](.backlog/done/detach-document-tab-window/issues/04-cross-window-tab-reattach-and-merge.md))
+- 다중 창 간 실시간 공유 문서 버퍼 허브(타이핑 내용·미저장 배지·자동/수동 저장·파일 이름 변경/삭제 즉시 동기화) 및 탭 참조 카운트 기반 창 닫기(`X`)·워크스페이스 전환 미저장 확인 다이얼로그와 메인 창 종료 시 보조 창 종속 종료 지원 ([티켓 01](.backlog/done/detach-document-tab-window/issues/01-shared-document-buffer-hub.md), [티켓 05](.backlog/done/detach-document-tab-window/issues/05-window-lifecycle-and-unsaved-close-guard.md))
+- 전용 로컬 에셋 프로토콜(`wiki-asset:`) 및 상대 경로 해석기를 통해 워크스페이스 로컬 이미지와 외부 웹 이미지를 Raw·위지윅·Preview·Split 전 에디터 모드에서 반응형으로 렌더링하고 마크다운 원문 상대 경로를 무손실 왕복 보존 ([상세 스펙](.backlog/done/markdown-image-insertion/spec.md), [티켓 01](.backlog/done/markdown-image-insertion/issues/01-local-image-protocol-and-rendering.md))
+- Raw·위지윅 모드에서 클립보드 이미지 붙여넣기(`Ctrl+V`) 및 OS 파일 탐색기·폴더 트리 드래그 앤 드롭 이미지 삽입 지원(외부·클립보드 이미지는 현재 문서 하위 `assets/` 폴더에 자동 저장 및 중복 파일명 충돌 회피, 워크스페이스 내부 이미지는 복사 없이 상대 경로 연결) ([티켓 02](.backlog/done/markdown-image-insertion/issues/02-image-paste-and-drag-drop-ingestion.md))
+- 폴더 트리에서 이미지 파일(`.png`, `.jpg`, `.gif`, `.webp`, `.svg`, `.bmp`, `.avif`) 클릭 시 텍스트 오염 없이 열리는 읽기 전용 이미지 미리보기 탭 추가 ([티켓 03](.backlog/done/markdown-image-insertion/issues/03-readonly-image-preview-tab.md))
+- Mermaid 다이어그램 블록에 4종 원클릭 액션 바(`이미지 복사`, `코드 복사`, `PNG 저장`, `SVG 저장`) 추가: Preview·Split 플로팅 액션 바 및 위지윅 블록 헤더 통합, 활성 테마 배경색과 `16px` 여백을 포함한 `2x` 고해상도 PNG 클립보드 복사·파일 저장 및 단독 SVG 벡터 파일 내보내기 지원 ([상세 스펙](.backlog/done/mermaid-diagram-export/spec.md), [티켓 01](.backlog/done/mermaid-diagram-export/issues/01-mermaid-action-bar-and-code-copy.md), [티켓 02](.backlog/done/mermaid-diagram-export/issues/02-mermaid-png-clipboard-copy.md), [티켓 03](.backlog/done/mermaid-diagram-export/issues/03-mermaid-png-and-svg-file-export.md))
+
+### Fixed
+- 링크로 감싼 이미지(`[![alt](img.png)](...)`)가 포함된 마크다운 헤딩 파싱 시 중첩 대괄호로 인해 문서 목차(TOC) 제목 추출이 깨지던 문제 수정
+
 ## [1.2.0] - 2026-11-15
 
 ### Added
