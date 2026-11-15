@@ -12,10 +12,10 @@ import {
   getGitChangedCount,
   type GitBranchList,
   type GitChangedFile,
-  type GitGraphCommit,
   type GitLogScope,
   type GitStatus
 } from '@shared/git'
+import type { GitGraphState } from '../hooks/useGitGraphLog'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
 import { GitGraphScopeToggle, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
@@ -24,12 +24,7 @@ export interface GitSidebarPanelProps {
   workspaceRootPath: string | null
   status: GitStatus | null
   branchList: GitBranchList | null
-  logCommits: readonly GitGraphCommit[]
-  logHasMore: boolean
-  logScope: GitLogScope
-  isLogLoading: boolean
-  isLogLoadingMore: boolean
-  logErrorMessage: string | null
+  graphState: GitGraphState
   pendingAction: string | null
   errorMessage: string | null
   splitState: GitPanelSplitState
@@ -220,12 +215,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   workspaceRootPath,
   status,
   branchList,
-  logCommits,
-  logHasMore,
-  logScope,
-  isLogLoading,
-  isLogLoadingMore,
-  logErrorMessage,
+  graphState,
   pendingAction,
   errorMessage,
   splitState,
@@ -496,7 +486,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
             <GitAccordionSection
               title="Graph"
               headerActions={
-                <GitGraphScopeToggle scope={logScope} onChangeScope={onChangeLogScope} />
+                <GitGraphScopeToggle scope={graphState.scope} onChangeScope={onChangeLogScope} />
               }
               isExpanded={layout.showGraphBody}
               flexRatio={layout.graphFlexRatio}
@@ -504,11 +494,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
             >
               <GitGraphSection
                 isUnborn={status.isUnborn}
-                commits={logCommits}
-                hasMore={logHasMore}
-                isLoading={isLogLoading}
-                isLoadingMore={isLogLoadingMore}
-                errorMessage={logErrorMessage}
+                graphState={graphState}
                 onLoadMore={onLoadMoreCommits}
               />
             </GitAccordionSection>

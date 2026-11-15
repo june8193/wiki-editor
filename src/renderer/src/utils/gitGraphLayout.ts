@@ -19,10 +19,10 @@ export interface GitGraphRow {
   isHead: boolean
   isMerge: boolean
   hasIncoming: boolean
+  /** Cyclic palette color index per column active at this row; null marks an intermediate freed slot. */
   activeLanes: ReadonlyArray<number | null>
   passThroughCols: ReadonlyArray<{ col: number; colorIndex: number }>
   connections: readonly GitGraphConnection[]
-  laneCount: number
 }
 
 /** Complete lane layout across a rendered page of commits. */
@@ -156,9 +156,8 @@ export function computeGitGraphLayout(commits: readonly GitGraphCommit[]): GitGr
     rowLanes[nodeCol] = nodeColor
 
     const activeLanes = trimTrailingNulls(rowLanes)
-    const laneCount = activeLanes.length
-    if (laneCount > maxLanes) {
-      maxLanes = laneCount
+    if (activeLanes.length > maxLanes) {
+      maxLanes = activeLanes.length
     }
 
     rows.push({
@@ -170,8 +169,7 @@ export function computeGitGraphLayout(commits: readonly GitGraphCommit[]): GitGr
       hasIncoming,
       activeLanes,
       passThroughCols,
-      connections,
-      laneCount
+      connections
     })
   }
 

@@ -8,6 +8,7 @@ import {
   type GitGraphCommit,
   type GitStatus
 } from '@shared/git'
+import { createInitialGitGraphState } from '../hooks/useGitGraphLog'
 import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
@@ -59,12 +60,7 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onPull: vi.fn(),
     onPush: vi.fn(),
     onSync: vi.fn(),
-    logCommits: [],
-    logHasMore: false,
-    logScope: 'all',
-    isLogLoading: false,
-    isLogLoadingMore: false,
-    logErrorMessage: null,
+    graphState: createInitialGitGraphState(),
     onChangeLogScope: vi.fn(),
     onLoadMoreCommits: vi.fn(),
     splitState: createDefaultGitPanelSplitState(),
@@ -519,9 +515,12 @@ describe('GitSidebarPanel', () => {
     render(
       <GitSidebarPanel
         {...buildProps({
-          logCommits: commits,
-          logHasMore: true,
-          logScope: 'all',
+          graphState: {
+            ...createInitialGitGraphState(),
+            commits,
+            hasMore: true,
+            scope: 'all'
+          },
           onChangeLogScope,
           onLoadMoreCommits,
           onToggleGraphCollapsed

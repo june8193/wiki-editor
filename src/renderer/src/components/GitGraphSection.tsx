@@ -1,5 +1,6 @@
 import { memo, useMemo } from 'react'
 import type { GitGraphCommit, GitLogScope, GitRefBadge, GitRefKind } from '@shared/git'
+import type { GitGraphState } from '../hooks/useGitGraphLog'
 import {
   buildGitGraphConnectionPath,
   computeGitGraphLayout,
@@ -43,11 +44,7 @@ export interface GitGraphScopeToggleProps {
 /** Props for the Graph accordion body rendering commit graph rows and pagination. */
 export interface GitGraphSectionProps {
   isUnborn: boolean
-  commits: readonly GitGraphCommit[]
-  hasMore: boolean
-  isLoading: boolean
-  isLoadingMore: boolean
-  errorMessage: string | null
+  graphState: GitGraphState
   onLoadMore: () => void
 }
 
@@ -218,13 +215,10 @@ const GitGraphLaneSvg = memo(function GitGraphLaneSvg({
  */
 export const GitGraphSection = memo(function GitGraphSection({
   isUnborn,
-  commits,
-  hasMore,
-  isLoading,
-  isLoadingMore,
-  errorMessage,
+  graphState,
   onLoadMore
 }: GitGraphSectionProps) {
+  const { commits, hasMore, isLoading, isLoadingMore, errorMessage } = graphState
   const layout = useMemo(() => computeGitGraphLayout(commits), [commits])
 
   if (isLoading && commits.length === 0) {

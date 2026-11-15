@@ -52,8 +52,7 @@ describe('gitGraphLayout', () => {
       hasIncoming: false,
       activeLanes: [0],
       passThroughCols: [],
-      connections: [{ fromCol: 0, toCol: 0, colorIndex: 0, kind: 'straight' }],
-      laneCount: 1
+      connections: [{ fromCol: 0, toCol: 0, colorIndex: 0, kind: 'straight' }]
     })
 
     expect(layout.rows[1]).toMatchObject({
@@ -64,8 +63,7 @@ describe('gitGraphLayout', () => {
       hasIncoming: true,
       activeLanes: [0],
       passThroughCols: [],
-      connections: [{ fromCol: 0, toCol: 0, colorIndex: 0, kind: 'straight' }],
-      laneCount: 1
+      connections: [{ fromCol: 0, toCol: 0, colorIndex: 0, kind: 'straight' }]
     })
 
     expect(layout.rows[2]).toMatchObject({
@@ -76,8 +74,7 @@ describe('gitGraphLayout', () => {
       hasIncoming: true,
       activeLanes: [0],
       passThroughCols: [],
-      connections: [],
-      laneCount: 1
+      connections: []
     })
   })
 
@@ -107,8 +104,7 @@ describe('gitGraphLayout', () => {
       hasIncoming: false,
       activeLanes: [0, 1],
       passThroughCols: [{ col: 0, colorIndex: 0 }],
-      connections: [{ fromCol: 1, toCol: 0, colorIndex: 1, kind: 'branch' }],
-      laneCount: 2
+      connections: [{ fromCol: 1, toCol: 0, colorIndex: 1, kind: 'branch' }]
     })
 
     expect(layout.rows[2]).toMatchObject({
@@ -118,8 +114,7 @@ describe('gitGraphLayout', () => {
       hasIncoming: true,
       activeLanes: [0],
       passThroughCols: [],
-      connections: [],
-      laneCount: 1
+      connections: []
     })
   })
 
@@ -140,11 +135,11 @@ describe('gitGraphLayout', () => {
       isHead: true,
       isMerge: true,
       hasIncoming: false,
+      activeLanes: [0, 1],
       connections: [
         { fromCol: 0, toCol: 0, colorIndex: 0, kind: 'straight' },
         { fromCol: 0, toCol: 1, colorIndex: 1, kind: 'merge' }
-      ],
-      laneCount: 2
+      ]
     })
 
     expect(layout.rows[1]).toMatchObject({
@@ -154,8 +149,7 @@ describe('gitGraphLayout', () => {
       hasIncoming: true,
       activeLanes: [0, 1],
       passThroughCols: [{ col: 1, colorIndex: 1 }],
-      connections: [{ fromCol: 0, toCol: 0, colorIndex: 0, kind: 'straight' }],
-      laneCount: 2
+      connections: [{ fromCol: 0, toCol: 0, colorIndex: 0, kind: 'straight' }]
     })
 
     expect(layout.rows[2]).toMatchObject({
@@ -164,8 +158,7 @@ describe('gitGraphLayout', () => {
       hasIncoming: true,
       activeLanes: [0, 1],
       passThroughCols: [{ col: 0, colorIndex: 0 }],
-      connections: [{ fromCol: 1, toCol: 0, colorIndex: 1, kind: 'branch' }],
-      laneCount: 2
+      connections: [{ fromCol: 1, toCol: 0, colorIndex: 1, kind: 'branch' }]
     })
 
     expect(layout.rows[3]).toMatchObject({
@@ -174,8 +167,7 @@ describe('gitGraphLayout', () => {
       hasIncoming: true,
       activeLanes: [0],
       passThroughCols: [],
-      connections: [],
-      laneCount: 1
+      connections: []
     })
   })
 
@@ -192,12 +184,12 @@ describe('gitGraphLayout', () => {
       nodeCol: 0,
       colorIndex: 0,
       isMerge: true,
+      activeLanes: [0, 1, 2],
       connections: [
         { fromCol: 0, toCol: 0, colorIndex: 0, kind: 'straight' },
         { fromCol: 0, toCol: 1, colorIndex: 1, kind: 'merge' },
         { fromCol: 0, toCol: 2, colorIndex: 2, kind: 'merge' }
-      ],
-      laneCount: 3
+      ]
     })
 
     // p1 sits on lane 0 with its open parent connection extending past the page bottom,
@@ -211,8 +203,7 @@ describe('gitGraphLayout', () => {
         { col: 1, colorIndex: 1 },
         { col: 2, colorIndex: 2 }
       ],
-      connections: [{ fromCol: 0, toCol: 0, colorIndex: 0, kind: 'straight' }],
-      laneCount: 3
+      connections: [{ fromCol: 0, toCol: 0, colorIndex: 0, kind: 'straight' }]
     })
   })
 

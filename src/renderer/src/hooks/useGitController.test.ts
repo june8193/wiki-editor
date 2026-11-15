@@ -291,10 +291,10 @@ describe('useGitController', () => {
     const { result } = renderHook(() => useGitController({ workspaceRootPath: 'C:/wiki' }))
 
     await waitFor(() => {
-      expect(result.current.logCommits.map((c) => c.hash)).toEqual(['a1', 'a2'])
+      expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['a1', 'a2'])
     })
-    expect(result.current.logScope).toBe('all')
-    expect(result.current.logHasMore).toBe(true)
+    expect(result.current.graphState.scope).toBe('all')
+    expect(result.current.graphState.hasMore).toBe(true)
     expect(logMock).toHaveBeenCalledWith('C:/wiki', { scope: 'all', limit: 100, skip: 0 })
 
     // Load next page
@@ -302,8 +302,8 @@ describe('useGitController', () => {
       await result.current.loadMoreCommits()
     })
     expect(logMock).toHaveBeenLastCalledWith('C:/wiki', { scope: 'all', limit: 100, skip: 2 })
-    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['a1', 'a2', 'a3'])
-    expect(result.current.logHasMore).toBe(false)
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['a1', 'a2', 'a3'])
+    expect(result.current.graphState.hasMore).toBe(false)
 
     // Stage/unstage should NOT re-fetch commit history
     const callsBeforeStage = logMock.mock.calls.length
@@ -317,16 +317,16 @@ describe('useGitController', () => {
     await act(async () => {
       await result.current.changeLogScope('current')
     })
-    expect(result.current.logScope).toBe('current')
+    expect(result.current.graphState.scope).toBe('current')
     expect(logMock).toHaveBeenLastCalledWith('C:/wiki', { scope: 'current', limit: 100, skip: 0 })
-    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['c1'])
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['c1'])
 
     // Commit, Checkout, Pull, Push, Sync, and Refresh each refresh page 1 with active scope
     await act(async () => {
       await result.current.commit('Add feature')
     })
     expect(logMock).toHaveBeenLastCalledWith('C:/wiki', { scope: 'current', limit: 100, skip: 0 })
-    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['c2', 'c1'])
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['c2', 'c1'])
 
     const callsBeforeActions = logMock.mock.calls.length
     await act(async () => {
@@ -406,7 +406,7 @@ describe('useGitController', () => {
     )
 
     await waitFor(() => {
-      expect(result.current.logCommits.map((c) => c.hash)).toEqual(['a-all-1'])
+      expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['a-all-1'])
     })
 
     // Start slow loadMore on 'all', then switch filter to 'current' before page 2 resolves
@@ -418,16 +418,16 @@ describe('useGitController', () => {
     await act(async () => {
       await result.current.changeLogScope('current')
     })
-    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['a-current-1'])
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['a-current-1'])
 
     // Stale page-2 response resolves later -> must NOT append onto 'current' results
     await act(async () => {
       resolveRepoAAllPage2({ commits: [makeCommit('stale-page-2')], hasMore: false })
       await pendingLoadMore
     })
-    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['a-current-1'])
-    expect(result.current.logScope).toBe('current')
-    expect(result.current.isLogLoadingMore).toBe(false)
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['a-current-1'])
+    expect(result.current.graphState.scope).toBe('current')
+    expect(result.current.graphState.isLoadingMore).toBe(false)
 
     // Trigger a slow refresh in repo-a before switching to repo-b
     delayRepoACurrent = true
@@ -438,19 +438,19 @@ describe('useGitController', () => {
     // Switch workspace -> scope resets to 'all' and previous repo commits clear cleanly
     rerender({ ws: 'C:/repo-b' })
     await waitFor(() => {
-      expect(result.current.logScope).toBe('all')
+      expect(result.current.graphState.scope).toBe('all')
     })
-    expect(result.current.logCommits).toEqual([])
+    expect(result.current.graphState.commits).toEqual([])
 
     await act(async () => {
       resolveRepoBLog({ commits: [makeCommit('b-all-1')], hasMore: false })
     })
-    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['b-all-1'])
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['b-all-1'])
 
     // Stale repo-a response resolving after repo-b finished must be ignored
     await act(async () => {
       resolveRepoACurrentDelayed({ commits: [makeCommit('stale-repo-a')], hasMore: false })
     })
-    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['b-all-1'])
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['b-all-1'])
   })
 })

@@ -645,12 +645,7 @@ export function App() {
                   workspaceRootPath={workspace?.rootPath ?? null}
                   status={git.status}
                   branchList={git.branchList}
-                  logCommits={git.logCommits}
-                  logHasMore={git.logHasMore}
-                  logScope={git.logScope}
-                  isLogLoading={git.isLogLoading}
-                  isLogLoadingMore={git.isLogLoadingMore}
-                  logErrorMessage={git.logErrorMessage}
+                  graphState={git.graphState}
                   pendingAction={git.pendingAction}
                   errorMessage={git.errorMessage}
                   splitState={gitPanelSplit}
