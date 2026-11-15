@@ -18,6 +18,7 @@ interface MarkdownPreviewProps {
   showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: PreviewScrollRequest | null
+  testId?: string
   onScrollTopChange?: (scrollTop: number) => void
 }
 
@@ -34,6 +35,7 @@ export function MarkdownPreview({
   showHeadingNumbers = false,
   mermaidRenderer,
   scrollRequest,
+  testId = 'document-editor',
   onScrollTopChange
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -83,7 +85,7 @@ export function MarkdownPreview({
     <div
       ref={containerRef}
       className="markdown-preview"
-      data-testid="document-editor"
+      data-testid={testId}
       aria-label="마크다운 미리보기"
       tabIndex={0}
       onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}

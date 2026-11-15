@@ -1,10 +1,17 @@
-import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
+import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
-import { EditorMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import {
+  DEFAULT_SPLIT_RATIO,
+  EditorMode,
+  PaneId,
+  TabItem,
+  TabViewPatch,
+  clampSplitRatio
+} from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
@@ -34,6 +41,12 @@ interface DocumentEditorProps {
   onUpdateViewState: (patch: TabViewPatch) => void
 }
 
+const SPLIT_KEYBOARD_STEP = 0.05
+
+function roundSplitRatio(ratio: number): number {
+  return Math.round(ratio * 10000) / 10000
+}
+
 const EDITOR_MODE_OPTIONS: ReadonlyArray<{
   mode: EditorMode
   label: string
@@ -42,7 +55,8 @@ const EDITOR_MODE_OPTIONS: ReadonlyArray<{
 }> = [
   { mode: 'raw', label: 'Raw', shortcutHint: 'Ctrl+1', requiresMarkdown: false },
   { mode: 'wysiwyg', label: '위지윅', shortcutHint: 'Ctrl+2', requiresMarkdown: true },
-  { mode: 'preview', label: 'Preview', shortcutHint: 'Ctrl+3', requiresMarkdown: true }
+  { mode: 'preview', label: 'Preview', shortcutHint: 'Ctrl+3', requiresMarkdown: true },
+  { mode: 'split', label: 'Split', shortcutHint: 'Ctrl+4', requiresMarkdown: true }
 ]
 
 export function DocumentEditor({
@@ -61,10 +75,58 @@ export function DocumentEditor({
 }: DocumentEditorProps) {
   const allowRichModes = isMarkdownDocument(activeDoc)
   const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
+  const splitRatio = roundSplitRatio(clampSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO))
+  const previewRatio = roundSplitRatio(1 - splitRatio)
   const rawLanguage = getRawEditorLanguage(activeDoc)
   const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
   const matchedScrollRequest =
     scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
+
+  const [isResizingSplit, setIsResizingSplit] = useState(false)
+  const splitContainerRef = useRef<HTMLDivElement | null>(null)
+  const onUpdateViewStateRef = useRef(onUpdateViewState)
+  onUpdateViewStateRef.current = onUpdateViewState
+
+  useEffect(() => {
+    if (effectiveMode !== 'split') {
+      setIsResizingSplit(false)
+    }
+  }, [effectiveMode])
+
+  useEffect(() => {
+    if (!isResizingSplit) return
+
+    const handleMouseMove = (event: MouseEvent): void => {
+      const container = splitContainerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      if (rect.width <= 0) return
+      const nextRatio = roundSplitRatio(clampSplitRatio((event.clientX - rect.left) / rect.width))
+      onUpdateViewStateRef.current({ splitPreviewRatio: nextRatio })
+    }
+
+    const handleDragEnd = (): void => {
+      setIsResizingSplit(false)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleDragEnd)
+    window.addEventListener('blur', handleDragEnd)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleDragEnd)
+      window.removeEventListener('blur', handleDragEnd)
+    }
+  }, [isResizingSplit])
+
+  const handleSplitDividerKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    event.stopPropagation()
+    const delta = event.key === 'ArrowLeft' ? -SPLIT_KEYBOARD_STEP : SPLIT_KEYBOARD_STEP
+    const nextRatio = roundSplitRatio(clampSplitRatio(splitRatio + delta))
+    onUpdateViewState({ splitPreviewRatio: nextRatio })
+  }
 
   const handleModeSelect = useCallback(
     (nextMode: EditorMode): void => {
@@ -105,6 +167,28 @@ export function DocumentEditor({
         ? '자동 저장 대기'
         : '미저장'
       : '저장됨'
+
+  const rawEditorElement =
+    effectiveMode === 'raw' || effectiveMode === 'split' ? (
+      <RawMarkdownEditor
+        content={activeDoc.content}
+        language={rawLanguage}
+        theme={theme}
+        cursor={tab.cursor}
+        scrollTop={tab.scrollTop}
+        showTableToolbar={allowRichModes}
+        enableSlashCommands={allowRichModes}
+        customCommands={customCommands}
+        documentTitle={documentTitle}
+        scrollRequest={
+          matchedScrollRequest && effectiveMode === 'raw'
+            ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
+            : null
+        }
+        onChangeContent={onChangeContent}
+        onUpdateViewState={onUpdateViewState}
+      />
+    ) : null
 
   return (
     <section
@@ -167,26 +251,7 @@ export function DocumentEditor({
         </div>
       </div>
 
-      {effectiveMode === 'raw' && (
-        <RawMarkdownEditor
-          content={activeDoc.content}
-          language={rawLanguage}
-          theme={theme}
-          cursor={tab.cursor}
-          scrollTop={tab.scrollTop}
-          showTableToolbar={allowRichModes}
-          enableSlashCommands={allowRichModes}
-          customCommands={customCommands}
-          documentTitle={documentTitle}
-          scrollRequest={
-            matchedScrollRequest
-              ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
-              : null
-          }
-          onChangeContent={onChangeContent}
-          onUpdateViewState={onUpdateViewState}
-        />
-      )}
+      {effectiveMode === 'raw' && rawEditorElement}
 
       {effectiveMode === 'wysiwyg' && (
         <WysiwygMarkdownEditor
@@ -225,6 +290,45 @@ export function DocumentEditor({
           }
           onScrollTopChange={handleScrollTopChange}
         />
+      )}
+      {effectiveMode === 'split' && (
+        <div
+          ref={splitContainerRef}
+          className="editor-split-container"
+          data-testid="editor-split-container"
+        >
+          <div className="editor-split-pane is-raw" style={{ flex: `${splitRatio} 1 0%` }}>
+            {rawEditorElement}
+          </div>
+          <div
+            role="separator"
+            tabIndex={0}
+            aria-label="에디터 분할 크기 조절"
+            aria-orientation="vertical"
+            aria-valuemin={15}
+            aria-valuemax={85}
+            aria-valuenow={Math.round(splitRatio * 100)}
+            className={`split-divider is-horizontal${isResizingSplit ? ' is-dragging' : ''}`}
+            onMouseDown={(event) => {
+              event.preventDefault()
+              setIsResizingSplit(true)
+            }}
+            onDoubleClick={() => {
+              onUpdateViewState({ splitPreviewRatio: DEFAULT_SPLIT_RATIO })
+            }}
+            onKeyDown={handleSplitDividerKeyDown}
+          />
+          <div className="editor-split-pane is-preview" style={{ flex: `${previewRatio} 1 0%` }}>
+            <MarkdownPreview
+              content={activeDoc.content}
+              scrollTop={0}
+              theme={theme}
+              showHeadingNumbers={showHeadingNumbers}
+              mermaidRenderer={mermaidRenderer}
+              testId="split-markdown-preview"
+            />
+          </div>
+        </div>
       )}
     </section>
   )

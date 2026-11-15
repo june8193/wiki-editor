@@ -13,7 +13,14 @@ export type EditorShortcutAction =
   | { type: 'save' }
   | { type: 'mode'; mode: EditorMode }
 
-const MODE_ORDER: readonly EditorMode[] = ['raw', 'wysiwyg', 'preview']
+const MODE_ORDER: readonly EditorMode[] = ['raw', 'wysiwyg', 'preview', 'split']
+
+const DIGIT_SHORTCUT_MODES: Readonly<Record<string, EditorMode>> = {
+  '1': 'raw',
+  '2': 'wysiwyg',
+  '3': 'preview',
+  '4': 'split'
+}
 
 /**
  * Determines whether rich Markdown modes (WYSIWYG / Preview) are enabled for a buffer.
@@ -42,7 +49,7 @@ export function getRawEditorLanguage(doc: Pick<DocumentBuffer, 'kind' | 'name'>)
 }
 
 /**
- * Cycles editor modes in order: Raw -> WYSIWYG -> Preview -> Raw.
+ * Cycles editor modes in order: Raw -> WYSIWYG -> Preview -> Split -> Raw.
  */
 export function cycleEditorMode(current: EditorMode): EditorMode {
   const index = MODE_ORDER.indexOf(current)
@@ -50,7 +57,7 @@ export function cycleEditorMode(current: EditorMode): EditorMode {
 }
 
 /**
- * Resolves Ctrl/Cmd+1/2/3 and Ctrl/Cmd+Shift+M mode-switching keyboard shortcuts.
+ * Resolves Ctrl/Cmd+1/2/3/4 and Ctrl/Cmd+Shift+M mode-switching keyboard shortcuts.
  */
 export function resolveModeShortcut(
   event: ModeShortcutEvent,
@@ -71,17 +78,12 @@ export function resolveModeShortcut(
     return null
   }
 
-  if (normalizedKey === '1') {
-    return 'raw'
-  }
-  if (normalizedKey === '2') {
-    return allowRichModes ? 'wysiwyg' : null
-  }
-  if (normalizedKey === '3') {
-    return allowRichModes ? 'preview' : null
+  const mappedMode = DIGIT_SHORTCUT_MODES[normalizedKey]
+  if (!mappedMode) {
+    return null
   }
 
-  return null
+  return mappedMode === 'raw' || allowRichModes ? mappedMode : null
 }
 
 /**

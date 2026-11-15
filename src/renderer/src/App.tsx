@@ -402,7 +402,7 @@ export function App() {
   const handleOutlineInsertToc = useCallback((): void => {
     applyActiveMarkdownTransform((content) => {
       const cursorLine =
-        activeTab?.mode === 'raw'
+        activeTab?.mode === 'raw' || activeTab?.mode === 'split'
           ? resolveRawCursorLine(content, activeTab.cursor.selectionStart)
           : findFirstNonFencedSlashTocLine(content)
       return insertOrUpdateTocBlock(content, cursorLine)

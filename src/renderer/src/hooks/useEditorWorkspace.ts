@@ -287,8 +287,9 @@ export function useEditorWorkspace({
       if (!activeTab) return
       const activeBuffer = bufferStore.getBuffer(activeTab.bufferKey)
       const allowRichModes = activeBuffer ? isMarkdownDocument(activeBuffer) : false
+      const effectiveMode = allowRichModes ? activeTab.mode : 'raw'
 
-      const shortcut = resolveEditorShortcut(event, activeTab.mode, allowRichModes)
+      const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes)
       if (!shortcut) return
 
       event.preventDefault()
