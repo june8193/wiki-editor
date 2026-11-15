@@ -674,10 +674,7 @@ export class RendererBufferSyncClient {
         localBuf?.isSaving ||
         hubBuf?.isDirty ||
         hubBuf?.isSaving ||
-        (this.pendingLocalEditCounts.get(key) ?? 0) > 0 ||
-        this.unsyncedLocalKeys.has(key) ||
-        this.pendingCreateFlushes.has(key) ||
-        this.pendingEditFlushes.has(key)
+        this.hasPendingLocalOrFlush(key)
     )
   }
 
@@ -702,6 +699,10 @@ export class RendererBufferSyncClient {
     )
   }
 
+  private hasPendingLocalOrFlush(key: string): boolean {
+    return this.hasLocalPendingState(key) || this.hasPendingUpdatesForKey(key)
+  }
+
   private getScopeCandidates(
     scope: DirtyBufferScope
   ): Array<{ key: string; buffer: DocumentBuffer }> {
@@ -719,8 +720,7 @@ export class RendererBufferSyncClient {
     for (const key of candidateKeys) {
       const localBuf = localSnapshot[key]
       const hubBuf = this.latestHubBuffers[key]
-      const hasPendingLocal = this.hasLocalPendingState(key) || this.hasPendingUpdatesForKey(key)
-      const buffer = hasPendingLocal && localBuf ? localBuf : (hubBuf ?? localBuf)
+      const buffer = this.hasPendingLocalOrFlush(key) && localBuf ? localBuf : (hubBuf ?? localBuf)
       if (!buffer) continue
 
       if (scope === 'workspace-all' && buffer.kind !== 'workspace') continue
