@@ -4228,3 +4228,214 @@ describe('Activity bar and left sidebar view switching', () => {
     })
   })
 })
+
+describe('Left sidebar resizing', () => {
+  const initialInnerWidth = window.innerWidth
+
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: initialInnerWidth
+    })
+  })
+
+  it('renders vertical separator with bounds and resizes left sidebar via ArrowLeft/ArrowRight clamped to [180, 512]', async () => {
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const resizer = screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+
+    expect(leftSidebar).toHaveStyle({ width: '260px' })
+    expect(resizer).toHaveAttribute('aria-orientation', 'vertical')
+    expect(resizer).toHaveAttribute('aria-valuemin', '180')
+    expect(resizer).toHaveAttribute('aria-valuemax', '512')
+    expect(resizer).toHaveAttribute('aria-valuenow', '260')
+    expect(resizer).toHaveAttribute('tabindex', '0')
+
+    fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+    const widened = Number(resizer.getAttribute('aria-valuenow'))
+    expect(widened).toBeGreaterThan(260)
+    expect(leftSidebar).toHaveStyle({ width: `${widened}px` })
+
+    fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '260')
+    expect(leftSidebar).toHaveStyle({ width: '260px' })
+
+    for (let i = 0; i < 10; i += 1) {
+      fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    }
+    expect(resizer).toHaveAttribute('aria-valuenow', '180')
+    expect(leftSidebar).toHaveStyle({ width: '180px' })
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+
+    for (let i = 0; i < 25; i += 1) {
+      fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+    }
+    expect(resizer).toHaveAttribute('aria-valuenow', '512')
+    expect(leftSidebar).toHaveStyle({ width: '512px' })
+  })
+
+  it('resizes via pointer/mouse drag with col-resize cursor & selection lock, stays expanded at min 180px, and resets to 260px on double-click', async () => {
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const resizer = screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+
+    // Pointer drag: start at 260px, drag +100px -> 360px, then drag far left -> clamped at 180px without collapsing
+    fireEvent.pointerDown(resizer, { button: 0, clientX: 306 })
+    expect(document.body.style.cursor).toBe('col-resize')
+    expect(document.body.style.userSelect).toBe('none')
+    expect(document.body).toHaveClass('is-resizing-sidebar')
+
+    fireEvent.pointerMove(window, { clientX: 406 })
+    expect(leftSidebar).toHaveStyle({ width: '360px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '360')
+
+    fireEvent.pointerMove(window, { clientX: 20 })
+    expect(leftSidebar).toHaveStyle({ width: '180px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '180')
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+
+    fireEvent.pointerUp(window)
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+    expect(document.body).not.toHaveClass('is-resizing-sidebar')
+
+    // Moving after pointerUp does not resize
+    fireEvent.pointerMove(window, { clientX: 350 })
+    expect(leftSidebar).toHaveStyle({ width: '180px' })
+
+    // Double-click restores default 260px
+    fireEvent.doubleClick(resizer)
+    expect(leftSidebar).toHaveStyle({ width: '260px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '260')
+
+    // Mouse drag fallback (compatible with mouse-only events)
+    fireEvent.mouseDown(resizer, { button: 0, clientX: 306 })
+    expect(document.body.style.cursor).toBe('col-resize')
+    fireEvent.mouseMove(window, { clientX: 386 })
+    expect(leftSidebar).toHaveStyle({ width: '340px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '340')
+    fireEvent.mouseUp(window)
+    expect(document.body.style.cursor).toBe('')
+
+    fireEvent.doubleClick(resizer)
+    expect(leftSidebar).toHaveStyle({ width: '260px' })
+  })
+
+  it('clamps width when window shrinks below current width, hides resizer when collapsed, preserves width across views/expand, and resets on remount without persisting config', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:/wiki/resize-ws',
+        workspaces: {
+          'C:/wiki/resize-ws': { 'note.md': '# Note' }
+        }
+      }
+    )
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    const view = render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const resizer = screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+
+    // Drag to 460px
+    fireEvent.pointerDown(resizer, { button: 0, clientX: 306 })
+    fireEvent.pointerMove(window, { clientX: 506 })
+    fireEvent.pointerUp(window)
+    expect(leftSidebar).toHaveStyle({ width: '460px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '460')
+
+    // Shrink window width to 640px -> max becomes 320px, current width clamps to 320px
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: 640
+    })
+    fireEvent(window, new Event('resize'))
+
+    expect(resizer).toHaveAttribute('aria-valuemax', '320')
+    expect(resizer).toHaveAttribute('aria-valuenow', '320')
+    expect(leftSidebar).toHaveStyle({ width: '320px' })
+
+    // Stepping down from clamped 320px decreases immediately (no stale 460px state)
+    fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    const narrowed = Number(resizer.getAttribute('aria-valuenow'))
+    expect(narrowed).toBeLessThan(320)
+    expect(leftSidebar).toHaveStyle({ width: `${narrowed}px` })
+
+    // View switch preserves resized width
+    await clickActivityBarButton(user, '탐색기')
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toHaveStyle({
+      width: `${narrowed}px`
+    })
+
+    // Collapsing hides both sidebar and resizer
+    await clickActivityBarButton(user, '탐색기')
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+    ).not.toBeInTheDocument()
+
+    // Re-expanding restores resizer and previous session width
+    await clickActivityBarButton(user, 'Git')
+    const reopenedSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const reopenedResizer = screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+    expect(reopenedSidebar).toHaveStyle({ width: `${narrowed}px` })
+    expect(reopenedResizer).toHaveAttribute('aria-valuenow', String(narrowed))
+
+    // Opening workspace preserves width across automatic switch to explorer
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toHaveStyle({
+      width: `${narrowed}px`
+    })
+
+    // Session-only: config.json untouched, remount resets to 260px
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: initialInnerWidth
+    })
+    view.unmount()
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toHaveStyle({
+      width: '260px'
+    })
+    expect(screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })).toHaveAttribute(
+      'aria-valuenow',
+      '260'
+    )
+  })
+})

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { AppMenuCommand } from '@shared/ipc'
 import type { GitStatus } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
@@ -11,6 +11,7 @@ import { GitSidebarPanel } from './components/GitSidebarPanel'
 import { PaneInteractionActions } from './components/PaneTabBar'
 import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
+import { SidebarResizer } from './components/SidebarResizer'
 import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
@@ -28,13 +29,43 @@ import { useGitController } from './hooks/useGitController'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
 import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
+import {
+  clampSidebarWidth,
+  getLeftSidebarWidthBounds,
+  LEFT_SIDEBAR_DEFAULT_WIDTH
+} from './utils/sidebarWidth'
 import { toErrorMessage } from './utils/toErrorMessage'
 
 const RIGHT_SIDEBAR_DEFAULT_WIDTH = 240
+const FALLBACK_WINDOW_WIDTH = 1024
+
+function subscribeWindowResize(callback: () => void): () => void {
+  window.addEventListener('resize', callback)
+  return () => window.removeEventListener('resize', callback)
+}
+
+function useWindowWidth(fallbackWidth = FALLBACK_WINDOW_WIDTH): number {
+  const lastValidRef = useRef<number>(
+    typeof window !== 'undefined' && Number.isFinite(window.innerWidth) && window.innerWidth > 0
+      ? window.innerWidth
+      : fallbackWidth
+  )
+  return useSyncExternalStore(subscribeWindowResize, () => {
+    if (
+      typeof window !== 'undefined' &&
+      Number.isFinite(window.innerWidth) &&
+      window.innerWidth > 0
+    ) {
+      lastValidRef.current = window.innerWidth
+    }
+    return lastValidRef.current
+  })
+}
 
 interface LeftSidebarState {
   activeView: LeftSidebarView
   isCollapsed: boolean
+  width: number
 }
 
 function selectLeftSidebarView(
@@ -44,7 +75,7 @@ function selectLeftSidebarView(
   if (!prev.isCollapsed && prev.activeView === view) {
     return { ...prev, isCollapsed: true }
   }
-  return { activeView: view, isCollapsed: false }
+  return { ...prev, activeView: view, isCollapsed: false }
 }
 
 function getGitChangedCount(workspaceRootPath: string | null, status: GitStatus | null): number {
@@ -68,12 +99,32 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
     activeView: 'workspace',
-    isCollapsed: false
+    isCollapsed: false,
+    width: LEFT_SIDEBAR_DEFAULT_WIDTH
   })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
+  const windowWidth = useWindowWidth()
+  const leftSidebarBounds = getLeftSidebarWidthBounds(windowWidth)
+  const leftSidebarWidth = clampSidebarWidth(
+    leftSidebar.width,
+    leftSidebarBounds.min,
+    leftSidebarBounds.max,
+    leftSidebarBounds.defaultWidth
+  )
+
+  useEffect(() => {
+    setLeftSidebar((prev) =>
+      prev.width === leftSidebarWidth ? prev : { ...prev, width: leftSidebarWidth }
+    )
+  }, [leftSidebarWidth])
+
   const handleSelectLeftSidebarView = useCallback((view: LeftSidebarView): void => {
     setLeftSidebar((prev) => selectLeftSidebarView(prev, view))
+  }, [])
+
+  const handleResizeLeftSidebar = useCallback((nextWidth: number): void => {
+    setLeftSidebar((prev) => (prev.width === nextWidth ? prev : { ...prev, width: nextWidth }))
   }, [])
 
   const reportErrorBanner = useCallback((message: string | null, error?: unknown): void => {
@@ -196,7 +247,7 @@ export function App() {
     onWorkspaceOpened: () => {
       clearWorkspaceBuffers()
       setLeftSidebar((prev) =>
-        prev.activeView === 'workspace' ? { activeView: 'explorer', isCollapsed: false } : prev
+        prev.activeView === 'workspace' ? { ...prev, activeView: 'explorer', isCollapsed: false } : prev
       )
     },
     onWorkspaceChanged: () => {
@@ -492,62 +543,77 @@ export function App() {
         />
 
         {!leftSidebar.isCollapsed && (
-          <aside className="left-sidebar" aria-label="왼쪽 사이드바">
-            {leftSidebar.activeView === 'workspace' && (
-              <WorkspaceView
-                workspace={workspace}
-                isFavorite={isCurrentWorkspaceFavorite}
-                favoriteWorkspaces={config.favoriteWorkspaces}
-                recentWorkspaces={config.recentWorkspaces}
-                onOpenFolder={handleSelectFolder}
-                onSwitchWorkspace={handleSwitchWorkspace}
-                onToggleFavorite={() => {
-                  if (workspace) {
-                    toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
-                  }
-                }}
-                onRemoveFavorite={removeFavoriteWorkspace}
-              />
-            )}
-            {leftSidebar.activeView === 'explorer' && (
-              <FolderTreeSidebar
-                workspace={workspace}
-                tree={treeState}
-                activeFilePath={activeFilePath}
-                onSelectPath={setSelectedTreePath}
-                onToggleDirectory={toggleDirectory}
-                onEnsureExpanded={ensureExpanded}
-                onResolveCreateParentDir={resolveCreateParentDir}
-                onOpenFile={handleOpenFile}
-                onRefreshTree={() => void refreshTree()}
-                onCreateEntry={createEntry}
-                onRenameEntry={renameEntry}
-                onRequestDelete={handleRequestDelete}
-              />
-            )}
+          <>
+            <aside
+              className="left-sidebar"
+              aria-label="왼쪽 사이드바"
+              style={{ width: `${leftSidebarWidth}px` }}
+            >
+              {leftSidebar.activeView === 'workspace' && (
+                <WorkspaceView
+                  workspace={workspace}
+                  isFavorite={isCurrentWorkspaceFavorite}
+                  favoriteWorkspaces={config.favoriteWorkspaces}
+                  recentWorkspaces={config.recentWorkspaces}
+                  onOpenFolder={handleSelectFolder}
+                  onSwitchWorkspace={handleSwitchWorkspace}
+                  onToggleFavorite={() => {
+                    if (workspace) {
+                      toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
+                    }
+                  }}
+                  onRemoveFavorite={removeFavoriteWorkspace}
+                />
+              )}
+              {leftSidebar.activeView === 'explorer' && (
+                <FolderTreeSidebar
+                  workspace={workspace}
+                  tree={treeState}
+                  activeFilePath={activeFilePath}
+                  onSelectPath={setSelectedTreePath}
+                  onToggleDirectory={toggleDirectory}
+                  onEnsureExpanded={ensureExpanded}
+                  onResolveCreateParentDir={resolveCreateParentDir}
+                  onOpenFile={handleOpenFile}
+                  onRefreshTree={() => void refreshTree()}
+                  onCreateEntry={createEntry}
+                  onRenameEntry={renameEntry}
+                  onRequestDelete={handleRequestDelete}
+                />
+              )}
 
-            {leftSidebar.activeView === 'git' && (
-              <GitSidebarPanel
-                workspaceRootPath={workspace?.rootPath ?? null}
-                status={git.status}
-                branchList={git.branchList}
-                pendingAction={git.pendingAction}
-                errorMessage={git.errorMessage}
-                onDismissError={git.dismissError}
-                onRefresh={() => void git.refreshStatus()}
-                onInitRepo={() => void git.initRepo()}
-                onStageFile={(path) => void git.stageFile(path)}
-                onStageAll={() => void git.stageAll()}
-                onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
-                onUnstageAll={() => void git.unstageAll()}
-                onCommit={git.commit}
-                onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
-                onPull={() => void git.pull()}
-                onPush={() => void git.push()}
-                onSync={() => void git.sync()}
-              />
-            )}
-          </aside>
+              {leftSidebar.activeView === 'git' && (
+                <GitSidebarPanel
+                  workspaceRootPath={workspace?.rootPath ?? null}
+                  status={git.status}
+                  branchList={git.branchList}
+                  pendingAction={git.pendingAction}
+                  errorMessage={git.errorMessage}
+                  onDismissError={git.dismissError}
+                  onRefresh={() => void git.refreshStatus()}
+                  onInitRepo={() => void git.initRepo()}
+                  onStageFile={(path) => void git.stageFile(path)}
+                  onStageAll={() => void git.stageAll()}
+                  onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
+                  onUnstageAll={() => void git.unstageAll()}
+                  onCommit={git.commit}
+                  onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
+                  onPull={() => void git.pull()}
+                  onPush={() => void git.push()}
+                  onSync={() => void git.sync()}
+                />
+              )}
+            </aside>
+            <SidebarResizer
+              edge="right"
+              width={leftSidebarWidth}
+              minWidth={leftSidebarBounds.min}
+              maxWidth={leftSidebarBounds.max}
+              defaultWidth={leftSidebarBounds.defaultWidth}
+              ariaLabel="왼쪽 사이드바 너비 조절"
+              onResize={handleResizeLeftSidebar}
+            />
+          </>
         )}
 
         <PaneWorkspace
