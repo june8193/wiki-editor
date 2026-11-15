@@ -97,6 +97,10 @@ export class BufferAutoSaveScheduler {
     this.timers.clear()
   }
 
+  private isAutoSaveCandidate(buf: DocumentBuffer | undefined): buf is DocumentBuffer {
+    return Boolean(buf && buf.kind === 'workspace' && buf.isDirty && !buf.isSaving)
+  }
+
   reconcile({
     buffers,
     isSaveInFlight,
@@ -110,13 +114,7 @@ export class BufferAutoSaveScheduler {
 
     for (const [key, entry] of this.timers.entries()) {
       const buf = buffers[key]
-      if (
-        !buf ||
-        buf.kind !== 'workspace' ||
-        !buf.isDirty ||
-        buf.isSaving ||
-        buf.version !== entry.version
-      ) {
+      if (!this.isAutoSaveCandidate(buf) || buf.version !== entry.version) {
         clearTimeout(entry.timerId)
         this.timers.delete(key)
       }
@@ -130,7 +128,7 @@ export class BufferAutoSaveScheduler {
     }
 
     for (const buf of Object.values(buffers)) {
-      if (buf.kind !== 'workspace' || !buf.isDirty || buf.isSaving) continue
+      if (!this.isAutoSaveCandidate(buf)) continue
       if (this.lastAttemptVersion.get(buf.key) === buf.version) continue
       if (this.timers.has(buf.key)) continue
 
@@ -141,10 +139,7 @@ export class BufferAutoSaveScheduler {
 
         const latest = getLatestBuffer(buf.key)
         if (
-          !latest ||
-          latest.kind !== 'workspace' ||
-          !latest.isDirty ||
-          latest.isSaving ||
+          !this.isAutoSaveCandidate(latest) ||
           latest.version !== scheduledVersion ||
           isSaveInFlight(latest.key)
         ) {

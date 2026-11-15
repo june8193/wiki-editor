@@ -6,8 +6,16 @@ import {
   type SharedBufferStateSnapshot
 } from '@shared/documentBuffer'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
+import { toErrorMessage } from '@shared/errors'
 import type { WikiBufferApi } from '@shared/ipc'
-import { type PaneLayoutState, PaneTabStore } from './PaneTabStore'
+import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
+import { type PaneId, type PaneLayoutState, PaneTabStore } from './PaneTabStore'
+
+export interface DirtyTabClosePrompt {
+  paneId: PaneId
+  tabId: string
+  buffer: DocumentBuffer
+}
 
 export function extractLayoutBufferKeys(layout: PaneLayoutState): string[] {
   const keys: string[] = []
@@ -52,19 +60,21 @@ export interface RendererBufferSyncClientOptions {
   tabStore: PaneTabStore
   bufferApi: WikiBufferApi
   onWorkspaceSaved?: () => void
-  onSaveError: (message: string, error: Error) => void
+  onError: (message: string | null, error?: unknown) => void
+  onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
 }
 
 /**
- * Synchronizes a window's local DocumentBufferStore and PaneTabStore with the main-process
- * SharedDocumentBufferHub while preserving optimistic local edits and synchronous tab counts.
+ * Coordinates a renderer window's local DocumentBufferStore, PaneTabStore, and
+ * main-process SharedDocumentBufferHub IPC lifecycle.
  */
 export class RendererBufferSyncClient {
   private readonly bufferStore: DocumentBufferStore
   private readonly tabStore: PaneTabStore
   private readonly bufferApi: WikiBufferApi
   private onWorkspaceSaved?: () => void
-  private onSaveError: (message: string, error: Error) => void
+  private onError: (message: string | null, error?: unknown) => void
+  private onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
 
   private hubTabCounts: Record<string, number> = {}
   private localTabCounts: Record<string, number> = {}
@@ -83,7 +93,8 @@ export class RendererBufferSyncClient {
     this.tabStore = options.tabStore
     this.bufferApi = options.bufferApi
     this.onWorkspaceSaved = options.onWorkspaceSaved
-    this.onSaveError = options.onSaveError
+    this.onError = options.onError
+    this.onConfirmCloseDirtyTab = options.onConfirmCloseDirtyTab
 
     this.localTabCounts = countBufferKeys(extractLayoutBufferKeys(this.tabStore.getSnapshot()))
     this.tabStore.subscribe(() => this.handleLocalTabStoreChange())
@@ -91,14 +102,17 @@ export class RendererBufferSyncClient {
 
   updateCallbacks(callbacks: {
     onWorkspaceSaved?: () => void
-    onSaveError: (message: string, error: Error) => void
+    onError: (message: string | null, error?: unknown) => void
+    onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
   }): void {
     this.onWorkspaceSaved = callbacks.onWorkspaceSaved
-    this.onSaveError = callbacks.onSaveError
+    this.onError = callbacks.onError
+    this.onConfirmCloseDirtyTab = callbacks.onConfirmCloseDirtyTab
   }
 
   start(): () => void {
     this.mounted = true
+    this.lastSyncedTabSignature = null
     const unsubscribeHub = this.bufferApi.onEvent((event) => this.handleHubEvent(event))
 
     void this.bufferApi.getSnapshot().then(
@@ -151,19 +165,7 @@ export class RendererBufferSyncClient {
     }
   }
 
-  isMounted(): boolean {
-    return this.mounted
-  }
-
-  getHubTabCount(key: string): number | undefined {
-    return this.hubTabCounts[key]
-  }
-
-  getHubBufferOrLocal(key: string): DocumentBuffer | undefined {
-    return this.latestHubBuffers[key] ?? this.bufferStore.getBuffer(key)
-  }
-
-  resolveLatestKey(initialKey: string): string {
+  private resolveLatestKey(initialKey: string): string {
     if (this.bufferStore.hasBuffer(initialKey)) {
       return initialKey
     }
@@ -176,53 +178,7 @@ export class RendererBufferSyncClient {
     return cursor
   }
 
-  prepareKeyOpen(key: string): void {
-    this.remappedKeys.delete(key)
-  }
-
-  trackCreatedBuffer(key: string, openPromise: Promise<unknown>): void {
-    this.creatingKeys.add(key)
-    void openPromise
-      .catch(() => undefined)
-      .finally(() => {
-        this.creatingKeys.delete(key)
-      })
-  }
-
-  beginLocalEdit(bufferKey: string): string {
-    const resolvedKey = this.resolveLatestKey(bufferKey)
-    this.pendingLocalEditCounts.set(
-      resolvedKey,
-      (this.pendingLocalEditCounts.get(resolvedKey) ?? 0) + 1
-    )
-    return resolvedKey
-  }
-
-  finishLocalEdit(initialResolvedKey: string): void {
-    const finalKey = this.resolveLatestKey(initialResolvedKey)
-    const remaining = (this.pendingLocalEditCounts.get(finalKey) ?? 1) - 1
-    if (remaining > 0) {
-      this.pendingLocalEditCounts.set(finalKey, remaining)
-      return
-    }
-    this.pendingLocalEditCounts.delete(finalKey)
-    if (!this.mounted) return
-    const latestHubBuf = this.latestHubBuffers[finalKey]
-    if (latestHubBuf) {
-      this.bufferStore.upsertBuffer(latestHubBuf)
-    }
-  }
-
-  async runManualSave<T>(key: string, task: () => Promise<T>): Promise<T> {
-    this.pendingManualSaveKeys.add(key)
-    try {
-      return await task()
-    } finally {
-      this.pendingManualSaveKeys.delete(key)
-    }
-  }
-
-  clearTrackingForKeys(keys: Iterable<string>): void {
+  private clearTrackingForKeys(keys: Iterable<string>): void {
     const keySet = keys instanceof Set ? keys : new Set(keys)
     if (keySet.size === 0) return
 
@@ -238,7 +194,18 @@ export class RendererBufferSyncClient {
     }
   }
 
-  applyKeyRemappings(
+  private cleanupClosedLocalBuffers(closedKeys: Iterable<string>): void {
+    const keyList = [...closedKeys]
+    this.clearTrackingForKeys(keyList)
+    for (const key of keyList) {
+      if ((this.hubTabCounts[key] ?? 0) === 0) {
+        this.bufferStore.removeBuffer(key)
+      }
+    }
+    this.syncCurrentLayoutTabs()
+  }
+
+  private applyKeyRemappings(
     remappings: readonly BufferKeyRemap[],
     options: { suppressTabDelta?: boolean } = {}
   ): void {
@@ -304,7 +271,7 @@ export class RendererBufferSyncClient {
     this.bufferStore.replaceSnapshot(merged)
   }
 
-  syncWindowTabs(keys: string[]): void {
+  syncWindowTabs = (keys: string[]): void => {
     const signature = keys.join('\0')
     if (this.lastSyncedTabSignature === signature) {
       return
@@ -324,7 +291,7 @@ export class RendererBufferSyncClient {
       })
   }
 
-  syncCurrentLayoutTabs(): void {
+  private syncCurrentLayoutTabs(): void {
     this.syncWindowTabs(extractLayoutBufferKeys(this.tabStore.getSnapshot()))
   }
 
@@ -361,10 +328,249 @@ export class RendererBufferSyncClient {
         const hasTabInWindow = openKeys.includes(event.key)
         const initiatedByWindow = this.pendingManualSaveKeys.has(event.key)
         if (hasTabInWindow || initiatedByWindow) {
-          this.onSaveError(event.message, new Error(event.message))
+          this.onError(event.message, new Error(event.message))
         }
         return
       }
     }
+  }
+
+  openWorkspaceFile = async (entry: WorkspaceEntry, targetPaneId?: PaneId): Promise<void> => {
+    const key = getWorkspacePathKey(entry.path)
+    this.remappedKeys.delete(key)
+    if ((this.localTabCounts[key] ?? 0) > 0 && this.bufferStore.hasBuffer(key)) {
+      this.tabStore.openTab(key, { paneId: targetPaneId })
+      return
+    }
+
+    this.onError(null)
+    try {
+      const buf = await this.bufferApi.openWorkspaceFile(entry.path, entry.name)
+      if (!this.mounted) return
+      this.remappedKeys.delete(buf.key)
+      if (!this.pendingLocalEditCounts.has(buf.key)) {
+        this.bufferStore.upsertBuffer(buf)
+      }
+      this.tabStore.openTab(buf.key, { paneId: targetPaneId })
+      this.syncCurrentLayoutTabs()
+    } catch (error: unknown) {
+      if (this.mounted) {
+        this.onError(toErrorMessage(error, '파일을 열지 못했습니다.'), error)
+      }
+    }
+  }
+
+  openConfigDocument = async (targetPaneId?: PaneId): Promise<void> => {
+    const existingConfig = this.bufferStore
+      .getAllBuffers()
+      .find((buffer) => buffer.kind === 'config')
+    if (existingConfig && (this.localTabCounts[existingConfig.key] ?? 0) > 0) {
+      this.tabStore.openTab(existingConfig.key, { paneId: targetPaneId })
+      return
+    }
+
+    this.onError(null)
+    try {
+      const buf = await this.bufferApi.openConfigDocument()
+      if (!this.mounted) return
+      if (!this.pendingLocalEditCounts.has(buf.key)) {
+        this.bufferStore.upsertBuffer(buf)
+      }
+      this.tabStore.openTab(buf.key, { paneId: targetPaneId })
+      this.syncCurrentLayoutTabs()
+    } catch (error: unknown) {
+      if (this.mounted) {
+        this.onError(toErrorMessage(error, '설정 파일을 읽지 못했습니다.'), error)
+      }
+    }
+  }
+
+  refreshCleanConfig = async (): Promise<void> => {
+    try {
+      await this.bufferApi.refreshCleanConfig()
+    } catch {
+      // Preserve primary error banners during background config refresh
+    }
+  }
+
+  openCreatedFile = (created: WorkspaceEntry): void => {
+    const key = getWorkspacePathKey(created.path)
+    this.remappedKeys.delete(key)
+    const buf = this.bufferStore.openBuffer({
+      kind: 'workspace',
+      path: created.path,
+      name: created.name,
+      content: ''
+    })
+    this.creatingKeys.add(buf.key)
+    this.tabStore.openTab(buf.key)
+    this.syncCurrentLayoutTabs()
+    void this.bufferApi
+      .openWorkspaceFile(created.path, created.name, '')
+      .catch(() => undefined)
+      .finally(() => {
+        this.creatingKeys.delete(buf.key)
+      })
+  }
+
+  updateBufferContent = (bufferKey: string, nextContent: string): void => {
+    const resolvedKey = this.resolveLatestKey(bufferKey)
+    this.pendingLocalEditCounts.set(
+      resolvedKey,
+      (this.pendingLocalEditCounts.get(resolvedKey) ?? 0) + 1
+    )
+    this.bufferStore.updateContent(resolvedKey, nextContent)
+
+    void this.bufferApi
+      .updateContent(resolvedKey, nextContent)
+      .catch(() => undefined)
+      .finally(() => {
+        const finalKey = this.resolveLatestKey(resolvedKey)
+        const remaining = (this.pendingLocalEditCounts.get(finalKey) ?? 1) - 1
+        if (remaining > 0) {
+          this.pendingLocalEditCounts.set(finalKey, remaining)
+          return
+        }
+        this.pendingLocalEditCounts.delete(finalKey)
+        if (!this.mounted) return
+        const latestHubBuf = this.latestHubBuffers[finalKey]
+        if (latestHubBuf) {
+          this.bufferStore.upsertBuffer(latestHubBuf)
+        }
+      })
+  }
+
+  saveBufferByKey = (bufferKey: string): void => {
+    const current = this.bufferStore.getBuffer(bufferKey)
+    if (!current || !current.isDirty || current.isSaving) {
+      return
+    }
+    this.onError(null)
+    this.pendingManualSaveKeys.add(current.key)
+    void this.bufferApi
+      .saveBuffer(current.key)
+      .catch((error: unknown) => {
+        if (this.mounted) {
+          this.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'), error)
+        }
+      })
+      .finally(() => {
+        this.pendingManualSaveKeys.delete(current.key)
+      })
+  }
+
+  saveActivePaneDocument = (): void => {
+    const activeTab = this.tabStore.getActiveTab()
+    if (!activeTab) return
+    this.saveBufferByKey(activeTab.bufferKey)
+  }
+
+  private async ensureSavedBuffer(bufferKey: string): Promise<boolean> {
+    const resolvedKey = this.resolveLatestKey(bufferKey)
+    const current = this.latestHubBuffers[resolvedKey] ?? this.bufferStore.getBuffer(resolvedKey)
+    if (!current || (!current.isDirty && !current.isSaving)) {
+      return true
+    }
+
+    this.pendingManualSaveKeys.add(resolvedKey)
+    try {
+      const result = await this.bufferApi.saveBuffer(resolvedKey)
+      return result.ok
+    } catch (error: unknown) {
+      if (this.mounted) {
+        this.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'), error)
+      }
+      return false
+    } finally {
+      this.pendingManualSaveKeys.delete(resolvedKey)
+    }
+  }
+
+  ensureAllWorkspaceBuffersSaved = async (): Promise<boolean> => {
+    const localKeys = new Set(extractLayoutBufferKeys(this.tabStore.getSnapshot()))
+    const targetKeys = new Set<string>()
+    for (const key of localKeys) {
+      const buf = this.latestHubBuffers[key] ?? this.bufferStore.getBuffer(key)
+      if (buf && buf.kind === 'workspace' && (buf.isDirty || buf.isSaving)) {
+        targetKeys.add(buf.key)
+      }
+    }
+
+    for (const key of targetKeys) {
+      if (!(await this.ensureSavedBuffer(key))) return false
+    }
+    return true
+  }
+
+  getDirtyWorkspaceSummary = (): string | null => {
+    const localKeys = new Set(extractLayoutBufferKeys(this.tabStore.getSnapshot()))
+    const dirty = this.bufferStore
+      .getDirtyBuffers('workspace')
+      .filter((buf) => localKeys.has(buf.key))
+    if (dirty.length === 0) return null
+    if (dirty.length === 1) return dirty[0].name
+    return `${dirty[0].name} 외 ${dirty.length - 1}개`
+  }
+
+  forceCloseTab = (paneId: PaneId, tabId: string): void => {
+    const result = this.tabStore.closeTab(paneId, tabId)
+    if (result?.isLastReferenceForBuffer) {
+      this.cleanupClosedLocalBuffers([result.closedTab.bufferKey])
+      return
+    }
+    this.syncCurrentLayoutTabs()
+  }
+
+  requestCloseTab = (paneId: PaneId, tabId: string): void => {
+    const tab = this.tabStore.getTab(paneId, tabId)
+    if (!tab) return
+    const buffer = this.bufferStore.getBuffer(tab.bufferKey)
+    const hasOtherTabAcrossWindows =
+      this.tabStore.hasOtherTabForBuffer(tab.bufferKey, tab.id) ||
+      (this.hubTabCounts[tab.bufferKey] ?? 1) > 1
+    if (buffer?.isDirty && !hasOtherTabAcrossWindows) {
+      this.onConfirmCloseDirtyTab({ paneId, tabId, buffer })
+      return
+    }
+    this.forceCloseTab(paneId, tabId)
+  }
+
+  saveAndCloseTab = async (paneId: PaneId, tabId: string): Promise<boolean> => {
+    const tab = this.tabStore.getTab(paneId, tabId)
+    if (!tab) return true
+    const ok = await this.ensureSavedBuffer(tab.bufferKey)
+    if (!ok) return false
+    this.forceCloseTab(paneId, tabId)
+    return true
+  }
+
+  clearWorkspaceBuffers = (): void => {
+    const localWorkspaceKeys = extractLayoutBufferKeys(this.tabStore.getSnapshot()).filter(
+      (key) => this.bufferStore.getBuffer(key)?.kind === 'workspace'
+    )
+    if (localWorkspaceKeys.length === 0) return
+
+    this.tabStore.closeTabsByBufferKeys(localWorkspaceKeys)
+    this.cleanupClosedLocalBuffers(localWorkspaceKeys)
+  }
+
+  syncRenamedPath = (oldPath: string, renamed: WorkspaceEntry): void => {
+    const remappings = this.bufferStore.syncRenamedPath(oldPath, renamed.path)
+    this.applyKeyRemappings(remappings)
+    void this.bufferApi.syncRenamedPath(oldPath, renamed.path).catch(() => undefined)
+  }
+
+  syncDeletedPath = (deletedPath: string): void => {
+    const removedKeys = this.bufferStore.removeBuffersUnderPath(deletedPath)
+    this.clearTrackingForKeys(removedKeys)
+    if (removedKeys.length > 0) {
+      this.tabStore.closeTabsByBufferKeys(removedKeys)
+    }
+    void this.bufferApi.syncDeletedPath(deletedPath).catch(() => undefined)
+  }
+
+  reconcileWorkspaceBuffersWithDisk = async (): Promise<readonly string[]> => {
+    const result = await this.bufferApi.reconcileWorkspaceBuffersWithDisk()
+    return result.warnings
   }
 }

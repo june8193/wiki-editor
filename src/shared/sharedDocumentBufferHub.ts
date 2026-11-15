@@ -2,6 +2,7 @@ import { BufferAutoSaveScheduler } from './bufferAutoSaveScheduler'
 import {
   type BufferKeyRemap,
   type DocumentBuffer,
+  type DocumentKind,
   isMissingWorkspaceFileError,
   type ReconcileBuffersResult,
   type SaveBufferResult,
@@ -54,7 +55,7 @@ export class SharedDocumentBufferHub {
   private readonly store = new DocumentBufferStore()
   private readonly listeners = new Set<(event: SharedBufferHubEvent) => void>()
   private readonly windowTabs = new Map<number, Map<string, number>>()
-  private readonly unregisteredOpenOwners = new Map<string, number>()
+  private readonly pendingOpenWindows = new Map<string, Set<number>>()
   private readonly inFlightOpens = new Map<string, Promise<DocumentBuffer>>()
   private readonly inFlightSaves = new Map<string, InFlightSaveEntry>()
   private readonly autoSaveScheduler: BufferAutoSaveScheduler
@@ -110,7 +111,7 @@ export class SharedDocumentBufferHub {
     const keyList = [...keys]
     this.autoSaveScheduler.clearForKeys(keyList)
     for (const key of keyList) {
-      this.unregisteredOpenOwners.delete(key)
+      this.pendingOpenWindows.delete(key)
     }
   }
 
@@ -136,14 +137,43 @@ export class SharedDocumentBufferHub {
     this.tabCounts = this.computeTabCounts()
   }
 
+  private registerPendingOpenOwner(key: string, windowId?: number): void {
+    if (windowId === undefined || this.windowTabs.get(windowId)?.has(key)) return
+    let owners = this.pendingOpenWindows.get(key)
+    if (!owners) {
+      owners = new Set<number>()
+      this.pendingOpenWindows.set(key, owners)
+    }
+    owners.add(windowId)
+  }
+
+  private removePendingOpenOwner(key: string, windowId: number): boolean {
+    const owners = this.pendingOpenWindows.get(key)
+    if (!owners || !owners.delete(windowId)) return false
+    if (owners.size === 0) {
+      this.pendingOpenWindows.delete(key)
+      return true
+    }
+    return false
+  }
+
+  private hasActiveOrPendingOwner(key: string, counts: Readonly<Record<string, number>>): boolean {
+    return (counts[key] ?? 0) > 0 || (this.pendingOpenWindows.get(key)?.size ?? 0) > 0
+  }
+
   private removeOrphanedBuffers(
     prevCounts: Readonly<Record<string, number>>,
     nextCounts: Readonly<Record<string, number>>,
     extraCandidateKeys: Iterable<string> = []
   ): boolean {
-    const orphanKeys = new Set<string>(extraCandidateKeys)
+    const orphanKeys = new Set<string>()
+    for (const candidateKey of extraCandidateKeys) {
+      if (!this.hasActiveOrPendingOwner(candidateKey, nextCounts)) {
+        orphanKeys.add(candidateKey)
+      }
+    }
     for (const [key, prevCount] of Object.entries(prevCounts)) {
-      if (prevCount > 0 && (nextCounts[key] ?? 0) === 0) {
+      if (prevCount > 0 && !this.hasActiveOrPendingOwner(key, nextCounts)) {
         orphanKeys.add(key)
       }
     }
@@ -166,7 +196,7 @@ export class SharedDocumentBufferHub {
     for (const key of bufferKeys) {
       if (!key) continue
       perWindow.set(key, (perWindow.get(key) ?? 0) + 1)
-      this.unregisteredOpenOwners.delete(key)
+      this.removePendingOpenOwner(key, windowId)
     }
 
     const prevCounts = this.tabCounts
@@ -190,17 +220,17 @@ export class SharedDocumentBufferHub {
     const prevCounts = this.tabCounts
     const nextCounts = this.computeTabCounts()
 
-    const unregisteredOwnerOrphans: string[] = []
-    for (const [key, ownerId] of this.unregisteredOpenOwners.entries()) {
-      if (ownerId === windowId && (nextCounts[key] ?? 0) === 0) {
-        unregisteredOwnerOrphans.push(key)
+    const depletedPendingKeys: string[] = []
+    for (const key of [...this.pendingOpenWindows.keys()]) {
+      if (this.removePendingOpenOwner(key, windowId)) {
+        depletedPendingKeys.push(key)
       }
     }
 
     const removedAnyBuffer = this.removeOrphanedBuffers(
       prevCounts,
       nextCounts,
-      unregisteredOwnerOrphans
+      depletedPendingKeys
     )
     const countsChanged = hadTabs && !areTabCountMapsEqual(prevCounts, nextCounts)
     this.tabCounts = nextCounts
@@ -214,7 +244,7 @@ export class SharedDocumentBufferHub {
   }
 
   private openOrGetBuffer(
-    kind: 'workspace' | 'config',
+    kind: DocumentKind,
     filePath: string,
     name: string | undefined,
     content: string,
@@ -223,6 +253,7 @@ export class SharedDocumentBufferHub {
     const key = getWorkspacePathKey(filePath)
     const existing = this.store.getBuffer(key)
     if (existing) {
+      this.registerPendingOpenOwner(existing.key, windowId)
       return { ...existing }
     }
 
@@ -232,9 +263,7 @@ export class SharedDocumentBufferHub {
       name,
       content
     })
-    if ((this.tabCounts[created.key] ?? 0) === 0 && windowId !== undefined) {
-      this.unregisteredOpenOwners.set(created.key, windowId)
-    }
+    this.registerPendingOpenOwner(created.key, windowId)
     this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
     return { ...created }
   }
@@ -257,6 +286,43 @@ export class SharedDocumentBufferHub {
     return openPromise
   }
 
+  private async openDedupedBuffer(
+    kind: DocumentKind,
+    filePath: string,
+    name: string | undefined,
+    windowId: number | undefined,
+    readContent: () => Promise<string>
+  ): Promise<DocumentBuffer> {
+    const key = getWorkspacePathKey(filePath)
+    const existing = this.store.getBuffer(key)
+    if (existing) {
+      this.registerPendingOpenOwner(existing.key, windowId)
+      return { ...existing }
+    }
+
+    this.registerPendingOpenOwner(key, windowId)
+    try {
+      return await this.dedupeOpenBuffer(key, async () => {
+        const content = await readContent()
+        const latest = this.store.getBuffer(key)
+        if (latest) {
+          return { ...latest }
+        }
+        // Skip persisting a newly loaded buffer if every tracked window closed mid-read.
+        if (windowId !== undefined && !this.hasActiveOrPendingOwner(key, this.tabCounts)) {
+          const tempStore = new DocumentBufferStore()
+          return tempStore.openBuffer({ kind, path: filePath, name, content })
+        }
+        return this.openOrGetBuffer(kind, filePath, name, content)
+      })
+    } catch (error: unknown) {
+      if (!this.store.hasBuffer(key) && windowId !== undefined) {
+        this.removePendingOpenOwner(key, windowId)
+      }
+      throw error
+    }
+  }
+
   async openWorkspaceFile(
     filePath: string,
     name?: string,
@@ -268,46 +334,26 @@ export class SharedDocumentBufferHub {
       throw new Error('Buffer path must not be empty')
     }
 
-    const existing = this.store.getBuffer(key)
-    if (existing) {
-      return { ...existing }
-    }
-
     if (initialContent !== undefined) {
       return this.openOrGetBuffer('workspace', filePath, name, initialContent, windowId)
     }
 
-    return this.dedupeOpenBuffer(key, async () => {
-      const content = await this.storage.readWorkspaceFile(filePath)
-      const latest = this.store.getBuffer(key)
-      if (latest) {
-        return { ...latest }
-      }
-      return this.openOrGetBuffer('workspace', filePath, name, content, windowId)
-    })
+    return this.openDedupedBuffer('workspace', filePath, name, windowId, () =>
+      this.storage.readWorkspaceFile(filePath)
+    )
   }
 
   async openConfigDocument(windowId?: number): Promise<DocumentBuffer> {
     const existingConfig = this.store.getAllBuffers().find((buffer) => buffer.kind === 'config')
     if (existingConfig) {
+      this.registerPendingOpenOwner(existingConfig.key, windowId)
       return { ...existingConfig }
     }
 
     const configPath = await this.storage.getConfigPath()
-    const key = getWorkspacePathKey(configPath)
-    const byKey = this.store.getBuffer(key)
-    if (byKey) {
-      return { ...byKey }
-    }
-
-    return this.dedupeOpenBuffer(key, async () => {
-      const raw = await this.storage.readConfigRaw()
-      const latest = this.store.getBuffer(key)
-      if (latest) {
-        return { ...latest }
-      }
-      return this.openOrGetBuffer('config', configPath, 'config.json', raw, windowId)
-    })
+    return this.openDedupedBuffer('config', configPath, 'config.json', windowId, () =>
+      this.storage.readConfigRaw()
+    )
   }
 
   async refreshCleanConfig(): Promise<DocumentBuffer | null> {
@@ -479,10 +525,14 @@ export class SharedDocumentBufferHub {
     this.autoSaveScheduler.remapKeys(remappings)
 
     for (const [oldKey, newKey] of remapLookup.entries()) {
-      const ownerId = this.unregisteredOpenOwners.get(oldKey)
-      if (ownerId !== undefined) {
-        this.unregisteredOpenOwners.delete(oldKey)
-        this.unregisteredOpenOwners.set(newKey, ownerId)
+      const pending = this.pendingOpenWindows.get(oldKey)
+      if (pending) {
+        this.pendingOpenWindows.delete(oldKey)
+        const target = this.pendingOpenWindows.get(newKey) ?? new Set<number>()
+        for (const ownerId of pending) {
+          target.add(ownerId)
+        }
+        this.pendingOpenWindows.set(newKey, target)
       }
 
       const inFlight = this.inFlightSaves.get(oldKey)
@@ -613,7 +663,7 @@ export class SharedDocumentBufferHub {
     this.autoSaveScheduler.dispose()
     this.listeners.clear()
     this.windowTabs.clear()
-    this.unregisteredOpenOwners.clear()
+    this.pendingOpenWindows.clear()
     this.inFlightOpens.clear()
     this.inFlightSaves.clear()
   }

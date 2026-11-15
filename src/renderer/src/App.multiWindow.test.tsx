@@ -556,4 +556,65 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
       flush()
     }
   })
+
+  it('re-acquires shared buffers through the hub when opening in a second window races with closing in the first', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'race.md': '# From Disk'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const win1 = harness.createWindow()
+    const win2 = harness.createWindow()
+
+    const rendered1 = render(<App wikiApi={win1.api} />)
+    const rendered2 = render(<App wikiApi={win2.api} />)
+
+    await openFolderAndNoteInWindow(user, rendered1.container, win1.emitMenuCommand, 'race.md')
+    await triggerMenuCommand(win2.emitMenuCommand, 'open-folder')
+    const sidebar2 = await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
+
+    // Hold Window 2's syncWindowTabs so Window 1 closes its last tab before Window 2 syncs
+    const openSpy = vi.spyOn(win2.api.buffer, 'openWorkspaceFile')
+    const originalWin2Sync = win2.api.buffer.syncWindowTabs
+    const deferredWin2Syncs: Array<() => void> = []
+    win2.api.buffer.syncWindowTabs = (keys) =>
+      new Promise((resolve) => {
+        deferredWin2Syncs.push(() => {
+          void originalWin2Sync(keys).then(resolve)
+        })
+      })
+
+    await user.click(await within(sidebar2).findByText('race.md'))
+    await waitFor(() => {
+      expect(within(rendered2.container).getByRole('tab', { name: /race\.md/ })).toBeInTheDocument()
+    })
+
+    // Window 1 closes its clean tab before Window 2's syncWindowTabs settles
+    await user.click(within(rendered1.container).getByRole('button', { name: 'race.md 탭 닫기' }))
+    await waitFor(() => {
+      expect(within(rendered1.container).queryByRole('tab', { name: /race\.md/ })).not.toBeInTheDocument()
+    })
+
+    win2.api.buffer.syncWindowTabs = originalWin2Sync
+    for (const flush of deferredWin2Syncs) {
+      flush()
+    }
+
+    await waitFor(() => {
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/race.md']).toBe(1)
+    })
+
+    expect(openSpy).toHaveBeenCalledWith('C:/wiki/docs/race.md', 'race.md')
+    const editor2 = await within(rendered2.container).findByTestId('document-editor')
+    expect(getRawEditorText(editor2)).toBe('# From Disk')
+  })
 })

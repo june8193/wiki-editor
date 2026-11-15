@@ -443,4 +443,41 @@ describe('registerBufferIpc', () => {
     await logService.flush()
     dispose()
   })
+
+  it('keeps buffer alive when a second window opens it before syncWindowTabs and the first window is destroyed', async () => {
+    const workspaceInfo = await workspaceService.openWorkspace(workspaceDir)
+    const configService = new ConfigService(configPath)
+    await configService.get()
+
+    const notePath = join(workspaceInfo.rootPath, 'multi-open.md')
+    const noteKey = getWorkspacePathKey(notePath)
+    await writeFile(notePath, '# Shared Open', 'utf8')
+
+    const ipcMain = createMultiWindowFakeIpcMain()
+    const win1 = createFakeWindowWebContents(101)
+    const win2 = createFakeWindowWebContents(102)
+    const targets = [win1, win2]
+
+    const dispose = registerBufferIpc({
+      ipcMain,
+      workspaceService,
+      configService,
+      getTargets: () => targets.filter((t) => !t.isDestroyed())
+    })
+
+    await ipcMain.invokeFrom(win1, BUFFER_IPC_CHANNELS.openWorkspaceFile, notePath, 'multi-open.md')
+    await ipcMain.invokeFrom(win2, BUFFER_IPC_CHANNELS.openWorkspaceFile, notePath, 'multi-open.md')
+
+    win1.destroy()
+    let snap = await ipcMain.invokeFrom<SharedBufferStateSnapshot>(win2, BUFFER_IPC_CHANNELS.getSnapshot)
+    expect(snap.buffers[noteKey]?.content).toBe('# Shared Open')
+
+    win2.destroy()
+    const win3 = createFakeWindowWebContents(103)
+    targets.push(win3)
+    snap = await ipcMain.invokeFrom<SharedBufferStateSnapshot>(win3, BUFFER_IPC_CHANNELS.getSnapshot)
+    expect(snap.buffers[noteKey]).toBeUndefined()
+
+    dispose()
+  })
 })
