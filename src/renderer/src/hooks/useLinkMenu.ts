@@ -7,15 +7,66 @@ import {
   type LinkCandidate,
   type LinkQueryMatch
 } from '../editor/LinkAutocompleteEngine'
-import {
-  computeSlashMenuPosition,
-  readSafeCaretCoords,
-  type CaretRectCoords,
-  type CoordsProvider,
-  type SlashMenuPosition
-} from './useSlashMenu'
+export interface CaretRectCoords {
+  left: number
+  top: number
+  bottom: number
+}
 
-export type LinkMenuPosition = SlashMenuPosition
+export interface CoordsProvider {
+  coordsAtPos: (pos: number) => { left: number; top: number; bottom: number } | null
+}
+
+export interface LinkMenuPosition {
+  top: number
+  left: number
+}
+
+const MENU_ESTIMATED_WIDTH = 300
+const MENU_ESTIMATED_HEIGHT = 240
+const MENU_EDGE_PADDING = 8
+const MENU_VERTICAL_GAP = 4
+
+export function readSafeCaretCoords(view: CoordsProvider, pos: number): CaretRectCoords | null {
+  try {
+    const rect = view.coordsAtPos(pos)
+    return rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : null
+  } catch {
+    return null
+  }
+}
+
+export function computeLinkMenuPosition(
+  shellEl: HTMLElement | null,
+  coords: CaretRectCoords | null
+): LinkMenuPosition {
+  if (!shellEl || !coords) {
+    return { top: 24, left: 16 }
+  }
+  const shellRect = shellEl.getBoundingClientRect()
+  if (shellRect.width === 0 && shellRect.height === 0) {
+    const rawTop = coords.bottom - shellRect.top + MENU_VERTICAL_GAP
+    const rawLeft = coords.left - shellRect.left
+    return {
+      top: Math.round(Math.max(24, Number.isFinite(rawTop) ? rawTop : 24)),
+      left: Math.round(Math.max(16, Number.isFinite(rawLeft) ? rawLeft : 16))
+    }
+  }
+  const maxLeft = Math.max(MENU_EDGE_PADDING, shellRect.width - MENU_ESTIMATED_WIDTH - MENU_EDGE_PADDING)
+  const left = Math.max(MENU_EDGE_PADDING, Math.min(coords.left - shellRect.left, maxLeft))
+  let top = coords.bottom - shellRect.top + MENU_VERTICAL_GAP
+  if (shellRect.height > 0 && top + MENU_ESTIMATED_HEIGHT > shellRect.height) {
+    const aboveTop = coords.top - shellRect.top - MENU_ESTIMATED_HEIGHT - MENU_VERTICAL_GAP
+    top =
+      aboveTop >= MENU_EDGE_PADDING
+        ? aboveTop
+        : Math.max(MENU_EDGE_PADDING, shellRect.height - MENU_ESTIMATED_HEIGHT - MENU_EDGE_PADDING)
+  }
+  return {
+    top: Math.round(Math.max(MENU_EDGE_PADDING, top)),
+    left: Math.round(left)
+  }
+}
 
 export interface LinkMenuState<TMatch extends LinkQueryMatch = LinkQueryMatch> {
   isOpen: boolean
@@ -141,7 +192,7 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
         }
       }
       const position =
-        coords !== null || !wasOpen ? computeSlashMenuPosition(shellEl, coords) : prev.position
+        coords !== null || !wasOpen ? computeLinkMenuPosition(shellEl, coords) : prev.position
 
       commitState({
         isOpen: true,

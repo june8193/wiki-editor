@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AppConfig, type CustomCommandConfig, DEFAULT_APP_CONFIG, ThemeMode } from '@shared/config'
+import { AppConfig, DEFAULT_APP_CONFIG, ThemeMode } from '@shared/config'
 import { removeRecentWorkspace as removeRecentWorkspaceFromList } from '@shared/workspace'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
@@ -163,18 +163,6 @@ export function useConfigController({
     toggleBooleanConfig('showHeadingNumbers', '목차 번호 표시 설정 변경에 실패했습니다.')
   }, [toggleBooleanConfig])
 
-  const updateCustomCommands = useCallback(
-    async (customCommands: CustomCommandConfig[]): Promise<boolean> => {
-      const nextCommands = customCommands.map((command) => ({ ...command }))
-      return runConfigMutation(
-        (prev) => ({ ...prev, customCommands: nextCommands }),
-        () => window.wikiApi.config.update({ customCommands: nextCommands }),
-        '커스텀 명령어 저장에 실패했습니다.'
-      )
-    },
-    [runConfigMutation]
-  )
-
   const toggleFavoriteWorkspace = useCallback(
     (workspacePath: string, name: string): void => {
       void runConfigMutation(
@@ -235,7 +223,6 @@ export function useConfigController({
     toggleTheme,
     toggleAutoSave,
     toggleShowHeadingNumbers,
-    updateCustomCommands,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     removeRecentWorkspace,

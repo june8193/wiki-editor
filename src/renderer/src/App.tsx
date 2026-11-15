@@ -22,7 +22,6 @@ import { SidebarResizer } from './components/SidebarResizer'
 import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
 import type { OutlineContextTarget } from './editor/outlineScrollSpy'
-import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
@@ -196,7 +195,6 @@ export function App() {
     toggleTheme,
     toggleAutoSave,
     toggleShowHeadingNumbers,
-    updateCustomCommands,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     removeRecentWorkspace,
@@ -731,7 +729,6 @@ export function App() {
           diffsByKey={diffsByKey}
           theme={config.theme}
           autoSave={config.autoSave}
-          customCommands={config.customCommands}
           scrollRequest={outlineScrollRequest}
           isShortcutDisabled={isEditorShortcutDisabled}
           workspaceMarkdownFiles={markdownFiles}
@@ -790,12 +787,9 @@ export function App() {
           theme={config.theme}
           autoSave={config.autoSave}
           configPath={configPath}
-          customCommands={config.customCommands}
-          previewTitle={activeBuffer ? deriveDocumentTitle(activeBuffer.name) : undefined}
           isDismissDisabled={pendingDialog !== null}
           onToggleTheme={toggleTheme}
           onToggleAutoSave={toggleAutoSave}
-          onSaveCustomCommands={updateCustomCommands}
           onOpenConfigEditor={handleOpenConfigEditor}
           onClose={() => setIsSettingsOpen(false)}
         />

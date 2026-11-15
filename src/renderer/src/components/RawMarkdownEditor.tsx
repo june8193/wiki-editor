@@ -1,12 +1,11 @@
 import type { EditorView } from '@codemirror/view'
-import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
 import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
 import type { CursorPosition } from '../stores/PaneTabStore'
 import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
-import { SlashCommandMenu } from './SlashCommandMenu'
 
 interface RawMarkdownEditorProps {
   content: string
@@ -15,11 +14,8 @@ interface RawMarkdownEditorProps {
   cursor: CursorPosition
   scrollTop: number
   showTableToolbar?: boolean
-  enableSlashCommands?: boolean
   enableLinkAutocomplete?: boolean
   isShortcutDisabled?: boolean
-  customCommands?: readonly CustomCommandConfig[]
-  documentTitle?: string
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   activeFilePath?: string | null
   scrollRequest?: RawScrollRequest | null
@@ -56,11 +52,8 @@ export function RawMarkdownEditor({
   cursor,
   scrollTop,
   showTableToolbar = false,
-  enableSlashCommands = language === 'markdown',
   enableLinkAutocomplete = language === 'markdown',
   isShortcutDisabled = false,
-  customCommands,
-  documentTitle,
   workspaceMarkdownFiles,
   activeFilePath,
   scrollRequest,
@@ -72,7 +65,7 @@ export function RawMarkdownEditor({
   onActiveHeadingChange,
   onRawScroll
 }: RawMarkdownEditorProps) {
-  const { shellRef, hostRef, inTable, runTableAction, slashMenuProps, linkMenuProps } =
+  const { shellRef, hostRef, inTable, runTableAction, linkMenuProps } =
     useRawCodeMirrorEditor({
       content,
       language,
@@ -80,11 +73,8 @@ export function RawMarkdownEditor({
       cursor,
       scrollTop,
       showTableToolbar,
-      enableSlashCommands,
       enableLinkAutocomplete,
       isShortcutDisabled,
-      customCommands,
-      documentTitle,
       workspaceMarkdownFiles,
       activeFilePath,
       scrollRequest,
@@ -115,7 +105,6 @@ export function RawMarkdownEditor({
         </div>
       )}
       <div ref={hostRef} className="codemirror-host" />
-      {enableSlashCommands ? <SlashCommandMenu {...slashMenuProps} /> : null}
       {enableLinkAutocomplete ? <LinkAutocompleteMenu {...linkMenuProps} /> : null}
     </div>
   )

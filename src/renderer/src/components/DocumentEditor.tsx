@@ -1,5 +1,5 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef } from 'react'
-import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { getRawEditorLanguage, resolveEditorShortcut, resolveEffectiveEditorMode } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
@@ -8,7 +8,6 @@ import type {
   HeadingScrollSpySample,
   OutlineScrollRequest
 } from '../editor/outlineScrollSpy'
-import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
 import {
@@ -29,7 +28,6 @@ interface DocumentEditorProps {
   tab: DocumentTabItem
   theme: ThemeMode
   autoSave: boolean
-  customCommands?: readonly CustomCommandConfig[]
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: OutlineScrollRequest | null
   isActive?: boolean
@@ -59,7 +57,6 @@ export function DocumentEditor({
   tab,
   theme,
   autoSave,
-  customCommands,
   mermaidRenderer,
   scrollRequest = null,
   isActive = true,
@@ -76,7 +73,6 @@ export function DocumentEditor({
   const rawRatio = normalizeSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
   const previewRatio = roundSplitRatio(1 - rawRatio)
   const rawLanguage = getRawEditorLanguage(activeDoc)
-  const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
   const matchedScrollRequest =
     scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
   const previewScrollRequest = matchedScrollRequest
@@ -169,11 +165,8 @@ export function DocumentEditor({
         cursor={tab.cursor}
         scrollTop={tab.scrollTop}
         showTableToolbar={allowRichModes}
-        enableSlashCommands={allowRichModes}
         enableLinkAutocomplete={allowRichModes}
         isShortcutDisabled={isShortcutDisabled}
-        customCommands={customCommands}
-        documentTitle={documentTitle}
         workspaceMarkdownFiles={workspaceMarkdownFiles}
         activeFilePath={activeFilePath}
         scrollRequest={
@@ -265,8 +258,6 @@ export function DocumentEditor({
           theme={theme}
           enableLinkAutocomplete={allowRichModes}
           isShortcutDisabled={isShortcutDisabled}
-          customCommands={customCommands}
-          documentTitle={documentTitle}
           workspaceMarkdownFiles={workspaceMarkdownFiles}
           activeFilePath={activeFilePath}
           mermaidRenderer={mermaidRenderer}

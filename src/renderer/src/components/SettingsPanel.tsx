@@ -1,37 +1,24 @@
 import { useEffect, useRef } from 'react'
-import {
-  type CustomCommandConfig,
-  DEFAULT_CUSTOM_COMMANDS,
-  ThemeMode
-} from '@shared/config'
-import { CustomCommandsSection } from './CustomCommandsSection'
+import { ThemeMode } from '@shared/config'
 
 interface SettingsPanelProps {
   theme: ThemeMode
   autoSave: boolean
   configPath: string
-  customCommands?: readonly CustomCommandConfig[]
-  previewTitle?: string
   isDismissDisabled?: boolean
   onToggleTheme: () => void
   onToggleAutoSave: () => void
-  onSaveCustomCommands?: (nextCommands: CustomCommandConfig[]) => Promise<boolean> | boolean
   onOpenConfigEditor: () => void
   onClose: () => void
 }
-
-const NOOP_SAVE_CUSTOM_COMMANDS = async (): Promise<boolean> => true
 
 export function SettingsPanel({
   theme,
   autoSave,
   configPath,
-  customCommands = DEFAULT_CUSTOM_COMMANDS,
-  previewTitle,
   isDismissDisabled = false,
   onToggleTheme,
   onToggleAutoSave,
-  onSaveCustomCommands = NOOP_SAVE_CUSTOM_COMMANDS,
   onOpenConfigEditor,
   onClose
 }: SettingsPanelProps) {
@@ -101,13 +88,6 @@ export function SettingsPanel({
               <span>자동 저장 (Auto-save)</span>
             </label>
           </section>
-
-          <CustomCommandsSection
-            customCommands={customCommands}
-            theme={theme}
-            previewTitle={previewTitle}
-            onSaveCustomCommands={onSaveCustomCommands}
-          />
 
           <section className="settings-section">
             <h3 className="settings-section-title">전역 설정 파일 (config.json)</h3>

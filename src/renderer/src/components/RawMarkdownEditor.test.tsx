@@ -2,7 +2,6 @@ import { EditorView } from '@codemirror/view'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import type { CustomCommandConfig } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 
@@ -351,7 +350,8 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     expect(emitted.split('\r\n').filter((line) => line.startsWith('|'))).toHaveLength(4)
   })
 
-  it('scrolls to and moves selection to the target heading line on scrollRequest and treats standalone /toc Enter as a plain newline', async () => {
+  it('scrolls to and moves selection to the target heading line on scrollRequest and leaves /toc and / inputs literal without slash popup', async () => {
+    const user = userEvent.setup()
     const doc = [
       '# Title',
       '',
@@ -364,12 +364,15 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
       '## Details',
       'Body text'
     ].join('\n')
-    const onChangeContent = vi.fn()
+    let currentDoc = doc
+    const onChangeContent = vi.fn((next: string) => {
+      currentDoc = next
+    })
     const onUpdateViewState = vi.fn()
 
     const { rerender } = render(
       <RawMarkdownEditor
-        content={doc}
+        content={currentDoc}
         language="markdown"
         theme="light"
         cursor={{ selectionStart: 0, selectionEnd: 0 }}
@@ -386,7 +389,7 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     // Scroll request targets 1-based line 9 ("## Details")
     rerender(
       <RawMarkdownEditor
-        content={doc}
+        content={currentDoc}
         language="markdown"
         theme="light"
         cursor={{ selectionStart: 0, selectionEnd: 0 }}
@@ -404,11 +407,11 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
       expect(editorEl.getAttribute('data-selection-start')).toBe(String(targetOffset))
     })
 
-    // Triggering Enter on /toc outside fence inserts a plain newline rather than a TOC block
+    // Pressing Enter on /toc and typing /fun leaves literal text without opening slash popup or inserting TOC
     onChangeContent.mockClear()
     rerender(
       <RawMarkdownEditor
-        content={doc}
+        content={currentDoc}
         language="markdown"
         theme="light"
         cursor={{ selectionStart: doc.indexOf('/toc') + 4, selectionEnd: doc.indexOf('/toc') + 4 }}
@@ -419,185 +422,14 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
       />
     )
 
-    fireEvent.keyDown(editorEl, { key: 'Enter' })
-    const afterSlashEnter = onChangeContent.mock.calls.at(-1)?.[0] as string | undefined
-    expect(afterSlashEnter ?? '').not.toContain('<!-- toc -->')
-  })
-
-  it('opens slash autocomplete popup on /, filters by prefix, supports keyboard navigation & click, and positions cursor at {{cursor}}', async () => {
-    const user = userEvent.setup()
-    const commands: CustomCommandConfig[] = [
-      {
-        trigger: 'function',
-        label: 'Function 문서',
-        description: '함수 템플릿',
-        template: '### Function: {{cursor}}()\nTitle: {{title}}'
-      },
-      {
-        trigger: 'struct',
-        label: 'Struct 정의',
-        description: '구조체 템플릿',
-        template: '### Struct: {{cursor}}'
-      },
-      {
-        trigger: 'func-async',
-        label: 'Async Function',
-        description: '비동기 함수',
-        template: 'async function {{cursor}}() {}'
-      }
-    ]
-    let currentDoc = ''
-    const onChangeContent = vi.fn((next: string) => {
-      currentDoc = next
-    })
-
-    render(
-      <RawMarkdownEditor
-        content={currentDoc}
-        language="markdown"
-        theme="light"
-        cursor={{ selectionStart: 0, selectionEnd: 0 }}
-        scrollTop={0}
-        customCommands={commands}
-        documentTitle="api-spec"
-        onChangeContent={onChangeContent}
-        onUpdateViewState={vi.fn()}
-      />
-    )
-
-    const editorEl = screen.getByTestId('document-editor')
     editorEl.focus()
-
-    // Type /fun -> opens listbox with function & func-async, excludes struct
-    await user.keyboard('/fun')
-    const listbox = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
-    expect(within(listbox).getByRole('option', { name: /\/function/ })).toBeInTheDocument()
-    expect(within(listbox).getByRole('option', { name: /\/func-async/ })).toBeInTheDocument()
-    expect(within(listbox).queryByRole('option', { name: /\/struct/ })).not.toBeInTheDocument()
-
-    // ArrowDown moves selection to second option (/func-async), ArrowUp back to /function, ArrowDown to /func-async
-    fireEvent.keyDown(editorEl, { key: 'ArrowDown' })
-    expect(within(listbox).getByRole('option', { name: /\/func-async/ })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
-    fireEvent.keyDown(editorEl, { key: 'ArrowUp' })
-    expect(within(listbox).getByRole('option', { name: /\/function/ })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
-
-    // Enter replaces /fun with expanded snippet and puts cursor at {{cursor}}
     fireEvent.keyDown(editorEl, { key: 'Enter' })
-    await waitFor(() => {
-      expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
-    })
-
-    expect(currentDoc).toBe('### Function: ()\nTitle: api-spec')
-    expect(editorEl.getAttribute('data-selection-start')).toBe(
-      String('### Function: '.length)
-    )
-    expect(editorEl.getAttribute('data-selection-end')).toBe(
-      String('### Function: '.length)
-    )
-
-    // Typing after insertion lands right at {{cursor}}
-    await user.keyboard('parseDoc')
-    expect(currentDoc).toBe('### Function: parseDoc()\nTitle: api-spec')
-
-    // Escape dismisses popup without inserting; clicking an option inserts
-    await user.keyboard('\n/str')
-    const secondListbox = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
-    expect(within(secondListbox).getByRole('option', { name: /\/struct/ })).toBeInTheDocument()
-
-    fireEvent.keyDown(editorEl, { key: 'Escape' })
-    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
-    expect(currentDoc).toContain('/str')
-
-    // Backspace re-triggers query and mouse click selects option
-    await user.keyboard('{Backspace}')
-    const thirdListbox = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
-    await user.click(within(thirdListbox).getByRole('option', { name: /\/struct/ }))
-    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
-    expect(currentDoc).toContain('### Struct: ')
-    expect(currentDoc).not.toContain('/st')
-  })
-
-  it('does not open slash popup in json mode, URLs, or fenced code blocks, and supports /table selection', async () => {
-    const user = userEvent.setup()
-
-    const { rerender } = render(
-      <RawMarkdownEditor
-        content="{}"
-        language="json"
-        theme="light"
-        cursor={{ selectionStart: 1, selectionEnd: 1 }}
-        scrollTop={0}
-        onChangeContent={vi.fn()}
-        onUpdateViewState={vi.fn()}
-      />
-    )
-
-    const jsonEditor = screen.getByTestId('document-editor')
-    jsonEditor.focus()
-    await user.keyboard('/fun')
-    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
-
-    // Markdown URL and code fence ignore
-    let mdDoc = '# Heading\n\nhttps:/'
-    const onMdChange = vi.fn((next: string) => {
-      mdDoc = next
-    })
-    rerender(
-      <RawMarkdownEditor
-        content={mdDoc}
-        language="markdown"
-        theme="light"
-        cursor={{ selectionStart: mdDoc.length, selectionEnd: mdDoc.length }}
-        scrollTop={0}
-        onChangeContent={onMdChange}
-        onUpdateViewState={vi.fn()}
-      />
-    )
-    const mdEditor = screen.getByTestId('document-editor')
-    mdEditor.focus()
-    await user.keyboard('/')
-    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
-
-    // Inside fenced code block: slash popup stays closed
-    await user.keyboard('\n```ts\n/fun')
-    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
-    await user.keyboard('\n```')
-
-    // Selecting default /table inserts markdown table snippet cleanly
-    await user.keyboard('\n/ta')
-    const tableList = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
-    await user.click(within(tableList).getByRole('option', { name: /\/table/ }))
-    expect(mdDoc).toContain('| 열 1 | 열 2 | 열 3 |')
-    expect(mdDoc).toContain('| --- | --- | --- |')
-  })
-
-  it('does not open slash popup when enableSlashCommands is false (e.g. plain text files)', async () => {
-    const user = userEvent.setup()
-
-    render(
-      <RawMarkdownEditor
-        content=""
-        language="markdown"
-        enableSlashCommands={false}
-        theme="light"
-        cursor={{ selectionStart: 0, selectionEnd: 0 }}
-        scrollTop={0}
-        onChangeContent={vi.fn()}
-        onUpdateViewState={vi.fn()}
-      />
-    )
-
-    const editor = screen.getByTestId('document-editor')
-    editor.focus()
     await user.keyboard('/fun')
 
     expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
+    expect(currentDoc).toContain('/toc')
+    expect(currentDoc).toContain('/fun')
+    expect(currentDoc).not.toContain('<!-- toc -->')
   })
 
   it('reports active heading on scroll, code-fence ignore, content edit, click-to-scroll pin reset, and isActive activation', () => {
@@ -864,7 +696,7 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
     expect(view.state.doc.toString()).toContain('| row | [A \\| B 표기](#a-b-표기) |')
   })
 
-  it('closes on space, ), external URL scheme, Escape, selection outside, and stays mutually exclusive with slash menu', async () => {
+  it('closes on space, ), external URL scheme, Escape, and selection outside', async () => {
     const md = '# 개요\n\n본문 '
     render(
       <RawMarkdownEditor
@@ -931,22 +763,11 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
     const lineStart = view.state.doc.toString().length
     act(() => {
       view.dispatch({
-        changes: { from: lineStart, to: lineStart, insert: '\n/' },
-        selection: { anchor: lineStart + 2 }
-      })
-    })
-    expect(await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })).toBeInTheDocument()
-
-    act(() => {
-      view.dispatch({
-        changes: { from: lineStart + 1, to: lineStart + 2, insert: '[링크](' },
+        changes: { from: lineStart, to: lineStart, insert: '\n[링크](' },
         selection: { anchor: lineStart + 6 }
       })
     })
     expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
-    expect(
-      screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })
-    ).not.toBeInTheDocument()
 
     fireEvent.keyDown(editorEl, { key: 'Escape' })
     expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { canSplitWithTab, PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
@@ -15,7 +15,6 @@ interface PaneWorkspaceProps {
   diffsByKey: Record<string, GitDiffContentState>
   theme: ThemeMode
   autoSave: boolean
-  customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
@@ -40,7 +39,6 @@ export function PaneWorkspace({
   diffsByKey,
   theme,
   autoSave,
-  customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
@@ -62,7 +60,6 @@ export function PaneWorkspace({
     splitMode: layout.splitMode,
     theme,
     autoSave,
-    customCommands,
     scrollRequest,
     isShortcutDisabled,
     workspaceMarkdownFiles,

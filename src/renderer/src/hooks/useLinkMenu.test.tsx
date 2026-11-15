@@ -3,7 +3,7 @@ import { act, fireEvent, render, renderHook, screen } from '@testing-library/rea
 import type { WorkspaceEntry } from '@shared/workspace'
 import { LinkAutocompleteMenu } from '../components/LinkAutocompleteMenu'
 import type { LinkCandidate, LinkQueryMatch } from '../editor/LinkAutocompleteEngine'
-import { useLinkMenu } from './useLinkMenu'
+import { computeLinkMenuPosition, useLinkMenu } from './useLinkMenu'
 
 function createMatch(label: string, query: string, rangeFrom = 0, rangeTo = 10): LinkQueryMatch {
   return { label, query, rangeFrom, rangeTo }
@@ -388,5 +388,48 @@ describe('LinkAutocompleteMenu', () => {
 
     fireEvent.click(option)
     expect(onSelect).toHaveBeenCalledWith(fileCandidate)
+  })
+
+  it('computeLinkMenuPosition 이 에디터 셸 경계 클램핑, 하단 플립, 0 크기 폴백을 계산한다', () => {
+    const shell = document.createElement('div')
+    shell.getBoundingClientRect = () =>
+      ({
+        left: 100,
+        top: 50,
+        right: 600,
+        bottom: 450,
+        width: 500,
+        height: 400,
+        x: 100,
+        y: 50,
+        toJSON: () => ({})
+      }) as DOMRect
+
+    expect(computeLinkMenuPosition(shell, { left: 560, top: 120, bottom: 140 })).toEqual({
+      left: 192,
+      top: 94
+    })
+    expect(computeLinkMenuPosition(shell, { left: 140, top: 380, bottom: 400 })).toEqual({
+      left: 40,
+      top: 86
+    })
+
+    const zeroShell = document.createElement('div')
+    zeroShell.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        x: 0,
+        y: 0,
+        toJSON: () => ({})
+      }) as DOMRect
+    expect(computeLinkMenuPosition(zeroShell, { left: 0, top: 0, bottom: 0 })).toEqual({
+      left: 16,
+      top: 24
+    })
   })
 })

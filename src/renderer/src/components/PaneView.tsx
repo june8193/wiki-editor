@@ -1,5 +1,5 @@
 import { CSSProperties, SyntheticEvent } from 'react'
-import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
@@ -22,7 +22,6 @@ interface PaneViewProps {
   flexRatio?: number
   theme: ThemeMode
   autoSave: boolean
-  customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
@@ -42,7 +41,6 @@ export function PaneView({
   flexRatio,
   theme,
   autoSave,
-  customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
@@ -124,7 +122,6 @@ export function PaneView({
           tab={activeTab}
           theme={theme}
           autoSave={autoSave}
-          customCommands={customCommands}
           scrollRequest={activeScrollRequest}
           isActive={isActivePane}
           isShortcutDisabled={isShortcutDisabled}

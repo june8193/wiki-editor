@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  DEFAULT_CUSTOM_COMMANDS,
-  type CustomCommandConfig,
-  type ThemeMode
-} from '@shared/config'
+import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
@@ -19,23 +15,18 @@ import {
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
   detectProseMirrorLinkQuery,
-  detectProseMirrorSlashQuery,
   extractWysiwygHeadingCandidates,
   insertWysiwygLink,
-  insertWysiwygMarkdownWithCursor,
   linkInsertPluginKey,
   prepareMarkdownForTiptap,
   type ProseMirrorLinkQueryMatch,
-  sanitizeHtmlWithRehype,
-  slashInsertPluginKey
+  sanitizeHtmlWithRehype
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
 import { useLinkMenu } from '../hooks/useLinkMenu'
-import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from '../hooks/useSlashMenu'
 import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
-import { SlashCommandMenu } from './SlashCommandMenu'
 
 export interface WysiwygScrollRequest {
   index: number
@@ -49,8 +40,6 @@ interface WysiwygMarkdownEditorProps {
   enableLinkAutocomplete?: boolean
   isShortcutDisabled?: boolean
   mermaidRenderer?: MermaidRenderer
-  customCommands?: readonly CustomCommandConfig[]
-  documentTitle?: string
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   activeFilePath?: string | null
   scrollRequest?: WysiwygScrollRequest | null
@@ -230,8 +219,6 @@ export function WysiwygMarkdownEditor({
   enableLinkAutocomplete = true,
   isShortcutDisabled = false,
   mermaidRenderer,
-  customCommands = DEFAULT_CUSTOM_COMMANDS,
-  documentTitle,
   workspaceMarkdownFiles,
   activeFilePath,
   scrollRequest,
@@ -249,34 +236,16 @@ export function WysiwygMarkdownEditor({
   const lastSyncedContentPropRef = useRef(content)
   const onChangeContentRef = useRef(onChangeContent)
   onChangeContentRef.current = onChangeContent
-  const documentTitleRef = useRef(documentTitle)
-  documentTitleRef.current = documentTitle
   const enableLinkAutocompleteRef = useRef(enableLinkAutocomplete)
   enableLinkAutocompleteRef.current = enableLinkAutocomplete
   const isShortcutDisabledRef = useRef(isShortcutDisabled)
   isShortcutDisabledRef.current = isShortcutDisabled
   const editorRef = useRef<Editor | null>(null)
 
-  const {
-    controlsRef: slashControlsRef,
-    menuProps: slashMenuProps,
-    dismiss: dismissSlashMenu
-  } = useSlashMenu(customCommands, (command, explicitRange?: SlashMenuRange) => {
-    const instance = editorRef.current
-    if (!instance) return false
-    const range = explicitRange ?? detectProseMirrorSlashQuery(instance.state)
-    if (!range) return false
-
-    return insertWysiwygMarkdownWithCursor(instance, command, range, {
-      title: documentTitleRef.current
-    })
-  })
-
   const { linkControlsRef, linkMenuProps } = useLinkMenu<ProseMirrorLinkQueryMatch>({
     documentContent: content,
     workspaceMarkdownFiles,
     activeFilePath,
-    onOpenMenu: dismissSlashMenu,
     onSelectCandidate: (candidate, match) => {
       const instance = editorRef.current
       if (!instance || !enableLinkAutocompleteRef.current) {
@@ -323,13 +292,8 @@ export function WysiwygMarkdownEditor({
           }
 
           const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
-          const activeControls = linkControlsRef.current.stateRef.current.isOpen
-            ? linkControlsRef.current
-            : slashControlsRef.current.stateRef.current.isOpen
-              ? slashControlsRef.current
-              : null
-
-          if (activeControls) {
+          if (linkControlsRef.current.stateRef.current.isOpen) {
+            const activeControls = linkControlsRef.current
             if (event.key === 'ArrowDown' && !hasModifier && activeControls.moveSelection(1)) {
               event.preventDefault()
               return true
@@ -361,12 +325,7 @@ export function WysiwygMarkdownEditor({
         const serialized = instance.getMarkdown()
         lastEmittedMarkdownRef.current = serialized
         onChangeContentRef.current(serialized)
-
-        if (
-          transaction.getMeta(slashInsertPluginKey) ||
-          transaction.getMeta(linkInsertPluginKey)
-        ) {
-          slashControlsRef.current.dismiss()
+        if (transaction.getMeta(linkInsertPluginKey)) {
           linkControlsRef.current.dismiss()
           return
         }
@@ -374,21 +333,12 @@ export function WysiwygMarkdownEditor({
         const linkMatch = enableLinkAutocompleteRef.current
           ? detectProseMirrorLinkQuery(instance.state)
           : null
-        if (linkControlsRef.current.syncDocMatch(linkMatch, instance.view, shellRef.current, serialized)) {
-          slashControlsRef.current.dismiss()
-          return
-        }
-
-        const match = detectProseMirrorSlashQuery(instance.state)
-        const coords = match ? readSafeCaretCoords(instance.view, match.rangeFrom) : null
-        slashControlsRef.current.updateFromMatch(match, coords, shellRef.current)
+        linkControlsRef.current.syncDocMatch(linkMatch, instance.view, shellRef.current, serialized)
       },
       onSelectionUpdate: ({ editor: instance, transaction }) => {
         if (transaction.docChanged) {
           return
         }
-        const { from, to, empty } = instance.state.selection
-        slashControlsRef.current.dismissIfSelectionOutside(from, to, empty)
         if (linkControlsRef.current.stateRef.current.isOpen) {
           const currentMatch = enableLinkAutocompleteRef.current
             ? detectProseMirrorLinkQuery(instance.state)
@@ -416,13 +366,12 @@ export function WysiwygMarkdownEditor({
           contentType: 'markdown'
         })
         lastEmittedMarkdownRef.current = markdown
-        dismissSlashMenu()
         dismissLinkMenu()
       } finally {
         isProgrammaticSyncRef.current = false
       }
     },
-    [dismissLinkMenu, dismissSlashMenu, editor]
+    [dismissLinkMenu, editor]
   )
 
   useEffect(() => {
@@ -603,8 +552,6 @@ export function WysiwygMarkdownEditor({
           ))}
         </div>
       )}
-
-      <SlashCommandMenu {...slashMenuProps} />
       {enableLinkAutocomplete ? <LinkAutocompleteMenu {...linkMenuProps} /> : null}
     </div>
   )

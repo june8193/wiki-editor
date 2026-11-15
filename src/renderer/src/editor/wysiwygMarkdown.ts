@@ -1,11 +1,11 @@
-import { AnyExtension, createNodeFromContent, Editor } from '@tiptap/core'
+import { AnyExtension, Editor } from '@tiptap/core'
 import Code from '@tiptap/extension-code'
 import CodeBlock from '@tiptap/extension-code-block'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import Link from '@tiptap/extension-link'
 import { TableKit } from '@tiptap/extension-table'
 import { Markdown } from '@tiptap/markdown'
-import { Fragment, type Mark, type Schema, Slice } from '@tiptap/pm/model'
+import type { Mark, Schema } from '@tiptap/pm/model'
 import {
   type EditorState,
   PluginKey,
@@ -15,7 +15,6 @@ import {
 import { deleteRow as pmDeleteRow, isInTable } from '@tiptap/pm/tables'
 import { ReactNodeViewRenderer } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import type { CustomCommandConfig } from '@shared/config'
 import rehypeParse from 'rehype-parse'
 import rehypeSanitize from 'rehype-sanitize'
 import rehypeStringify from 'rehype-stringify'
@@ -32,11 +31,6 @@ import {
   type InlineLinkSegmentMatch
 } from './LinkAutocompleteEngine'
 import { isSafeMarkdownUrl, MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
-import {
-  detectSlashQuery,
-  expandSlashTemplate,
-  type SlashQueryMatch
-} from './SlashCommandEngine'
 
 interface MdastPositionNode {
   type?: string
@@ -49,7 +43,6 @@ interface MdastPositionNode {
   }
 }
 
-export const slashInsertPluginKey = new PluginKey<boolean>('wysiwygSlashInsert')
 export const linkInsertPluginKey = new PluginKey<boolean>('wysiwygLinkInsert')
 
 const MermaidAwareCodeBlock = CodeBlock.extend({
@@ -254,187 +247,6 @@ export function createWysiwygExtensions(): AnyExtension[] {
       nested: true
     })
   ]
-}
-
-/**
- * Detects an active `/query` token before the ProseMirror caret outside code blocks, inline code marks, and URLs.
- */
-export function detectProseMirrorSlashQuery(state: EditorState): SlashQueryMatch | null {
-  const { $from, empty } = state.selection
-  if (!empty || !$from.parent.isTextblock || $from.parent.type.name === 'codeBlock') {
-    return null
-  }
-  if ($from.marks().some((mark) => mark.type.name === 'code')) {
-    return null
-  }
-
-  const textBefore = $from.parent.textBetween(0, $from.parentOffset, undefined, '\uFFFC')
-  const localMatch = detectSlashQuery(textBefore, textBefore.length, { ignoreCodeFences: false })
-  if (!localMatch) {
-    return null
-  }
-
-  const tokenLength = localMatch.rangeTo - localMatch.rangeFrom
-  const nodeBefore = $from.nodeBefore
-  if (!nodeBefore || !nodeBefore.isText || (nodeBefore.text?.length ?? 0) < tokenLength) {
-    return null
-  }
-
-  return {
-    query: localMatch.query,
-    rangeFrom: $from.pos - tokenLength,
-    rangeTo: $from.pos
-  }
-}
-
-function pickCursorSentinel(expandedText: string, docText: string): string {
-  let index = 0
-  while (expandedText.includes(`WIKICURSOR${index}`) || docText.includes(`WIKICURSOR${index}`)) {
-    index += 1
-  }
-  return `WIKICURSOR${index}`
-}
-
-function buildWysiwygCommandFragment(
-  editor: Editor,
-  command: CustomCommandConfig,
-  context?: { title?: string; date?: string; now?: Date }
-): { fragment: Fragment; sentinel: string | null } {
-  let markdownToInsert: string
-  let sentinel: string | null = null
-
-  const expanded = expandSlashTemplate(command.template, context)
-  if (expanded.hasCursorPlaceholder) {
-    const existingDocText = editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n')
-    sentinel = pickCursorSentinel(expanded.text, existingDocText)
-    markdownToInsert =
-      expanded.text.slice(0, expanded.cursorOffset) +
-      sentinel +
-      expanded.text.slice(expanded.cursorOffset)
-  } else {
-    markdownToInsert = expanded.text
-  }
-
-  const prepared = prepareMarkdownForTiptap(markdownToInsert)
-  const parsedDoc = editor.markdown?.parse(prepared)
-  const jsonBlocks = Array.isArray(parsedDoc?.content) ? parsedDoc.content : []
-  const created =
-    jsonBlocks.length > 0
-      ? createNodeFromContent(jsonBlocks, editor.state.schema, { slice: false })
-      : Fragment.empty
-  const fragment = created instanceof Fragment ? created : Fragment.from(created)
-  return { fragment, sentinel }
-}
-
-function applyWysiwygFragmentReplacement(
-  tr: Transaction,
-  range: Pick<SlashQueryMatch, 'rangeFrom' | 'rangeTo'>,
-  fragment: Fragment
-): { searchFrom: number; fallbackEndPos: number } {
-  const { rangeFrom, rangeTo } = range
-  const $from = tr.doc.resolve(rangeFrom)
-  const isStandaloneTopParagraph =
-    $from.depth === 1 &&
-    $from.parent.type.name === 'paragraph' &&
-    rangeTo <= $from.end(1) &&
-    $from.parent.textBetween(0, rangeFrom - $from.start(1), undefined, '\uFFFC').trim() === '' &&
-    $from.parent.textBetween(rangeTo - $from.start(1), $from.parent.content.size, undefined, '\uFFFC').trim() ===
-      ''
-
-  if (isStandaloneTopParagraph) {
-    const replaceFrom = $from.before(1)
-    const replaceTo = $from.after(1)
-    const replacement =
-      fragment.childCount === 0
-        ? Fragment.from(tr.doc.type.schema.nodes.paragraph.create())
-        : fragment
-    tr.replaceWith(replaceFrom, replaceTo, replacement)
-    return { searchFrom: replaceFrom, fallbackEndPos: replaceFrom + replacement.size }
-  }
-
-  if (fragment.childCount === 1 && fragment.firstChild?.type.name === 'paragraph') {
-    const inlineContent = fragment.firstChild.content
-    tr.replaceWith(rangeFrom, rangeTo, inlineContent)
-    return { searchFrom: rangeFrom, fallbackEndPos: rangeFrom + inlineContent.size }
-  }
-
-  if (fragment.childCount === 0) {
-    tr.delete(rangeFrom, rangeTo)
-    return { searchFrom: rangeFrom, fallbackEndPos: rangeFrom }
-  }
-
-  tr.replaceRange(rangeFrom, rangeTo, new Slice(fragment, 0, 0))
-  return {
-    searchFrom: Math.max(0, rangeFrom - 1),
-    fallbackEndPos: Math.min(tr.doc.content.size, rangeFrom + fragment.size + 2)
-  }
-}
-
-function consumeCursorSentinel(
-  tr: Transaction,
-  sentinel: string,
-  searchFrom: number,
-  searchTo: number
-): { pos: number; marks: readonly Mark[] } | null {
-  let foundFrom: number | null = null
-  let foundTo: number | null = null
-  let marks: readonly Mark[] = []
-  const clampedFrom = Math.max(0, searchFrom)
-  const clampedTo = Math.min(tr.doc.content.size, Math.max(clampedFrom, searchTo))
-
-  tr.doc.nodesBetween(clampedFrom, clampedTo, (node, pos) => {
-    if (foundFrom !== null) return false
-    if (node.isText && node.text) {
-      const idx = node.text.indexOf(sentinel)
-      if (idx !== -1) {
-        foundFrom = pos + idx
-        foundTo = foundFrom + sentinel.length
-        marks = node.marks
-        return false
-      }
-    }
-    return true
-  })
-
-  if (foundFrom === null || foundTo === null) {
-    return null
-  }
-  tr.delete(foundFrom, foundTo)
-  return { pos: foundFrom, marks }
-}
-
-/**
- * Replaces the active `/query` ProseMirror range with sanitized Markdown nodes in a single
- * transaction and moves the cursor to the expanded `{{cursor}}` position.
- */
-export function insertWysiwygMarkdownWithCursor(
-  editor: Editor,
-  command: CustomCommandConfig,
-  range: Pick<SlashQueryMatch, 'rangeFrom' | 'rangeTo'>,
-  context?: { title?: string; date?: string; now?: Date }
-): boolean {
-  const { state } = editor
-  if (range.rangeFrom < 0 || range.rangeTo > state.doc.content.size || range.rangeFrom > range.rangeTo) {
-    return false
-  }
-
-  const { fragment, sentinel } = buildWysiwygCommandFragment(editor, command, context)
-  const tr = state.tr
-  const { searchFrom, fallbackEndPos } = applyWysiwygFragmentReplacement(tr, range, fragment)
-  const consumed = sentinel
-    ? consumeCursorSentinel(tr, sentinel, searchFrom, fallbackEndPos + 2)
-    : null
-
-  const targetPos = Math.max(0, Math.min(consumed?.pos ?? fallbackEndPos, tr.doc.content.size))
-  tr.setSelection(TextSelection.near(tr.doc.resolve(targetPos), consumed ? 1 : -1))
-  if (consumed && consumed.marks.length > 0) {
-    tr.setStoredMarks(consumed.marks)
-  }
-  tr.setMeta(slashInsertPluginKey, true)
-
-  editor.view.dispatch(tr)
-  editor.view.focus()
-  return true
 }
 
 export type ProseMirrorLinkQueryMatch = InlineLinkSegmentMatch
