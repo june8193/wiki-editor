@@ -185,7 +185,8 @@ export function registerBufferIpc({
       [
         BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk,
         () => hub.reconcileWorkspaceBuffersWithDisk()
-      ]
+      ],
+      [BUFFER_IPC_CHANNELS.clearWorkspaceBuffers, () => hub.clearWorkspaceBuffers()]
     ],
     { logService }
   )

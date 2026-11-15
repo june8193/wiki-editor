@@ -10,6 +10,7 @@ import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
 import { useGitController } from '../hooks/useGitController'
 import { useWikiApi } from '../hooks/useWikiApi'
+import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
 import { useWindowWidth } from '../hooks/useWindowWidth'
 import { useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import {
@@ -124,6 +125,7 @@ export function MainAppShell() {
   const isSelectingFolderRef = useRef<boolean>(false)
   const hasWorkspaceInteractionRef = useRef<boolean>(false)
   const isStartupRestoreRef = useRef<boolean>(false)
+  const hadOpenWorkspaceRef = useRef<boolean>(false)
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(
     editor.reconcileWorkspaceBuffersWithDisk
@@ -151,7 +153,9 @@ export function MainAppShell() {
   } = useWorkspaceTree({
     onError: reportErrorBanner,
     onWorkspaceOpened: () => {
-      editor.clearWorkspaceBuffers()
+      if (hadOpenWorkspaceRef.current) {
+        editor.clearWorkspaceBuffers()
+      }
       if (isStartupRestoreRef.current) {
         isStartupRestoreRef.current = false
         if (!hasUserSelectedSidebarViewRef.current) {
@@ -177,6 +181,7 @@ export function MainAppShell() {
     onEntryRenamed: editor.syncRenamedPath,
     onEntryDeleted: editor.syncDeletedPath
   })
+  hadOpenWorkspaceRef.current = workspace !== null
 
   onInitialConfigLoadedRef.current = (loadedConfig) => {
     if (
@@ -205,6 +210,14 @@ export function MainAppShell() {
       pendingGitConfirmCancelRef.current?.()
     }
   }, [])
+
+  useWindowCloseGuard({
+    wikiApi,
+    getDirtySummary: editor.getDirtyCloseSummary,
+    saveDirtyBuffers: editor.ensureCloseBuffersSaved,
+    setPendingDialog,
+    onBeforeShowDialog: () => pendingGitConfirmCancelRef.current?.()
+  })
 
   const { ensureAllWorkspaceBuffersSaved, getDirtyWorkspaceSummary } = editor
   const promptUnsavedWorkspaceChanges = useCallback(
@@ -292,6 +305,10 @@ export function MainAppShell() {
     (targetPath: string): void => {
       hasWorkspaceInteractionRef.current = true
       isStartupRestoreRef.current = false
+      if (!hadOpenWorkspaceRef.current) {
+        void openWorkspace(targetPath)
+        return
+      }
       guardUnsavedWorkspaceChanges(() => openWorkspace(targetPath))
     },
     [guardUnsavedWorkspaceChanges, openWorkspace]

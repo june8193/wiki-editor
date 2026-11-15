@@ -103,6 +103,26 @@ export class SharedDocumentBufferHub {
     return this.tabTracker.getWindowTotalTabCount(windowId)
   }
 
+  /** Returns whether any open workspace or config buffer currently has unsaved changes. */
+  hasAnyDirtyBuffer(): boolean {
+    return this.store.getDirtyBuffers().length > 0
+  }
+
+  /**
+   * Returns dirty buffers whose last cross-window reference (tab or pending claim) would drop to 0
+   * if `windowId` closed.
+   */
+  getDirtyBuffersLostOnWindowClose(windowId: number): DocumentBuffer[] {
+    return this.store
+      .getDirtyBuffers()
+      .filter(
+        (buffer) =>
+          this.tabTracker.getWindowBufferTabCount(windowId, buffer.key) > 0 &&
+          !this.tabTracker.hasOtherWindowReference(buffer.key, windowId)
+      )
+      .map((buffer) => ({ ...buffer }))
+  }
+
   registerPendingTransfer(windowId: number, pathOrKey: string): void {
     const resolvedKey = this.store.getBuffer(pathOrKey)?.key ?? pathOrKey
     this.tabTracker.registerPendingTransferOwner(resolvedKey, windowId)
@@ -535,19 +555,40 @@ export class SharedDocumentBufferHub {
     return removedKeys
   }
 
+  private cancelInFlightOpens(
+    removedKeys: string[],
+    predicate: (entryKey: string, entry: InFlightOpenEntry) => boolean
+  ): void {
+    for (const [entryKey, entry] of this.inFlightOpens.entries()) {
+      if (predicate(entryKey, entry)) {
+        entry.deleted = true
+        if (!removedKeys.includes(entryKey)) {
+          removedKeys.push(entryKey)
+        }
+      }
+    }
+  }
+
   syncDeletedPath(targetPath: string): string[] {
     const removedKeys = this.store.removeBuffersUnderPath(targetPath)
     const targetPrefixKey = getWorkspacePathKey(targetPath)
     if (targetPrefixKey) {
-      for (const [entryKey, entry] of this.inFlightOpens.entries()) {
-        if (entry.currentInput.kind === 'workspace' && isKeyNestedOrSame(entryKey, targetPrefixKey)) {
-          entry.deleted = true
-          if (!removedKeys.includes(entryKey)) {
-            removedKeys.push(entryKey)
-          }
-        }
-      }
+      this.cancelInFlightOpens(
+        removedKeys,
+        (entryKey, entry) =>
+          entry.currentInput.kind === 'workspace' && isKeyNestedOrSame(entryKey, targetPrefixKey)
+      )
     }
+    return this.closeRemovedKeys(removedKeys)
+  }
+
+  /** Closes all open workspace buffers and cancels in-flight workspace loads while keeping config open. */
+  clearWorkspaceBuffers(): string[] {
+    const removedKeys = this.store.clearWorkspaceBuffers()
+    this.cancelInFlightOpens(
+      removedKeys,
+      (_entryKey, entry) => entry.currentInput.kind === 'workspace'
+    )
     return this.closeRemovedKeys(removedKeys)
   }
 

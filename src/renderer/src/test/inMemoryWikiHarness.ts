@@ -135,6 +135,7 @@ export interface InMemoryWindowHandle {
   api: WikiApi
   emitMenuCommand: (command: AppMenuCommand) => void
   emitBeforeInput: (input: BeforeInputKeyEventLike) => void
+  requestClose: () => void
   getBounds: () => WindowBounds
   getMenuListenerCount: () => number
   isClosed: () => boolean
@@ -182,6 +183,9 @@ export function createHubBufferApi(
     },
     async reconcileWorkspaceBuffersWithDisk() {
       return hub.reconcileWorkspaceBuffersWithDisk()
+    },
+    async clearWorkspaceBuffers() {
+      return hub.clearWorkspaceBuffers()
     },
     onEvent(listener) {
       if (isWindowDestroyed()) {
@@ -247,7 +251,15 @@ export function createMultiWindowWikiHarness(
       workArea: { x: 0, y: 0, width: 1920, height: 1080 }
     })
   }
-  const openWindows = new Map<number, { isDestroyed: () => boolean; getBounds: () => WindowBounds }>()
+  const openWindows = new Map<
+    number,
+    {
+      role: WindowRole
+      isDestroyed: () => boolean
+      getBounds: () => WindowBounds
+      forceClose: () => void
+    }
+  >()
   const dragListenersByWindow = new Map<number, Set<(session: ActiveTabDragSession | null) => void>>()
   const dragCoordinator = new TabDragCoordinator()
   dragCoordinator.onStateChanged((session) => {
@@ -362,31 +374,37 @@ export function createMultiWindowWikiHarness(
           }
     const windowBounds: WindowBounds = { ...(options.bounds ?? defaultBounds) }
     let destroyed = false
+    let closing = false
+    let closePromptPending = false
     let hasSyncedNonEmptyTabs = false
     const menuListeners = new Set<(command: AppMenuCommand) => void>()
     const bufferListeners = new Set<(event: SharedBufferHubEvent) => void>()
     const dragListeners = new Set<(session: ActiveTabDragSession | null) => void>()
+    const closeRequestedListeners = new Set<() => void>()
     const windowConfigListeners = new Set<(config: AppConfig) => void>()
     const windowWorkspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
     dragListenersByWindow.set(windowId, dragListeners)
-    openWindows.set(windowId, {
-      isDestroyed: () => destroyed,
-      getBounds: () => ({ ...windowBounds })
-    })
 
-    if (role === 'auxiliary') {
-      for (const tab of initialTabs) {
-        hub.registerPendingTransfer(windowId, tab.bufferKey)
+    const closeAllOpenAuxiliaryWindows = (): void => {
+      for (const candidate of [...openWindows.values()]) {
+        if (candidate.role === 'auxiliary') {
+          candidate.forceClose()
+        }
       }
     }
 
     const destroyWindow = (): void => {
       if (destroyed) return
       destroyed = true
+      closePromptPending = false
+      if (role === 'main') {
+        closeAllOpenAuxiliaryWindows()
+      }
       dragCoordinator.clearForWindow(windowId)
       openWindows.delete(windowId)
       dragListeners.clear()
       dragListenersByWindow.delete(windowId)
+      closeRequestedListeners.clear()
       unsubscribeHub()
       hub.unregisterWindow(windowId)
       menuListeners.clear()
@@ -401,6 +419,42 @@ export function createMultiWindowWikiHarness(
       windowWorkspaceListeners.clear()
     }
 
+    const forceCloseWindow = (): void => {
+      if (destroyed || closing) return
+      closing = true
+      closePromptPending = false
+      destroyWindow()
+    }
+
+    openWindows.set(windowId, {
+      role,
+      isDestroyed: () => destroyed,
+      getBounds: () => ({ ...windowBounds }),
+      forceClose: forceCloseWindow
+    })
+
+    if (role === 'auxiliary') {
+      for (const tab of initialTabs) {
+        hub.registerPendingTransfer(windowId, tab.bufferKey)
+      }
+    }
+
+    const requestCloseWindow = (): void => {
+      if (destroyed || closing || closePromptPending) return
+      const hasDirty =
+        role === 'main'
+          ? hub.hasAnyDirtyBuffer()
+          : hub.getDirtyBuffersLostOnWindowClose(windowId).length > 0
+      if (!hasDirty) {
+        forceCloseWindow()
+        return
+      }
+      closePromptPending = true
+      for (const listener of closeRequestedListeners) {
+        listener()
+      }
+    }
+
     const unsubscribeHub = hub.subscribe((event) => {
       if (destroyed) return
       if (role === 'auxiliary' && (event.type === 'state-changed' || event.type === 'buffers-closed')) {
@@ -408,7 +462,7 @@ export function createMultiWindowWikiHarness(
         if (currentTabCount > 0) {
           hasSyncedNonEmptyTabs = true
         } else if (hasSyncedNonEmptyTabs) {
-          destroyWindow()
+          forceCloseWindow()
           return
         }
       }
@@ -716,7 +770,20 @@ export function createMultiWindowWikiHarness(
         },
         async closeCurrent() {
           if (role === 'auxiliary') {
-            destroyWindow()
+            forceCloseWindow()
+          }
+        },
+        onCloseRequested(listener) {
+          closeRequestedListeners.add(listener)
+          return () => {
+            closeRequestedListeners.delete(listener)
+          }
+        },
+        async resolveCloseRequest(approved) {
+          if (destroyed || !closePromptPending) return
+          closePromptPending = false
+          if (approved) {
+            forceCloseWindow()
           }
         }
       },
@@ -741,6 +808,7 @@ export function createMultiWindowWikiHarness(
         if (destroyed) return
         dragCoordinator.handleBeforeInput(input)
       },
+      requestClose: requestCloseWindow,
       getBounds: () => ({ ...windowBounds }),
       getMenuListenerCount: () => menuListeners.size,
       isClosed: () => destroyed,

@@ -88,6 +88,7 @@ export const BUFFER_IPC_CHANNELS = {
   syncRenamedPath: 'buffer:sync-renamed-path',
   syncDeletedPath: 'buffer:sync-deleted-path',
   reconcileWorkspaceBuffersWithDisk: 'buffer:reconcile-workspace-buffers-with-disk',
+  clearWorkspaceBuffers: 'buffer:clear-workspace-buffers',
   event: 'buffer:event'
 } as const
 
@@ -103,7 +104,9 @@ export const WINDOW_IPC_CHANNELS = {
   acceptTabDragDrop: 'window:accept-tab-drag-drop',
   endTabDrag: 'window:end-tab-drag',
   dragStateChanged: 'window:drag-state-changed',
-  closeCurrent: 'window:close-current'
+  closeCurrent: 'window:close-current',
+  closeRequested: 'window:close-requested',
+  resolveCloseRequest: 'window:resolve-close-request'
 } as const
 
 export interface WikiConfigApi {
@@ -174,6 +177,7 @@ export interface WikiBufferApi {
   syncRenamedPath(oldPath: string, newPath: string): Promise<BufferKeyRemap[]>
   syncDeletedPath(targetPath: string): Promise<string[]>
   reconcileWorkspaceBuffersWithDisk(): Promise<ReconcileBuffersResult>
+  clearWorkspaceBuffers(): Promise<string[]>
   onEvent(listener: (event: SharedBufferHubEvent) => void): () => void
 }
 
@@ -194,6 +198,8 @@ export interface WikiWindowApi {
   endTabDrag(input: TabDragEndInput): Promise<TabDragEndResult>
   onTabDragStateChanged(listener: (session: ActiveTabDragSession | null) => void): () => void
   closeCurrent(): Promise<void>
+  onCloseRequested(listener: () => void): () => void
+  resolveCloseRequest(approved: boolean): Promise<void>
 }
 
 export interface WikiApi {

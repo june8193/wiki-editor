@@ -93,4 +93,110 @@ describe('SharedDocumentBufferHub race guards', () => {
       hub.dispose()
     }
   })
+
+  it('tracks per-window exclusive dirty buffers vs shared buffers for close guards', async () => {
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async (filePath) => `# ${filePath}`,
+        writeWorkspaceFile: async () => undefined,
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{"autoSave":false}',
+        saveConfigRaw: async () => ({ autoSave: false })
+      }
+    })
+
+    try {
+      const alpha = await hub.openWorkspaceFile('C:/wiki/alpha.md', 'alpha.md', undefined, 2)
+      const shared = await hub.openWorkspaceFile('C:/wiki/shared.md', 'shared.md', undefined, 1)
+      await hub.openWorkspaceFile('C:/wiki/shared.md', 'shared.md', undefined, 2)
+      const config = await hub.openConfigDocument(2)
+
+      hub.syncWindowTabs(1, [shared.key])
+      hub.syncWindowTabs(2, [alpha.key, alpha.key, shared.key, config.key])
+
+      expect(hub.hasAnyDirtyBuffer()).toBe(false)
+      expect(hub.getDirtyBuffersLostOnWindowClose(2)).toEqual([])
+
+      hub.updateContent(alpha.key, '# dirty alpha')
+      hub.updateContent(shared.key, '# dirty shared')
+      hub.updateContent(config.key, '{"autoSave":true}')
+
+      expect(hub.hasAnyDirtyBuffer()).toBe(true)
+      expect(
+        hub
+          .getDirtyBuffersLostOnWindowClose(2)
+          .map((buffer) => buffer.key)
+          .sort()
+      ).toEqual([alpha.key, config.key].sort())
+
+      // When Main closes shared tab, shared becomes exclusive to Win2.
+      hub.syncWindowTabs(1, [])
+      expect(
+        hub
+          .getDirtyBuffersLostOnWindowClose(2)
+          .map((buffer) => buffer.key)
+          .sort()
+      ).toEqual([alpha.key, config.key, shared.key].sort())
+
+      // Pending transfer reservation on another window protects close of source window
+      hub.registerPendingTransfer(3, alpha.key)
+      expect(
+        hub
+          .getDirtyBuffersLostOnWindowClose(2)
+          .map((buffer) => buffer.key)
+          .sort()
+      ).toEqual([config.key, shared.key].sort())
+    } finally {
+      hub.dispose()
+    }
+  })
+
+  it('clearWorkspaceBuffers closes workspace buffers and in-flight opens while preserving config buffer', async () => {
+    const readGate = createDeferred<string>()
+    const events: string[] = []
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async (filePath) =>
+          filePath.includes('pending.md') ? readGate.promise : '# Alpha',
+        writeWorkspaceFile: async () => undefined,
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{"autoSave":false}',
+        saveConfigRaw: async () => ({ autoSave: false })
+      }
+    })
+    hub.subscribe((event) => {
+      events.push(event.type)
+    })
+
+    try {
+      const alpha = await hub.openWorkspaceFile('C:/wiki/alpha.md', 'alpha.md', undefined, 1)
+      const config = await hub.openConfigDocument(2)
+      hub.syncWindowTabs(1, [alpha.key])
+      hub.syncWindowTabs(2, [alpha.key, config.key])
+      hub.updateContent(alpha.key, '# dirty alpha')
+      hub.updateContent(config.key, '{"autoSave":true}')
+
+      const pendingOpen = hub.openWorkspaceFile('C:/wiki/pending.md', 'pending.md', undefined, 1)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      const closedKeys = hub.clearWorkspaceBuffers()
+      expect(closedKeys.sort()).toEqual([alpha.key, 'c:/wiki/pending.md'].sort())
+      expect(events).toContain('buffers-closed')
+
+      readGate.resolve('# Stale pending content')
+      await pendingOpen
+
+      const snapshot = hub.getSnapshot()
+      expect(snapshot.buffers[alpha.key]).toBeUndefined()
+      expect(snapshot.buffers['c:/wiki/pending.md']).toBeUndefined()
+      expect(snapshot.buffers[config.key]).toBeDefined()
+      expect(snapshot.buffers[config.key]?.isDirty).toBe(true)
+      expect(snapshot.tabCounts[alpha.key]).toBeUndefined()
+      expect(snapshot.tabCounts[config.key]).toBe(1)
+    } finally {
+      hub.dispose()
+    }
+  })
 })

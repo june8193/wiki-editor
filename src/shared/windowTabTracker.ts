@@ -79,6 +79,14 @@ function remapPendingOwnersInMap(
   }
 }
 
+function hasOtherOwnerInSet(owners: ReadonlySet<number> | undefined, windowId: number): boolean {
+  if (!owners || owners.size === 0) return false
+  for (const ownerId of owners) {
+    if (ownerId !== windowId) return true
+  }
+  return false
+}
+
 export interface TabCountChange {
   prevCounts: Record<string, number>
   depletedPendingKeys: string[]
@@ -160,6 +168,21 @@ export class WindowTabTracker {
       (this.tabCounts[key] ?? 0) > 0 ||
       (this.pendingOpenWindows.get(key)?.size ?? 0) > 0 ||
       (this.pendingTransferWindows.get(key)?.size ?? 0) > 0
+    )
+  }
+
+  /** Returns the tab count for `key` currently synced in `windowId`. */
+  getWindowBufferTabCount(windowId: number, key: string): number {
+    return this.windowTabs.get(windowId)?.[key] ?? 0
+  }
+
+  /** Returns whether at least one other window holds an active tab or pending owner claim for `key`. */
+  hasOtherWindowReference(key: string, windowId: number): boolean {
+    const ownCount = this.windowTabs.get(windowId)?.[key] ?? 0
+    if ((this.tabCounts[key] ?? 0) > ownCount) return true
+    return (
+      hasOtherOwnerInSet(this.pendingOpenWindows.get(key), windowId) ||
+      hasOtherOwnerInSet(this.pendingTransferWindows.get(key), windowId)
     )
   }
 

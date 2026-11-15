@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
+  DocumentBuffer,
   ReconcileBuffersResult,
   SharedBufferHubEvent,
   SharedBufferStateSnapshot
@@ -453,6 +454,59 @@ describe('registerBufferIpc', () => {
     targets.push(win3)
     snap = await ipcMain.invokeFrom<SharedBufferStateSnapshot>(win3, BUFFER_IPC_CHANNELS.getSnapshot)
     expect(snap.buffers[noteKey]).toBeUndefined()
+
+    dispose()
+  })
+
+  it('clears workspace buffers across windows via buffer:clear-workspace-buffers while keeping config open', async () => {
+    const workspaceInfo = await workspaceService.openWorkspace(workspaceDir)
+    const configService = new ConfigService(configPath)
+    await configService.get()
+
+    const notePath = join(workspaceInfo.rootPath, 'switch-note.md')
+    const noteKey = getWorkspacePathKey(notePath)
+    await writeFile(notePath, '# Before switch', 'utf8')
+
+    const ipcMain = createFakeIpcMain()
+    const win1 = createFakeWindowWebContents(101)
+    const win2 = createFakeWindowWebContents(102)
+    const targets = [win1, win2]
+
+    const dispose = registerBufferIpc({
+      ipcMain,
+      configService,
+      hub: createSharedDocumentBufferHub({ workspaceService, configService }),
+      getTargets: () => targets.filter((t) => !t.isDestroyed())
+    })
+
+    const noteBuf = (await ipcMain.invokeFrom(
+      win2,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      notePath,
+      'switch-note.md'
+    )) as DocumentBuffer
+    const configBuf = (await ipcMain.invokeFrom(
+      win2,
+      BUFFER_IPC_CHANNELS.openConfigDocument
+    )) as DocumentBuffer
+    await ipcMain.invokeFrom(win2, BUFFER_IPC_CHANNELS.syncWindowTabs, [noteBuf.key, configBuf.key])
+    await ipcMain.invokeFrom(win2, BUFFER_IPC_CHANNELS.updateContent, noteBuf.key, '# Dirty switch')
+
+    win2.events.length = 0
+    const clearedKeys = await ipcMain.invokeFrom<string[]>(
+      win1,
+      BUFFER_IPC_CHANNELS.clearWorkspaceBuffers
+    )
+
+    expect(clearedKeys).toEqual([noteKey])
+    expect(win2.events.some((event) => event.type === 'buffers-closed')).toBe(true)
+
+    const snap = await ipcMain.invokeFrom<SharedBufferStateSnapshot>(
+      win1,
+      BUFFER_IPC_CHANNELS.getSnapshot
+    )
+    expect(snap.buffers[noteKey]).toBeUndefined()
+    expect(snap.buffers[configBuf.key]).toBeDefined()
 
     dispose()
   })

@@ -252,6 +252,8 @@ export function useEditorWorkspace({
     saveActivePaneDocument: syncClient.saveActivePaneDocument,
     ensureAllWorkspaceBuffersSaved: syncClient.ensureAllWorkspaceBuffersSaved,
     getDirtyWorkspaceSummary: syncClient.getDirtyWorkspaceSummary,
+    getDirtyCloseSummary: syncClient.getDirtyCloseSummary,
+    ensureCloseBuffersSaved: syncClient.ensureCloseBuffersSaved,
     requestCloseTab: syncClient.requestCloseTab,
     forceCloseTab: syncClient.forceCloseTab,
     saveAndCloseTab: syncClient.saveAndCloseTab,

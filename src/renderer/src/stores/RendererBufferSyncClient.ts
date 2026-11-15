@@ -31,6 +31,8 @@ export interface DirtyTabClosePrompt {
   discardAndClose: () => void
 }
 
+type DirtyBufferScope = 'workspace-all' | 'all-windows-close' | 'exclusive-window-close'
+
 function areStringArraysEqual(
   left: readonly string[] | null,
   right: readonly string[]
@@ -635,6 +637,9 @@ export class RendererBufferSyncClient {
         ? await this.syncBufferKeyToHub(initialKey)
         : initialKey
       const result = await this.bufferApi.saveBuffer(currentKey)
+      if (!result.ok && result.errorMessage && this.mounted) {
+        this.onError(result.errorMessage, new Error(result.errorMessage))
+      }
       return result.ok
     } catch (error: unknown) {
       if (this.mounted) {
@@ -685,32 +690,90 @@ export class RendererBufferSyncClient {
     return this.runSaveBufferRequest(resolvedKey)
   }
 
-  ensureAllWorkspaceBuffersSaved = async (): Promise<boolean> => {
-    const localKeys = new Set(this.tabStore.getBufferKeys())
-    const targetKeys = new Set<string>()
-    for (const key of localKeys) {
-      const resolvedKey = this.resolveLatestKey(key)
-      const kind =
-        this.bufferStore.getBuffer(resolvedKey)?.kind ?? this.latestHubBuffers[resolvedKey]?.kind
-      if (kind === 'workspace' && this.needsBufferSave(resolvedKey)) {
-        targetKeys.add(resolvedKey)
-      }
+  private getWindowCloseDirtyScope(): DirtyBufferScope {
+    return this.windowApi?.role === 'auxiliary' ? 'exclusive-window-close' : 'all-windows-close'
+  }
+
+  private getScopeCandidates(
+    scope: DirtyBufferScope
+  ): Array<{ key: string; buffer: DocumentBuffer; hasPendingLocal: boolean }> {
+    const localSnapshot = this.bufferStore.getSnapshot()
+    const candidateKeys = new Set<string>()
+    for (const rawKey of [
+      ...Object.keys(this.latestHubBuffers),
+      ...this.tabStore.getBufferKeys(),
+      ...Object.keys(localSnapshot)
+    ]) {
+      candidateKeys.add(this.resolveLatestKey(rawKey))
     }
 
+    const candidates: Array<{ key: string; buffer: DocumentBuffer; hasPendingLocal: boolean }> = []
+    for (const key of candidateKeys) {
+      const localBuf = localSnapshot[key]
+      const hubBuf = this.latestHubBuffers[key]
+      const hasPendingLocal =
+        (this.pendingLocalEditCounts.get(key) ?? 0) > 0 ||
+        this.unsyncedLocalKeys.has(key) ||
+        this.creatingKeys.has(key) ||
+        this.hasPendingUpdatesForKey(key)
+      const buffer = hasPendingLocal && localBuf ? localBuf : (hubBuf ?? localBuf)
+      if (!buffer) continue
+
+      if (scope === 'workspace-all' && buffer.kind !== 'workspace') continue
+      if (scope === 'exclusive-window-close') {
+        const localCount = this.localTabCounts[key] ?? 0
+        if (localCount === 0 || (this.effectiveTabCounts[key] ?? 0) > localCount) {
+          continue
+        }
+      }
+
+      candidates.push({ key, buffer, hasPendingLocal })
+    }
+    return candidates
+  }
+
+  private getDirtySummaryForScope(scope: DirtyBufferScope): string | null {
+    const dirty = this.getScopeCandidates(scope)
+      .filter(
+        ({ key, buffer }) =>
+          buffer.isDirty ||
+          this.unsyncedLocalKeys.has(key) ||
+          this.creatingKeys.has(key) ||
+          (this.pendingLocalEditCounts.get(key) ?? 0) > 0
+      )
+      .map(({ buffer }) => buffer)
+    if (dirty.length === 0) return null
+    if (dirty.length === 1) return dirty[0].name
+    return `${dirty[0].name} 외 ${dirty.length - 1}개`
+  }
+
+  private async ensureScopeBuffersSaved(scope: DirtyBufferScope): Promise<boolean> {
+    const targetKeys = this.getScopeCandidates(scope)
+      .filter(({ key }) => this.needsBufferSave(key))
+      .map(({ key }) => key)
+    if (targetKeys.length === 0) return true
+
+    this.onError(null)
     for (const key of targetKeys) {
       if (!(await this.ensureSavedBuffer(key))) return false
     }
     return true
   }
 
+  ensureAllWorkspaceBuffersSaved = async (): Promise<boolean> => {
+    return this.ensureScopeBuffersSaved('workspace-all')
+  }
+
   getDirtyWorkspaceSummary = (): string | null => {
-    const localKeys = new Set(this.tabStore.getBufferKeys())
-    const dirty = this.bufferStore
-      .getDirtyBuffers('workspace')
-      .filter((buf) => localKeys.has(buf.key))
-    if (dirty.length === 0) return null
-    if (dirty.length === 1) return dirty[0].name
-    return `${dirty[0].name} 외 ${dirty.length - 1}개`
+    return this.getDirtySummaryForScope('workspace-all')
+  }
+
+  getDirtyCloseSummary = (): string | null => {
+    return this.getDirtySummaryForScope(this.getWindowCloseDirtyScope())
+  }
+
+  ensureCloseBuffersSaved = async (): Promise<boolean> => {
+    return this.ensureScopeBuffersSaved(this.getWindowCloseDirtyScope())
   }
 
   forceCloseTab = (paneId: PaneId, tabId: string): void => {
@@ -835,13 +898,17 @@ export class RendererBufferSyncClient {
   }
 
   clearWorkspaceBuffers = (): void => {
-    const localWorkspaceKeys = this.tabStore.getBufferKeys().filter(
-      (key) => this.bufferStore.getBuffer(key)?.kind === 'workspace'
-    )
-    if (localWorkspaceKeys.length === 0) return
-
-    this.tabStore.closeTabsByBufferKeys(localWorkspaceKeys)
-    this.cleanupClosedLocalBuffers(localWorkspaceKeys)
+    const localWorkspaceKeys = this.tabStore.getBufferKeys().filter((key) => {
+      const resolvedKey = this.resolveLatestKey(key)
+      const kind =
+        this.bufferStore.getBuffer(resolvedKey)?.kind ?? this.latestHubBuffers[resolvedKey]?.kind
+      return kind === 'workspace'
+    })
+    if (localWorkspaceKeys.length > 0) {
+      this.tabStore.closeTabsByBufferKeys(localWorkspaceKeys)
+      this.cleanupClosedLocalBuffers(localWorkspaceKeys)
+    }
+    void this.bufferApi.clearWorkspaceBuffers().catch(() => undefined)
   }
 
   syncRenamedPath = (oldPath: string, renamed: WorkspaceEntry): void => {

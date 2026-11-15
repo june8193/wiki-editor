@@ -1852,4 +1852,331 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
       expect(aux2.isClosed()).toBe(true)
     })
   })
+
+  it('guards auxiliary X close only for last-reference dirty workspace/config buffers and surfaces save error banner on abort', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'shared.md': '# Shared',
+            'sole.md': '# Sole'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    activeDisposers.push(() => mainRendered.unmount())
+
+    // Open shared.md and split it so Main keeps one copy while Aux1 gets the second copy
+    await openFolderAndNoteInWindow(user, mainRendered.container, mainWin.emitMenuCommand, 'shared.md')
+    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /shared\.md/ }))
+    const mainTabMenu = await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })
+    await user.click(within(mainTabMenu).getByRole('menuitem', { name: '분할 영역에 복제 열기' }))
+    await waitFor(() => {
+      expect(within(mainRendered.container).getAllByRole('tab', { name: /shared\.md/ })).toHaveLength(2)
+    })
+
+    const rightSharedTab = within(within(mainRendered.container).getByTestId('pane-secondary')).getByRole(
+      'tab',
+      { name: /shared\.md/ }
+    )
+    fireEvent.contextMenu(rightSharedTab)
+    const rightMenu = await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })
+    await user.click(within(rightMenu).getByRole('menuitem', { name: '새 창으로 이동' }))
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(1)
+    })
+    const auxShared = harness.getAuxiliaryWindows()[0]
+    const auxSharedRendered = render(<App wikiApi={auxShared.api} />)
+    activeDisposers.push(() => auxSharedRendered.unmount())
+
+    const auxSharedEditor = await within(auxSharedRendered.container).findByTestId('document-editor')
+    setRawEditorText(auxSharedEditor, '# Shared Dirty From Aux')
+    await waitFor(() => {
+      expect(within(auxSharedRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+
+    // Shared dirty buffer still open in Main -> Aux X closes immediately without ConfirmDialog
+    act(() => {
+      auxShared.requestClose()
+    })
+    expect(within(auxSharedRendered.container).queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(auxShared.isClosed()).toBe(true)
+
+    // Open sole.md + config.json in Main, move sole.md to new Aux2 and drag config.json into Aux2 so Aux2 holds sole references
+    const sidebar = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('sole.md'))
+    await detachTabViaContextMenu(user, mainRendered.container, /sole\.md/)
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+    })
+    const auxSole = harness.getAuxiliaryWindows()[1]
+    const auxSoleRendered = render(<App wikiApi={auxSole.api} />)
+    activeDisposers.push(() => auxSoleRendered.unmount())
+    await within(auxSoleRendered.container).findByRole('tab', { name: /sole\.md/ })
+
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'toggle-settings')
+    await user.click(
+      await within(mainRendered.container).findByRole('button', { name: '설정 파일 직접 열기' })
+    )
+    const configTabInMain = await within(mainRendered.container).findByRole('tab', {
+      name: /config\.json/
+    })
+    const dtConfig = createCrossWindowDataTransfer()
+    fireEvent.dragStart(configTabInMain, { dataTransfer: dtConfig })
+    fireEvent.drop(
+      within(auxSoleRendered.container).getByRole('tablist', { name: '주 탭 목록' }),
+      { dataTransfer: dtConfig }
+    )
+    await waitFor(() => {
+      expect(
+        within(auxSoleRendered.container).getByRole('tab', { name: /config\.json/ })
+      ).toBeInTheDocument()
+      expect(
+        within(mainRendered.container).queryByRole('tab', { name: /config\.json/ })
+      ).not.toBeInTheDocument()
+    })
+
+    // Make sole.md dirty AND config.json invalid JSON inside Aux2
+    await user.click(within(auxSoleRendered.container).getByRole('tab', { name: /sole\.md/ }))
+    setRawEditorText(await within(auxSoleRendered.container).findByTestId('document-editor'), '# Saved Sole')
+    await user.click(within(auxSoleRendered.container).getByRole('tab', { name: /config\.json/ }))
+    setRawEditorText(await within(auxSoleRendered.container).findByTestId('document-editor'), '{invalid json')
+    await waitFor(() => {
+      expect(within(auxSoleRendered.container).getAllByTestId('tab-dirty-indicator')).toHaveLength(2)
+    })
+
+    // First X click -> ConfirmDialog in Aux2; Cancel keeps Aux2 open
+    act(() => {
+      auxSole.requestClose()
+    })
+    const auxDialog = await within(auxSoleRendered.container).findByRole('alertdialog')
+    await user.click(within(auxDialog).getByRole('button', { name: '취소' }))
+    expect(within(auxSoleRendered.container).queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(auxSole.isClosed()).toBe(false)
+
+    // Second X click -> Save & Close fails on invalid JSON config -> aborts close and shows error banner
+    act(() => {
+      auxSole.requestClose()
+    })
+    const saveRetryDialog = await within(auxSoleRendered.container).findByRole('alertdialog')
+    await user.click(within(saveRetryDialog).getByRole('button', { name: '저장 후 닫기' }))
+
+    expect(await within(auxSoleRendered.container).findByRole('alert')).toBeInTheDocument()
+    expect(auxSole.isClosed()).toBe(false)
+    expect(harness.getFilesSnapshot().get('C:/wiki/docs/sole.md')).toBe('# Saved Sole')
+
+    // Fix config.json -> Save & Close persists config and closes Aux2
+    const validRaw = JSON.stringify(
+      { ...(await mainWin.api.config.get()), autoSave: false, theme: 'dark' },
+      null,
+      2
+    )
+    setRawEditorText(await within(auxSoleRendered.container).findByTestId('document-editor'), validRaw)
+    act(() => {
+      auxSole.requestClose()
+    })
+    const finalDialog = await within(auxSoleRendered.container).findByRole('alertdialog')
+    await user.click(within(finalDialog).getByRole('button', { name: '저장 후 닫기' }))
+
+    await waitFor(() => {
+      expect(auxSole.isClosed()).toBe(true)
+    })
+    expect((await mainWin.api.config.get()).theme).toBe('dark')
+  })
+
+  it('guards main window X close across main and all auxiliary windows, saves/discards cleanly, aborts on error, and closes auxiliary windows without individual prompts', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'main.md': '# Main Clean',
+            'aux-a.md': '# Aux A Initial'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    activeDisposers.push(() => mainRendered.unmount())
+
+    await openFolderAndNoteInWindow(user, mainRendered.container, mainWin.emitMenuCommand, 'main.md')
+    const sidebar = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('aux-a.md'))
+    await detachTabViaContextMenu(user, mainRendered.container, /aux-a\.md/)
+
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'toggle-settings')
+    await user.click(
+      await within(mainRendered.container).findByRole('button', { name: '설정 파일 직접 열기' })
+    )
+    await detachTabViaContextMenu(user, mainRendered.container, /config\.json/)
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+    })
+    const [auxA, auxConfig] = harness.getAuxiliaryWindows()
+    const auxARendered = render(<App wikiApi={auxA.api} />)
+    const auxConfigRendered = render(<App wikiApi={auxConfig.api} />)
+    activeDisposers.push(() => auxARendered.unmount(), () => auxConfigRendered.unmount())
+
+    // Dirty aux-a.md and invalid config.json in auxConfig while main.md stays clean
+    setRawEditorText(await within(auxARendered.container).findByTestId('document-editor'), '# Aux A Saved')
+    setRawEditorText(await within(auxConfigRendered.container).findByTestId('document-editor'), '{broken config')
+
+    await waitFor(() => {
+      expect(within(auxARendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+      expect(within(auxConfigRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+
+    // Main X close -> ConfirmDialog shown ONLY in Main, never in Aux1 or Aux2
+    act(() => {
+      mainWin.requestClose()
+    })
+    const mainDialog = await within(mainRendered.container).findByRole('alertdialog')
+    expect(within(mainDialog).getByText(/aux-a\.md 외 1개/)).toBeInTheDocument()
+    expect(within(auxARendered.container).queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(within(auxConfigRendered.container).queryByRole('alertdialog')).not.toBeInTheDocument()
+
+    // Cancel keeps all 3 windows open
+    await user.click(within(mainDialog).getByRole('button', { name: '취소' }))
+    expect(mainWin.isClosed()).toBe(false)
+    expect(auxA.isClosed()).toBe(false)
+    expect(auxConfig.isClosed()).toBe(false)
+
+    // Save & Close fails due to invalid JSON in auxConfig -> Main shows error banner and aborts all closes
+    act(() => {
+      mainWin.requestClose()
+    })
+    const saveFailDialog = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(saveFailDialog).getByRole('button', { name: '저장 후 닫기' }))
+    expect(await within(mainRendered.container).findByRole('alert')).toBeInTheDocument()
+    expect(mainWin.isClosed()).toBe(false)
+    expect(auxA.isClosed()).toBe(false)
+    expect(auxConfig.isClosed()).toBe(false)
+
+    // Fix config.json in auxConfig -> Main Save & Close persists and closes all 3 without aux prompts
+    const validRaw = JSON.stringify(
+      { ...(await mainWin.api.config.get()), autoSave: false, theme: 'dark' },
+      null,
+      2
+    )
+    setRawEditorText(await within(auxConfigRendered.container).findByTestId('document-editor'), validRaw)
+    act(() => {
+      mainWin.requestClose()
+    })
+    const confirmSaveDialog = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(confirmSaveDialog).getByRole('button', { name: '저장 후 닫기' }))
+
+    await waitFor(() => {
+      expect(auxA.isClosed()).toBe(true)
+      expect(auxConfig.isClosed()).toBe(true)
+      expect(mainWin.isClosed()).toBe(true)
+    })
+    expect(within(auxARendered.container).queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(within(auxConfigRendered.container).queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(harness.getFilesSnapshot().get('C:/wiki/docs/aux-a.md')).toBe('# Aux A Saved')
+  })
+
+  it('closes auxiliary windows with main on discard/clean close and handles cross-window workspace switching cleanup preserving config.json windows', async () => {
+    const user = userEvent.setup()
+    let folderToSelect = 'C:\\wiki\\ws1'
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\ws1',
+        workspaces: {
+          'C:\\wiki\\ws1': {
+            'one.md': '# One Initial',
+            'aux-ws.md': '# Aux WS Initial'
+          },
+          'C:\\wiki\\ws2': {
+            'two.md': '# Workspace Two'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    mainWin.api.workspace.selectFolder = async () => folderToSelect
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    activeDisposers.push(() => mainRendered.unmount())
+
+    // Open ws1 files in Main, detach aux-ws.md to Aux1 and config.json to Aux2
+    await openFolderAndNoteInWindow(user, mainRendered.container, mainWin.emitMenuCommand, 'one.md')
+    const sidebar = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('aux-ws.md'))
+    await detachTabViaContextMenu(user, mainRendered.container, /aux-ws\.md/)
+
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'toggle-settings')
+    await user.click(
+      await within(mainRendered.container).findByRole('button', { name: '설정 파일 직접 열기' })
+    )
+    await detachTabViaContextMenu(user, mainRendered.container, /config\.json/)
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+    })
+    const [auxWs, auxConfig] = harness.getAuxiliaryWindows()
+    const auxWsRendered = render(<App wikiApi={auxWs.api} />)
+    const auxConfigRendered = render(<App wikiApi={auxConfig.api} />)
+    activeDisposers.push(() => auxWsRendered.unmount(), () => auxConfigRendered.unmount())
+
+    // Edit aux-ws.md and config.json dirty while Main's one.md stays clean
+    setRawEditorText(await within(auxWsRendered.container).findByTestId('document-editor'), '# Aux WS Saved')
+    setRawEditorText(
+      await within(auxConfigRendered.container).findByTestId('document-editor'),
+      '{"autoSave":false,"theme":"dark"}'
+    )
+    await waitFor(() => {
+      expect(within(auxWsRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+      expect(within(auxConfigRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+
+    // Switch workspace to ws2 -> Main prompts for aux-ws.md (ignores config.json)
+    folderToSelect = 'C:\\wiki\\ws2'
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+    const switchDialog = await within(mainRendered.container).findByRole('alertdialog')
+    expect(within(switchDialog).getByText(/aux-ws\.md/)).toBeInTheDocument()
+    expect(within(switchDialog).queryByText(/config\.json/)).not.toBeInTheDocument()
+
+    await user.click(within(switchDialog).getByRole('button', { name: '저장 후 이동' }))
+
+    // Verify aux-ws.md saved, ws2 opened, auxWs auto-closed cleanly without close guard, while auxConfig stays open
+    await waitFor(() => {
+      expect(within(mainRendered.container).getByText('two.md')).toBeInTheDocument()
+      expect(within(mainRendered.container).queryByRole('tab', { name: /one\.md/ })).not.toBeInTheDocument()
+      expect(auxWs.isClosed()).toBe(true)
+    })
+    expect(harness.getFilesSnapshot().get('C:/wiki/ws1/aux-ws.md')).toBe('# Aux WS Saved')
+    expect(auxConfig.isClosed()).toBe(false)
+    expect(
+      within(auxConfigRendered.container).getByRole('tab', { name: /config\.json/ })
+    ).toBeInTheDocument()
+    expect(within(auxConfigRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    // Main X -> 버리고 닫기 discards dirty config.json in auxConfig and closes both windows without aux prompt
+    act(() => {
+      mainWin.requestClose()
+    })
+    const discardDialog = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(discardDialog).getByRole('button', { name: '버리고 닫기' }))
+    await waitFor(() => {
+      expect(auxConfig.isClosed()).toBe(true)
+      expect(mainWin.isClosed()).toBe(true)
+    })
+    expect(within(auxConfigRendered.container).queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
 })

@@ -1,5 +1,6 @@
 import type { BrowserWindowConstructorOptions } from 'electron'
 import type { SharedBufferHubEvent } from '@shared/documentBuffer'
+import { WINDOW_IPC_CHANNELS } from '@shared/ipc'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
   TabDragCoordinator,
@@ -39,6 +40,10 @@ export interface WindowWebContentsLike extends BufferWebContentsLike {
   ) => void
 }
 
+export interface WindowCloseEventLike {
+  preventDefault(): void
+}
+
 export interface BrowserWindowLike {
   id: number
   webContents: WindowWebContentsLike
@@ -48,6 +53,8 @@ export interface BrowserWindowLike {
   show(): void
   close(): void
   isDestroyed(): boolean
+  on?(eventName: 'close', listener: (event: WindowCloseEventLike) => void): void
+  removeListener?(eventName: 'close', listener: (event: WindowCloseEventLike) => void): void
   once(eventName: 'ready-to-show' | 'closed', listener: () => void): void
   loadURL(url: string): Promise<void> | void
   loadFile(filePath: string, options?: { query?: Record<string, string> }): Promise<void> | void
@@ -69,7 +76,8 @@ interface WindowRecord {
   initialTabs: TabTransferPayload[]
   hasSyncedNonEmptyTabs: boolean
   closing: boolean
-  cleanupBeforeInput?: () => void
+  closePromptPending: boolean
+  cleanupListeners?: () => void
 }
 
 function getNumericSenderId(sender: unknown): number | undefined {
@@ -147,7 +155,8 @@ export class WindowManager {
       window: win,
       initialTabs: clonedTabs,
       hasSyncedNonEmptyTabs: false,
-      closing: false
+      closing: false,
+      closePromptPending: false
     }
 
     this.windowsByWebContentsId.set(webContentsId, record)
@@ -170,18 +179,24 @@ export class WindowManager {
     const handleBeforeInput = (_event: unknown, input: BeforeInputKeyEventLike): void => {
       this.dragCoordinator.handleBeforeInput(input)
     }
+    const handleWindowClose = (event: WindowCloseEventLike): void => {
+      this.handleWindowClose(record, event)
+    }
     win.webContents.on?.('before-input-event', handleBeforeInput)
-    record.cleanupBeforeInput = () => {
+    win.on?.('close', handleWindowClose)
+    record.cleanupListeners = () => {
       win.webContents.removeListener?.('before-input-event', handleBeforeInput)
-      record.cleanupBeforeInput = undefined
+      win.removeListener?.('close', handleWindowClose)
+      record.cleanupListeners = undefined
     }
 
     win.once('closed', () => {
-      record.cleanupBeforeInput?.()
+      record.cleanupListeners?.()
       this.dragCoordinator.clearForWindow(webContentsId)
       this.windowsByWebContentsId.delete(webContentsId)
       if (this.mainWebContentsId === webContentsId) {
         this.mainWebContentsId = null
+        this.closeAllAuxiliaryWindows()
       }
     })
 
@@ -364,8 +379,44 @@ export class WindowManager {
     }
   }
 
+  private hasCloseGuardDirtyBuffers(record: WindowRecord): boolean {
+    return record.role === 'main'
+      ? this.bufferHub.hasAnyDirtyBuffer()
+      : this.bufferHub.getDirtyBuffersLostOnWindowClose(record.webContentsId).length > 0
+  }
+
+  private handleWindowClose(record: WindowRecord, event: WindowCloseEventLike): void {
+    if (this.disposed || record.closing) return
+    if (record.closePromptPending) {
+      event.preventDefault()
+      return
+    }
+    if (!this.hasCloseGuardDirtyBuffers(record)) {
+      if (record.role === 'main') {
+        record.closing = true
+        this.closeAllAuxiliaryWindows()
+      }
+      return
+    }
+
+    event.preventDefault()
+    record.closePromptPending = true
+    if (!record.window.webContents.isDestroyed()) {
+      record.window.webContents.send(WINDOW_IPC_CHANNELS.closeRequested, undefined)
+    }
+  }
+
+  private closeAllAuxiliaryWindows(): void {
+    for (const candidate of [...this.windowsByWebContentsId.values()]) {
+      if (candidate.role === 'auxiliary') {
+        this.closeRecord(candidate)
+      }
+    }
+  }
+
   private closeRecord(record: WindowRecord): void {
     if (record.closing || record.window.isDestroyed()) return
+    record.closePromptPending = false
     record.closing = true
     record.window.close()
   }
@@ -373,6 +424,17 @@ export class WindowManager {
   closeCurrentWindow(sender: unknown): void {
     const record = this.resolveRecordFromSender(sender)
     if (!record || record.role !== 'auxiliary') return
+    this.closeRecord(record)
+  }
+
+  resolveCloseRequest(sender: unknown, approved: boolean): void {
+    const record = this.resolveRecordFromSender(sender)
+    if (!record || record.window.isDestroyed() || !record.closePromptPending) return
+    record.closePromptPending = false
+    if (!approved) return
+    if (record.role === 'main') {
+      this.closeAllAuxiliaryWindows()
+    }
     this.closeRecord(record)
   }
 
@@ -455,7 +517,7 @@ export class WindowManager {
     this.disposed = true
     this.unsubscribeHub()
     for (const record of this.windowsByWebContentsId.values()) {
-      record.cleanupBeforeInput?.()
+      record.cleanupListeners?.()
     }
     this.dragCoordinator.dispose()
     this.windowsByWebContentsId.clear()

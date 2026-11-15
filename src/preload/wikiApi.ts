@@ -204,6 +204,8 @@ export function createWikiApi(
         ipcRenderer.invoke(
           BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk
         ) as Promise<ReconcileBuffersResult>,
+      clearWorkspaceBuffers: () =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.clearWorkspaceBuffers) as Promise<string[]>,
       onEvent: (listener) =>
         subscribeChannel<SharedBufferHubEvent>(ipcRenderer, BUFFER_IPC_CHANNELS.event, listener)
     },
@@ -240,7 +242,13 @@ export function createWikiApi(
           WINDOW_IPC_CHANNELS.dragStateChanged,
           listener
         ),
-      closeCurrent: () => ipcRenderer.invoke(WINDOW_IPC_CHANNELS.closeCurrent) as Promise<void>
+      closeCurrent: () => ipcRenderer.invoke(WINDOW_IPC_CHANNELS.closeCurrent) as Promise<void>,
+      onCloseRequested: (listener) =>
+        subscribeChannel<unknown>(ipcRenderer, WINDOW_IPC_CHANNELS.closeRequested, () =>
+          listener()
+        ),
+      resolveCloseRequest: (approved) =>
+        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.resolveCloseRequest, approved) as Promise<void>
     },
     log: {
       write: (payload) => ipcRenderer.invoke(LOG_IPC_CHANNELS.write, payload) as Promise<void>

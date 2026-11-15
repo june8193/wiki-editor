@@ -233,6 +233,7 @@ describe('createWikiApi', () => {
     await api.buffer.syncRenamedPath('C:\\wiki\\note.md', 'C:\\wiki\\renamed.md')
     await api.buffer.syncDeletedPath('C:\\wiki\\renamed.md')
     await api.buffer.reconcileWorkspaceBuffersWithDisk()
+    await api.buffer.clearWorkspaceBuffers()
 
     expect(ipc.lastInvoked).toEqual([
       { channel: BUFFER_IPC_CHANNELS.getSnapshot, args: [] },
@@ -251,7 +252,8 @@ describe('createWikiApi', () => {
         args: ['C:\\wiki\\note.md', 'C:\\wiki\\renamed.md']
       },
       { channel: BUFFER_IPC_CHANNELS.syncDeletedPath, args: ['C:\\wiki\\renamed.md'] },
-      { channel: BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk, args: [] }
+      { channel: BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk, args: [] },
+      { channel: BUFFER_IPC_CHANNELS.clearWorkspaceBuffers, args: [] }
     ])
 
     const received: SharedBufferHubEvent[] = []
@@ -300,6 +302,17 @@ describe('createWikiApi', () => {
       payload: transferPayload
     })
     await auxApi.window.closeCurrent()
+    await auxApi.window.resolveCloseRequest(false)
+
+    let closeRequestCount = 0
+    const unsubscribeCloseRequested = auxApi.window.onCloseRequested(() => {
+      closeRequestCount += 1
+    })
+    expect(auxIpc.listenerCount(WINDOW_IPC_CHANNELS.closeRequested)).toBe(1)
+    auxIpc.emit(WINDOW_IPC_CHANNELS.closeRequested, undefined)
+    expect(closeRequestCount).toBe(1)
+    unsubscribeCloseRequested()
+    expect(auxIpc.listenerCount(WINDOW_IPC_CHANNELS.closeRequested)).toBe(0)
 
     const dragEvents: Array<ActiveTabDragSession | null> = []
     const unsubscribeDrag = auxApi.window.onTabDragStateChanged((session) => {
@@ -345,7 +358,8 @@ describe('createWikiApi', () => {
           }
         ]
       },
-      { channel: WINDOW_IPC_CHANNELS.closeCurrent, args: [] }
+      { channel: WINDOW_IPC_CHANNELS.closeCurrent, args: [] },
+      { channel: WINDOW_IPC_CHANNELS.resolveCloseRequest, args: [false] }
     ])
   })
 })

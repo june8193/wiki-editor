@@ -252,7 +252,9 @@ describe('RendererBufferSyncClient race guards', () => {
       acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
       endTabDrag: async () => ({ detached: false, outcome: 'cancelled' }),
       onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined
+      closeCurrent: async () => undefined,
+      onCloseRequested: () => () => undefined,
+      resolveCloseRequest: async () => undefined
     }
     const { hub, bufferApi, bufferStore, tabStore, client, onError } = createHubClientHarness(
       1,
@@ -404,6 +406,200 @@ describe('RendererBufferSyncClient race guards', () => {
 
       expect(win2.tabStore.getBufferKeys()).toEqual([])
       expect(win2.bufferStore.hasBuffer('c:/wiki/doomed.md')).toBe(false)
+    } finally {
+      stop1()
+      stop2()
+      win1.detach()
+      win2.detach()
+      hub.dispose()
+    }
+  })
+
+  it('aggregates dirty workspace buffers across windows, saves them on switch, clears remote workspace tabs, and keeps config.json open', async () => {
+    const files = new Map<string, string>([
+      ['C:/wiki/main.md', '# Main'],
+      ['C:/wiki/aux-only.md', '# Aux Only']
+    ])
+    let failWriteForAux = true
+    let savedConfigRaw = '{}'
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async (filePath) => files.get(filePath) ?? '',
+        writeWorkspaceFile: async (filePath, content) => {
+          if (failWriteForAux && filePath.includes('aux-only.md')) {
+            throw new Error('Disk write error')
+          }
+          files.set(filePath, content)
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => savedConfigRaw,
+        saveConfigRaw: async (raw) => {
+          savedConfigRaw = raw
+          return JSON.parse(raw)
+        }
+      }
+    })
+
+    const win1 = attachWindowClient(hub, 1)
+    const win2 = attachWindowClient(hub, 2)
+    const stop1 = win1.client.start()
+    const stop2 = win2.client.start()
+
+    try {
+      // Win1 opens only config.json (no workspace tabs!) and marks config dirty
+      await win1.client.openConfigDocument()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      const configKey = win1.tabStore.getBufferKeys()[0]
+      win1.client.updateBufferContent(configKey, '{"autoSave":false,"theme":"dark"}')
+
+      // Win2 opens aux-only.md and edits it dirty
+      await win2.client.openWorkspaceFile({
+        name: 'aux-only.md',
+        path: 'C:/wiki/aux-only.md',
+        relativePath: 'aux-only.md',
+        kind: 'file'
+      })
+      win2.client.updateBufferContent('c:/wiki/aux-only.md', '# Aux Dirty Edit')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      // Workspace summary from Win1 must see aux-only.md and ignore dirty config.json
+      expect(win1.client.getDirtyWorkspaceSummary()).toBe('aux-only.md')
+
+      // Failed save returns false and reports error in Win1
+      expect(await win1.client.ensureAllWorkspaceBuffersSaved()).toBe(false)
+      expect(win1.onError).toHaveBeenCalledWith('Disk write error', expect.any(Error))
+
+      // Retry succeeds, saves aux-only.md without touching config.json
+      failWriteForAux = false
+      expect(await win1.client.ensureAllWorkspaceBuffersSaved()).toBe(true)
+      expect(files.get('C:/wiki/aux-only.md')).toBe('# Aux Dirty Edit')
+      expect(win1.client.getDirtyWorkspaceSummary()).toBeNull()
+      expect(win1.bufferStore.getBuffer(configKey)?.isDirty).toBe(true)
+
+      // clearWorkspaceBuffers clears workspace buffers across Win2 even when Win1 holds only config.json
+      win1.client.clearWorkspaceBuffers()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(win2.tabStore.getBufferKeys()).toEqual([])
+      expect(hub.getSnapshot().buffers['c:/wiki/aux-only.md']).toBeUndefined()
+      expect(win1.tabStore.getBufferKeys()).toEqual([configKey])
+    } finally {
+      stop1()
+      stop2()
+      win1.detach()
+      win2.detach()
+      hub.dispose()
+    }
+  })
+
+  it('scopes close dirty checks exclusively for auxiliary windows and globally for main windows', async () => {
+    const files = new Map<string, string>([
+      ['C:/wiki/shared.md', '# Shared'],
+      ['C:/wiki/aux-sole.md', '# Aux Sole'],
+      ['C:/wiki/main-clean.md', '# Main Clean']
+    ])
+    let failConfigSave = true
+    let savedConfigRaw = '{"autoSave":false}'
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async (filePath) => files.get(filePath) ?? '',
+        writeWorkspaceFile: async (filePath, content) => {
+          files.set(filePath, content)
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => savedConfigRaw,
+        saveConfigRaw: async (raw) => {
+          if (failConfigSave) {
+            throw new Error('Config write failure')
+          }
+          savedConfigRaw = raw
+          return JSON.parse(raw)
+        }
+      }
+    })
+
+    const createWindowApi = (role: 'main' | 'auxiliary'): WikiWindowApi => ({
+      role,
+      getInitContext: async () => ({ role, initialTabs: [] }),
+      detachTabToNewWindow: async () => ({ windowId: 99 }),
+      startTabDrag: async (input) => ({
+        dragSessionId: 'drag-1',
+        sourceWindowId: 1,
+        paneId: input.paneId,
+        tabId: input.tabId,
+        payload: input.payload,
+        outcome: 'pending'
+      }),
+      updateTabDragOutcome: async () => null,
+      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
+      endTabDrag: async () => ({ detached: false, outcome: 'cancelled' }),
+      onTabDragStateChanged: () => () => undefined,
+      closeCurrent: async () => undefined,
+      onCloseRequested: () => () => undefined,
+      resolveCloseRequest: async () => undefined
+    })
+
+    const win1 = attachWindowClient(hub, 1, createWindowApi('main'))
+    const win2 = attachWindowClient(hub, 2, createWindowApi('auxiliary'))
+    const stop1 = win1.client.start()
+    const stop2 = win2.client.start()
+
+    try {
+      await win1.client.openWorkspaceFile({
+        name: 'main-clean.md',
+        path: 'C:/wiki/main-clean.md',
+        relativePath: 'main-clean.md',
+        kind: 'file'
+      })
+      await win1.client.openWorkspaceFile({
+        name: 'shared.md',
+        path: 'C:/wiki/shared.md',
+        relativePath: 'shared.md',
+        kind: 'file'
+      })
+      win1.client.syncWindowTabs(win1.tabStore.getBufferKeys())
+
+      await win2.client.openWorkspaceFile({
+        name: 'shared.md',
+        path: 'C:/wiki/shared.md',
+        relativePath: 'shared.md',
+        kind: 'file'
+      })
+      await win2.client.openWorkspaceFile({
+        name: 'aux-sole.md',
+        path: 'C:/wiki/aux-sole.md',
+        relativePath: 'aux-sole.md',
+        kind: 'file'
+      })
+      await win2.client.openConfigDocument()
+      win2.client.syncWindowTabs(win2.tabStore.getBufferKeys())
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      const configKey = win2.tabStore.getBufferKeys().find((key) => key.endsWith('config.json'))!
+      // Shared dirty buffer open in both Main & Aux does NOT make Aux close prompt
+      win2.client.updateBufferContent('c:/wiki/shared.md', '# Shared Dirty')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(win2.client.getDirtyCloseSummary()).toBeNull()
+      // Main still sees global dirty shared.md
+      expect(win1.client.getDirtyCloseSummary()).toBe('shared.md')
+
+      // Aux sole dirty config.json triggers Aux close prompt AND Main close prompt
+      win2.client.updateBufferContent(configKey, '{"autoSave":false,"theme":"dark"}')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(win2.client.getDirtyCloseSummary()).toBe('config.json')
+      expect(win1.client.getDirtyCloseSummary()).toBe('shared.md 외 1개')
+
+      // Saving from Main saves shared.md cleanly, fails on config.json -> surfaces error on Main
+      expect(await win1.client.ensureCloseBuffersSaved()).toBe(false)
+      expect(files.get('C:/wiki/shared.md')).toBe('# Shared Dirty')
+      expect(win1.onError).toHaveBeenCalledWith('Config write failure', expect.any(Error))
+
+      failConfigSave = false
+      expect(await win1.client.ensureCloseBuffersSaved()).toBe(true)
+      expect(savedConfigRaw).toBe('{"autoSave":false,"theme":"dark"}')
+      expect(win1.client.getDirtyCloseSummary()).toBeNull()
+      expect(win2.client.getDirtyCloseSummary()).toBeNull()
     } finally {
       stop1()
       stop2()

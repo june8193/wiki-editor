@@ -5,6 +5,7 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
 import { useWikiApi } from '../hooks/useWikiApi'
+import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 
 /**
@@ -15,7 +16,7 @@ import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 export function AuxiliaryAppShell() {
   const wikiApi = useWikiApi()
   const { errorMessage, reportErrorBanner } = useErrorBanner()
-  const { pendingDialog, dismissDialog, confirmCloseDirtyTab } = useConfirmDialog()
+  const { pendingDialog, setPendingDialog, dismissDialog, confirmCloseDirtyTab } = useConfirmDialog()
   const { config, toggleShowHeadingNumbers } = useConfigController({
     onError: reportErrorBanner
   })
@@ -25,6 +26,13 @@ export function AuxiliaryAppShell() {
     isShortcutDisabled: isDialogOpen,
     onError: reportErrorBanner,
     onConfirmCloseDirtyTab: confirmCloseDirtyTab
+  })
+
+  useWindowCloseGuard({
+    wikiApi,
+    getDirtySummary: editor.getDirtyCloseSummary,
+    saveDirtyBuffers: editor.ensureCloseBuffersSaved,
+    setPendingDialog
   })
 
   useEffect(() => {

@@ -83,6 +83,12 @@ export function registerWindowIpc({
       (event) => {
         windowManager.closeCurrentWindow(resolveSenderWebContents(event))
       }
+    ],
+    [
+      WINDOW_IPC_CHANNELS.resolveCloseRequest,
+      (event, approved) => {
+        windowManager.resolveCloseRequest(resolveSenderWebContents(event), Boolean(approved))
+      }
     ]
   ]
 

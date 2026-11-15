@@ -100,7 +100,9 @@ describe('RendererTabDragController', () => {
         return { detached: false, outcome: 'cancelled' } satisfies TabDragEndResult
       },
       onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined
+      closeCurrent: async () => undefined,
+      onCloseRequested: () => () => undefined,
+      resolveCloseRequest: async () => undefined
     }
 
     const { tabStore, syncClient, controller, start } = createDragControllerHarness(windowApi)
@@ -168,7 +170,9 @@ describe('RendererTabDragController', () => {
         return { detached: true, windowId: 2 }
       },
       onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined
+      closeCurrent: async () => undefined,
+      onCloseRequested: () => () => undefined,
+      resolveCloseRequest: async () => undefined
     }
 
     const { hub, bufferApi, tabStore, syncClient, controller, start } =
@@ -231,7 +235,9 @@ describe('RendererTabDragController', () => {
         return { detached: false, outcome: 'cancelled' }
       },
       onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined
+      closeCurrent: async () => undefined,
+      onCloseRequested: () => () => undefined,
+      resolveCloseRequest: async () => undefined
     }
 
     const { bufferApi, tabStore, syncClient, controller, onError, start } =
@@ -293,7 +299,9 @@ describe('RendererTabDragController', () => {
         return { detached: false, outcome: 'dropped-in-window' }
       },
       onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined
+      closeCurrent: async () => undefined,
+      onCloseRequested: () => () => undefined,
+      resolveCloseRequest: async () => undefined
     }
 
     const { tabStore, syncClient, controller, start } = createDragControllerHarness(windowApi)
@@ -363,7 +371,9 @@ describe('RendererTabDragController', () => {
         dragListeners.add(listener)
         return () => dragListeners.delete(listener)
       },
-      closeCurrent: async () => undefined
+      closeCurrent: async () => undefined,
+      onCloseRequested: () => () => undefined,
+      resolveCloseRequest: async () => undefined
     }
 
     const { hub, tabStore, syncClient, controller, start } =

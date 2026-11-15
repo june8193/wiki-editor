@@ -52,7 +52,8 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
     let closedCount = 0
     const windowListeners = {
       'ready-to-show': [] as Array<() => void>,
-      closed: [] as Array<() => void>
+      closed: [] as Array<() => void>,
+      close: new Set<(event: { preventDefault: () => void }) => void>()
     }
     const webContentsDestroyedListeners: Array<() => void> = []
     const beforeInputListeners = new Set<
@@ -76,6 +77,22 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
       }
       for (const listener of windowListeners.closed.splice(0)) {
         listener()
+      }
+    }
+
+    const fireCloseAndDestroyIfAllowed = () => {
+      if (destroyed) return
+      let prevented = false
+      const event = {
+        preventDefault: () => {
+          prevented = true
+        }
+      }
+      for (const listener of [...windowListeners.close]) {
+        listener(event)
+      }
+      if (!prevented) {
+        destroyWindow()
       }
     }
 
@@ -129,9 +146,22 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
       },
       close: () => {
         closedCount += 1
-        destroyWindow()
+        fireCloseAndDestroyIfAllowed()
       },
       isDestroyed: () => destroyed,
+      on: (eventName: 'close', listener: (event: { preventDefault: () => void }) => void) => {
+        if (eventName === 'close') {
+          windowListeners.close.add(listener)
+        }
+      },
+      removeListener: (
+        eventName: 'close',
+        listener: (event: { preventDefault: () => void }) => void
+      ) => {
+        if (eventName === 'close') {
+          windowListeners.close.delete(listener)
+        }
+      },
       once: (eventName: 'ready-to-show' | 'closed', listener: () => void) => {
         windowListeners[eventName].push(listener)
       },
@@ -153,7 +183,7 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
       },
       getBeforeInputListenerCount: () => beforeInputListeners.size,
       simulateUserClose: () => {
-        destroyWindow()
+        fireCloseAndDestroyIfAllowed()
       }
     }
 
@@ -1203,5 +1233,271 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       accepted: false,
       reason: 'no-active-drag'
     })
+  })
+
+  it('guards auxiliary X close only when closing drops last tab reference to a dirty workspace/config buffer, while bypassing guard on programmatic auto-close', async () => {
+    await writeFile(join(workspaceDir, 'shared.md'), '# Shared', 'utf-8')
+    await writeFile(join(workspaceDir, 'exclusive.md'), '# Exclusive', 'utf-8')
+
+    const mainWin = windowManager.createMainWindow() as FakeWindowInstance
+    await ipcHarness.invokeFrom(mainWin.webContents, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+
+    const sharedBuf = (await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(workspaceDir, 'shared.md')
+    )) as DocumentBuffer
+    const exclusiveBuf = (await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(workspaceDir, 'exclusive.md')
+    )) as DocumentBuffer
+    const configBuf = (await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      BUFFER_IPC_CHANNELS.openConfigDocument
+    )) as DocumentBuffer
+
+    await ipcHarness.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      sharedBuf.key,
+      exclusiveBuf.key,
+      configBuf.key
+    ])
+
+    // Detach sharedBuf to aux1 while keeping a second tab of sharedBuf open in Main
+    await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: sharedBuf.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const auxShared = createdWindows[1]
+    await ipcHarness.invokeFrom(auxShared.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      sharedBuf.key
+    ])
+    await ipcHarness.invokeFrom(
+      auxShared.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      sharedBuf.key,
+      '# Shared dirty'
+    )
+
+    // auxShared shares dirty sharedBuf with Main -> X closes immediately without prompt
+    auxShared.sentMessages.length = 0
+    auxShared.simulateUserClose()
+    expect(auxShared.isDestroyed()).toBe(true)
+    expect(
+      auxShared.sentMessages.some((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toBe(false)
+
+    // Detach exclusive workspace file + config.json to auxExclusive (now sole reference)
+    await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: exclusiveBuf.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const auxExclusive = createdWindows[2]
+    await ipcHarness.invokeFrom(auxExclusive.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      exclusiveBuf.key,
+      configBuf.key
+    ])
+    await ipcHarness.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      sharedBuf.key
+    ])
+    await ipcHarness.invokeFrom(
+      auxExclusive.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      configBuf.key,
+      '{"autoSave":false,"theme":"dark"}'
+    )
+
+    // Aux holding sole dirty config.json reference intercepts X and prompts
+    auxExclusive.sentMessages.length = 0
+    mainWin.sentMessages.length = 0
+    auxExclusive.simulateUserClose()
+    expect(auxExclusive.isDestroyed()).toBe(false)
+    expect(
+      auxExclusive.sentMessages.filter((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toHaveLength(1)
+    expect(
+      mainWin.sentMessages.some((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toBe(false)
+
+    // Duplicate X click while prompt pending does not emit duplicate prompt
+    auxExclusive.simulateUserClose()
+    expect(
+      auxExclusive.sentMessages.filter((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toHaveLength(1)
+
+    // Cancelling keeps aux open, and subsequent X re-prompts
+    await ipcHarness.invokeFrom(
+      auxExclusive.webContents,
+      WINDOW_IPC_CHANNELS.resolveCloseRequest,
+      false
+    )
+    expect(auxExclusive.isDestroyed()).toBe(false)
+    auxExclusive.simulateUserClose()
+    expect(
+      auxExclusive.sentMessages.filter((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toHaveLength(2)
+
+    // Approving closes aux
+    await ipcHarness.invokeFrom(
+      auxExclusive.webContents,
+      WINDOW_IPC_CHANNELS.resolveCloseRequest,
+      true
+    )
+    expect(auxExclusive.isDestroyed()).toBe(true)
+
+    // Programmatic empty-tab auto-close bypasses close guard
+    await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(workspaceDir, 'exclusive.md')
+    )
+    await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: exclusiveBuf.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const auxProgrammatic = createdWindows[3]
+    await ipcHarness.invokeFrom(auxProgrammatic.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      exclusiveBuf.key
+    ])
+    await ipcHarness.invokeFrom(
+      auxProgrammatic.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      exclusiveBuf.key,
+      '# Dirty before programmatic auto-close'
+    )
+    await ipcHarness.invokeFrom(auxProgrammatic.webContents, WINDOW_IPC_CHANNELS.closeCurrent)
+    expect(auxProgrammatic.isDestroyed()).toBe(true)
+    expect(
+      auxProgrammatic.sentMessages.some((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toBe(false)
+  })
+
+  it('guards main window X close across main and all auxiliary buffers and closes all auxiliary windows together without per-auxiliary prompts', async () => {
+    await writeFile(join(workspaceDir, 'note-a.md'), '# Note A', 'utf-8')
+    await writeFile(join(workspaceDir, 'note-b.md'), '# Note B', 'utf-8')
+
+    const mainWin = windowManager.createMainWindow() as FakeWindowInstance
+    await ipcHarness.invokeFrom(mainWin.webContents, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+
+    const bufA = (await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(workspaceDir, 'note-a.md')
+    )) as DocumentBuffer
+    const bufB = (await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(workspaceDir, 'note-b.md')
+    )) as DocumentBuffer
+    const configBuf = (await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      BUFFER_IPC_CHANNELS.openConfigDocument
+    )) as DocumentBuffer
+
+    await ipcHarness.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      bufA.key,
+      bufB.key,
+      configBuf.key
+    ])
+
+    await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufB.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: configBuf.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux1 = createdWindows[1]
+    const aux2 = createdWindows[2]
+
+    await ipcHarness.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+    await ipcHarness.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufB.key])
+    await ipcHarness.invokeFrom(aux2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [configBuf.key])
+
+    // Dirty only in aux2 (config.json) -> Main X prompts ONLY in Main, never in Aux windows
+    await ipcHarness.invokeFrom(
+      aux2.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      configBuf.key,
+      '{"autoSave":false,"theme":"dark"}'
+    )
+    mainWin.sentMessages.length = 0
+    aux1.sentMessages.length = 0
+    aux2.sentMessages.length = 0
+
+    mainWin.simulateUserClose()
+    expect(mainWin.isDestroyed()).toBe(false)
+    expect(aux1.isDestroyed()).toBe(false)
+    expect(aux2.isDestroyed()).toBe(false)
+    expect(
+      mainWin.sentMessages.filter((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toHaveLength(1)
+    expect(
+      aux1.sentMessages.some((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toBe(false)
+    expect(
+      aux2.sentMessages.some((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toBe(false)
+
+    // Cancel keeps every window alive
+    await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.resolveCloseRequest, false)
+    expect(mainWin.isDestroyed()).toBe(false)
+    expect(aux1.isDestroyed()).toBe(false)
+    expect(aux2.isDestroyed()).toBe(false)
+
+    // Approve closes all auxiliary windows immediately WITHOUT aux prompts, then closes main
+    mainWin.simulateUserClose()
+    await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.resolveCloseRequest, true)
+    expect(aux1.isDestroyed()).toBe(true)
+    expect(aux2.isDestroyed()).toBe(true)
+    expect(mainWin.isDestroyed()).toBe(true)
+    expect(
+      aux1.sentMessages.some((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toBe(false)
+    expect(
+      aux2.sentMessages.some((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toBe(false)
+  })
+
+  it('closes all auxiliary windows together immediately when main window closes in clean state', async () => {
+    await writeFile(join(workspaceDir, 'clean.md'), '# Clean', 'utf-8')
+    const mainWin = windowManager.createMainWindow() as FakeWindowInstance
+    await ipcHarness.invokeFrom(mainWin.webContents, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+    const cleanBuf = (await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(workspaceDir, 'clean.md')
+    )) as DocumentBuffer
+    await ipcHarness.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      cleanBuf.key
+    ])
+    await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: cleanBuf.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const auxWin = createdWindows[1]
+    await ipcHarness.invokeFrom(auxWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      cleanBuf.key
+    ])
+
+    mainWin.simulateUserClose()
+    expect(auxWin.isDestroyed()).toBe(true)
+    expect(mainWin.isDestroyed()).toBe(true)
+    expect(
+      mainWin.sentMessages.some((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toBe(false)
   })
 })
