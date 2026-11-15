@@ -17,6 +17,7 @@ import { registerClipboardIpc } from './ipc/registerClipboardIpc'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerLogIpc } from './ipc/registerLogIpc'
+import { registerWindowIpc } from './ipc/registerWindowIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import type { AppEnvironmentInfo } from './logging/formatBugReport'
 import { createHelpMenuActions } from './logging/helpMenuActions'
@@ -24,12 +25,19 @@ import { LogService } from './logging/LogService'
 import { registerProcessLifecycleLogging } from './logging/processLifecycleLogging'
 import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
-import { createMainWindowOptions, registerWindowNavigationGuard } from './window'
+import {
+  createMainWindowOptions,
+  createWindowCloseCoordinator,
+  registerWindowNavigationGuard
+} from './window'
+
+const windowCloseCoordinator = createWindowCloseCoordinator()
 
 function createMainWindow(): BrowserWindow {
   const preloadPath = join(__dirname, '../preload/index.js')
   const mainWindow = new BrowserWindow(createMainWindowOptions(preloadPath))
   registerWindowNavigationGuard(mainWindow.webContents)
+  windowCloseCoordinator.guardWindow(mainWindow)
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
@@ -64,9 +72,13 @@ let disposeWorkspaceIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
 let disposeClipboardIpc: (() => void) | undefined
+let disposeWindowIpc: (() => void) | undefined
 let workspaceService: WorkspaceFsService | undefined
 
 function disposeMainResources(): void {
+  windowCloseCoordinator.dispose()
+  disposeWindowIpc?.()
+  disposeWindowIpc = undefined
   disposeClipboardIpc?.()
   disposeClipboardIpc = undefined
   disposeLogIpc?.()
@@ -116,6 +128,11 @@ void app.whenReady().then(async () => {
   disposeClipboardIpc = registerClipboardIpc({
     ipcMain,
     writeClipboardText: (text) => clipboard.writeText(text),
+    logService
+  })
+  disposeWindowIpc = registerWindowIpc({
+    ipcMain,
+    coordinator: windowCloseCoordinator,
     logService
   })
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)

@@ -75,6 +75,13 @@ export const CLIPBOARD_IPC_CHANNELS = {
   writeText: 'clipboard:write-text'
 } as const
 
+export const WINDOW_IPC_CHANNELS = {
+  closeRequested: 'window:close-requested',
+  closeResponse: 'window:close-response'
+} as const
+
+export type WindowCloseResponse = 'confirming' | 'close' | 'cancel'
+
 export interface WikiConfigApi {
   get(): Promise<AppConfig>
   update(patch: Partial<AppConfig>): Promise<AppConfig>
@@ -136,6 +143,11 @@ export interface WikiClipboardApi {
   writeText(text: string): Promise<void>
 }
 
+export interface WikiWindowApi {
+  onCloseRequested(listener: () => void): () => void
+  respondClose(response: WindowCloseResponse): Promise<void>
+}
+
 export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
@@ -143,4 +155,5 @@ export interface WikiApi {
   menu: WikiMenuApi
   log?: WikiLogApi
   clipboard?: WikiClipboardApi
+  window?: WikiWindowApi
 }

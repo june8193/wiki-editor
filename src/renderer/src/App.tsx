@@ -164,6 +164,11 @@ export function App() {
     }
   }, [])
   const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null)
+  const pendingDialogRef = useRef<PendingDialogState | null>(null)
+  pendingDialogRef.current = pendingDialog
+  const mountedRef = useRef<boolean>(true)
+  const isAppCloseFlowActiveRef = useRef<boolean>(false)
+  const handleAppCloseRequestedRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
   const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(async () => [])
@@ -231,8 +236,11 @@ export function App() {
     openCreatedFile,
     updateBufferContent,
     saveBufferByKey,
+    waitForInFlightSaves,
     ensureAllWorkspaceBuffersSaved,
+    ensureAllBuffersSaved,
     getDirtyWorkspaceSummary,
+    getDirtyDocumentSummary,
     requestCloseTab,
     forceCloseTab,
     saveAndCloseTab,
@@ -334,7 +342,9 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       pendingGitConfirmCancelRef.current?.()
     }
   }, [])
@@ -497,12 +507,66 @@ export function App() {
     'toggle-settings': () => setIsSettingsOpen((open) => !open)
   }
 
+  handleAppCloseRequestedRef.current = async (): Promise<void> => {
+    if (isAppCloseFlowActiveRef.current) {
+      return
+    }
+    isAppCloseFlowActiveRef.current = true
+    void window.wikiApi.window?.respondClose('confirming')
+
+    await waitForInFlightSaves()
+    if (!mountedRef.current) {
+      isAppCloseFlowActiveRef.current = false
+      return
+    }
+
+    const dirtySummary = getDirtyDocumentSummary()
+    if (!dirtySummary) {
+      isAppCloseFlowActiveRef.current = false
+      void window.wikiApi.window?.respondClose('close')
+      return
+    }
+
+    pendingDialogRef.current?.onCancel?.()
+    setPendingDialog({
+      title: '저장하지 않은 변경 사항',
+      message: `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. 저장하고 종료할까요?`,
+      confirmLabel: '저장 후 종료',
+      secondaryLabel: '버리고 종료',
+      onConfirm: async () => {
+        setPendingDialog(null)
+        const saved = await ensureAllBuffersSaved()
+        if (!mountedRef.current) {
+          isAppCloseFlowActiveRef.current = false
+          return
+        }
+        isAppCloseFlowActiveRef.current = false
+        void window.wikiApi.window?.respondClose(saved ? 'close' : 'cancel')
+      },
+      onSecondary: () => {
+        setPendingDialog(null)
+        isAppCloseFlowActiveRef.current = false
+        void window.wikiApi.window?.respondClose('close')
+      },
+      onCancel: () => {
+        isAppCloseFlowActiveRef.current = false
+        void window.wikiApi.window?.respondClose('cancel')
+      }
+    })
+  }
+
   useEffect(() => {
     return window.wikiApi.menu.onCommand((command) => {
-      if (isDialogOpenRef.current) {
+      if (isDialogOpenRef.current || isAppCloseFlowActiveRef.current) {
         return
       }
       menuHandlersRef.current[command]?.()
+    })
+  }, [])
+
+  useEffect(() => {
+    return window.wikiApi.window?.onCloseRequested(() => {
+      void handleAppCloseRequestedRef.current()
     })
   }, [])
 

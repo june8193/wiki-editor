@@ -16,6 +16,8 @@ import {
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
   WikiApi,
+  WINDOW_IPC_CHANNELS,
+  type WindowCloseResponse,
   WORKSPACE_IPC_CHANNELS
 } from '@shared/ipc'
 import type {
@@ -157,6 +159,14 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
     clipboard: {
       writeText: (text) =>
         ipcRenderer.invoke(CLIPBOARD_IPC_CHANNELS.writeText, text) as Promise<void>
+    },
+    window: {
+      onCloseRequested: (listener) =>
+        subscribeChannel<undefined>(ipcRenderer, WINDOW_IPC_CHANNELS.closeRequested, () => {
+          listener()
+        }),
+      respondClose: (response: WindowCloseResponse) =>
+        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.closeResponse, response) as Promise<void>
     }
   }
 }

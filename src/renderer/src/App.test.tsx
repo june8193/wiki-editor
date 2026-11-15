@@ -15,7 +15,14 @@ import {
   type GitGraphCommit,
   type GitLogResult
 } from '@shared/git'
-import type { AppMenuCommand, WikiApi, WikiClipboardApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
+import type {
+  AppMenuCommand,
+  WikiApi,
+  WikiClipboardApi,
+  WikiGitApi,
+  WikiLogApi,
+  WindowCloseResponse
+} from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import {
   addFavoriteWorkspace,
@@ -171,11 +178,13 @@ function createInMemoryWikiApi(
   emitExternalChange: (patch: Partial<AppConfig>) => void
   emitWorkspaceChange: (event: WorkspaceChangeEvent) => void
   emitMenuCommand: (command: AppMenuCommand) => void
+  emitCloseRequested: () => void
   getListenerCount: () => number
   getMenuListenerCount: () => number
   getFilesSnapshot: () => Map<string, string>
   readDirCalls: string[]
   copiedTexts: string[]
+  closeResponses: WindowCloseResponse[]
 } {
   let state: AppConfig = {
     ...cloneAppConfig(DEFAULT_APP_CONFIG),
@@ -184,6 +193,8 @@ function createInMemoryWikiApi(
   const configListeners = new Set<(config: AppConfig) => void>()
   const workspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
   const menuListeners = new Set<(command: AppMenuCommand) => void>()
+  const closeListeners = new Set<() => void>()
+  const closeResponses: WindowCloseResponse[] = []
   const configPath = 'C:\\Users\\test\\AppData\\Roaming\\wiki-editor\\config.json'
 
   // Virtual directory & file map keyed by normalized POSIX-style paths
@@ -499,6 +510,17 @@ function createInMemoryWikiApi(
         copiedTexts.push(text)
       },
       ...fsOptions.clipboard
+    },
+    window: {
+      onCloseRequested(listener) {
+        closeListeners.add(listener)
+        return () => {
+          closeListeners.delete(listener)
+        }
+      },
+      async respondClose(response) {
+        closeResponses.push(response)
+      }
     }
   }
 
@@ -517,12 +539,24 @@ function createInMemoryWikiApi(
         listener(command)
       }
     },
+    emitCloseRequested() {
+      for (const listener of closeListeners) {
+        listener()
+      }
+    },
     getListenerCount: () => configListeners.size,
     getMenuListenerCount: () => menuListeners.size,
     getFilesSnapshot: () => new Map(files),
     readDirCalls,
-    copiedTexts
+    copiedTexts,
+    closeResponses
   }
+}
+
+async function triggerCloseRequested(emitCloseRequested: () => void): Promise<void> {
+  await act(async () => {
+    emitCloseRequested()
+  })
 }
 
 async function triggerMenuCommand(
@@ -8060,5 +8094,339 @@ describe('Markdown link navigation and missing target banner', () => {
     const missingTargetSlugAlert = await screen.findByRole('alert')
     expect(missingTargetSlugAlert).toHaveTextContent(/missing-sec/)
     expect(getFilesSnapshot()).toEqual(initialSnapshot)
+  })
+})
+
+describe('App close unsaved changes confirmation', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('approves close immediately without dialog when all open tabs (clean docs, clean config, diff tab) have no unsaved changes', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, emitCloseRequested, closeResponses } = createInMemoryWikiApi(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\clean-close',
+        workspaces: {
+          'C:\\wiki\\clean-close': {
+            'readme.md': '# Readme'
+          }
+        },
+        git: {
+          status: async (workspacePath) => ({
+            ...createEmptyGitStatus(true, workspacePath),
+            unstaged: [{ path: 'readme.md', status: 'M' }]
+          }),
+          diff: async () => ({
+            path: 'readme.md',
+            status: 'M',
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: '@@ -1 +1 @@\n-# Old\n+# Readme'
+          })
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('readme.md'))
+
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
+
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(await within(gitRegion).findByRole('button', { name: /M\s*readme\.md/i }))
+    expect(await screen.findByRole('region', { name: 'readme.md Diff 뷰어' })).toBeInTheDocument()
+
+    await triggerCloseRequested(emitCloseRequested)
+
+    await waitFor(() => {
+      expect(closeResponses).toEqual(['confirming', 'close'])
+    })
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('prompts for dirty workspace and config.json documents, supports cancel, save-and-close, and discard-and-close', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, emitCloseRequested, closeResponses, getFilesSnapshot } =
+      createInMemoryWikiApi(
+        { autoSave: false, theme: 'light' },
+        {
+          selectedFolder: 'C:\\wiki\\dirty-close',
+          workspaces: {
+            'C:\\wiki\\dirty-close': {
+              'a.md': '# A'
+            }
+          }
+        }
+      )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('a.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    setRawEditorText(within(primaryPane).getByTestId('document-editor'), '# A edited')
+
+    // Single dirty file prompt + Cancel
+    await triggerCloseRequested(emitCloseRequested)
+    const firstDialog = await screen.findByRole('alertdialog')
+    expect(firstDialog).toHaveTextContent(
+      '"a.md"에 저장하지 않은 변경 사항이 있습니다. 저장하고 종료할까요?'
+    )
+    expect(within(firstDialog).getByRole('button', { name: '취소' })).toBeInTheDocument()
+    expect(within(firstDialog).getByRole('button', { name: '버리고 종료' })).toBeInTheDocument()
+    expect(within(firstDialog).getByRole('button', { name: '저장 후 종료' })).toBeInTheDocument()
+
+    await user.click(within(firstDialog).getByRole('button', { name: '취소' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(closeResponses).toEqual(['confirming', 'cancel'])
+    expect(getFilesSnapshot().get('C:/wiki/dirty-close/a.md')).toBe('# A')
+
+    // Open and edit config.json as well -> summary becomes "a.md 외 1개" -> Save & Close
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
+    const configEditor = await screen.findByTestId('document-editor')
+    const validUpdatedConfig = JSON.stringify(
+      { ...cloneAppConfig(DEFAULT_APP_CONFIG), theme: 'dark' },
+      null,
+      2
+    )
+    setRawEditorText(configEditor, validUpdatedConfig)
+
+    await triggerCloseRequested(emitCloseRequested)
+    const multiDialog = await screen.findByRole('alertdialog')
+    expect(multiDialog).toHaveTextContent(
+      '"a.md 외 1개"에 저장하지 않은 변경 사항이 있습니다. 저장하고 종료할까요?'
+    )
+
+    await user.click(within(multiDialog).getByRole('button', { name: '저장 후 종료' }))
+    await waitFor(() => {
+      expect(closeResponses).toEqual(['confirming', 'cancel', 'confirming', 'close'])
+    })
+    expect(getFilesSnapshot().get('C:/wiki/dirty-close/a.md')).toBe('# A edited')
+    expect((await api.config.get()).theme).toBe('dark')
+
+    // Edit a.md again -> Discard & Close does not write the new edit
+    await user.click(within(primaryPane).getByRole('tab', { name: /a\.md/i }))
+    setRawEditorText(within(primaryPane).getByTestId('document-editor'), '# A discarded')
+
+    await triggerCloseRequested(emitCloseRequested)
+    const discardDialog = await screen.findByRole('alertdialog')
+    await user.click(within(discardDialog).getByRole('button', { name: '버리고 종료' }))
+    await waitFor(() => {
+      expect(closeResponses).toEqual([
+        'confirming',
+        'cancel',
+        'confirming',
+        'close',
+        'confirming',
+        'close'
+      ])
+    })
+    expect(getFilesSnapshot().get('C:/wiki/dirty-close/a.md')).toBe('# A edited')
+  })
+
+  it('saves all valid buffers, aborts close, and preserves Error Banner when any buffer fails to save', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, emitCloseRequested, closeResponses, getFilesSnapshot } =
+      createInMemoryWikiApi(
+        { autoSave: false },
+        {
+          selectedFolder: 'C:\\wiki\\partial-fail',
+          workspaces: {
+            'C:\\wiki\\partial-fail': {
+              'fail.md': '# Fail',
+              'ok.md': '# OK'
+            }
+          }
+        }
+      )
+    const origWriteFile = api.workspace.writeFile
+    let failFirstWrite = true
+    api.workspace.writeFile = async (filePath, content) => {
+      if (failFirstWrite && filePath.endsWith('fail.md')) {
+        failFirstWrite = false
+        throw new Error('Disk full on fail.md')
+      }
+      return origWriteFile(filePath, content)
+    }
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+
+    await user.click(await within(explorer).findByText('fail.md'))
+    setRawEditorText(screen.getByTestId('document-editor'), '# Fail updated')
+
+    await user.click(within(explorer).getByText('ok.md'))
+    setRawEditorText(screen.getByTestId('document-editor'), '# OK updated')
+
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
+    const validUpdatedConfig = JSON.stringify(
+      { ...cloneAppConfig(DEFAULT_APP_CONFIG), theme: 'dark' },
+      null,
+      2
+    )
+    setRawEditorText(screen.getByTestId('document-editor'), validUpdatedConfig)
+
+    await triggerCloseRequested(emitCloseRequested)
+    const dialog = await screen.findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: '저장 후 종료' }))
+
+    await waitFor(() => {
+      expect(closeResponses).toEqual(['confirming', 'cancel'])
+    })
+
+    // Valid ok.md and config.json WERE saved even though fail.md failed before them
+    expect(getFilesSnapshot().get('C:/wiki/partial-fail/ok.md')).toBe('# OK updated')
+    expect((await api.config.get()).theme).toBe('dark')
+    expect(getFilesSnapshot().get('C:/wiki/partial-fail/fail.md')).toBe('# Fail')
+    // Error banner remains visible and not cleared by ok.md/config.json succeeding
+    expect(screen.getByRole('alert')).toHaveTextContent('Disk full on fail.md')
+
+    // Now break config.json and retry Save & Close -> fail.md succeeds, invalid config.json aborts close with JSON error banner
+    setRawEditorText(screen.getByTestId('document-editor'), '{ invalid json')
+    await triggerCloseRequested(emitCloseRequested)
+    const retryDialog = await screen.findByRole('alertdialog')
+    await user.click(within(retryDialog).getByRole('button', { name: '저장 후 종료' }))
+
+    await waitFor(() => {
+      expect(closeResponses).toEqual(['confirming', 'cancel', 'confirming', 'cancel'])
+    })
+    expect(getFilesSnapshot().get('C:/wiki/partial-fail/fail.md')).toBe('# Fail updated')
+    expect(screen.getByRole('alert')).toHaveTextContent(/Invalid JSON syntax/i)
+  })
+
+  it('awaits an in-flight save before approving close without dialog, and pauses auto-save while close dialog is open', async () => {
+    const user = userEvent.setup()
+    let releaseFirstSave!: () => void
+    let writeCount = 0
+    const { api, emitMenuCommand, emitCloseRequested, closeResponses, getFilesSnapshot } =
+      createInMemoryWikiApi(
+        { autoSave: true, autoSaveDelayMs: 60 },
+        {
+          selectedFolder: 'C:\\wiki\\inflight-close',
+          workspaces: {
+            'C:\\wiki\\inflight-close': {
+              'doc.md': '# Start'
+            }
+          }
+        }
+      )
+    const origWrite = api.workspace.writeFile
+    api.workspace.writeFile = async (filePath, content) => {
+      writeCount += 1
+      if (writeCount === 1) {
+        return new Promise<void>((resolve) => {
+          releaseFirstSave = () => {
+            void origWrite(filePath, content).then(resolve)
+          }
+        })
+      }
+      return origWrite(filePath, content)
+    }
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('doc.md'))
+
+    const editor = await screen.findByTestId('document-editor')
+    setRawEditorText(editor, '# In-flight v1')
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
+    expect(writeCount).toBe(1)
+
+    await triggerCloseRequested(emitCloseRequested)
+    expect(closeResponses).toEqual(['confirming'])
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+
+    releaseFirstSave()
+    await waitFor(() => {
+      expect(closeResponses).toEqual(['confirming', 'close'])
+    })
+    expect(getFilesSnapshot().get('C:/wiki/inflight-close/doc.md')).toBe('# In-flight v1')
+
+    // Now edit with autoSave enabled and request close before debounce fires -> ConfirmDialog opens & auto-save pauses
+    setRawEditorText(editor, '# Pending debounce')
+    await triggerCloseRequested(emitCloseRequested)
+    const confirmDialog = await screen.findByRole('alertdialog')
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+    })
+    expect(writeCount).toBe(1)
+
+    await user.click(within(confirmDialog).getByRole('button', { name: '버리고 종료' }))
+    await waitFor(() => {
+      expect(closeResponses).toEqual(['confirming', 'close', 'confirming', 'close'])
+    })
+  })
+
+  it('cancels an existing ConfirmDialog cleanly when close is requested and ignores duplicate close requests', async () => {
+    const user = userEvent.setup()
+    const gitStatus = {
+      ...createEmptyGitStatus(true, 'C:/wiki/concurrent-close'),
+      branch: 'main',
+      hasUpstream: true
+    }
+    const pullMock = vi.fn(async () => gitStatus)
+    const { api, emitMenuCommand, emitCloseRequested, closeResponses } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\concurrent-close',
+        workspaces: {
+          'C:\\wiki\\concurrent-close': {
+            'note.md': '# Note'
+          }
+        },
+        git: {
+          status: vi.fn(async () => gitStatus),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [{ name: 'main', current: true, upstream: 'origin/main' }]
+          })),
+          pull: pullMock
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('note.md'))
+    setRawEditorText(screen.getByTestId('document-editor'), '# Note dirty')
+
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    const gitDialog = await screen.findByRole('alertdialog')
+    expect(gitDialog).toHaveTextContent('저장 후 진행')
+
+    await triggerCloseRequested(emitCloseRequested)
+    const closeDialog = await screen.findByRole('alertdialog')
+    expect(closeDialog).toHaveTextContent('저장하고 종료할까요?')
+    expect(pullMock).not.toHaveBeenCalled()
+
+    // Duplicate close request while app-close ConfirmDialog is open is ignored
+    await triggerCloseRequested(emitCloseRequested)
+    expect(closeResponses).toEqual(['confirming'])
+
+    await user.click(within(closeDialog).getByRole('button', { name: '취소' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+    expect(closeResponses).toEqual(['confirming', 'cancel'])
+    expect(pullMock).not.toHaveBeenCalled()
   })
 })

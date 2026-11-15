@@ -7,6 +7,7 @@ import {
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
+  WINDOW_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS
 } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
@@ -240,5 +241,36 @@ describe('createWikiApi', () => {
 
     ipc.emit(MENU_IPC_CHANNELS.command, 'open-folder')
     expect(commands).toHaveLength(3)
+  })
+
+  it('subscribes to window:close-requested without exposing Electron event and sends window:close-response', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+    const receivedArgs: unknown[][] = []
+
+    const unsubscribe = api.window.onCloseRequested((...args: unknown[]) => {
+      receivedArgs.push(args)
+    })
+
+    expect(ipc.listenerCount(WINDOW_IPC_CHANNELS.closeRequested)).toBe(1)
+
+    ipc.emit(WINDOW_IPC_CHANNELS.closeRequested, { secret: 'should-not-leak' })
+    expect(receivedArgs).toEqual([[]])
+
+    await api.window.respondClose('confirming')
+    await api.window.respondClose('close')
+    await api.window.respondClose('cancel')
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: WINDOW_IPC_CHANNELS.closeResponse, args: ['confirming'] },
+      { channel: WINDOW_IPC_CHANNELS.closeResponse, args: ['close'] },
+      { channel: WINDOW_IPC_CHANNELS.closeResponse, args: ['cancel'] }
+    ])
+
+    unsubscribe()
+    expect(ipc.listenerCount(WINDOW_IPC_CHANNELS.closeRequested)).toBe(0)
+
+    ipc.emit(WINDOW_IPC_CHANNELS.closeRequested, undefined)
+    expect(receivedArgs).toHaveLength(1)
   })
 })

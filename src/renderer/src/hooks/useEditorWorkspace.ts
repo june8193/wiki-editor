@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { getWorkspaceDisplayName, getWorkspacePathKey, WorkspaceEntry } from '@shared/workspace'
 import { resolveEditorShortcut, resolveEffectiveEditorMode } from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
-import { DocumentBuffer, DocumentBufferStore } from '../stores/DocumentBufferStore'
+import { DocumentBuffer, DocumentBufferStore, type DocumentKind } from '../stores/DocumentBufferStore'
 import {
   type DocumentTabItem,
   type PaneId,
@@ -26,6 +26,12 @@ export interface OpenedWorkspaceDocument {
 interface InFlightSaveEntry {
   currentKey: string
   promise: Promise<boolean>
+}
+
+function formatDirtySummary(dirty: readonly DocumentBuffer[]): string | null {
+  if (dirty.length === 0) return null
+  if (dirty.length === 1) return dirty[0].name
+  return `${dirty[0].name} 외 ${dirty.length - 1}개`
 }
 
 // Electron contextBridge strips Error subclasses/errno codes, so deleted workspace files match localized/ENOENT messages.
@@ -185,14 +191,16 @@ export function useEditorWorkspace({
   }, [])
 
   const saveBufferSnapshot = useCallback(
-    (snapshot: DocumentBuffer): Promise<boolean> => {
+    (snapshot: DocumentBuffer, options?: { clearError?: boolean }): Promise<boolean> => {
       const existing = inFlightSavesRef.current.get(snapshot.key)
       if (existing) {
         return existing.promise
       }
 
       bufferStore.setSaving(snapshot.key, true)
-      callbacksRef.current.onError(null)
+      if (options?.clearError ?? true) {
+        callbacksRef.current.onError(null)
+      }
 
       const entry: InFlightSaveEntry = {
         currentKey: snapshot.key,
@@ -252,7 +260,7 @@ export function useEditorWorkspace({
   }, [saveBufferByKey, tabStore])
 
   const ensureSavedBuffer = useCallback(
-    async (bufferKey: string): Promise<boolean> => {
+    async (bufferKey: string, options?: { clearError?: boolean }): Promise<boolean> => {
       const inFlight = inFlightSavesRef.current.get(bufferKey)
       if (inFlight) {
         const ok = await inFlight.promise
@@ -263,36 +271,63 @@ export function useEditorWorkspace({
       if (!latest || !latest.isDirty) {
         return true
       }
-      return saveBufferSnapshot({ ...latest })
+      return saveBufferSnapshot({ ...latest }, options)
     },
     [bufferStore, saveBufferSnapshot]
   )
 
-  const ensureAllWorkspaceBuffersSaved = useCallback(async (): Promise<boolean> => {
-    const targetKeys = new Set<string>()
-    for (const buf of bufferStore.getDirtyBuffers('workspace')) {
-      targetKeys.add(buf.key)
-    }
-    for (const key of inFlightSavesRef.current.keys()) {
-      const buf = bufferStore.getBuffer(key)
-      if (buf?.kind === 'workspace') {
-        targetKeys.add(key)
+  const collectSaveTargetKeys = useCallback(
+    (kind?: DocumentKind): Set<string> => {
+      const targetKeys = new Set<string>()
+      for (const buf of bufferStore.getDirtyBuffers(kind)) {
+        targetKeys.add(buf.key)
       }
-    }
+      for (const key of inFlightSavesRef.current.keys()) {
+        const buf = bufferStore.getBuffer(key)
+        if (buf && (kind === undefined || buf.kind === kind)) {
+          targetKeys.add(key)
+        }
+      }
+      return targetKeys
+    },
+    [bufferStore]
+  )
 
-    for (const key of targetKeys) {
+  const waitForInFlightSaves = useCallback(async (): Promise<void> => {
+    while (inFlightSavesRef.current.size > 0) {
+      const pending = Array.from(inFlightSavesRef.current.values(), (entry) => entry.promise)
+      await Promise.allSettled(pending)
+    }
+  }, [])
+
+  const ensureAllWorkspaceBuffersSaved = useCallback(async (): Promise<boolean> => {
+    for (const key of collectSaveTargetKeys('workspace')) {
       const ok = await ensureSavedBuffer(key)
       if (!ok) return false
     }
     return true
-  }, [bufferStore, ensureSavedBuffer])
+  }, [collectSaveTargetKeys, ensureSavedBuffer])
 
-  const getDirtyWorkspaceSummary = useCallback((): string | null => {
-    const dirty = bufferStore.getDirtyBuffers('workspace')
-    if (dirty.length === 0) return null
-    if (dirty.length === 1) return dirty[0].name
-    return `${dirty[0].name} 외 ${dirty.length - 1}개`
-  }, [bufferStore])
+  const ensureAllBuffersSaved = useCallback(async (): Promise<boolean> => {
+    let hasFailure = false
+    for (const key of collectSaveTargetKeys()) {
+      const ok = await ensureSavedBuffer(key, { clearError: !hasFailure })
+      if (!ok) {
+        hasFailure = true
+      }
+    }
+    return !hasFailure && bufferStore.getDirtyBuffers().length === 0
+  }, [bufferStore, collectSaveTargetKeys, ensureSavedBuffer])
+
+  const getDirtyWorkspaceSummary = useCallback(
+    (): string | null => formatDirtySummary(bufferStore.getDirtyBuffers('workspace')),
+    [bufferStore]
+  )
+
+  const getDirtyDocumentSummary = useCallback(
+    (): string | null => formatDirtySummary(bufferStore.getDirtyBuffers()),
+    [bufferStore]
+  )
 
   // Global fallback Ctrl+S and mode-switch shortcut handler when focus is outside a specific pane editor
   useEffect(() => {
@@ -653,8 +688,11 @@ export function useEditorWorkspace({
     updateBufferContent,
     saveBufferByKey,
     saveActivePaneDocument,
+    waitForInFlightSaves,
     ensureAllWorkspaceBuffersSaved,
+    ensureAllBuffersSaved,
     getDirtyWorkspaceSummary,
+    getDirtyDocumentSummary,
     requestCloseTab,
     forceCloseTab,
     saveAndCloseTab,
