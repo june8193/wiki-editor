@@ -731,4 +731,135 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
       '# Flushed before workspace switch'
     )
   })
+
+  it('prompts when closing a dirty shared document if another window closes it while syncWindowTabs is pending', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'shared.md': '# Shared',
+            'other.md': '# Other'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const win1 = harness.createWindow()
+    const win2 = harness.createWindow()
+    const rendered1 = render(<App wikiApi={win1.api} />)
+    const rendered2 = render(<App wikiApi={win2.api} />)
+
+    const editor1 = await openFolderAndNoteInWindow(
+      user,
+      rendered1.container,
+      win1.emitMenuCommand,
+      'shared.md'
+    )
+    await openFolderAndNoteInWindow(user, rendered2.container, win2.emitMenuCommand, 'shared.md')
+    await waitFor(() => {
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/shared.md']).toBe(2)
+    })
+
+    setRawEditorText(editor1, '# Unsaved shared edits')
+    await waitFor(() => {
+      expect(within(rendered1.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+
+    // Hold Window 1's syncWindowTabs in flight while Window 2 closes shared.md
+    const sidebar1 = within(rendered1.container).getByLabelText('워크스페이스 탐색기')
+    const win1SyncGate = deferBufferMethod(win1.api.buffer, 'syncWindowTabs')
+    await user.click(within(sidebar1).getByText('other.md'))
+    await waitFor(() => {
+      expect(within(rendered1.container).getByRole('tab', { name: /other\.md/ })).toBeInTheDocument()
+      expect(win1SyncGate.count()).toBeGreaterThanOrEqual(1)
+    })
+
+    await user.click(within(rendered2.container).getByRole('button', { name: 'shared.md 탭 닫기' }))
+    await waitFor(() => {
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/shared.md']).toBe(1)
+    })
+
+    // Window 1 now holds the sole remaining reference and must prompt even before syncWindowTabs settles
+    await user.click(within(rendered1.container).getByRole('button', { name: 'shared.md 탭 닫기' }))
+    const dialog = await within(rendered1.container).findByRole('alertdialog')
+    expect(dialog).toBeInTheDocument()
+
+    win1SyncGate.flushAll()
+  })
+
+  it('ignores stale syncWindowTabs responses after a newer cross-window close event reduces tabCounts to 1', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'shared.md': '# Shared',
+            'other.md': '# Other'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const win1 = harness.createWindow()
+    const win2 = harness.createWindow()
+    const rendered1 = render(<App wikiApi={win1.api} />)
+    const rendered2 = render(<App wikiApi={win2.api} />)
+
+    const editor1 = await openFolderAndNoteInWindow(
+      user,
+      rendered1.container,
+      win1.emitMenuCommand,
+      'shared.md'
+    )
+    await openFolderAndNoteInWindow(user, rendered2.container, win2.emitMenuCommand, 'shared.md')
+    await waitFor(() => {
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/shared.md']).toBe(2)
+    })
+
+    setRawEditorText(editor1, '# Unsaved after remote close')
+    await waitFor(() => {
+      expect(within(rendered1.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+
+    // Execute syncWindowTabs on the hub immediately (capturing tabCounts = 2), but delay returning its reply
+    const origSync = win1.api.buffer.syncWindowTabs.bind(win1.api.buffer)
+    const releaseReplies: Array<() => void> = []
+    win1.api.buffer.syncWindowTabs = async (bufferKeys) => {
+      const snapshot = await origSync(bufferKeys)
+      return new Promise((resolve) => {
+        releaseReplies.push(() => resolve(snapshot))
+      })
+    }
+
+    const sidebar1 = within(rendered1.container).getByLabelText('워크스페이스 탐색기')
+    await user.click(within(sidebar1).getByText('other.md'))
+    await waitFor(() => {
+      expect(releaseReplies.length).toBeGreaterThanOrEqual(1)
+    })
+
+    // Window 2 closes shared.md AFTER Window 1's hub update ran, broadcasting count = 1
+    await user.click(within(rendered2.container).getByRole('button', { name: 'shared.md 탭 닫기' }))
+    await waitFor(() => {
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/shared.md']).toBe(1)
+    })
+
+    // Now the stale syncWindowTabs reply (which still saw count = 2) settles in Window 1
+    win1.api.buffer.syncWindowTabs = origSync
+    for (const release of releaseReplies.splice(0)) {
+      release()
+    }
+    await waitFor(() => {
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/shared.md']).toBe(1)
+    })
+
+    await user.click(within(rendered1.container).getByRole('button', { name: 'shared.md 탭 닫기' }))
+    expect(await within(rendered1.container).findByRole('alertdialog')).toBeInTheDocument()
+  })
 })

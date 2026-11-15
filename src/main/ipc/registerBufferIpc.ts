@@ -115,7 +115,7 @@ export function registerBufferIpc({
   const unregisterHandlers = registerIpcHandlers(
     ipcMain,
     [
-      [BUFFER_IPC_CHANNELS.getSnapshot, () => hub.getSnapshot()],
+      [BUFFER_IPC_CHANNELS.getSnapshot, (event) => hub.getSnapshot(resolveWindowId(event))],
       [
         BUFFER_IPC_CHANNELS.openWorkspaceFile,
         (event, filePath, name, initialContent) =>

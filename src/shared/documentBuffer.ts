@@ -32,6 +32,9 @@ export type DocumentBufferSnapshot = Readonly<Record<string, DocumentBuffer>>
 export interface SharedBufferStateSnapshot {
   buffers: DocumentBufferSnapshot
   tabCounts: Readonly<Record<string, number>>
+  windowTabCounts?: Readonly<Record<number, Readonly<Record<string, number>>>>
+  revision?: number
+  windowId?: number
 }
 
 export interface SaveBufferResult {

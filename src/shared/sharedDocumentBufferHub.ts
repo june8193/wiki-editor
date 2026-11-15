@@ -63,6 +63,7 @@ export class SharedDocumentBufferHub {
   private readonly logError?: (message: string, details?: Record<string, unknown>) => void
 
   private tabCounts: Record<string, number> = {}
+  private revision = 0
   private disposed = false
 
   constructor(options: SharedDocumentBufferHubOptions) {
@@ -81,10 +82,27 @@ export class SharedDocumentBufferHub {
     }
   }
 
-  getSnapshot(): SharedBufferStateSnapshot {
+  private serializeWindowTabCounts(): Record<number, Record<string, number>> {
+    const result: Record<number, Record<string, number>> = {}
+    for (const [winId, perWindow] of this.windowTabs.entries()) {
+      const counts: Record<string, number> = {}
+      for (const [key, count] of perWindow.entries()) {
+        if (count > 0) {
+          counts[key] = count
+        }
+      }
+      result[winId] = counts
+    }
+    return result
+  }
+
+  getSnapshot(windowId?: number): SharedBufferStateSnapshot {
     return {
       buffers: this.store.getSnapshot(),
-      tabCounts: { ...this.tabCounts }
+      tabCounts: { ...this.tabCounts },
+      windowTabCounts: this.serializeWindowTabCounts(),
+      revision: this.revision,
+      ...(windowId !== undefined ? { windowId } : {})
     }
   }
 
@@ -93,6 +111,11 @@ export class SharedDocumentBufferHub {
     for (const listener of this.listeners) {
       listener(event)
     }
+  }
+
+  private emitStateChanged(): void {
+    this.revision += 1
+    this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
   }
 
   private reconcileAutoSaveTimers(): void {
@@ -223,9 +246,10 @@ export class SharedDocumentBufferHub {
 
     const prevCounts = this.tabCounts
     this.windowTabs.set(windowId, perWindow)
+    this.revision += 1
     this.reconcileTabCountChanges(prevCounts)
 
-    return this.getSnapshot()
+    return this.getSnapshot(windowId)
   }
 
   unregisterWindow(windowId: number): void {
@@ -240,6 +264,7 @@ export class SharedDocumentBufferHub {
       }
     }
 
+    this.revision += 1
     this.reconcileTabCountChanges(prevCounts, depletedPendingKeys, wasPaused)
   }
 
@@ -268,7 +293,7 @@ export class SharedDocumentBufferHub {
       content
     })
     this.registerPendingOpenOwner(created.key, windowId)
-    this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
+    this.emitStateChanged()
     return { ...created }
   }
 
@@ -362,7 +387,7 @@ export class SharedDocumentBufferHub {
     }
 
     if (this.store.refreshCleanContent(latest.key, freshRaw)) {
-      this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
+      this.emitStateChanged()
     }
     const updated = this.store.getBuffer(latest.key)
     return updated ? { ...updated } : null
@@ -381,7 +406,7 @@ export class SharedDocumentBufferHub {
         this.autoSaveScheduler.clearAttempt(updated.key)
       }
       this.reconcileAutoSaveTimers()
-      this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
+      this.emitStateChanged()
     }
 
     return { ...updated }
@@ -394,7 +419,7 @@ export class SharedDocumentBufferHub {
     }
 
     this.store.setSaving(snapshot.key, true)
-    this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
+    this.emitStateChanged()
 
     const entry: InFlightSaveEntry = {
       currentKey: snapshot.key,
@@ -455,7 +480,7 @@ export class SharedDocumentBufferHub {
         this.store.setSaving(entry.currentKey, false)
         if (!this.disposed) {
           this.reconcileAutoSaveTimers()
-          this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
+          this.emitStateChanged()
         }
       }
     })()
@@ -543,6 +568,7 @@ export class SharedDocumentBufferHub {
 
     this.remapWindowTabsAndTracking(remappings)
     this.reconcileAutoSaveTimers()
+    this.revision += 1
     this.emit({
       type: 'paths-remapped',
       snapshot: this.getSnapshot(),
@@ -557,6 +583,7 @@ export class SharedDocumentBufferHub {
     this.cleanupTrackingForKeys(removedKeys)
     this.pruneAndRemoveTabReferences(removedSet)
     this.reconcileAutoSaveTimers()
+    this.revision += 1
     this.emit({
       type: 'buffers-closed',
       snapshot: this.getSnapshot(),
@@ -630,10 +657,7 @@ export class SharedDocumentBufferHub {
     if (closedKeys.length > 0) {
       this.closeRemovedKeys(closedKeys)
     } else if (refreshedClean) {
-      this.emit({
-        type: 'state-changed',
-        snapshot: this.getSnapshot()
-      })
+      this.emitStateChanged()
     }
 
     const warnings: string[] = []

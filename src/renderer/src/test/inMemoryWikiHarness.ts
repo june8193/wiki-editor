@@ -234,7 +234,7 @@ export function createMultiWindowWikiHarness(
   ): WikiBufferApi => {
     return {
       async getSnapshot() {
-        return hub.getSnapshot()
+        return hub.getSnapshot(windowId)
       },
       async openWorkspaceFile(filePath, name, initialContent) {
         return hub.openWorkspaceFile(filePath, name, initialContent, windowId)

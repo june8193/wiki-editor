@@ -132,4 +132,23 @@ describe('DocumentBufferStore', () => {
     expect(store.getDirtyBuffers('workspace')).toEqual([])
     expect(store.getDirtyBuffers('config')).toHaveLength(1)
   })
+
+  it('skips redundant listener notifications on identical upsertBuffer or replaceSnapshot calls', () => {
+    const store = new DocumentBufferStore()
+    const opened = store.openBuffer({
+      kind: 'workspace',
+      path: 'C:/wiki/a.md',
+      name: 'a.md',
+      content: 'v0'
+    })
+    const listener = vi.fn()
+    store.subscribe(listener)
+
+    store.upsertBuffer({ ...opened })
+    store.replaceSnapshot({ [opened.key]: { ...opened } })
+    expect(listener).not.toHaveBeenCalled()
+
+    store.upsertBuffer({ ...opened, content: 'v1', isDirty: true, version: 2 })
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
 })

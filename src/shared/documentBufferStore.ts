@@ -9,6 +9,20 @@ import {
 } from './documentBuffer'
 import { getWorkspaceDisplayName, getWorkspacePathKey } from './workspace'
 
+function areDocumentBuffersEqual(left: DocumentBuffer, right: DocumentBuffer): boolean {
+  return (
+    left.key === right.key &&
+    left.kind === right.kind &&
+    left.path === right.path &&
+    left.name === right.name &&
+    left.content === right.content &&
+    left.savedContent === right.savedContent &&
+    left.isDirty === right.isDirty &&
+    left.version === right.version &&
+    left.isSaving === right.isSaving
+  )
+}
+
 /**
  * Centralized document buffer store keyed by normalized file path.
  * Multiple tabs across split panes and windows subscribe to the same buffer entry for real-time sync.
@@ -34,11 +48,27 @@ export class DocumentBufferStore {
   }
 
   replaceSnapshot(nextBuffers: DocumentBufferSnapshot): void {
+    const currentKeys = Object.keys(this.buffers)
+    const nextKeys = Object.keys(nextBuffers)
+    if (
+      currentKeys.length === nextKeys.length &&
+      nextKeys.every((key) => {
+        const existing = this.buffers[key]
+        const next = nextBuffers[key]
+        return existing !== undefined && next !== undefined && areDocumentBuffersEqual(existing, next)
+      })
+    ) {
+      return
+    }
     this.commit({ ...nextBuffers })
   }
 
   /** Inserts or updates a single buffer entry in place without exposing mutable internals. */
   upsertBuffer(buffer: DocumentBuffer): void {
+    const existing = this.buffers[buffer.key]
+    if (existing && areDocumentBuffersEqual(existing, buffer)) {
+      return
+    }
     this.commit({ ...this.buffers, [buffer.key]: { ...buffer } })
   }
 

@@ -99,10 +99,14 @@ export class RendererBufferSyncClient {
   private onError: (message: string | null, error?: unknown) => void
   private onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
 
-  private hubTabCounts: Record<string, number> = {}
+  private windowId: number | null = null
+  private latestHubRevision = -1
+  private latestHubTabCounts: Record<string, number> = {}
+  private latestHubWindowTabCounts:
+    | Readonly<Record<number, Readonly<Record<string, number>>>>
+    | undefined
   private localTabCounts: Record<string, number> = {}
-  private inFlightTabSyncCount = 0
-  private suppressLocalTabCountDelta = false
+  private effectiveTabCounts: Record<string, number> = {}
   private latestHubBuffers: DocumentBufferSnapshot = {}
   private readonly pendingLocalEditCounts = new Map<string, number>()
   private readonly pendingEditFlushes = new Map<string, Promise<void>>()
@@ -121,6 +125,7 @@ export class RendererBufferSyncClient {
     this.onConfirmCloseDirtyTab = options.onConfirmCloseDirtyTab
 
     this.localTabCounts = countBufferKeys(this.tabStore.getBufferKeys())
+    this.recomputeEffectiveTabCounts()
     this.tabStore.subscribe(() => this.handleLocalTabStoreChange())
   }
 
@@ -146,37 +151,39 @@ export class RendererBufferSyncClient {
     }
   }
 
-  private handleLocalTabStoreChange(): void {
-    const nextLocalCounts = countBufferKeys(this.tabStore.getBufferKeys())
-    if (!this.suppressLocalTabCountDelta) {
-      const prevLocalCounts = this.localTabCounts
-      const nextHubCounts = { ...this.hubTabCounts }
-      const touchedKeys = new Set([
-        ...Object.keys(prevLocalCounts),
-        ...Object.keys(nextLocalCounts)
+  private recomputeEffectiveTabCounts(): void {
+    if (this.windowId !== null && this.latestHubWindowTabCounts) {
+      const syncedSelf = this.latestHubWindowTabCounts[this.windowId] ?? {}
+      const nextCounts: Record<string, number> = {}
+      const allKeys = new Set([
+        ...Object.keys(this.latestHubTabCounts),
+        ...Object.keys(syncedSelf),
+        ...Object.keys(this.localTabCounts)
       ])
-      for (const key of touchedKeys) {
-        const delta = (nextLocalCounts[key] ?? 0) - (prevLocalCounts[key] ?? 0)
-        if (delta === 0) continue
-        const updated = Math.max(0, (nextHubCounts[key] ?? 0) + delta)
-        if (updated === 0) {
-          delete nextHubCounts[key]
-        } else {
-          nextHubCounts[key] = updated
+      for (const key of allKeys) {
+        const otherCount = Math.max(
+          0,
+          (this.latestHubTabCounts[key] ?? 0) - (syncedSelf[key] ?? 0)
+        )
+        const total = otherCount + (this.localTabCounts[key] ?? 0)
+        if (total > 0) {
+          nextCounts[key] = total
         }
       }
-      this.hubTabCounts = nextHubCounts
+      this.effectiveTabCounts = nextCounts
+      return
     }
-    this.localTabCounts = nextLocalCounts
+
+    const nextCounts: Record<string, number> = { ...this.latestHubTabCounts }
+    for (const [key, localCount] of Object.entries(this.localTabCounts)) {
+      nextCounts[key] = Math.max(localCount, nextCounts[key] ?? 0)
+    }
+    this.effectiveTabCounts = nextCounts
   }
 
-  private runWithSuppressedTabDelta(fn: () => void): void {
-    this.suppressLocalTabCountDelta = true
-    try {
-      fn()
-    } finally {
-      this.suppressLocalTabCountDelta = false
-    }
+  private handleLocalTabStoreChange(): void {
+    this.localTabCounts = countBufferKeys(this.tabStore.getBufferKeys())
+    this.recomputeEffectiveTabCounts()
   }
 
   private resolveLatestKey(initialKey: string): string {
@@ -213,17 +220,14 @@ export class RendererBufferSyncClient {
     const keyList = [...closedKeys]
     this.clearTrackingForKeys(keyList)
     for (const key of keyList) {
-      if ((this.hubTabCounts[key] ?? 0) === 0) {
+      if ((this.localTabCounts[key] ?? 0) === 0) {
         this.bufferStore.removeBuffer(key)
       }
     }
     this.syncCurrentLayoutTabs()
   }
 
-  private applyKeyRemappings(
-    remappings: readonly BufferKeyRemap[],
-    options: { suppressTabDelta?: boolean } = {}
-  ): void {
+  private applyKeyRemappings(remappings: readonly BufferKeyRemap[]): void {
     if (remappings.length === 0) return
     for (const { oldKey, newKey } of remappings) {
       if (oldKey === newKey) continue
@@ -233,30 +237,23 @@ export class RendererBufferSyncClient {
       moveTrackedKey(this.creatingKeys, oldKey, newKey)
       moveTrackedKey(this.pendingManualSaveKeys, oldKey, newKey)
     }
-
-    if (!options.suppressTabDelta) {
-      this.tabStore.remapBufferKeys(remappings)
-      return
-    }
-
-    if (this.inFlightTabSyncCount > 0) {
-      const nextHubCounts = { ...this.hubTabCounts }
-      for (const { oldKey, newKey } of remappings) {
-        if (oldKey === newKey || !(oldKey in nextHubCounts)) continue
-        nextHubCounts[newKey] = (nextHubCounts[newKey] ?? 0) + nextHubCounts[oldKey]
-        delete nextHubCounts[oldKey]
-      }
-      this.hubTabCounts = nextHubCounts
-    }
-    this.runWithSuppressedTabDelta(() => {
-      this.tabStore.remapBufferKeys(remappings)
-    })
+    this.tabStore.remapBufferKeys(remappings)
   }
 
   private applyHubSnapshot(snapshot: SharedBufferStateSnapshot): void {
-    if (this.inFlightTabSyncCount === 0) {
-      this.hubTabCounts = { ...snapshot.tabCounts }
+    if (snapshot.windowId !== undefined && this.windowId === null) {
+      this.windowId = snapshot.windowId
     }
+    if (snapshot.revision !== undefined) {
+      if (snapshot.revision < this.latestHubRevision) {
+        this.recomputeEffectiveTabCounts()
+        return
+      }
+      this.latestHubRevision = snapshot.revision
+    }
+    this.latestHubTabCounts = { ...snapshot.tabCounts }
+    this.latestHubWindowTabCounts = snapshot.windowTabCounts
+    this.recomputeEffectiveTabCounts()
     this.latestHubBuffers = snapshot.buffers
 
     const currentLocal = this.bufferStore.getSnapshot()
@@ -264,6 +261,9 @@ export class RendererBufferSyncClient {
 
     for (const [key, hubBuf] of Object.entries(snapshot.buffers)) {
       this.remappedKeys.delete(key)
+      if ((this.localTabCounts[key] ?? 0) === 0 && !this.creatingKeys.has(key)) {
+        continue
+      }
       const pendingCount = this.pendingLocalEditCounts.get(key) ?? 0
       const localBuf = currentLocal[key]
       if (pendingCount > 0 && localBuf) {
@@ -292,18 +292,14 @@ export class RendererBufferSyncClient {
       return
     }
     this.lastSyncedTabKeys = [...keys]
-    this.inFlightTabSyncCount += 1
     void this.bufferApi
       .syncWindowTabs(keys)
       .then((snapshot) => {
-        this.inFlightTabSyncCount = Math.max(0, this.inFlightTabSyncCount - 1)
-        if (this.mounted && this.inFlightTabSyncCount === 0) {
+        if (this.mounted) {
           this.applyHubSnapshot(snapshot)
         }
       })
-      .catch(() => {
-        this.inFlightTabSyncCount = Math.max(0, this.inFlightTabSyncCount - 1)
-      })
+      .catch(() => undefined)
   }
 
   private syncCurrentLayoutTabs(): void {
@@ -318,21 +314,12 @@ export class RendererBufferSyncClient {
         this.applyHubSnapshot(event.snapshot)
         return
       case 'paths-remapped':
-        this.applyKeyRemappings(event.remappings, { suppressTabDelta: true })
+        this.applyKeyRemappings(event.remappings)
         this.applyHubSnapshot(event.snapshot)
         return
       case 'buffers-closed':
         this.clearTrackingForKeys(event.closedKeys)
-        if (this.inFlightTabSyncCount > 0) {
-          const nextHubCounts = { ...this.hubTabCounts }
-          for (const closedKey of event.closedKeys) {
-            delete nextHubCounts[closedKey]
-          }
-          this.hubTabCounts = nextHubCounts
-        }
-        this.runWithSuppressedTabDelta(() => {
-          this.tabStore.closeTabsByBufferKeys(event.closedKeys)
-        })
+        this.tabStore.closeTabsByBufferKeys(event.closedKeys)
         this.applyHubSnapshot(event.snapshot)
         return
       case 'workspace-saved':
@@ -361,7 +348,10 @@ export class RendererBufferSyncClient {
       if (!this.mounted) return
       this.remappedKeys.delete(buf.key)
       if (!this.pendingLocalEditCounts.has(buf.key)) {
-        this.bufferStore.upsertBuffer(buf)
+        const latestBuf = this.latestHubBuffers[buf.key]
+        this.bufferStore.upsertBuffer(
+          latestBuf && latestBuf.version > buf.version ? latestBuf : buf
+        )
       }
       this.tabStore.openTab(buf.key, { paneId: targetPaneId })
       this.syncCurrentLayoutTabs()
@@ -590,8 +580,9 @@ export class RendererBufferSyncClient {
     const buffer = this.bufferStore.getBuffer(tab.bufferKey)
     const hasOtherTabAcrossWindows =
       this.tabStore.hasOtherTabForBuffer(tab.bufferKey, tab.id) ||
-      (this.hubTabCounts[tab.bufferKey] ?? 1) > 1
+      (this.effectiveTabCounts[tab.bufferKey] ?? 1) > 1
     if (buffer?.isDirty && !hasOtherTabAcrossWindows) {
+      void this.bufferApi.setAutoSavePaused(true).catch(() => undefined)
       this.onConfirmCloseDirtyTab({ paneId, tabId, buffer })
       return
     }
