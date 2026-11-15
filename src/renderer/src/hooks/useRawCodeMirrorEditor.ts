@@ -4,7 +4,7 @@ import { json } from '@codemirror/lang-json'
 import { markdown } from '@codemirror/lang-markdown'
 import { bracketMatching, HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
-import { Annotation, Compartment, EditorState, Extension, Prec, StateEffect } from '@codemirror/state'
+import { Annotation, Compartment, EditorState, Extension, StateEffect } from '@codemirror/state'
 import {
   drawSelection,
   EditorView,
@@ -14,51 +14,33 @@ import {
   lineNumbers
 } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
-import {
-  DEFAULT_CUSTOM_COMMANDS,
-  type CustomCommandConfig,
-  type ThemeMode
-} from '@shared/config'
+import type { ThemeMode } from '@shared/config'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
-import {
-  detectDocumentLineEnding,
-  insertOrUpdateTocBlock,
-  tryReplaceSlashTocAtLine
-} from '../editor/MarkdownTocEngine'
+import { detectDocumentLineEnding, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
   type HeadingScrollSpySample,
   measureActiveHeadingIndexInRawEditor
 } from '../editor/outlineScrollSpy'
-import { detectSlashQuery, resolveSlashCommandSnippet } from '../editor/SlashCommandEngine'
 import type { CursorPosition } from '../stores/PaneTabStore'
 import { useEditorOutlineSpy } from './useEditorOutlineSpy'
-import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from './useSlashMenu'
 import { syncElementScrollTop } from './useSyncScrollTop'
 
 const externalSyncAnnotation = Annotation.define<boolean>()
-const slashInsertAnnotation = Annotation.define<boolean>()
 
-function applyRawTocCommand(view: EditorView, requireSlashTocLine: boolean): boolean {
+function applyRawTocCommand(view: EditorView): boolean {
   const sel = view.state.selection.main
-  if (requireSlashTocLine && !sel.empty) {
-    return false
-  }
-
   const line = view.state.doc.lineAt(sel.from)
   const docText = view.state.doc.toString()
-  const nextDoc = requireSlashTocLine
-    ? tryReplaceSlashTocAtLine(docText, line.number)
-    : insertOrUpdateTocBlock(docText, line.number)
+  const nextDoc = insertOrUpdateTocBlock(docText, line.number)
 
-  if (!nextDoc || nextDoc === docText) {
+  if (nextDoc === docText) {
     return false
   }
 
-  const baseAnchor = requireSlashTocLine ? line.from + line.text.length : sel.from
   const nextCursor = Math.min(
     nextDoc.length,
-    Math.max(0, baseAnchor + (nextDoc.length - docText.length))
+    Math.max(0, sel.from + (nextDoc.length - docText.length))
   )
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: nextDoc },
@@ -79,9 +61,6 @@ export interface UseRawCodeMirrorEditorOptions {
   cursor: CursorPosition
   scrollTop: number
   showTableToolbar: boolean
-  enableSlashCommands?: boolean
-  customCommands?: readonly CustomCommandConfig[]
-  documentTitle?: string
   scrollRequest?: RawScrollRequest | null
   isActive?: boolean
   editorViewRef?: { current: EditorView | null }
@@ -189,9 +168,6 @@ export function useRawCodeMirrorEditor({
   cursor,
   scrollTop,
   showTableToolbar,
-  enableSlashCommands = language === 'markdown',
-  customCommands = DEFAULT_CUSTOM_COMMANDS,
-  documentTitle,
   scrollRequest,
   isActive = true,
   editorViewRef,
@@ -200,7 +176,6 @@ export function useRawCodeMirrorEditor({
   onActiveHeadingChange,
   onRawScroll
 }: UseRawCodeMirrorEditorOptions) {
-  const shellRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const outlineSpyRef = useRef<{
@@ -220,9 +195,6 @@ export function useRawCodeMirrorEditor({
     cursor,
     scrollTop,
     showTableToolbar,
-    enableSlashCommands,
-    customCommands,
-    documentTitle,
     onChangeContent,
     onUpdateViewState,
     onRawScroll
@@ -234,53 +206,10 @@ export function useRawCodeMirrorEditor({
     cursor,
     scrollTop,
     showTableToolbar,
-    enableSlashCommands,
-    customCommands,
-    documentTitle,
     onChangeContent,
     onUpdateViewState,
     onRawScroll
   }
-
-  const {
-    controlsRef: slashControlsRef,
-    menuProps: slashMenuProps,
-    dismiss: dismissSlashMenu
-  } = useSlashMenu(customCommands, (command, explicitRange?: SlashMenuRange) => {
-    const view = viewRef.current
-    if (!view || !runtimeRef.current.enableSlashCommands) {
-      return false
-    }
-    const docText = view.state.doc.toString()
-    const match =
-      explicitRange &&
-      explicitRange.rangeFrom >= 0 &&
-      explicitRange.rangeTo <= docText.length &&
-      explicitRange.rangeFrom <= explicitRange.rangeTo
-        ? { query: '', rangeFrom: explicitRange.rangeFrom, rangeTo: explicitRange.rangeTo }
-        : detectSlashQuery(docText, view.state.selection.main.head, { ignoreCodeFences: true })
-    if (!match) {
-      return false
-    }
-
-    const normalizedCommand: CustomCommandConfig = {
-      ...command,
-      template: normalizeDocText(command.template)
-    }
-    const expanded = resolveSlashCommandSnippet(docText, normalizedCommand, {
-      title: runtimeRef.current.documentTitle
-    })
-    const nextDocLength = docText.length - (match.rangeTo - match.rangeFrom) + expanded.text.length
-    const nextCursor = Math.max(0, Math.min(nextDocLength, match.rangeFrom + expanded.cursorOffset))
-
-    view.dispatch({
-      changes: { from: match.rangeFrom, to: match.rangeTo, insert: expanded.text },
-      selection: { anchor: nextCursor },
-      annotations: slashInsertAnnotation.of(true)
-    })
-    view.focus()
-    return true
-  })
 
   const lineEndingRef = useRef<'\r\n' | '\n'>(detectDocumentLineEnding(content))
   const lastCursorPropRef = useRef<CursorPosition>(cursor)
@@ -303,11 +232,6 @@ export function useRawCodeMirrorEditor({
     const initialSelection = clampSelection(normalizedInitial.length, initial.cursor)
     lastCursorPropRef.current = initial.cursor
 
-    const handleSlashTocEnter = (view: EditorView): boolean => {
-      if (runtimeRef.current.language !== 'markdown') return false
-      return applyRawTocCommand(view, true)
-    }
-
     const state = EditorState.create({
       doc: normalizedInitial,
       selection: initialSelection,
@@ -323,21 +247,7 @@ export function useRawCodeMirrorEditor({
         compartments.language.of(createLanguageExtension(initial.language)),
         compartments.theme.of(createEditorThemeExtension(initial.theme)),
         compartments.tableKeymap.of(initial.showTableToolbar ? rawTableKeymap : []),
-        Prec.highest(
-          keymap.of([
-            { key: 'ArrowDown', run: () => slashControlsRef.current.moveSelection(1) },
-            { key: 'ArrowUp', run: () => slashControlsRef.current.moveSelection(-1) },
-            { key: 'Enter', run: () => slashControlsRef.current.applySelected() },
-            { key: 'Tab', run: () => slashControlsRef.current.applySelected() },
-            { key: 'Escape', run: () => slashControlsRef.current.dismiss() }
-          ])
-        ),
-        keymap.of([
-          { key: 'Enter', run: handleSlashTocEnter },
-          ...defaultKeymap,
-          ...historyKeymap,
-          indentWithTab
-        ]),
+        keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
         EditorView.contentAttributes.of({
           'data-testid': 'document-editor',
           'aria-label': '문서 에디터',
@@ -362,26 +272,6 @@ export function useRawCodeMirrorEditor({
             if (runtimeRef.current.showTableToolbar) {
               setInTable(isViewCursorInRawTable(update.view))
             }
-          }
-
-          const isSlashInsert = update.transactions.some((tr) => tr.annotation(slashInsertAnnotation))
-          if (isSlashInsert) {
-            return
-          }
-          if (update.docChanged) {
-            const sel = update.state.selection.main
-            if (runtimeRef.current.enableSlashCommands && sel.empty) {
-              const match = detectSlashQuery(update.state.doc.toString(), sel.head, {
-                ignoreCodeFences: true
-              })
-              const coords = match ? readSafeCaretCoords(update.view, match.rangeFrom) : null
-              slashControlsRef.current.updateFromMatch(match, coords, shellRef.current)
-            } else {
-              slashControlsRef.current.dismiss()
-            }
-          } else if (update.selectionSet) {
-            const sel = update.state.selection.main
-            slashControlsRef.current.dismissIfSelectionOutside(sel.from, sel.to, sel.empty)
           }
         })
       ]
@@ -418,9 +308,6 @@ export function useRawCodeMirrorEditor({
     if (prev.language !== language) {
       effects.push(compartments.language.reconfigure(createLanguageExtension(language)))
     }
-    if (!enableSlashCommands) {
-      dismissSlashMenu()
-    }
     if (prev.theme !== theme) {
       effects.push(compartments.theme.reconfigure(createEditorThemeExtension(theme)))
     }
@@ -434,7 +321,7 @@ export function useRawCodeMirrorEditor({
     if (effects.length === 0) return
     prevCompartmentsRef.current = { language, theme, showTableToolbar }
     view.dispatch({ effects, annotations: externalSyncAnnotation.of(true) })
-  }, [dismissSlashMenu, enableSlashCommands, language, theme, showTableToolbar])
+  }, [language, theme, showTableToolbar])
 
   useLayoutEffect(() => {
     const view = viewRef.current
@@ -463,9 +350,6 @@ export function useRawCodeMirrorEditor({
         selection: docChanged || (cursorPropChanged && selectionDiffers) ? targetSelection : undefined,
         annotations: externalSyncAnnotation.of(true)
       })
-      if (docChanged) {
-        dismissSlashMenu()
-      }
       lastCursorPropRef.current = cursor
       syncSelectionAttrs(view)
     }
@@ -473,7 +357,7 @@ export function useRawCodeMirrorEditor({
     if (showTableToolbar && (docChanged || cursorPropChanged)) {
       setInTable(isViewCursorInRawTable(view))
     }
-  }, [content, cursor, dismissSlashMenu, showTableToolbar])
+  }, [content, cursor, showTableToolbar])
 
   useLayoutEffect(() => {
     const view = viewRef.current
@@ -536,15 +420,13 @@ export function useRawCodeMirrorEditor({
   const insertToc = useCallback((): void => {
     const view = viewRef.current
     if (!view || runtimeRef.current.language !== 'markdown') return
-    applyRawTocCommand(view, false)
+    applyRawTocCommand(view)
   }, [])
 
   return {
-    shellRef,
     hostRef,
     inTable,
     runTableAction,
-    insertToc,
-    slashMenuProps
+    insertToc
   }
 }

@@ -378,7 +378,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(screen.getByTestId('document-editor').textContent).toContain('flowchart LR')
   })
 
-  it('renders Raw editor (toolbar, slash menu, syntax highlighting) and live Preview (markdown + debounced Mermaid) side by side in Split mode', async () => {
+  it('renders Raw editor (toolbar, syntax highlighting) and live Preview (markdown + debounced Mermaid) side by side in Split mode', async () => {
     const user = userEvent.setup()
     let latestTab: DocumentTabItem = {
       ...createTab('split'),
@@ -486,10 +486,10 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       expect(within(previewRegion).getByTestId('mermaid-svg').textContent).toContain('A --> C')
     })
 
-    // Typing '/' at end of Raw editor opens Slash command menu in Split mode
+    // Typing '/' at end of Raw editor does not open any slash command menu
     rawEditor.focus()
     await user.keyboard('/')
-    expect(screen.getByRole('listbox', { name: '슬래시 명령어 자동완성' })).toBeInTheDocument()
+    expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
   })
 
   it('resizes split regions via splitter mouse drag, ArrowLeft/ArrowRight keys (0.15~0.85 clamp), and double-click reset to 0.5', () => {

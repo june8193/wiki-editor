@@ -1,13 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  DEFAULT_CUSTOM_COMMANDS,
-  type CustomCommandConfig,
-  type ThemeMode
-} from '@shared/config'
+import type { ThemeMode } from '@shared/config'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
+import { insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
   type HeadingScrollSpySample,
   resolveMatchingOutlineCandidates
@@ -16,19 +12,14 @@ import {
   addTableRowBeforeSafely,
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
-  detectProseMirrorSlashQuery,
   extractWysiwygHeadingCandidates,
   headingNumberingPluginKey,
-  insertWysiwygMarkdownWithCursor,
   prepareMarkdownForTiptap,
-  sanitizeHtmlWithRehype,
-  slashInsertPluginKey
+  sanitizeHtmlWithRehype
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
-import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from '../hooks/useSlashMenu'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
-import { SlashCommandMenu } from './SlashCommandMenu'
 
 export interface WysiwygScrollRequest {
   index: number
@@ -41,8 +32,6 @@ interface WysiwygMarkdownEditorProps {
   theme?: ThemeMode
   showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
-  customCommands?: readonly CustomCommandConfig[]
-  documentTitle?: string
   scrollRequest?: WysiwygScrollRequest | null
   isActive?: boolean
   onChangeContent: (nextContent: string) => void
@@ -218,15 +207,12 @@ export function WysiwygMarkdownEditor({
   theme = 'light',
   showHeadingNumbers = false,
   mermaidRenderer,
-  customCommands = DEFAULT_CUSTOM_COMMANDS,
-  documentTitle,
   scrollRequest,
   isActive = true,
   onChangeContent,
   onScrollTopChange,
   onActiveHeadingChange
 }: WysiwygMarkdownEditorProps) {
-  const shellRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const contextMenuRef = useRef<HTMLDivElement | null>(null)
   const isProgrammaticSyncRef = useRef(false)
@@ -237,25 +223,6 @@ export function WysiwygMarkdownEditor({
   const lastSyncedContentPropRef = useRef(content)
   const onChangeContentRef = useRef(onChangeContent)
   onChangeContentRef.current = onChangeContent
-  const documentTitleRef = useRef(documentTitle)
-  documentTitleRef.current = documentTitle
-  const insertTocRef = useRef<() => void>(() => undefined)
-  const editorRef = useRef<Editor | null>(null)
-
-  const {
-    controlsRef: slashControlsRef,
-    menuProps: slashMenuProps,
-    dismiss: dismissSlashMenu
-  } = useSlashMenu(customCommands, (command, explicitRange?: SlashMenuRange) => {
-    const instance = editorRef.current
-    if (!instance) return false
-    const range = explicitRange ?? detectProseMirrorSlashQuery(instance.state)
-    if (!range) return false
-
-    return insertWysiwygMarkdownWithCursor(instance, command, range, {
-      title: documentTitleRef.current
-    })
-  })
 
   const [cellMenuPos, setCellMenuPos] = useState<{ x: number; y: number } | null>(null)
   const closeCellMenu = useCallback(() => setCellMenuPos(null), [])
@@ -273,44 +240,7 @@ export function WysiwygMarkdownEditor({
           'data-testid': 'document-editor',
           'aria-label': '위지윅 문서 에디터'
         },
-        transformPastedHTML: sanitizeHtmlWithRehype,
-        handleKeyDown: (view, event) => {
-          const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
-          if (slashControlsRef.current.stateRef.current.isOpen) {
-            if (event.key === 'ArrowDown' && !hasModifier) {
-              event.preventDefault()
-              return slashControlsRef.current.moveSelection(1)
-            }
-            if (event.key === 'ArrowUp' && !hasModifier) {
-              event.preventDefault()
-              return slashControlsRef.current.moveSelection(-1)
-            }
-            if ((event.key === 'Enter' || event.key === 'Tab') && !hasModifier) {
-              if (slashControlsRef.current.applySelected()) {
-                event.preventDefault()
-                return true
-              }
-            }
-            if (event.key === 'Escape') {
-              event.preventDefault()
-              return slashControlsRef.current.dismiss()
-            }
-          }
-
-          if (event.key === 'Enter' && !hasModifier) {
-            const { $from, empty } = view.state.selection
-            if (
-              empty &&
-              $from.parent.type.name === 'paragraph' &&
-              $from.parent.textContent.trim() === '/toc'
-            ) {
-              event.preventDefault()
-              insertTocRef.current()
-              return true
-            }
-          }
-          return false
-        }
+        transformPastedHTML: sanitizeHtmlWithRehype
       },
       onUpdate: ({ editor: instance, transaction }) => {
         if (isProgrammaticSyncRef.current || !transaction.docChanged) {
@@ -320,26 +250,10 @@ export function WysiwygMarkdownEditor({
         const serialized = instance.getMarkdown()
         lastEmittedMarkdownRef.current = serialized
         onChangeContentRef.current(serialized)
-
-        if (transaction.getMeta(slashInsertPluginKey)) {
-          slashControlsRef.current.dismiss()
-          return
-        }
-        const match = detectProseMirrorSlashQuery(instance.state)
-        const coords = match ? readSafeCaretCoords(instance.view, match.rangeFrom) : null
-        slashControlsRef.current.updateFromMatch(match, coords, shellRef.current)
-      },
-      onSelectionUpdate: ({ editor: instance, transaction }) => {
-        if (transaction.docChanged) {
-          return
-        }
-        const { from, to, empty } = instance.state.selection
-        slashControlsRef.current.dismissIfSelectionOutside(from, to, empty)
       }
     },
     []
   )
-  editorRef.current = editor
 
   const syncEditorContent = useCallback(
     (markdown: string, markLocalEdit: boolean): void => {
@@ -352,26 +266,22 @@ export function WysiwygMarkdownEditor({
         })
         hasLocalEditRef.current = markLocalEdit
         lastEmittedMarkdownRef.current = markdown
-        dismissSlashMenu()
       } finally {
         isProgrammaticSyncRef.current = false
       }
     },
-    [dismissSlashMenu, editor]
+    [editor]
   )
 
   const handleInsertToc = useCallback((): void => {
     if (!editor) return
     const currentMd = hasLocalEditRef.current ? editor.getMarkdown() : contentRef.current
-    const cursorLine = findFirstNonFencedSlashTocLine(currentMd)
-    const nextMd = insertOrUpdateTocBlock(currentMd, cursorLine)
+    const nextMd = insertOrUpdateTocBlock(currentMd)
     if (nextMd === currentMd) return
 
     syncEditorContent(nextMd, true)
     onChangeContentRef.current(nextMd)
   }, [editor, syncEditorContent])
-
-  insertTocRef.current = handleInsertToc
 
   useEffect(() => {
     if (!editor) return
@@ -439,7 +349,7 @@ export function WysiwygMarkdownEditor({
   )
 
   return (
-    <div ref={shellRef} className="wysiwyg-shell">
+    <div className="wysiwyg-shell">
       <div className="editor-toolbar" role="toolbar" aria-label="위지윅 서식 툴바">
         {FORMAT_TOOLBAR_ITEMS.map((item) => {
           if (item.kind === 'divider') {
@@ -461,7 +371,7 @@ export function WysiwygMarkdownEditor({
         <button
           type="button"
           className="toolbar-btn"
-          title="본문에 목차(/toc) 삽입"
+          title="본문에 목차 삽입"
           onClick={handleInsertToc}
         >
           목차 삽입
@@ -547,8 +457,6 @@ export function WysiwygMarkdownEditor({
           ))}
         </div>
       )}
-
-      <SlashCommandMenu {...slashMenuProps} />
     </div>
   )
 }

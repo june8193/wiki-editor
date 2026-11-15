@@ -1,5 +1,5 @@
 import { CSSProperties, SyntheticEvent } from 'react'
-import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { ThemeMode } from '@shared/config'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
@@ -22,7 +22,6 @@ interface PaneViewProps {
   theme: ThemeMode
   autoSave: boolean
   showHeadingNumbers?: boolean
-  customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
@@ -42,7 +41,6 @@ export function PaneView({
   theme,
   autoSave,
   showHeadingNumbers = true,
-  customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
   buffers,
@@ -124,7 +122,6 @@ export function PaneView({
           theme={theme}
           autoSave={autoSave}
           showHeadingNumbers={showHeadingNumbers}
-          customCommands={customCommands}
           scrollRequest={activeScrollRequest}
           isActive={isActivePane}
           isShortcutDisabled={isShortcutDisabled}

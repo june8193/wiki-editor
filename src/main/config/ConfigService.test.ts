@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_APP_CONFIG, DEFAULT_CUSTOM_COMMANDS } from '@shared/config'
+import { DEFAULT_APP_CONFIG } from '@shared/config'
 import { LogService } from '../logging/LogService'
 import { ConfigService } from './ConfigService'
 
@@ -32,15 +32,14 @@ describe('ConfigService', () => {
       autoSaveDelayMs: 1000,
       showHeadingNumbers: true,
       favoriteWorkspaces: [],
-      recentWorkspaces: [],
-      customCommands: DEFAULT_CUSTOM_COMMANDS
+      recentWorkspaces: []
     })
 
     const rawOnDisk = await readFile(configPath, 'utf8')
     expect(JSON.parse(rawOnDisk)).toEqual(config)
   })
 
-  it('normalizes partial or invalid field values while preserving valid persisted fields', async () => {
+  it('normalizes partial or invalid field values while preserving valid persisted fields and ignoring legacy customCommands', async () => {
     await mkdir(dirname(configPath), { recursive: true })
     await writeFile(
       configPath,
@@ -48,7 +47,8 @@ describe('ConfigService', () => {
         theme: 'dark',
         autoSave: true,
         autoSaveDelayMs: -10,
-        recentWorkspaces: ['C:\\docs', 123]
+        recentWorkspaces: ['C:\\docs', 123],
+        customCommands: [{ trigger: 'legacy', label: 'Legacy', template: 'x' }]
       }),
       'utf8'
     )
@@ -63,9 +63,11 @@ describe('ConfigService', () => {
       autoSaveDelayMs: 1000,
       showHeadingNumbers: true,
       favoriteWorkspaces: [],
-      recentWorkspaces: ['C:\\docs'],
-      customCommands: DEFAULT_CUSTOM_COMMANDS
+      recentWorkspaces: ['C:\\docs']
     })
+
+    const files = await readdir(dirname(configPath))
+    expect(files.some((name) => name.startsWith('config.json.corrupt.'))).toBe(false)
   })
 
   it('recovers from corrupted JSON by backing up the broken file and writing valid defaults', async () => {
@@ -190,25 +192,13 @@ describe('ConfigService', () => {
       service.saveRaw(
         JSON.stringify({
           ...DEFAULT_APP_CONFIG,
-          customCommands: [
-            { trigger: 'dup', label: 'One', template: '1' },
-            { trigger: 'dup', label: 'Two', template: '2' }
-          ]
+          customCommands: []
         })
       )
-    ).rejects.toThrow(/customCommands/i)
-    await expect(
-      service.saveRaw(
-        JSON.stringify({
-          ...DEFAULT_APP_CONFIG,
-          customCommands: [{ trigger: 'bad space', label: 'One', template: '1' }]
-        })
-      )
-    ).rejects.toThrow(/customCommands/i)
+    ).rejects.toThrow(/Unknown config key: "customCommands"/)
 
     expect(notifications).toEqual([])
     expect((await service.get()).theme).toBe('light')
-    expect((await service.get()).customCommands).toEqual(DEFAULT_CUSTOM_COMMANDS)
 
     const validRaw = JSON.stringify({
       version: 1,
@@ -219,8 +209,7 @@ describe('ConfigService', () => {
       favoriteWorkspaces: [
         { path: join(tempDir, 'docs'), name: 'docs', pinnedAt: '2026-11-14T00:00:00.000Z' }
       ],
-      recentWorkspaces: [join(tempDir, 'docs')],
-      customCommands: []
+      recentWorkspaces: [join(tempDir, 'docs')]
     })
 
     const saved = await service.saveRaw(validRaw)
@@ -250,27 +239,6 @@ describe('ConfigService', () => {
     await service.recordRecentWorkspace(wsB)
     const afterMru = await service.recordRecentWorkspace(`${wsA}/`)
     expect(afterMru.recentWorkspaces).toEqual([wsA, wsB])
-  })
-
-  it('persists custom command edits and deletions including clearing all commands across restarts', async () => {
-    const service = new ConfigService(configPath)
-    const initial = await service.get()
-    expect(initial.customCommands.length).toBeGreaterThanOrEqual(4)
-
-    await service.update({
-      customCommands: [
-        { trigger: 'custom', label: 'Custom', description: 'Desc', template: '## {{title}}\n{{cursor}}' }
-      ]
-    })
-
-    const afterEdit = await new ConfigService(configPath).get()
-    expect(afterEdit.customCommands).toEqual([
-      { trigger: 'custom', label: 'Custom', description: 'Desc', template: '## {{title}}\n{{cursor}}' }
-    ])
-
-    await service.update({ customCommands: [] })
-    const afterClear = await new ConfigService(configPath).get()
-    expect(afterClear.customCommands).toEqual([])
   })
 
   it('logs a warn entry with backupPath without leaking corrupt raw content when recovering corrupted config.json', async () => {

@@ -170,7 +170,7 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
             disabled={!documentName || !isMarkdownDocument}
             onClick={onInsertToc}
           >
-            본문에 목차(/toc) 삽입
+            본문에 목차 삽입
           </button>
           <button
             type="button"

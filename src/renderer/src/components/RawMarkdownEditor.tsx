@@ -1,10 +1,9 @@
 import type { EditorView } from '@codemirror/view'
-import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { ThemeMode } from '@shared/config'
 import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
 import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
 import type { CursorPosition } from '../stores/PaneTabStore'
-import { SlashCommandMenu } from './SlashCommandMenu'
 
 interface RawMarkdownEditorProps {
   content: string
@@ -13,9 +12,6 @@ interface RawMarkdownEditorProps {
   cursor: CursorPosition
   scrollTop: number
   showTableToolbar?: boolean
-  enableSlashCommands?: boolean
-  customCommands?: readonly CustomCommandConfig[]
-  documentTitle?: string
   scrollRequest?: RawScrollRequest | null
   isActive?: boolean
   editorViewRef?: { current: EditorView | null }
@@ -49,9 +45,6 @@ export function RawMarkdownEditor({
   cursor,
   scrollTop,
   showTableToolbar = false,
-  enableSlashCommands = language === 'markdown',
-  customCommands,
-  documentTitle,
   scrollRequest,
   isActive = true,
   editorViewRef,
@@ -60,7 +53,7 @@ export function RawMarkdownEditor({
   onActiveHeadingChange,
   onRawScroll
 }: RawMarkdownEditorProps) {
-  const { shellRef, hostRef, inTable, runTableAction, insertToc, slashMenuProps } =
+  const { hostRef, inTable, runTableAction, insertToc } =
     useRawCodeMirrorEditor({
       content,
       language,
@@ -68,9 +61,6 @@ export function RawMarkdownEditor({
       cursor,
       scrollTop,
       showTableToolbar,
-      enableSlashCommands,
-      customCommands,
-      documentTitle,
       scrollRequest,
       isActive,
       editorViewRef,
@@ -81,7 +71,7 @@ export function RawMarkdownEditor({
     })
 
   return (
-    <div ref={shellRef} className="raw-editor-shell">
+    <div className="raw-editor-shell">
       {showTableToolbar && (
         <div className="editor-toolbar" role="toolbar" aria-label="Raw 표 편집 툴바">
           {RAW_TABLE_BUTTONS.map((btn) => (
@@ -100,14 +90,13 @@ export function RawMarkdownEditor({
             type="button"
             className="toolbar-btn"
             onClick={insertToc}
-            title="본문에 목차(/toc) 삽입 또는 갱신"
+            title="본문에 목차 삽입 또는 갱신"
           >
             목차 삽입
           </button>
         </div>
       )}
       <div ref={hostRef} className="codemirror-host" />
-      {enableSlashCommands ? <SlashCommandMenu {...slashMenuProps} /> : null}
     </div>
   )
 }

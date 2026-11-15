@@ -71,16 +71,6 @@ export function resolveRawCursorLine(markdown: string, lfOffset: number): number
 }
 
 /**
- * Returns true if the given character offset sits inside a fenced code block (``` or ~~~).
- */
-export function isOffsetInCodeFence(markdown: string, offset: number): boolean {
-  if (!markdown) return false
-  const lineNumber = getLineNumberAtOffset(markdown, offset)
-  const lines = scanMarkdownLines(markdown)
-  return lines[lineNumber - 1]?.inCodeFence ?? false
-}
-
-/**
  * Formats an Outline heading label consistently with dynamic numbering settings.
  */
 export function formatOutlineHeadingTitle(
@@ -368,18 +358,6 @@ export function insertOrUpdateTocBlock(markdown: string, cursorLine?: number): s
     return nextLines.join(lineEnding)
   }
 
-  if (cursorLine !== undefined && cursorLine >= 1 && cursorLine <= lines.length) {
-    const cursorIdx = cursorLine - 1
-    if (!lines[cursorIdx].inCodeFence && textLines[cursorIdx].trim() === '/toc') {
-      const nextLines = [
-        ...textLines.slice(0, cursorIdx),
-        ...tocLines,
-        ...textLines.slice(cursorIdx + 1)
-      ]
-      return nextLines.join(lineEnding)
-    }
-  }
-
   if (!tocBody) {
     return markdown
   }
@@ -411,32 +389,6 @@ export function insertOrUpdateTocBlock(markdown: string, cursorLine?: number): s
   ]
 
   return [...before, ...blockToInsert, ...after].join(lineEnding)
-}
-
-/**
- * Replaces a `/toc` command on `targetLine1Based` with an inserted/updated TOC block if and only if
- * that line is outside fenced code blocks and produces a modified document; otherwise returns `null`.
- */
-export function tryReplaceSlashTocAtLine(
-  markdown: string,
-  targetLine1Based: number
-): string | null {
-  const lines = scanMarkdownLines(markdown)
-  const target = lines[targetLine1Based - 1]
-  if (!target || target.inCodeFence || target.text.trim() !== '/toc') {
-    return null
-  }
-  const next = insertOrUpdateTocBlock(markdown, targetLine1Based)
-  return next === markdown ? null : next
-}
-
-/**
- * Returns the 1-based line number of the first standalone `/toc` line outside code fences, if any.
- */
-export function findFirstNonFencedSlashTocLine(markdown: string): number | undefined {
-  const lines = scanMarkdownLines(markdown)
-  const found = lines.find((line) => !line.inCodeFence && line.text.trim() === '/toc')
-  return found?.lineNumber
 }
 
 function transformHeadingLines(

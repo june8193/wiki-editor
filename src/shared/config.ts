@@ -1,14 +1,3 @@
-export interface CustomCommandConfig {
-  /** 슬래시 명령어 트리거 (예: "function", "struct" -> /function, /struct) */
-  trigger: string
-  /** 자동완성 목록 표시 이름 */
-  label: string
-  /** 선택적 설명 */
-  description?: string
-  /** 삽입될 표준 마크다운 템플릿 ({{cursor}}, {{date}}, {{title}} 치환 지원) */
-  template: string
-}
-
 export interface FavoriteWorkspace {
   path: string
   name: string
@@ -25,52 +14,6 @@ export interface AppConfig {
   showHeadingNumbers: boolean
   favoriteWorkspaces: FavoriteWorkspace[]
   recentWorkspaces: string[]
-  customCommands: CustomCommandConfig[]
-}
-
-export const DEFAULT_TOC_COMMAND_TEMPLATE = '<!-- toc -->\n<!-- /toc -->'
-
-export const DEFAULT_CUSTOM_COMMANDS: readonly CustomCommandConfig[] = [
-  {
-    trigger: 'function',
-    label: 'Function 문서',
-    description: '함수 시그니처와 매개변수/반환값 문서 템플릿',
-    template:
-      '### Function: {{cursor}}\n\n- **설명**:\n- **매개변수**:\n  - `param`: 설명\n- **반환값**:'
-  },
-  {
-    trigger: 'struct',
-    label: 'Struct 정의',
-    description: '구조체/타입 정의 코드 블록 템플릿',
-    template: '### Struct: {{cursor}}\n\n```c\ntypedef struct {\n  int id;\n} StructName;\n```'
-  },
-  {
-    trigger: 'table',
-    label: '마크다운 표',
-    description: '3열 기본 GFM 마크다운 표 삽입',
-    template: '| {{cursor}}열 1 | 열 2 | 열 3 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |'
-  },
-  {
-    trigger: 'mermaid',
-    label: 'Mermaid 다이어그램',
-    description: 'Mermaid 플로우차트 다이어그램 코드 블록 삽입',
-    template: '```mermaid\nflowchart TD\n  {{cursor}}A[시작] --> B[끝]\n```'
-  },
-  {
-    trigger: 'toc',
-    label: '목차 (TOC)',
-    description: '현재 문서 헤딩 기준 목차 블록 삽입',
-    template: DEFAULT_TOC_COMMAND_TEMPLATE
-  }
-]
-
-function cloneCustomCommand(command: CustomCommandConfig): CustomCommandConfig {
-  return {
-    trigger: command.trigger,
-    label: command.label,
-    ...(command.description !== undefined ? { description: command.description } : {}),
-    template: command.template
-  }
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -80,8 +23,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   autoSaveDelayMs: 1000,
   showHeadingNumbers: true,
   favoriteWorkspaces: [],
-  recentWorkspaces: [],
-  customCommands: DEFAULT_CUSTOM_COMMANDS.map(cloneCustomCommand)
+  recentWorkspaces: []
 }
 
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -101,73 +43,6 @@ function isFavoriteWorkspace(value: unknown): value is FavoriteWorkspace {
     value.name.trim().length > 0 &&
     typeof value.pinnedAt === 'string'
   )
-}
-
-const CUSTOM_COMMAND_TRIGGER_RE = /^[\p{L}\p{N}_-]+$/u
-
-/**
- * Validates a custom slash command trigger against empty, whitespace, slash, syntax, and uniqueness rules.
- * Returns null when valid, or a descriptive error message when invalid.
- */
-export function validateCustomCommandTrigger(
-  trigger: string,
-  existingTriggers?: Iterable<string>
-): string | null {
-  if (trigger.length === 0) {
-    return '트리거명을 입력하세요.'
-  }
-  if (/\s/.test(trigger)) {
-    return '트리거명에는 공백을 포함할 수 없습니다.'
-  }
-  if (trigger.includes('/')) {
-    return '트리거명에는 "/"를 포함할 수 없습니다.'
-  }
-  if (!CUSTOM_COMMAND_TRIGGER_RE.test(trigger)) {
-    return '트리거명은 영문, 숫자, 한글, "_", "-"만 사용할 수 있습니다.'
-  }
-  if (existingTriggers) {
-    const normalized = trigger.toLowerCase()
-    for (const existing of existingTriggers) {
-      if (existing.toLowerCase() === normalized) {
-        return `이미 존재하는 트리거명입니다: /${trigger}`
-      }
-    }
-  }
-  return null
-}
-
-function isCustomCommandConfig(value: unknown): value is CustomCommandConfig {
-  return (
-    isPlainRecord(value) &&
-    typeof value.trigger === 'string' &&
-    validateCustomCommandTrigger(value.trigger) === null &&
-    typeof value.label === 'string' &&
-    value.label.trim().length > 0 &&
-    typeof value.template === 'string' &&
-    (value.description === undefined || typeof value.description === 'string')
-  )
-}
-
-function parseCustomCommands(value: unknown, strict: boolean): CustomCommandConfig[] | null {
-  if (!Array.isArray(value)) return null
-  const seenTriggers = new Set<string>()
-  const parsed: CustomCommandConfig[] = []
-
-  for (const item of value) {
-    if (!isCustomCommandConfig(item)) {
-      if (strict) return null
-      continue
-    }
-    const triggerKey = item.trigger.toLowerCase()
-    if (seenTriggers.has(triggerKey)) {
-      if (strict) return null
-      continue
-    }
-    seenTriggers.add(triggerKey)
-    parsed.push(cloneCustomCommand(item))
-  }
-
-  return parsed
 }
 
 function parseTypedArray<T>(
@@ -224,11 +99,6 @@ const CONFIG_FIELD_SPECS: { [K in keyof AppConfig]: FieldSpec<K> } = {
         strict
       ),
     errorMessage: 'Invalid recentWorkspaces: expected string[]'
-  },
-  customCommands: {
-    parse: (value, strict) => parseCustomCommands(value, strict),
-    errorMessage:
-      'Invalid customCommands: triggers must be unique, non-empty, contain no whitespace or slashes, and use valid characters'
   }
 }
 
@@ -238,8 +108,7 @@ export function cloneAppConfig(config: AppConfig): AppConfig {
   return {
     ...config,
     favoriteWorkspaces: config.favoriteWorkspaces.map(shallowClone),
-    recentWorkspaces: [...config.recentWorkspaces],
-    customCommands: config.customCommands.map(cloneCustomCommand)
+    recentWorkspaces: [...config.recentWorkspaces]
   }
 }
 

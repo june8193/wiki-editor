@@ -71,7 +71,7 @@ describe('MarkdownTocEngine', () => {
     ])
   })
 
-  it('generates Unicode-safe anchor slugs with duplicate disambiguation and nested /toc markdown', () => {
+  it('generates Unicode-safe anchor slugs with duplicate disambiguation and nested TOC markdown', () => {
     expect(slugifyHeading('시작하기 (Getting Started)')).toBe('시작하기-getting-started')
     expect(slugifyHeading('API `v2` & **Guide**')).toBe('api-v2-guide')
 
@@ -104,11 +104,10 @@ describe('MarkdownTocEngine', () => {
     )
   })
 
-  it('inserts a /toc block at cursor or after the first H1 and updates an existing TOC block in place', () => {
+  it('inserts a TOC block at cursor or after the first H1, preserves literal /toc text, and updates an existing TOC block in place', () => {
     const md = [
       '# Main Title',
       '',
-      '/toc',
       '',
       '## First Section',
       '### Child',
@@ -139,6 +138,12 @@ describe('MarkdownTocEngine', () => {
 
     expect(updated.match(/<!-- toc -->/g)).toHaveLength(1)
     expect(updated).toContain('    - [New Sub](#new-sub)')
+
+    // Literal /toc line is treated as plain text and is not stripped or replaced
+    const withLiteralSlashToc = ['# Main Title', '', '/toc', '', '## First Section'].join('\n')
+    const afterInsert = insertOrUpdateTocBlock(withLiteralSlashToc)
+    expect(afterInsert).toContain('<!-- toc -->')
+    expect(afterInsert).toMatch(/^\/toc$/m)
   })
 
   it('does not treat <!-- toc --> markers inside fenced code blocks as the active TOC block', () => {

@@ -1,12 +1,9 @@
 import { Editor } from '@tiptap/core'
-import type { CustomCommandConfig } from '@shared/config'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   addTableRowBeforeSafely,
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
-  detectProseMirrorSlashQuery,
-  insertWysiwygMarkdownWithCursor,
   prepareMarkdownForTiptap,
   sanitizeHtmlWithRehype
 } from './wysiwygMarkdown'
@@ -284,48 +281,5 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     expect(exported).toContain('- [Section](#section)')
     expect(exported).not.toContain('script')
     expect(exported).not.toContain('onerror')
-  })
-
-  it('detects ProseMirror slash queries outside code/URLs and inserts sanitized markdown with {{cursor}} placement', () => {
-    const editor = createTestWysiwygEditor('# Guide\n\n/fun')
-    const endOfPara = editor.state.doc.content.size - 1
-    editor.commands.setTextSelection(endOfPara)
-
-    const match = detectProseMirrorSlashQuery(editor.state)
-    expect(match).not.toBeNull()
-    expect(match?.query).toBe('fun')
-
-    const cmd: CustomCommandConfig = {
-      trigger: 'function',
-      label: 'Function',
-      template:
-        '### Function: {{cursor}}()\n\n<script>alert(1)</script>Title: {{title}} ({{date}})\n[bad](javascript:alert(1))'
-    }
-
-    const applied = insertWysiwygMarkdownWithCursor(editor, cmd, match!, {
-      title: 'arch-doc',
-      date: '2026-11-14'
-    })
-    expect(applied).toBe(true)
-
-    // Typing right after insertion lands at {{cursor}}
-    editor.commands.insertContent('runTask')
-    const md = editor.getMarkdown()
-    expect(md).toContain('### Function: runTask()')
-    expect(md).toContain('Title: arch-doc (2026-11-14)')
-    expect(md).not.toContain('<script>')
-    expect(md).not.toContain('javascript:')
-    expect(md).not.toContain('WIKICURSOR')
-    expect(md).not.toContain('/fun')
-
-    // Code block and URL prefixes do NOT match slash queries
-    const fencedEditor = createTestWysiwygEditor('```ts\n/fun\n```\n\nhttps://')
-    const insideCodePos = findTextPos(fencedEditor, '/fun') + 3
-    fencedEditor.commands.setTextSelection(insideCodePos)
-    expect(detectProseMirrorSlashQuery(fencedEditor.state)).toBeNull()
-
-    const urlEndPos = fencedEditor.state.doc.content.size - 1
-    fencedEditor.commands.setTextSelection(urlEndPos)
-    expect(detectProseMirrorSlashQuery(fencedEditor.state)).toBeNull()
   })
 })

@@ -112,7 +112,7 @@ describe('DocumentOutlinePanel', () => {
       />
     )
 
-    await user.click(screen.getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
+    await user.click(screen.getByRole('button', { name: '본문에 목차 삽입' }))
     await user.click(screen.getByRole('button', { name: '본문 헤딩 번호 쓰기' }))
     await user.click(screen.getByRole('button', { name: '본문 헤딩 번호 제거' }))
 
@@ -136,7 +136,7 @@ describe('DocumentOutlinePanel', () => {
       />
     )
 
-    expect(screen.getByRole('button', { name: '본문에 목차(/toc) 삽입' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '본문에 목차 삽입' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '본문 헤딩 번호 쓰기' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '본문 헤딩 번호 제거' })).toBeDisabled()
     expect(screen.getByText('마크다운 문서에서만 목차를 지원합니다.')).toBeInTheDocument()
