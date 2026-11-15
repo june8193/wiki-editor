@@ -1,7 +1,9 @@
 import { type AutoSaveConfig, BufferAutoSaveScheduler } from './bufferAutoSaveScheduler'
 import {
+  buildRemappedPath,
   type BufferKeyRemap,
   type DocumentBuffer,
+  isKeyNestedOrSame,
   isMissingWorkspaceFileError,
   type OpenBufferInput,
   type ReconcileBuffersResult,
@@ -12,8 +14,8 @@ import {
 } from './documentBuffer'
 import { createDocumentBuffer, DocumentBufferStore } from './documentBufferStore'
 import { toErrorMessage } from './errors'
-import { WindowTabTracker } from './windowTabTracker'
-import { getWorkspacePathKey } from './workspace'
+import { type TabCountChange, WindowTabTracker } from './windowTabTracker'
+import { getWorkspaceDisplayName, getWorkspacePathKey } from './workspace'
 
 export interface SharedDocumentBufferStorage {
   readWorkspaceFile: (filePath: string) => Promise<string>
@@ -27,6 +29,13 @@ export interface SharedDocumentBufferHubOptions {
   storage: SharedDocumentBufferStorage
   initialAutoSaveConfig?: AutoSaveConfig
   logError?: (message: string, details?: Record<string, unknown>) => void
+}
+
+interface InFlightOpenEntry {
+  currentInput: Omit<OpenBufferInput, 'content'>
+  currentKey: string
+  deleted?: boolean
+  promise: Promise<DocumentBuffer>
 }
 
 interface InFlightSaveEntry {
@@ -43,7 +52,7 @@ export class SharedDocumentBufferHub {
   private readonly store = new DocumentBufferStore()
   private readonly tabTracker = new WindowTabTracker()
   private readonly listeners = new Set<(event: SharedBufferHubEvent) => void>()
-  private readonly inFlightOpens = new Map<string, Promise<DocumentBuffer>>()
+  private readonly inFlightOpens = new Map<string, InFlightOpenEntry>()
   private readonly inFlightSaves = new Map<string, InFlightSaveEntry>()
   private readonly autoSaveScheduler: BufferAutoSaveScheduler
   private readonly storage: SharedDocumentBufferStorage
@@ -127,16 +136,17 @@ export class SharedDocumentBufferHub {
   }
 
   private reconcileTabCountChanges(
-    prevCounts: Readonly<Record<string, number>>,
-    countsChanged: boolean,
-    extraCandidateKeys: Iterable<string> = [],
+    change: TabCountChange,
     forceTimerReconcile = false
   ): void {
-    const removedAnyBuffer = this.removeOrphanedBuffers(prevCounts, extraCandidateKeys)
+    const removedAnyBuffer = this.removeOrphanedBuffers(
+      change.prevCounts,
+      change.depletedPendingKeys
+    )
     if (forceTimerReconcile || removedAnyBuffer) {
       this.reconcileAutoSaveTimers()
     }
-    if (removedAnyBuffer || countsChanged) {
+    if (removedAnyBuffer || change.countsChanged) {
       this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
     }
   }
@@ -146,22 +156,17 @@ export class SharedDocumentBufferHub {
     bufferKeys: readonly string[],
     options?: SyncWindowTabsOptions
   ): SharedBufferStateSnapshot {
-    const { prevCounts, depletedPendingKeys, countsChanged } = this.tabTracker.syncWindowTabs(
-      windowId,
-      bufferKeys,
-      options
-    )
+    const change = this.tabTracker.syncWindowTabs(windowId, bufferKeys, options)
     this.revision += 1
-    this.reconcileTabCountChanges(prevCounts, countsChanged, depletedPendingKeys)
+    this.reconcileTabCountChanges(change)
     return this.getSnapshot(windowId)
   }
 
   unregisterWindow(windowId: number): void {
     const wasPaused = this.autoSaveScheduler.removePausedWindow(windowId)
-    const { prevCounts, depletedPendingKeys, countsChanged } =
-      this.tabTracker.unregisterWindow(windowId)
+    const change = this.tabTracker.unregisterWindow(windowId)
     this.revision += 1
-    this.reconcileTabCountChanges(prevCounts, countsChanged, depletedPendingKeys, wasPaused)
+    this.reconcileTabCountChanges(change, wasPaused)
   }
 
   private claimExistingBuffer(existing: DocumentBuffer, windowId?: number): DocumentBuffer {
@@ -186,33 +191,45 @@ export class SharedDocumentBufferHub {
     windowId: number | undefined,
     readContent: () => Promise<string>
   ): Promise<DocumentBuffer> {
-    const key = getWorkspacePathKey(input.path)
-    this.tabTracker.registerPendingOpenOwner(key, windowId)
+    const initialKey = getWorkspacePathKey(input.path)
+    this.tabTracker.registerPendingOpenOwner(initialKey, windowId)
+    let entry = this.inFlightOpens.get(initialKey)
     try {
-      let openPromise = this.inFlightOpens.get(key)
-      if (!openPromise) {
-        openPromise = (async () => {
+      if (!entry) {
+        const createdEntry: InFlightOpenEntry = {
+          currentInput: input,
+          currentKey: initialKey,
+          promise: Promise.resolve({} as DocumentBuffer)
+        }
+        createdEntry.promise = (async () => {
           const content = await readContent()
-          const latest = this.store.getBuffer(key)
+          const latestKey = createdEntry.currentKey
+          const latestInput = createdEntry.currentInput
+          const latest = this.store.getBuffer(latestKey)
           if (latest) {
             return { ...latest }
           }
-          // Skip persisting a newly loaded buffer if every tracked window closed mid-read.
-          if (windowId !== undefined && !this.tabTracker.hasActiveOrPendingOwner(key)) {
-            return createDocumentBuffer({ ...input, content })
+          // Skip persisting a newly loaded buffer if deleted or every window closed mid-read.
+          if (
+            createdEntry.deleted ||
+            (windowId !== undefined && !this.tabTracker.hasActiveOrPendingOwner(latestKey))
+          ) {
+            return createDocumentBuffer({ ...latestInput, content })
           }
-          return this.createBuffer({ ...input, content })
+          return this.createBuffer({ ...latestInput, content })
         })().finally(() => {
-          if (this.inFlightOpens.get(key) === openPromise) {
-            this.inFlightOpens.delete(key)
+          if (this.inFlightOpens.get(createdEntry.currentKey) === createdEntry) {
+            this.inFlightOpens.delete(createdEntry.currentKey)
           }
         })
-        this.inFlightOpens.set(key, openPromise)
+        entry = createdEntry
+        this.inFlightOpens.set(initialKey, entry)
       }
-      return await openPromise
+      return await entry.promise
     } catch (error: unknown) {
-      if (!this.store.hasBuffer(key) && windowId !== undefined) {
-        this.tabTracker.removePendingOpenOwner(key, windowId)
+      const targetKey = entry?.currentKey ?? initialKey
+      if (!this.store.hasBuffer(targetKey) && windowId !== undefined) {
+        this.tabTracker.removePendingOpenOwner(targetKey, windowId)
       }
       throw error
     }
@@ -427,8 +444,48 @@ export class SharedDocumentBufferHub {
     }
   }
 
+  private remapInFlightOpens(
+    oldPath: string,
+    newPath: string,
+    combinedRemappings: BufferKeyRemap[]
+  ): void {
+    const oldPrefixKey = getWorkspacePathKey(oldPath)
+    const newPrefixKey = getWorkspacePathKey(newPath)
+    if (!oldPrefixKey || !newPrefixKey || oldPrefixKey === newPrefixKey) return
+
+    const seenOldKeys = new Set(combinedRemappings.map((r) => r.oldKey))
+    for (const [entryKey, entry] of [...this.inFlightOpens.entries()]) {
+      if (entry.currentInput.kind !== 'workspace' || !isKeyNestedOrSame(entryKey, oldPrefixKey)) {
+        continue
+      }
+
+      const nextPath = buildRemappedPath(entry.currentInput.path, oldPath, newPath)
+      const nextKey = getWorkspacePathKey(nextPath)
+      if (!nextKey || nextKey === entryKey) continue
+
+      this.inFlightOpens.delete(entryKey)
+      entry.currentInput = {
+        ...entry.currentInput,
+        path: nextPath,
+        name:
+          entryKey === oldPrefixKey
+            ? getWorkspaceDisplayName(nextPath)
+            : entry.currentInput.name
+      }
+      entry.currentKey = nextKey
+      if (!this.inFlightOpens.has(nextKey)) {
+        this.inFlightOpens.set(nextKey, entry)
+      }
+      if (!seenOldKeys.has(entryKey)) {
+        seenOldKeys.add(entryKey)
+        combinedRemappings.push({ oldKey: entryKey, newKey: nextKey })
+      }
+    }
+  }
+
   syncRenamedPath(oldPath: string, newPath: string): BufferKeyRemap[] {
     const remappings = this.store.syncRenamedPath(oldPath, newPath)
+    this.remapInFlightOpens(oldPath, newPath, remappings)
     if (remappings.length === 0) return []
 
     this.remapWindowTabsAndTracking(remappings)
@@ -458,6 +515,17 @@ export class SharedDocumentBufferHub {
 
   syncDeletedPath(targetPath: string): string[] {
     const removedKeys = this.store.removeBuffersUnderPath(targetPath)
+    const targetPrefixKey = getWorkspacePathKey(targetPath)
+    if (targetPrefixKey) {
+      for (const [entryKey, entry] of this.inFlightOpens.entries()) {
+        if (entry.currentInput.kind === 'workspace' && isKeyNestedOrSame(entryKey, targetPrefixKey)) {
+          entry.deleted = true
+          if (!removedKeys.includes(entryKey)) {
+            removedKeys.push(entryKey)
+          }
+        }
+      }
+    }
     return this.closeRemovedKeys(removedKeys)
   }
 
@@ -500,6 +568,7 @@ export class SharedDocumentBufferHub {
           if (this.disposed) return
           const current = this.store.getBuffer(latest.key)
           if (!current || current.kind !== 'workspace') return
+          if (current.isSaving || this.inFlightSaves.has(current.key)) return
           if (!isMissingWorkspaceFileError(error)) return
 
           if (!current.isDirty) {
@@ -513,6 +582,15 @@ export class SharedDocumentBufferHub {
 
     const closedKeys: string[] = []
     for (const missingKey of cleanMissingKeys) {
+      const current = this.store.getBuffer(missingKey)
+      if (!current || current.kind !== 'workspace') continue
+      if (current.isSaving || this.inFlightSaves.has(current.key)) continue
+      if (current.isDirty) {
+        if (!missingDirtyNames.includes(current.name)) {
+          missingDirtyNames.push(current.name)
+        }
+        continue
+      }
       if (this.store.removeBuffer(missingKey)) {
         closedKeys.push(missingKey)
       }

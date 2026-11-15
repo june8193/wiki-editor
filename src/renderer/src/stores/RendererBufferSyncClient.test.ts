@@ -272,4 +272,67 @@ describe('RendererBufferSyncClient race guards', () => {
       hub.dispose()
     }
   })
+
+  it('skips opening a dangling tab when buffers-closed arrives while openWorkspaceFile reply is in flight', async () => {
+    const win1 = createHubClientHarness(1)
+    const { hub, files } = win1
+    files.set('C:/wiki/doomed.md', '# Doomed')
+    const stop1 = win1.client.start()
+    const win2 = attachWindowClient(hub, 2)
+    const stop2 = win2.client.start()
+
+    try {
+      await win1.client.openWorkspaceFile({
+        name: 'doomed.md',
+        path: 'C:/wiki/doomed.md',
+        relativePath: 'doomed.md',
+        kind: 'file'
+      })
+      hub.syncWindowTabs(1, ['c:/wiki/doomed.md'])
+
+      const replyGate = createDeferred<Awaited<ReturnType<WikiBufferApi['openWorkspaceFile']>>>()
+      const origOpen2 = win2.bufferApi.openWorkspaceFile.bind(win2.bufferApi)
+      win2.bufferApi.openWorkspaceFile = async (filePath, name, initialContent) => {
+        const opened = await origOpen2(filePath, name, initialContent)
+        await replyGate.promise
+        return opened
+      }
+
+      const openWin2Promise = win2.client.openWorkspaceFile({
+        name: 'doomed.md',
+        path: 'C:/wiki/doomed.md',
+        relativePath: 'doomed.md',
+        kind: 'file'
+      })
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      // While Win2 is still awaiting its open reply, Win1 deletes doomed.md (broadcasting buffers-closed)
+      files.delete('C:/wiki/doomed.md')
+      hub.syncDeletedPath('C:/wiki/doomed.md')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      replyGate.resolve({
+        key: 'c:/wiki/doomed.md',
+        kind: 'workspace',
+        path: 'C:/wiki/doomed.md',
+        name: 'doomed.md',
+        content: '# Doomed',
+        savedContent: '# Doomed',
+        isDirty: false,
+        version: 1,
+        isSaving: false
+      })
+      await openWin2Promise
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      expect(win2.tabStore.getBufferKeys()).toEqual([])
+      expect(win2.bufferStore.hasBuffer('c:/wiki/doomed.md')).toBe(false)
+    } finally {
+      stop1()
+      stop2()
+      win1.detach()
+      win2.detach()
+      hub.dispose()
+    }
+  })
 })

@@ -23,6 +23,12 @@ function areTabCountMapsEqual(
   return true
 }
 
+export interface TabCountChange {
+  prevCounts: Record<string, number>
+  depletedPendingKeys: string[]
+  countsChanged: boolean
+}
+
 /**
  * Tracks per-window tab reference counts and pending async open claims across renderer windows
  * so shared buffers stay alive until every window reference and pending open finishes.
@@ -96,15 +102,21 @@ export class WindowTabTracker {
     return (this.tabCounts[key] ?? 0) > 0 || (this.pendingOpenWindows.get(key)?.size ?? 0) > 0
   }
 
+  private finalizeTabCountChange(depletedPendingKeys: string[] = []): TabCountChange {
+    const prevCounts = this.tabCounts
+    this.tabCounts = this.computeTabCounts()
+    return {
+      prevCounts,
+      depletedPendingKeys,
+      countsChanged: !areTabCountMapsEqual(prevCounts, this.tabCounts)
+    }
+  }
+
   syncWindowTabs(
     windowId: number,
     bufferKeys: readonly string[],
     options?: SyncWindowTabsOptions
-  ): {
-    prevCounts: Record<string, number>
-    depletedPendingKeys: string[]
-    countsChanged: boolean
-  } {
+  ): TabCountChange {
     const perWindow = countBufferKeys(bufferKeys)
     for (const key of Object.keys(perWindow)) {
       this.removePendingOpenOwner(key, windowId)
@@ -114,31 +126,14 @@ export class WindowTabTracker {
       ? this.releasePendingOwnersForWindow(windowId)
       : []
 
-    const prevCounts = this.tabCounts
     this.windowTabs.set(windowId, perWindow)
-    this.tabCounts = this.computeTabCounts()
-    return {
-      prevCounts,
-      depletedPendingKeys,
-      countsChanged: !areTabCountMapsEqual(prevCounts, this.tabCounts)
-    }
+    return this.finalizeTabCountChange(depletedPendingKeys)
   }
 
-  unregisterWindow(windowId: number): {
-    prevCounts: Record<string, number>
-    depletedPendingKeys: string[]
-    countsChanged: boolean
-  } {
+  unregisterWindow(windowId: number): TabCountChange {
     this.windowTabs.delete(windowId)
-    const prevCounts = this.tabCounts
     const depletedPendingKeys = this.releasePendingOwnersForWindow(windowId)
-
-    this.tabCounts = this.computeTabCounts()
-    return {
-      prevCounts,
-      depletedPendingKeys,
-      countsChanged: !areTabCountMapsEqual(prevCounts, this.tabCounts)
-    }
+    return this.finalizeTabCountChange(depletedPendingKeys)
   }
 
   collectOrphanKeys(

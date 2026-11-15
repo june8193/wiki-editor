@@ -106,6 +106,7 @@ export class RendererBufferSyncClient {
   private readonly creatingKeys = new Set<string>()
   private readonly pendingManualSaveKeys = new Set<string>()
   private readonly unsyncedLocalKeys = new Set<string>()
+  private readonly activeRemoteOpens = new Set<Set<string>>()
   private readonly remappedKeys = new Map<string, string>()
   private lastSyncedTabKeys: readonly string[] | null = null
   private mounted = false
@@ -308,6 +309,11 @@ export class RendererBufferSyncClient {
         this.applyHubSnapshot(event.snapshot)
         return
       case 'buffers-closed':
+        for (const closedSet of this.activeRemoteOpens) {
+          for (const closedKey of event.closedKeys) {
+            closedSet.add(closedKey)
+          }
+        }
         this.clearTrackingForKeys(event.closedKeys)
         this.tabStore.closeTabsByBufferKeys(event.closedKeys)
         this.applyHubSnapshot(event.snapshot)
@@ -333,6 +339,8 @@ export class RendererBufferSyncClient {
     fallbackError: string
   ): Promise<void> {
     this.onError(null)
+    const closedDuringOpen = new Set<string>()
+    this.activeRemoteOpens.add(closedDuringOpen)
     try {
       const buf = await loadBuffer()
       if (!this.mounted) {
@@ -340,6 +348,9 @@ export class RendererBufferSyncClient {
         return
       }
       const targetKey = this.resolveLatestKey(buf.key)
+      if (closedDuringOpen.has(buf.key) || closedDuringOpen.has(targetKey)) {
+        return
+      }
       const latestBuf = this.latestHubBuffers[targetKey]
       if (targetKey !== buf.key && !latestBuf) {
         return
@@ -357,6 +368,8 @@ export class RendererBufferSyncClient {
       if (this.mounted) {
         this.onError(toErrorMessage(error, fallbackError), error)
       }
+    } finally {
+      this.activeRemoteOpens.delete(closedDuringOpen)
     }
   }
 
@@ -402,18 +415,14 @@ export class RendererBufferSyncClient {
     set.delete(this.resolveLatestKey(initialKey))
   }
 
-  private trackPendingFlush(
+  private trackAsyncFlush(
     flushes: Map<string, Promise<void>>,
     initialKey: string,
-    prevHubBuffers: DocumentBufferSnapshot,
-    hadPriorFlush: boolean,
-    syncedSynchronously: boolean,
-    flushPromise: Promise<void>
+    flushPromise: Promise<void>,
+    alreadyInSync: boolean
   ): void {
-    // Keep synchronous in-memory hub updates immediate while serializing real async IPC or deferred saves.
-    if (!hadPriorFlush && this.latestHubBuffers !== prevHubBuffers && syncedSynchronously) {
-      return
-    }
+    // Skip queueing when the in-memory hub test harness already settled synchronously.
+    if (alreadyInSync) return
     let tracked!: Promise<void>
     tracked = flushPromise.finally(() => {
       const finalKey = this.resolveLatestKey(initialKey)
@@ -484,14 +493,11 @@ export class RendererBufferSyncClient {
     const createPromise = previousCreate
       ? previousCreate.then(() => sendCreate())
       : sendCreate()
-    this.trackPendingFlush(
-      this.pendingCreateFlushes,
-      buf.key,
-      prevHubBuffers,
-      previousCreate !== undefined,
-      buf.key in this.latestHubBuffers,
-      createPromise
-    )
+    const alreadyInSync =
+      previousCreate === undefined &&
+      this.latestHubBuffers !== prevHubBuffers &&
+      buf.key in this.latestHubBuffers
+    this.trackAsyncFlush(this.pendingCreateFlushes, buf.key, createPromise, alreadyInSync)
   }
 
   updateBufferContent = (bufferKey: string, nextContent: string): void => {
@@ -529,14 +535,11 @@ export class RendererBufferSyncClient {
         : sendUpdate(resolvedKey)
     ).finally(() => this.finalizeLocalEdit(resolvedKey, synced))
 
-    this.trackPendingFlush(
-      this.pendingEditFlushes,
-      resolvedKey,
-      prevHubBuffers,
-      priorFlush !== undefined,
-      this.latestHubBuffers[resolvedKey]?.content === nextContent,
-      requestPromise
-    )
+    const alreadyInSync =
+      priorFlush === undefined &&
+      this.latestHubBuffers !== prevHubBuffers &&
+      this.latestHubBuffers[resolvedKey]?.content === nextContent
+    this.trackAsyncFlush(this.pendingEditFlushes, resolvedKey, requestPromise, alreadyInSync)
   }
 
   private async runSaveBufferRequest(key: string): Promise<boolean> {
