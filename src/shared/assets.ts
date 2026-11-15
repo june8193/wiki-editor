@@ -55,7 +55,7 @@ export function parseWikiAssetUrl(rawUrl: string): string | null {
   return targetPath
 }
 
-function safeDecodeUriComponent(value: string): string {
+export function safeDecodeUriComponent(value: string): string {
   try {
     return decodeURIComponent(value)
   } catch {

@@ -210,6 +210,26 @@ function findClosingDestinationParen(text: string, openParenIndex: number): numb
   return -1
 }
 
+function findClosingLabelBracket(text: string, labelStart: number): number {
+  let depth = 1
+  let cursor = labelStart
+
+  while (cursor < text.length) {
+    const ch = text[cursor]
+    if (ch === '[') {
+      depth += 1
+    } else if (ch === ']') {
+      depth -= 1
+      if (depth === 0) {
+        return cursor
+      }
+    }
+    cursor = nextMarkdownCursor(text, cursor)
+  }
+
+  return -1
+}
+
 function stripInlineLinksAndImages(text: string): string {
   let result = ''
   let i = 0
@@ -219,16 +239,12 @@ function stripInlineLinksAndImages(text: string): string {
     const isLink = !isImage && text[i] === '['
     if (isImage || isLink) {
       const labelStart = i + (isImage ? 2 : 1)
-      let closeBracket = labelStart
-      while (closeBracket < text.length && text[closeBracket] !== ']') {
-        closeBracket = nextMarkdownCursor(text, closeBracket)
-      }
-
-      const hasValidLabel = isImage ? closeBracket < text.length : closeBracket > labelStart && closeBracket < text.length
+      const closeBracket = findClosingLabelBracket(text, labelStart)
+      const hasValidLabel = isImage ? closeBracket >= labelStart : closeBracket > labelStart
       if (hasValidLabel && text[closeBracket + 1] === '(') {
         const closeParen = findClosingDestinationParen(text, closeBracket + 1)
         if (closeParen !== -1) {
-          result += text.slice(labelStart, closeBracket)
+          result += stripInlineLinksAndImages(text.slice(labelStart, closeBracket))
           i = closeParen + 1
           continue
         }

@@ -17,7 +17,7 @@ import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
 import { unified } from 'unified'
 import { MermaidDiagram } from '../components/MermaidDiagram'
-import { resolveImageDisplaySrc } from '@shared/assets'
+import { resolveImageDisplaySrc, safeDecodeUriComponent } from '@shared/assets'
 import { MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 import {
   createHeadingNumberTracker,
@@ -48,14 +48,6 @@ interface SourceLineDataProps {
 }
 
 const PreviewRenderContext = createContext<PreviewRenderContextValue>({ theme: 'light' })
-
-function decodeSlugSafely(rawSlug: string): string {
-  try {
-    return decodeURIComponent(rawSlug)
-  } catch {
-    return rawSlug
-  }
-}
 
 function extractHastText(node: HastElement | HastRootContent): string {
   if (node.type === 'text') {
@@ -190,7 +182,7 @@ function SafeLink(props: ComponentPropsWithoutRef<'a'>) {
       onClick={(event) => {
         event.preventDefault()
         if (isInternalAnchor && href.length > 1) {
-          onAnchorNavigate?.(decodeSlugSafely(href.slice(1)))
+          onAnchorNavigate?.(safeDecodeUriComponent(href.slice(1)))
         }
         onClick?.(event)
       }}
