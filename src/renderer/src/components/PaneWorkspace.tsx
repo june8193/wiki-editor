@@ -21,9 +21,9 @@ import {
   allowWikiTabDragOver,
   dispatchTabDrop,
   isExternalTabDragEvent,
-  type PaneInteractionActions,
   type TabDragUiState
 } from '../stores/tabDragDrop'
+import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
 
 export interface PaneWorkspaceProps {

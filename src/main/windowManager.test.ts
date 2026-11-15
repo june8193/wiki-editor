@@ -1105,9 +1105,6 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
   })
 
   it('reclaims a recently ended pending drag session when endTabDrag beats acceptTabDragDrop, while blocking reclaimed drops after Escape or expiry', async () => {
-    await writeFile(join(workspaceDir, 'alpha.md'), '# Alpha disk', 'utf-8')
-    await writeFile(join(workspaceDir, 'beta.md'), '# Beta disk', 'utf-8')
-
     let nowMs = 1_000
     const coordinator = new TabDragCoordinator({ now: () => nowMs, crossWindowReclaimGraceMs: 500 })
     const betaPayload: TabTransferPayload = {

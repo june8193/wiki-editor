@@ -126,13 +126,13 @@ export class TabDragCoordinator {
   }
 
   /**
-   * Transitions a pending active session to a terminal outcome and broadcasts the change.
+   * Transitions a pending drag session to a terminal outcome and broadcasts the change.
    */
   private transitionPendingOutcome(
+    session: ActiveTabDragSession | null,
     targetOutcome: TabDragResolution,
     targetWindowId?: number
   ): ActiveTabDragSession | null {
-    const session = this.activeSession
     if (!session) return null
     if (session.outcome !== 'pending') {
       return cloneSession(session)
@@ -159,7 +159,7 @@ export class TabDragCoordinator {
     if (!session || session.sourceWindowId !== sourceWindowId || session.dragSessionId !== dragSessionId) {
       return null
     }
-    return this.transitionPendingOutcome(outcome)
+    return this.transitionPendingOutcome(session, outcome)
   }
 
   /**
@@ -168,8 +168,7 @@ export class TabDragCoordinator {
    * the authoritative shared `DocumentBuffer` and transferred tab state.
    */
   acceptCrossWindowDrop(params: AcceptCrossWindowDropParams): AcceptTabDragDropResult {
-    const active = this.activeSession
-    const session = active ?? this.getValidReclaimableSession()
+    const session = this.activeSession ?? this.getValidReclaimableSession()
     if (!session) {
       return { accepted: false, reason: 'no-active-drag' }
     }
@@ -192,15 +191,9 @@ export class TabDragCoordinator {
     // eager source window tab close cannot prune the last buffer reference in flight.
     params.bufferHub.registerPendingTransfer(params.targetWindowId, buffer.key)
     const payload = toTabTransferPayload({ ...session.payload, bufferKey: buffer.key })
-    session.payload = toTabTransferPayload(payload)
+    session.payload = payload
     this.reclaimableEndedSession = null
-    if (active) {
-      this.transitionPendingOutcome('dropped-in-window', params.targetWindowId)
-    } else {
-      session.outcome = 'dropped-in-window'
-      session.targetWindowId = params.targetWindowId
-      this.emit(cloneSession(session))
-    }
+    this.transitionPendingOutcome(session, 'dropped-in-window', params.targetWindowId)
 
     return {
       accepted: true,
@@ -234,7 +227,7 @@ export class TabDragCoordinator {
       return null
     }
     this.reclaimableEndedSession = null
-    return this.transitionPendingOutcome('cancelled')
+    return this.transitionPendingOutcome(this.activeSession, 'cancelled')
   }
 
   /**

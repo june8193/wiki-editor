@@ -1,15 +1,30 @@
 import { useCallback, useRef, useState } from 'react'
 import { useDismissable } from '../hooks/useDismissable'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
-import type { PaneId, TabItem } from '../stores/PaneTabStore'
+import type { ScreenPoint } from '@shared/window'
+import type { PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 import {
   allowWikiTabDragOver,
   extractDragEndScreenPoint,
   handleTabMoveDrop,
-  type PaneInteractionActions,
+  type TabDragDropActions,
   type TabDragUiState,
   writeTabDragDataTransfer
 } from '../stores/tabDragDrop'
+
+export interface PaneInteractionActions extends TabDragDropActions {
+  onFocusPane: (paneId: PaneId) => void
+  onActivateTab: (paneId: PaneId, tabId: string) => void
+  onCloseTab: (paneId: PaneId, tabId: string) => void
+  onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
+  onDetachTabToNewWindow?: (paneId: PaneId, tabId: string) => void
+  onStartTabDrag: (paneId: PaneId, tabId: string) => void
+  onCancelTabDrag: () => void
+  onEndTabDrag: (screenPoint?: ScreenPoint) => void
+  onChangeContent: (bufferKey: string, nextContent: string) => void
+  onSaveBuffer: (bufferKey: string) => void
+  onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
+}
 
 interface TabContextMenuState {
   tabId: string

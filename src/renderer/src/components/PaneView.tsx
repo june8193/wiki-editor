@@ -6,11 +6,10 @@ import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
 import {
   allowWikiTabDragOver,
   handleTabMoveDrop,
-  type PaneInteractionActions,
   type TabDragUiState,
   type TabDropMoveOptions
 } from '../stores/tabDragDrop'
-import { isPaneTabTriggerTarget, PaneTabBar } from './PaneTabBar'
+import { isPaneTabTriggerTarget, type PaneInteractionActions, PaneTabBar } from './PaneTabBar'
 
 interface PaneViewProps {
   pane: PaneState

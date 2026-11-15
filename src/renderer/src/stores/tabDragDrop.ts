@@ -1,7 +1,6 @@
 import type { DragEvent } from 'react'
-import type { PaneId, ScreenPoint } from '@shared/window'
-import type { ActiveTabDragSession } from '@shared/window'
-import type { TabViewPatch, TransferredTabDropTarget } from './PaneTabStore'
+import type { ActiveTabDragSession, PaneId, ScreenPoint } from '@shared/window'
+import type { TransferredTabDropTarget } from './PaneTabStore'
 
 export interface DraggingTabPayload {
   paneId: PaneId
@@ -18,26 +17,15 @@ export const EMPTY_TAB_DRAG_STATE: TabDragUiState = {
   externalDragSession: null
 }
 
-export interface PaneInteractionActions {
-  onFocusPane: (paneId: PaneId) => void
-  onActivateTab: (paneId: PaneId, tabId: string) => void
-  onCloseTab: (paneId: PaneId, tabId: string) => void
+export interface TabDragDropActions {
   onMoveTab: (
     sourcePaneId: PaneId,
     targetPaneId: PaneId,
     tabId: string,
     targetIndex?: number
   ) => void
-  onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
-  onDetachTabToNewWindow?: (paneId: PaneId, tabId: string) => void
   onDropExternalTab?: (target: TransferredTabDropTarget, dragSessionId?: string) => void
-  onStartTabDrag: (paneId: PaneId, tabId: string) => void
   onDropTabInWindow: () => void
-  onCancelTabDrag: () => void
-  onEndTabDrag: (screenPoint?: ScreenPoint) => void
-  onChangeContent: (bufferKey: string, nextContent: string) => void
-  onSaveBuffer: (bufferKey: string) => void
-  onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
 }
 
 export interface TabDropAcceptOptions {
@@ -141,7 +129,7 @@ export function dispatchTabDrop(
   event: DragEvent,
   dragState: TabDragUiState,
   dropTarget: TransferredTabDropTarget,
-  actions: Pick<PaneInteractionActions, 'onDropTabInWindow' | 'onDropExternalTab'>,
+  actions: Pick<TabDragDropActions, 'onDropTabInWindow' | 'onDropExternalTab'>,
   onLocalDrop: (payload: DraggingTabPayload) => void,
   options?: TabDropAcceptOptions & { stopPropagation?: boolean }
 ): void {
@@ -177,10 +165,7 @@ export function handleTabMoveDrop(
   event: DragEvent,
   dragState: TabDragUiState,
   targetPaneId: PaneId,
-  actions: Pick<
-    PaneInteractionActions,
-    'onDropTabInWindow' | 'onMoveTab' | 'onDropExternalTab'
-  >,
+  actions: TabDragDropActions,
   options?: TabDropMoveOptions
 ): void {
   dispatchTabDrop(

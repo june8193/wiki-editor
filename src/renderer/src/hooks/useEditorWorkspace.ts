@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
 import { canDetachTabFromWindow } from '@shared/window'
-import type { PaneInteractionActions } from '../stores/tabDragDrop'
+import type { PaneInteractionActions } from '../components/PaneTabBar'
 import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
 import {
