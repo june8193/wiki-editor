@@ -73,6 +73,28 @@ describe('resolveMarkdownLinkTarget', () => {
     expect(resolveMarkdownLinkTarget('', posixCtx).kind).toBe('error')
     expect(resolveMarkdownLinkTarget('./bad%ZZ.md', posixCtx).kind).toBe('error')
   })
+
+  it('rejects non-markdown relative workspace files while allowing .md/.markdown case-insensitively and prioritizing workspace escape checks', () => {
+    expect(resolveMarkdownLinkTarget('./SPEC.MARKDOWN#intro', posixCtx)).toEqual({
+      kind: 'workspace-file',
+      targetPath: '/wiki/notes/docs/SPEC.MARKDOWN',
+      slug: 'intro'
+    })
+
+    for (const nonMd of ['./image.png', './config.json', './notes.txt#sec']) {
+      const result = resolveMarkdownLinkTarget(nonMd, posixCtx)
+      expect(result.kind).toBe('error')
+      if (result.kind === 'error') {
+        expect(result.message).toMatch(/마크다운/)
+      }
+    }
+
+    const escapedNonMd = resolveMarkdownLinkTarget('../../outside.png', posixCtx)
+    expect(escapedNonMd.kind).toBe('error')
+    if (escapedNonMd.kind === 'error') {
+      expect(escapedNonMd.message).toMatch(/워크스페이스 루트 밖/)
+    }
+  })
 })
 
 describe('findMarkdownHeadingBySlug', () => {

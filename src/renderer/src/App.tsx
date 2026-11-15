@@ -16,12 +16,10 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { SidebarResizer } from './components/SidebarResizer'
 import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
-import { resolveMarkdownLinkTarget } from './editor/MarkdownLinkNavigation'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
   applyHeadingNumbers,
   findFirstNonFencedSlashTocLine,
-  findMarkdownHeadingBySlug,
   insertOrUpdateTocBlock,
   type MarkdownHeading,
   resolveRawCursorLine,
@@ -30,10 +28,11 @@ import {
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
+import { type HeadingScrollTarget, useMarkdownLinkNavigation } from './hooks/useMarkdownLinkNavigation'
 import { useWindowWidth } from './hooks/useWindowWidth'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
-import { getPaneActiveTab, type PaneId, type TabItem, type TabViewPatch } from './stores/PaneTabStore'
+import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
 import {
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
@@ -52,11 +51,6 @@ interface LeftSidebarState {
 interface RightSidebarState {
   isCollapsed: boolean
   width: number
-}
-
-interface HeadingScrollTarget {
-  paneId: PaneId
-  tab: Pick<TabItem, 'id' | 'mode'>
 }
 
 function selectLeftSidebarView(
@@ -145,8 +139,6 @@ export function App() {
   const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null)
   const [outlineScrollRequest, setOutlineScrollRequest] = useState<OutlineScrollRequest | null>(null)
   const scrollNonceRef = useRef(0)
-  const linkNavigationSeqRef = useRef(0)
-  const workspaceRootRef = useRef<string | null>(null)
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
   const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(async () => [])
@@ -210,7 +202,6 @@ export function App() {
     buffers,
     layout,
     openWorkspaceFile,
-    openWorkspaceFileByPath,
     openConfigDocument,
     refreshCleanConfig,
     openCreatedFile,
@@ -437,7 +428,7 @@ export function App() {
 
   const handleOpenFile = useCallback(
     (entry: WorkspaceEntry): void => {
-      void openWorkspaceFile(entry)
+      void openWorkspaceFile(entry.path, undefined, entry.name)
     },
     [openWorkspaceFile]
   )
@@ -482,7 +473,6 @@ export function App() {
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
   const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
-  workspaceRootRef.current = workspace?.rootPath ?? null
 
   const applyActiveMarkdownTransform = useCallback(
     (transform: (content: string) => string): void => {
@@ -561,74 +551,14 @@ export function App() {
     [updateTabViewState]
   )
 
-  const scrollToHeadingOrReport = useCallback(
-    (target: HeadingScrollTarget, content: string, slug: string): void => {
-      const match = findMarkdownHeadingBySlug(content, slug)
-      if (!match) {
-        reportErrorBanner(`섹션을 찾을 수 없습니다: #${slug}`)
-        return
-      }
-      dispatchHeadingScroll(target, match.heading, match.index)
-      reportErrorBanner(null)
-    },
-    [dispatchHeadingScroll, reportErrorBanner]
-  )
-
-  const handleNavigateMarkdownLink = useCallback(
-    (paneId: PaneId, tabId: string, href: string): void => {
-      const sourceTab = layout.panes[paneId].tabs.find((tab) => tab.id === tabId)
-      const sourceBuffer = sourceTab ? buffers[sourceTab.bufferKey] : undefined
-      if (!sourceTab || !sourceBuffer || !isMarkdownDocument(sourceBuffer)) {
-        return
-      }
-
-      const originWorkspaceRoot = workspace?.rootPath ?? null
-      const resolved = resolveMarkdownLinkTarget(href, {
-        workspaceRootPath: originWorkspaceRoot,
-        activeFilePath: sourceBuffer.kind === 'workspace' ? sourceBuffer.path : null
-      })
-
-      if (resolved.kind === 'external') {
-        return
-      }
-
-      const navSeq = ++linkNavigationSeqRef.current
-      if (resolved.kind === 'error') {
-        reportErrorBanner(resolved.message)
-        return
-      }
-
-      if (resolved.kind === 'same-doc-section') {
-        scrollToHeadingOrReport({ paneId, tab: sourceTab }, sourceBuffer.content, resolved.slug)
-        return
-      }
-
-      reportErrorBanner(null)
-      void (async () => {
-        const opened = await openWorkspaceFileByPath(resolved.targetPath, paneId)
-        if (!opened) {
-          return
-        }
-        if (
-          linkNavigationSeqRef.current !== navSeq ||
-          workspaceRootRef.current !== originWorkspaceRoot
-        ) {
-          return
-        }
-        if (resolved.slug !== null) {
-          scrollToHeadingOrReport({ paneId, tab: opened.tab }, opened.buffer.content, resolved.slug)
-        }
-      })()
-    },
-    [
-      buffers,
-      layout.panes,
-      openWorkspaceFileByPath,
-      reportErrorBanner,
-      scrollToHeadingOrReport,
-      workspace?.rootPath
-    ]
-  )
+  const handleNavigateMarkdownLink = useMarkdownLinkNavigation({
+    panes: layout.panes,
+    buffers,
+    workspaceRootPath: workspace?.rootPath ?? null,
+    openWorkspaceFile,
+    dispatchHeadingScroll,
+    reportErrorBanner
+  })
 
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({

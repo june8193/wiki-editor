@@ -7,6 +7,7 @@ import {
   stripMarkdownExtension,
   type WorkspaceEntry
 } from '@shared/workspace'
+import { countBacktickRun, isExternalLinkScheme } from './MarkdownLinkSyntax'
 import {
   isOffsetInCodeFence,
   parseMarkdownHeadings,
@@ -74,16 +75,7 @@ interface PendingLinkCandidate {
   queryStartBufferOffset: number
 }
 
-const EXTERNAL_SCHEME_REGEX = /^(?:https?:|mailto:)/i
 const DISALLOWED_QUERY_CHAR_REGEX = /[\s)]/
-
-function countBacktickRun(text: string, start: number): number {
-  let end = start
-  while (end < text.length && text[end] === '`') {
-    end += 1
-  }
-  return end - start
-}
 
 function wrapCodeSpanMarkdown(text: string): string {
   let maxRun = 0
@@ -261,7 +253,7 @@ export function detectLinkQueryFromSegments(
   }
 
   const query = buffer.slice(candidate.queryStartBufferOffset)
-  if (DISALLOWED_QUERY_CHAR_REGEX.test(query) || EXTERNAL_SCHEME_REGEX.test(query)) {
+  if (DISALLOWED_QUERY_CHAR_REGEX.test(query) || isExternalLinkScheme(query)) {
     return null
   }
 

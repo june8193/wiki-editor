@@ -369,7 +369,7 @@ export function useEditorWorkspace({
     }
   }, [autoSave, autoSaveDelayMs, isAutoSavePaused, buffers, bufferStore, saveBufferSnapshot])
 
-  const openWorkspaceFileByPath = useCallback(
+  const openWorkspaceFile = useCallback(
     async (
       filePath: string,
       targetPaneId?: PaneId,
@@ -402,13 +402,6 @@ export function useEditorWorkspace({
       }
     },
     [bufferStore, tabStore]
-  )
-
-  const openWorkspaceFile = useCallback(
-    async (entry: WorkspaceEntry, targetPaneId?: PaneId): Promise<void> => {
-      await openWorkspaceFileByPath(entry.path, targetPaneId, entry.name)
-    },
-    [openWorkspaceFileByPath]
   )
 
   const openConfigDocument = useCallback(
@@ -637,7 +630,6 @@ export function useEditorWorkspace({
     buffers,
     layout,
     openWorkspaceFile,
-    openWorkspaceFileByPath,
     openConfigDocument,
     refreshCleanConfig,
     openCreatedFile,

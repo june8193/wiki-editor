@@ -43,4 +43,20 @@ describe('extractMarkdownLinkHrefAtOffset', () => {
     expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('./b.md'))).toBeNull()
     expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('./c.md'))).toBe('./c.md')
   })
+
+  it('unescapes backslash-escaped destination characters and supports multi-line link labels inside a paragraph', () => {
+    const escaped = 'See [Guide](./guide\\(1\\).md) and [Angle](<./a\\>b.md>)'
+    expect(extractMarkdownLinkHrefAtOffset(escaped, escaped.indexOf('Guide'))).toBe(
+      './guide(1).md'
+    )
+    expect(extractMarkdownLinkHrefAtOffset(escaped, escaped.indexOf('Angle'))).toBe('./a>b.md')
+
+    const multiLine = 'See [first line\nsecond line](./doc.md) end'
+    expect(extractMarkdownLinkHrefAtOffset(multiLine, multiLine.indexOf('first'))).toBe('./doc.md')
+    expect(extractMarkdownLinkHrefAtOffset(multiLine, multiLine.indexOf('second'))).toBe('./doc.md')
+
+    const splitBlank = '[first\n\nsecond](./doc.md)'
+    expect(extractMarkdownLinkHrefAtOffset(splitBlank, splitBlank.indexOf('first'))).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(splitBlank, splitBlank.indexOf('second'))).toBeNull()
+  })
 })

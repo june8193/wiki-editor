@@ -120,7 +120,22 @@ function normalizeDocText(text: string): string {
 
 function resolveRawClickOffset(view: EditorView, event: MouseEvent): number | null {
   if (event.clientX !== 0 || event.clientY !== 0) {
-    return view.posAtCoords({ x: event.clientX, y: event.clientY })
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+    if (pos === null) {
+      return null
+    }
+    const line = view.state.doc.lineAt(pos)
+    if (pos === line.from) {
+      const charRect = view.coordsAtPos(pos)
+      if (
+        charRect &&
+        (charRect.right > charRect.left || charRect.bottom > charRect.top) &&
+        event.clientX < charRect.left
+      ) {
+        return null
+      }
+    }
+    return pos
   }
 
   const target = event.target

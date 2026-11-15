@@ -26,9 +26,15 @@ export interface WorkspaceChangeEvent {
 
 const DEFAULT_MAX_RECENT_WORKSPACES = 10
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:(?:[\\/]|$)/
+const WINDOWS_DRIVE_PREFIX_RE = /^[a-zA-Z]:/
 
 function isWindowsPathStyle(path: string): boolean {
   return WINDOWS_DRIVE_RE.test(path) || path.startsWith('\\\\') || path.startsWith('//')
+}
+
+/** Returns true when a path starts with a POSIX/UNC slash or Windows drive prefix. */
+export function isAbsoluteOrDrivePrefix(value: string): boolean {
+  return WINDOWS_DRIVE_PREFIX_RE.test(value) || value.startsWith('/') || value.startsWith('\\')
 }
 
 function stripTrailingSeparators(path: string, separator: string): string {
@@ -219,4 +225,134 @@ export function compareWorkspaceEntriesByRelativePath(
     sensitivity: 'base'
   })
   return baseOrder !== 0 ? baseOrder : a.relativePath.localeCompare(b.relativePath)
+}
+
+export type RelativeWorkspacePathResult =
+  | { ok: true; targetPath: string }
+  | { ok: false; reason: 'outside-workspace' | 'invalid' }
+
+interface NormalizedPathParts {
+  rootPrefix: string
+  sep: '/' | '\\'
+  caseInsensitive: boolean
+  segments: string[]
+}
+
+function splitNormalizedRootAndSegments(normalizedPath: string): NormalizedPathParts | null {
+  if (!normalizedPath) return null
+
+  if (normalizedPath.startsWith('\\\\')) {
+    const uncMatch = /^(\\\\[^\\]+\\[^\\]+)(?:\\(.*))?$/.exec(normalizedPath)
+    if (!uncMatch) return null
+    return {
+      rootPrefix: uncMatch[1],
+      sep: '\\',
+      caseInsensitive: true,
+      segments: uncMatch[2] ? uncMatch[2].split('\\').filter(Boolean) : []
+    }
+  }
+
+  if (WINDOWS_DRIVE_PREFIX_RE.test(normalizedPath)) {
+    const driveMatch = /^([a-zA-Z]:)(?:\\(.*))?$/.exec(normalizedPath)
+    if (!driveMatch) return null
+    return {
+      rootPrefix: driveMatch[1],
+      sep: '\\',
+      caseInsensitive: true,
+      segments: driveMatch[2] ? driveMatch[2].split('\\').filter(Boolean) : []
+    }
+  }
+
+  if (normalizedPath.startsWith('/')) {
+    return {
+      rootPrefix: '/',
+      sep: '/',
+      caseInsensitive: false,
+      segments: normalizedPath.slice(1).split('/').filter(Boolean)
+    }
+  }
+
+  return null
+}
+
+function isStrictDescendantSegments(
+  target: readonly string[],
+  root: readonly string[],
+  caseInsensitive: boolean
+): boolean {
+  if (target.length <= root.length) return false
+  for (let i = 0; i < root.length; i += 1) {
+    const left = caseInsensitive ? target[i].toLowerCase() : target[i]
+    const right = caseInsensitive ? root[i].toLowerCase() : root[i]
+    if (left !== right) return false
+  }
+  return true
+}
+
+/**
+ * Resolves a relative file reference against `baseFilePath` inside `workspaceRootPath`,
+ * preventing escapes outside the workspace root without Node path dependencies.
+ */
+export function resolveRelativeWorkspacePath(
+  workspaceRootPath: string,
+  baseFilePath: string,
+  relativePath: string
+): RelativeWorkspacePathResult {
+  if (isAbsoluteOrDrivePrefix(relativePath)) {
+    return { ok: false, reason: 'outside-workspace' }
+  }
+  if (
+    relativePath.length === 0 ||
+    relativePath.includes('\0') ||
+    relativePath.endsWith('/') ||
+    relativePath.endsWith('\\')
+  ) {
+    return { ok: false, reason: 'invalid' }
+  }
+
+  const parsedRoot = splitNormalizedRootAndSegments(normalizeWorkspacePath(workspaceRootPath))
+  const parsedBase = splitNormalizedRootAndSegments(normalizeWorkspacePath(baseFilePath))
+  if (!parsedRoot || !parsedBase) {
+    return { ok: false, reason: 'outside-workspace' }
+  }
+
+  const caseInsensitive = parsedRoot.caseInsensitive || parsedBase.caseInsensitive
+  const sameRoot = caseInsensitive
+    ? parsedRoot.rootPrefix.toLowerCase() === parsedBase.rootPrefix.toLowerCase()
+    : parsedRoot.rootPrefix === parsedBase.rootPrefix
+  if (!sameRoot) {
+    return { ok: false, reason: 'outside-workspace' }
+  }
+
+  const rawSegments = relativePath.split(/[/\\]+/)
+  const stack = parsedBase.segments.slice(0, -1)
+  let underflowed = false
+  for (const seg of rawSegments) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') {
+      if (stack.length === 0) {
+        underflowed = true
+        continue
+      }
+      stack.pop()
+      continue
+    }
+    stack.push(seg)
+  }
+
+  if (underflowed || !isStrictDescendantSegments(stack, parsedRoot.segments, caseInsensitive)) {
+    return { ok: false, reason: 'outside-workspace' }
+  }
+
+  const lastRawSegment = rawSegments[rawSegments.length - 1]
+  if (lastRawSegment === '.' || lastRawSegment === '..') {
+    return { ok: false, reason: 'invalid' }
+  }
+
+  const targetPath =
+    parsedRoot.rootPrefix === '/'
+      ? `/${stack.join('/')}`
+      : `${parsedRoot.rootPrefix}${parsedRoot.sep}${stack.join(parsedRoot.sep)}`
+
+  return { ok: true, targetPath }
 }

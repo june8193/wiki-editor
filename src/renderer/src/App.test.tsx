@@ -5384,6 +5384,9 @@ describe('Markdown link navigation and missing target banner', () => {
               '- [메일](mailto:wiki@example.com)',
               '- [가이드](../sub/guide%20%281%29.md#%EC%84%A4%EC%A0%95)',
               '- [형제](./sibling.md)',
+              '- [Raw 이동](./raw-target.md)',
+              '- [위지윅 이동](./wysiwyg-target.md)',
+              '- [상하 이동](./vertical-target.md)',
               '',
               '본문 첫 줄',
               '',
@@ -5392,6 +5395,9 @@ describe('Markdown link navigation and missing target banner', () => {
               '세부 본문'
             ].join('\n'),
             'docs/sibling.md': '# 형제 문서\n\n[현재 복귀](./current.md#개요)',
+            'docs/raw-target.md': '# Raw 대상\n\n본문',
+            'docs/wysiwyg-target.md': '# 위지윅 대상\n\n본문',
+            'docs/vertical-target.md': '# 상하 분할 대상\n\n본문',
             'sub/guide (1).md': '# 가이드 시작\n\n안내 본문\n\n## 설정\n\n설정 값'
           }
         }
@@ -5454,7 +5460,15 @@ describe('Markdown link navigation and missing target banner', () => {
       fireEvent.click(externalSpan, { ctrlKey: true })
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
-      // 3) WYSIWYG mode: normal click does not jump, Meta+click scrolls heading
+      const rawRelSpan = Array.from(rawCmContent.querySelectorAll('span')).find((el) =>
+        el.textContent?.includes('./raw-target.md')
+      )!
+      fireEvent.click(rawRelSpan, { ctrlKey: true })
+      const rawTargetTab = await within(primaryPane).findByRole('tab', { name: /raw-target\.md/i })
+      expect(rawTargetTab).toHaveAttribute('aria-selected', 'true')
+      await user.click(within(primaryPane).getByRole('tab', { name: /current\.md/i }))
+
+      // 3) WYSIWYG mode: normal click does not jump, Meta+click scrolls heading, Ctrl+click opens relative file
       await user.click(within(primaryPane).getByRole('button', { name: '위지윅' }))
       scrollIntoViewMock.mockClear()
       const wysiwygEl = within(primaryPane).getByTestId('document-editor')
@@ -5469,6 +5483,16 @@ describe('Markdown link navigation and missing target banner', () => {
         expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
       })
       expect((scrollIntoViewMock.mock.instances[0] as HTMLElement).textContent).toContain('세부 항목')
+
+      const wysiwygRelLink = Array.from(wysiwygEl.querySelectorAll('a')).find(
+        (a) => a.getAttribute('href') === './wysiwyg-target.md'
+      )!
+      expect(fireEvent.click(wysiwygRelLink, { ctrlKey: true })).toBe(false)
+      const wysiwygTargetTab = await within(primaryPane).findByRole('tab', {
+        name: /wysiwyg-target\.md/i
+      })
+      expect(wysiwygTargetTab).toHaveAttribute('aria-selected', 'true')
+      await user.click(within(primaryPane).getByRole('tab', { name: /current\.md/i }))
 
       // 4) Preview relative file link with percent encoding + #slug opens tab and jumps to target heading
       await user.click(within(primaryPane).getByRole('button', { name: 'Preview' }))
@@ -5512,6 +5536,23 @@ describe('Markdown link navigation and missing target banner', () => {
         expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
       })
       expect((scrollIntoViewMock.mock.instances[0] as HTMLElement).id).toBe('개요')
+
+      // Switch to vertical split mode and open relative link inside the clicked secondary vertical pane
+      fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /sibling\.md/i }))
+      fireEvent.drop(await screen.findByTestId('split-drop-zone-vertical'))
+      expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'vertical')
+
+      await user.click(within(secondaryPane).getByRole('tab', { name: /current\.md/i }))
+      await user.click(within(secondaryPane).getByRole('button', { name: 'Preview' }))
+      await user.click(within(secondaryPane).getByRole('link', { name: '상하 이동' }))
+
+      const verticalTargetTab = await within(secondaryPane).findByRole('tab', {
+        name: /vertical-target\.md/i
+      })
+      expect(verticalTargetTab).toHaveAttribute('aria-selected', 'true')
+      expect(
+        within(primaryPane).queryByRole('tab', { name: /vertical-target\.md/i })
+      ).not.toBeInTheDocument()
     } finally {
       Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
         configurable: true,
@@ -5535,9 +5576,11 @@ describe('Markdown link navigation and missing target banner', () => {
               '- [없는 섹션](#no-such-heading)',
               '- [없는 파일](./missing.md)',
               '- [루트 밖](../../outside.md)',
+              '- [비마크다운 파일](./diagram.png)',
               '- [파일은 있음](./target.md#missing-sec)'
             ].join('\n'),
-            'docs/target.md': '# 존재하는 제목\n\n내용'
+            'docs/target.md': '# 존재하는 제목\n\n내용',
+            'docs/diagram.png': 'PNGDATA'
           }
         }
       }
@@ -5580,6 +5623,19 @@ describe('Markdown link navigation and missing target banner', () => {
     expect(readFileSpy).toHaveBeenCalledTimes(readCallsBeforeEscape)
     expect(getFilesSnapshot()).toEqual(initialSnapshot)
     expect(createEntrySpy).not.toHaveBeenCalled()
+
+    // 3b) Non-markdown relative file link is rejected without reading the file or creating entries
+    const readCallsBeforeNonMd = readFileSpy.mock.calls.length
+    await user.click(within(primaryPane).getByRole('link', { name: '비마크다운 파일' }))
+    const nonMdAlert = await screen.findByRole('alert')
+    expect(nonMdAlert).toHaveTextContent(/마크다운 문서만|지원하지 않는/)
+    expect(readFileSpy).toHaveBeenCalledTimes(readCallsBeforeNonMd)
+    expect(getFilesSnapshot()).toEqual(initialSnapshot)
+    expect(createEntrySpy).not.toHaveBeenCalled()
+    expect(within(primaryPane).getByRole('tab', { name: /index\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
 
     // 4) Existing target file + missing #slug opens target tab AND shows error banner
     await user.click(within(primaryPane).getByRole('link', { name: '파일은 있음' }))

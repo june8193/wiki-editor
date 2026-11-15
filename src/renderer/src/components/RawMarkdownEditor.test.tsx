@@ -1105,4 +1105,40 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
     posAtCoordsSpy.mockRestore()
     expect(onLinkNavigate).toHaveBeenCalledTimes(4)
   })
+
+  it('ignores Ctrl+click in left padding before a col-0 link in Raw mode while allowing clicks on the link itself', () => {
+    const onLinkNavigate = vi.fn()
+    const { container } = render(
+      <RawMarkdownEditor
+        content="[섹션](#개요)"
+        language="markdown"
+        theme="light"
+        scrollTop={0}
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+        onLinkNavigate={onLinkNavigate}
+      />
+    )
+
+    const cmContent = container.querySelector('.cm-content') as HTMLElement
+    const view = EditorView.findFromDOM(cmContent)!
+    const line0 = cmContent.querySelector('.cm-line') as HTMLElement
+    const posAtCoordsSpy = vi.spyOn(view, 'posAtCoords').mockReturnValue(0)
+    const coordsAtPosSpy = vi
+      .spyOn(view, 'coordsAtPos')
+      .mockReturnValue({ left: 48, right: 56, top: 10, bottom: 26 })
+
+    try {
+      fireEvent.click(line0, { ctrlKey: true, clientX: 20, clientY: 16 })
+      expect(onLinkNavigate).not.toHaveBeenCalled()
+
+      fireEvent.click(line0, { ctrlKey: true, clientX: 52, clientY: 16 })
+      expect(onLinkNavigate).toHaveBeenCalledTimes(1)
+      expect(onLinkNavigate).toHaveBeenCalledWith('#개요')
+    } finally {
+      posAtCoordsSpy.mockRestore()
+      coordsAtPosSpy.mockRestore()
+    }
+  })
 })

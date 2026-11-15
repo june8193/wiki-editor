@@ -1,5 +1,27 @@
 import { isOffsetInCodeFence } from './MarkdownTocEngine'
 
+const EXTERNAL_SCHEME_REGEX = /^(?:https?:|mailto:)/i
+const PARAGRAPH_BREAK_LINE_RE = /^(?:[ \t]*|[ ]{0,3}(?:`{3,}[^`]*|~{3,}.*))$/
+const ASCII_PUNCT_ESCAPE_RE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g
+
+/** Returns true if `value` starts with an external link scheme (`http:`, `https:`, or `mailto:`). */
+export function isExternalLinkScheme(value: string): boolean {
+  return EXTERNAL_SCHEME_REGEX.test(value)
+}
+
+/** Counts consecutive backticks starting at `start` up to `limit`. */
+export function countBacktickRun(text: string, start: number, limit = text.length): number {
+  let end = start
+  while (end < limit && text[end] === '`') {
+    end += 1
+  }
+  return end - start
+}
+
+function stepPastEscaped(cursor: number, limit: number): number {
+  return cursor + 1 < limit ? cursor + 2 : limit
+}
+
 function isEscapedAt(text: string, index: number): boolean {
   let backslashes = 0
   for (let i = index - 1; i >= 0 && text[i] === '\\'; i--) {
@@ -9,19 +31,12 @@ function isEscapedAt(text: string, index: number): boolean {
 }
 
 function findInlineCodeClose(text: string, start: number, limit: number): number {
-  let tickCount = 0
-  let cursor = start
-  while (cursor < limit && text[cursor] === '`') {
-    tickCount++
-    cursor++
-  }
+  const tickCount = countBacktickRun(text, start, limit)
+  let cursor = start + tickCount
 
   while (cursor < limit) {
     if (text[cursor] === '`') {
-      let run = 0
-      while (cursor + run < limit && text[cursor + run] === '`') {
-        run++
-      }
+      const run = countBacktickRun(text, cursor, limit)
       if (run === tickCount) {
         return cursor + run
       }
@@ -34,29 +49,65 @@ function findInlineCodeClose(text: string, start: number, limit: number): number
   return -1
 }
 
-function findLineBoundsAtOffset(
-  text: string,
-  offset: number
-): { lineStart: number; lineEnd: number } {
-  const lineStart = offset === 0 ? 0 : text.lastIndexOf('\n', offset - 1) + 1
+function findLineEndAt(text: string, lineStart: number, limit = text.length): number {
   const nlIndex = text.indexOf('\n', lineStart)
-  const rawLineEnd = nlIndex === -1 ? text.length : nlIndex
-  const lineEnd =
-    rawLineEnd > lineStart && text[rawLineEnd - 1] === '\r' ? rawLineEnd - 1 : rawLineEnd
-  return { lineStart, lineEnd }
+  const rawEnd = nlIndex === -1 || nlIndex > limit ? limit : nlIndex
+  return rawEnd > lineStart && text[rawEnd - 1] === '\r' ? rawEnd - 1 : rawEnd
 }
 
-function findClosingBracket(text: string, openBracket: number, lineEnd: number): number {
+function isParagraphBreakLine(text: string, lineStart: number, lineEnd: number): boolean {
+  return PARAGRAPH_BREAK_LINE_RE.test(text.slice(lineStart, lineEnd))
+}
+
+function findParagraphBoundsAtOffset(
+  text: string,
+  offset: number
+): { paragraphStart: number; paragraphEnd: number } | null {
+  const curStart = offset === 0 ? 0 : text.lastIndexOf('\n', offset - 1) + 1
+  const curEnd = findLineEndAt(text, curStart)
+  if (offset > curEnd || isParagraphBreakLine(text, curStart, curEnd)) {
+    return null
+  }
+
+  let paragraphStart = curStart
+  while (paragraphStart > 0) {
+    const prevLf = paragraphStart - 1
+    const prevStart = prevLf === 0 ? 0 : text.lastIndexOf('\n', prevLf - 1) + 1
+    const prevEnd = prevLf > prevStart && text[prevLf - 1] === '\r' ? prevLf - 1 : prevLf
+    if (isParagraphBreakLine(text, prevStart, prevEnd)) {
+      break
+    }
+    paragraphStart = prevStart
+  }
+
+  let paragraphEnd = curEnd
+  let scan = curEnd
+  while (scan < text.length) {
+    const nlIndex = text.indexOf('\n', scan)
+    if (nlIndex === -1) break
+    const nextStart = nlIndex + 1
+    const nextEnd = findLineEndAt(text, nextStart)
+    if (isParagraphBreakLine(text, nextStart, nextEnd)) {
+      break
+    }
+    paragraphEnd = nextEnd
+    scan = nextEnd
+  }
+
+  return { paragraphStart, paragraphEnd }
+}
+
+function findClosingBracket(text: string, openBracket: number, limit: number): number {
   let depth = 1
   let cursor = openBracket + 1
-  while (cursor < lineEnd) {
+  while (cursor < limit) {
     const ch = text[cursor]
-    if (ch === '\\' && cursor + 1 < lineEnd) {
-      cursor += 2
+    if (ch === '\\') {
+      cursor = stepPastEscaped(cursor, limit)
       continue
     }
     if (ch === '`') {
-      const closed = findInlineCodeClose(text, cursor, lineEnd)
+      const closed = findInlineCodeClose(text, cursor, limit)
       if (closed !== -1) {
         cursor = closed
         continue
@@ -83,6 +134,10 @@ function skipHorizontalWhitespace(text: string, start: number, limit: number): n
   return cursor
 }
 
+function unescapeMarkdownDestination(rawHref: string): string {
+  return rawHref.replace(ASCII_PUNCT_ESCAPE_RE, '$1')
+}
+
 function skipOptionalTitleAndFindParen(text: string, start: number, lineEnd: number): number {
   let cursor = skipHorizontalWhitespace(text, start, lineEnd)
   if (cursor >= lineEnd) {
@@ -99,8 +154,8 @@ function skipOptionalTitleAndFindParen(text: string, start: number, lineEnd: num
   const closer = opener === '(' ? ')' : opener
   cursor++
   while (cursor < lineEnd) {
-    if (text[cursor] === '\\' && cursor + 1 < lineEnd) {
-      cursor += 2
+    if (text[cursor] === '\\') {
+      cursor = stepPastEscaped(cursor, lineEnd)
       continue
     }
     if (text[cursor] === closer) {
@@ -128,12 +183,12 @@ function parseLinkDestination(
     cursor++
     const hrefStart = cursor
     while (cursor < lineEnd) {
-      if (text[cursor] === '\\' && cursor + 1 < lineEnd) {
-        cursor += 2
+      if (text[cursor] === '\\') {
+        cursor = stepPastEscaped(cursor, lineEnd)
         continue
       }
       if (text[cursor] === '>') {
-        const href = text.slice(hrefStart, cursor)
+        const href = unescapeMarkdownDestination(text.slice(hrefStart, cursor))
         const closeParen = skipOptionalTitleAndFindParen(text, cursor + 1, lineEnd)
         return closeParen !== -1 ? { href, closeParen } : null
       }
@@ -149,8 +204,8 @@ function parseLinkDestination(
   let parenDepth = 1
   while (cursor < lineEnd) {
     const ch = text[cursor]
-    if (ch === '\\' && cursor + 1 < lineEnd) {
-      cursor += 2
+    if (ch === '\\') {
+      cursor = stepPastEscaped(cursor, lineEnd)
       continue
     }
     if (ch === '(') {
@@ -161,13 +216,16 @@ function parseLinkDestination(
     if (ch === ')') {
       parenDepth--
       if (parenDepth === 0) {
-        return { href: text.slice(hrefStart, cursor), closeParen: cursor }
+        return {
+          href: unescapeMarkdownDestination(text.slice(hrefStart, cursor)),
+          closeParen: cursor
+        }
       }
       cursor++
       continue
     }
     if (ch === ' ' || ch === '\t') {
-      const href = text.slice(hrefStart, cursor)
+      const href = unescapeMarkdownDestination(text.slice(hrefStart, cursor))
       const closeParen = skipOptionalTitleAndFindParen(text, cursor, lineEnd)
       return closeParen !== -1 ? { href, closeParen } : null
     }
@@ -179,27 +237,28 @@ function parseLinkDestination(
 
 /**
  * Extracts the `href` of the inline Markdown link `[label](href)` enclosing `offset` on
- * non-fenced lines, ignoring Markdown images (`![alt](src)`), inline code spans, and fences.
+ * non-fenced paragraphs, ignoring Markdown images (`![alt](src)`), inline code spans, and fences.
  */
 export function extractMarkdownLinkHrefAtOffset(text: string, offset: number): string | null {
   if (offset < 0 || offset > text.length || text.length === 0 || isOffsetInCodeFence(text, offset)) {
     return null
   }
 
-  const { lineStart, lineEnd } = findLineBoundsAtOffset(text, offset)
-  if (offset > lineEnd) {
+  const bounds = findParagraphBoundsAtOffset(text, offset)
+  if (!bounds) {
     return null
   }
+  const { paragraphStart, paragraphEnd } = bounds
 
-  let cursor = lineStart
-  while (cursor < lineEnd) {
+  let cursor = paragraphStart
+  while (cursor < paragraphEnd) {
     const ch = text[cursor]
-    if (ch === '\\' && cursor + 1 < lineEnd) {
-      cursor += 2
+    if (ch === '\\') {
+      cursor = stepPastEscaped(cursor, paragraphEnd)
       continue
     }
     if (ch === '`') {
-      const closed = findInlineCodeClose(text, cursor, lineEnd)
+      const closed = findInlineCodeClose(text, cursor, paragraphEnd)
       if (closed !== -1) {
         if (offset >= cursor && offset < closed) {
           return null
@@ -209,11 +268,17 @@ export function extractMarkdownLinkHrefAtOffset(text: string, offset: number): s
       }
     }
     if (ch === '[') {
-      const isImage = cursor > lineStart && text[cursor - 1] === '!' && !isEscapedAt(text, cursor - 1)
+      const isImage =
+        cursor > paragraphStart && text[cursor - 1] === '!' && !isEscapedAt(text, cursor - 1)
       if (!isImage) {
-        const closeBracket = findClosingBracket(text, cursor, lineEnd)
-        if (closeBracket !== -1 && closeBracket + 1 < lineEnd && text[closeBracket + 1] === '(') {
-          const parsedDest = parseLinkDestination(text, closeBracket + 1, lineEnd)
+        const closeBracket = findClosingBracket(text, cursor, paragraphEnd)
+        if (
+          closeBracket !== -1 &&
+          closeBracket + 1 < paragraphEnd &&
+          text[closeBracket + 1] === '('
+        ) {
+          const destLineEnd = findLineEndAt(text, closeBracket + 1, paragraphEnd)
+          const parsedDest = parseLinkDestination(text, closeBracket + 1, destLineEnd)
           if (parsedDest) {
             const linkTo = parsedDest.closeParen + 1
             if (offset >= cursor && offset < linkTo) {

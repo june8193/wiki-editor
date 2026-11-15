@@ -12,6 +12,7 @@ import {
   remapPathPrefix,
   removeFavoriteWorkspace,
   removeRecentWorkspace,
+  resolveRelativeWorkspacePath,
   stripMarkdownExtension,
   toggleFavoriteWorkspace
 } from './workspace'
@@ -102,5 +103,65 @@ describe('shared workspace path and favorites helpers', () => {
     expect(stripMarkdownExtension('v1.2.MD')).toBe('v1.2')
     expect(stripMarkdownExtension('.md')).toBe('.md')
     expect(stripMarkdownExtension('plain.txt')).toBe('plain.txt')
+  })
+
+  it('resolves relative workspace paths across POSIX, Windows, and UNC roots while rejecting escapes and invalid paths', () => {
+    expect(
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', './sibling.md')
+    ).toEqual({
+      ok: true,
+      targetPath: '/wiki/notes/docs/sibling.md'
+    })
+    expect(
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', '../sub/guide (1).md')
+    ).toEqual({
+      ok: true,
+      targetPath: '/wiki/notes/sub/guide (1).md'
+    })
+
+    expect(
+      resolveRelativeWorkspacePath(
+        'C:\\wiki\\notes',
+        'C:\\wiki\\notes\\docs\\current.md',
+        '../sub/target.md'
+      )
+    ).toEqual({
+      ok: true,
+      targetPath: 'C:\\wiki\\notes\\sub\\target.md'
+    })
+
+    expect(
+      resolveRelativeWorkspacePath(
+        '\\\\server\\share\\wiki',
+        '\\\\server\\share\\wiki\\docs\\a.md',
+        '../b.md'
+      )
+    ).toEqual({
+      ok: true,
+      targetPath: '\\\\server\\share\\wiki\\b.md'
+    })
+
+    // Escapes & root boundary
+    for (const escapeCase of [
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', '../../outside.md'),
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', '/etc/passwd.md'),
+      resolveRelativeWorkspacePath('C:\\wiki\\notes', 'C:\\wiki\\notes\\docs\\current.md', 'D:\\x.md'),
+      resolveRelativeWorkspacePath('C:\\wiki\\notes', 'D:\\other\\docs\\a.md', './b.md'),
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', '..')
+    ]) {
+      expect(escapeCase).toEqual({ ok: false, reason: 'outside-workspace' })
+    }
+
+    // Invalid relative paths inside workspace
+    for (const invalidCase of [
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', ''),
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', 'bad\0.md'),
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', './sub/'),
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', './sub\\'),
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', './.'),
+      resolveRelativeWorkspacePath('/wiki/notes', '/wiki/notes/docs/current.md', './sub/..')
+    ]) {
+      expect(invalidCase).toEqual({ ok: false, reason: 'invalid' })
+    }
   })
 })

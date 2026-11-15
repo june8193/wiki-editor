@@ -1,3 +1,9 @@
+import {
+  isAbsoluteOrDrivePrefix,
+  isMarkdownFileName,
+  resolveRelativeWorkspacePath
+} from '@shared/workspace'
+import { isExternalLinkScheme } from './MarkdownLinkSyntax'
 import { decodeSlugSafely } from './MarkdownTocEngine'
 
 export interface MarkdownLinkContext {
@@ -11,99 +17,7 @@ export type ResolvedMarkdownLinkTarget =
   | { kind: 'workspace-file'; targetPath: string; slug: string | null }
   | { kind: 'error'; message: string }
 
-const EXTERNAL_SCHEME_REGEX = /^(https?:|mailto:)/i
 const URI_SCHEME_REGEX = /^([a-zA-Z][a-zA-Z0-9+.-]{1,}):/
-const WINDOWS_DRIVE_PREFIX_REGEX = /^([a-zA-Z]:)([/\\]?)/
-const UNC_PREFIX_REGEX = /^([/\\]{2}[^/\\]+[/\\][^/\\]+)([/\\]?)/
-
-interface ParsedFsPath {
-  rootPrefix: string
-  separator: '/' | '\\'
-  caseInsensitive: boolean
-  segments: string[]
-}
-
-function resolveSegmentStack(
-  rawSegments: readonly string[],
-  initialStack: readonly string[] = []
-): { segments: string[]; underflowed: boolean } {
-  const segments = [...initialStack]
-  let underflowed = false
-  for (const segment of rawSegments) {
-    if (segment === '' || segment === '.') continue
-    if (segment === '..') {
-      if (segments.length === 0) {
-        underflowed = true
-        continue
-      }
-      segments.pop()
-      continue
-    }
-    segments.push(segment)
-  }
-  return { segments, underflowed }
-}
-
-function parseFsPath(inputPath: string): ParsedFsPath | null {
-  const trimmed = inputPath.trim()
-  if (trimmed.length === 0) return null
-
-  const uncMatch = trimmed.match(UNC_PREFIX_REGEX)
-  if (uncMatch) {
-    return {
-      rootPrefix: uncMatch[1].replace(/\//g, '\\'),
-      separator: '\\',
-      caseInsensitive: true,
-      segments: resolveSegmentStack(trimmed.slice(uncMatch[0].length).split(/[/\\]+/)).segments
-    }
-  }
-
-  const winDriveMatch = trimmed.match(WINDOWS_DRIVE_PREFIX_REGEX)
-  if (winDriveMatch) {
-    const separator: '/' | '\\' = trimmed.includes('\\')
-      ? '\\'
-      : winDriveMatch[2] === '\\'
-        ? '\\'
-        : '/'
-    return {
-      rootPrefix: winDriveMatch[1],
-      separator,
-      caseInsensitive: true,
-      segments: resolveSegmentStack(trimmed.slice(winDriveMatch[0].length).split(/[/\\]+/)).segments
-    }
-  }
-
-  if (trimmed.startsWith('/')) {
-    return {
-      rootPrefix: '/',
-      separator: '/',
-      caseInsensitive: false,
-      segments: resolveSegmentStack(trimmed.slice(1).split(/[/\\]+/)).segments
-    }
-  }
-
-  return null
-}
-
-function isStrictDescendantSegments(
-  target: readonly string[],
-  root: readonly string[],
-  caseInsensitive: boolean
-): boolean {
-  if (target.length <= root.length) return false
-  for (let i = 0; i < root.length; i++) {
-    const left = caseInsensitive ? target[i].toLowerCase() : target[i]
-    const right = caseInsensitive ? root[i].toLowerCase() : root[i]
-    if (left !== right) return false
-  }
-  return true
-}
-
-function hasAbsoluteOrDrivePrefix(value: string): boolean {
-  return (
-    WINDOWS_DRIVE_PREFIX_REGEX.test(value) || value.startsWith('/') || value.startsWith('\\')
-  )
-}
 
 function outsideWorkspaceError(targetHref: string): ResolvedMarkdownLinkTarget {
   return {
@@ -122,7 +36,8 @@ function unwrapLinkHref(rawHref: string): string {
 
 /**
  * Classifies and resolves a Markdown link target (external URL, same-document `#slug`, or
- * workspace-relative file link with optional `#slug`), rejecting workspace escapes and malformed paths.
+ * workspace-relative Markdown file link with optional `#slug`), rejecting workspace escapes,
+ * non-Markdown files, and malformed paths.
  */
 export function resolveMarkdownLinkTarget(
   rawHref: string,
@@ -132,10 +47,10 @@ export function resolveMarkdownLinkTarget(
   if (trimmed.length === 0) {
     return { kind: 'error', message: '링크 대상을 찾을 수 없습니다.' }
   }
-  if (EXTERNAL_SCHEME_REGEX.test(trimmed)) {
+  if (isExternalLinkScheme(trimmed)) {
     return { kind: 'external' }
   }
-  if (hasAbsoluteOrDrivePrefix(trimmed)) {
+  if (isAbsoluteOrDrivePrefix(trimmed)) {
     return outsideWorkspaceError(trimmed)
   }
   if (URI_SCHEME_REGEX.test(trimmed)) {
@@ -161,54 +76,31 @@ export function resolveMarkdownLinkTarget(
     return { kind: 'error', message: `잘못된 링크 경로입니다: ${trimmed}` }
   }
 
-  const rawSegments = decodedPathPart.split(/[/\\]+/)
-  const lastRawSegment = rawSegments[rawSegments.length - 1]
-  if (
-    decodedPathPart.length === 0 ||
-    decodedPathPart.includes('\0') ||
-    decodedPathPart.endsWith('/') ||
-    decodedPathPart.endsWith('\\') ||
-    lastRawSegment === '.' ||
-    lastRawSegment === '..'
-  ) {
-    return { kind: 'error', message: `대상 파일을 찾을 수 없습니다: ${trimmed}` }
-  }
-  if (hasAbsoluteOrDrivePrefix(decodedPathPart)) {
+  if (isAbsoluteOrDrivePrefix(decodedPathPart)) {
     return outsideWorkspaceError(trimmed)
   }
   if (!context.workspaceRootPath || !context.activeFilePath) {
     return { kind: 'error', message: '현재 문서 경로를 확인할 수 없습니다.' }
   }
 
-  const parsedRoot = parseFsPath(context.workspaceRootPath)
-  const parsedActive = parseFsPath(context.activeFilePath)
-  if (!parsedRoot || !parsedActive) {
-    return outsideWorkspaceError(trimmed)
-  }
-  const sameRootPrefix =
-    parsedRoot.caseInsensitive || parsedActive.caseInsensitive
-      ? parsedRoot.rootPrefix.toLowerCase() === parsedActive.rootPrefix.toLowerCase()
-      : parsedRoot.rootPrefix === parsedActive.rootPrefix
-  if (!sameRootPrefix) {
-    return outsideWorkspaceError(trimmed)
-  }
-
-  const { segments: resolvedSegments, underflowed } = resolveSegmentStack(
-    rawSegments,
-    parsedActive.segments.slice(0, -1)
+  const resolved = resolveRelativeWorkspacePath(
+    context.workspaceRootPath,
+    context.activeFilePath,
+    decodedPathPart
   )
-  if (
-    underflowed ||
-    !isStrictDescendantSegments(resolvedSegments, parsedRoot.segments, parsedRoot.caseInsensitive)
-  ) {
-    return outsideWorkspaceError(trimmed)
+  if (!resolved.ok) {
+    return resolved.reason === 'outside-workspace'
+      ? outsideWorkspaceError(trimmed)
+      : { kind: 'error', message: `대상 파일을 찾을 수 없습니다: ${trimmed}` }
   }
 
-  const targetPath =
-    parsedRoot.rootPrefix === '/'
-      ? `/${resolvedSegments.join('/')}`
-      : `${parsedRoot.rootPrefix}${parsedRoot.separator}${resolvedSegments.join(parsedRoot.separator)}`
-  const slug = rawFragmentPart !== null ? decodeSlugSafely(rawFragmentPart) : null
+  if (!isMarkdownFileName(resolved.targetPath)) {
+    return {
+      kind: 'error',
+      message: `지원하지 않는 링크 대상입니다 (마크다운 문서만 열 수 있습니다): ${trimmed}`
+    }
+  }
 
-  return { kind: 'workspace-file', targetPath, slug }
+  const slug = rawFragmentPart !== null ? decodeSlugSafely(rawFragmentPart) : null
+  return { kind: 'workspace-file', targetPath: resolved.targetPath, slug }
 }
