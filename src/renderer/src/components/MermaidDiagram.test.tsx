@@ -4,9 +4,9 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { WikiApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
-import type { DiagramPngRasterAdapter, DiagramSvgRasterRequest } from '../editor/mermaidExport'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import themeCss from '../styles/theme.css?raw'
+import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { MermaidDiagram } from './MermaidDiagram'
 
 describe('MermaidDiagram', () => {
@@ -762,518 +762,409 @@ describe('MermaidDiagram', () => {
 
   it('places 이미지 복사 before 코드 복사, copies 2x theme-backed PNG, manages 1500ms feedback, blocks duplicate in-flight clicks, and aborts on unmount', async () => {
     vi.useFakeTimers()
+    const canvasStub = installSvgCanvasStub()
 
-    const copiedImages: Uint8Array[] = []
-    let resolveCopy!: () => void
-    let deferCopy = false
-    const copyImage = vi.fn(
-      (bytes: Uint8Array) =>
-        new Promise<void>((resolve) => {
-          copiedImages.push(bytes)
-          if (deferCopy) {
-            resolveCopy = resolve
-            return
-          }
-          resolve()
-        })
-    )
-    const copyText = vi.fn(async () => {})
-    window.wikiApi = {
-      diagram: { copyText, copyImage }
-    } as unknown as WikiApi
+    try {
+      const copiedImages: Uint8Array[] = []
+      let resolveCopy!: () => void
+      let deferCopy = false
+      const copyImage = vi.fn(
+        (bytes: Uint8Array) =>
+          new Promise<void>((resolve) => {
+            copiedImages.push(bytes)
+            if (deferCopy) {
+              resolveCopy = resolve
+              return
+            }
+            resolve()
+          })
+      )
+      const copyText = vi.fn(async () => {})
+      window.wikiApi = {
+        diagram: { copyText, copyImage }
+      } as unknown as WikiApi
 
-    const rasterRequests: DiagramSvgRasterRequest[] = []
-    let deferRaster = false
-    let resolveDeferredRaster!: (bytes: Uint8Array) => void
-    const rasterAdapter: DiagramPngRasterAdapter = vi.fn((request) => {
-      rasterRequests.push(request)
-      if (deferRaster) {
-        return new Promise<Uint8Array>((resolve) => {
-          resolveDeferredRaster = resolve
-        })
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => ({
+          svg: `<svg viewBox="0 0 100 50" width="100%" style="max-width: 100px;"><g><text>${text.trim()}</text></g></svg>`
+        }))
       }
-      return Promise.resolve(new Uint8Array([137, 80, 78, 71, request.pixelWidth & 0xff]))
-    })
+      const renderer = createMermaidRenderer(driver)
 
-    const driver: MermaidDriver = {
-      initialize: vi.fn(),
-      render: vi.fn(async (_id, text) => ({
-        svg: `<svg viewBox="0 0 100 50" width="100%" style="max-width: 100px;"><g><text>${text.trim()}</text></g></svg>`
-      }))
+      const { rerender, unmount } = render(
+        <div>
+          <MermaidDiagram code={'graph TD\n  FIRST-->SECOND'} theme="light" renderer={renderer} debounceMs={0} />
+          <MermaidDiagram code={'graph TD\n  OTHER-->NODE'} theme="light" renderer={renderer} debounceMs={0} />
+        </div>
+      )
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      const blocks = screen.getAllByTestId('mermaid-diagram')
+      const firstToolbar = within(blocks[0]).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+      const buttons = within(firstToolbar).getAllByRole('button')
+      expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+        '이미지 복사',
+        '코드 복사'
+      ])
+
+      const firstImageBtn = buttons[0]
+      const firstCodeBtn = buttons[1]
+      const secondImageBtn = within(blocks[1]).getByRole('button', { name: '이미지 복사' })
+
+      // 1. Light theme copy: #ffffff opaque background + 16px margin + 2x scale
+      await act(async () => {
+        fireEvent.click(firstImageBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      expect(canvasStub.calls).toHaveLength(1)
+      expect(canvasStub.calls[0]).toMatchObject({
+        pixelWidth: 264,
+        pixelHeight: 164
+      })
+      expect(canvasStub.calls[0].decodedSvg).toContain('width="132"')
+      expect(canvasStub.calls[0].decodedSvg).toContain('height="82"')
+      expect(canvasStub.calls[0].decodedSvg).toContain('fill="#ffffff"')
+      expect(canvasStub.calls[0].decodedSvg).not.toContain('max-width')
+      expect(copiedImages).toHaveLength(1)
+      expect(copiedImages[0]).toEqual(new Uint8Array([137, 80, 78, 71, 1, 264 & 0xff]))
+      expect(firstImageBtn).toHaveClass('is-copied')
+      expect(firstImageBtn).toHaveTextContent('복사됨')
+      expect(secondImageBtn).not.toHaveTextContent('복사됨')
+
+      // Timer resets cleanly on consecutive click before 1500ms expires
+      act(() => {
+        vi.advanceTimersByTime(1000)
+      })
+      expect(firstImageBtn).toHaveTextContent('복사됨')
+      await act(async () => {
+        fireEvent.click(firstImageBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      act(() => {
+        vi.advanceTimersByTime(1499)
+      })
+      expect(firstImageBtn).toHaveTextContent('복사됨')
+      act(() => {
+        vi.advanceTimersByTime(1)
+      })
+      expect(firstImageBtn).not.toHaveTextContent('복사됨')
+
+      // 2. Dark theme copy: #161b22 opaque background
+      rerender(
+        <div>
+          <MermaidDiagram code={'graph TD\n  FIRST-->SECOND'} theme="dark" renderer={renderer} debounceMs={0} />
+          <MermaidDiagram code={'graph TD\n  OTHER-->NODE'} theme="light" renderer={renderer} debounceMs={0} />
+        </div>
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      // 3. In-flight click prevents duplicate image copy and adjacent code copy
+      deferCopy = true
+      await act(async () => {
+        fireEvent.click(firstImageBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(firstImageBtn).toHaveAttribute('aria-busy', 'true')
+      expect(canvasStub.calls[2].decodedSvg).toContain('fill="#161b22"')
+
+      await act(async () => {
+        fireEvent.click(firstImageBtn)
+        fireEvent.click(firstCodeBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(copyImage).toHaveBeenCalledTimes(3)
+      expect(copyText).not.toHaveBeenCalled()
+
+      await act(async () => {
+        resolveCopy()
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(firstImageBtn).not.toHaveAttribute('aria-busy')
+      expect(firstImageBtn).toHaveTextContent('복사됨')
+
+      // 4. Unmounting mid-rasterization cancels before invoking copyImage IPC
+      deferCopy = false
+      canvasStub.setDeferLoad(true)
+      const callsBeforeUnmount = copyImage.mock.calls.length
+      await act(async () => {
+        fireEvent.click(firstImageBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      unmount()
+      await act(async () => {
+        canvasStub.resolveNextLoad()
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(copyImage).toHaveBeenCalledTimes(callsBeforeUnmount)
+    } finally {
+      canvasStub.restore()
     }
-    const renderer = createMermaidRenderer(driver)
-
-    const { rerender, unmount } = render(
-      <div>
-        <MermaidDiagram
-          code={'graph TD\n  FIRST-->SECOND'}
-          theme="light"
-          renderer={renderer}
-          rasterAdapter={rasterAdapter}
-          debounceMs={0}
-        />
-        <MermaidDiagram
-          code={'graph TD\n  OTHER-->NODE'}
-          theme="light"
-          renderer={renderer}
-          rasterAdapter={rasterAdapter}
-          debounceMs={0}
-        />
-      </div>
-    )
-
-    await act(async () => {
-      await Promise.resolve()
-    })
-
-    const blocks = screen.getAllByTestId('mermaid-diagram')
-    const firstToolbar = within(blocks[0]).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
-    const buttons = within(firstToolbar).getAllByRole('button')
-    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
-      '이미지 복사',
-      '코드 복사'
-    ])
-
-    const firstImageBtn = buttons[0]
-    const firstCodeBtn = buttons[1]
-    const secondImageBtn = within(blocks[1]).getByRole('button', { name: '이미지 복사' })
-
-    // 1. Light theme copy: #ffffff opaque background + 16px margin + 2x scale
-    await act(async () => {
-      fireEvent.click(firstImageBtn)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    expect(rasterRequests).toHaveLength(1)
-    expect(rasterRequests[0]).toMatchObject({
-      pixelWidth: 264,
-      pixelHeight: 164
-    })
-    const decodedLightSvg = decodeURIComponent(
-      rasterRequests[0].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
-    )
-    expect(decodedLightSvg).toContain('width="132"')
-    expect(decodedLightSvg).toContain('height="82"')
-    expect(decodedLightSvg).toContain('fill="#ffffff"')
-    expect(decodedLightSvg).not.toContain('max-width')
-    expect(copiedImages).toHaveLength(1)
-    expect(copiedImages[0]).toEqual(new Uint8Array([137, 80, 78, 71, 264 & 0xff]))
-    expect(firstImageBtn).toHaveClass('is-copied')
-    expect(firstImageBtn).toHaveTextContent('복사됨')
-    expect(secondImageBtn).not.toHaveTextContent('복사됨')
-
-    // Timer resets cleanly on consecutive click before 1500ms expires
-    act(() => {
-      vi.advanceTimersByTime(1000)
-    })
-    expect(firstImageBtn).toHaveTextContent('복사됨')
-    await act(async () => {
-      fireEvent.click(firstImageBtn)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    act(() => {
-      vi.advanceTimersByTime(1499)
-    })
-    expect(firstImageBtn).toHaveTextContent('복사됨')
-    act(() => {
-      vi.advanceTimersByTime(1)
-    })
-    expect(firstImageBtn).not.toHaveTextContent('복사됨')
-
-    // 2. Dark theme copy: #161b22 opaque background
-    rerender(
-      <div>
-        <MermaidDiagram
-          code={'graph TD\n  FIRST-->SECOND'}
-          theme="dark"
-          renderer={renderer}
-          rasterAdapter={rasterAdapter}
-          debounceMs={0}
-        />
-        <MermaidDiagram
-          code={'graph TD\n  OTHER-->NODE'}
-          theme="light"
-          renderer={renderer}
-          rasterAdapter={rasterAdapter}
-          debounceMs={0}
-        />
-      </div>
-    )
-    await act(async () => {
-      await Promise.resolve()
-    })
-
-    // 3. In-flight click prevents duplicate image copy and adjacent code copy
-    deferCopy = true
-    await act(async () => {
-      fireEvent.click(firstImageBtn)
-      await Promise.resolve()
-    })
-    expect(firstImageBtn).toHaveAttribute('aria-busy', 'true')
-    const decodedDarkSvg = decodeURIComponent(
-      rasterRequests[2].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
-    )
-    expect(decodedDarkSvg).toContain('fill="#161b22"')
-
-    await act(async () => {
-      fireEvent.click(firstImageBtn)
-      fireEvent.click(firstCodeBtn)
-      await Promise.resolve()
-    })
-    expect(copyImage).toHaveBeenCalledTimes(3)
-    expect(copyText).not.toHaveBeenCalled()
-
-    await act(async () => {
-      resolveCopy()
-      await Promise.resolve()
-    })
-    expect(firstImageBtn).not.toHaveAttribute('aria-busy')
-    expect(firstImageBtn).toHaveTextContent('복사됨')
-
-    // 4. Unmounting mid-rasterization cancels before invoking copyImage IPC
-    deferCopy = false
-    deferRaster = true
-    const callsBeforeUnmount = copyImage.mock.calls.length
-    await act(async () => {
-      fireEvent.click(firstImageBtn)
-      await Promise.resolve()
-    })
-    unmount()
-    await act(async () => {
-      resolveDeferredRaster(new Uint8Array([1, 2, 3]))
-      await Promise.resolve()
-    })
-    expect(copyImage).toHaveBeenCalledTimes(callsBeforeUnmount)
   })
 
   it('disables 이미지 복사 during loading, debounce pending, syntax errors, and whitespace-only while keeping 코드 복사 independent, and re-enables on valid recovery', async () => {
     vi.useFakeTimers()
+    const canvasStub = installSvgCanvasStub()
 
-    const copyText = vi.fn(async () => {})
-    const copyImage = vi.fn(async () => {})
-    window.wikiApi = {
-      diagram: { copyText, copyImage }
-    } as unknown as WikiApi
+    try {
+      const copyText = vi.fn(async () => {})
+      const copyImage = vi.fn(async () => {})
+      window.wikiApi = {
+        diagram: { copyText, copyImage }
+      } as unknown as WikiApi
 
-    const rasterAdapter: DiagramPngRasterAdapter = vi.fn(async (req) => {
-      return new Uint8Array([1, 2, req.pixelWidth & 0xff])
-    })
+      let resolvePending!: (res: { svg: string }) => void
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => {
+          if (text.includes('pending')) {
+            return new Promise<{ svg: string }>((resolve) => {
+              resolvePending = resolve
+            })
+          }
+          if (text.includes('broken')) {
+            throw new Error('Parse error')
+          }
+          return {
+            svg: `<svg viewBox="0 0 80 40"><g><text>${text.trim()}</text></g></svg>`
+          }
+        })
+      }
+      const renderer = createMermaidRenderer(driver)
 
-    let resolvePending!: (res: { svg: string }) => void
-    const driver: MermaidDriver = {
-      initialize: vi.fn(),
-      render: vi.fn(async (_id, text) => {
-        if (text.includes('pending')) {
-          return new Promise<{ svg: string }>((resolve) => {
-            resolvePending = resolve
-          })
-        }
-        if (text.includes('broken')) {
-          throw new Error('Parse error')
-        }
-        return {
-          svg: `<svg viewBox="0 0 80 40"><g><text>${text.trim()}</text></g></svg>`
-        }
+      // 1. Initial loading state -> 이미지 복사 disabled, 코드 복사 enabled & preserves copied feedback across SVG resolution
+      const { rerender, unmount } = render(
+        <MermaidDiagram code={'graph TD\n  pending_first'} theme="light" renderer={renderer} debounceMs={200} />
+      )
+
+      const block = screen.getByTestId('mermaid-diagram')
+      const imageBtn = within(block).getByRole('button', { name: '이미지 복사' })
+      const codeBtn = within(block).getByRole('button', { name: '코드 복사' })
+      expect(imageBtn).toBeDisabled()
+      expect(codeBtn).toBeEnabled()
+
+      await act(async () => {
+        fireEvent.click(codeBtn)
+        await vi.advanceTimersByTimeAsync(0)
       })
+      expect(codeBtn).toHaveTextContent('복사됨')
+
+      await act(async () => {
+        resolvePending({
+          svg: '<svg viewBox="0 0 80 40"><g><text>pending_first</text></g></svg>'
+        })
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(imageBtn).toBeEnabled()
+      expect(codeBtn).toHaveTextContent('복사됨')
+
+      // 2. Debounced edit wait -> retained SVG visible, but 이미지 복사 immediately disabled until render settles
+      rerender(
+        <MermaidDiagram code={'graph TD\n  edited_valid'} theme="light" renderer={renderer} debounceMs={200} />
+      )
+      expect(within(block).getByTestId('mermaid-svg')).toHaveTextContent('pending_first')
+      expect(imageBtn).toBeDisabled()
+      expect(codeBtn).toBeEnabled()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200)
+      })
+      expect(within(block).getByTestId('mermaid-svg')).toHaveTextContent('edited_valid')
+      expect(imageBtn).toBeEnabled()
+
+      // 3. Theme switch with uncached render disables 이미지 복사 until dark SVG completes
+      rerender(
+        <MermaidDiagram code={'graph TD\n  pending_dark_switch'} theme="dark" renderer={renderer} debounceMs={200} />
+      )
+      expect(imageBtn).toBeDisabled()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(imageBtn).toBeDisabled()
+      await act(async () => {
+        resolvePending({
+          svg: '<svg viewBox="0 0 80 40"><g><text>pending_dark_switch</text></g></svg>'
+        })
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(imageBtn).toBeEnabled()
+
+      // 4. Syntax error with retained SVG -> 이미지 복사 disabled, 코드 복사 enabled
+      rerender(
+        <MermaidDiagram code={'graph TD\n  broken_after_valid'} theme="dark" renderer={renderer} debounceMs={0} />
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(within(block).getByText('Mermaid 문법 오류')).toBeInTheDocument()
+      expect(within(block).getByTestId('mermaid-svg')).toHaveTextContent('pending_dark_switch')
+      expect(imageBtn).toBeDisabled()
+      expect(codeBtn).toBeEnabled()
+
+      // 5. Recovery to valid code -> re-enables 이미지 복사 and exports recovered SVG
+      rerender(
+        <MermaidDiagram code={'graph TD\n  recovered_ok'} theme="dark" renderer={renderer} debounceMs={0} />
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(imageBtn).toBeEnabled()
+      await act(async () => {
+        fireEvent.click(imageBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(canvasStub.calls).toHaveLength(1)
+      expect(copyImage).toHaveBeenCalledTimes(1)
+
+      // 6. Whitespace-only source -> both buttons disabled
+      rerender(
+        <MermaidDiagram code={'   \n  '} theme="dark" renderer={renderer} debounceMs={0} />
+      )
+      expect(imageBtn).toBeDisabled()
+      expect(codeBtn).toBeDisabled()
+      unmount()
+
+      // 7. Initial fallback error box without lastValid -> 이미지 복사 disabled, 코드 복사 enabled
+      render(
+        <MermaidDiagram code={'graph TD\n  broken_initial'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const fallbackBlock = screen.getByTestId('mermaid-diagram')
+      expect(within(fallbackBlock).getByRole('alert')).toHaveTextContent('Mermaid 다이어그램 문법 오류')
+      expect(within(fallbackBlock).getByRole('button', { name: '이미지 복사' })).toBeDisabled()
+      expect(within(fallbackBlock).getByRole('button', { name: '코드 복사' })).toBeEnabled()
+    } finally {
+      canvasStub.restore()
     }
-    const renderer = createMermaidRenderer(driver)
-
-    // 1. Initial loading state -> 이미지 복사 disabled, 코드 복사 enabled & preserves copied feedback across SVG resolution
-    const { rerender, unmount } = render(
-      <MermaidDiagram
-        code={'graph TD\n  pending_first'}
-        theme="light"
-        renderer={renderer}
-        rasterAdapter={rasterAdapter}
-        debounceMs={200}
-      />
-    )
-
-    const block = screen.getByTestId('mermaid-diagram')
-    const imageBtn = within(block).getByRole('button', { name: '이미지 복사' })
-    const codeBtn = within(block).getByRole('button', { name: '코드 복사' })
-    expect(imageBtn).toBeDisabled()
-    expect(codeBtn).toBeEnabled()
-
-    await act(async () => {
-      fireEvent.click(codeBtn)
-      await Promise.resolve()
-    })
-    expect(codeBtn).toHaveTextContent('복사됨')
-
-    await act(async () => {
-      resolvePending({
-        svg: '<svg viewBox="0 0 80 40"><g><text>pending_first</text></g></svg>'
-      })
-      await Promise.resolve()
-    })
-    expect(imageBtn).toBeEnabled()
-    expect(codeBtn).toHaveTextContent('복사됨')
-
-    // 2. Debounced edit wait -> retained SVG visible, but 이미지 복사 immediately disabled until render settles
-    rerender(
-      <MermaidDiagram
-        code={'graph TD\n  edited_valid'}
-        theme="light"
-        renderer={renderer}
-        rasterAdapter={rasterAdapter}
-        debounceMs={200}
-      />
-    )
-    expect(within(block).getByTestId('mermaid-svg')).toHaveTextContent('pending_first')
-    expect(imageBtn).toBeDisabled()
-    expect(codeBtn).toBeEnabled()
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(200)
-    })
-    expect(within(block).getByTestId('mermaid-svg')).toHaveTextContent('edited_valid')
-    expect(imageBtn).toBeEnabled()
-
-    // 3. Theme switch with uncached render disables 이미지 복사 until dark SVG completes
-    rerender(
-      <MermaidDiagram
-        code={'graph TD\n  pending_dark_switch'}
-        theme="dark"
-        renderer={renderer}
-        rasterAdapter={rasterAdapter}
-        debounceMs={200}
-      />
-    )
-    expect(imageBtn).toBeDisabled()
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0)
-    })
-    expect(imageBtn).toBeDisabled()
-    await act(async () => {
-      resolvePending({
-        svg: '<svg viewBox="0 0 80 40"><g><text>pending_dark_switch</text></g></svg>'
-      })
-      await vi.advanceTimersByTimeAsync(0)
-    })
-    expect(imageBtn).toBeEnabled()
-
-    // 4. Syntax error with retained SVG -> 이미지 복사 disabled, 코드 복사 enabled
-    rerender(
-      <MermaidDiagram
-        code={'graph TD\n  broken_after_valid'}
-        theme="dark"
-        renderer={renderer}
-        rasterAdapter={rasterAdapter}
-        debounceMs={0}
-      />
-    )
-    await act(async () => {
-      await Promise.resolve()
-    })
-    expect(within(block).getByText('Mermaid 문법 오류')).toBeInTheDocument()
-    expect(within(block).getByTestId('mermaid-svg')).toHaveTextContent('pending_dark_switch')
-    expect(imageBtn).toBeDisabled()
-    expect(codeBtn).toBeEnabled()
-
-    // 5. Recovery to valid code -> re-enables 이미지 복사 and exports recovered SVG
-    rerender(
-      <MermaidDiagram
-        code={'graph TD\n  recovered_ok'}
-        theme="dark"
-        renderer={renderer}
-        rasterAdapter={rasterAdapter}
-        debounceMs={0}
-      />
-    )
-    await act(async () => {
-      await Promise.resolve()
-    })
-    expect(imageBtn).toBeEnabled()
-    await act(async () => {
-      fireEvent.click(imageBtn)
-      await Promise.resolve()
-    })
-    expect(rasterAdapter).toHaveBeenCalledTimes(1)
-    expect(copyImage).toHaveBeenCalledTimes(1)
-
-    // 6. Whitespace-only source -> both buttons disabled
-    rerender(
-      <MermaidDiagram
-        code={'   \n  '}
-        theme="dark"
-        renderer={renderer}
-        rasterAdapter={rasterAdapter}
-        debounceMs={0}
-      />
-    )
-    expect(imageBtn).toBeDisabled()
-    expect(codeBtn).toBeDisabled()
-    unmount()
-
-    // 7. Initial fallback error box without lastValid -> 이미지 복사 disabled, 코드 복사 enabled
-    render(
-      <MermaidDiagram
-        code={'graph TD\n  broken_initial'}
-        theme="light"
-        renderer={renderer}
-        rasterAdapter={rasterAdapter}
-        debounceMs={0}
-      />
-    )
-    await act(async () => {
-      await Promise.resolve()
-    })
-    const fallbackBlock = screen.getByTestId('mermaid-diagram')
-    expect(within(fallbackBlock).getByRole('alert')).toHaveTextContent('Mermaid 다이어그램 문법 오류')
-    expect(within(fallbackBlock).getByRole('button', { name: '이미지 복사' })).toBeDisabled()
-    expect(within(fallbackBlock).getByRole('button', { name: '코드 복사' })).toBeEnabled()
   })
 
   it('logs sanitized metadata on image copy failure, scopes inline role="alert" to originating block, recovers on retry, and handles missing copyImage API', async () => {
-    const entries: RendererLogPayload[] = []
-    let failMode: 'none' | 'raster' | 'ipc' = 'raster'
-    const secretSource = 'graph TD\n  TOP_SECRET_IMAGE_SOURCE --> TARGET'
-    const validPng = new Uint8Array([137, 80, 78, 71, 42])
+    const canvasStub = installSvgCanvasStub()
 
-    const rasterAdapter: DiagramPngRasterAdapter = vi.fn(async () => {
-      if (failMode === 'raster') {
-        throw new Error('SVG 디코딩에 실패했습니다.')
+    try {
+      canvasStub.setFailDecode(true)
+      const entries: RendererLogPayload[] = []
+      let failIpc = false
+      const secretSource = 'graph TD\n  TOP_SECRET_IMAGE_SOURCE --> TARGET'
+
+      const copyImage = vi.fn(async () => {
+        if (failIpc) {
+          throw new Error('네이티브 이미지 클립보드 쓰기에 실패했습니다.')
+        }
+      })
+      window.wikiApi = {
+        diagram: { copyText: vi.fn(async () => {}), copyImage },
+        log: {
+          write: vi.fn(async (payload: RendererLogPayload) => {
+            entries.push(payload)
+          })
+        }
+      } as unknown as WikiApi
+
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => ({
+          svg: `<svg viewBox="0 0 90 45"><g><text>${text.trim()}</text></g></svg>`
+        }))
       }
-      return validPng
-    })
+      const renderer = createMermaidRenderer(driver)
 
-    const copyImage = vi.fn(async () => {
-      if (failMode === 'ipc') {
-        throw new Error('네이티브 이미지 클립보드 쓰기에 실패했습니다.')
-      }
-    })
-    window.wikiApi = {
-      diagram: { copyText: vi.fn(async () => {}), copyImage },
-      log: {
-        write: vi.fn(async (payload: RendererLogPayload) => {
-          entries.push(payload)
-        })
-      }
-    } as unknown as WikiApi
+      const { rerender } = render(
+        <div>
+          <MermaidDiagram code={secretSource} theme="dark" renderer={renderer} debounceMs={0} />
+          <MermaidDiagram code={'graph TD\n  SECOND-->THIRD'} theme="dark" renderer={renderer} debounceMs={0} />
+        </div>
+      )
+      await screen.findAllByTestId('mermaid-svg')
 
-    const driver: MermaidDriver = {
-      initialize: vi.fn(),
-      render: vi.fn(async (_id, text) => ({
-        svg: `<svg viewBox="0 0 90 45"><g><text>${text.trim()}</text></g></svg>`
-      }))
-    }
-    const renderer = createMermaidRenderer(driver)
+      const blocks = screen.getAllByTestId('mermaid-diagram')
+      const firstImageBtn = within(blocks[0]).getByRole('button', { name: '이미지 복사' })
 
-    const { rerender } = render(
-      <div>
-        <MermaidDiagram
-          code={secretSource}
-          theme="dark"
-          renderer={renderer}
-          rasterAdapter={rasterAdapter}
-          debounceMs={0}
-        />
-        <MermaidDiagram
-          code={'graph TD\n  SECOND-->THIRD'}
-          theme="dark"
-          renderer={renderer}
-          rasterAdapter={rasterAdapter}
-          debounceMs={0}
-        />
-      </div>
-    )
-    await screen.findAllByTestId('mermaid-svg')
-
-    const blocks = screen.getAllByTestId('mermaid-diagram')
-    const firstImageBtn = within(blocks[0]).getByRole('button', { name: '이미지 복사' })
-
-    // 1. Rasterizer failure
-    await act(async () => {
+      // 1. Rasterizer SVG decode failure
       fireEvent.click(firstImageBtn)
-      await Promise.resolve()
-    })
-    expect(within(blocks[0]).getByRole('alert')).toHaveTextContent('SVG 디코딩에 실패했습니다.')
-    expect(within(blocks[1]).queryByRole('alert')).not.toBeInTheDocument()
-    expect(firstImageBtn).not.toHaveTextContent('복사됨')
-    expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({
-      level: 'error',
-      category: 'ui',
-      message: 'Mermaid image copy failed',
-      data: {
-        theme: 'dark',
-        codeLength: secretSource.length
-      }
-    })
-    expect(typeof (entries[0].data as { svgLength?: unknown }).svgLength).toBe('number')
-    expect(JSON.stringify(entries[0])).not.toContain('TOP_SECRET_IMAGE_SOURCE')
-    expect(JSON.stringify(entries[0])).not.toContain('<svg')
+      await waitFor(() => {
+        expect(within(blocks[0]).getByRole('alert')).toHaveTextContent(
+          'Mermaid SVG 이미지를 디코딩할 수 없습니다.'
+        )
+      })
+      expect(within(blocks[1]).queryByRole('alert')).not.toBeInTheDocument()
+      expect(firstImageBtn).not.toHaveTextContent('복사됨')
+      expect(entries).toHaveLength(1)
+      expect(entries[0]).toMatchObject({
+        level: 'error',
+        category: 'ui',
+        message: 'Mermaid image copy failed',
+        data: {
+          theme: 'dark',
+          codeLength: secretSource.length
+        }
+      })
+      expect(typeof (entries[0].data as { svgLength?: unknown }).svgLength).toBe('number')
+      expect(JSON.stringify(entries[0])).not.toContain('TOP_SECRET_IMAGE_SOURCE')
+      expect(JSON.stringify(entries[0])).not.toContain('<svg')
 
-    // 2. IPC copyImage failure includes byteLength without logging PNG binary bytes
-    failMode = 'ipc'
-    await act(async () => {
+      // 2. IPC copyImage failure includes byteLength without logging PNG binary bytes
+      canvasStub.setFailDecode(false)
+      failIpc = true
       fireEvent.click(firstImageBtn)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    expect(within(blocks[0]).getByRole('alert')).toHaveTextContent(
-      '네이티브 이미지 클립보드 쓰기에 실패했습니다.'
-    )
-    expect(entries).toHaveLength(2)
-    expect(entries[1]).toMatchObject({
-      level: 'error',
-      category: 'ui',
-      message: 'Mermaid image copy failed',
-      data: {
-        theme: 'dark',
-        codeLength: secretSource.length,
-        byteLength: validPng.byteLength
-      }
-    })
-    expect(JSON.stringify(entries[1])).not.toContain('137')
+      await waitFor(() => {
+        expect(within(blocks[0]).getByRole('alert')).toHaveTextContent(
+          '네이티브 이미지 클립보드 쓰기에 실패했습니다.'
+        )
+      })
+      expect(entries).toHaveLength(2)
+      expect(entries[1]).toMatchObject({
+        level: 'error',
+        category: 'ui',
+        message: 'Mermaid image copy failed',
+        data: {
+          theme: 'dark',
+          codeLength: secretSource.length,
+          byteLength: 6
+        }
+      })
+      expect(JSON.stringify(entries[1])).not.toContain('137')
 
-    // 3. Retry succeeds -> clears alert and displays copied feedback
-    failMode = 'none'
-    await act(async () => {
+      // 3. Retry succeeds -> clears alert and displays copied feedback
+      failIpc = false
       fireEvent.click(firstImageBtn)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    expect(within(blocks[0]).queryByRole('alert')).not.toBeInTheDocument()
-    expect(firstImageBtn).toHaveTextContent('복사됨')
+      await waitFor(() => {
+        expect(firstImageBtn).toHaveTextContent('복사됨')
+      })
+      expect(within(blocks[0]).queryByRole('alert')).not.toBeInTheDocument()
 
-    // 4. Theme change clears stale feedback
-    rerender(
-      <div>
-        <MermaidDiagram
-          code={secretSource}
-          theme="light"
-          renderer={renderer}
-          rasterAdapter={rasterAdapter}
-          debounceMs={0}
-        />
-        <MermaidDiagram
-          code={'graph TD\n  SECOND-->THIRD'}
-          theme="dark"
-          renderer={renderer}
-          rasterAdapter={rasterAdapter}
-          debounceMs={0}
-        />
-      </div>
-    )
-    await waitFor(() => {
-      expect(within(blocks[0]).getByRole('button', { name: '이미지 복사' })).toBeEnabled()
-    })
-    expect(within(blocks[0]).getByRole('button', { name: '이미지 복사' })).not.toHaveTextContent(
-      '복사됨'
-    )
+      // 4. Theme change clears stale feedback
+      rerender(
+        <div>
+          <MermaidDiagram code={secretSource} theme="light" renderer={renderer} debounceMs={0} />
+          <MermaidDiagram code={'graph TD\n  SECOND-->THIRD'} theme="dark" renderer={renderer} debounceMs={0} />
+        </div>
+      )
+      await waitFor(() => {
+        expect(within(blocks[0]).getByRole('button', { name: '이미지 복사' })).toBeEnabled()
+      })
+      expect(within(blocks[0]).getByRole('button', { name: '이미지 복사' })).not.toHaveTextContent(
+        '복사됨'
+      )
 
-    // 5. Missing copyImage bridge triggers inline role="alert"
-    delete (window as { wikiApi?: WikiApi }).wikiApi
-    await act(async () => {
+      // 5. Missing copyImage bridge triggers inline role="alert"
+      delete (window as { wikiApi?: WikiApi }).wikiApi
       fireEvent.click(within(blocks[0]).getByRole('button', { name: '이미지 복사' }))
-      await Promise.resolve()
-    })
-    expect(within(blocks[0]).getByRole('alert')).toHaveTextContent(
-      '이미지 클립보드 복사 API를 사용할 수 없습니다.'
-    )
+      await waitFor(() => {
+        expect(within(blocks[0]).getByRole('alert')).toHaveTextContent(
+          '이미지 클립보드 복사 API를 사용할 수 없습니다.'
+        )
+      })
+    } finally {
+      canvasStub.restore()
+    }
   })
 })

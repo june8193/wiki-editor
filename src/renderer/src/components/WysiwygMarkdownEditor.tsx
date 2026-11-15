@@ -6,7 +6,6 @@ import {
 } from '@shared/config'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
-import type { DiagramPngRasterAdapter } from '../editor/mermaidExport'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
@@ -29,7 +28,6 @@ import { useDismissable } from '../hooks/useDismissable'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from '../hooks/useSlashMenu'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
-import { MermaidExportProvider } from './MermaidExportContext'
 import { SlashCommandMenu } from './SlashCommandMenu'
 
 export interface WysiwygScrollRequest {
@@ -43,7 +41,6 @@ interface WysiwygMarkdownEditorProps {
   theme?: ThemeMode
   showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
-  mermaidRasterAdapter?: DiagramPngRasterAdapter
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
   scrollRequest?: WysiwygScrollRequest | null
@@ -221,7 +218,6 @@ export function WysiwygMarkdownEditor({
   theme = 'light',
   showHeadingNumbers = false,
   mermaidRenderer,
-  mermaidRasterAdapter,
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
   scrollRequest,
@@ -522,11 +518,9 @@ export function WysiwygMarkdownEditor({
           </div>
         )}
 
-        <MermaidExportProvider rasterAdapter={mermaidRasterAdapter}>
-          <WysiwygMermaidContext.Provider value={mermaidContextValue}>
-            <EditorContent editor={editor} className="wysiwyg-editor-content" />
-          </WysiwygMermaidContext.Provider>
-        </MermaidExportProvider>
+        <WysiwygMermaidContext.Provider value={mermaidContextValue}>
+          <EditorContent editor={editor} className="wysiwyg-editor-content" />
+        </WysiwygMermaidContext.Provider>
       </div>
 
       {cellMenuPos && (

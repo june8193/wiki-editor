@@ -13,14 +13,12 @@ import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
 import { DocumentOutlinePanel } from './components/DocumentOutlinePanel'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
 import { GitSidebarPanel } from './components/GitSidebarPanel'
-import { MermaidExportProvider } from './components/MermaidExportContext'
 import { PaneInteractionActions } from './components/PaneTabBar'
 import { PaneWorkspace } from './components/PaneWorkspace'
 import { SettingsPanel } from './components/SettingsPanel'
 import { SidebarResizer } from './components/SidebarResizer'
 import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
-import type { DiagramPngRasterAdapter } from './editor/mermaidExport'
 import type { OutlineContextTarget } from './editor/outlineScrollSpy'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
@@ -87,11 +85,7 @@ interface PendingDialogState {
   onCancel?: () => void
 }
 
-export interface AppProps {
-  mermaidRasterAdapter?: DiagramPngRasterAdapter
-}
-
-export function App({ mermaidRasterAdapter }: AppProps = {}) {
+export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
     activeView: 'workspace',
@@ -637,8 +631,7 @@ export function App({ mermaidRasterAdapter }: AppProps = {}) {
   const gitChangedCount = workspace?.rootPath ? getGitChangedCount(git.status) : 0
 
   return (
-    <MermaidExportProvider rasterAdapter={mermaidRasterAdapter}>
-      <div className="app-shell" data-theme={config.theme}>
+    <div className="app-shell" data-theme={config.theme}>
       {errorMessage && (
         <div className="error-banner" role="alert">
           {errorMessage}
@@ -831,7 +824,6 @@ export function App({ mermaidRasterAdapter }: AppProps = {}) {
           }}
         />
       )}
-      </div>
-    </MermaidExportProvider>
+    </div>
   )
 }

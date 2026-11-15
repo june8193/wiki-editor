@@ -4,8 +4,8 @@ import type { CustomCommandConfig } from '@shared/config'
 import type { WikiApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { DiagramPngRasterAdapter, DiagramSvgRasterRequest } from '../editor/mermaidExport'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
+import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 function placeCaretInProseMirror(editorEl: HTMLElement, targetEl: Element): void {
@@ -876,172 +876,162 @@ describe('WysiwygMarkdownEditor', () => {
   })
 
   it('supports inline 이미지 복사 in WYSIWYG light/dark themes with 1500ms feedback, syntax-error disabling, sanitized failure alerts, and zero markdown mutation', async () => {
-    const entries: RendererLogPayload[] = []
-    let failCopyImage = false
-    const copyImage = vi.fn(async () => {
-      if (failCopyImage) {
-        throw new Error('위지윅 이미지 클립보드 실패')
-      }
-    })
-    window.wikiApi = {
-      diagram: { copyText: vi.fn(async () => {}), copyImage },
-      log: {
-        write: vi.fn(async (payload: RendererLogPayload) => {
-          entries.push(payload)
-        })
-      }
-    } as unknown as WikiApi
+    const canvasStub = installSvgCanvasStub()
 
-    const rasterRequests: DiagramSvgRasterRequest[] = []
-    const pngBytes = new Uint8Array([137, 80, 78, 71, 77])
-    const rasterAdapter: DiagramPngRasterAdapter = vi.fn(async (req) => {
-      rasterRequests.push(req)
-      return pngBytes
-    })
-
-    const driver: MermaidDriver = {
-      initialize: vi.fn(),
-      render: vi.fn(async (_id, text) => {
-        if (text.includes('broken_img')) {
-          throw new Error('Syntax error')
-        }
-        return {
-          svg: `<svg viewBox="0 0 120 60" width="100%" style="max-width: 120px;"><g><text>${text.trim()}</text></g></svg>`
+    try {
+      const entries: RendererLogPayload[] = []
+      let failCopyImage = false
+      const copyImage = vi.fn(async () => {
+        if (failCopyImage) {
+          throw new Error('위지윅 이미지 클립보드 실패')
         }
       })
-    }
-    const mermaidRenderer = createMermaidRenderer(driver)
-    const onChangeContent = vi.fn()
-    const validSource = 'graph TD\n  WYS_IMG_SECRET --> Out'
-    const brokenSource = 'graph TD\n  broken_img'
-    const markdown = [
-      '```mermaid',
-      validSource,
-      '```',
-      '',
-      '```mermaid',
-      brokenSource,
-      '```',
-      '',
-      '```mermaid',
-      '   ',
-      '```'
-    ].join('\n')
+      window.wikiApi = {
+        diagram: { copyText: vi.fn(async () => {}), copyImage },
+        log: {
+          write: vi.fn(async (payload: RendererLogPayload) => {
+            entries.push(payload)
+          })
+        }
+      } as unknown as WikiApi
 
-    const { rerender } = render(
-      <WysiwygMarkdownEditor
-        content={markdown}
-        scrollTop={0}
-        theme="light"
-        mermaidRenderer={mermaidRenderer}
-        mermaidRasterAdapter={rasterAdapter}
-        onChangeContent={onChangeContent}
-      />
-    )
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => {
+          if (text.includes('broken_img')) {
+            throw new Error('Syntax error')
+          }
+          return {
+            svg: `<svg viewBox="0 0 120 60" width="100%" style="max-width: 120px;"><g><text>${text.trim()}</text></g></svg>`
+          }
+        })
+      }
+      const mermaidRenderer = createMermaidRenderer(driver)
+      const onChangeContent = vi.fn()
+      const validSource = 'graph TD\n  WYS_IMG_SECRET --> Out'
+      const brokenSource = 'graph TD\n  broken_img'
+      const markdown = [
+        '```mermaid',
+        validSource,
+        '```',
+        '',
+        '```mermaid',
+        brokenSource,
+        '```',
+        '',
+        '```mermaid',
+        '   ',
+        '```'
+      ].join('\n')
 
-    await waitFor(() => {
-      expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
-      expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
-    })
-
-    const blocks = screen.getAllByTestId('wysiwyg-mermaid-block')
-    const validBlock = blocks[0]
-    const brokenBlock = blocks[1]
-    const blankBlock = blocks[2]
-
-    const toolbar = within(validBlock).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
-    expect(within(toolbar).getAllByRole('button').map((btn) => btn.getAttribute('aria-label'))).toEqual([
-      '이미지 복사',
-      '코드 복사'
-    ])
-
-    const validImageBtn = within(validBlock).getByRole('button', { name: '이미지 복사' })
-    const brokenImageBtn = within(brokenBlock).getByRole('button', { name: '이미지 복사' })
-    const brokenCodeBtn = within(brokenBlock).getByRole('button', { name: '코드 복사' })
-    const blankImageBtn = within(blankBlock).getByRole('button', { name: '이미지 복사' })
-
-    expect(validImageBtn).toBeEnabled()
-    expect(brokenImageBtn).toBeDisabled()
-    expect(brokenCodeBtn).toBeEnabled()
-    expect(blankImageBtn).toBeDisabled()
-
-    // Light theme PNG copy
-    await act(async () => {
-      fireEvent.click(validImageBtn)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    expect(rasterRequests).toHaveLength(1)
-    expect(rasterRequests[0]).toMatchObject({
-      pixelWidth: 304,
-      pixelHeight: 184
-    })
-    const decodedWysiwygLightSvg = decodeURIComponent(
-      rasterRequests[0].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
-    )
-    expect(decodedWysiwygLightSvg).toContain('width="152"')
-    expect(decodedWysiwygLightSvg).toContain('height="92"')
-    expect(decodedWysiwygLightSvg).toContain('fill="#ffffff"')
-    expect(copyImage).toHaveBeenCalledWith(pngBytes)
-    expect(validImageBtn).toHaveTextContent('복사됨')
-
-    // Switch to dark theme and copy PNG
-    rerender(
-      <WysiwygMarkdownEditor
-        content={markdown}
-        scrollTop={0}
-        theme="dark"
-        mermaidRenderer={mermaidRenderer}
-        mermaidRasterAdapter={rasterAdapter}
-        onChangeContent={onChangeContent}
-      />
-    )
-    await waitFor(() => {
-      expect(within(validBlock).getByTestId('mermaid-diagram')).toHaveAttribute(
-        'data-mermaid-theme',
-        'dark'
+      const { rerender } = render(
+        <WysiwygMarkdownEditor
+          content={markdown}
+          scrollTop={0}
+          theme="light"
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={onChangeContent}
+        />
       )
-      expect(within(validBlock).getByRole('button', { name: '이미지 복사' })).toBeEnabled()
-    })
 
-    failCopyImage = true
-    await act(async () => {
+      await waitFor(() => {
+        expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
+        expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
+      })
+
+      const blocks = screen.getAllByTestId('wysiwyg-mermaid-block')
+      const validBlock = blocks[0]
+      const brokenBlock = blocks[1]
+      const blankBlock = blocks[2]
+
+      const toolbar = within(validBlock).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+      expect(within(toolbar).getAllByRole('button').map((btn) => btn.getAttribute('aria-label'))).toEqual([
+        '이미지 복사',
+        '코드 복사'
+      ])
+
+      const validImageBtn = within(validBlock).getByRole('button', { name: '이미지 복사' })
+      const brokenImageBtn = within(brokenBlock).getByRole('button', { name: '이미지 복사' })
+      const brokenCodeBtn = within(brokenBlock).getByRole('button', { name: '코드 복사' })
+      const blankImageBtn = within(blankBlock).getByRole('button', { name: '이미지 복사' })
+
+      expect(validImageBtn).toBeEnabled()
+      expect(brokenImageBtn).toBeDisabled()
+      expect(brokenCodeBtn).toBeEnabled()
+      expect(blankImageBtn).toBeDisabled()
+
+      // Light theme PNG copy
       fireEvent.click(validImageBtn)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    const validActionAlert = validBlock.querySelector('.mermaid-action-error')
-    expect(validActionAlert).toHaveAttribute('role', 'alert')
-    expect(validActionAlert).toHaveTextContent('위지윅 이미지 클립보드 실패')
-    expect(brokenBlock.querySelector('.mermaid-action-error')).toBeNull()
-    expect(blankBlock.querySelector('.mermaid-action-error')).toBeNull()
-    const imageFailures = entries.filter((e) => e.message === 'Mermaid image copy failed')
-    expect(imageFailures).toHaveLength(1)
-    expect(imageFailures[0].data).toMatchObject({
-      theme: 'dark',
-      codeLength: validSource.length,
-      byteLength: pngBytes.byteLength
-    })
-    expect(JSON.stringify(imageFailures[0])).not.toContain('WYS_IMG_SECRET')
+      await waitFor(() => {
+        expect(copyImage).toHaveBeenCalledTimes(1)
+        expect(validImageBtn).toHaveTextContent('복사됨')
+      })
+      expect(canvasStub.calls).toHaveLength(1)
+      expect(canvasStub.calls[0]).toMatchObject({
+        pixelWidth: 304,
+        pixelHeight: 184
+      })
+      expect(canvasStub.calls[0].decodedSvg).toContain('width="152"')
+      expect(canvasStub.calls[0].decodedSvg).toContain('height="92"')
+      expect(canvasStub.calls[0].decodedSvg).toContain('fill="#ffffff"')
+      expect(copyImage).toHaveBeenLastCalledWith(new Uint8Array([137, 80, 78, 71, 1, 304 & 0xff]))
 
-    // Recover and advance 1500ms feedback timer
-    failCopyImage = false
-    vi.useFakeTimers()
-    await act(async () => {
+      // Switch to dark theme and verify failure alert + sanitized log
+      rerender(
+        <WysiwygMarkdownEditor
+          content={markdown}
+          scrollTop={0}
+          theme="dark"
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={onChangeContent}
+        />
+      )
+      await waitFor(() => {
+        expect(within(validBlock).getByTestId('mermaid-diagram')).toHaveAttribute(
+          'data-mermaid-theme',
+          'dark'
+        )
+        expect(within(validBlock).getByRole('button', { name: '이미지 복사' })).toBeEnabled()
+      })
+
+      failCopyImage = true
       fireEvent.click(validImageBtn)
-      await vi.advanceTimersByTimeAsync(0)
-    })
-    const decodedWysiwygDarkSvg = decodeURIComponent(
-      rasterRequests[2].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
-    )
-    expect(decodedWysiwygDarkSvg).toContain('fill="#161b22"')
-    expect(within(validBlock).queryByRole('alert')).not.toBeInTheDocument()
-    expect(validImageBtn).toHaveTextContent('복사됨')
+      await waitFor(() => {
+        expect(validBlock.querySelector('.mermaid-action-error')).toHaveTextContent(
+          '위지윅 이미지 클립보드 실패'
+        )
+      })
+      const validActionAlert = validBlock.querySelector('.mermaid-action-error')
+      expect(validActionAlert).toHaveAttribute('role', 'alert')
+      expect(brokenBlock.querySelector('.mermaid-action-error')).toBeNull()
+      expect(blankBlock.querySelector('.mermaid-action-error')).toBeNull()
+      const imageFailures = entries.filter((e) => e.message === 'Mermaid image copy failed')
+      expect(imageFailures).toHaveLength(1)
+      expect(imageFailures[0].data).toMatchObject({
+        theme: 'dark',
+        codeLength: validSource.length,
+        byteLength: 6
+      })
+      expect(JSON.stringify(imageFailures[0])).not.toContain('WYS_IMG_SECRET')
 
-    act(() => {
-      vi.advanceTimersByTime(1500)
-    })
-    expect(validImageBtn).not.toHaveTextContent('복사됨')
-    expect(onChangeContent).not.toHaveBeenCalled()
+      // Recover and advance 1500ms feedback timer
+      failCopyImage = false
+      vi.useFakeTimers()
+      await act(async () => {
+        fireEvent.click(validImageBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(canvasStub.calls[2].decodedSvg).toContain('fill="#161b22"')
+      expect(within(validBlock).queryByRole('alert')).not.toBeInTheDocument()
+      expect(validImageBtn).toHaveTextContent('복사됨')
+
+      act(() => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(validImageBtn).not.toHaveTextContent('복사됨')
+      expect(onChangeContent).not.toHaveBeenCalled()
+    } finally {
+      canvasStub.restore()
+    }
   })
 })

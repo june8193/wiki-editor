@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import {
   defaultCanvasPngRasterAdapter,
   type DiagramSvgRasterRequest,
@@ -108,48 +109,7 @@ describe('mermaidExport', () => {
   })
 
   it('decodes SVG data URI into an offscreen canvas and extracts PNG bytes via defaultCanvasPngRasterAdapter', async () => {
-    const OriginalImage = globalThis.Image
-    const origCreateElement = document.createElement.bind(document)
-    let shouldDecodeFail = false
-    let emittedBlob: Blob | null = new Blob([new Uint8Array([137, 80, 78, 71])], {
-      type: 'image/png'
-    })
-
-    class FakeImage {
-      onload: (() => void) | null = null
-      onerror: (() => void) | null = null
-      decoding = ''
-      private _src = ''
-      set src(value: string) {
-        this._src = value
-        queueMicrotask(() => {
-          if (shouldDecodeFail) {
-            this.onerror?.()
-          } else {
-            this.onload?.()
-          }
-        })
-      }
-      get src(): string {
-        return this._src
-      }
-    }
-
-    const drawImage = vi.fn()
-    const clearRect = vi.fn()
-    const createElementSpy = vi.spyOn(document, 'createElement').mockImplementation(((tagName: string) => {
-      if (tagName.toLowerCase() === 'canvas') {
-        return {
-          width: 0,
-          height: 0,
-          getContext: () => ({ clearRect, drawImage }),
-          toBlob: (cb: (blob: Blob | null) => void) => cb(emittedBlob)
-        } as unknown as HTMLCanvasElement
-      }
-      return origCreateElement(tagName)
-    }) as typeof document.createElement)
-
-    globalThis.Image = FakeImage as unknown as typeof Image
+    const stub = installSvgCanvasStub()
 
     try {
       const pngBytes = await defaultCanvasPngRasterAdapter({
@@ -157,11 +117,11 @@ describe('mermaidExport', () => {
         pixelWidth: 200,
         pixelHeight: 100
       })
-      expect(Array.from(pngBytes)).toEqual([137, 80, 78, 71])
-      expect(clearRect).toHaveBeenCalledWith(0, 0, 200, 100)
-      expect(drawImage).toHaveBeenCalledWith(expect.any(FakeImage), 0, 0, 200, 100)
+      expect(Array.from(pngBytes)).toEqual([137, 80, 78, 71, 1, 200])
+      expect(stub.clearRectSpy).toHaveBeenCalledWith(0, 0, 200, 100)
+      expect(stub.drawImageSpy).toHaveBeenCalledWith(expect.anything(), 0, 0, 200, 100)
 
-      shouldDecodeFail = true
+      stub.setFailDecode(true)
       await expect(
         defaultCanvasPngRasterAdapter({
           svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
@@ -170,8 +130,8 @@ describe('mermaidExport', () => {
         })
       ).rejects.toThrow()
 
-      shouldDecodeFail = false
-      emittedBlob = null
+      stub.setFailDecode(false)
+      stub.setEmitNullBlob(true)
       await expect(
         defaultCanvasPngRasterAdapter({
           svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
@@ -180,8 +140,7 @@ describe('mermaidExport', () => {
         })
       ).rejects.toThrow()
     } finally {
-      createElementSpy.mockRestore()
-      globalThis.Image = OriginalImage
+      stub.restore()
     }
   })
 })

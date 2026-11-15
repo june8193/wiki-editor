@@ -1,11 +1,9 @@
-import { type ReactNode, useContext, useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
-import type { DiagramPngRasterAdapter } from '../editor/mermaidExport'
 import { defaultMermaidRenderer, type MermaidRenderer, type MermaidTheme } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { DEFAULT_MERMAID_DEBOUNCE_MS, useMermaidRenderState } from '../hooks/useMermaidRenderState'
 import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
-import { MermaidExportContext } from './MermaidExportContext'
 
 export interface MermaidDiagramViewProps {
   code: string
@@ -87,7 +85,6 @@ interface MermaidDiagramProps {
   code: string
   theme: ThemeMode
   renderer?: MermaidRenderer
-  rasterAdapter?: DiagramPngRasterAdapter
   debounceMs?: number
   className?: string
   sourceLine?: string
@@ -102,14 +99,11 @@ export function MermaidDiagram({
   code,
   theme,
   renderer = defaultMermaidRenderer,
-  rasterAdapter,
   debounceMs = DEFAULT_MERMAID_DEBOUNCE_MS,
   className,
   sourceLine,
   sourceEndLine
 }: MermaidDiagramProps) {
-  const contextRasterAdapter = useContext(MermaidExportContext)
-  const effectiveRasterAdapter = rasterAdapter ?? contextRasterAdapter
   const [isHovered, setIsHovered] = useState(false)
 
   const { mermaidTheme, displaySvg, confirmedSvg, displayError } = useMermaidRenderState({
@@ -122,8 +116,7 @@ export function MermaidDiagram({
   const actions = useMermaidDiagramActions({
     code,
     theme,
-    confirmedSvg,
-    rasterAdapter: effectiveRasterAdapter
+    confirmedSvg
   })
 
   return (

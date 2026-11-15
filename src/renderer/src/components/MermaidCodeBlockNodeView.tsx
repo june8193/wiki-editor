@@ -6,7 +6,6 @@ import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { useMermaidRenderState } from '../hooks/useMermaidRenderState'
 import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
 import { MermaidDiagramView } from './MermaidDiagram'
-import { MermaidExportContext } from './MermaidExportContext'
 
 export interface WysiwygMermaidContextValue {
   theme: ThemeMode
@@ -19,7 +18,6 @@ export const WysiwygMermaidContext = createContext<WysiwygMermaidContextValue>({
 
 function WysiwygMermaidBlock({ code }: { code: string }) {
   const { theme, mermaidRenderer } = useContext(WysiwygMermaidContext)
-  const rasterAdapter = useContext(MermaidExportContext)
   const [showSource, setShowSource] = useState(false)
 
   const { mermaidTheme, displaySvg, confirmedSvg, displayError } = useMermaidRenderState({
@@ -31,8 +29,7 @@ function WysiwygMermaidBlock({ code }: { code: string }) {
   const actions = useMermaidDiagramActions({
     code,
     theme,
-    confirmedSvg,
-    rasterAdapter
+    confirmedSvg
   })
 
   return (

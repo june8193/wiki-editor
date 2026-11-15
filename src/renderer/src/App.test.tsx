@@ -27,8 +27,8 @@ import {
   WorkspaceEntry,
   WorkspaceEntryKind
 } from '@shared/workspace'
-import type { DiagramPngRasterAdapter, DiagramSvgRasterRequest } from './editor/mermaidExport'
 import { defaultMermaidRenderer } from './editor/mermaidRenderer'
+import { installSvgCanvasStub } from './test/svgCanvasStub'
 import { App } from './App'
 import themeCss from './styles/theme.css?raw'
 
@@ -2945,13 +2945,6 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       }
     })
 
-    const rasterRequests: DiagramSvgRasterRequest[] = []
-    const rasterAdapter: DiagramPngRasterAdapter = vi.fn(async (request) => {
-      rasterRequests.push(request)
-      const isDark = decodeURIComponent(request.svgDataUri).includes('#161b22')
-      return new Uint8Array([137, 80, 78, 71, isDark ? 2 : 1])
-    })
-
     const { api, emitMenuCommand } = createInMemoryWikiApi(
       { theme: 'light' },
       {
@@ -2971,9 +2964,10 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     )
     window.wikiApi = api
 
+    const canvasStub = installSvgCanvasStub()
     const { rootEl, cleanup } = mountThemeStylesAndRoot()
     try {
-      render(<App mermaidRasterAdapter={rasterAdapter} />, { container: rootEl })
+      render(<App />, { container: rootEl })
       await triggerMenuCommand(emitMenuCommand, 'open-folder')
       await user.click(await screen.findByText('diagram-export.md'))
 
@@ -3015,20 +3009,20 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
       await user.hover(previewBlocks[0])
       await user.click(previewValidImageBtn)
-      expect(rasterRequests).toHaveLength(1)
-      expect(rasterRequests[0]).toMatchObject({
+      await waitFor(() => {
+        expect(copyImage).toHaveBeenCalledTimes(1)
+        expect(previewValidImageBtn).toHaveTextContent('복사됨')
+      })
+      expect(canvasStub.calls).toHaveLength(1)
+      expect(canvasStub.calls[0]).toMatchObject({
         pixelWidth: 544,
         pixelHeight: 304
       })
-      const decodedAppLightSvg = decodeURIComponent(
-        rasterRequests[0].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
-      )
-      expect(decodedAppLightSvg).toContain('width="272"')
-      expect(decodedAppLightSvg).toContain('height="152"')
-      expect(decodedAppLightSvg).toContain('fill="#ffffff"')
-      expect(decodedAppLightSvg).not.toContain('max-width')
-      expect(copiedPngPayloads[0]).toEqual(new Uint8Array([137, 80, 78, 71, 1]))
-      expect(previewValidImageBtn).toHaveTextContent('복사됨')
+      expect(canvasStub.calls[0].decodedSvg).toContain('width="272"')
+      expect(canvasStub.calls[0].decodedSvg).toContain('height="152"')
+      expect(canvasStub.calls[0].decodedSvg).toContain('fill="#ffffff"')
+      expect(canvasStub.calls[0].decodedSvg).not.toContain('max-width')
+      expect(copiedPngPayloads[0]).toEqual(new Uint8Array([137, 80, 78, 71, 1, 544 & 0xff]))
 
       // Toggle dark theme in Preview -> exports #161b22 dark background PNG
       await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
@@ -3038,16 +3032,16 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       })
       await user.hover(previewBlocks[0])
       await user.click(previewValidImageBtn)
-      expect(rasterRequests).toHaveLength(2)
-      expect(rasterRequests[1]).toMatchObject({
+      await waitFor(() => {
+        expect(copyImage).toHaveBeenCalledTimes(2)
+      })
+      expect(canvasStub.calls).toHaveLength(2)
+      expect(canvasStub.calls[1]).toMatchObject({
         pixelWidth: 544,
         pixelHeight: 304
       })
-      const decodedAppDarkSvg = decodeURIComponent(
-        rasterRequests[1].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
-      )
-      expect(decodedAppDarkSvg).toContain('fill="#161b22"')
-      expect(copiedPngPayloads[1]).toEqual(new Uint8Array([137, 80, 78, 71, 2]))
+      expect(canvasStub.calls[1].decodedSvg).toContain('fill="#161b22"')
+      expect(copiedPngPayloads[1]).toEqual(new Uint8Array([137, 80, 78, 71, 2, 544 & 0xff]))
 
       // Restore light theme for subsequent checks
       await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
@@ -3073,7 +3067,9 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       const splitCodeBtn = within(splitBlocks[0]).getByRole('button', { name: '코드 복사' })
       await user.hover(splitBlocks[0])
       await user.click(splitImageBtn)
-      expect(copyImage).toHaveBeenCalledTimes(3)
+      await waitFor(() => {
+        expect(copyImage).toHaveBeenCalledTimes(3)
+      })
 
       const splitRawEditor = document.querySelector('.editor-split-region.is-raw') as HTMLElement
       const brokenLiveDoc = docContent.replace(validSource, 'graph TD\n  SYNTAX_ERROR_LIVE')
@@ -3128,9 +3124,13 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
       shouldFailCopyImage = true
       await user.click(wysiwygValidImageBtn)
+      await waitFor(() => {
+        expect(wysiwygBlocks[0].querySelector('.mermaid-action-error')).toHaveTextContent(
+          'App PNG clipboard failed'
+        )
+      })
       const wysiwygActionAlert = wysiwygBlocks[0].querySelector('.mermaid-action-error')
       expect(wysiwygActionAlert).toHaveAttribute('role', 'alert')
-      expect(wysiwygActionAlert).toHaveTextContent('App PNG clipboard failed')
       expect(wysiwygBlocks[1].querySelector('.mermaid-action-error')).toBeNull()
       expect(wysiwygBlocks[2].querySelector('.mermaid-action-error')).toBeNull()
 
@@ -3144,7 +3144,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         data: {
           theme: 'light',
           codeLength: validSource.length,
-          byteLength: 5
+          byteLength: 6
         }
       })
       expect(typeof (imageFailureLogs[0].data as { svgLength?: unknown }).svgLength).toBe('number')
@@ -3171,6 +3171,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(docContent)
       expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
     } finally {
+      canvasStub.restore()
       vi.useRealTimers()
       cleanup()
     }

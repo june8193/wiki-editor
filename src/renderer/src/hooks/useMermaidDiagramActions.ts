@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
-import {
-  type DiagramPngRasterAdapter,
-  rasterizeMermaidSvgToPng
-} from '../editor/mermaidExport'
+import { rasterizeMermaidSvgToPng } from '../editor/mermaidExport'
 import { logRendererError } from '../logging/rendererLogger'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
@@ -15,7 +12,6 @@ export interface UseMermaidDiagramActionsOptions {
   code: string
   theme: ThemeMode
   confirmedSvg: string | null
-  rasterAdapter?: DiagramPngRasterAdapter
 }
 
 export interface MermaidDiagramActionsState {
@@ -45,8 +41,7 @@ const COPY_IMAGE_FAILED_FALLBACK_MESSAGE = 'Mermaid 이미지 복사에 실패�
 export function useMermaidDiagramActions({
   code,
   theme,
-  confirmedSvg,
-  rasterAdapter
+  confirmedSvg
 }: UseMermaidDiagramActionsOptions): MermaidDiagramActionsState {
   const [activeAction, setActiveAction] = useState<MermaidActionId | null>(null)
   const [completedAction, setCompletedAction] = useState<MermaidActionId | null>(null)
@@ -157,7 +152,7 @@ export function useMermaidDiagramActions({
           throw new Error('이미지 클립보드 복사 API를 사용할 수 없습니다.')
         }
 
-        const pngBytes = await rasterizeMermaidSvgToPng(confirmedSvg, theme, rasterAdapter)
+        const pngBytes = await rasterizeMermaidSvgToPng(confirmedSvg, theme)
         if (!isMountedRef.current || executionTokenRef.current !== token) {
           return
         }
@@ -179,7 +174,7 @@ export function useMermaidDiagramActions({
         })
       }
     )
-  }, [canCopyImage, code.length, confirmedSvg, executeAction, rasterAdapter, theme])
+  }, [canCopyImage, code.length, confirmedSvg, executeAction, theme])
 
   const handleCopyCode = useCallback(async () => {
     await executeAction(
