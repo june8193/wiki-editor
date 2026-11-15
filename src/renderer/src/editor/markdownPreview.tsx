@@ -26,28 +26,24 @@ import {
 } from './MarkdownTocEngine'
 import type { MermaidRenderer } from './mermaidRenderer'
 
+import { decodeSlugSafely, isLinkNavigationClick } from './MarkdownLinkNavigation'
+
 export interface MarkdownPreviewRenderOptions {
   theme?: ThemeMode
   showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
   onAnchorNavigate?: (slug: string) => void
+  onLinkNavigate?: (href: string) => void
 }
 
 interface PreviewRenderContextValue {
   theme: ThemeMode
   mermaidRenderer?: MermaidRenderer
   onAnchorNavigate?: (slug: string) => void
+  onLinkNavigate?: (href: string) => void
 }
 
 const PreviewRenderContext = createContext<PreviewRenderContextValue>({ theme: 'light' })
-
-function decodeSlugSafely(rawSlug: string): string {
-  try {
-    return decodeURIComponent(rawSlug)
-  } catch {
-    return rawSlug
-  }
-}
 
 function extractHastText(node: HastElement | HastRootContent): string {
   if (node.type === 'text') {
@@ -146,8 +142,8 @@ function hasLanguageMermaidClass(className: unknown): boolean {
 }
 
 function SafeLink(props: ComponentPropsWithoutRef<'a'>) {
-  const { href, onClick, children, ...rest } = props
-  const { onAnchorNavigate } = useContext(PreviewRenderContext)
+  const { href, onClick, onAuxClick, children, ...rest } = props
+  const { onAnchorNavigate, onLinkNavigate } = useContext(PreviewRenderContext)
   const isInternalAnchor = typeof href === 'string' && href.startsWith('#')
 
   return (
@@ -157,10 +153,18 @@ function SafeLink(props: ComponentPropsWithoutRef<'a'>) {
       rel={href && !isInternalAnchor ? 'noopener noreferrer' : undefined}
       onClick={(event) => {
         event.preventDefault()
-        if (isInternalAnchor && href.length > 1) {
-          onAnchorNavigate?.(decodeSlugSafely(href.slice(1)))
+        if (typeof href === 'string' && isLinkNavigationClick('preview', event)) {
+          if (onLinkNavigate) {
+            onLinkNavigate(href)
+          } else if (isInternalAnchor && href.length > 1) {
+            onAnchorNavigate?.(decodeSlugSafely(href.slice(1)))
+          }
         }
         onClick?.(event)
+      }}
+      onAuxClick={(event) => {
+        event.preventDefault()
+        onAuxClick?.(event)
       }}
     >
       {children}
@@ -247,7 +251,8 @@ export function renderMarkdownToReact(
   const contextValue: PreviewRenderContextValue = {
     theme: options.theme ?? 'light',
     mermaidRenderer: options.mermaidRenderer,
-    onAnchorNavigate: options.onAnchorNavigate
+    onAnchorNavigate: options.onAnchorNavigate,
+    onLinkNavigate: options.onLinkNavigate
   }
   return (
     <PreviewRenderContext.Provider value={contextValue}>

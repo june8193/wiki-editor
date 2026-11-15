@@ -696,4 +696,49 @@ describe('WysiwygMarkdownEditor link autocomplete & Ctrl+K', () => {
       )
     })
   })
+
+  it('triggers onLinkNavigate in WYSIWYG mode only on Ctrl/Meta+click while preserving normal click and blocking browser navigation', () => {
+    const onLinkNavigate = vi.fn()
+    render(
+      <WysiwygMarkdownEditor
+        content={[
+          'See [섹션](#%EA%B0%9C%EC%9A%94), [`parseSym`](#parsesym), [문서](./other.md#top), and [웹](https://example.com).'
+        ].join('\n')}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onLinkNavigate={onLinkNavigate}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const anchors = Array.from(editorEl.querySelectorAll('a'))
+    expect(anchors.length).toBeGreaterThanOrEqual(4)
+
+    const sectionAnchor = anchors.find((a) => a.getAttribute('href') === '#%EA%B0%9C%EC%9A%94')!
+    const symCode = anchors
+      .find((a) => a.getAttribute('href') === '#parsesym')!
+      .querySelector('code')!
+    const fileAnchor = anchors.find((a) => a.getAttribute('href') === './other.md#top')!
+    const externalAnchor = anchors.find((a) => a.getAttribute('href') === 'https://example.com')!
+
+    // Normal click only prevents browser navigation and does not trigger onLinkNavigate
+    expect(fireEvent.click(sectionAnchor)).toBe(false)
+    expect(fireEvent.click(fileAnchor)).toBe(false)
+    expect(fireEvent.click(externalAnchor)).toBe(false)
+    expect(fireEvent.click(fileAnchor, { ctrlKey: true, altKey: true })).toBe(false)
+    expect(onLinkNavigate).not.toHaveBeenCalled()
+
+    // Ctrl+click and Meta+click (including clicking child <code> inside <a>) trigger onLinkNavigate
+    expect(fireEvent.click(sectionAnchor, { ctrlKey: true })).toBe(false)
+    expect(onLinkNavigate).toHaveBeenNthCalledWith(1, '#%EA%B0%9C%EC%9A%94')
+
+    expect(fireEvent.click(symCode, { metaKey: true })).toBe(false)
+    expect(onLinkNavigate).toHaveBeenNthCalledWith(2, '#parsesym')
+
+    expect(fireEvent.click(fileAnchor, { ctrlKey: true })).toBe(false)
+    expect(onLinkNavigate).toHaveBeenNthCalledWith(3, './other.md#top')
+
+    expect(fireEvent.click(externalAnchor, { ctrlKey: true })).toBe(false)
+    expect(onLinkNavigate).toHaveBeenNthCalledWith(4, 'https://example.com')
+  })
 })

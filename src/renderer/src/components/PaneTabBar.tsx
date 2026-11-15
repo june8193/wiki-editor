@@ -22,6 +22,7 @@ export interface PaneInteractionActions {
   onChangeContent: (bufferKey: string, nextContent: string) => void
   onSaveBuffer: (bufferKey: string) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
+  onNavigateLink?: (paneId: PaneId, tabId: string, href: string) => void
 }
 
 interface TabContextMenuState {

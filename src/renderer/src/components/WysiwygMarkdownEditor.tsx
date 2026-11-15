@@ -8,6 +8,7 @@ import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
+import { isLinkNavigationClick } from '../editor/MarkdownLinkNavigation'
 import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
   addTableRowBeforeSafely,
@@ -54,6 +55,7 @@ interface WysiwygMarkdownEditorProps {
   scrollRequest?: WysiwygScrollRequest | null
   onChangeContent: (nextContent: string) => void
   onScrollTopChange?: (scrollTop: number) => void
+  onLinkNavigate?: (href: string) => void
 }
 
 interface ToolbarStateSnapshot {
@@ -232,7 +234,8 @@ export function WysiwygMarkdownEditor({
   activeFilePath,
   scrollRequest,
   onChangeContent,
-  onScrollTopChange
+  onScrollTopChange,
+  onLinkNavigate
 }: WysiwygMarkdownEditorProps) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
@@ -575,6 +578,21 @@ export function WysiwygMarkdownEditor({
           setCellMenuPos({ x: event.clientX, y: event.clientY })
         }}
         onClick={(event) => {
+          const target = event.target as HTMLElement | null
+          const anchor = target?.closest('a')
+          if (!anchor) {
+            return
+          }
+          event.preventDefault()
+          if (!isLinkNavigationClick('wysiwyg', event)) {
+            return
+          }
+          const href = anchor.getAttribute('href')
+          if (href !== null) {
+            onLinkNavigate?.(href)
+          }
+        }}
+        onAuxClick={(event) => {
           const target = event.target as HTMLElement | null
           if (target?.closest('a')) {
             event.preventDefault()

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
-import { getWorkspacePathKey, WorkspaceEntry } from '@shared/workspace'
+import { getWorkspaceDisplayName, getWorkspacePathKey, WorkspaceEntry } from '@shared/workspace'
 import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
 import { DocumentBuffer, DocumentBufferStore } from '../stores/DocumentBufferStore'
 import {
   type PaneId,
   PaneTabStore,
-  type PaneTabTransition
+  type PaneTabTransition,
+  type TabItem
 } from '../stores/PaneTabStore'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
@@ -14,6 +15,11 @@ export interface DirtyTabCloseRequest {
   paneId: PaneId
   tabId: string
   buffer: DocumentBuffer
+}
+
+export interface OpenedWorkspaceDocument {
+  buffer: DocumentBuffer
+  tab: TabItem
 }
 
 interface InFlightSaveEntry {
@@ -363,32 +369,46 @@ export function useEditorWorkspace({
     }
   }, [autoSave, autoSaveDelayMs, isAutoSavePaused, buffers, bufferStore, saveBufferSnapshot])
 
-  const openWorkspaceFile = useCallback(
-    async (entry: WorkspaceEntry, targetPaneId?: PaneId): Promise<void> => {
-      const key = getWorkspacePathKey(entry.path)
-      if (bufferStore.hasBuffer(key)) {
-        tabStore.openTab(key, { paneId: targetPaneId })
-        return
+  const openWorkspaceFileByPath = useCallback(
+    async (
+      filePath: string,
+      targetPaneId?: PaneId,
+      explicitName?: string
+    ): Promise<OpenedWorkspaceDocument | null> => {
+      const key = getWorkspacePathKey(filePath)
+      const existingBuffer = bufferStore.getBuffer(key)
+      if (existingBuffer) {
+        const tab = tabStore.openTab(key, { paneId: targetPaneId })
+        return { buffer: existingBuffer, tab }
       }
 
       callbacksRef.current.onError(null)
       try {
-        const content = await window.wikiApi.workspace.readFile(entry.path)
-        if (!mountedRef.current) return
+        const content = await window.wikiApi.workspace.readFile(filePath)
+        if (!mountedRef.current) return null
         const buf = bufferStore.openBuffer({
           kind: 'workspace',
-          path: entry.path,
-          name: entry.name,
+          path: filePath,
+          name: explicitName ?? getWorkspaceDisplayName(filePath),
           content
         })
-        tabStore.openTab(buf.key, { paneId: targetPaneId })
+        const tab = tabStore.openTab(buf.key, { paneId: targetPaneId })
+        return { buffer: buf, tab }
       } catch (error: unknown) {
         if (mountedRef.current) {
           callbacksRef.current.onError(toErrorMessage(error, '파일을 열지 못했습니다.'), error)
         }
+        return null
       }
     },
     [bufferStore, tabStore]
+  )
+
+  const openWorkspaceFile = useCallback(
+    async (entry: WorkspaceEntry, targetPaneId?: PaneId): Promise<void> => {
+      await openWorkspaceFileByPath(entry.path, targetPaneId, entry.name)
+    },
+    [openWorkspaceFileByPath]
   )
 
   const openConfigDocument = useCallback(
@@ -617,6 +637,7 @@ export function useEditorWorkspace({
     buffers,
     layout,
     openWorkspaceFile,
+    openWorkspaceFileByPath,
     openConfigDocument,
     refreshCleanConfig,
     openCreatedFile,

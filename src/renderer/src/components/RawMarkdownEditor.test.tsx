@@ -1029,4 +1029,73 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
     await user.click(within(tableListbox).getByRole('option', { name: /A \| B\.md/ }))
     expect(view.state.doc.toString()).toContain('[A \\| B](./A%20%7C%20B.md)')
   })
+
+  it('triggers onLinkNavigate in Raw mode only on Ctrl/Meta+click inside non-code markdown links', () => {
+    const onLinkNavigate = vi.fn()
+    const content = [
+      'See [섹션](#%EA%B0%9C%EC%9A%94) and [파일](./sub/target.md#intro).',
+      'Plain `[inline](./a.md)` and [웹](https://example.com).',
+      '',
+      '```markdown',
+      '[fenced](./b.md)',
+      '```'
+    ].join('\n')
+
+    const { container } = render(
+      <RawMarkdownEditor
+        content={content}
+        language="markdown"
+        theme="light"
+        scrollTop={0}
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+        onLinkNavigate={onLinkNavigate}
+      />
+    )
+
+    const cmContent = container.querySelector('.cm-content') as HTMLElement
+    const view = EditorView.findFromDOM(cmContent)!
+    const lines = Array.from(cmContent.querySelectorAll('.cm-line'))
+    const findSpanContaining = (lineEl: Element, text: string): HTMLElement => {
+      const spans = Array.from(lineEl.querySelectorAll('span'))
+      return (spans.find((s) => s.textContent?.includes(text)) as HTMLElement | undefined) ?? (lineEl as HTMLElement)
+    }
+
+    const sectionTarget = findSpanContaining(lines[0], '#%EA%B0%9C%EC%9A%94')
+    const fileTarget = findSpanContaining(lines[0], './sub/target.md#intro')
+    const inlineTarget = findSpanContaining(lines[1], './a.md')
+    const externalTarget = findSpanContaining(lines[1], 'https://example.com')
+    const fencedTarget = findSpanContaining(lines[4], './b.md')
+
+    // Normal click never navigates in Raw mode
+    fireEvent.click(sectionTarget)
+    fireEvent.click(fileTarget)
+    fireEvent.click(fileTarget, { ctrlKey: true, altKey: true })
+    expect(onLinkNavigate).not.toHaveBeenCalled()
+
+    // Ctrl+click and Meta+click on link spans call onLinkNavigate
+    fireEvent.click(sectionTarget, { ctrlKey: true })
+    expect(onLinkNavigate).toHaveBeenNthCalledWith(1, '#%EA%B0%9C%EC%9A%94')
+
+    fireEvent.click(fileTarget, { metaKey: true })
+    expect(onLinkNavigate).toHaveBeenNthCalledWith(2, './sub/target.md#intro')
+
+    fireEvent.click(externalTarget, { ctrlKey: true })
+    expect(onLinkNavigate).toHaveBeenNthCalledWith(3, 'https://example.com')
+
+    // Inline code and fenced code links are ignored
+    fireEvent.click(inlineTarget, { ctrlKey: true })
+    fireEvent.click(fencedTarget, { ctrlKey: true })
+    expect(onLinkNavigate).toHaveBeenCalledTimes(3)
+
+    // Clicking .cm-content directly when cursor is inside a link uses selection head fallback
+    act(() => {
+      view.dispatch({
+        selection: { anchor: content.indexOf('섹션') + 1 }
+      })
+    })
+    fireEvent.click(cmContent, { ctrlKey: true })
+    expect(onLinkNavigate).toHaveBeenNthCalledWith(4, '#%EA%B0%9C%EC%9A%94')
+  })
 })

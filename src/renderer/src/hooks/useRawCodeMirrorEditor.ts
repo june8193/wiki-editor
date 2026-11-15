@@ -28,6 +28,10 @@ import {
   type LinkQueryMatch
 } from '../editor/LinkAutocompleteEngine'
 import {
+  extractMarkdownLinkAtOffset,
+  isLinkNavigationClick
+} from '../editor/MarkdownLinkNavigation'
+import {
   detectDocumentLineEnding,
   insertOrUpdateTocBlock,
   isOffsetInCodeFence,
@@ -94,6 +98,7 @@ export interface UseRawCodeMirrorEditorOptions {
   scrollRequest?: RawScrollRequest | null
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
+  onLinkNavigate?: (href: string) => void
 }
 
 const markdownHighlightStyle = HighlightStyle.define([
@@ -113,6 +118,28 @@ const markdownHighlightStyle = HighlightStyle.define([
 
 function normalizeDocText(text: string): string {
   return text.replace(/\r\n?/g, '\n')
+}
+
+function resolveRawClickOffset(view: EditorView, event: MouseEvent): number | null {
+  if (event.clientX !== 0 || event.clientY !== 0) {
+    const coordPos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+    if (coordPos !== null) {
+      return coordPos
+    }
+  }
+
+  const target = event.target
+  if (!(target instanceof Node) || !view.contentDOM.contains(target)) {
+    return null
+  }
+  if (target === view.contentDOM) {
+    return view.state.selection.main.head
+  }
+  try {
+    return view.posAtDOM(target, 0)
+  } catch {
+    return null
+  }
 }
 
 function createEditorThemeExtension(theme: ThemeMode): Extension {
@@ -203,7 +230,8 @@ export function useRawCodeMirrorEditor({
   activeFilePath,
   scrollRequest,
   onChangeContent,
-  onUpdateViewState
+  onUpdateViewState,
+  onLinkNavigate
 }: UseRawCodeMirrorEditorOptions) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -226,7 +254,8 @@ export function useRawCodeMirrorEditor({
     customCommands,
     documentTitle,
     onChangeContent,
-    onUpdateViewState
+    onUpdateViewState,
+    onLinkNavigate
   })
   runtimeRef.current = {
     content,
@@ -241,7 +270,8 @@ export function useRawCodeMirrorEditor({
     customCommands,
     documentTitle,
     onChangeContent,
-    onUpdateViewState
+    onUpdateViewState,
+    onLinkNavigate
   }
 
   const {
@@ -368,6 +398,28 @@ export function useRawCodeMirrorEditor({
         compartments.language.of(createLanguageExtension(initial.language)),
         compartments.theme.of(createEditorThemeExtension(initial.theme)),
         compartments.tableKeymap.of(initial.showTableToolbar ? rawTableKeymap : []),
+        EditorView.domEventHandlers({
+          click: (event, view) => {
+            if (runtimeRef.current.language !== 'markdown' || !isLinkNavigationClick('raw', event)) {
+              return false
+            }
+            const navigate = runtimeRef.current.onLinkNavigate
+            if (!navigate) {
+              return false
+            }
+            const offset = resolveRawClickOffset(view, event)
+            if (offset === null) {
+              return false
+            }
+            const match = extractMarkdownLinkAtOffset(view.state.doc.toString(), offset)
+            if (!match) {
+              return false
+            }
+            event.preventDefault()
+            navigate(match.href)
+            return true
+          }
+        }),
         Prec.highest(
           keymap.of([
             {

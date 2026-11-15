@@ -23,6 +23,7 @@ interface RawMarkdownEditorProps {
   scrollRequest?: RawScrollRequest | null
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
+  onLinkNavigate?: (href: string) => void
 }
 
 const RAW_TABLE_BUTTONS: ReadonlyArray<{
@@ -58,7 +59,8 @@ export function RawMarkdownEditor({
   activeFilePath,
   scrollRequest,
   onChangeContent,
-  onUpdateViewState
+  onUpdateViewState,
+  onLinkNavigate
 }: RawMarkdownEditorProps) {
   const { shellRef, hostRef, inTable, runTableAction, insertToc, slashMenuProps, linkMenuProps } =
     useRawCodeMirrorEditor({
@@ -77,7 +79,8 @@ export function RawMarkdownEditor({
       activeFilePath,
       scrollRequest,
       onChangeContent,
-      onUpdateViewState
+      onUpdateViewState,
+      onLinkNavigate
     })
 
   return (

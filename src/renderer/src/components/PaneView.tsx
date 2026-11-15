@@ -112,6 +112,7 @@ export function PaneView({
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}
+          onNavigateLink={(href) => actions.onNavigateLink?.(pane.id, activeTab.id, href)}
         />
       ) : (
         <section className="workspace-placeholder">

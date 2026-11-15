@@ -34,6 +34,7 @@ interface DocumentEditorProps {
   onChangeContent: (nextContent: string) => void
   onSave: () => void
   onUpdateViewState: (patch: TabViewPatch) => void
+  onNavigateLink?: (href: string) => void
 }
 
 const EDITOR_MODE_OPTIONS: ReadonlyArray<{
@@ -60,7 +61,8 @@ export function DocumentEditor({
   workspaceMarkdownFiles,
   onChangeContent,
   onSave,
-  onUpdateViewState
+  onUpdateViewState,
+  onNavigateLink
 }: DocumentEditorProps) {
   const activeFilePath = activeDoc.kind === 'workspace' ? activeDoc.path : null
   const allowRichModes = isMarkdownDocument(activeDoc)
@@ -193,6 +195,7 @@ export function DocumentEditor({
           }
           onChangeContent={onChangeContent}
           onUpdateViewState={onUpdateViewState}
+          onLinkNavigate={allowRichModes ? onNavigateLink : undefined}
         />
       )}
 
@@ -216,6 +219,7 @@ export function DocumentEditor({
           }
           onChangeContent={onChangeContent}
           onScrollTopChange={handleScrollTopChange}
+          onLinkNavigate={onNavigateLink}
         />
       )}
 
@@ -236,6 +240,7 @@ export function DocumentEditor({
               : null
           }
           onScrollTopChange={handleScrollTopChange}
+          onLinkNavigate={onNavigateLink}
         />
       )}
     </section>

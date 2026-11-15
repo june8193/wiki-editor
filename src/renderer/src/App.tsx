@@ -16,6 +16,10 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { SidebarResizer } from './components/SidebarResizer'
 import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
+import {
+  findMarkdownHeadingBySlug,
+  resolveMarkdownLinkTarget
+} from './editor/MarkdownLinkNavigation'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
   applyHeadingNumbers,
@@ -31,7 +35,7 @@ import { useGitController } from './hooks/useGitController'
 import { useWindowWidth } from './hooks/useWindowWidth'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
-import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
+import { type EditorMode, getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
 import {
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
@@ -138,6 +142,8 @@ export function App() {
   const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null)
   const [outlineScrollRequest, setOutlineScrollRequest] = useState<OutlineScrollRequest | null>(null)
   const scrollNonceRef = useRef(0)
+  const linkNavigationSeqRef = useRef(0)
+  const workspaceRootRef = useRef<string | null>(null)
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
   const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(async () => [])
@@ -201,6 +207,7 @@ export function App() {
     buffers,
     layout,
     openWorkspaceFile,
+    openWorkspaceFileByPath,
     openConfigDocument,
     refreshCleanConfig,
     openCreatedFile,
@@ -472,6 +479,7 @@ export function App() {
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
   const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
+  workspaceRootRef.current = workspace?.rootPath ?? null
 
   const applyActiveMarkdownTransform = useCallback(
     (transform: (content: string) => string): void => {
@@ -484,21 +492,34 @@ export function App() {
     [activeBuffer, isActiveMarkdown, updateBufferContent]
   )
 
-  const handleSelectOutlineHeading = useCallback(
-    (heading: MarkdownHeading, index: number): void => {
-      if (!activeTab || !isActiveMarkdown) return
+  const dispatchHeadingScroll = useCallback(
+    (
+      paneId: PaneId,
+      tabId: string,
+      mode: EditorMode,
+      heading: MarkdownHeading,
+      index: number
+    ): void => {
       scrollNonceRef.current += 1
       setOutlineScrollRequest({
-        paneId: activePane.id,
-        tabId: activeTab.id,
-        mode: activeTab.mode,
+        paneId,
+        tabId,
+        mode,
         line: heading.line,
         slug: heading.slug,
         index,
         nonce: scrollNonceRef.current
       })
     },
-    [activePane.id, activeTab, isActiveMarkdown]
+    []
+  )
+
+  const handleSelectOutlineHeading = useCallback(
+    (heading: MarkdownHeading, index: number): void => {
+      if (!activeTab || !isActiveMarkdown) return
+      dispatchHeadingScroll(activePane.id, activeTab.id, activeTab.mode, heading, index)
+    },
+    [activePane.id, activeTab, dispatchHeadingScroll, isActiveMarkdown]
   )
 
   useEffect(() => {
@@ -543,6 +564,94 @@ export function App() {
     [updateTabViewState]
   )
 
+  const scrollToHeadingInPane = useCallback(
+    (
+      paneId: PaneId,
+      tabId: string,
+      mode: EditorMode,
+      content: string,
+      rawSlug: string
+    ): boolean => {
+      const match = findMarkdownHeadingBySlug(content, rawSlug)
+      if (!match) {
+        return false
+      }
+      dispatchHeadingScroll(paneId, tabId, mode, match.heading, match.index)
+      return true
+    },
+    [dispatchHeadingScroll]
+  )
+
+  const handleNavigateMarkdownLink = useCallback(
+    (paneId: PaneId, tabId: string, href: string): void => {
+      const sourceTab = layout.panes[paneId].tabs.find((tab) => tab.id === tabId)
+      const sourceBuffer = sourceTab ? buffers[sourceTab.bufferKey] : undefined
+      if (!sourceTab || !sourceBuffer || !isMarkdownDocument(sourceBuffer)) {
+        return
+      }
+
+      const originWorkspaceRoot = workspace?.rootPath ?? null
+      const resolved = resolveMarkdownLinkTarget(href, {
+        workspaceRootPath: originWorkspaceRoot,
+        activeFilePath: sourceBuffer.kind === 'workspace' ? sourceBuffer.path : null
+      })
+
+      if (resolved.kind === 'external') {
+        return
+      }
+
+      const navSeq = ++linkNavigationSeqRef.current
+      if (resolved.kind === 'error') {
+        reportErrorBanner(resolved.message)
+        return
+      }
+
+      if (resolved.kind === 'same-doc-section') {
+        if (!scrollToHeadingInPane(paneId, sourceTab.id, sourceTab.mode, sourceBuffer.content, resolved.slug)) {
+          reportErrorBanner(`섹션을 찾을 수 없습니다: #${resolved.slug}`)
+          return
+        }
+        reportErrorBanner(null)
+        return
+      }
+
+      reportErrorBanner(null)
+      void (async () => {
+        const opened = await openWorkspaceFileByPath(resolved.targetPath, paneId)
+        if (!opened) {
+          return
+        }
+        if (
+          linkNavigationSeqRef.current !== navSeq ||
+          workspaceRootRef.current !== originWorkspaceRoot
+        ) {
+          return
+        }
+        if (resolved.slug !== null) {
+          if (
+            !scrollToHeadingInPane(
+              paneId,
+              opened.tab.id,
+              opened.tab.mode,
+              opened.buffer.content,
+              resolved.slug
+            )
+          ) {
+            reportErrorBanner(`섹션을 찾을 수 없습니다: #${resolved.slug}`)
+          }
+        }
+      })()
+    },
+    [
+      buffers,
+      layout.panes,
+      openWorkspaceFileByPath,
+      reportErrorBanner,
+      scrollToHeadingInPane,
+      workspace?.rootPath
+    ]
+  )
+
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       onFocusPane: focusPane,
@@ -552,12 +661,14 @@ export function App() {
       onDuplicateTab: duplicateTabToOtherPane,
       onChangeContent: handlePaneChangeContent,
       onSaveBuffer: saveBufferByKey,
-      onUpdateTabViewState: handlePaneUpdateTabViewState
+      onUpdateTabViewState: handlePaneUpdateTabViewState,
+      onNavigateLink: handleNavigateMarkdownLink
     }),
     [
       activateTab,
       duplicateTabToOtherPane,
       focusPane,
+      handleNavigateMarkdownLink,
       handlePaneChangeContent,
       handlePaneUpdateTabViewState,
       moveTab,

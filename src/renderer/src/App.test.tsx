@@ -5366,3 +5366,227 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
     expect(within(listbox).getByText('nested/target.md')).toBeInTheDocument()
   })
 })
+
+describe('Markdown link navigation and missing target banner', () => {
+  it('navigates same-doc sections across Preview/Raw/WYSIWYG modes, ignores external URLs, and opens relative links with optional #slug in clicked split pane', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false, showHeadingNumbers: false },
+      {
+        selectedFolder: 'C:/wiki-nav',
+        workspaces: {
+          'C:/wiki-nav': {
+            'docs/current.md': [
+              '# 개요',
+              '',
+              '- [세부 이동](#%EC%84%B8%EB%B6%80-%ED%95%AD%EB%AA%A9)',
+              '- [외부](https://example.com)',
+              '- [메일](mailto:wiki@example.com)',
+              '- [가이드](../sub/guide%20%281%29.md#%EC%84%A4%EC%A0%95)',
+              '- [형제](./sibling.md)',
+              '',
+              '본문 첫 줄',
+              '',
+              '## 세부 항목',
+              '',
+              '세부 본문'
+            ].join('\n'),
+            'docs/sibling.md': '# 형제 문서\n\n[현재 복귀](./current.md#개요)',
+            'sub/guide (1).md': '# 가이드 시작\n\n안내 본문\n\n## 설정\n\n설정 값'
+          }
+        }
+      }
+    )
+    const readFileSpy = vi.spyOn(api.workspace, 'readFile')
+    const scrollIntoViewMock = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: scrollIntoViewMock
+    })
+
+    try {
+      window.wikiApi = api
+      render(<App />)
+
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = screen.getByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('docs'))
+      await user.click(await within(explorer).findByText('current.md'))
+
+      const primaryPane = screen.getByTestId('pane-primary')
+      expect(within(primaryPane).getByRole('tab', { name: /current\.md/i })).toBeInTheDocument()
+
+      // 1) Preview normal click: same-doc percent-encoded Korean #slug + external links no-op
+      await user.click(within(primaryPane).getByRole('button', { name: 'Preview' }))
+      scrollIntoViewMock.mockClear()
+      fireEvent.click(within(primaryPane).getByRole('link', { name: '세부 이동' }))
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect((scrollIntoViewMock.mock.instances[0] as HTMLElement).id).toBe('세부-항목')
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+      const readCallsBeforeExternal = readFileSpy.mock.calls.length
+      expect(fireEvent.click(within(primaryPane).getByRole('link', { name: '외부' }))).toBe(false)
+      expect(fireEvent.click(within(primaryPane).getByRole('link', { name: '메일' }))).toBe(false)
+      expect(readFileSpy).toHaveBeenCalledTimes(readCallsBeforeExternal)
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+      // 2) Raw mode: normal click does not jump, Ctrl+click jumps cursor to heading line
+      await user.click(within(primaryPane).getByRole('button', { name: 'Raw' }))
+      const rawCmContent = within(primaryPane).getByTestId('document-editor') as HTMLElement
+      const rawView = EditorView.findFromDOM(rawCmContent)!
+      const headingOffset = rawView.state.doc.toString().indexOf('## 세부 항목')
+      const sectionSpan = Array.from(rawCmContent.querySelectorAll('span')).find((el) =>
+        el.textContent?.includes('#%EC%84%B8%EB%B6%80-%ED%95%AD%EB%AA%A9')
+      )!
+      const externalSpan = Array.from(rawCmContent.querySelectorAll('span')).find((el) =>
+        el.textContent?.includes('https://example.com')
+      )!
+
+      fireEvent.click(sectionSpan)
+      expect(rawView.state.selection.main.head).not.toBe(headingOffset)
+
+      fireEvent.click(sectionSpan, { ctrlKey: true })
+      await waitFor(() => {
+        expect(rawView.state.selection.main.head).toBe(headingOffset)
+      })
+      fireEvent.click(externalSpan, { ctrlKey: true })
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+      // 3) WYSIWYG mode: normal click does not jump, Meta+click scrolls heading
+      await user.click(within(primaryPane).getByRole('button', { name: '위지윅' }))
+      scrollIntoViewMock.mockClear()
+      const wysiwygEl = within(primaryPane).getByTestId('document-editor')
+      const wysiwygSectionLink = Array.from(wysiwygEl.querySelectorAll('a')).find(
+        (a) => a.getAttribute('href') === '#%EC%84%B8%EB%B6%80-%ED%95%AD%EB%AA%A9'
+      )!
+      expect(fireEvent.click(wysiwygSectionLink)).toBe(false)
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      expect(fireEvent.click(wysiwygSectionLink, { metaKey: true })).toBe(false)
+      await waitFor(() => {
+        expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      })
+      expect((scrollIntoViewMock.mock.instances[0] as HTMLElement).textContent).toContain('세부 항목')
+
+      // 4) Preview relative file link with percent encoding + #slug opens tab and jumps to target heading
+      await user.click(within(primaryPane).getByRole('button', { name: 'Preview' }))
+      await user.click(within(primaryPane).getByRole('link', { name: '가이드' }))
+      const guideTab = await within(primaryPane).findByRole('tab', { name: /guide \(1\)\.md/i })
+      expect(guideTab).toHaveAttribute('aria-selected', 'true')
+      await waitFor(() => {
+        const targetCm = within(primaryPane).getByTestId('document-editor') as HTMLElement
+        const targetView = EditorView.findFromDOM(targetCm)!
+        expect(targetView.state.selection.main.head).toBe(
+          targetView.state.doc.toString().indexOf('## 설정')
+        )
+      })
+
+      // 5) Split mode: relative click in secondary pane opens/activates tab ONLY in secondary pane
+      fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /current\.md/i }))
+      const tabMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+      await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역에 복제 열기' }))
+
+      const secondaryPane = screen.getByTestId('pane-secondary')
+      await user.click(within(secondaryPane).getByRole('button', { name: 'Preview' }))
+      await user.click(within(secondaryPane).getByRole('link', { name: '형제' }))
+
+      const siblingTab = await within(secondaryPane).findByRole('tab', { name: /sibling\.md/i })
+      expect(siblingTab).toHaveAttribute('aria-selected', 'true')
+      expect(within(primaryPane).queryByRole('tab', { name: /sibling\.md/i })).not.toBeInTheDocument()
+      expect(within(secondaryPane).getAllByRole('tab')).toHaveLength(2)
+
+      // Activating already-open current.md tab in secondary pane via ./current.md#개요 keeps tab count at 2 and scrolls
+      await user.click(within(secondaryPane).getByRole('button', { name: 'Preview' }))
+      scrollIntoViewMock.mockClear()
+      await user.click(within(secondaryPane).getByRole('link', { name: '현재 복귀' }))
+      await waitFor(() => {
+        expect(within(secondaryPane).getByRole('tab', { name: /current\.md/i })).toHaveAttribute(
+          'aria-selected',
+          'true'
+        )
+      })
+      expect(within(secondaryPane).getAllByRole('tab')).toHaveLength(2)
+      await waitFor(() => {
+        expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      })
+      expect((scrollIntoViewMock.mock.instances[0] as HTMLElement).id).toBe('개요')
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        writable: true,
+        value: originalScrollIntoView
+      })
+    }
+  })
+
+  it('displays error banner without creating files for missing targets or workspace escapes, and opens target file even when its #slug is missing', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:/wiki-broken',
+        workspaces: {
+          'C:/wiki-broken': {
+            'docs/index.md': [
+              '# 인덱스',
+              '',
+              '- [없는 섹션](#no-such-heading)',
+              '- [없는 파일](./missing.md)',
+              '- [루트 밖](../../outside.md)',
+              '- [파일은 있음](./target.md#missing-sec)'
+            ].join('\n'),
+            'docs/target.md': '# 존재하는 제목\n\n내용'
+          }
+        }
+      }
+    )
+    const createEntrySpy = vi.spyOn(api.workspace, 'createEntry')
+    const readFileSpy = vi.spyOn(api.workspace, 'readFile')
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('docs'))
+    await user.click(await within(explorer).findByText('index.md'))
+
+    const initialSnapshot = getFilesSnapshot()
+    const primaryPane = screen.getByTestId('pane-primary')
+    await user.click(within(primaryPane).getByRole('button', { name: 'Preview' }))
+
+    // 1) Missing #slug in current document
+    await user.click(within(primaryPane).getByRole('link', { name: '없는 섹션' }))
+    const missingHeadingAlert = await screen.findByRole('alert')
+    expect(missingHeadingAlert).toHaveTextContent(/찾을 수 없습니다/)
+
+    // 2) Missing relative markdown file
+    await user.click(within(primaryPane).getByRole('link', { name: '없는 파일' }))
+    const missingFileAlert = await screen.findByRole('alert')
+    expect(missingFileAlert).toHaveTextContent(/찾을 수 없습니다/)
+    expect(getFilesSnapshot()).toEqual(initialSnapshot)
+    expect(createEntrySpy).not.toHaveBeenCalled()
+    expect(within(primaryPane).getByRole('tab', { name: /index\.md/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    // 3) Path outside workspace root
+    const readCallsBeforeEscape = readFileSpy.mock.calls.length
+    await user.click(within(primaryPane).getByRole('link', { name: '루트 밖' }))
+    const outsideAlert = await screen.findByRole('alert')
+    expect(outsideAlert).toHaveTextContent(/워크스페이스 루트 밖/)
+    expect(readFileSpy).toHaveBeenCalledTimes(readCallsBeforeEscape)
+    expect(getFilesSnapshot()).toEqual(initialSnapshot)
+    expect(createEntrySpy).not.toHaveBeenCalled()
+
+    // 4) Existing target file + missing #slug opens target tab AND shows error banner
+    await user.click(within(primaryPane).getByRole('link', { name: '파일은 있음' }))
+    const targetTab = await within(primaryPane).findByRole('tab', { name: /target\.md/i })
+    expect(targetTab).toHaveAttribute('aria-selected', 'true')
+    const missingTargetSlugAlert = await screen.findByRole('alert')
+    expect(missingTargetSlugAlert).toHaveTextContent(/missing-sec/)
+    expect(getFilesSnapshot()).toEqual(initialSnapshot)
+  })
+})

@@ -19,6 +19,7 @@ interface MarkdownPreviewProps {
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: PreviewScrollRequest | null
   onScrollTopChange?: (scrollTop: number) => void
+  onLinkNavigate?: (href: string) => void
 }
 
 function scrollHeadingIntoView(target: Element): void {
@@ -34,7 +35,8 @@ export function MarkdownPreview({
   showHeadingNumbers = false,
   mermaidRenderer,
   scrollRequest,
-  onScrollTopChange
+  onScrollTopChange,
+  onLinkNavigate
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -68,9 +70,10 @@ export function MarkdownPreview({
         theme,
         showHeadingNumbers,
         mermaidRenderer,
-        onAnchorNavigate: handleAnchorNavigate
+        onAnchorNavigate: onLinkNavigate ? undefined : handleAnchorNavigate,
+        onLinkNavigate
       }),
-    [content, handleAnchorNavigate, mermaidRenderer, showHeadingNumbers, theme]
+    [content, handleAnchorNavigate, mermaidRenderer, onLinkNavigate, showHeadingNumbers, theme]
   )
 
   useSyncScrollTop(containerRef, scrollTop)
