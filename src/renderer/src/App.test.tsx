@@ -56,6 +56,29 @@ vi.mock('mermaid', () => ({
   }
 }))
 
+function mockPrototypeScrollIntoView(): {
+  mock: ReturnType<typeof vi.fn>
+  restore: () => void
+} {
+  const mock = vi.fn()
+  const origDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    writable: true,
+    value: mock
+  })
+  return {
+    mock,
+    restore: () => {
+      if (origDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origDescriptor)
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+      }
+    }
+  }
+}
+
 interface VirtualFsOptions {
   workspaces?: Record<string, Record<string, string | null>>
   selectedFolder?: string | null
@@ -2683,12 +2706,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
   it('updates sidebar Outline ignoring code fences, toggles showHeadingNumbers cleanly with persistence, and scrolls to headings across modes', async () => {
     const user = userEvent.setup()
-    const scrollIntoViewMock = vi.fn()
-    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
-      HTMLElement.prototype,
-      'scrollIntoView'
-    )
-    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
 
     try {
       const guideDoc = [
@@ -2788,11 +2806,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       ) as HTMLInputElement
       expect(reopenedCheckbox.checked).toBe(true)
     } finally {
-      if (origScrollIntoViewDescriptor) {
-        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
-      } else {
-        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
-      }
+      restore()
     }
   })
 
@@ -2932,16 +2946,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
   })
 
   it('does not replay stale outlineScrollRequest after tab switch or global Ctrl+1/Ctrl+3 shortcuts', async () => {
-    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
-      HTMLElement.prototype,
-      'scrollIntoView'
-    )
-    const scrollIntoViewMock = vi.fn()
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-      configurable: true,
-      writable: true,
-      value: scrollIntoViewMock
-    })
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
 
     try {
       const user = userEvent.setup()
@@ -2996,11 +3001,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(screen.getByRole('button', { name: 'Preview' })).toHaveAttribute('aria-pressed', 'true')
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
     } finally {
-      if (origScrollIntoViewDescriptor) {
-        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
-      } else {
-        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
-      }
+      restore()
     }
   })
 
@@ -5250,29 +5251,6 @@ function stubPreviewSpyLayout(
     stubHeadingTop(el, () => top + docOffsets[idx] - getScrollTop())
   })
   return headings
-}
-
-function mockPrototypeScrollIntoView(): {
-  mock: ReturnType<typeof vi.fn>
-  restore: () => void
-} {
-  const mock = vi.fn()
-  const origDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
-  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-    configurable: true,
-    writable: true,
-    value: mock
-  })
-  return {
-    mock,
-    restore: () => {
-      if (origDescriptor) {
-        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origDescriptor)
-      } else {
-        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
-      }
-    }
-  }
 }
 
 describe('Document Outline active heading scroll spy in Preview mode', () => {

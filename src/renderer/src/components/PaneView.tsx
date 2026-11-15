@@ -1,12 +1,9 @@
 import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
-import {
-  DocumentEditor,
-  type OutlineActiveHeadingReport,
-  type OutlineScrollRequest
-} from './DocumentEditor'
+import { DocumentEditor } from './DocumentEditor'
 import {
   DraggingTabPayload,
   handleTabMoveDrop,

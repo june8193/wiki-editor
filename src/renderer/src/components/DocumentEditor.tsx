@@ -2,25 +2,13 @@ import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import type {
-  DocumentOutlineSpyUpdate,
-  OutlineActiveHeadingReport,
-  OutlineContextTarget,
-  OutlineScrollRequest
-} from '../editor/outlineScrollSpy'
+import type { DocumentOutlineSpyUpdate, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
 import { EditorMode, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
-
-export type {
-  DocumentOutlineSpyUpdate,
-  OutlineActiveHeadingReport,
-  OutlineContextTarget,
-  OutlineScrollRequest
-}
 
 interface DocumentEditorProps {
   document: DocumentBuffer

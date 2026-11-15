@@ -9,6 +9,7 @@ import {
 } from 'react'
 
 const USER_SCROLL_INTENT_WINDOW_MS = 250
+const POINTER_RELEASE_EVENTS = ['pointerup', 'pointercancel', 'mouseup', 'blur'] as const
 
 function isScrollNavigationKey(event: ReactKeyboardEvent<HTMLElement>): boolean {
   if (event.altKey) return false
@@ -57,15 +58,13 @@ export function useUserScrollIntent() {
   }, [])
 
   useEffect(() => {
-    window.addEventListener('pointerup', clearPointerDown)
-    window.addEventListener('pointercancel', clearPointerDown)
-    window.addEventListener('mouseup', clearPointerDown)
-    window.addEventListener('blur', clearPointerDown)
+    for (const eventName of POINTER_RELEASE_EVENTS) {
+      window.addEventListener(eventName, clearPointerDown)
+    }
     return () => {
-      window.removeEventListener('pointerup', clearPointerDown)
-      window.removeEventListener('pointercancel', clearPointerDown)
-      window.removeEventListener('mouseup', clearPointerDown)
-      window.removeEventListener('blur', clearPointerDown)
+      for (const eventName of POINTER_RELEASE_EVENTS) {
+        window.removeEventListener(eventName, clearPointerDown)
+      }
     }
   }, [clearPointerDown])
 

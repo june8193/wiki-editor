@@ -2,7 +2,7 @@ import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { canSplitWithTab, PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
-import type { OutlineActiveHeadingReport, OutlineScrollRequest } from './DocumentEditor'
+import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { dispatchTabDrop, DraggingTabPayload, PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
 
