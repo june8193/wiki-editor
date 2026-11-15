@@ -419,6 +419,14 @@ function formatMarkdownImageDestination(src: string): string {
   return balance === 0 ? src : `<${src}>`
 }
 
+function extractSafeImageSrc(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed && isSafeMarkdownImageUrl(trimmed) ? trimmed : null
+}
+
 function parseSafeImageAttrs(
   dom: unknown,
   attrName: typeof IMAGE_MARKDOWN_SRC_ATTR | 'src'
@@ -426,8 +434,8 @@ function parseSafeImageAttrs(
   if (!(dom instanceof HTMLElement)) {
     return false
   }
-  const rawSrc = dom.getAttribute(attrName)?.trim() ?? ''
-  if (!rawSrc || !isSafeMarkdownImageUrl(rawSrc)) {
+  const rawSrc = extractSafeImageSrc(dom.getAttribute(attrName))
+  if (!rawSrc) {
     return false
   }
   return {
@@ -479,25 +487,23 @@ const WikiAssetImage = Image.extend<WikiAssetImageOptions>({
   },
 
   renderHTML({ node, HTMLAttributes }) {
-    const rawSrc = typeof node.attrs.src === 'string' ? node.attrs.src : ''
-    const displaySrc = rawSrc
-      ? resolveImageDisplaySrc(rawSrc, this.options.getDocumentPath?.())
-      : ''
+    const rawSrc = extractSafeImageSrc(node.attrs.src)
+    const displaySrc = rawSrc ? resolveImageDisplaySrc(rawSrc, this.options.getDocumentPath?.()) : ''
     const merged = mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)
     delete merged.src
     delete merged[IMAGE_MARKDOWN_SRC_ATTR]
     if (displaySrc) {
       merged.src = displaySrc
     }
-    if (rawSrc && isSafeMarkdownImageUrl(rawSrc)) {
+    if (rawSrc) {
       merged[IMAGE_MARKDOWN_SRC_ATTR] = rawSrc
     }
     return ['img', merged]
   },
 
   parseMarkdown: (token, helpers) => {
-    const href = typeof token.href === 'string' ? token.href : ''
-    if (!href || !isSafeMarkdownImageUrl(href)) {
+    const href = extractSafeImageSrc(token.href)
+    if (!href) {
       return []
     }
     return helpers.createNode('image', {
@@ -508,8 +514,8 @@ const WikiAssetImage = Image.extend<WikiAssetImageOptions>({
   },
 
   renderMarkdown: (node) => {
-    const src = typeof node.attrs?.src === 'string' ? node.attrs.src : ''
-    if (!src || !isSafeMarkdownImageUrl(src)) {
+    const src = extractSafeImageSrc(node.attrs?.src)
+    if (!src) {
       return ''
     }
     const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt : ''
@@ -527,11 +533,11 @@ const WikiAssetImage = Image.extend<WikiAssetImageOptions>({
       setImage:
         (options) =>
         (commandProps) => {
-          const rawSrc = options.src?.trim() ?? ''
-          if (!rawSrc || !isSafeMarkdownImageUrl(rawSrc)) {
+          const safeSrc = extractSafeImageSrc(options.src)
+          if (!safeSrc) {
             return false
           }
-          return parentCommands?.setImage?.(options)(commandProps) ?? false
+          return parentCommands?.setImage?.({ ...options, src: safeSrc })(commandProps) ?? false
         }
     }
   },
@@ -544,8 +550,7 @@ const WikiAssetImage = Image.extend<WikiAssetImageOptions>({
           find: rule.find,
           undoable: rule.undoable,
           handler: (props) => {
-            const rawSrc = props.match[3]?.trim() ?? ''
-            if (!rawSrc || !isSafeMarkdownImageUrl(rawSrc)) {
+            if (!extractSafeImageSrc(props.match[3])) {
               return null
             }
             return rule.handler(props)

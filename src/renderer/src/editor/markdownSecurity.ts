@@ -1,8 +1,8 @@
 import { defaultSchema, type Options as SanitizeSchema } from 'rehype-sanitize'
 import {
-  ALLOWED_IMAGE_URI_SCHEME_SET,
   ALLOWED_IMAGE_URI_SCHEMES,
-  hasAllowedUriScheme
+  hasAllowedUriScheme,
+  isSafeImageUri
 } from '@shared/urlSecurity'
 
 export const ALLOWED_URI_SCHEMES = ['http', 'https', 'mailto'] as const
@@ -19,11 +19,7 @@ export function isSafeMarkdownUrl(url: string): boolean {
  * Validates image URLs against safe image schemes (`http`, `https`, or local relative paths).
  */
 export function isSafeMarkdownImageUrl(url: string): boolean {
-  const trimmed = url.trim()
-  if (trimmed.startsWith('/') || trimmed.startsWith('\\')) {
-    return false
-  }
-  return hasAllowedUriScheme(url, ALLOWED_IMAGE_URI_SCHEME_SET)
+  return isSafeImageUri(url)
 }
 
 /**

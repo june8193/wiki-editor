@@ -34,3 +34,31 @@ export function hasAllowedUriScheme(url: string, allowedSchemes: ReadonlySet<str
   }
   return scheme === null || allowedSchemes.has(scheme)
 }
+
+/**
+ * Rejects root-absolute (`/...`, `\...`), protocol-relative (`//...`, `\\...`),
+ * and fragment/query-only (`#...`, `?...`) targets when expecting a local relative file path.
+ */
+export function isDisallowedRelativePath(value: string): boolean {
+  return (
+    value.startsWith('/') ||
+    value.startsWith('\\') ||
+    value.startsWith('#') ||
+    value.startsWith('?')
+  )
+}
+
+/**
+ * Validates image destinations against `http`, `https`, or local relative asset paths.
+ */
+export function isSafeImageUri(url: string): boolean {
+  const trimmed = url.trim()
+  const { valid, scheme } = inspectUriScheme(trimmed)
+  if (!valid) {
+    return false
+  }
+  if (scheme !== null) {
+    return ALLOWED_IMAGE_URI_SCHEME_SET.has(scheme)
+  }
+  return !isDisallowedRelativePath(trimmed)
+}

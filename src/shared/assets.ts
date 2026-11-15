@@ -1,4 +1,8 @@
-import { ALLOWED_IMAGE_URI_SCHEME_SET, inspectUriScheme } from './urlSecurity'
+import {
+  ALLOWED_IMAGE_URI_SCHEME_SET,
+  inspectUriScheme,
+  isDisallowedRelativePath
+} from './urlSecurity'
 
 export const WIKI_ASSET_SCHEME = 'wiki-asset'
 const WIKI_ASSET_HOST = 'local'
@@ -96,32 +100,15 @@ function splitRootAndSegments(filePath: string): {
   }
 }
 
-function isDisallowedRelativeTarget(value: string): boolean {
-  const { valid, scheme } = inspectUriScheme(value)
-  if (!valid || scheme !== null) {
-    return true
-  }
-  return (
-    value.startsWith('/') ||
-    value.startsWith('\\') ||
-    value.startsWith('#') ||
-    value.startsWith('?')
-  )
-}
-
-export function resolveWorkspaceImagePath(rawSrc: string, documentPath: string): string | null {
-  const trimmed = rawSrc.trim()
-  if (isDisallowedRelativeTarget(trimmed) || !documentPath) {
-    return null
-  }
-
-  const pathPart = trimmed.split(/[?#]/, 1)[0]
+function resolveValidatedRelativePath(trimmedSrc: string, documentPath: string): string | null {
+  const pathPart = trimmedSrc.split(/[?#]/, 1)[0]
   if (!pathPart) {
     return null
   }
 
   const decodedPath = safeDecodeUriComponent(pathPart)
-  if (isDisallowedRelativeTarget(decodedPath)) {
+  const { valid, scheme } = inspectUriScheme(decodedPath)
+  if (!valid || scheme !== null || isDisallowedRelativePath(decodedPath)) {
     return null
   }
 
@@ -145,6 +132,18 @@ export function resolveWorkspaceImagePath(rawSrc: string, documentPath: string):
   return useBackslash ? joined.replace(/\//g, '\\') : joined
 }
 
+export function resolveWorkspaceImagePath(rawSrc: string, documentPath: string): string | null {
+  const trimmed = rawSrc.trim()
+  if (!documentPath) {
+    return null
+  }
+  const { valid, scheme } = inspectUriScheme(trimmed)
+  if (!valid || scheme !== null || isDisallowedRelativePath(trimmed)) {
+    return null
+  }
+  return resolveValidatedRelativePath(trimmed, documentPath)
+}
+
 export function resolveImageDisplaySrc(rawSrc: string, documentPath?: string): string {
   const trimmed = rawSrc.trim()
   const { valid, scheme } = inspectUriScheme(trimmed)
@@ -156,12 +155,12 @@ export function resolveImageDisplaySrc(rawSrc: string, documentPath?: string): s
     return ALLOWED_IMAGE_URI_SCHEME_SET.has(scheme) ? rawSrc : ''
   }
 
-  if (isDisallowedRelativeTarget(trimmed)) {
+  if (isDisallowedRelativePath(trimmed)) {
     return ''
   }
 
   if (documentPath) {
-    const resolvedPath = resolveWorkspaceImagePath(trimmed, documentPath)
+    const resolvedPath = resolveValidatedRelativePath(trimmed, documentPath)
     return resolvedPath ? buildWikiAssetUrl(resolvedPath) : ''
   }
 

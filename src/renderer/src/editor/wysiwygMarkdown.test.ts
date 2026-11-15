@@ -332,6 +332,22 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
   })
 })
 
+function createImageTestEditor(
+  content: string,
+  options: { documentPath?: string; contentType?: 'markdown' | 'html'; prepare?: boolean } = {}
+): Editor {
+  const { documentPath, contentType = 'markdown', prepare = true } = options
+  const editor = new Editor({
+    extensions: createWysiwygExtensions(
+      documentPath ? { getDocumentPath: () => documentPath } : undefined
+    ),
+    content: contentType === 'markdown' && prepare ? prepareMarkdownForTiptap(content) : content,
+    contentType
+  })
+  createdEditors.push(editor)
+  return editor
+}
+
 describe('wysiwygMarkdown local image rendering and roundtrip', () => {
   afterEach(() => {
     while (createdEditors.length > 0) {
@@ -356,14 +372,7 @@ describe('wysiwygMarkdown local image rendering and roundtrip', () => {
       '![external](https://example.com/banner.png)'
     ].join('\n')
 
-    const editor = new Editor({
-      extensions: createWysiwygExtensions({
-        getDocumentPath: () => documentPath
-      }),
-      content: prepareMarkdownForTiptap(markdown),
-      contentType: 'markdown'
-    })
-    createdEditors.push(editor)
+    const editor = createImageTestEditor(markdown, { documentPath })
 
     const imgs = Array.from(editor.view.dom.querySelectorAll('img:not(.ProseMirror-separator)'))
     expect(imgs.map((img) => img.getAttribute('alt'))).toEqual([
@@ -405,14 +414,7 @@ describe('wysiwygMarkdown local image rendering and roundtrip', () => {
     expect(roundtripped).toContain('![external](https://example.com/banner.png)')
 
     // Ensure second-pass parsing still keeps ![parens](<...>) as an image node, not plain text
-    const secondEditor = new Editor({
-      extensions: createWysiwygExtensions({
-        getDocumentPath: () => documentPath
-      }),
-      content: prepareMarkdownForTiptap(roundtripped),
-      contentType: 'markdown'
-    })
-    createdEditors.push(secondEditor)
+    const secondEditor = createImageTestEditor(roundtripped, { documentPath })
     expect(secondEditor.view.dom.querySelectorAll('img:not(.ProseMirror-separator)')).toHaveLength(5)
   })
 
@@ -425,18 +427,14 @@ describe('wysiwygMarkdown local image rendering and roundtrip', () => {
       '![data](data:text/html,<script>alert(1)</script>)'
     ].join('\n')
 
-    const preparedEditor = createTestWysiwygEditor(unsafeMarkdown)
+    const preparedEditor = createImageTestEditor(unsafeMarkdown)
     expect(preparedEditor.view.dom.querySelectorAll('img:not(.ProseMirror-separator)')).toHaveLength(0)
     expect(preparedEditor.getMarkdown()).not.toContain('wiki-asset:')
 
-    const directEditor = new Editor({
-      extensions: createWysiwygExtensions({
-        getDocumentPath: () => '/vault/docs/page.md'
-      }),
-      content: unsafeMarkdown,
-      contentType: 'markdown'
+    const directEditor = createImageTestEditor(unsafeMarkdown, {
+      documentPath: '/vault/docs/page.md',
+      prepare: false
     })
-    createdEditors.push(directEditor)
     expect(directEditor.view.dom.querySelectorAll('img:not(.ProseMirror-separator)')).toHaveLength(0)
 
     const internalCopiedHtml =
@@ -445,14 +443,10 @@ describe('wysiwygMarkdown local image rendering and roundtrip', () => {
     expect(sanitizedInternal).not.toContain('wiki-asset:')
     expect(sanitizedInternal).toContain('data-markdown-src="./assets/pic.png"')
 
-    const pasteEditor = new Editor({
-      extensions: createWysiwygExtensions({
-        getDocumentPath: () => '/vault/docs/page.md'
-      }),
-      content: sanitizedInternal,
+    const pasteEditor = createImageTestEditor(sanitizedInternal, {
+      documentPath: '/vault/docs/page.md',
       contentType: 'html'
     })
-    createdEditors.push(pasteEditor)
     expect(pasteEditor.getMarkdown()).toBe('![copied](./assets/pic.png)')
     expect(
       pasteEditor.view.dom.querySelector('img:not(.ProseMirror-separator)')?.getAttribute('src')
