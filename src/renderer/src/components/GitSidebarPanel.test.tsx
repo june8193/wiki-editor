@@ -1,7 +1,13 @@
-import { render, screen, within } from '@testing-library/react'
+import { useState } from 'react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { createEmptyGitStatus, type GitBranchList, type GitStatus } from '@shared/git'
+import {
+  clampChangesHeightRatio,
+  createDefaultGitPanelSplitState,
+  type GitPanelSplitState
+} from '../utils/gitPanelSplit'
 import { GitSidebarPanel, type GitSidebarPanelProps } from './GitSidebarPanel'
 
 function buildGitStatus(overrides: Partial<GitStatus> = {}): GitStatus {
@@ -46,8 +52,41 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onPull: vi.fn(),
     onPush: vi.fn(),
     onSync: vi.fn(),
+    splitState: createDefaultGitPanelSplitState(),
+    onToggleChangesCollapsed: vi.fn(),
+    onToggleGraphCollapsed: vi.fn(),
+    onResizeChangesRatio: vi.fn(),
     ...overrides
   }
+}
+
+function StatefulGitSidebarPanel(props: GitSidebarPanelProps) {
+  const [splitState, setSplitState] = useState<GitPanelSplitState>(() => props.splitState)
+
+  return (
+    <GitSidebarPanel
+      {...props}
+      splitState={splitState}
+      onToggleChangesCollapsed={() =>
+        setSplitState((prev) => ({
+          ...prev,
+          isChangesCollapsed: !prev.isChangesCollapsed
+        }))
+      }
+      onToggleGraphCollapsed={() =>
+        setSplitState((prev) => ({
+          ...prev,
+          isGraphCollapsed: !prev.isGraphCollapsed
+        }))
+      }
+      onResizeChangesRatio={(nextRatio) => {
+        const clamped = clampChangesHeightRatio(nextRatio)
+        setSplitState((prev) =>
+          prev.changesHeightRatio === clamped ? prev : { ...prev, changesHeightRatio: clamped }
+        )
+      }}
+    />
+  )
 }
 
 describe('GitSidebarPanel', () => {
@@ -217,5 +256,220 @@ describe('GitSidebarPanel', () => {
     expect(alert).toHaveTextContent('원격 저장소 인증에 실패했습니다.')
     await user.click(within(alert).getByRole('button', { name: 'Git 오류 닫기' }))
     expect(onDismissError).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes whole-panel collapse toggle from header, hides accordions in non-repo states, and splits repo body into Changes and Graph accordions', async () => {
+    const user = userEvent.setup()
+    const onCheckoutBranch = vi.fn()
+    const onSync = vi.fn()
+    const onCommit = vi.fn().mockResolvedValue(true)
+
+    const { rerender } = render(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          workspaceRootPath: 'C:\\wiki',
+          status: null,
+          branchList: null
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(within(region).getByText('Git')).toBeInTheDocument()
+    expect(within(region).getByText('Git 상태를 불러오는 중...')).toBeInTheDocument()
+    expect(within(region).queryByRole('button', { name: /^Git$/i })).not.toBeInTheDocument()
+    expect(within(region).queryByRole('button', { name: /Changes/i })).not.toBeInTheDocument()
+    expect(within(region).queryByRole('button', { name: /Graph/i })).not.toBeInTheDocument()
+
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          workspaceRootPath: 'C:\\wiki',
+          status: createEmptyGitStatus(false, 'C:\\wiki'),
+          branchList: null
+        })}
+      />
+    )
+    expect(within(region).queryByRole('button', { name: /Changes/i })).not.toBeInTheDocument()
+    expect(within(region).queryByRole('button', { name: /Graph/i })).not.toBeInTheDocument()
+
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [
+              { path: 'a.md', status: 'A' },
+              { path: 'b.md', status: 'M' }
+            ],
+            unstaged: [{ path: 'c.md', status: 'M' }],
+            untracked: [
+              { path: 'd.md', status: '?' },
+              { path: 'e.md', status: '?' }
+            ]
+          }),
+          onCheckoutBranch,
+          onSync,
+          onCommit
+        })}
+      />
+    )
+
+    // Header has no collapse toggle (only refresh button in header)
+    expect(within(region).queryByRole('button', { name: /Git.*main/i })).not.toBeInTheDocument()
+    expect(within(region).getByRole('button', { name: 'Git 상태 새로고침' })).toBeInTheDocument()
+
+    const changesToggle = within(region).getByRole('button', { name: /Changes/i })
+    const graphToggle = within(region).getByRole('button', { name: /Graph/i })
+    expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(changesToggle).toHaveTextContent('5')
+    expect(graphToggle).toHaveAttribute('aria-expanded', 'true')
+
+    // Ctrl+Enter submits commit inside Changes body
+    const commitInput = within(region).getByLabelText('커밋 메시지')
+    await user.type(commitInput, 'chore: ctrl enter commit')
+    fireEvent.keyDown(commitInput, { key: 'Enter', ctrlKey: true })
+    expect(onCommit).toHaveBeenCalledWith('chore: ctrl enter commit')
+
+    // Collapse Changes -> commit form and file sections hide, but common branch & remote actions remain active
+    await user.click(changesToggle)
+    expect(changesToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(within(region).queryByLabelText('커밋 메시지')).not.toBeInTheDocument()
+    expect(within(region).queryByText(/스테이지됨/)).not.toBeInTheDocument()
+    expect(graphToggle).toHaveAttribute('aria-expanded', 'true')
+
+    await user.selectOptions(within(region).getByLabelText('브랜치 선택'), 'feature/git')
+    await user.click(within(region).getByRole('button', { name: '브랜치 전환' }))
+    await user.click(within(region).getByRole('button', { name: 'Sync' }))
+    expect(onCheckoutBranch).toHaveBeenCalledWith('feature/git')
+    expect(onSync).toHaveBeenCalledTimes(1)
+
+    // Collapse Graph too -> both bodies hidden
+    await user.click(graphToggle)
+    expect(graphToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      within(region).queryByText(/커밋 히스토리가 없습니다|아직 커밋된 내역이 없습니다/)
+    ).not.toBeInTheDocument()
+
+    // Re-expand Changes & Graph independently
+    await user.click(changesToggle)
+    expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(within(region).getByLabelText('커밋 메시지')).toBeInTheDocument()
+    expect(graphToggle).toHaveAttribute('aria-expanded', 'false')
+
+    await user.click(graphToggle)
+    expect(graphToggle).toHaveAttribute('aria-expanded', 'true')
+
+    // Clean repository shows 0 badge
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [],
+            unstaged: [],
+            untracked: []
+          })
+        })}
+      />
+    )
+    expect(within(region).getByRole('button', { name: /Changes/i })).toHaveTextContent('0')
+  })
+
+  it('renders horizontal section resizer only when both sections are expanded and supports keyboard, pointer drag, double-click, and collapse ratio preservation', async () => {
+    const user = userEvent.setup()
+    render(<StatefulGitSidebarPanel {...buildProps()} />)
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const changesSection = within(region).getByRole('region', { name: 'Changes' })
+    const graphSection = within(region).getByRole('region', { name: 'Graph' })
+    const resizer = within(region).getByRole('separator', { name: 'Git 섹션 높이 조절' })
+
+    expect(
+      changesSection.compareDocumentPosition(resizer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      resizer.compareDocumentPosition(graphSection) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    expect(resizer).toHaveAttribute('aria-orientation', 'horizontal')
+    expect(resizer).toHaveAttribute('aria-valuemin', '20')
+    expect(resizer).toHaveAttribute('aria-valuemax', '80')
+    expect(resizer).toHaveAttribute('aria-valuenow', '50')
+    expect(resizer).toHaveAttribute('tabindex', '0')
+    expect(changesSection).toHaveStyle({ flex: '0.5 1 0%' })
+    expect(graphSection).toHaveStyle({ flex: '0.5 1 0%' })
+
+    // Keyboard resize: ArrowDown increases Changes ratio, ArrowUp decreases, clamped to [20, 80]
+    fireEvent.keyDown(resizer, { key: 'ArrowDown' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '55')
+    expect(changesSection).toHaveStyle({ flex: '0.55 1 0%' })
+    expect(graphSection).toHaveStyle({ flex: '0.45 1 0%' })
+
+    for (let i = 0; i < 10; i += 1) {
+      fireEvent.keyDown(resizer, { key: 'ArrowDown' })
+    }
+    expect(resizer).toHaveAttribute('aria-valuenow', '80')
+
+    for (let i = 0; i < 15; i += 1) {
+      fireEvent.keyDown(resizer, { key: 'ArrowUp' })
+    }
+    expect(resizer).toHaveAttribute('aria-valuenow', '20')
+
+    // Double-click restores default 50%
+    fireEvent.doubleClick(resizer)
+    expect(resizer).toHaveAttribute('aria-valuenow', '50')
+
+    // Pointer drag with row-resize cursor & text-selection lock
+    const splitContainer = changesSection.parentElement!
+    vi.spyOn(splitContainer, 'getBoundingClientRect').mockReturnValue({
+      top: 100,
+      left: 0,
+      right: 260,
+      bottom: 600,
+      width: 260,
+      height: 500,
+      x: 0,
+      y: 100,
+      toJSON: () => ({})
+    })
+
+    fireEvent.pointerDown(resizer, { button: 0, clientY: 350 })
+    expect(document.body.style.cursor).toBe('row-resize')
+    expect(document.body.style.userSelect).toBe('none')
+    expect(document.body).toHaveClass('is-resizing-git-sections')
+
+    fireEvent.pointerMove(window, { clientY: 450 }) // (450 - 100) / 500 = 0.7 -> 70%
+    expect(resizer).toHaveAttribute('aria-valuenow', '70')
+    expect(changesSection).toHaveStyle({ flex: '0.7 1 0%' })
+    expect(graphSection).toHaveStyle({ flex: '0.3 1 0%' })
+
+    fireEvent.pointerUp(window)
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+    expect(document.body).not.toHaveClass('is-resizing-git-sections')
+
+    // Mouse drag fallback
+    fireEvent.mouseDown(resizer, { button: 0, clientY: 450 })
+    expect(document.body.style.cursor).toBe('row-resize')
+    fireEvent.mouseMove(window, { clientY: 425 }) // (425 - 100) / 500 = 0.65 -> 65%
+    expect(resizer).toHaveAttribute('aria-valuenow', '65')
+    fireEvent.mouseUp(window)
+    expect(document.body.style.cursor).toBe('')
+
+    // Collapsing Graph hides separator and lets Changes fill 100% of remaining height
+    await user.click(within(region).getByRole('button', { name: /Graph/i }))
+    expect(within(region).queryByRole('separator', { name: 'Git 섹션 높이 조절' })).not.toBeInTheDocument()
+    expect(changesSection).toHaveStyle({ flex: '1 1 0%' })
+
+    // Re-expanding Graph restores previous 65% ratio
+    await user.click(within(region).getByRole('button', { name: /Graph/i }))
+    const restoredResizer = within(region).getByRole('separator', { name: 'Git 섹션 높이 조절' })
+    expect(restoredResizer).toHaveAttribute('aria-valuenow', '65')
+    expect(changesSection).toHaveStyle({ flex: '0.65 1 0%' })
+    expect(graphSection).toHaveStyle({ flex: '0.35 1 0%' })
+
+    // Collapsing Changes hides separator and lets Graph fill 100% of remaining height
+    await user.click(within(region).getByRole('button', { name: /Changes/i }))
+    expect(within(region).queryByRole('separator', { name: 'Git 섹션 높이 조절' })).not.toBeInTheDocument()
+    expect(graphSection).toHaveStyle({ flex: '1 1 0%' })
   })
 })

@@ -3550,6 +3550,165 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       /삭제되었으나 미저장 편집 내용이 남아 있습니다 \(keep-dirty\.md\)/
     )
   })
+
+  it('supports fixed common branch/sync controls while Changes is collapsed, Changes/Graph accordion transitions, section resizer keyboard/double-click, and session-only preservation across view switches', async () => {
+    const user = userEvent.setup()
+    let currentBranch = 'main'
+    const buildStatus = () => ({
+      ...createEmptyGitStatus(true, 'C:/wiki/split-git'),
+      branch: currentBranch,
+      hasUpstream: true,
+      staged: [{ path: 'staged.md', status: 'A' as const }],
+      unstaged: [{ path: 'changed.md', status: 'M' as const }],
+      untracked: [{ path: 'draft.md', status: '?' as const }]
+    })
+
+    const checkoutSpy = vi.fn(async (_ws: string, branchName: string) => {
+      currentBranch = branchName
+      return buildStatus()
+    })
+    const syncSpy = vi.fn(async () => ({
+      status: buildStatus(),
+      pulled: true,
+      pushed: true,
+      summary: '동기화 완료'
+    }))
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/split-git',
+        workspaces: {
+          'C:/wiki/split-git': {
+            'changed.md': '# Changed'
+          }
+        },
+        git: {
+          status: vi.fn(async () => buildStatus()),
+          branches: vi.fn(async () => ({
+            current: currentBranch,
+            isDetached: false,
+            branches: [
+              { name: 'main', current: currentBranch === 'main', upstream: 'origin/main' },
+              { name: 'docs-v2', current: currentBranch === 'docs-v2', upstream: null }
+            ]
+          })),
+          checkout: checkoutSpy,
+          sync: syncSpy
+        }
+      }
+    )
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    const view = render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(within(gitRegion).queryByRole('button', { name: /Git.*main/i })).not.toBeInTheDocument()
+
+    const changesToggle = within(gitRegion).getByRole('button', { name: /Changes/i })
+    const graphToggle = within(gitRegion).getByRole('button', { name: /Graph/i })
+    expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(changesToggle).toHaveTextContent('3')
+    expect(graphToggle).toHaveAttribute('aria-expanded', 'true')
+
+    const resizer = within(gitRegion).getByRole('separator', { name: 'Git 섹션 높이 조절' })
+    expect(resizer).toHaveAttribute('aria-orientation', 'horizontal')
+    expect(resizer).toHaveAttribute('aria-valuemin', '20')
+    expect(resizer).toHaveAttribute('aria-valuemax', '80')
+    expect(resizer).toHaveAttribute('aria-valuenow', '50')
+
+    // Collapse Changes -> separator hides, Graph fills height, branch switch & Sync in fixed common area still work
+    await user.click(changesToggle)
+    expect(changesToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      within(gitRegion).queryByRole('separator', { name: 'Git 섹션 높이 조절' })
+    ).not.toBeInTheDocument()
+    expect(within(gitRegion).queryByLabelText('커밋 메시지')).not.toBeInTheDocument()
+    expect(within(gitRegion).getByRole('region', { name: 'Graph' })).toHaveStyle({
+      flex: '1 1 0%'
+    })
+
+    await user.selectOptions(within(gitRegion).getByLabelText('브랜치 선택'), 'docs-v2')
+    await user.click(within(gitRegion).getByRole('button', { name: '브랜치 전환' }))
+    await waitFor(() => {
+      expect(checkoutSpy).toHaveBeenCalledWith('C:/wiki/split-git', 'docs-v2')
+      expect(within(gitRegion).getByLabelText('현재 브랜치 docs-v2')).toBeInTheDocument()
+    })
+
+    await user.click(within(gitRegion).getByRole('button', { name: 'Sync' }))
+    await waitFor(() => {
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+    })
+
+    // Collapse Graph too -> both sections collapsed
+    await user.click(graphToggle)
+    expect(graphToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      within(gitRegion).queryByRole('separator', { name: 'Git 섹션 높이 조절' })
+    ).not.toBeInTheDocument()
+
+    // Re-expand both -> resizer returns
+    await user.click(changesToggle)
+    await user.click(graphToggle)
+    const activeResizer = within(gitRegion).getByRole('separator', { name: 'Git 섹션 높이 조절' })
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '50')
+
+    // Keyboard resize & clamping [20, 80] + double-click restore 50%
+    fireEvent.keyDown(activeResizer, { key: 'ArrowDown' })
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '55')
+    for (let i = 0; i < 10; i += 1) {
+      fireEvent.keyDown(activeResizer, { key: 'ArrowDown' })
+    }
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '80')
+    for (let i = 0; i < 15; i += 1) {
+      fireEvent.keyDown(activeResizer, { key: 'ArrowUp' })
+    }
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '20')
+
+    fireEvent.doubleClick(activeResizer)
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '50')
+
+    fireEvent.keyDown(activeResizer, { key: 'ArrowDown' })
+    fireEvent.keyDown(activeResizer, { key: 'ArrowDown' })
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '60')
+
+    // Collapse Graph, switch away to Explorer and back to Git -> collapsed state & 60% ratio preserved
+    await user.click(graphToggle)
+    await clickActivityBarButton(user, '탐색기')
+    await clickActivityBarButton(user, 'Git')
+
+    const reopenedGit = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const reopenedGraphToggle = within(reopenedGit).getByRole('button', { name: /Graph/i })
+    expect(reopenedGraphToggle).toHaveAttribute('aria-expanded', 'false')
+    await user.click(reopenedGraphToggle)
+    expect(
+      within(reopenedGit).getByRole('separator', { name: 'Git 섹션 높이 조절' })
+    ).toHaveAttribute('aria-valuenow', '60')
+
+    // Session-only: config.json untouched, remount resets to expanded 50%
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+    view.unmount()
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const remountedGit = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(within(remountedGit).getByRole('button', { name: /Changes/i })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(remountedGit).getByRole('button', { name: /Graph/i })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(
+      within(remountedGit).getByRole('separator', { name: 'Git 섹션 높이 조절' })
+    ).toHaveAttribute('aria-valuenow', '50')
+  })
 })
 
 describe('Renderer error logging & UI breadcrumbs', () => {

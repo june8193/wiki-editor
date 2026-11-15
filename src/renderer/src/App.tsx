@@ -33,6 +33,11 @@ import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
 import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
 import {
+  clampChangesHeightRatio,
+  createDefaultGitPanelSplitState,
+  type GitPanelSplitState
+} from './utils/gitPanelSplit'
+import {
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
   LEFT_SIDEBAR_DEFAULT_WIDTH,
@@ -90,6 +95,9 @@ export function App() {
     isCollapsed: false,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
   })
+  const [gitPanelSplit, setGitPanelSplit] = useState<GitPanelSplitState>(
+    createDefaultGitPanelSplitState
+  )
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const windowWidth = useWindowWidth()
@@ -123,6 +131,21 @@ export function App() {
     const clampedWidth = clampSidebarWidth(nextWidth, RIGHT_SIDEBAR_WIDTH_BOUNDS)
     setRightSidebar((prev) =>
       prev.width === clampedWidth ? prev : { ...prev, width: clampedWidth }
+    )
+  }, [])
+
+  const handleToggleGitChangesCollapsed = useCallback((): void => {
+    setGitPanelSplit((prev) => ({ ...prev, isChangesCollapsed: !prev.isChangesCollapsed }))
+  }, [])
+
+  const handleToggleGitGraphCollapsed = useCallback((): void => {
+    setGitPanelSplit((prev) => ({ ...prev, isGraphCollapsed: !prev.isGraphCollapsed }))
+  }, [])
+
+  const handleResizeGitChangesRatio = useCallback((nextRatio: number): void => {
+    const clampedRatio = clampChangesHeightRatio(nextRatio)
+    setGitPanelSplit((prev) =>
+      prev.changesHeightRatio === clampedRatio ? prev : { ...prev, changesHeightRatio: clampedRatio }
     )
   }, [])
 
@@ -632,6 +655,7 @@ export function App() {
                   branchList={git.branchList}
                   pendingAction={git.pendingAction}
                   errorMessage={git.errorMessage}
+                  splitState={gitPanelSplit}
                   onDismissError={git.dismissError}
                   onRefresh={() => void git.refreshStatus()}
                   onInitRepo={() => void git.initRepo()}
@@ -644,6 +668,9 @@ export function App() {
                   onPull={() => void git.pull()}
                   onPush={() => void git.push()}
                   onSync={() => void git.sync()}
+                  onToggleChangesCollapsed={handleToggleGitChangesCollapsed}
+                  onToggleGraphCollapsed={handleToggleGitGraphCollapsed}
+                  onResizeChangesRatio={handleResizeGitChangesRatio}
                 />
               )}
             </aside>
