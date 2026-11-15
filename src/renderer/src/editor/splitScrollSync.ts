@@ -53,7 +53,7 @@ interface NormalizedPreviewLayout {
   blocks: readonly PreviewSourceBlock[]
   clientHeight: number
   scrollHeight: number
-  totalLines?: number
+  totalLines: number
 }
 
 const DEFAULT_GUARD_WINDOW_MS = 150
@@ -146,7 +146,7 @@ function buildPreviewLineSegments(layout: NormalizedPreviewLayout): PreviewLineS
   const last = blocks[blocks.length - 1]
   const lastEnd = last.endLine + 1
   const lastBottom = last.top + last.height
-  const targetEndLine = Math.max((totalLines ?? last.endLine) + 1, lastEnd)
+  const targetEndLine = Math.max(totalLines + 1, lastEnd)
   const targetEndOffset = Math.max(lastBottom, scrollHeight)
   if (targetEndLine > lastEnd && targetEndOffset > lastBottom) {
     segments.push({
@@ -198,16 +198,17 @@ function mapOffsetAcrossBlocks(scrollTop: number, layout: NormalizedPreviewLayou
   return segments[segments.length - 1].lineEnd
 }
 
-function prepareSplitSync(
-  sourceTop: number,
-  sourceMax: number,
-  targetMax: number,
-  rawPaddingTop: number,
-  preview: Omit<PreviewScrollMetrics, 'scrollTop'>,
+function prepareSplitSync(params: {
+  sourceTop: number
+  sourceMax: number
+  targetMax: number
+  rawPaddingTop: number
+  preview: Omit<PreviewScrollMetrics, 'scrollTop'>
   fallbackTotalLines: number
-):
+}):
   | { kind: 'resolved'; scrollTop: number | null }
   | { kind: 'interpolate'; layout: NormalizedPreviewLayout; hasTopPaddingBridge: boolean } {
+  const { sourceTop, sourceMax, targetMax, rawPaddingTop, preview, fallbackTotalLines } = params
   if (sourceMax <= 0 || targetMax <= 0) {
     return { kind: 'resolved', scrollTop: null }
   }
@@ -254,9 +255,7 @@ export function collectPreviewSourceBlocks(container: HTMLElement): PreviewSourc
     }
     const startLine = Number(el.getAttribute('data-source-line'))
     if (!Number.isFinite(startLine) || startLine < 1) continue
-    const rawEndLine = Number(el.getAttribute('data-source-end-line'))
-    const endLine =
-      Number.isFinite(rawEndLine) && rawEndLine >= startLine ? rawEndLine : startLine
+    const endLine = Number(el.getAttribute('data-source-end-line') ?? startLine)
     const rect = el.getBoundingClientRect()
     rawBlocks.push({
       startLine,
@@ -329,14 +328,14 @@ export function computePreviewScrollTopFromRaw(
 ): number | null {
   const rawMax = Math.max(0, raw.scrollHeight - raw.clientHeight)
   const previewMax = Math.max(0, preview.scrollHeight - preview.clientHeight)
-  const prep = prepareSplitSync(
-    raw.scrollTop,
-    rawMax,
-    previewMax,
-    raw.paddingTop,
+  const prep = prepareSplitSync({
+    sourceTop: raw.scrollTop,
+    sourceMax: rawMax,
+    targetMax: previewMax,
+    rawPaddingTop: raw.paddingTop,
     preview,
-    raw.totalLines
-  )
+    fallbackTotalLines: raw.totalLines
+  })
   if (prep.kind === 'resolved') return prep.scrollTop
 
   if (prep.hasTopPaddingBridge && raw.scrollTop < raw.paddingTop) {
@@ -360,14 +359,14 @@ export function computeRawScrollTopFromPreview(
 ): number | null {
   const previewMax = Math.max(0, preview.scrollHeight - preview.clientHeight)
   const rawMax = Math.max(0, raw.scrollHeight - raw.clientHeight)
-  const prep = prepareSplitSync(
-    preview.scrollTop,
-    previewMax,
-    rawMax,
-    raw.paddingTop,
+  const prep = prepareSplitSync({
+    sourceTop: preview.scrollTop,
+    sourceMax: previewMax,
+    targetMax: rawMax,
+    rawPaddingTop: raw.paddingTop,
     preview,
-    raw.totalLines
-  )
+    fallbackTotalLines: raw.totalLines
+  })
   if (prep.kind === 'resolved') return prep.scrollTop
 
   if (prep.hasTopPaddingBridge && preview.scrollTop < prep.layout.blocks[0].top) {

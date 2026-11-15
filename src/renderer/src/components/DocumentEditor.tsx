@@ -77,6 +77,13 @@ export function DocumentEditor({
   const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
   const matchedScrollRequest =
     scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
+  const previewScrollRequest = matchedScrollRequest
+    ? {
+        slug: matchedScrollRequest.slug,
+        index: matchedScrollRequest.index,
+        nonce: matchedScrollRequest.nonce
+      }
+    : null
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
   const {
     rawEditorViewRef,
@@ -249,15 +256,7 @@ export function DocumentEditor({
           theme={theme}
           showHeadingNumbers={showHeadingNumbers}
           mermaidRenderer={mermaidRenderer}
-          scrollRequest={
-            matchedScrollRequest
-              ? {
-                  slug: matchedScrollRequest.slug,
-                  index: matchedScrollRequest.index,
-                  nonce: matchedScrollRequest.nonce
-                }
-              : null
-          }
+          scrollRequest={previewScrollRequest}
           onScrollTopChange={handleScrollTopChange}
         />
       )}
@@ -286,15 +285,7 @@ export function DocumentEditor({
               theme={theme}
               showHeadingNumbers={showHeadingNumbers}
               mermaidRenderer={mermaidRenderer}
-              scrollRequest={
-                matchedScrollRequest
-                  ? {
-                      slug: matchedScrollRequest.slug,
-                      index: matchedScrollRequest.index,
-                      nonce: matchedScrollRequest.nonce
-                    }
-                  : null
-              }
+              scrollRequest={previewScrollRequest}
               onScrollTopChange={handleSplitPreviewScroll}
               testId="split-markdown-preview"
             />

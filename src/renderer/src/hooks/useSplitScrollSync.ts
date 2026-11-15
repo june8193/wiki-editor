@@ -53,8 +53,11 @@ export function useSplitScrollSync({
       if (!view || !previewEl) return
 
       const guard = getScrollSyncGuard()
-      const sourceScrollTop = source === 'raw' ? view.scrollDOM.scrollTop : previewEl.scrollTop
-      if (guard.shouldIgnoreScroll(source, sourceScrollTop)) {
+      const sideElements: Record<ScrollSyncSide, HTMLElement> = {
+        raw: view.scrollDOM,
+        preview: previewEl
+      }
+      if (guard.shouldIgnoreScroll(source, sideElements[source].scrollTop)) {
         return
       }
 
@@ -67,14 +70,31 @@ export function useSplitScrollSync({
         totalLines: rawGeometry.totalLines
       }
 
-      const targetScrollTop =
-        source === 'raw'
-          ? computePreviewScrollTopFromRaw(rawGeometry, previewMetrics)
-          : computeRawScrollTopFromPreview(previewMetrics, rawGeometry)
+      const targetRoutes: Record<
+        ScrollSyncSide,
+        {
+          targetSide: ScrollSyncSide
+          computeTarget: () => number | null
+          persistScrollTop: boolean
+        }
+      > = {
+        raw: {
+          targetSide: 'preview',
+          computeTarget: () => computePreviewScrollTopFromRaw(rawGeometry, previewMetrics),
+          persistScrollTop: false
+        },
+        preview: {
+          targetSide: 'raw',
+          computeTarget: () => computeRawScrollTopFromPreview(previewMetrics, rawGeometry),
+          persistScrollTop: true
+        }
+      }
+
+      const { targetSide, computeTarget, persistScrollTop } = targetRoutes[source]
+      const targetScrollTop = computeTarget()
       if (targetScrollTop === null) return
 
-      const targetSide: ScrollSyncSide = source === 'raw' ? 'preview' : 'raw'
-      const targetEl = targetSide === 'raw' ? view.scrollDOM : previewEl
+      const targetEl = sideElements[targetSide]
       const targetMax = Math.max(0, targetEl.scrollHeight - targetEl.clientHeight)
       if (
         targetEl.scrollTop === targetScrollTop ||
@@ -87,7 +107,7 @@ export function useSplitScrollSync({
 
       targetEl.scrollTop = targetScrollTop
       guard.markProgrammaticScroll(targetSide, targetEl.scrollTop)
-      if (targetSide === 'raw') {
+      if (persistScrollTop) {
         onUpdateViewState({ scrollTop: targetEl.scrollTop })
       }
     },

@@ -14,8 +14,8 @@ interface MermaidDiagramProps {
   renderer?: MermaidRenderer
   debounceMs?: number
   className?: string
-  sourceLine?: string | number
-  sourceEndLine?: string | number
+  sourceLine?: string
+  sourceEndLine?: string
 }
 
 interface ValidDiagramSnapshot {
