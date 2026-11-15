@@ -120,8 +120,26 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
       expect(getRawEditorText(editor1)).toBe('# Edited in Window 2')
     })
 
-    // Manual save (Ctrl+S) in Window 1 saves disk and clears ● / sets 저장됨 in BOTH windows
+    // Manual save (Ctrl+S) in Window 1 syncs 저장 중... in BOTH windows, then saves disk and sets 저장됨
+    const origWriteFile = win1.api.workspace.writeFile.bind(win1.api.workspace)
+    let releaseWrite!: () => void
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
+    win1.api.workspace.writeFile = async (filePath, content) => {
+      await writeGate
+      return origWriteFile(filePath, content)
+    }
+
     fireEvent.keyDown(editor1, { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(within(rendered1.container).getByText('저장 중...')).toBeInTheDocument()
+      expect(within(rendered2.container).getByText('저장 중...')).toBeInTheDocument()
+    })
+
+    win1.api.workspace.writeFile = origWriteFile
+    releaseWrite()
+
     await waitFor(() => {
       expect(harness.getFilesSnapshot().get('C:/wiki/docs/shared.md')).toBe('# Edited in Window 2')
       expect(within(rendered1.container).queryByTestId('dirty-indicator')).not.toBeInTheDocument()

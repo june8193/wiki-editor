@@ -139,12 +139,18 @@ export function registerBufferIpc({
       [BUFFER_IPC_CHANNELS.saveBuffer, (_event, key) => hub.saveBuffer(key as string)],
       [
         BUFFER_IPC_CHANNELS.syncWindowTabs,
-        (event, bufferKeys) => {
+        (event, bufferKeys, options) => {
           const windowId = resolveWindowId(event)
+          const releasePending = Boolean(
+            options &&
+              typeof options === 'object' &&
+              (options as { releasePending?: unknown }).releasePending
+          )
           return windowId !== undefined
             ? hub.syncWindowTabs(
                 windowId,
-                Array.isArray(bufferKeys) ? (bufferKeys as string[]) : []
+                Array.isArray(bufferKeys) ? (bufferKeys as string[]) : [],
+                releasePending ? { releasePending: true } : undefined
               )
             : hub.getSnapshot()
         }

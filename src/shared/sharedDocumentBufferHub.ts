@@ -7,7 +7,8 @@ import {
   type ReconcileBuffersResult,
   type SaveBufferResult,
   type SharedBufferHubEvent,
-  type SharedBufferStateSnapshot
+  type SharedBufferStateSnapshot,
+  type SyncWindowTabsOptions
 } from './documentBuffer'
 import { createDocumentBuffer, DocumentBufferStore } from './documentBufferStore'
 import { toErrorMessage } from './errors'
@@ -140,10 +141,18 @@ export class SharedDocumentBufferHub {
     }
   }
 
-  syncWindowTabs(windowId: number, bufferKeys: readonly string[]): SharedBufferStateSnapshot {
-    const { prevCounts, countsChanged } = this.tabTracker.syncWindowTabs(windowId, bufferKeys)
+  syncWindowTabs(
+    windowId: number,
+    bufferKeys: readonly string[],
+    options?: SyncWindowTabsOptions
+  ): SharedBufferStateSnapshot {
+    const { prevCounts, depletedPendingKeys, countsChanged } = this.tabTracker.syncWindowTabs(
+      windowId,
+      bufferKeys,
+      options
+    )
     this.revision += 1
-    this.reconcileTabCountChanges(prevCounts, countsChanged)
+    this.reconcileTabCountChanges(prevCounts, countsChanged, depletedPendingKeys)
     return this.getSnapshot(windowId)
   }
 

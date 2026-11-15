@@ -43,6 +43,10 @@ export interface SaveBufferResult {
   errorMessage?: string
 }
 
+export interface SyncWindowTabsOptions {
+  releasePending?: boolean
+}
+
 export interface ReconcileBuffersResult {
   warnings: string[]
   closedKeys: string[]

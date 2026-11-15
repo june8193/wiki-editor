@@ -112,6 +112,59 @@ export interface InMemoryWindowHandle {
   destroy: () => void
 }
 
+/** Creates a WikiBufferApi facade backed directly by a SharedDocumentBufferHub instance. */
+export function createHubBufferApi(
+  hub: SharedDocumentBufferHub,
+  windowId: number,
+  bufferListeners: Set<(event: SharedBufferHubEvent) => void>,
+  isWindowDestroyed: () => boolean = () => false
+): WikiBufferApi {
+  return {
+    async getSnapshot() {
+      return hub.getSnapshot(windowId)
+    },
+    async openWorkspaceFile(filePath, name, initialContent) {
+      return hub.openWorkspaceFile(filePath, name, initialContent, windowId)
+    },
+    async openConfigDocument() {
+      return hub.openConfigDocument(windowId)
+    },
+    async refreshCleanConfig() {
+      return hub.refreshCleanConfig()
+    },
+    async updateContent(key, nextContent) {
+      return hub.updateContent(key, nextContent)
+    },
+    async saveBuffer(key) {
+      return hub.saveBuffer(key)
+    },
+    async syncWindowTabs(bufferKeys, options) {
+      return hub.syncWindowTabs(windowId, bufferKeys, options)
+    },
+    async setAutoSavePaused(paused) {
+      hub.setAutoSavePaused(windowId, paused)
+    },
+    async syncRenamedPath(oldPath, newPath) {
+      return hub.syncRenamedPath(oldPath, newPath)
+    },
+    async syncDeletedPath(targetPath) {
+      return hub.syncDeletedPath(targetPath)
+    },
+    async reconcileWorkspaceBuffersWithDisk() {
+      return hub.reconcileWorkspaceBuffersWithDisk()
+    },
+    onEvent(listener) {
+      if (isWindowDestroyed()) {
+        return () => undefined
+      }
+      bufferListeners.add(listener)
+      return () => {
+        bufferListeners.delete(listener)
+      }
+    }
+  }
+}
+
 export interface MultiWindowWikiHarness {
   createWindow: () => InMemoryWindowHandle
   emitExternalChange: (patch: Partial<AppConfig>) => void
@@ -227,57 +280,6 @@ export function createMultiWindowWikiHarness(
       listener(snapshot)
     }
     return cloneAppConfig(snapshot)
-  }
-
-  const createWindowBufferApi = (
-    windowId: number,
-    bufferListeners: Set<(event: SharedBufferHubEvent) => void>,
-    isWindowDestroyed: () => boolean
-  ): WikiBufferApi => {
-    return {
-      async getSnapshot() {
-        return hub.getSnapshot(windowId)
-      },
-      async openWorkspaceFile(filePath, name, initialContent) {
-        return hub.openWorkspaceFile(filePath, name, initialContent, windowId)
-      },
-      async openConfigDocument() {
-        return hub.openConfigDocument(windowId)
-      },
-      async refreshCleanConfig() {
-        return hub.refreshCleanConfig()
-      },
-      async updateContent(key, nextContent) {
-        return hub.updateContent(key, nextContent)
-      },
-      async saveBuffer(key) {
-        return hub.saveBuffer(key)
-      },
-      async syncWindowTabs(bufferKeys) {
-        return hub.syncWindowTabs(windowId, bufferKeys)
-      },
-      async setAutoSavePaused(paused) {
-        hub.setAutoSavePaused(windowId, paused)
-      },
-      async syncRenamedPath(oldPath, newPath) {
-        return hub.syncRenamedPath(oldPath, newPath)
-      },
-      async syncDeletedPath(targetPath) {
-        return hub.syncDeletedPath(targetPath)
-      },
-      async reconcileWorkspaceBuffersWithDisk() {
-        return hub.reconcileWorkspaceBuffersWithDisk()
-      },
-      onEvent(listener) {
-        if (isWindowDestroyed()) {
-          return () => undefined
-        }
-        bufferListeners.add(listener)
-        return () => {
-          bufferListeners.delete(listener)
-        }
-      }
-    }
   }
 
   const createWindow = (): InMemoryWindowHandle => {
@@ -494,7 +496,7 @@ export function createMultiWindowWikiHarness(
           }
         }
       },
-      buffer: createWindowBufferApi(windowId, bufferListeners, () => destroyed),
+      buffer: createHubBufferApi(hub, windowId, bufferListeners, () => destroyed),
       ...(fsOptions.log ? { log: fsOptions.log } : {})
     }
 

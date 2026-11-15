@@ -1,4 +1,4 @@
-import type { BufferKeyRemap } from './documentBuffer'
+import type { BufferKeyRemap, SyncWindowTabsOptions } from './documentBuffer'
 
 /** Counts open tab occurrences per buffer key, ignoring empty keys. */
 export function countBufferKeys(keys: readonly string[]): Record<string, number> {
@@ -44,10 +44,6 @@ export class WindowTabTracker {
     return nextCounts
   }
 
-  getTabCounts(): Readonly<Record<string, number>> {
-    return this.tabCounts
-  }
-
   getTabCountsSnapshot(): Record<string, number> {
     return { ...this.tabCounts }
   }
@@ -80,33 +76,50 @@ export class WindowTabTracker {
     return false
   }
 
+  private releasePendingOwnersForWindow(windowId: number): string[] {
+    const depletedPendingKeys: string[] = []
+    for (const key of [...this.pendingOpenWindows.keys()]) {
+      if (this.removePendingOpenOwner(key, windowId)) {
+        depletedPendingKeys.push(key)
+      }
+    }
+    return depletedPendingKeys
+  }
+
   clearPendingForKeys(keys: Iterable<string>): void {
     for (const key of keys) {
       this.pendingOpenWindows.delete(key)
     }
   }
 
-  hasActiveOrPendingOwner(
-    key: string,
-    counts: Readonly<Record<string, number>> = this.tabCounts
-  ): boolean {
-    return (counts[key] ?? 0) > 0 || (this.pendingOpenWindows.get(key)?.size ?? 0) > 0
+  hasActiveOrPendingOwner(key: string): boolean {
+    return (this.tabCounts[key] ?? 0) > 0 || (this.pendingOpenWindows.get(key)?.size ?? 0) > 0
   }
 
   syncWindowTabs(
     windowId: number,
-    bufferKeys: readonly string[]
-  ): { prevCounts: Record<string, number>; countsChanged: boolean } {
+    bufferKeys: readonly string[],
+    options?: SyncWindowTabsOptions
+  ): {
+    prevCounts: Record<string, number>
+    depletedPendingKeys: string[]
+    countsChanged: boolean
+  } {
     const perWindow = countBufferKeys(bufferKeys)
     for (const key of Object.keys(perWindow)) {
       this.removePendingOpenOwner(key, windowId)
     }
+
+    const depletedPendingKeys = options?.releasePending
+      ? this.releasePendingOwnersForWindow(windowId)
+      : []
 
     const prevCounts = this.tabCounts
     this.windowTabs.set(windowId, perWindow)
     this.tabCounts = this.computeTabCounts()
     return {
       prevCounts,
+      depletedPendingKeys,
       countsChanged: !areTabCountMapsEqual(prevCounts, this.tabCounts)
     }
   }
@@ -118,12 +131,7 @@ export class WindowTabTracker {
   } {
     this.windowTabs.delete(windowId)
     const prevCounts = this.tabCounts
-    const depletedPendingKeys: string[] = []
-    for (const key of [...this.pendingOpenWindows.keys()]) {
-      if (this.removePendingOpenOwner(key, windowId)) {
-        depletedPendingKeys.push(key)
-      }
-    }
+    const depletedPendingKeys = this.releasePendingOwnersForWindow(windowId)
 
     this.tabCounts = this.computeTabCounts()
     return {

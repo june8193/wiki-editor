@@ -3,6 +3,7 @@ import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
 import type { WikiBufferApi } from '@shared/ipc'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
+import { createHubBufferApi } from '../test/inMemoryWikiHarness'
 import { PaneTabStore } from './PaneTabStore'
 import { RendererBufferSyncClient } from './RendererBufferSyncClient'
 
@@ -14,6 +15,35 @@ function createDeferred<T = void>() {
     reject = rej
   })
   return { promise, resolve, reject }
+}
+
+function attachWindowClient(hub: SharedDocumentBufferHub, windowId: number) {
+  const listeners = new Set<(event: SharedBufferHubEvent) => void>()
+  const unsubscribeHub = hub.subscribe((event) => {
+    for (const listener of listeners) {
+      listener(event)
+    }
+  })
+  const bufferApi = createHubBufferApi(hub, windowId, listeners)
+  const bufferStore = new DocumentBufferStore()
+  const tabStore = new PaneTabStore()
+  const onError = vi.fn()
+  const client = new RendererBufferSyncClient({
+    bufferStore,
+    tabStore,
+    bufferApi,
+    onError,
+    onConfirmCloseDirtyTab: vi.fn()
+  })
+
+  return {
+    bufferApi,
+    bufferStore,
+    tabStore,
+    client,
+    onError,
+    detach: unsubscribeHub
+  }
 }
 
 function createHubClientHarness(windowId = 1) {
@@ -30,45 +60,7 @@ function createHubClientHarness(windowId = 1) {
       saveConfigRaw: async () => ({})
     }
   })
-  const listeners = new Set<(event: SharedBufferHubEvent) => void>()
-  hub.subscribe((event) => {
-    for (const listener of listeners) {
-      listener(event)
-    }
-  })
-
-  const bufferApi: WikiBufferApi = {
-    getSnapshot: async () => hub.getSnapshot(windowId),
-    openWorkspaceFile: async (filePath, name, initialContent) =>
-      hub.openWorkspaceFile(filePath, name, initialContent, windowId),
-    openConfigDocument: async () => hub.openConfigDocument(windowId),
-    refreshCleanConfig: async () => hub.refreshCleanConfig(),
-    updateContent: async (key, nextContent) => hub.updateContent(key, nextContent),
-    saveBuffer: async (key) => hub.saveBuffer(key),
-    syncWindowTabs: async (bufferKeys) => hub.syncWindowTabs(windowId, bufferKeys),
-    setAutoSavePaused: async (paused) => hub.setAutoSavePaused(windowId, paused),
-    syncRenamedPath: async (oldPath, newPath) => hub.syncRenamedPath(oldPath, newPath),
-    syncDeletedPath: async (targetPath) => hub.syncDeletedPath(targetPath),
-    reconcileWorkspaceBuffersWithDisk: async () => hub.reconcileWorkspaceBuffersWithDisk(),
-    onEvent: (listener) => {
-      listeners.add(listener)
-      return () => {
-        listeners.delete(listener)
-      }
-    }
-  }
-
-  const bufferStore = new DocumentBufferStore()
-  const tabStore = new PaneTabStore()
-  const client = new RendererBufferSyncClient({
-    bufferStore,
-    tabStore,
-    bufferApi,
-    onError: vi.fn(),
-    onConfirmCloseDirtyTab: vi.fn()
-  })
-
-  return { hub, files, bufferApi, bufferStore, tabStore, client }
+  return { hub, files, ...attachWindowClient(hub, windowId) }
 }
 
 describe('RendererBufferSyncClient race guards', () => {
@@ -140,6 +132,143 @@ describe('RendererBufferSyncClient race guards', () => {
       expect(files.get('C:/wiki/fresh.md')).toBe('# First line on new file')
     } finally {
       stop()
+      hub.dispose()
+    }
+  })
+
+  it('redirects in-flight openWorkspaceFile to the remapped key when another window renames concurrently', async () => {
+    const win1 = createHubClientHarness(1)
+    const { hub, files } = win1
+    files.set('C:/wiki/a.md', '# Original A')
+
+    const stop1 = win1.client.start()
+    const win2 = attachWindowClient(hub, 2)
+    const stop2 = win2.client.start()
+
+    try {
+      await win1.client.openWorkspaceFile({
+        name: 'a.md',
+        path: 'C:/wiki/a.md',
+        relativePath: 'a.md',
+        kind: 'file'
+      })
+      hub.syncWindowTabs(1, ['c:/wiki/a.md'])
+
+      const openGate = createDeferred<Awaited<ReturnType<WikiBufferApi['openWorkspaceFile']>>>()
+      win2.bufferApi.openWorkspaceFile = async () => openGate.promise
+
+      const preRenameBuf = await hub.openWorkspaceFile('C:/wiki/a.md', 'a.md', undefined, 2)
+      const openWin2Promise = win2.client.openWorkspaceFile({
+        name: 'a.md',
+        path: 'C:/wiki/a.md',
+        relativePath: 'a.md',
+        kind: 'file'
+      })
+
+      files.delete('C:/wiki/a.md')
+      files.set('C:/wiki/b.md', '# Original A')
+      hub.syncRenamedPath('C:/wiki/a.md', 'C:/wiki/b.md')
+
+      openGate.resolve(preRenameBuf)
+      await openWin2Promise
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      expect(win2.tabStore.getBufferKeys()).toEqual(['c:/wiki/b.md'])
+      expect(win2.bufferStore.hasBuffer('c:/wiki/b.md')).toBe(true)
+      expect(win2.bufferStore.hasBuffer('c:/wiki/a.md')).toBe(false)
+    } finally {
+      stop1()
+      stop2()
+      win1.detach()
+      win2.detach()
+      hub.dispose()
+    }
+  })
+
+  it('preserves unsynced local edits, surfaces onError, and retries updateContent before save when IPC fails', async () => {
+    const { hub, files, bufferApi, bufferStore, tabStore, client, onError } =
+      createHubClientHarness(1)
+    const stop = client.start()
+
+    try {
+      await client.openWorkspaceFile({
+        name: 'shared.md',
+        path: 'C:/wiki/shared.md',
+        relativePath: 'shared.md',
+        kind: 'file'
+      })
+      hub.syncWindowTabs(1, ['c:/wiki/shared.md'])
+
+      const origUpdate = bufferApi.updateContent.bind(bufferApi)
+      bufferApi.updateContent = async () => {
+        throw new Error('IPC update failed')
+      }
+
+      client.updateBufferContent('c:/wiki/shared.md', '# Unsynced edit')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      expect(onError).toHaveBeenCalled()
+      expect(bufferStore.getBuffer('c:/wiki/shared.md')?.content).toBe('# Unsynced edit')
+      expect(bufferStore.getBuffer('c:/wiki/shared.md')?.isDirty).toBe(true)
+
+      const tab = tabStore.getSnapshot().panes.primary.tabs[0]
+      expect(await client.saveAndCloseTab('primary', tab.id)).toBe(false)
+      expect(tabStore.getBufferKeys()).toEqual(['c:/wiki/shared.md'])
+
+      bufferApi.updateContent = origUpdate
+      expect(await client.saveAndCloseTab('primary', tab.id)).toBe(true)
+      expect(files.get('C:/wiki/shared.md')).toBe('# Unsynced edit')
+    } finally {
+      stop()
+      hub.dispose()
+    }
+  })
+
+  it('releases pending-open owner claims when renderer unmounts mid-open before webContents destroys', async () => {
+    const { hub, files, detach } = createHubClientHarness(1)
+    const win2 = attachWindowClient(hub, 2)
+    const stop2 = win2.client.start()
+
+    try {
+      files.set('C:/wiki/solo.md', '# Solo')
+      const replyGate = createDeferred<Awaited<ReturnType<WikiBufferApi['openWorkspaceFile']>>>()
+      const origOpen2 = win2.bufferApi.openWorkspaceFile.bind(win2.bufferApi)
+      win2.bufferApi.openWorkspaceFile = async (filePath, name, initialContent) => {
+        await origOpen2(filePath, name, initialContent)
+        return replyGate.promise
+      }
+
+      const openPromise = win2.client.openWorkspaceFile({
+        name: 'solo.md',
+        path: 'C:/wiki/solo.md',
+        relativePath: 'solo.md',
+        kind: 'file'
+      })
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(hub.getSnapshot().buffers['c:/wiki/solo.md']).toBeDefined()
+
+      // Unmount win2 mid-open (without destroying BrowserWindow); orphan buffer should clear
+      stop2()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(hub.getSnapshot().buffers['c:/wiki/solo.md']).toBeUndefined()
+
+      replyGate.resolve({
+        key: 'c:/wiki/solo.md',
+        kind: 'workspace',
+        path: 'C:/wiki/solo.md',
+        name: 'solo.md',
+        content: '# Solo',
+        savedContent: '# Solo',
+        isDirty: false,
+        version: 1,
+        isSaving: false
+      })
+      await openPromise
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(hub.getSnapshot().buffers['c:/wiki/solo.md']).toBeUndefined()
+    } finally {
+      detach()
+      win2.detach()
       hub.dispose()
     }
   })

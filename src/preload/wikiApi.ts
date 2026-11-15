@@ -161,10 +161,11 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
         ) as Promise<DocumentBuffer | null>,
       saveBuffer: (key) =>
         ipcRenderer.invoke(BUFFER_IPC_CHANNELS.saveBuffer, key) as Promise<SaveBufferResult>,
-      syncWindowTabs: (bufferKeys) =>
+      syncWindowTabs: (bufferKeys, options) =>
         ipcRenderer.invoke(
           BUFFER_IPC_CHANNELS.syncWindowTabs,
-          bufferKeys
+          bufferKeys,
+          ...(options ? [options] : [])
         ) as Promise<SharedBufferStateSnapshot>,
       setAutoSavePaused: (paused) =>
         ipcRenderer.invoke(BUFFER_IPC_CHANNELS.setAutoSavePaused, paused) as Promise<void>,

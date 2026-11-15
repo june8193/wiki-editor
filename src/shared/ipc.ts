@@ -5,7 +5,8 @@ import type {
   ReconcileBuffersResult,
   SaveBufferResult,
   SharedBufferHubEvent,
-  SharedBufferStateSnapshot
+  SharedBufferStateSnapshot,
+  SyncWindowTabsOptions
 } from './documentBuffer'
 import type { GitBranchList, GitStatus, GitSyncResult } from './git'
 import type { RendererLogPayload } from './logging'
@@ -141,7 +142,10 @@ export interface WikiBufferApi {
   refreshCleanConfig(): Promise<DocumentBuffer | null>
   updateContent(key: string, nextContent: string): Promise<DocumentBuffer | null>
   saveBuffer(key: string): Promise<SaveBufferResult>
-  syncWindowTabs(bufferKeys: string[]): Promise<SharedBufferStateSnapshot>
+  syncWindowTabs(
+    bufferKeys: string[],
+    options?: SyncWindowTabsOptions
+  ): Promise<SharedBufferStateSnapshot>
   setAutoSavePaused(paused: boolean): Promise<void>
   syncRenamedPath(oldPath: string, newPath: string): Promise<BufferKeyRemap[]>
   syncDeletedPath(targetPath: string): Promise<string[]>

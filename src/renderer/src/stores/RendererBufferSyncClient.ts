@@ -105,6 +105,7 @@ export class RendererBufferSyncClient {
   private readonly pendingEditFlushes = new Map<string, Promise<void>>()
   private readonly creatingKeys = new Set<string>()
   private readonly pendingManualSaveKeys = new Set<string>()
+  private readonly unsyncedLocalKeys = new Set<string>()
   private readonly remappedKeys = new Map<string, string>()
   private lastSyncedTabKeys: readonly string[] | null = null
   private mounted = false
@@ -140,7 +141,7 @@ export class RendererBufferSyncClient {
       this.mounted = false
       unsubscribeHub()
       void this.bufferApi.setAutoSavePaused(false).catch(() => undefined)
-      void this.bufferApi.syncWindowTabs([]).catch(() => undefined)
+      void this.bufferApi.syncWindowTabs([], { releasePending: true }).catch(() => undefined)
     }
   }
 
@@ -202,6 +203,7 @@ export class RendererBufferSyncClient {
       this.pendingEditFlushes.delete(key)
       this.creatingKeys.delete(key)
       this.pendingManualSaveKeys.delete(key)
+      this.unsyncedLocalKeys.delete(key)
     }
     for (const [oldKey, newKey] of this.remappedKeys.entries()) {
       if (keySet.has(oldKey) || keySet.has(newKey)) {
@@ -231,6 +233,7 @@ export class RendererBufferSyncClient {
       movePendingFlush(this.pendingEditFlushes, oldKey, newKey)
       moveTrackedKey(this.creatingKeys, oldKey, newKey)
       moveTrackedKey(this.pendingManualSaveKeys, oldKey, newKey)
+      moveTrackedKey(this.unsyncedLocalKeys, oldKey, newKey)
     }
     this.tabStore.remapBufferKeys(remappings)
   }
@@ -261,8 +264,8 @@ export class RendererBufferSyncClient {
       }
       const pendingCount = this.pendingLocalEditCounts.get(key) ?? 0
       const localBuf = currentLocal[key]
-      merged[key] =
-        pendingCount > 0 && localBuf ? mergePendingLocalBuffer(hubBuf, localBuf) : hubBuf
+      const keepLocalEdits = (pendingCount > 0 || this.unsyncedLocalKeys.has(key)) && localBuf
+      merged[key] = keepLocalEdits ? mergePendingLocalBuffer(hubBuf, localBuf) : hubBuf
     }
 
     for (const creatingKey of this.creatingKeys) {
@@ -332,15 +335,23 @@ export class RendererBufferSyncClient {
     this.onError(null)
     try {
       const buf = await loadBuffer()
-      if (!this.mounted) return
-      this.remappedKeys.delete(buf.key)
-      if (!this.pendingLocalEditCounts.has(buf.key)) {
-        const latestBuf = this.latestHubBuffers[buf.key]
-        this.bufferStore.upsertBuffer(
-          latestBuf && latestBuf.version > buf.version ? latestBuf : buf
-        )
+      if (!this.mounted) {
+        void this.bufferApi.syncWindowTabs([], { releasePending: true }).catch(() => undefined)
+        return
       }
-      this.tabStore.openTab(buf.key, { paneId: targetPaneId })
+      const targetKey = this.resolveLatestKey(buf.key)
+      const latestBuf = this.latestHubBuffers[targetKey]
+      if (targetKey !== buf.key && !latestBuf) {
+        return
+      }
+      this.remappedKeys.delete(buf.key)
+      this.remappedKeys.delete(targetKey)
+      const targetBuf =
+        latestBuf && (targetKey !== buf.key || latestBuf.version > buf.version) ? latestBuf : buf
+      if (!this.pendingLocalEditCounts.has(targetKey) && !this.unsyncedLocalKeys.has(targetKey)) {
+        this.bufferStore.upsertBuffer(targetBuf)
+      }
+      this.tabStore.openTab(targetKey, { paneId: targetPaneId })
       this.syncCurrentLayoutTabs()
     } catch (error: unknown) {
       if (this.mounted) {
@@ -386,11 +397,23 @@ export class RendererBufferSyncClient {
     }
   }
 
+  private deleteTrackedKeyVariants(set: Set<string>, initialKey: string): void {
+    set.delete(initialKey)
+    set.delete(this.resolveLatestKey(initialKey))
+  }
+
   private trackPendingFlush(
     flushes: Map<string, Promise<void>>,
     initialKey: string,
+    prevHubBuffers: DocumentBufferSnapshot,
+    hadPriorFlush: boolean,
+    syncedSynchronously: boolean,
     flushPromise: Promise<void>
   ): void {
+    // Keep synchronous in-memory hub updates immediate while serializing real async IPC or deferred saves.
+    if (!hadPriorFlush && this.latestHubBuffers !== prevHubBuffers && syncedSynchronously) {
+      return
+    }
     let tracked!: Promise<void>
     tracked = flushPromise.finally(() => {
       const finalKey = this.resolveLatestKey(initialKey)
@@ -404,16 +427,21 @@ export class RendererBufferSyncClient {
     flushes.set(initialKey, tracked)
   }
 
-  private finalizeLocalEdit(initialKey: string): void {
+  private finalizeLocalEdit(initialKey: string, synced: boolean): void {
     const finalKey = this.resolveLatestKey(initialKey)
     const currentCount = this.pendingLocalEditCounts.get(finalKey)
     if (currentCount === undefined) return
+    if (synced) {
+      this.unsyncedLocalKeys.delete(finalKey)
+    } else {
+      this.unsyncedLocalKeys.add(finalKey)
+    }
     if (currentCount > 1) {
       this.pendingLocalEditCounts.set(finalKey, currentCount - 1)
       return
     }
     this.pendingLocalEditCounts.delete(finalKey)
-    if (!this.mounted) return
+    if (!this.mounted || !synced) return
     if ((this.localTabCounts[finalKey] ?? 0) === 0 && !this.creatingKeys.has(finalKey)) {
       return
     }
@@ -442,25 +470,28 @@ export class RendererBufferSyncClient {
       this.bufferApi
         .openWorkspaceFile(created.path, created.name, '')
         .then(
-          () => undefined,
+          () => {
+            if (!this.mounted) {
+              void this.bufferApi.syncWindowTabs([], { releasePending: true }).catch(() => undefined)
+            }
+          },
           () => undefined
         )
         .finally(() => {
-          this.creatingKeys.delete(buf.key)
-          this.creatingKeys.delete(this.resolveLatestKey(buf.key))
+          this.deleteTrackedKeyVariants(this.creatingKeys, buf.key)
         })
 
     const createPromise = previousCreate
       ? previousCreate.then(() => sendCreate())
       : sendCreate()
-    // Keep synchronous in-memory hub updates immediate while ordering edits/saves behind async creates.
-    const hasPendingAsyncCreate =
-      previousCreate !== undefined ||
-      this.latestHubBuffers === prevHubBuffers ||
-      !(buf.key in this.latestHubBuffers)
-    if (hasPendingAsyncCreate) {
-      this.trackPendingFlush(this.pendingCreateFlushes, buf.key, createPromise)
-    }
+    this.trackPendingFlush(
+      this.pendingCreateFlushes,
+      buf.key,
+      prevHubBuffers,
+      previousCreate !== undefined,
+      buf.key in this.latestHubBuffers,
+      createPromise
+    )
   }
 
   updateBufferContent = (bufferKey: string, nextContent: string): void => {
@@ -474,11 +505,17 @@ export class RendererBufferSyncClient {
     const prevHubBuffers = this.latestHubBuffers
     const priorFlush =
       this.pendingEditFlushes.get(resolvedKey) ?? this.pendingCreateFlushes.get(resolvedKey)
-    const sendUpdate = (targetKey: string): Promise<void> =>
-      this.bufferApi.updateContent(targetKey, nextContent).then(
-        () => undefined,
-        () => undefined
-      )
+    let synced = false
+    const sendUpdate = async (targetKey: string): Promise<void> => {
+      try {
+        await this.bufferApi.updateContent(targetKey, nextContent)
+        synced = true
+      } catch (error: unknown) {
+        if (this.mounted) {
+          this.onError(toErrorMessage(error, '문서 변경 사항을 동기화하지 못했습니다.'), error)
+        }
+      }
+    }
 
     const requestPromise = (
       priorFlush
@@ -490,16 +527,16 @@ export class RendererBufferSyncClient {
             return sendUpdate(latestKey)
           })
         : sendUpdate(resolvedKey)
-    ).finally(() => this.finalizeLocalEdit(resolvedKey))
+    ).finally(() => this.finalizeLocalEdit(resolvedKey, synced))
 
-    // Keep synchronous in-memory hub updates fast while serializing real async IPC or deferred saves.
-    const hasPendingAsyncFlush =
-      priorFlush !== undefined ||
-      this.latestHubBuffers === prevHubBuffers ||
-      this.latestHubBuffers[resolvedKey]?.content !== nextContent
-    if (hasPendingAsyncFlush) {
-      this.trackPendingFlush(this.pendingEditFlushes, resolvedKey, requestPromise)
-    }
+    this.trackPendingFlush(
+      this.pendingEditFlushes,
+      resolvedKey,
+      prevHubBuffers,
+      priorFlush !== undefined,
+      this.latestHubBuffers[resolvedKey]?.content === nextContent,
+      requestPromise
+    )
   }
 
   private async runSaveBufferRequest(key: string): Promise<boolean> {
@@ -520,6 +557,15 @@ export class RendererBufferSyncClient {
         await this.pendingEditFlushes.get(currentKey)
         currentKey = this.resolveLatestKey(currentKey)
       }
+      const localBuf = this.bufferStore.getBuffer(currentKey)
+      const hubBuf = this.latestHubBuffers[currentKey]
+      if (
+        localBuf &&
+        (this.unsyncedLocalKeys.has(currentKey) || !hubBuf || localBuf.content !== hubBuf.content)
+      ) {
+        await this.bufferApi.updateContent(currentKey, localBuf.content)
+        this.unsyncedLocalKeys.delete(currentKey)
+      }
       const result = await this.bufferApi.saveBuffer(currentKey)
       return result.ok
     } catch (error: unknown) {
@@ -528,8 +574,7 @@ export class RendererBufferSyncClient {
       }
       return false
     } finally {
-      this.pendingManualSaveKeys.delete(initialKey)
-      this.pendingManualSaveKeys.delete(this.resolveLatestKey(initialKey))
+      this.deleteTrackedKeyVariants(this.pendingManualSaveKeys, initialKey)
     }
   }
 
@@ -557,6 +602,7 @@ export class RendererBufferSyncClient {
         hubBuf?.isDirty ||
         hubBuf?.isSaving ||
         (this.pendingLocalEditCounts.get(key) ?? 0) > 0 ||
+        this.unsyncedLocalKeys.has(key) ||
         this.pendingCreateFlushes.has(key) ||
         this.pendingEditFlushes.has(key)
     )
