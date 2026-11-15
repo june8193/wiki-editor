@@ -33,6 +33,18 @@ function createTab(mode: EditorMode = 'raw', splitPreviewRatio = 0.5): TabItem {
   }
 }
 
+function mockScrollElementRect(
+  scrollContainer: HTMLElement,
+  el: HTMLElement,
+  docTop: number,
+  height: number
+): void {
+  el.getBoundingClientRect = () => {
+    const y = docTop - scrollContainer.scrollTop
+    return { top: y, left: 0, right: 500, bottom: y + height, width: 500, height, x: 0, y, toJSON: () => ({}) }
+  }
+}
+
 describe('DocumentEditor 4-mode switcher & roundtrip', () => {
   it('switches between Raw, 위지윅, Preview, and Split via top mode switcher and Ctrl+1/2/3/4/Shift+M without corrupting unchanged markdown', async () => {
     const user = userEvent.setup()
@@ -718,15 +730,9 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(mermaidEl).toHaveAttribute('data-source-end-line', '10')
     expect(ulEl).toHaveAttribute('data-source-end-line', '60')
 
-    const mockRect = (el: HTMLElement, docTop: number, height: number) => {
-      el.getBoundingClientRect = () => {
-        const y = docTop - previewRegion.scrollTop
-        return { top: y, left: 0, right: 500, bottom: y + height, width: 500, height, x: 0, y, toJSON: () => ({}) }
-      }
-    }
-    mockRect(h1, 0, 40)
-    mockRect(mermaidEl, 60, 600)
-    mockRect(ulEl, 680, 720)
+    mockScrollElementRect(previewRegion, h1, 0, 40)
+    mockScrollElementRect(previewRegion, mermaidEl, 60, 600)
+    mockScrollElementRect(previewRegion, ulEl, 680, 720)
 
     // 1. Scroll Raw to exact start of line 7 (50% through 8-line Mermaid block [3, 11])
     const line7Top = cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(7).from).top
@@ -763,50 +769,47 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(rawScroller.scrollTop).toBe(0)
   })
 
-  it('scrolls both Raw editor and Preview to the target heading on Outline scrollRequest in Split mode', async () => {
+  it('scrolls both Raw editor and Preview to the target heading on Outline scrollRequest in Split mode and guards line 1 echo', async () => {
     const origScrollIntoView = Element.prototype.scrollIntoView
     const scrollIntoViewMock = vi.fn()
     Element.prototype.scrollIntoView = scrollIntoViewMock
 
     try {
-      const md = '# Arch\n\nIntro\n\n## Flow\n\nDetails'
+      const trailingLines = Array.from({ length: 24 }, (_, i) => `Trailing ${i + 1}`)
+      const md = ['# Arch', '', 'Intro', '', '## Flow', '', ...trailingLines].join('\n')
       const doc = createDoc({ content: md, savedContent: md })
       const tab = createTab('split', 0.5)
       const onChangeContent = vi.fn()
 
-      const { rerender } = render(
+      const buildOutlineSplitEditor = (
+        theme: 'light' | 'dark' = 'light',
+        request: Parameters<typeof DocumentEditor>[0]['scrollRequest'] = null
+      ) => (
         <DocumentEditor
           document={doc}
           tab={tab}
-          theme="light"
+          theme={theme}
           autoSave={false}
           showHeadingNumbers={false}
+          scrollRequest={request}
           onChangeContent={onChangeContent}
           onSave={vi.fn()}
           onUpdateViewState={vi.fn()}
         />
       )
 
+      const { container, rerender } = render(buildOutlineSplitEditor())
+
       rerender(
-        <DocumentEditor
-          document={doc}
-          tab={tab}
-          theme="light"
-          autoSave={false}
-          showHeadingNumbers={false}
-          scrollRequest={{
-            paneId: 'primary',
-            tabId: 'tab-1',
-            mode: 'split',
-            line: 5,
-            slug: 'flow',
-            index: 1,
-            nonce: 7
-          }}
-          onChangeContent={onChangeContent}
-          onSave={vi.fn()}
-          onUpdateViewState={vi.fn()}
-        />
+        buildOutlineSplitEditor('light', {
+          paneId: 'primary',
+          tabId: 'tab-1',
+          mode: 'split',
+          line: 5,
+          slug: 'flow',
+          index: 1,
+          nonce: 7
+        })
       )
 
       const rawEditor = screen.getByTestId('document-editor')
@@ -823,27 +826,59 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       // Same nonce does not re-scroll on unrelated rerender
       scrollIntoViewMock.mockClear()
       rerender(
-        <DocumentEditor
-          document={doc}
-          tab={tab}
-          theme="dark"
-          autoSave={false}
-          showHeadingNumbers={false}
-          scrollRequest={{
-            paneId: 'primary',
-            tabId: 'tab-1',
-            mode: 'split',
-            line: 5,
-            slug: 'flow',
-            index: 1,
-            nonce: 7
-          }}
-          onChangeContent={onChangeContent}
-          onSave={vi.fn()}
-          onUpdateViewState={vi.fn()}
-        />
+        buildOutlineSplitEditor('dark', {
+          paneId: 'primary',
+          tabId: 'tab-1',
+          mode: 'split',
+          line: 5,
+          slug: 'flow',
+          index: 1,
+          nonce: 7
+        })
       )
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      // Outline jump to line 1 with 16px .cm-content padding and CodeMirror 5px yMargin (scrollTop = 11)
+      // must still be guarded so Raw scroll does not nudge Preview downward from 0.
+      const rawScroller = container.querySelector('.cm-scroller') as HTMLElement
+      const cmView = EditorView.findFromDOM(rawScroller)!
+      Object.defineProperty(cmView, 'documentPadding', {
+        configurable: true,
+        get: () => ({ top: 16, bottom: 16 })
+      })
+      Object.defineProperty(rawScroller, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(rawScroller, 'scrollHeight', {
+        configurable: true,
+        get: () => cmView.contentHeight
+      })
+      Object.defineProperty(previewRegion, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(previewRegion, 'scrollHeight', { configurable: true, value: 800 })
+      previewRegion.getBoundingClientRect = () =>
+        ({ top: 0, left: 0, right: 500, bottom: 200, width: 500, height: 200, x: 0, y: 0, toJSON: () => ({}) })
+      const h1 = previewRegion.querySelector('h1[data-source-line="1"]') as HTMLElement
+      mockScrollElementRect(previewRegion, h1, 16, 40)
+
+      previewRegion.scrollTop = 0
+      rawScroller.scrollTop = 200
+      rerender(
+        buildOutlineSplitEditor('dark', {
+          paneId: 'primary',
+          tabId: 'tab-1',
+          mode: 'split',
+          line: 1,
+          slug: 'arch',
+          index: 0,
+          nonce: 8
+        })
+      )
+
+      await waitFor(() => {
+        expect(rawEditor.getAttribute('data-selection-start')).toBe('0')
+      })
+
+      rawScroller.scrollTop = 11 // documentPadding.top (16) - CodeMirror yMargin (5)
+      fireEvent.scroll(rawScroller)
+      expect(previewRegion.scrollTop).toBe(0)
     } finally {
       Element.prototype.scrollIntoView = origScrollIntoView
     }

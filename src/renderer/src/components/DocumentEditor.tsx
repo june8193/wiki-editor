@@ -1,19 +1,9 @@
-import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef } from 'react'
-import type { EditorView } from '@codemirror/view'
+import { KeyboardEvent as ReactKeyboardEvent, useCallback, useRef } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { getRawEditorLanguage, resolveEditorShortcut, resolveEffectiveEditorMode } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import {
-  type ScrollSyncLoopGuard,
-  type ScrollSyncSide,
-  collectPreviewSourceBlocks,
-  computePreviewScrollTopFromRaw,
-  computeRawScrollTopFromPreview,
-  createCodeMirrorRawScrollGeometry,
-  createScrollSyncLoopGuard,
-  mapLineToRawScrollTop
-} from '../editor/splitScrollSync'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
+import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
 import {
   DEFAULT_SPLIT_RATIO,
@@ -88,101 +78,16 @@ export function DocumentEditor({
   const matchedScrollRequest =
     scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
-  const rawEditorViewRef = useRef<EditorView | null>(null)
-  const splitPreviewContainerRef = useRef<HTMLDivElement | null>(null)
-  const scrollSyncGuardRef = useRef<ScrollSyncLoopGuard | null>(null)
-  const prevEffectiveModeRef = useRef<EditorMode | null>(null)
-
-  const getScrollSyncGuard = useCallback((): ScrollSyncLoopGuard => {
-    if (!scrollSyncGuardRef.current) {
-      scrollSyncGuardRef.current = createScrollSyncLoopGuard()
-    }
-    return scrollSyncGuardRef.current
-  }, [])
-
-  const syncSplitScroll = useCallback(
-    (source: ScrollSyncSide): void => {
-      if (effectiveMode !== 'split') return
-      const view = rawEditorViewRef.current
-      const previewEl = splitPreviewContainerRef.current
-      if (!view || !previewEl) return
-
-      const guard = getScrollSyncGuard()
-      const sourceScrollTop = source === 'raw' ? view.scrollDOM.scrollTop : previewEl.scrollTop
-      if (guard.shouldIgnoreScroll(source, sourceScrollTop)) {
-        return
-      }
-
-      const rawGeometry = createCodeMirrorRawScrollGeometry(view)
-      const previewMetrics = {
-        scrollTop: previewEl.scrollTop,
-        clientHeight: previewEl.clientHeight,
-        scrollHeight: previewEl.scrollHeight,
-        blocks: collectPreviewSourceBlocks(previewEl),
-        totalLines: rawGeometry.totalLines
-      }
-
-      const targetScrollTop =
-        source === 'raw'
-          ? computePreviewScrollTopFromRaw(rawGeometry, previewMetrics)
-          : computeRawScrollTopFromPreview(previewMetrics, rawGeometry)
-      if (targetScrollTop === null) return
-
-      const targetSide: ScrollSyncSide = source === 'raw' ? 'preview' : 'raw'
-      const targetEl = targetSide === 'raw' ? view.scrollDOM : previewEl
-      const targetMax = Math.max(0, targetEl.scrollHeight - targetEl.clientHeight)
-      if (
-        targetEl.scrollTop === targetScrollTop ||
-        (Math.abs(targetEl.scrollTop - targetScrollTop) <= 0.5 &&
-          targetScrollTop > 0 &&
-          targetScrollTop < targetMax)
-      ) {
-        return
-      }
-
-      targetEl.scrollTop = targetScrollTop
-      guard.markProgrammaticScroll(targetSide, targetEl.scrollTop)
-      if (targetSide === 'raw') {
-        onUpdateViewState({ scrollTop: targetEl.scrollTop })
-      }
-    },
-    [effectiveMode, getScrollSyncGuard, onUpdateViewState]
-  )
-
-  const handleSplitRawScroll = useCallback((): void => {
-    syncSplitScroll('raw')
-  }, [syncSplitScroll])
-
-  const handleSplitPreviewScroll = useCallback((): void => {
-    syncSplitScroll('preview')
-  }, [syncSplitScroll])
-
-  useEffect(() => {
-    const prevMode = prevEffectiveModeRef.current
-    prevEffectiveModeRef.current = effectiveMode
-
-    if (effectiveMode === 'split' && prevMode !== 'split' && !matchedScrollRequest) {
-      const view = rawEditorViewRef.current
-      if (view && view.scrollDOM.scrollTop > 0) {
-        syncSplitScroll('raw')
-      }
-    }
-  }, [effectiveMode, matchedScrollRequest, syncSplitScroll])
-
-  useEffect(() => {
-    if (effectiveMode !== 'split' || !matchedScrollRequest) return
-    const view = rawEditorViewRef.current
-    const previewEl = splitPreviewContainerRef.current
-    if (!view || !previewEl) return
-
-    const guard = getScrollSyncGuard()
-    guard.markProgrammaticScroll('preview', previewEl.scrollTop)
-
-    const rawGeometry = createCodeMirrorRawScrollGeometry(view)
-    const expectedRawScrollTop = mapLineToRawScrollTop(matchedScrollRequest.line, rawGeometry)
-    // CodeMirror scrollIntoView({ y: 'start' }) applies a default 5px yMargin before clamping.
-    guard.markProgrammaticScroll('raw', expectedRawScrollTop, 6)
-  }, [effectiveMode, getScrollSyncGuard, matchedScrollRequest])
+  const {
+    rawEditorViewRef,
+    splitPreviewContainerRef,
+    handleSplitRawScroll,
+    handleSplitPreviewScroll
+  } = useSplitScrollSync({
+    effectiveMode,
+    matchedScrollRequest,
+    onUpdateViewState
+  })
 
   const handleSplitRatioChange = useCallback(
     (nextRatio: number): void => {

@@ -25,15 +25,6 @@ export interface RawScrollGeometry {
   getOffsetForLine: (line: number) => number
 }
 
-export interface UniformRawScrollOptions {
-  scrollTop: number
-  clientHeight: number
-  scrollHeight: number
-  lineHeight: number
-  totalLines: number
-  paddingTop?: number
-}
-
 export type ScrollSyncSide = 'raw' | 'preview'
 
 export interface ScrollSyncLoopGuardOptions {
@@ -49,7 +40,13 @@ export interface ScrollSyncLoopGuard {
     tolerancePx?: number
   ) => void
   shouldIgnoreScroll: (side: ScrollSyncSide, actualScrollTop: number) => boolean
-  clear: (side?: ScrollSyncSide) => void
+}
+
+interface PreviewLineSegment {
+  lineStart: number
+  lineEnd: number
+  offsetStart: number
+  offsetEnd: number
 }
 
 const DEFAULT_GUARD_WINDOW_MS = 150
@@ -100,6 +97,123 @@ function normalizeBlocks(blocks: readonly PreviewSourceBlock[]): PreviewSourceBl
   return normalized
 }
 
+function buildPreviewLineSegments(
+  blocks: readonly PreviewSourceBlock[],
+  scrollHeight: number,
+  totalLines?: number
+): PreviewLineSegment[] {
+  if (blocks.length === 0) return []
+
+  const segments: PreviewLineSegment[] = []
+  const first = blocks[0]
+  if (first.startLine > 1 && first.top > 0) {
+    segments.push({
+      lineStart: 1,
+      lineEnd: first.startLine,
+      offsetStart: 0,
+      offsetEnd: first.top
+    })
+  }
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i]
+    const blockEnd = block.endLine + 1
+    const blockBottom = block.top + block.height
+    segments.push({
+      lineStart: block.startLine,
+      lineEnd: blockEnd,
+      offsetStart: block.top,
+      offsetEnd: blockBottom
+    })
+
+    if (i + 1 < blocks.length) {
+      const next = blocks[i + 1]
+      if (next.startLine > blockEnd) {
+        segments.push({
+          lineStart: blockEnd,
+          lineEnd: next.startLine,
+          offsetStart: blockBottom,
+          offsetEnd: next.top
+        })
+      }
+    }
+  }
+
+  const last = blocks[blocks.length - 1]
+  const lastEnd = last.endLine + 1
+  const lastBottom = last.top + last.height
+  const targetEndLine = Math.max((totalLines ?? last.endLine) + 1, lastEnd)
+  const targetEndOffset = Math.max(lastBottom, scrollHeight)
+  if (targetEndLine > lastEnd && targetEndOffset > lastBottom) {
+    segments.push({
+      lineStart: lastEnd,
+      lineEnd: targetEndLine,
+      offsetStart: lastBottom,
+      offsetEnd: targetEndOffset
+    })
+  }
+
+  return segments
+}
+
+function mapLineAcrossBlocks(
+  line: number,
+  blocks: readonly PreviewSourceBlock[],
+  clientHeight: number,
+  scrollHeight: number,
+  totalLines?: number
+): number {
+  const maxScrollTop = Math.max(0, scrollHeight - clientHeight)
+  const segments = buildPreviewLineSegments(blocks, scrollHeight, totalLines)
+  if (segments.length === 0) return 0
+
+  for (const seg of segments) {
+    if (line <= seg.lineEnd) {
+      return clamp(
+        interpolateLinear(line, seg.lineStart, seg.lineEnd, seg.offsetStart, seg.offsetEnd),
+        0,
+        maxScrollTop
+      )
+    }
+  }
+
+  return clamp(segments[segments.length - 1].offsetEnd, 0, maxScrollTop)
+}
+
+function mapOffsetAcrossBlocks(
+  scrollTop: number,
+  blocks: readonly PreviewSourceBlock[],
+  scrollHeight: number,
+  totalLines?: number
+): number {
+  const segments = buildPreviewLineSegments(blocks, scrollHeight, totalLines)
+  if (segments.length === 0) return 1
+
+  const y = Math.max(0, scrollTop)
+  for (const seg of segments) {
+    if (y <= seg.offsetEnd) {
+      return interpolateLinear(y, seg.offsetStart, seg.offsetEnd, seg.lineStart, seg.lineEnd)
+    }
+  }
+
+  return segments[segments.length - 1].lineEnd
+}
+
+function resolveBoundaryOrFallback(
+  sourceTop: number,
+  sourceMax: number,
+  targetMax: number,
+  blocks: readonly PreviewSourceBlock[]
+): number | null {
+  if (sourceMax <= 0 || targetMax <= 0) return null
+  if (sourceTop <= 0) return 0
+  if (isAtBottomBoundary(sourceTop, sourceMax)) return targetMax
+  if (blocks.length === 0) {
+    return clamp((sourceTop / sourceMax) * targetMax, 0, targetMax)
+  }
+  return null
+}
+
 /**
  * Collects top-level `[data-source-line]` Preview block positions relative to the scroll container.
  */
@@ -129,31 +243,6 @@ export function collectPreviewSourceBlocks(container: HTMLElement): PreviewSourc
   }
 
   return normalizeBlocks(rawBlocks)
-}
-
-/**
- * Builds a uniform line-height Raw scroll geometry descriptor for deterministic mapping and unit testing.
- */
-export function createUniformRawScrollGeometry(options: UniformRawScrollOptions): RawScrollGeometry {
-  const paddingTop = Math.max(0, options.paddingTop ?? 0)
-  const totalLines = Math.max(1, options.totalLines)
-  const lineHeight = Math.max(1, options.lineHeight)
-
-  return {
-    scrollTop: options.scrollTop,
-    clientHeight: options.clientHeight,
-    scrollHeight: options.scrollHeight,
-    paddingTop,
-    totalLines,
-    getLineAtOffset(docY: number): number {
-      if (docY <= 0 || totalLines <= 0) return 1
-      return clamp(1 + docY / lineHeight, 1, totalLines + 1)
-    },
-    getOffsetForLine(line: number): number {
-      const clampedLine = clamp(line, 1, totalLines + 1)
-      return (clampedLine - 1) * lineHeight
-    }
-  }
 }
 
 /**
@@ -223,58 +312,14 @@ export function mapLineToPreviewScrollTop(
   line: number,
   preview: Omit<PreviewScrollMetrics, 'scrollTop'>
 ): number {
-  const maxScrollTop = Math.max(0, preview.scrollHeight - preview.clientHeight)
   const blocks = normalizeBlocks(preview.blocks)
-  if (blocks.length === 0) return 0
-
-  const first = blocks[0]
-  if (line < first.startLine) {
-    const offset =
-      first.startLine <= 1
-        ? first.top
-        : interpolateLinear(line, 1, first.startLine, 0, first.top)
-    return clamp(offset, 0, maxScrollTop)
-  }
-
-  for (let i = 0; i < blocks.length; i += 1) {
-    const block = blocks[i]
-    const blockEnd = block.endLine + 1
-    const blockBottom = block.top + block.height
-
-    if (line <= blockEnd) {
-      return clamp(
-        interpolateLinear(line, block.startLine, blockEnd, block.top, blockBottom),
-        0,
-        maxScrollTop
-      )
-    }
-
-    if (i + 1 < blocks.length) {
-      const next = blocks[i + 1]
-      if (line < next.startLine) {
-        return clamp(
-          interpolateLinear(line, blockEnd, next.startLine, blockBottom, next.top),
-          0,
-          maxScrollTop
-        )
-      }
-    }
-  }
-
-  const last = blocks[blocks.length - 1]
-  const lastEnd = last.endLine + 1
-  const lastBottom = last.top + last.height
-  const targetEndLine = Math.max((preview.totalLines ?? last.endLine) + 1, lastEnd)
-  const targetEndOffset = Math.max(lastBottom, preview.scrollHeight)
-
-  if (targetEndLine > lastEnd && targetEndOffset > lastBottom) {
-    return clamp(
-      interpolateLinear(line, lastEnd, targetEndLine, lastBottom, targetEndOffset),
-      0,
-      maxScrollTop
-    )
-  }
-  return clamp(lastBottom, 0, maxScrollTop)
+  return mapLineAcrossBlocks(
+    line,
+    blocks,
+    preview.clientHeight,
+    preview.scrollHeight,
+    preview.totalLines
+  )
 }
 
 /**
@@ -282,47 +327,12 @@ export function mapLineToPreviewScrollTop(
  */
 export function mapPreviewScrollTopToLine(preview: PreviewScrollMetrics): number {
   const blocks = normalizeBlocks(preview.blocks)
-  if (blocks.length === 0) return 1
-
-  const y = Math.max(0, preview.scrollTop)
-  const first = blocks[0]
-  if (y < first.top) {
-    if (first.top <= 0 || first.startLine <= 1) return first.startLine
-    return interpolateLinear(y, 0, first.top, 1, first.startLine)
-  }
-
-  for (let i = 0; i < blocks.length; i += 1) {
-    const block = blocks[i]
-    const blockEnd = block.endLine + 1
-    const blockBottom = block.top + block.height
-
-    if (y <= blockBottom) {
-      return interpolateLinear(y, block.top, blockBottom, block.startLine, blockEnd)
-    }
-
-    if (i + 1 < blocks.length) {
-      const next = blocks[i + 1]
-      if (y < next.top) {
-        return interpolateLinear(y, blockBottom, next.top, blockEnd, next.startLine)
-      }
-    }
-  }
-
-  const last = blocks[blocks.length - 1]
-  const lastEnd = last.endLine + 1
-  const lastBottom = last.top + last.height
-  const targetEndLine = Math.max((preview.totalLines ?? last.endLine) + 1, lastEnd)
-  const targetEndOffset = Math.max(lastBottom, preview.scrollHeight)
-
-  if (targetEndOffset > lastBottom && targetEndLine > lastEnd) {
-    return interpolateLinear(y, lastBottom, targetEndOffset, lastEnd, targetEndLine)
-  }
-  return lastEnd
+  return mapOffsetAcrossBlocks(preview.scrollTop, blocks, preview.scrollHeight, preview.totalLines)
 }
 
 /**
  * Computes target Preview `scrollTop` from Raw scroll geometry, preserving top/bottom boundaries.
- * Returns `null` when either container is non-scrollable.
+ * Returns `null` when either split region is non-scrollable.
  */
 export function computePreviewScrollTopFromRaw(
   raw: RawScrollGeometry,
@@ -330,14 +340,10 @@ export function computePreviewScrollTopFromRaw(
 ): number | null {
   const rawMax = Math.max(0, raw.scrollHeight - raw.clientHeight)
   const previewMax = Math.max(0, preview.scrollHeight - preview.clientHeight)
-  if (rawMax <= 0 || previewMax <= 0) return null
-
-  if (raw.scrollTop <= 0) return 0
-  if (isAtBottomBoundary(raw.scrollTop, rawMax)) return previewMax
-
   const blocks = normalizeBlocks(preview.blocks)
-  if (blocks.length === 0) {
-    return clamp((raw.scrollTop / rawMax) * previewMax, 0, previewMax)
+  const boundaryOrFallback = resolveBoundaryOrFallback(raw.scrollTop, rawMax, previewMax, blocks)
+  if (boundaryOrFallback !== null || rawMax <= 0 || previewMax <= 0) {
+    return boundaryOrFallback
   }
 
   if (
@@ -350,17 +356,18 @@ export function computePreviewScrollTopFromRaw(
   }
 
   const line = mapRawScrollTopToLine(raw)
-  return mapLineToPreviewScrollTop(line, {
-    clientHeight: preview.clientHeight,
-    scrollHeight: preview.scrollHeight,
+  return mapLineAcrossBlocks(
+    line,
     blocks,
-    totalLines: preview.totalLines ?? raw.totalLines
-  })
+    preview.clientHeight,
+    preview.scrollHeight,
+    preview.totalLines ?? raw.totalLines
+  )
 }
 
 /**
  * Computes target Raw `scrollTop` from Preview scroll metrics, preserving top/bottom boundaries.
- * Returns `null` when either container is non-scrollable.
+ * Returns `null` when either split region is non-scrollable.
  */
 export function computeRawScrollTopFromPreview(
   preview: PreviewScrollMetrics,
@@ -368,14 +375,10 @@ export function computeRawScrollTopFromPreview(
 ): number | null {
   const previewMax = Math.max(0, preview.scrollHeight - preview.clientHeight)
   const rawMax = Math.max(0, raw.scrollHeight - raw.clientHeight)
-  if (previewMax <= 0 || rawMax <= 0) return null
-
-  if (preview.scrollTop <= 0) return 0
-  if (isAtBottomBoundary(preview.scrollTop, previewMax)) return rawMax
-
   const blocks = normalizeBlocks(preview.blocks)
-  if (blocks.length === 0) {
-    return clamp((preview.scrollTop / previewMax) * rawMax, 0, rawMax)
+  const boundaryOrFallback = resolveBoundaryOrFallback(preview.scrollTop, previewMax, rawMax, blocks)
+  if (boundaryOrFallback !== null || previewMax <= 0 || rawMax <= 0) {
+    return boundaryOrFallback
   }
 
   if (
@@ -387,17 +390,18 @@ export function computeRawScrollTopFromPreview(
     return clamp(interpolateLinear(preview.scrollTop, 0, blocks[0].top, 0, raw.paddingTop), 0, rawMax)
   }
 
-  const line = mapPreviewScrollTopToLine({
-    ...preview,
+  const line = mapOffsetAcrossBlocks(
+    preview.scrollTop,
     blocks,
-    totalLines: preview.totalLines ?? raw.totalLines
-  })
+    preview.scrollHeight,
+    preview.totalLines ?? raw.totalLines
+  )
   return mapLineToRawScrollTop(line, raw)
 }
 
 /**
  * Direction-aware programmatic scroll guard that prevents Raw <-> Preview ping-pong loops
- * while immediately recognizing subsequent genuine user scrolls on either pane.
+ * while immediately recognizing subsequent genuine user scrolls on either split region.
  */
 export function createScrollSyncLoopGuard(
   options: ScrollSyncLoopGuardOptions = {}
@@ -434,14 +438,6 @@ export function createScrollSyncLoopGuard(
         return false
       }
       return Math.abs(actualScrollTop - entry.expectedScrollTop) <= entry.tolerancePx
-    },
-    clear(side?: ScrollSyncSide): void {
-      if (side) {
-        pending[side] = null
-      } else {
-        pending.raw = null
-        pending.preview = null
-      }
     }
   }
 }

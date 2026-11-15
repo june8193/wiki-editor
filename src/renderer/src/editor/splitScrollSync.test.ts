@@ -4,11 +4,40 @@ import {
   computePreviewScrollTopFromRaw,
   computeRawScrollTopFromPreview,
   createScrollSyncLoopGuard,
-  createUniformRawScrollGeometry,
   mapLineToPreviewScrollTop,
   mapPreviewScrollTopToLine,
-  type PreviewSourceBlock
+  type PreviewSourceBlock,
+  type RawScrollGeometry
 } from './splitScrollSync'
+
+function createUniformRawScrollGeometry(options: {
+  scrollTop: number
+  clientHeight: number
+  scrollHeight: number
+  lineHeight: number
+  totalLines: number
+  paddingTop?: number
+}): RawScrollGeometry {
+  const paddingTop = Math.max(0, options.paddingTop ?? 0)
+  const totalLines = Math.max(1, options.totalLines)
+  const lineHeight = Math.max(1, options.lineHeight)
+
+  return {
+    scrollTop: options.scrollTop,
+    clientHeight: options.clientHeight,
+    scrollHeight: options.scrollHeight,
+    paddingTop,
+    totalLines,
+    getLineAtOffset(docY: number): number {
+      if (docY <= 0) return 1
+      return Math.min(totalLines + 1, Math.max(1, 1 + docY / lineHeight))
+    },
+    getOffsetForLine(line: number): number {
+      const clampedLine = Math.min(totalLines + 1, Math.max(1, line))
+      return (clampedLine - 1) * lineHeight
+    }
+  }
+}
 
 describe('splitScrollSync bidirectional line-based interpolation & loop guard', () => {
   const sampleBlocks: readonly PreviewSourceBlock[] = [
@@ -100,7 +129,7 @@ describe('splitScrollSync bidirectional line-based interpolation & loop guard', 
     expect(computeRawScrollTopFromPreview(makePreview(556), makeRaw(0))).toBe(270)
   })
 
-  it('handles pre-block leading gaps, empty block proportional fallback, and unscrollable panes cleanly', () => {
+  it('handles pre-block leading gaps, empty block proportional fallback, and unscrollable regions cleanly', () => {
     const delayedBlocks: readonly PreviewSourceBlock[] = [
       { startLine: 5, endLine: 6, top: 40, height: 60 }
     ]
@@ -123,7 +152,7 @@ describe('splitScrollSync bidirectional line-based interpolation & loop guard', 
       })
     ).toBe(3)
 
-    // Unscrollable pane (scrollHeight <= clientHeight) returns null so jsdom/short docs don't jump
+    // Unscrollable region (scrollHeight <= clientHeight) returns null so jsdom/short docs don't jump
     const unscrollableRaw = createUniformRawScrollGeometry({
       scrollTop: 50,
       clientHeight: 400,
@@ -219,10 +248,8 @@ describe('splitScrollSync bidirectional line-based interpolation & loop guard', 
     clock += 200
     expect(guard.shouldIgnoreScroll('preview', 500)).toBe(false)
 
-    // Independent sides and clear()
-    guard.markProgrammaticScroll('raw', 100)
+    // Independent sides (marking raw does not affect preview)
     guard.markProgrammaticScroll('preview', 200)
-    guard.clear('raw')
     expect(guard.shouldIgnoreScroll('raw', 100)).toBe(false)
     expect(guard.shouldIgnoreScroll('preview', 200)).toBe(true)
 
