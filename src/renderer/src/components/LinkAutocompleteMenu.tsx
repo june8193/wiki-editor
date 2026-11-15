@@ -61,7 +61,7 @@ export function LinkAutocompleteMenu({
             <span className="link-autocomplete-badge">{badge}</span>
             <span className="link-autocomplete-content">
               <span className="link-autocomplete-title">{label}</span>
-              <span className="link-autocomplete-slug">{meta}</span>
+              <span className="link-autocomplete-meta">{meta}</span>
             </span>
           </button>
         )

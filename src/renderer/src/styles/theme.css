@@ -1579,7 +1579,7 @@ body.is-resizing-sidebar .pane-workspace {
   font-weight: 500;
 }
 
-.link-autocomplete-slug {
+.link-autocomplete-meta {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

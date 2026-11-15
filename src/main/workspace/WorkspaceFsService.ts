@@ -220,11 +220,7 @@ export class WorkspaceFsService {
             continue
           }
           const dirKey = getWorkspacePathKey(realDirPath)
-          if (
-            !isPathInsideRoot(root, realDirPath) ||
-            hasBlockedPathSegment(relative(root, realDirPath), IGNORED_ENTRY_NAMES) ||
-            visitedRealDirs.has(dirKey)
-          ) {
+          if (!this.isSafeInternalTarget(root, realDirPath) || visitedRealDirs.has(dirKey)) {
             continue
           }
           visitedRealDirs.add(dirKey)
@@ -518,10 +514,7 @@ export class WorkspaceFsService {
 
     try {
       const realTarget = await realpath(entryPath)
-      if (
-        !isPathInsideRoot(root, realTarget) ||
-        hasBlockedPathSegment(relative(root, realTarget), IGNORED_ENTRY_NAMES)
-      ) {
+      if (!this.isSafeInternalTarget(root, realTarget)) {
         return null
       }
       const targetStats = await stat(realTarget)
@@ -531,5 +524,12 @@ export class WorkspaceFsService {
     } catch {
       return null
     }
+  }
+
+  private isSafeInternalTarget(root: string, realTarget: string): boolean {
+    return (
+      isPathInsideRoot(root, realTarget) &&
+      !hasBlockedPathSegment(relative(root, realTarget), IGNORED_ENTRY_NAMES)
+    )
   }
 }

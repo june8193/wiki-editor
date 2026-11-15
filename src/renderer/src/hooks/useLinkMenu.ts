@@ -79,16 +79,18 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
   const [state, setState] = useState<LinkMenuState<TMatch>>(CLOSED_LINK_MENU_STATE)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const stateRef = useRef<LinkMenuState<TMatch>>(state)
+  const fileCandidates = useMemo(
+    () => buildFileLinkCandidates(workspaceMarkdownFiles, activeFilePath),
+    [workspaceMarkdownFiles, activeFilePath]
+  )
   const documentContentRef = useRef(documentContent)
-  const workspaceMarkdownFilesRef = useRef(workspaceMarkdownFiles)
-  const activeFilePathRef = useRef(activeFilePath)
+  const fileCandidatesRef = useRef(fileCandidates)
   const onSelectCandidateRef = useRef(onSelectCandidate)
   const onOpenMenuRef = useRef(onOpenMenu)
 
   stateRef.current = state
   documentContentRef.current = documentContent
-  workspaceMarkdownFilesRef.current = workspaceMarkdownFiles
-  activeFilePathRef.current = activeFilePath
+  fileCandidatesRef.current = fileCandidates
   onSelectCandidateRef.current = onSelectCandidate
   onOpenMenuRef.current = onOpenMenu
 
@@ -120,7 +122,7 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
       const content = overrideContent ?? documentContentRef.current
       const allCandidates: LinkCandidate[] = [
         ...buildHeadingLinkCandidates(content),
-        ...buildFileLinkCandidates(workspaceMarkdownFilesRef.current, activeFilePathRef.current)
+        ...fileCandidatesRef.current
       ]
       const candidates = filterAndRankLinkCandidates(allCandidates, match.label, match.query)
       if (candidates.length === 0) {
@@ -256,7 +258,7 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
       return
     }
     updateFromMatch(current.match, null, null)
-  }, [workspaceMarkdownFiles, activeFilePath, updateFromMatch])
+  }, [fileCandidates, updateFromMatch])
 
   const controlsRef = useRef<LinkMenuControls<TMatch>>({
     stateRef,

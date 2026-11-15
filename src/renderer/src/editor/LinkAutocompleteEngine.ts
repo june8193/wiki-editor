@@ -340,8 +340,9 @@ export function computeRelativeMarkdownHref(
   activeFilePath: string | null | undefined,
   targetEntry: Pick<WorkspaceEntry, 'path' | 'relativePath'>
 ): string {
+  const fallbackHref = `./${encodePosixRelativeSegments(targetEntry.relativePath)}`
   if (!activeFilePath || !activeFilePath.trim()) {
-    return `./${encodePosixRelativeSegments(targetEntry.relativePath)}`
+    return fallbackHref
   }
 
   const toPosix = normalizeWorkspacePath(targetEntry.path).replace(/\\/g, '/')
@@ -349,7 +350,7 @@ export function computeRelativeMarkdownHref(
   const toKey = getWorkspacePathKey(targetEntry.path)
   const fromKey = getWorkspacePathKey(activeFilePath)
   if (!toPosix || !fromPosix || !toKey || !fromKey) {
-    return `./${encodePosixRelativeSegments(targetEntry.relativePath)}`
+    return fallbackHref
   }
 
   const toParts = toPosix.split('/')
@@ -364,7 +365,7 @@ export function computeRelativeMarkdownHref(
   }
 
   if (commonLen === 0) {
-    return `./${encodePosixRelativeSegments(targetEntry.relativePath)}`
+    return fallbackHref
   }
 
   const upCount = fromDirParts.length - commonLen
@@ -512,16 +513,14 @@ export function filterAndRankLinkCandidates<T extends LinkCandidate>(
     if (isPathOnly && candidate.kind !== 'file') return
 
     let primaryTier = 3
-    let secondaryTier = 3
     if (isPathOnly && candidate.kind === 'file') {
       primaryTier = getFilePathQueryMatchTier(candidate, normalizedQuery)
       if (primaryTier >= 3) return
-      secondaryTier = getCandidateMatchTier(candidate, secondaryTerm)
     } else {
       primaryTier = getCandidateMatchTier(candidate, primaryTerm)
       if (effectiveQuery && primaryTier >= 3) return
-      secondaryTier = getCandidateMatchTier(candidate, secondaryTerm)
     }
+    const secondaryTier = getCandidateMatchTier(candidate, secondaryTerm)
 
     scored.push({
       candidate,
