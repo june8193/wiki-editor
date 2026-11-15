@@ -142,8 +142,12 @@ export class RendererBufferSyncClient {
       this.mounted = false
       unsubscribeHub()
       void this.bufferApi.setAutoSavePaused(false).catch(() => undefined)
-      void this.bufferApi.syncWindowTabs([], { releasePending: true }).catch(() => undefined)
+      this.releasePendingWindowTabs()
     }
+  }
+
+  private releasePendingWindowTabs(): void {
+    void this.bufferApi.syncWindowTabs([], { releasePending: true }).catch(() => undefined)
   }
 
   private recomputeEffectiveTabCounts(): void {
@@ -344,7 +348,7 @@ export class RendererBufferSyncClient {
     try {
       const buf = await loadBuffer()
       if (!this.mounted) {
-        void this.bufferApi.syncWindowTabs([], { releasePending: true }).catch(() => undefined)
+        this.releasePendingWindowTabs()
         return
       }
       const targetKey = this.resolveLatestKey(buf.key)
@@ -481,7 +485,7 @@ export class RendererBufferSyncClient {
         .then(
           () => {
             if (!this.mounted) {
-              void this.bufferApi.syncWindowTabs([], { releasePending: true }).catch(() => undefined)
+              this.releasePendingWindowTabs()
             }
           },
           () => undefined

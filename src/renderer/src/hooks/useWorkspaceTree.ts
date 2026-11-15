@@ -190,7 +190,7 @@ export function useWorkspaceTree({
         })
       }
     }
-  }, [])
+  }, [wikiApi])
 
   const expandDirectory = useCallback(
     async (dirPath: string): Promise<void> => {
@@ -358,7 +358,7 @@ export function useWorkspaceTree({
         }
       }
     },
-    [refreshDirectory]
+    [refreshDirectory, wikiApi]
   )
 
   const treeState: WorkspaceTreeState = {

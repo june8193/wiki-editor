@@ -529,6 +529,13 @@ export class SharedDocumentBufferHub {
     return this.closeRemovedKeys(removedKeys)
   }
 
+  private getReconcilableWorkspaceBuffer(key: string): DocumentBuffer | undefined {
+    const current = this.store.getBuffer(key)
+    if (!current || current.kind !== 'workspace') return undefined
+    if (current.isSaving || this.inFlightSaves.has(current.key)) return undefined
+    return current
+  }
+
   async reconcileWorkspaceBuffersWithDisk(): Promise<ReconcileBuffersResult> {
     const openWorkspaceBuffers = this.store
       .getAllBuffers()
@@ -544,17 +551,15 @@ export class SharedDocumentBufferHub {
 
     await Promise.all(
       openWorkspaceBuffers.map(async (buffer) => {
-        const latest = this.store.getBuffer(buffer.key)
-        if (!latest || latest.kind !== 'workspace') return
-        if (latest.isSaving || this.inFlightSaves.has(latest.key)) return
+        const latest = this.getReconcilableWorkspaceBuffer(buffer.key)
+        if (!latest) return
 
         try {
           const diskContent = await this.storage.readWorkspaceFile(latest.path)
           if (this.disposed) return
 
-          const current = this.store.getBuffer(latest.key)
-          if (!current || current.kind !== 'workspace') return
-          if (current.isSaving || this.inFlightSaves.has(current.key)) return
+          const current = this.getReconcilableWorkspaceBuffer(latest.key)
+          if (!current) return
 
           if (!current.isDirty) {
             this.autoSaveScheduler.clearTimer(current.key)
@@ -566,9 +571,8 @@ export class SharedDocumentBufferHub {
           }
         } catch (error: unknown) {
           if (this.disposed) return
-          const current = this.store.getBuffer(latest.key)
-          if (!current || current.kind !== 'workspace') return
-          if (current.isSaving || this.inFlightSaves.has(current.key)) return
+          const current = this.getReconcilableWorkspaceBuffer(latest.key)
+          if (!current) return
           if (!isMissingWorkspaceFileError(error)) return
 
           if (!current.isDirty) {
@@ -582,9 +586,8 @@ export class SharedDocumentBufferHub {
 
     const closedKeys: string[] = []
     for (const missingKey of cleanMissingKeys) {
-      const current = this.store.getBuffer(missingKey)
-      if (!current || current.kind !== 'workspace') continue
-      if (current.isSaving || this.inFlightSaves.has(current.key)) continue
+      const current = this.getReconcilableWorkspaceBuffer(missingKey)
+      if (!current) continue
       if (current.isDirty) {
         if (!missingDirtyNames.includes(current.name)) {
           missingDirtyNames.push(current.name)
