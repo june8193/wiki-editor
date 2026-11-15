@@ -430,4 +430,35 @@ describe('markdownPreview local image rendering', () => {
     expect(unsafeContainer.innerHTML).not.toContain('wiki-asset:')
     expect(unsafeContainer.innerHTML).not.toContain('javascript:')
   })
+
+  it('preserves inline image alt text in Preview heading ID slugs to match /toc anchor links', () => {
+    const markdown = [
+      '- [Badge Architecture](#badge-architecture)',
+      '',
+      '# ![Badge](./assets/badge%20(1).png) Architecture'
+    ].join('\n')
+
+    const scrollIntoViewMock = vi.fn()
+    const origScrollIntoView = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollIntoViewMock
+
+    try {
+      const { container } = render(
+        <MarkdownPreview
+          content={markdown}
+          scrollTop={0}
+          theme="light"
+          documentPath="/vault/docs/guide.md"
+        />
+      )
+
+      const h1 = container.querySelector('h1')
+      expect(h1).toHaveAttribute('id', 'badge-architecture')
+      fireEvent.click(screen.getByRole('link', { name: 'Badge Architecture' }))
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(h1)
+    } finally {
+      Element.prototype.scrollIntoView = origScrollIntoView
+    }
+  })
 })

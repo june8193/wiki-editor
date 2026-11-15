@@ -13,6 +13,7 @@ import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { TableKit } from '@tiptap/extension-table'
 import { Markdown } from '@tiptap/markdown'
 import { resolveImageDisplaySrc } from '@shared/assets'
+import { isSafeImageUri } from '@shared/urlSecurity'
 import { Fragment, type Mark, type Schema, Slice } from '@tiptap/pm/model'
 import {
   type EditorState,
@@ -33,11 +34,7 @@ import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 import { MermaidCodeBlockNodeView } from '../components/MermaidCodeBlockNodeView'
-import {
-  isSafeMarkdownImageUrl,
-  isSafeMarkdownUrl,
-  WYSIWYG_SANITIZE_SCHEMA
-} from './markdownSecurity'
+import { isSafeMarkdownUrl, WYSIWYG_SANITIZE_SCHEMA } from './markdownSecurity'
 import {
   detectSlashQuery,
   expandSlashTemplate,
@@ -301,7 +298,7 @@ export function prepareMarkdownForTiptap(markdown: string): string {
       if ((node.type === 'image' || node.type === 'definition') && typeof node.url === 'string') {
         const isSafeTarget =
           node.type === 'image'
-            ? isSafeMarkdownImageUrl(node.url)
+            ? isSafeImageUri(node.url)
             : isSafeMarkdownUrl(node.url)
         if (!isSafeTarget) {
           patches.push({
@@ -424,7 +421,7 @@ function extractSafeImageSrc(value: unknown): string | null {
     return null
   }
   const trimmed = value.trim()
-  return trimmed && isSafeMarkdownImageUrl(trimmed) ? trimmed : null
+  return trimmed && isSafeImageUri(trimmed) ? trimmed : null
 }
 
 function parseSafeImageAttrs(

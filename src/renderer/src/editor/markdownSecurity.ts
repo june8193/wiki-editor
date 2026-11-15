@@ -1,9 +1,5 @@
 import { defaultSchema, type Options as SanitizeSchema } from 'rehype-sanitize'
-import {
-  ALLOWED_IMAGE_URI_SCHEMES,
-  hasAllowedUriScheme,
-  isSafeImageUri
-} from '@shared/urlSecurity'
+import { ALLOWED_IMAGE_URI_SCHEMES, hasAllowedUriScheme } from '@shared/urlSecurity'
 
 export const ALLOWED_URI_SCHEMES = ['http', 'https', 'mailto'] as const
 const ALLOWED_URI_SCHEME_SET = new Set<string>(ALLOWED_URI_SCHEMES)
@@ -13,13 +9,6 @@ const ALLOWED_URI_SCHEME_SET = new Set<string>(ALLOWED_URI_SCHEMES)
  */
 export function isSafeMarkdownUrl(url: string): boolean {
   return hasAllowedUriScheme(url, ALLOWED_URI_SCHEME_SET)
-}
-
-/**
- * Validates image URLs against safe image schemes (`http`, `https`, or local relative paths).
- */
-export function isSafeMarkdownImageUrl(url: string): boolean {
-  return isSafeImageUri(url)
 }
 
 /**

@@ -39,7 +39,7 @@ export function hasAllowedUriScheme(url: string, allowedSchemes: ReadonlySet<str
  * Rejects root-absolute (`/...`, `\...`), protocol-relative (`//...`, `\\...`),
  * and fragment/query-only (`#...`, `?...`) targets when expecting a local relative file path.
  */
-export function isDisallowedRelativePath(value: string): boolean {
+function isDisallowedRelativePath(value: string): boolean {
   return (
     value.startsWith('/') ||
     value.startsWith('\\') ||
@@ -48,17 +48,32 @@ export function isDisallowedRelativePath(value: string): boolean {
   )
 }
 
+export type ClassifiedImageUri =
+  | { kind: 'unsafe' }
+  | { kind: 'external' }
+  | { kind: 'relative'; path: string }
+
+/**
+ * Classifies an image URI as unsafe, an allowed external (`http`/`https`) URL, or a local relative path.
+ */
+export function classifyImageUri(url: string): ClassifiedImageUri {
+  const trimmed = url.trim()
+  const { valid, scheme } = inspectUriScheme(trimmed)
+  if (!valid) {
+    return { kind: 'unsafe' }
+  }
+  if (scheme !== null) {
+    return ALLOWED_IMAGE_URI_SCHEME_SET.has(scheme) ? { kind: 'external' } : { kind: 'unsafe' }
+  }
+  if (isDisallowedRelativePath(trimmed)) {
+    return { kind: 'unsafe' }
+  }
+  return { kind: 'relative', path: trimmed }
+}
+
 /**
  * Validates image destinations against `http`, `https`, or local relative asset paths.
  */
 export function isSafeImageUri(url: string): boolean {
-  const trimmed = url.trim()
-  const { valid, scheme } = inspectUriScheme(trimmed)
-  if (!valid) {
-    return false
-  }
-  if (scheme !== null) {
-    return ALLOWED_IMAGE_URI_SCHEME_SET.has(scheme)
-  }
-  return !isDisallowedRelativePath(trimmed)
+  return classifyImageUri(url).kind !== 'unsafe'
 }

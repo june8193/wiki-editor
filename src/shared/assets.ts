@@ -1,8 +1,4 @@
-import {
-  ALLOWED_IMAGE_URI_SCHEME_SET,
-  inspectUriScheme,
-  isDisallowedRelativePath
-} from './urlSecurity'
+import { classifyImageUri } from './urlSecurity'
 
 export const WIKI_ASSET_SCHEME = 'wiki-asset'
 const WIKI_ASSET_HOST = 'local'
@@ -107,8 +103,7 @@ function resolveValidatedRelativePath(trimmedSrc: string, documentPath: string):
   }
 
   const decodedPath = safeDecodeUriComponent(pathPart)
-  const { valid, scheme } = inspectUriScheme(decodedPath)
-  if (!valid || scheme !== null || isDisallowedRelativePath(decodedPath)) {
+  if (classifyImageUri(decodedPath).kind !== 'relative') {
     return null
   }
 
@@ -132,37 +127,14 @@ function resolveValidatedRelativePath(trimmedSrc: string, documentPath: string):
   return useBackslash ? joined.replace(/\//g, '\\') : joined
 }
 
-export function resolveWorkspaceImagePath(rawSrc: string, documentPath: string): string | null {
-  const trimmed = rawSrc.trim()
-  if (!documentPath) {
-    return null
-  }
-  const { valid, scheme } = inspectUriScheme(trimmed)
-  if (!valid || scheme !== null || isDisallowedRelativePath(trimmed)) {
-    return null
-  }
-  return resolveValidatedRelativePath(trimmed, documentPath)
-}
-
 export function resolveImageDisplaySrc(rawSrc: string, documentPath?: string): string {
-  const trimmed = rawSrc.trim()
-  const { valid, scheme } = inspectUriScheme(trimmed)
-  if (!valid) {
+  const classified = classifyImageUri(rawSrc)
+  if (classified.kind === 'unsafe') {
     return ''
   }
-
-  if (scheme !== null) {
-    return ALLOWED_IMAGE_URI_SCHEME_SET.has(scheme) ? rawSrc : ''
+  if (classified.kind === 'external' || !documentPath) {
+    return rawSrc
   }
-
-  if (isDisallowedRelativePath(trimmed)) {
-    return ''
-  }
-
-  if (documentPath) {
-    const resolvedPath = resolveValidatedRelativePath(trimmed, documentPath)
-    return resolvedPath ? buildWikiAssetUrl(resolvedPath) : ''
-  }
-
-  return rawSrc
+  const resolvedPath = resolveValidatedRelativePath(classified.path, documentPath)
+  return resolvedPath ? buildWikiAssetUrl(resolvedPath) : ''
 }

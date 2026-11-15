@@ -61,6 +61,9 @@ function extractHastText(node: HastElement | HastRootContent): string {
   if (node.type === 'text') {
     return node.value
   }
+  if (node.type === 'element' && node.tagName === 'img') {
+    return typeof node.properties?.alt === 'string' ? node.properties.alt : ''
+  }
   if ('children' in node && Array.isArray(node.children)) {
     return node.children.map(extractHastText).join('')
   }
