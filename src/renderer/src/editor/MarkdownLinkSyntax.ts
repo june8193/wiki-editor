@@ -75,11 +75,16 @@ function findClosingBracket(text: string, openBracket: number, lineEnd: number):
   return -1
 }
 
-function skipOptionalTitleAndFindParen(text: string, start: number, lineEnd: number): number {
+function skipHorizontalWhitespace(text: string, start: number, limit: number): number {
   let cursor = start
-  while (cursor < lineEnd && (text[cursor] === ' ' || text[cursor] === '\t')) {
+  while (cursor < limit && (text[cursor] === ' ' || text[cursor] === '\t')) {
     cursor++
   }
+  return cursor
+}
+
+function skipOptionalTitleAndFindParen(text: string, start: number, lineEnd: number): number {
+  let cursor = skipHorizontalWhitespace(text, start, lineEnd)
   if (cursor >= lineEnd) {
     return -1
   }
@@ -105,9 +110,7 @@ function skipOptionalTitleAndFindParen(text: string, start: number, lineEnd: num
     cursor++
   }
 
-  while (cursor < lineEnd && (text[cursor] === ' ' || text[cursor] === '\t')) {
-    cursor++
-  }
+  cursor = skipHorizontalWhitespace(text, cursor, lineEnd)
   return cursor < lineEnd && text[cursor] === ')' ? cursor : -1
 }
 
@@ -116,10 +119,7 @@ function parseLinkDestination(
   openParen: number,
   lineEnd: number
 ): { href: string; closeParen: number } | null {
-  let cursor = openParen + 1
-  while (cursor < lineEnd && (text[cursor] === ' ' || text[cursor] === '\t')) {
-    cursor++
-  }
+  let cursor = skipHorizontalWhitespace(text, openParen + 1, lineEnd)
   if (cursor >= lineEnd) {
     return null
   }
