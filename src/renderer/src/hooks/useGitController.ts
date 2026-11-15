@@ -151,7 +151,7 @@ export function useGitController({
       actionLabel: string,
       options: {
         affectsWorkspaceFiles?: boolean
-        fetchBranches?: boolean
+        fetchRepoMetadata?: boolean
         fallbackError: string
         run: (rootPath: string) => Promise<GitStatus>
       }
@@ -177,7 +177,7 @@ export function useGitController({
         }
 
         const nextStatus = await options.run(rootPath)
-        await applyWorkspaceGitState(rootPath, epoch, nextStatus, options.fetchBranches ?? false)
+        await applyWorkspaceGitState(rootPath, epoch, nextStatus, options.fetchRepoMetadata ?? false)
 
         if (
           options.affectsWorkspaceFiles &&
@@ -226,7 +226,7 @@ export function useGitController({
 
   const initRepo = useCallback(async (): Promise<void> => {
     await runGitAction('Git 초기화', {
-      fetchBranches: true,
+      fetchRepoMetadata: true,
       fallbackError: 'Git 저장소를 초기화하지 못했습니다.',
       run: (rootPath) => window.wikiApi.git.init(rootPath)
     })
@@ -270,7 +270,7 @@ export function useGitController({
   const commit = useCallback(
     async (message: string): Promise<boolean> => {
       return runGitAction('Commit', {
-        fetchBranches: true,
+        fetchRepoMetadata: true,
         fallbackError: '커밋에 실패했습니다.',
         run: (rootPath) => window.wikiApi.git.commit(rootPath, message)
       })
@@ -282,7 +282,7 @@ export function useGitController({
     async (branchName: string): Promise<void> => {
       await runGitAction('브랜치 전환', {
         affectsWorkspaceFiles: true,
-        fetchBranches: true,
+        fetchRepoMetadata: true,
         fallbackError: '브랜치를 전환하지 못했습니다.',
         run: (rootPath) => window.wikiApi.git.checkout(rootPath, branchName)
       })
@@ -293,7 +293,7 @@ export function useGitController({
   const pull = useCallback(async (): Promise<void> => {
     await runGitAction('Pull', {
       affectsWorkspaceFiles: true,
-      fetchBranches: true,
+      fetchRepoMetadata: true,
       fallbackError: 'Pull에 실패했습니다.',
       run: (rootPath) => window.wikiApi.git.pull(rootPath)
     })
@@ -301,7 +301,7 @@ export function useGitController({
 
   const push = useCallback(async (): Promise<void> => {
     await runGitAction('Push', {
-      fetchBranches: true,
+      fetchRepoMetadata: true,
       fallbackError: 'Push에 실패했습니다.',
       run: (rootPath) => window.wikiApi.git.push(rootPath)
     })
@@ -310,7 +310,7 @@ export function useGitController({
   const sync = useCallback(async (): Promise<void> => {
     await runGitAction('Sync', {
       affectsWorkspaceFiles: true,
-      fetchBranches: true,
+      fetchRepoMetadata: true,
       fallbackError: 'Sync에 실패했습니다.',
       run: async (rootPath) => (await window.wikiApi.git.sync(rootPath)).status
     })

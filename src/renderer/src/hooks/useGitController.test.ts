@@ -18,6 +18,18 @@ function makeStatus(branch: string, ahead = 0): GitStatus {
   }
 }
 
+function makeCommit(hash: string): GitGraphCommit {
+  return {
+    hash,
+    shortHash: hash.slice(0, 7),
+    parents: [],
+    subject: `commit ${hash}`,
+    authorName: 'Tester',
+    committedAt: '2026-11-15T12:00:00+09:00',
+    refs: []
+  }
+}
+
 describe('useGitController', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
@@ -237,16 +249,6 @@ describe('useGitController', () => {
   })
 
   it('loads commit graph on repo init, filters by scope, paginates with loadMoreCommits, and refreshes page 1 on repository mutations', async () => {
-    const makeCommit = (hash: string): GitGraphCommit => ({
-      hash,
-      shortHash: hash.slice(0, 7),
-      parents: [],
-      subject: `commit ${hash}`,
-      authorName: 'Tester',
-      committedAt: '2026-11-15T12:00:00+09:00',
-      refs: []
-    })
-
     const allPage1 = [makeCommit('a1'), makeCommit('a2')]
     const allPage2 = [makeCommit('a3')]
     const currentPage1 = [makeCommit('c1')]
@@ -340,16 +342,6 @@ describe('useGitController', () => {
   })
 
   it('ignores stale git.log responses across filter switches, loadMore races, and workspace switches', async () => {
-    const makeCommit = (hash: string): GitGraphCommit => ({
-      hash,
-      shortHash: hash.slice(0, 7),
-      parents: [],
-      subject: hash,
-      authorName: 'Tester',
-      committedAt: '2026-11-15T12:00:00+09:00',
-      refs: []
-    })
-
     let resolveRepoAAllPage2!: (value: GitLogResult) => void
     const repoAAllPage2Promise = new Promise<GitLogResult>((resolve) => {
       resolveRepoAAllPage2 = resolve
