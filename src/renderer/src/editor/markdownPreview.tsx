@@ -17,6 +17,7 @@ import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
 import { unified } from 'unified'
 import { MermaidDiagram } from '../components/MermaidDiagram'
+import { resolveImageDisplaySrc } from '@shared/assets'
 import { MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 import {
   createHeadingNumberTracker,
@@ -29,12 +30,14 @@ import type { MermaidRenderer } from './mermaidRenderer'
 export interface MarkdownPreviewRenderOptions {
   theme?: ThemeMode
   showHeadingNumbers?: boolean
+  documentPath?: string
   mermaidRenderer?: MermaidRenderer
   onAnchorNavigate?: (slug: string) => void
 }
 
 interface PreviewRenderContextValue {
   theme: ThemeMode
+  documentPath?: string
   mermaidRenderer?: MermaidRenderer
   onAnchorNavigate?: (slug: string) => void
 }
@@ -253,6 +256,18 @@ function PreviewTable(props: ComponentPropsWithoutRef<'table'> & SourceLineDataP
   )
 }
 
+function PreviewImage({ src, ...props }: ComponentPropsWithoutRef<'img'>): ReactNode {
+  const { documentPath } = useContext(PreviewRenderContext)
+  if (typeof src !== 'string') {
+    return <img {...props} />
+  }
+  const resolvedSrc = resolveImageDisplaySrc(src, documentPath)
+  if (!resolvedSrc) {
+    return <img {...props} />
+  }
+  return <img {...props} src={resolvedSrc} />
+}
+
 function buildPreviewProcessor(showHeadingNumbers: boolean) {
   return unified()
     .use(remarkParse)
@@ -268,6 +283,7 @@ function buildPreviewProcessor(showHeadingNumbers: boolean) {
       jsxs,
       components: {
         a: SafeLink,
+        img: PreviewImage,
         input: PreviewCheckbox,
         pre: PreviewPre,
         table: PreviewTable
@@ -290,6 +306,7 @@ export function renderMarkdownToReact(
   const file = processor.processSync(markdown)
   const contextValue: PreviewRenderContextValue = {
     theme: options.theme ?? 'light',
+    documentPath: options.documentPath,
     mermaidRenderer: options.mermaidRenderer,
     onAnchorNavigate: options.onAnchorNavigate
   }

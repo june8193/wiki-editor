@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { resolveImageDisplaySrc } from '@shared/assets'
 import {
   DEFAULT_CUSTOM_COMMANDS,
   type CustomCommandConfig,
@@ -43,6 +44,7 @@ interface WysiwygMarkdownEditorProps {
   mermaidRenderer?: MermaidRenderer
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
+  documentPath?: string
   scrollRequest?: WysiwygScrollRequest | null
   isActive?: boolean
   onChangeContent: (nextContent: string) => void
@@ -220,6 +222,7 @@ export function WysiwygMarkdownEditor({
   mermaidRenderer,
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
+  documentPath,
   scrollRequest,
   isActive = true,
   onChangeContent,
@@ -239,6 +242,8 @@ export function WysiwygMarkdownEditor({
   onChangeContentRef.current = onChangeContent
   const documentTitleRef = useRef(documentTitle)
   documentTitleRef.current = documentTitle
+  const documentPathRef = useRef(documentPath)
+  documentPathRef.current = documentPath
   const insertTocRef = useRef<() => void>(() => undefined)
   const editorRef = useRef<Editor | null>(null)
 
@@ -264,7 +269,10 @@ export function WysiwygMarkdownEditor({
   const editor = useEditor(
     {
       immediatelyRender: true,
-      extensions: createWysiwygExtensions({ showHeadingNumbers }),
+      extensions: createWysiwygExtensions({
+        showHeadingNumbers,
+        getDocumentPath: () => documentPathRef.current
+      }),
       content: prepareMarkdownForTiptap(content),
       contentType: 'markdown',
       editorProps: {
@@ -340,6 +348,19 @@ export function WysiwygMarkdownEditor({
     []
   )
   editorRef.current = editor
+
+  useEffect(() => {
+    documentPathRef.current = documentPath
+    if (!editor || editor.isDestroyed) return
+
+    for (const img of editor.view.dom.querySelectorAll('img[data-markdown-src]')) {
+      const rawSrc = img.getAttribute('data-markdown-src') ?? ''
+      const nextSrc = resolveImageDisplaySrc(rawSrc, documentPath)
+      if (nextSrc && img.getAttribute('src') !== nextSrc) {
+        img.setAttribute('src', nextSrc)
+      }
+    }
+  }, [documentPath, editor])
 
   const syncEditorContent = useCallback(
     (markdown: string, markLocalEdit: boolean): void => {

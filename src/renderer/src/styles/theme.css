@@ -927,6 +927,12 @@ body.is-resizing-sidebar .pane-workspace {
   margin: 0 0 0.85em;
 }
 
+.markdown-preview img,
+.wysiwyg-prosemirror img:not(.ProseMirror-separator) {
+  max-width: 100%;
+  height: auto;
+}
+
 .markdown-preview a,
 .wysiwyg-prosemirror a {
   color: var(--accent-color);

@@ -219,3 +219,16 @@ describe('MarkdownTocEngine', () => {
     )
   })
 })
+
+describe('MarkdownTocEngine inline image alt with parentheses', () => {
+  it('preserves alt text cleanly when heading contains inline image URLs with parentheses', () => {
+    const markdown = [
+      '# ![Logo](./assets/logo%20(1).png) Alpha',
+      '## ![Icon](<./assets/icon (2).svg>) Beta'
+    ].join('\n')
+
+    const headings = parseMarkdownHeadings(markdown)
+    expect(headings.map((item) => item.title)).toEqual(['Logo Alpha', 'Icon Beta'])
+    expect(headings.map((item) => item.slug)).toEqual(['logo-alpha', 'icon-beta'])
+  })
+})

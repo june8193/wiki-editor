@@ -73,6 +73,8 @@ export function DocumentEditor({
   const previewRatio = roundSplitRatio(1 - rawRatio)
   const rawLanguage = getRawEditorLanguage(activeDoc)
   const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
+  const documentPath =
+    activeDoc.kind === 'workspace' && activeDoc.path ? activeDoc.path : undefined
   const matchedScrollRequest =
     scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
   const previewScrollRequest = matchedScrollRequest
@@ -257,6 +259,7 @@ export function DocumentEditor({
           showHeadingNumbers={showHeadingNumbers}
           customCommands={customCommands}
           documentTitle={documentTitle}
+          documentPath={documentPath}
           mermaidRenderer={mermaidRenderer}
           scrollRequest={
             matchedScrollRequest
@@ -276,6 +279,7 @@ export function DocumentEditor({
           scrollTop={tab.scrollTop}
           theme={theme}
           showHeadingNumbers={showHeadingNumbers}
+          documentPath={documentPath}
           mermaidRenderer={mermaidRenderer}
           scrollRequest={previewScrollRequest}
           isActive={isActive}
@@ -307,6 +311,7 @@ export function DocumentEditor({
               scrollTop={0}
               theme={theme}
               showHeadingNumbers={showHeadingNumbers}
+              documentPath={documentPath}
               mermaidRenderer={mermaidRenderer}
               scrollRequest={previewScrollRequest}
               isActive={isActive}

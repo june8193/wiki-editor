@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { MarkdownPreview } from '../components/MarkdownPreview'
 import { createMermaidRenderer, type MermaidDriver } from './mermaidRenderer'
+import { buildWikiAssetUrl } from '@shared/assets'
 import { renderMarkdownToReact } from './markdownPreview'
 
 describe('markdownPreview pipeline and XSS sanitization', () => {
@@ -362,5 +363,69 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
     expect(nestedP).not.toHaveAttribute('data-source-line')
     expect(nestedP.parentElement).toHaveAttribute('data-source-line', '29')
     expect(nestedP.parentElement).toHaveAttribute('data-source-end-line', '29')
+  })
+})
+
+describe('markdownPreview local image rendering', () => {
+  it('rewrites relative markdown and HTML images to wiki-asset URLs after sanitization while keeping external URLs', () => {
+    const documentPath = 'C:\\vault\\docs\\guide\\intro.md'
+    const markdown = [
+      '![local](./assets/pic.png)',
+      '![parent](../shared/diagram.svg)',
+      '![parens](<./assets/my pic (1).png>)',
+      '<img src="./assets/html%20photo.webp" alt="html-img" onerror="alert(1)">',
+      '![external](https://example.com/banner.png)'
+    ].join('\n\n')
+
+    const { container } = render(renderMarkdownToReact(markdown, { documentPath }))
+    const images = Array.from(container.querySelectorAll('img'))
+
+    expect(images.map((img) => img.getAttribute('alt'))).toEqual([
+      'local',
+      'parent',
+      'parens',
+      'html-img',
+      'external'
+    ])
+    expect(images[0]?.getAttribute('src')).toBe(
+      buildWikiAssetUrl('C:\\vault\\docs\\guide\\assets\\pic.png')
+    )
+    expect(images[1]?.getAttribute('src')).toBe(
+      buildWikiAssetUrl('C:\\vault\\docs\\shared\\diagram.svg')
+    )
+    expect(images[2]?.getAttribute('src')).toBe(
+      buildWikiAssetUrl('C:\\vault\\docs\\guide\\assets\\my pic (1).png')
+    )
+    expect(images[3]?.getAttribute('src')).toBe(
+      buildWikiAssetUrl('C:\\vault\\docs\\guide\\assets\\html photo.webp')
+    )
+    expect(images[3]?.hasAttribute('onerror')).toBe(false)
+    expect(images[4]?.getAttribute('src')).toBe('https://example.com/banner.png')
+  })
+
+  it('keeps relative image src untouched when documentPath is absent and blocks wiki-asset/javascript/data in markdown input', () => {
+    const { container: scratchpadContainer } = render(
+      renderMarkdownToReact('![local](./assets/pic.png)')
+    )
+    const scratchpadImg = scratchpadContainer.querySelector('img')
+    expect(scratchpadImg?.getAttribute('src')).toBe('./assets/pic.png')
+
+    const unsafeMarkdown = [
+      '![direct-proto](wiki-asset://local/asset?path=C:/vault/secret.png)',
+      '![js](javascript:alert(1))',
+      '![data](data:text/html,<script>alert(1)</script>)',
+      '<img src="wiki-asset://local/asset?path=/vault/secret.png" alt="raw-proto" onerror="alert(1)">'
+    ].join('\n\n')
+
+    const { container: unsafeContainer } = render(
+      renderMarkdownToReact(unsafeMarkdown, { documentPath: '/vault/docs/page.md' })
+    )
+
+    for (const img of unsafeContainer.querySelectorAll('img')) {
+      expect(img.getAttribute('src')).toBeNull()
+      expect(img.hasAttribute('onerror')).toBe(false)
+    }
+    expect(unsafeContainer.innerHTML).not.toContain('wiki-asset:')
+    expect(unsafeContainer.innerHTML).not.toContain('javascript:')
   })
 })

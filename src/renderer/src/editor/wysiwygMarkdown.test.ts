@@ -1,4 +1,5 @@
 import { Editor } from '@tiptap/core'
+import { buildWikiAssetUrl } from '@shared/assets'
 import type { CustomCommandConfig } from '@shared/config'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -6,6 +7,7 @@ import {
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
   detectProseMirrorSlashQuery,
+  extractWysiwygHeadingCandidates,
   insertWysiwygMarkdownWithCursor,
   prepareMarkdownForTiptap,
   sanitizeHtmlWithRehype
@@ -327,5 +329,135 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     const urlEndPos = fencedEditor.state.doc.content.size - 1
     fencedEditor.commands.setTextSelection(urlEndPos)
     expect(detectProseMirrorSlashQuery(fencedEditor.state)).toBeNull()
+  })
+})
+
+describe('wysiwygMarkdown local image rendering and roundtrip', () => {
+  it('renders relative images with wiki-asset display URLs while preserving original relative paths on getMarkdown and heading extraction', () => {
+    const documentPath = 'C:\\vault\\docs\\guide\\intro.md'
+    const markdown = [
+      '# ![Logo](./assets/logo%20(1).png) Alpha',
+      '',
+      '![local](./assets/pic.png)',
+      '',
+      '![parent](../shared/diagram.svg)',
+      '',
+      '![parens](<./assets/my pic (1).png>)',
+      '',
+      '![external](https://example.com/banner.png)'
+    ].join('\n')
+
+    const editor = new Editor({
+      extensions: createWysiwygExtensions({
+        getDocumentPath: () => documentPath
+      }),
+      content: prepareMarkdownForTiptap(markdown),
+      contentType: 'markdown'
+    })
+    createdEditors.push(editor)
+
+    const imgs = Array.from(editor.view.dom.querySelectorAll('img:not(.ProseMirror-separator)'))
+    expect(imgs.map((img) => img.getAttribute('alt'))).toEqual([
+      'Logo',
+      'local',
+      'parent',
+      'parens',
+      'external'
+    ])
+    expect(imgs[0]?.getAttribute('src')).toBe(
+      buildWikiAssetUrl('C:\\vault\\docs\\guide\\assets\\logo (1).png')
+    )
+    expect(imgs[0]?.getAttribute('data-markdown-src')).toBe('./assets/logo%20(1).png')
+    expect(imgs[1]?.getAttribute('src')).toBe(
+      buildWikiAssetUrl('C:\\vault\\docs\\guide\\assets\\pic.png')
+    )
+    expect(imgs[1]?.getAttribute('data-markdown-src')).toBe('./assets/pic.png')
+    expect(imgs[2]?.getAttribute('src')).toBe(
+      buildWikiAssetUrl('C:\\vault\\docs\\shared\\diagram.svg')
+    )
+    expect(imgs[2]?.getAttribute('data-markdown-src')).toBe('../shared/diagram.svg')
+    expect(imgs[3]?.getAttribute('src')).toBe(
+      buildWikiAssetUrl('C:\\vault\\docs\\guide\\assets\\my pic (1).png')
+    )
+    expect(imgs[3]?.getAttribute('data-markdown-src')).toBe('./assets/my pic (1).png')
+    expect(imgs[4]?.getAttribute('src')).toBe('https://example.com/banner.png')
+    expect(imgs[4]?.getAttribute('data-markdown-src')).toBe('https://example.com/banner.png')
+
+    expect(extractWysiwygHeadingCandidates(editor.state.doc)).toEqual([
+      { level: 1, text: 'Logo Alpha', pos: 0, hasMedia: true }
+    ])
+
+    const roundtripped = editor.getMarkdown()
+    expect(roundtripped).not.toContain('wiki-asset:')
+    expect(roundtripped).toContain('# ![Logo](./assets/logo%20(1).png) Alpha')
+    expect(roundtripped).toContain('![local](./assets/pic.png)')
+    expect(roundtripped).toContain('![parent](../shared/diagram.svg)')
+    expect(roundtripped).toContain('![parens](<./assets/my pic (1).png>)')
+    expect(roundtripped).toContain('![external](https://example.com/banner.png)')
+
+    // Ensure second-pass parsing still keeps ![parens](<...>) as an image node, not plain text
+    const secondEditor = new Editor({
+      extensions: createWysiwygExtensions({
+        getDocumentPath: () => documentPath
+      }),
+      content: prepareMarkdownForTiptap(roundtripped),
+      contentType: 'markdown'
+    })
+    createdEditors.push(secondEditor)
+    expect(secondEditor.view.dom.querySelectorAll('img:not(.ProseMirror-separator)')).toHaveLength(5)
+  })
+
+  it('blocks wiki-asset, javascript, and data image URIs in markdown and preserves safe data-markdown-src across sanitized HTML paste', () => {
+    const unsafeMarkdown = [
+      '![proto](wiki-asset://local/asset?path=/vault/a.png)',
+      '',
+      '![js](javascript:alert(1))',
+      '',
+      '![data](data:text/html,<script>alert(1)</script>)'
+    ].join('\n')
+
+    const preparedEditor = createTestWysiwygEditor(unsafeMarkdown)
+    expect(preparedEditor.view.dom.querySelectorAll('img:not(.ProseMirror-separator)')).toHaveLength(0)
+    expect(preparedEditor.getMarkdown()).not.toContain('wiki-asset:')
+
+    const directEditor = new Editor({
+      extensions: createWysiwygExtensions({
+        getDocumentPath: () => '/vault/docs/page.md'
+      }),
+      content: unsafeMarkdown,
+      contentType: 'markdown'
+    })
+    createdEditors.push(directEditor)
+    expect(directEditor.view.dom.querySelectorAll('img:not(.ProseMirror-separator)')).toHaveLength(0)
+
+    const internalCopiedHtml =
+      '<p><img src="wiki-asset://local/asset?path=%2Fvault%2Fdocs%2Fassets%2Fpic.png" data-markdown-src="./assets/pic.png" alt="copied"></p>'
+    const sanitizedInternal = sanitizeHtmlWithRehype(internalCopiedHtml)
+    expect(sanitizedInternal).not.toContain('wiki-asset:')
+    expect(sanitizedInternal).toContain('data-markdown-src="./assets/pic.png"')
+
+    const pasteEditor = new Editor({
+      extensions: createWysiwygExtensions({
+        getDocumentPath: () => '/vault/docs/page.md'
+      }),
+      content: sanitizedInternal,
+      contentType: 'html'
+    })
+    createdEditors.push(pasteEditor)
+    expect(pasteEditor.getMarkdown()).toBe('![copied](./assets/pic.png)')
+    expect(
+      pasteEditor.view.dom.querySelector('img:not(.ProseMirror-separator)')?.getAttribute('src')
+    ).toBe(buildWikiAssetUrl('/vault/docs/assets/pic.png'))
+
+    const untrustedHtml =
+      '<p><img src="wiki-asset://local/asset?path=/vault/a.png" data-markdown-src="javascript:alert(1)" onerror="alert(2)" alt="bad"></p>'
+    const sanitizedUntrusted = sanitizeHtmlWithRehype(untrustedHtml)
+    expect(sanitizedUntrusted).not.toContain('wiki-asset:')
+    expect(sanitizedUntrusted).not.toContain('javascript:')
+    expect(sanitizedUntrusted).not.toContain('onerror')
+
+    pasteEditor.commands.setContent(sanitizedUntrusted)
+    expect(pasteEditor.getMarkdown()).not.toContain('wiki-asset:')
+    expect(pasteEditor.view.dom.querySelectorAll('img:not(.ProseMirror-separator)')).toHaveLength(0)
   })
 })

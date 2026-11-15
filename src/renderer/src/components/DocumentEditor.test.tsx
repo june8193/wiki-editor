@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
+import { buildWikiAssetUrl } from '@shared/assets'
 import { DocumentEditor } from './DocumentEditor'
 import type { DocumentBuffer } from '../stores/DocumentBufferStore'
 import type { EditorMode, TabItem } from '../stores/PaneTabStore'
@@ -882,5 +883,105 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     } finally {
       Element.prototype.scrollIntoView = origScrollIntoView
     }
+  })
+})
+
+describe('DocumentEditor local markdown image rendering across modes', () => {
+  it('renders workspace relative images with wiki-asset URLs in WYSIWYG, Preview, and Split without mutating markdown', async () => {
+    const markdown = [
+      '# Images',
+      '',
+      '![local](./assets/pic.png)',
+      '',
+      '![ext](https://example.com/banner.png)'
+    ].join('\n')
+
+    const doc = {
+      key: 'file:/vault/docs/guide.md',
+      kind: 'workspace' as const,
+      name: 'guide.md',
+      path: '/vault/docs/guide.md',
+      content: markdown,
+      savedContent: markdown,
+      isDirty: false,
+      isSaving: false,
+      version: 1
+    }
+    const baseTab = {
+      id: 'tab-1',
+      bufferKey: doc.key,
+      mode: 'wysiwyg' as const,
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0,
+      splitPreviewRatio: 0.5
+    }
+    const onChangeContent = vi.fn()
+    const onSave = vi.fn()
+    const onUpdateViewState = vi.fn()
+
+    const expectedWikiUrl = buildWikiAssetUrl('/vault/docs/assets/pic.png')
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={doc}
+        tab={baseTab}
+        theme="light"
+        autoSave={false}
+        onChangeContent={onChangeContent}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'local' })).toHaveAttribute('src', expectedWikiUrl)
+    })
+    expect(screen.getByRole('img', { name: 'local' })).toHaveAttribute(
+      'data-markdown-src',
+      './assets/pic.png'
+    )
+    expect(screen.getByRole('img', { name: 'ext' })).toHaveAttribute(
+      'src',
+      'https://example.com/banner.png'
+    )
+
+    rerender(
+      <DocumentEditor
+        document={doc}
+        tab={{ ...baseTab, mode: 'preview' }}
+        theme="light"
+        autoSave={false}
+        onChangeContent={onChangeContent}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    expect(screen.getByRole('img', { name: 'local' })).toHaveAttribute('src', expectedWikiUrl)
+    expect(screen.getByRole('img', { name: 'ext' })).toHaveAttribute(
+      'src',
+      'https://example.com/banner.png'
+    )
+
+    rerender(
+      <DocumentEditor
+        document={doc}
+        tab={{ ...baseTab, mode: 'split' }}
+        theme="light"
+        autoSave={false}
+        onChangeContent={onChangeContent}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    const splitPreview = screen.getByTestId('split-markdown-preview')
+    expect(within(splitPreview).getByRole('img', { name: 'local' })).toHaveAttribute(
+      'src',
+      expectedWikiUrl
+    )
+    expect(screen.getByTestId('document-editor').textContent).toContain('./assets/pic.png')
+    expect(screen.getByTestId('document-editor').textContent).not.toContain('wiki-asset:')
+    expect(onChangeContent).not.toHaveBeenCalled()
   })
 })

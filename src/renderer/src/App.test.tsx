@@ -22,6 +22,7 @@ import {
   WorkspaceEntryKind
 } from '@shared/workspace'
 import { defaultMermaidRenderer } from './editor/mermaidRenderer'
+import { buildWikiAssetUrl } from '@shared/assets'
 import { App } from './App'
 import themeCss from './styles/theme.css?raw'
 
@@ -6248,6 +6249,100 @@ describe('Split editor mode and bidirectional scroll sync', () => {
       } else {
         delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
       }
+    }
+  })
+
+  it('renders relative workspace images across WYSIWYG, Preview, and Split with responsive CSS and zero wiki-asset leak on disk', async () => {
+    const user = userEvent.setup()
+    const docContent = [
+      '# ![Logo](./assets/logo%20(1).png) Guide',
+      '',
+      '![Diagram](../shared/arch.svg)',
+      '',
+      '![Remote](https://example.com/hero.png)'
+    ].join('\n')
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false, showHeadingNumbers: false },
+      {
+        selectedFolder: 'C:/wiki/image-vault',
+        workspaces: {
+          'C:/wiki/image-vault': {
+            'docs/guide.md': docContent,
+            'docs/assets/logo (1).png': 'png-bytes',
+            'shared/arch.svg': '<svg></svg>'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { rootEl, cleanup } = mountThemeStylesAndRoot()
+    try {
+      render(<App />, { container: rootEl })
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+      const explorer = screen.getByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('docs'))
+      await user.click(await within(explorer).findByText('guide.md'))
+
+      const expectedLogoUrl = buildWikiAssetUrl('C:/wiki/image-vault/docs/assets/logo (1).png')
+      const expectedArchUrl = buildWikiAssetUrl('C:/wiki/image-vault/shared/arch.svg')
+
+      // Outline preserves alt text cleanly without '.png)' leakage
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      expect(within(outline).getByRole('button', { name: /Logo Guide/ })).toBeInTheDocument()
+
+      // Switch to WYSIWYG (Ctrl+2)
+      fireEvent.keyDown(screen.getByTestId('document-editor'), { key: '2', ctrlKey: true })
+      await waitFor(() => {
+        expect(screen.getByRole('img', { name: 'Logo' })).toHaveAttribute('src', expectedLogoUrl)
+      })
+
+      const wysiwygDiagram = screen.getByRole('img', { name: 'Diagram' })
+      expect(wysiwygDiagram).toHaveAttribute('src', expectedArchUrl)
+      expect(wysiwygDiagram).toHaveAttribute('data-markdown-src', '../shared/arch.svg')
+      expect(wysiwygDiagram.hasAttribute('width')).toBe(false)
+      expect(wysiwygDiagram.hasAttribute('height')).toBe(false)
+      expect(screen.getByRole('img', { name: 'Remote' })).toHaveAttribute(
+        'src',
+        'https://example.com/hero.png'
+      )
+      const wysiwygLogoStyle = window.getComputedStyle(screen.getByRole('img', { name: 'Logo' }))
+      expect(wysiwygLogoStyle.maxWidth).toBe('100%')
+      expect(wysiwygLogoStyle.height).toBe('auto')
+
+      // Switch to Preview (Ctrl+3)
+      fireEvent.keyDown(screen.getByTestId('document-editor'), { key: '3', ctrlKey: true })
+      const previewLogo = await screen.findByRole('img', { name: 'Logo' })
+      expect(previewLogo).toHaveAttribute('src', expectedLogoUrl)
+      expect(screen.getByRole('img', { name: 'Diagram' })).toHaveAttribute('src', expectedArchUrl)
+      expect(screen.getByRole('img', { name: 'Remote' })).toHaveAttribute(
+        'src',
+        'https://example.com/hero.png'
+      )
+      const previewLogoStyle = window.getComputedStyle(previewLogo)
+      expect(previewLogoStyle.maxWidth).toBe('100%')
+      expect(previewLogoStyle.height).toBe('auto')
+
+      // Switch to Split (Ctrl+4)
+      fireEvent.keyDown(screen.getByTestId('document-editor'), { key: '4', ctrlKey: true })
+      const splitPreview = await screen.findByTestId('split-markdown-preview')
+      const splitLogo = within(splitPreview).getByRole('img', { name: 'Logo' })
+      expect(splitLogo).toHaveAttribute('src', expectedLogoUrl)
+      const splitLogoStyle = window.getComputedStyle(splitLogo)
+      expect(splitLogoStyle.maxWidth).toBe('100%')
+      expect(splitLogoStyle.height).toBe('auto')
+      expect(screen.getByTestId('document-editor').textContent).toContain('./assets/logo%20(1).png')
+      expect(screen.getByTestId('document-editor').textContent).not.toContain('wiki-asset:')
+
+      // Switch back to Raw (Ctrl+1) and verify saved file content never leaks wiki-asset:
+      fireEvent.keyDown(screen.getByTestId('document-editor'), { key: '1', ctrlKey: true })
+      const rawContent = screen.getByTestId('document-editor').textContent ?? ''
+      expect(rawContent).not.toContain('wiki-asset:')
+      expect(await api.workspace.readFile('C:/wiki/image-vault/docs/guide.md')).toBe(docContent)
+    } finally {
+      cleanup()
     }
   })
 })

@@ -343,6 +343,31 @@ export class WorkspaceFsService {
     return this.workspaceRoot
   }
 
+  async resolveAssetPath(
+    inputPath: string
+  ): Promise<
+    { status: 'ok'; resolvedPath: string } | { status: 'forbidden' } | { status: 'not-found' }
+  > {
+    try {
+      const root = this.requireWorkspaceRoot()
+      const candidate = this.assertLexicalWorkspacePath(root, inputPath)
+      const { resolvedReal, exists } = await this.resolveRealWithAncestor(root, candidate)
+      if (!exists) {
+        return { status: 'not-found' }
+      }
+      return { status: 'ok', resolvedPath: resolvedReal }
+    } catch (error) {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? (error as { code?: unknown }).code
+          : undefined
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        return { status: 'not-found' }
+      }
+      return { status: 'forbidden' }
+    }
+  }
+
   private requireWorkspaceRoot(): string {
     if (!this.workspaceRoot) {
       throw new Error('열린 워크스페이스가 없습니다.')

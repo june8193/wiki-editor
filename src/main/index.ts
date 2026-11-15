@@ -1,7 +1,13 @@
 import { release as getOsRelease } from 'node:os'
 import { join } from 'node:path'
+import { WIKI_ASSET_SCHEME } from '@shared/assets'
+import {
+  handleWikiAssetRequest,
+  WIKI_ASSET_PRIVILEGED_SCHEME
+} from './protocol/wikiAssetProtocol'
 import {
   app,
+  protocol,
   type BaseWindow,
   BrowserWindow,
   clipboard,
@@ -57,13 +63,18 @@ function showMessageBox(options: MessageBoxOptions): Promise<Electron.MessageBox
 
 const logService = new LogService(join(app.getPath('userData'), 'logs'))
 
+protocol.registerSchemesAsPrivileged([WIKI_ASSET_PRIVILEGED_SCHEME])
+
 let disposeConfigIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
+let disposeWikiAssetProtocol: (() => void) | undefined
 let workspaceService: WorkspaceFsService | undefined
 
 function disposeMainResources(): void {
+  disposeWikiAssetProtocol?.()
+  disposeWikiAssetProtocol = undefined
   disposeLogIpc?.()
   disposeLogIpc = undefined
   disposeGitIpc?.()
@@ -93,9 +104,16 @@ void app.whenReady().then(async () => {
   const configService = new ConfigService(configPath, { logService })
   await configService.get()
 
-  workspaceService = new WorkspaceFsService({
+  const activeWorkspaceService = new WorkspaceFsService({
     trashItem: (targetPath) => shell.trashItem(targetPath)
   })
+  workspaceService = activeWorkspaceService
+  protocol.handle(WIKI_ASSET_SCHEME, (request) =>
+    handleWikiAssetRequest(request, activeWorkspaceService)
+  )
+  disposeWikiAssetProtocol = () => {
+    protocol.unhandle(WIKI_ASSET_SCHEME)
+  }
   const gitService = new GitService({ logService })
 
   const getTargets = () => BrowserWindow.getAllWindows().map((win) => win.webContents)

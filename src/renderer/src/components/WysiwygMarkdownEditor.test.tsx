@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import type { CustomCommandConfig } from '@shared/config'
 import { describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
+import { buildWikiAssetUrl } from '@shared/assets'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 function placeCaretInProseMirror(editorEl: HTMLElement, targetEl: Element): void {
@@ -730,5 +731,69 @@ describe('WysiwygMarkdownEditor', () => {
     )
 
     expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+  })
+})
+
+describe('WysiwygMarkdownEditor local image rendering and path sync', () => {
+  it('renders local relative images with wiki-asset URLs, updates live DOM on documentPath change, and roundtrips without wiki-asset leak', async () => {
+    const onChangeContent = vi.fn()
+    const markdown = [
+      '![local](./assets/pic.png)',
+      '',
+      '![parent](../shared/diagram.svg)',
+      '',
+      '![external](https://example.com/banner.png)'
+    ].join('\n')
+
+    const { container, rerender } = render(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        documentPath="C:\\vault\\docs\\guide\\intro.md"
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'local' })).toHaveAttribute(
+        'src',
+        buildWikiAssetUrl('C:\\vault\\docs\\guide\\assets\\pic.png')
+      )
+    })
+
+    const localImg = screen.getByRole('img', { name: 'local' })
+    expect(localImg).toHaveAttribute('data-markdown-src', './assets/pic.png')
+    expect(screen.getByRole('img', { name: 'parent' })).toHaveAttribute(
+      'src',
+      buildWikiAssetUrl('C:\\vault\\docs\\shared\\diagram.svg')
+    )
+    expect(screen.getByRole('img', { name: 'external' })).toHaveAttribute(
+      'src',
+      'https://example.com/banner.png'
+    )
+
+    // Rename / path update while mounted refreshes image URLs without modifying markdown content
+    rerender(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        documentPath="C:\\vault\\notes\\renamed.md"
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'local' })).toHaveAttribute(
+        'src',
+        buildWikiAssetUrl('C:\\vault\\notes\\assets\\pic.png')
+      )
+    })
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Ensure no width/height attributes are injected and no raw wiki-asset leaks in DOM data-markdown-src
+    expect(localImg.hasAttribute('width')).toBe(false)
+    expect(localImg.hasAttribute('height')).toBe(false)
+    const renderedImgs = container.querySelectorAll('img:not(.ProseMirror-separator)')
+    expect(renderedImgs).toHaveLength(3)
   })
 })

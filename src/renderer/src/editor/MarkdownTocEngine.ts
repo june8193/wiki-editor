@@ -173,10 +173,88 @@ export function stripHeadingNumberPrefix(text: string): string {
   return hasHeadingNumberPrefix(text) ? text.replace(LEADING_HEADING_NUMBER_RE, '') : text
 }
 
+function findClosingDestinationParen(text: string, openParenIndex: number): number {
+  let cursor = openParenIndex + 1
+  while (cursor < text.length && text[cursor] === ' ') {
+    cursor += 1
+  }
+
+  if (text[cursor] === '<') {
+    cursor += 1
+    while (cursor < text.length) {
+      if (text[cursor] === '\\' && cursor + 1 < text.length) {
+        cursor += 2
+        continue
+      }
+      if (text[cursor] === '>') {
+        cursor += 1
+        break
+      }
+      cursor += 1
+    }
+  }
+
+  let parenDepth = 1
+  while (cursor < text.length) {
+    const ch = text[cursor]
+    if (ch === '\\' && cursor + 1 < text.length) {
+      cursor += 2
+      continue
+    }
+    if (ch === '(') {
+      parenDepth += 1
+    } else if (ch === ')') {
+      parenDepth -= 1
+      if (parenDepth === 0) {
+        return cursor
+      }
+    }
+    cursor += 1
+  }
+  return -1
+}
+
+function stripInlineLinksAndImages(text: string): string {
+  let result = ''
+  let i = 0
+
+  while (i < text.length) {
+    const isImage = text[i] === '!' && text[i + 1] === '['
+    const isLink = !isImage && text[i] === '['
+    if (isImage || isLink) {
+      const labelStart = i + (isImage ? 2 : 1)
+      let closeBracket = labelStart
+      while (closeBracket < text.length) {
+        if (text[closeBracket] === '\\' && closeBracket + 1 < text.length) {
+          closeBracket += 2
+          continue
+        }
+        if (text[closeBracket] === ']') {
+          break
+        }
+        closeBracket += 1
+      }
+
+      const hasValidLabel = isImage ? closeBracket < text.length : closeBracket > labelStart && closeBracket < text.length
+      if (hasValidLabel && text[closeBracket + 1] === '(') {
+        const closeParen = findClosingDestinationParen(text, closeBracket + 1)
+        if (closeParen !== -1) {
+          result += text.slice(labelStart, closeBracket)
+          i = closeParen + 1
+          continue
+        }
+      }
+    }
+
+    result += text[i]
+    i += 1
+  }
+
+  return result
+}
+
 export function stripInlineMarkdown(text: string): string {
-  return text
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+  return stripInlineLinksAndImages(text)
     .replace(/\[([^\]]+)\]\[[^\]]*\]/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/(\*\*|__|~~)(?=\S)(.+?)(?<=\S)\1/g, '$2')

@@ -1,8 +1,17 @@
-import { AnyExtension, createNodeFromContent, Editor, Extension, Node as TiptapNode } from '@tiptap/core'
+import {
+  AnyExtension,
+  createNodeFromContent,
+  Editor,
+  Extension,
+  mergeAttributes,
+  Node as TiptapNode
+} from '@tiptap/core'
 import CodeBlock from '@tiptap/extension-code-block'
+import Image, { type ImageOptions } from '@tiptap/extension-image'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { TableKit } from '@tiptap/extension-table'
 import { Markdown } from '@tiptap/markdown'
+import { resolveImageDisplaySrc } from '@shared/assets'
 import { Fragment, type Mark, type Schema, Slice } from '@tiptap/pm/model'
 import {
   type EditorState,
@@ -23,7 +32,11 @@ import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 import { MermaidCodeBlockNodeView } from '../components/MermaidCodeBlockNodeView'
-import { isSafeMarkdownUrl, MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
+import {
+  isSafeMarkdownImageUrl,
+  isSafeMarkdownUrl,
+  WYSIWYG_SANITIZE_SCHEMA
+} from './markdownSecurity'
 import {
   detectSlashQuery,
   expandSlashTemplate,
@@ -55,6 +68,7 @@ interface MdastPositionNode {
 
 export interface WysiwygExtensionOptions {
   showHeadingNumbers?: boolean
+  getDocumentPath?: () => string | undefined
 }
 
 export const headingNumberingPluginKey = new PluginKey<boolean>('headingNumbering')
@@ -220,7 +234,7 @@ const TocMarker = TiptapNode.create({
 const markdownAstParser = unified().use(remarkParse).use(remarkGfm)
 const htmlSanitizer = unified()
   .use(rehypeParse, { fragment: true })
-  .use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA)
+  .use(rehypeSanitize, WYSIWYG_SANITIZE_SCHEMA)
   .use(rehypeStringify)
 
 /**
@@ -378,6 +392,114 @@ export function deleteTableRowPreservingHeader(editor: Editor): boolean {
  * Returns the standard TipTap v3 extension stack for GFM WYSIWYG editing, Mermaid NodeView,
  * dynamic heading numbering decorations, and roundtrip serialization.
  */
+interface WikiAssetImageOptions extends ImageOptions {
+  getDocumentPath?: () => string | undefined
+}
+
+function formatMarkdownImageDestination(src: string): string {
+  if (/[\s<>]/.test(src)) {
+    return `<${src.replace(/[<>]/g, encodeURIComponent)}>`
+  }
+  let balance = 0
+  for (const ch of src) {
+    if (ch === '(') {
+      balance += 1
+    } else if (ch === ')') {
+      balance -= 1
+      if (balance < 0) {
+        return `<${src}>`
+      }
+    }
+  }
+  return balance === 0 ? src : `<${src}>`
+}
+
+function parseSafeImageAttrs(
+  dom: unknown,
+  attrName: 'data-markdown-src' | 'src'
+): { src: string; alt: string | null; title: string | null } | false {
+  if (!(dom instanceof HTMLElement)) {
+    return false
+  }
+  const rawSrc = dom.getAttribute(attrName)?.trim() ?? ''
+  if (!rawSrc || !isSafeMarkdownImageUrl(rawSrc)) {
+    return false
+  }
+  return {
+    src: rawSrc,
+    alt: dom.getAttribute('alt') ?? null,
+    title: dom.getAttribute('title') ?? null
+  }
+}
+
+const WikiAssetImage = Image.extend<WikiAssetImageOptions>({
+  addOptions() {
+    return {
+      ...this.parent?.(),
+      inline: true,
+      allowBase64: false,
+      resize: false,
+      HTMLAttributes: {},
+      getDocumentPath: undefined
+    }
+  },
+
+  parseHTML() {
+    return [
+      {
+        tag: 'img[data-markdown-src]',
+        getAttrs: (dom) => parseSafeImageAttrs(dom, 'data-markdown-src')
+      },
+      {
+        tag: 'img[src]:not([data-markdown-src]):not([src^="data:"])',
+        getAttrs: (dom) => parseSafeImageAttrs(dom, 'src')
+      }
+    ]
+  },
+
+  renderHTML({ node, HTMLAttributes }) {
+    const rawSrc = typeof node.attrs.src === 'string' ? node.attrs.src : ''
+    const displaySrc = rawSrc
+      ? resolveImageDisplaySrc(rawSrc, this.options.getDocumentPath?.())
+      : ''
+    const merged = mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)
+    delete merged.src
+    delete merged['data-markdown-src']
+    if (displaySrc) {
+      merged.src = displaySrc
+    }
+    if (rawSrc && isSafeMarkdownImageUrl(rawSrc)) {
+      merged['data-markdown-src'] = rawSrc
+    }
+    return ['img', merged]
+  },
+
+  parseMarkdown: (token, helpers) => {
+    const href = typeof token.href === 'string' ? token.href : ''
+    if (!href || !isSafeMarkdownImageUrl(href)) {
+      return []
+    }
+    return helpers.createNode('image', {
+      src: href,
+      alt: token.text || '',
+      title: token.title || null
+    })
+  },
+
+  renderMarkdown: (node) => {
+    const src = typeof node.attrs?.src === 'string' ? node.attrs.src : ''
+    if (!src || !isSafeMarkdownImageUrl(src)) {
+      return ''
+    }
+    const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt : ''
+    const title = typeof node.attrs?.title === 'string' ? node.attrs.title : ''
+    const destination = formatMarkdownImageDestination(src)
+    return title
+      ? `![${alt}](${destination} "${title.replace(/"/g, '\\"')}")`
+      : `![${alt}](${destination})`
+  }
+})
+
 export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): AnyExtension[] {
   return [
     StarterKit.configure({
@@ -389,6 +511,9 @@ export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): 
       }
     }),
     MermaidAwareCodeBlock,
+    WikiAssetImage.configure({
+      getDocumentPath: options.getDocumentPath
+    }),
     TocMarker,
     HeadingNumberingExtension.configure({
       showHeadingNumbers: options.showHeadingNumbers ?? false
