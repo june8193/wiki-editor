@@ -982,12 +982,25 @@ body.is-resizing-sidebar .pane-workspace {
   margin-top: 2px;
 }
 
-.settings-panel {
-  width: 400px;
-  max-width: 100%;
-  padding: 16px 20px;
-  background-color: var(--bg-surface);
-  border-left: 1px solid var(--border-color);
+.settings-modal-backdrop {
+  z-index: 70;
+}
+
+.settings-modal {
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-modal:focus {
+  outline: none;
+}
+
+.settings-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -995,7 +1008,8 @@ body.is-resizing-sidebar .pane-workspace {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .settings-panel-header h2 {

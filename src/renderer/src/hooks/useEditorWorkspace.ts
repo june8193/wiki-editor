@@ -104,6 +104,7 @@ interface UseEditorWorkspaceOptions {
   autoSave: boolean
   autoSaveDelayMs: number
   isAutoSavePaused: boolean
+  isShortcutDisabled?: boolean
   onSaveConfigRaw: (rawContent: string) => Promise<unknown>
   onWorkspaceSaved?: () => void
   onError: (message: string | null, error?: unknown) => void
@@ -117,6 +118,7 @@ export function useEditorWorkspace({
   autoSave,
   autoSaveDelayMs,
   isAutoSavePaused,
+  isShortcutDisabled = isAutoSavePaused,
   onSaveConfigRaw,
   onWorkspaceSaved,
   onError,
@@ -140,6 +142,7 @@ export function useEditorWorkspace({
 
   const mountedRef = useRef<boolean>(true)
   const isAutoSavePausedRef = useRef<boolean>(isAutoSavePaused)
+  const isShortcutDisabledRef = useRef<boolean>(isShortcutDisabled)
   const inFlightSavesRef = useRef<Map<string, InFlightSaveEntry>>(new Map())
   const autoSaveTimersRef = useRef<Map<string, { version: number; timerId: number }>>(new Map())
   const lastAutoSaveAttemptVersionRef = useRef<Map<string, number>>(new Map())
@@ -151,6 +154,7 @@ export function useEditorWorkspace({
   })
 
   isAutoSavePausedRef.current = isAutoSavePaused
+  isShortcutDisabledRef.current = isShortcutDisabled
   callbacksRef.current = {
     onSaveConfigRaw,
     onWorkspaceSaved,
@@ -282,7 +286,7 @@ export function useEditorWorkspace({
   // Global fallback Ctrl+S and mode-switch shortcut handler when focus is outside a specific pane editor
   useEffect(() => {
     const handleGlobalKeyDown = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || isAutoSavePausedRef.current) return
+      if (event.defaultPrevented || isShortcutDisabledRef.current) return
       const activeTab = tabStore.getActiveTab()
       if (!activeTab) return
       const activeBuffer = bufferStore.getBuffer(activeTab.bufferKey)

@@ -142,6 +142,7 @@ export function App() {
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const isDialogOpenRef = useRef<boolean>(false)
   isDialogOpenRef.current = pendingDialog !== null
+  const isEditorShortcutDisabled = pendingDialog !== null || isSettingsOpen
   const isSelectingFolderRef = useRef<boolean>(false)
   const tabCloseActionsRef = useRef<{
     saveAndCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => Promise<boolean>
@@ -217,6 +218,7 @@ export function App() {
     autoSave: config.autoSave,
     autoSaveDelayMs: config.autoSaveDelayMs,
     isAutoSavePaused: pendingDialog !== null,
+    isShortcutDisabled: isEditorShortcutDisabled,
     onSaveConfigRaw: saveRawConfig,
     onWorkspaceSaved: () => void refreshGitStatusRef.current(),
     onError: reportErrorBanner,
@@ -387,6 +389,7 @@ export function App() {
   )
 
   const handleOpenConfigEditor = useCallback((): void => {
+    setIsSettingsOpen(false)
     void openConfigDocument()
   }, [openConfigDocument])
 
@@ -619,7 +622,7 @@ export function App() {
           showHeadingNumbers={config.showHeadingNumbers}
           customCommands={config.customCommands}
           scrollRequest={outlineScrollRequest}
-          isShortcutDisabled={pendingDialog !== null}
+          isShortcutDisabled={isEditorShortcutDisabled}
           onSetSplitRatio={setSplitRatio}
           onSplitWithTab={splitWithTab}
           actions={paneActions}
@@ -664,24 +667,25 @@ export function App() {
             <ListTree size={18} strokeWidth={1.75} aria-hidden="true" />
           </button>
         )}
-
-        {isSettingsOpen && (
-          <SettingsPanel
-            theme={config.theme}
-            autoSave={config.autoSave}
-            showHeadingNumbers={config.showHeadingNumbers}
-            configPath={configPath}
-            customCommands={config.customCommands}
-            previewTitle={activeBuffer ? deriveDocumentTitle(activeBuffer.name) : undefined}
-            onToggleTheme={toggleTheme}
-            onToggleAutoSave={toggleAutoSave}
-            onToggleShowHeadingNumbers={toggleShowHeadingNumbers}
-            onSaveCustomCommands={updateCustomCommands}
-            onOpenConfigEditor={handleOpenConfigEditor}
-            onClose={() => setIsSettingsOpen(false)}
-          />
-        )}
       </main>
+
+      {isSettingsOpen && (
+        <SettingsPanel
+          theme={config.theme}
+          autoSave={config.autoSave}
+          showHeadingNumbers={config.showHeadingNumbers}
+          configPath={configPath}
+          customCommands={config.customCommands}
+          previewTitle={activeBuffer ? deriveDocumentTitle(activeBuffer.name) : undefined}
+          isDismissDisabled={pendingDialog !== null}
+          onToggleTheme={toggleTheme}
+          onToggleAutoSave={toggleAutoSave}
+          onToggleShowHeadingNumbers={toggleShowHeadingNumbers}
+          onSaveCustomCommands={updateCustomCommands}
+          onOpenConfigEditor={handleOpenConfigEditor}
+          onClose={() => setIsSettingsOpen(false)}
+        />
+      )}
 
       {pendingDialog && (
         <ConfirmDialog

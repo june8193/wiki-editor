@@ -557,6 +557,7 @@ describe('App shell, theme persistence, and settings panel', () => {
     const openConfigButton = screen.getByRole('button', { name: /설정 파일 직접 열기/i })
     await user.click(openConfigButton)
 
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
     const editor = await screen.findByTestId('document-editor')
     expect(getRawEditorText(editor)).toContain('"theme": "dark"')
     expect(getRawEditorText(editor)).toContain('"autoSave": true')
@@ -678,10 +679,10 @@ describe('App shell, theme persistence, and settings panel', () => {
     const view = render(<App />)
 
     await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
-    expect(screen.getByLabelText('전역 설정 패널')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toHaveAttribute('aria-modal', 'true')
 
     await user.click(screen.getByRole('button', { name: /닫기/i }))
-    expect(screen.queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
 
     view.unmount()
 
@@ -810,10 +811,10 @@ describe('App shell, theme persistence, and settings panel', () => {
     expect((await api.config.get()).theme).toBe('dark')
 
     await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
-    expect(screen.getByLabelText('전역 설정 패널')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
 
     await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
-    expect(screen.queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
 
     view.unmount()
     expect(getMenuListenerCount()).toBe(0)
@@ -3222,7 +3223,7 @@ describe('Custom slash commands, Settings UI management, and direct config.json 
 
     await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     await user.click(screen.getByRole('button', { name: /설정 파일 직접 열기/i }))
-    await user.click(within(screen.getByLabelText('전역 설정 패널')).getByRole('button', { name: '닫기' }))
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
 
     const configEditor = await screen.findByTestId('document-editor')
     const beforeConfig = await api.config.get()
@@ -4610,5 +4611,193 @@ describe('Right sidebar collapse, expand, and resizing', () => {
       'aria-valuenow',
       '240'
     )
+  })
+})
+
+describe('Settings modal dialog', () => {
+  it('opens as a centered modal dialog outside main layout, toggles with toggle-settings, and closes via 닫기 button', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+
+    // Open via toggle-settings menu command
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+
+    const dialog = screen.getByRole('dialog', { name: '전역 설정 패널' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(screen.getByLabelText('전역 설정 패널')).toBe(dialog)
+
+    // Modal is rendered outside <main> layout so it does not consume workspace/sidebar width
+    const main = screen.getByRole('main')
+    expect(within(main).queryByLabelText('전역 설정 패널')).not.toBeInTheDocument()
+    expect(within(main).getAllByRole('complementary')).toHaveLength(2)
+
+    // Clicking inside the dialog does not close it
+    await user.click(within(dialog).getByRole('heading', { name: '전역 설정' }))
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    // Clicking 닫기 closes the modal
+    await user.click(within(dialog).getByRole('button', { name: '닫기' }))
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+
+    // toggle-settings toggles open and closed again
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+  })
+
+  it('closes settings modal on backdrop click and Esc key without closing on inner clicks', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    // Backdrop click closes modal, inner dialog click does not
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    const dialog = screen.getByRole('dialog', { name: '전역 설정 패널' })
+    await user.click(dialog)
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    const backdrop = dialog.parentElement!
+    await user.click(backdrop)
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+
+    // Esc via user keyboard closes modal
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+
+    // Esc dispatched on window closes modal too
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+  })
+
+  it('disables editor save and mode-switch shortcuts while settings modal is open', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\modal-shortcuts',
+        workspaces: {
+          'C:\\wiki\\modal-shortcuts': {
+            'note.md': '# Note'
+          }
+        }
+      }
+    )
+    const writeSpy = vi.spyOn(api.workspace, 'writeFile')
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('note.md'))
+
+    const editor = await screen.findByTestId('document-editor')
+    setRawEditorText(editor, '# Updated')
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    const dialog = screen.getByRole('dialog', { name: '전역 설정 패널' })
+
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(dialog, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(editor, { key: '2', ctrlKey: true })
+    fireEvent.keyDown(window, { key: '3', ctrlKey: true })
+
+    expect(writeSpy).not.toHaveBeenCalled()
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    expect(within(modeGroup).getByRole('button', { name: 'Raw' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+
+    // Closing modal re-enables editor shortcuts
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(writeSpy).toHaveBeenCalledTimes(1)
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    })
+  })
+
+  it('closes settings modal when opening config.json directly and renders ConfirmDialog above settings modal', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\modal-layer',
+        workspaces: {
+          'C:\\wiki\\modal-layer': {
+            'dirty.md': '# Dirty'
+          },
+          'C:\\wiki\\modal-next': {
+            'next.md': '# Next'
+          }
+        }
+      }
+    )
+    let nextFolder = 'C:\\wiki\\modal-layer'
+    api.workspace.selectFolder = async () => nextFolder
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('dirty.md'))
+
+    const editor = await screen.findByTestId('document-editor')
+    setRawEditorText(editor, '# Dirty edited')
+
+    // Open Settings modal, then trigger ConfirmDialog while settings modal is open
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    const settingsDialog = screen.getByRole('dialog', { name: '전역 설정 패널' })
+
+    nextFolder = 'C:\\wiki\\modal-next'
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const confirmDialog = await screen.findByRole('alertdialog')
+    expect(settingsDialog).toBeInTheDocument()
+    expect(
+      settingsDialog.compareDocumentPosition(confirmDialog) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    // Esc while ConfirmDialog is on top must not dismiss Settings modal underneath
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    // Dismiss ConfirmDialog via 취소 -> Settings modal remains open and interactive
+    await user.click(within(confirmDialog).getByRole('button', { name: '취소' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    // Clicking 설정 파일 직접 열기 opens config.json and closes the Settings modal
+    await user.click(within(settingsDialog).getByRole('button', { name: /설정 파일 직접 열기/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+    })
+    const configEditor = await screen.findByTestId('document-editor')
+    expect(getRawEditorText(configEditor)).toContain('"theme": "light"')
   })
 })
