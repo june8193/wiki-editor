@@ -9,6 +9,10 @@ import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
+  type HeadingScrollSpySample,
+  measureActiveHeadingIndexInContainer
+} from '../editor/outlineScrollSpy'
+import {
   addTableRowBeforeSafely,
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
@@ -20,6 +24,7 @@ import {
   slashInsertPluginKey
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
+import { useEditorOutlineSpy } from '../hooks/useEditorOutlineSpy'
 import { useOneShotScroll } from '../hooks/useOneShotScroll'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from '../hooks/useSlashMenu'
 import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
@@ -40,8 +45,10 @@ interface WysiwygMarkdownEditorProps {
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
   scrollRequest?: WysiwygScrollRequest | null
+  isActive?: boolean
   onChangeContent: (nextContent: string) => void
   onScrollTopChange?: (scrollTop: number) => void
+  onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
 }
 
 interface ToolbarStateSnapshot {
@@ -215,8 +222,10 @@ export function WysiwygMarkdownEditor({
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
   scrollRequest,
+  isActive = true,
   onChangeContent,
-  onScrollTopChange
+  onScrollTopChange,
+  onActiveHeadingChange
 }: WysiwygMarkdownEditorProps) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
@@ -381,6 +390,17 @@ export function WysiwygMarkdownEditor({
     }
   }, [editor, showHeadingNumbers])
 
+  const { resetScrollIntent, handleContainerScroll, scrollIntentHandlers } = useEditorOutlineSpy({
+    content,
+    isReady: Boolean(editor),
+    isActive,
+    measure: (headings) => {
+      const container = scrollContainerRef.current
+      return container ? measureActiveHeadingIndexInContainer(container, headings) : null
+    },
+    onActiveHeadingChange
+  })
+
   useOneShotScroll(scrollRequest, Boolean(editor), (req) => {
     if (!editor) return false
 
@@ -396,6 +416,7 @@ export function WysiwygMarkdownEditor({
     const targetPos = headingPositions[req.index]
     if (targetPos === undefined) return true
 
+    resetScrollIntent()
     const dom = editor.view.nodeDOM(targetPos)
     if (dom instanceof Element && typeof dom.scrollIntoView === 'function') {
       dom.scrollIntoView({ block: 'start' })
@@ -436,13 +457,13 @@ export function WysiwygMarkdownEditor({
           if (item.kind === 'divider') {
             return <span key={item.id} className="toolbar-divider" aria-hidden="true" />
           }
-          const isActive = item.activeKey ? toolbarState[item.activeKey] : false
+          const isItemActive = item.activeKey ? toolbarState[item.activeKey] : false
           return (
             <button
               key={item.id}
               type="button"
-              className={`toolbar-btn${isActive ? ' is-active' : ''}`}
-              aria-pressed={item.activeKey ? isActive : undefined}
+              className={`toolbar-btn${isItemActive ? ' is-active' : ''}`}
+              aria-pressed={item.activeKey ? isItemActive : undefined}
               onClick={() => item.run(editor)}
             >
               {item.label}
@@ -462,7 +483,11 @@ export function WysiwygMarkdownEditor({
       <div
         ref={scrollContainerRef}
         className="wysiwyg-scroll-container"
-        onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
+        {...scrollIntentHandlers}
+        onScroll={(event) => {
+          onScrollTopChange?.(event.currentTarget.scrollTop)
+          handleContainerScroll()
+        }}
         onContextMenu={(event) => {
           const target = event.target as HTMLElement | null
           const cellEl = target?.closest('td, th')

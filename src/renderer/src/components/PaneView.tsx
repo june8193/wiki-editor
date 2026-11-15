@@ -107,6 +107,7 @@ export function PaneView({
           showHeadingNumbers={showHeadingNumbers}
           customCommands={customCommands}
           scrollRequest={activeScrollRequest}
+          isActive={isActivePane}
           isShortcutDisabled={isShortcutDisabled}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}

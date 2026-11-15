@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseMarkdownHeadings } from './MarkdownTocEngine'
 import {
+  measureActiveHeadingIndexInRawEditor,
   resolveActiveHeadingIndexByLine,
   resolveActiveHeadingIndexByOffsets
 } from './outlineScrollSpy'
@@ -173,5 +174,122 @@ describe('outlineScrollSpy', () => {
         clientHeight: 400
       })
     ).toBe(2)
+  })
+
+  it('measures Raw CodeMirror viewport top line while excluding fenced # comments and unmeasured layout', () => {
+    const markdown = [
+      'Intro preface',
+      '# First Heading',
+      '```bash',
+      '# shell comment inside fence',
+      'echo hi',
+      '```',
+      '## Second Heading',
+      'Closing text'
+    ].join('\n')
+    const headings = parseMarkdownHeadings(markdown)
+    const lines = markdown.split('\n')
+    const lineStarts: number[] = []
+    let offset = 0
+    for (const line of lines) {
+      lineStarts.push(offset)
+      offset += line.length + 1
+    }
+
+    const createViewportStub = (metrics: {
+      scrollTop: number
+      scrollHeight: number
+      clientHeight: number
+      paddingTop?: number
+      lineHeight?: number
+    }) => {
+      const scrollDOM = document.createElement('div')
+      const contentDOM = document.createElement('div')
+      Object.defineProperties(scrollDOM, {
+        scrollTop: { value: metrics.scrollTop, configurable: true },
+        scrollHeight: { value: metrics.scrollHeight, configurable: true },
+        clientHeight: { value: metrics.clientHeight, configurable: true }
+      })
+      const lineHeight = metrics.lineHeight ?? 20
+      return {
+        scrollDOM,
+        contentDOM,
+        documentPadding: { top: metrics.paddingTop ?? 16 },
+        state: {
+          doc: {
+            lines: lines.length,
+            lineAt: (pos: number) => {
+              let lineNumber = 1
+              for (let i = 0; i < lineStarts.length; i += 1) {
+                if (lineStarts[i] <= pos) {
+                  lineNumber = i + 1
+                }
+              }
+              return { number: lineNumber }
+            }
+          }
+        },
+        lineBlockAtHeight: (height: number) => {
+          const lineIdx = Math.max(0, Math.min(lines.length - 1, Math.floor(height / lineHeight)))
+          return { from: lineStarts[lineIdx] }
+        }
+      }
+    }
+
+    // Empty headings -> null
+    expect(
+      measureActiveHeadingIndexInRawEditor(
+        createViewportStub({ scrollTop: 0, scrollHeight: 800, clientHeight: 400 }),
+        []
+      )
+    ).toBeNull()
+
+    // Unmeasured jsdom box (zero geometry and zero scrollTop) -> null
+    expect(
+      measureActiveHeadingIndexInRawEditor(
+        createViewportStub({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 }),
+        headings
+      )
+    ).toBeNull()
+
+    // At top (preface line 1, baselineHeight = 0 + 24 - 16 = 8px -> line 1) -> null
+    expect(
+      measureActiveHeadingIndexInRawEditor(
+        createViewportStub({ scrollTop: 0, scrollHeight: 800, clientHeight: 400 }),
+        headings
+      )
+    ).toBeNull()
+
+    // Scrolled onto fenced `# shell comment inside fence` (line 4): remains on `# First Heading` (index 0)
+    expect(
+      measureActiveHeadingIndexInRawEditor(
+        createViewportStub({ scrollTop: 60, scrollHeight: 800, clientHeight: 400 }),
+        headings
+      )
+    ).toBe(0)
+
+    // Scrolled onto line 7 (`## Second Heading`): updates to index 1
+    expect(
+      measureActiveHeadingIndexInRawEditor(
+        createViewportStub({ scrollTop: 120, scrollHeight: 800, clientHeight: 400 }),
+        headings
+      )
+    ).toBe(1)
+
+    // Scrolled to bottom (scrollHeight 800, clientHeight 400, scrollTop 399): selects last heading
+    expect(
+      measureActiveHeadingIndexInRawEditor(
+        createViewportStub({ scrollTop: 399, scrollHeight: 800, clientHeight: 400 }),
+        headings
+      )
+    ).toBe(1)
+
+    // Collapsed DOM line blocks (zero height after unmeasured jsdom layout cycle) fall back to defaultLineHeight
+    const collapsedViewport = {
+      ...createViewportStub({ scrollTop: 42, scrollHeight: 800, clientHeight: 400 }),
+      defaultLineHeight: 14,
+      lineBlockAtHeight: () => ({ from: lineStarts[lines.length - 1], top: 14, bottom: 14 })
+    }
+    expect(measureActiveHeadingIndexInRawEditor(collapsedViewport, headings)).toBe(0)
   })
 })

@@ -19,6 +19,7 @@ interface DocumentEditorProps {
   customCommands?: readonly CustomCommandConfig[]
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: OutlineScrollRequest | null
+  isActive?: boolean
   isShortcutDisabled?: boolean
   onChangeContent: (nextContent: string) => void
   onSave: () => void
@@ -46,6 +47,7 @@ export function DocumentEditor({
   customCommands,
   mermaidRenderer,
   scrollRequest = null,
+  isActive = true,
   isShortcutDisabled = false,
   onChangeContent,
   onSave,
@@ -176,8 +178,14 @@ export function DocumentEditor({
               ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
               : null
           }
+          isActive={isActive}
           onChangeContent={onChangeContent}
           onUpdateViewState={onUpdateViewState}
+          onActiveHeadingChange={
+            allowRichModes && onActiveHeadingChange
+              ? (sample) => onActiveHeadingChange({ mode: 'raw', ...sample })
+              : undefined
+          }
         />
       )}
 
@@ -195,8 +203,14 @@ export function DocumentEditor({
               ? { index: matchedScrollRequest.index, nonce: matchedScrollRequest.nonce }
               : null
           }
+          isActive={isActive}
           onChangeContent={onChangeContent}
           onScrollTopChange={handleScrollTopChange}
+          onActiveHeadingChange={
+            onActiveHeadingChange
+              ? (sample) => onActiveHeadingChange({ mode: 'wysiwyg', ...sample })
+              : undefined
+          }
         />
       )}
 
@@ -216,6 +230,7 @@ export function DocumentEditor({
                 }
               : null
           }
+          isActive={isActive}
           onScrollTopChange={handleScrollTopChange}
           onActiveHeadingChange={
             onActiveHeadingChange

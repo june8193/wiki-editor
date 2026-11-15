@@ -11,7 +11,9 @@ import {
 const USER_SCROLL_INTENT_WINDOW_MS = 250
 const POINTER_RELEASE_EVENTS = ['pointerup', 'pointercancel', 'mouseup', 'blur'] as const
 
-function isScrollNavigationKey(event: ReactKeyboardEvent<HTMLElement>): boolean {
+function isScrollNavigationKey(
+  event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'metaKey' | 'key'>
+): boolean {
   if (event.altKey) return false
   if ((event.ctrlKey || event.metaKey) && event.key !== 'Home' && event.key !== 'End') {
     return false
@@ -68,21 +70,28 @@ export function useUserScrollIntent() {
     }
   }, [clearPointerDown])
 
-  const handlePointerStart = useCallback(
-    (event: ReactPointerEvent<HTMLElement> | ReactMouseEvent<HTMLElement>): void => {
+  const applyPointerStart = useCallback(
+    (container: HTMLElement, target: EventTarget | null, clientX: number, clientY: number): void => {
       isPointerDownRef.current = true
-      if (event.target === event.currentTarget) {
-        const rect = event.currentTarget.getBoundingClientRect()
+      if (target === container) {
+        const rect = container.getBoundingClientRect()
         const isOnScrollbarOrUnmeasured =
           rect.width === 0 ||
-          event.clientX - rect.left >= event.currentTarget.clientWidth ||
-          event.clientY - rect.top >= event.currentTarget.clientHeight
+          clientX - rect.left >= container.clientWidth ||
+          clientY - rect.top >= container.clientHeight
         if (isOnScrollbarOrUnmeasured) {
           markUserScrollIntent()
         }
       }
     },
     [markUserScrollIntent]
+  )
+
+  const handlePointerStart = useCallback(
+    (event: ReactPointerEvent<HTMLElement> | ReactMouseEvent<HTMLElement>): void => {
+      applyPointerStart(event.currentTarget, event.target, event.clientX, event.clientY)
+    },
+    [applyPointerStart]
   )
 
   const handleKeyDown = useCallback(
@@ -92,6 +101,40 @@ export function useUserScrollIntent() {
       }
     },
     [markUserScrollIntent]
+  )
+
+  const attachScrollIntentListeners = useCallback(
+    (element: HTMLElement): (() => void) => {
+      const onPointerStart = (event: MouseEvent | PointerEvent): void => {
+        applyPointerStart(element, event.target, event.clientX, event.clientY)
+      }
+      const onKeyDown = (event: KeyboardEvent): void => {
+        if (isScrollNavigationKey(event)) {
+          markUserScrollIntent()
+        }
+      }
+
+      element.addEventListener('wheel', markUserScrollIntent, { passive: true })
+      element.addEventListener('touchstart', markUserScrollIntent, { passive: true })
+      element.addEventListener('pointerdown', onPointerStart)
+      element.addEventListener('mousedown', onPointerStart)
+      element.addEventListener('pointerup', clearPointerDown)
+      element.addEventListener('pointercancel', clearPointerDown)
+      element.addEventListener('mouseup', clearPointerDown)
+      element.addEventListener('keydown', onKeyDown)
+
+      return () => {
+        element.removeEventListener('wheel', markUserScrollIntent)
+        element.removeEventListener('touchstart', markUserScrollIntent)
+        element.removeEventListener('pointerdown', onPointerStart)
+        element.removeEventListener('mousedown', onPointerStart)
+        element.removeEventListener('pointerup', clearPointerDown)
+        element.removeEventListener('pointercancel', clearPointerDown)
+        element.removeEventListener('mouseup', clearPointerDown)
+        element.removeEventListener('keydown', onKeyDown)
+      }
+    },
+    [applyPointerStart, clearPointerDown, markUserScrollIntent]
   )
 
   const scrollIntentHandlers = useMemo(
@@ -112,6 +155,7 @@ export function useUserScrollIntent() {
     markUserScrollIntent,
     resetScrollIntent,
     consumeUserScrollIntent,
-    scrollIntentHandlers
+    scrollIntentHandlers,
+    attachScrollIntentListeners
   }
 }

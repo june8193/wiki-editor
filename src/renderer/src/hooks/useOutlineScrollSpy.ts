@@ -5,6 +5,7 @@ import type {
   OutlineContextTarget,
   OutlineScrollRequest
 } from '../editor/outlineScrollSpy'
+import type { PaneId } from '../stores/PaneTabStore'
 
 interface ActiveOutlineHeadingState {
   context: OutlineContextTarget
@@ -64,9 +65,19 @@ export function useOutlineScrollSpy({
   const [pinnedOutlineHeading, setPinnedOutlineHeading] =
     useState<PinnedOutlineHeadingState | null>(null)
   const scrollNonceRef = useRef(0)
+  const latestSpyByPaneRef = useRef<Partial<Record<PaneId, ActiveOutlineHeadingState>>>({})
 
   const activeContextRef = useRef<OutlineContextTarget | null>(activeContext)
   activeContextRef.current = activeContext
+
+  const cachedSpyForActivePane = activeContext
+    ? (latestSpyByPaneRef.current[activeContext.paneId] ?? null)
+    : null
+  const activeSpy = isSpyValidForContext(spyOutlineHeading, activeContext)
+    ? spyOutlineHeading
+    : isSpyValidForContext(cachedSpyForActivePane, activeContext)
+      ? cachedSpyForActivePane
+      : null
 
   const activeHeadingIndex = isPinValidForContext(
     pinnedOutlineHeading,
@@ -74,17 +85,23 @@ export function useOutlineScrollSpy({
     bufferContent
   )
     ? pinnedOutlineHeading.index
-    : isSpyValidForContext(spyOutlineHeading, activeContext)
-      ? spyOutlineHeading.index
+    : activeSpy
+      ? activeSpy.index
       : null
 
   useEffect(() => {
     setPinnedOutlineHeading((prev) =>
       isPinValidForContext(prev, activeContext, bufferContent) ? prev : null
     )
-    setSpyOutlineHeading((prev) =>
-      isSpyValidForContext(prev, activeContext) ? prev : null
-    )
+    setSpyOutlineHeading((prev) => {
+      if (isSpyValidForContext(prev, activeContext)) {
+        return prev
+      }
+      const nextCached = activeContext
+        ? (latestSpyByPaneRef.current[activeContext.paneId] ?? null)
+        : null
+      return isSpyValidForContext(nextCached, activeContext) ? nextCached : null
+    })
   }, [activeContext, bufferContent])
 
   useEffect(() => {
@@ -94,6 +111,10 @@ export function useOutlineScrollSpy({
   }, [outlineScrollRequest])
 
   const handleActiveHeadingReport = useCallback((report: OutlineActiveHeadingReport): void => {
+    latestSpyByPaneRef.current[report.context.paneId] = {
+      context: report.context,
+      index: report.headingIndex
+    }
     if (!isSameOutlineContext(activeContextRef.current, report.context)) {
       return
     }

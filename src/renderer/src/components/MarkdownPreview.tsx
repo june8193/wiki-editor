@@ -1,15 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
-import { parseMarkdownHeadings } from '../editor/MarkdownTocEngine'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import {
   type HeadingScrollSpySample,
   measureActiveHeadingIndexInContainer
 } from '../editor/outlineScrollSpy'
+import { useEditorOutlineSpy } from '../hooks/useEditorOutlineSpy'
 import { useOneShotScroll } from '../hooks/useOneShotScroll'
 import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
-import { useUserScrollIntent } from '../hooks/useUserScrollIntent'
 
 export interface PreviewScrollRequest {
   slug?: string
@@ -24,6 +23,7 @@ interface MarkdownPreviewProps {
   showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: PreviewScrollRequest | null
+  isActive?: boolean
   onScrollTopChange?: (scrollTop: number) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
 }
@@ -41,27 +41,27 @@ export function MarkdownPreview({
   showHeadingNumbers = false,
   mermaidRenderer,
   scrollRequest,
+  isActive = true,
   onScrollTopChange,
   onActiveHeadingChange
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const onActiveHeadingChangeRef = useRef(onActiveHeadingChange)
-  onActiveHeadingChangeRef.current = onActiveHeadingChange
 
-  const { markUserScrollIntent, resetScrollIntent, consumeUserScrollIntent, scrollIntentHandlers } =
-    useUserScrollIntent()
-
-  const parsedHeadings = useMemo(() => parseMarkdownHeadings(content), [content])
-
-  const reportActiveHeading = useCallback(
-    (container: HTMLDivElement, isUserScroll: boolean): void => {
-      const callback = onActiveHeadingChangeRef.current
-      if (!callback) return
-      const headingIndex = measureActiveHeadingIndexInContainer(container, parsedHeadings)
-      callback({ headingIndex, isUserScroll })
+  const {
+    markUserScrollIntent,
+    resetScrollIntent,
+    handleContainerScroll,
+    scrollIntentHandlers
+  } = useEditorOutlineSpy({
+    content,
+    isReady: true,
+    isActive,
+    measure: (headings) => {
+      const container = containerRef.current
+      return container ? measureActiveHeadingIndexInContainer(container, headings) : null
     },
-    [parsedHeadings]
-  )
+    onActiveHeadingChange
+  })
 
   const scrollToHeading = useCallback((slug?: string, index?: number): void => {
     const container = containerRef.current
@@ -106,12 +106,6 @@ export function MarkdownPreview({
     scrollToHeading(req.slug, req.index)
   })
 
-  useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-    reportActiveHeading(container, false)
-  }, [reportActiveHeading])
-
   return (
     <div
       ref={containerRef}
@@ -122,8 +116,7 @@ export function MarkdownPreview({
       {...scrollIntentHandlers}
       onScroll={(event) => {
         onScrollTopChange?.(event.currentTarget.scrollTop)
-        const isUserScroll = consumeUserScrollIntent()
-        reportActiveHeading(event.currentTarget, isUserScroll)
+        handleContainerScroll()
       }}
     >
       {content.trim().length === 0 ? (

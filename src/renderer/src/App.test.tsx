@@ -5357,7 +5357,7 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
     }
   })
 
-  it('protects clicked outline heading until user scroll, clears pin on tab/mode switch, and ignores inactive split-pane Preview scroll', async () => {
+  it('protects clicked Document Outline heading until user scroll, clears pin on tab/Editor Mode switch, and ignores inactive Split Mode Pane scroll', async () => {
     const user = userEvent.setup()
     const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
 
@@ -5475,7 +5475,7 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
       fireEvent.scroll(primaryPreview)
       expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
 
-      // 6. Scrolling an inactive split pane's Preview does not overwrite active pane's outline highlight
+      // 6. Scrolling an inactive Split Mode Pane's Preview does not overwrite active Pane's Document Outline highlight
       fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /side\.md/i }))
       const tabMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
       await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
@@ -5505,6 +5505,441 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
       expect(outlineButtons()).toHaveLength(4)
       expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
       expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switches, and Split Mode Panes', () => {
+  it('tracks scroll, content edits, click pin protection, and user-scroll release in 위지윅 Editor Mode', async () => {
+    const user = userEvent.setup()
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const docContent = [
+        'Intro preface before first heading.',
+        '',
+        '# Overview',
+        'Section 1 body',
+        '',
+        '## Architecture',
+        'Section 2 body',
+        '',
+        '### Details',
+        'Section 3 body',
+        '',
+        '## Summary',
+        'Short ending'
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\wysiwyg-spy',
+          workspaces: {
+            'C:\\wiki\\wysiwyg-spy': {
+              'guide.md': docContent
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('guide.md'))
+
+      await user.click(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: '위지윅'
+        })
+      )
+
+      const primaryPane = screen.getByTestId('pane-primary')
+      const scrollContainer = primaryPane.querySelector('.wysiwyg-scroll-container') as HTMLElement
+      expect(scrollContainer).toBeTruthy()
+
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+
+      let currentScrollTop = 0
+      const headingOffsets = new Map<string, number>([
+        ['Overview', 160],
+        ['Architecture', 340],
+        ['Details', 560],
+        ['Summary', 880]
+      ])
+
+      Object.defineProperties(scrollContainer, {
+        clientHeight: { value: 400, configurable: true },
+        scrollHeight: { value: 1000, configurable: true },
+        scrollTop: {
+          get: () => currentScrollTop,
+          set: () => undefined,
+          configurable: true
+        }
+      })
+
+      const originalRect = HTMLElement.prototype.getBoundingClientRect
+      const rectSpy = vi
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockImplementation(function (this: HTMLElement) {
+          if (this === scrollContainer) {
+            return {
+              top: 100,
+              bottom: 500,
+              left: 0,
+              right: 600,
+              width: 600,
+              height: 400,
+              x: 0,
+              y: 100,
+              toJSON: () => ({})
+            } as DOMRect
+          }
+          if (/^H[1-6]$/.test(this.tagName) && scrollContainer.contains(this)) {
+            const text = this.textContent?.trim() ?? ''
+            const offset = headingOffsets.get(text) ?? 0
+            const top = 100 + offset - currentScrollTop
+            return {
+              top,
+              bottom: top + 28,
+              left: 0,
+              right: 500,
+              width: 500,
+              height: 28,
+              x: 0,
+              y: top,
+              toJSON: () => ({})
+            } as DOMRect
+          }
+          return originalRect.call(this)
+        })
+
+      try {
+        // 1. Preface at top -> none active
+        fireEvent.scroll(scrollContainer)
+        for (const btn of outlineButtons()) {
+          expect(btn).not.toHaveAttribute('aria-current')
+        }
+
+        // 2. Scroll to Architecture -> index 1 active and auto-scrolled in Document Outline
+        scrollIntoViewMock.mockClear()
+        currentScrollTop = 320
+        fireEvent.scroll(scrollContainer)
+        expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+        expect(outlineButtons()[1]).toHaveClass('is-active')
+        expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
+
+        // 3. Click Summary in Document Outline -> pin protected until explicit user scroll
+        await user.click(outlineButtons()[3])
+        expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+        currentScrollTop = 330
+        fireEvent.scroll(scrollContainer)
+        expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+
+        // User wheel scroll releases pin and tracks active heading cleanly
+        fireEvent.wheel(scrollContainer)
+        currentScrollTop = 335
+        fireEvent.scroll(scrollContainer)
+        expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+        // 4. Editing content inserts a new heading above Architecture, recalculating active index
+        headingOffsets.set('Intro preface before first heading.', 80)
+        const docEl = within(primaryPane).getByTestId('document-editor')
+        const firstParagraph = docEl.querySelector('p')!
+        const docWithElementFromPoint = document as Document & {
+          elementFromPoint?: (x: number, y: number) => Element | null
+        }
+        const hadOwnElementFromPoint = Object.prototype.hasOwnProperty.call(
+          docWithElementFromPoint,
+          'elementFromPoint'
+        )
+        const prevElementFromPoint = docWithElementFromPoint.elementFromPoint
+        docWithElementFromPoint.elementFromPoint = () => firstParagraph
+        try {
+          await user.click(firstParagraph)
+        } finally {
+          if (hadOwnElementFromPoint) {
+            docWithElementFromPoint.elementFromPoint = prevElementFromPoint
+          } else {
+            Reflect.deleteProperty(docWithElementFromPoint, 'elementFromPoint')
+          }
+        }
+        await user.click(within(primaryPane).getByRole('button', { name: 'H1' }))
+        await waitFor(() => {
+          expect(outlineButtons()).toHaveLength(5)
+        })
+        expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+      } finally {
+        rectSpy.mockRestore()
+      }
+    } finally {
+      restore()
+    }
+  })
+
+  it('tracks Raw scroll by 1-based top line (excluding code fences), content edits, click pin protection, and ignores cursor-only moves', async () => {
+    const user = userEvent.setup()
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const rawDoc = [
+        'Preface intro line 1',
+        '# Alpha Heading',
+        '```bash',
+        '# bash comment inside fence',
+        'echo ok',
+        '```',
+        '## Beta Heading',
+        'Beta paragraph line 8',
+        '### Gamma Heading',
+        'Closing line 10'
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\raw-spy',
+          workspaces: {
+            'C:\\wiki\\raw-spy': {
+              'raw-guide.md': rawDoc
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('raw-guide.md'))
+
+      const primaryPane = screen.getByTestId('pane-primary')
+      const scroller = primaryPane.querySelector('.cm-scroller') as HTMLElement
+      expect(scroller).toBeTruthy()
+      const rawEditorEl = within(primaryPane).getByTestId('document-editor')
+      const rawView = getRawEditorView(rawEditorEl)
+
+      let currentScrollTop = 0
+      stubScrollLayout(scroller, () => ({
+        scrollTop: currentScrollTop,
+        scrollHeight: 500,
+        clientHeight: 200,
+        top: 100
+      }))
+
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+      expect(outlineButtons()).toHaveLength(3)
+
+      // 1. Preface at scrollTop=0 -> none active
+      fireEvent.scroll(scroller)
+      for (const btn of outlineButtons()) {
+        expect(btn).not.toHaveAttribute('aria-current')
+      }
+
+      // 2. Scroll onto fenced `# bash comment` (line 4, scrollTop=42) -> stays on # Alpha Heading (index 0)
+      scrollIntoViewMock.mockClear()
+      currentScrollTop = 42
+      fireEvent.scroll(scroller)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[0]).toHaveClass('is-active')
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
+
+      // 3. Cursor movement alone without scrolling does NOT shift Document Outline highlight
+      const endPos = rawView.state.doc.length
+      act(() => {
+        rawView.dispatch({ selection: { anchor: endPos } })
+      })
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[2]).not.toHaveAttribute('aria-current')
+
+      // 4. Click Gamma Heading (index 2) -> pin protected across programmatic scroll; wheel releases pin
+      await user.click(outlineButtons()[2])
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+      currentScrollTop = 84 // Line 7: Beta Heading
+      fireEvent.scroll(scroller)
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+
+      fireEvent.wheel(scroller)
+      fireEvent.scroll(scroller)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // 5. Scroll to bottom (scrollHeight 500, clientHeight 200, scrollTop 299) -> highlights last heading
+      currentScrollTop = 299
+      fireEvent.scroll(scroller)
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+
+      // 6. Editing Raw content shifts heading indices at the same scroll position (scrollTop=100, line 8)
+      fireEvent.wheel(scroller)
+      currentScrollTop = 100
+      fireEvent.scroll(scroller)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      setRawEditorText(rawEditorEl, '# Prepended Top\n' + rawDoc)
+      expect(outlineButtons()).toHaveLength(4)
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+    } finally {
+      restore()
+    }
+  })
+
+  it('synchronizes Document Outline immediately across Editor Mode switches, same-Pane Tab switches, and Split Mode Pane focus switches', async () => {
+    const user = userEvent.setup()
+    const { restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const alphaDoc = [
+        'Alpha preface',
+        '# Alpha One',
+        'Alpha paragraph',
+        '## Alpha Two',
+        'Alpha section',
+        '### Alpha Three',
+        'Alpha ending'
+      ].join('\n')
+      const betaDoc = [
+        'Beta preface',
+        '# Beta One',
+        'Beta paragraph',
+        '## Beta Two',
+        'Beta ending'
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\sync-modes',
+          workspaces: {
+            'C:\\wiki\\sync-modes': {
+              'alpha.md': alphaDoc,
+              'beta.md': betaDoc,
+              'meta.json': '{"name":"wiki"}'
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('beta.md'))
+      await user.click(await within(explorer).findByText('meta.json'))
+      await user.click(await within(explorer).findByText('alpha.md'))
+
+      const primaryPane = screen.getByTestId('pane-primary')
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+
+      // 1. Raw -> 위지윅 -> Preview Editor Mode switches immediately recalculate active heading
+      const rawScroller = primaryPane.querySelector('.cm-scroller') as HTMLElement
+      let alphaScrollTop = 42 // Line 4: ## Alpha Two
+      stubScrollLayout(rawScroller, () => ({
+        scrollTop: alphaScrollTop,
+        scrollHeight: 500,
+        clientHeight: 200,
+        top: 100
+      }))
+      fireEvent.scroll(rawScroller)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // Pin heading 2 then switch Editor Mode to 위지윅 -> pin clears and new mode recalculates
+      await user.click(outlineButtons()[2])
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+
+      await user.click(
+        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+          'button',
+          { name: '위지윅' }
+        )
+      )
+      const wysiwygContainer = primaryPane.querySelector('.wysiwyg-scroll-container') as HTMLElement
+      alphaScrollTop = 0
+      stubPreviewSpyLayout(wysiwygContainer, [120, 320, 520], () => alphaScrollTop)
+      // Trigger measurement on stubbed WYSIWYG container -> heading 0 active on mode change vs top
+      fireEvent.scroll(wysiwygContainer)
+      for (const btn of outlineButtons()) {
+        expect(btn).not.toHaveAttribute('aria-current')
+      }
+
+      // Switch to Preview mode and scroll to Alpha Two (index 1)
+      await user.click(
+        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+          'button',
+          { name: 'Preview' }
+        )
+      )
+      const primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      alphaScrollTop = 310
+      stubPreviewSpyLayout(primaryPreview, [120, 320, 520], () => alphaScrollTop)
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // 2. Same-Pane Tab switch to non-markdown (.json) clears Document Outline, returning restores Alpha Two
+      await user.click(within(primaryPane).getByRole('tab', { name: /meta\.json/i }))
+      expect(within(outline).queryByRole('list')).not.toBeInTheDocument()
+
+      await user.click(within(primaryPane).getByRole('tab', { name: /alpha\.md/i }))
+      const restoredPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      stubPreviewSpyLayout(restoredPreview, [120, 320, 520], () => alphaScrollTop)
+      fireEvent.scroll(restoredPreview)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // 3. Split Mode (좌우 분할): move beta.md to Secondary Pane while keeping Primary Pane active
+      fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /beta\.md/i }))
+      const tabMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+      await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+      const secondaryPane = screen.getByTestId('pane-secondary')
+      // Click back into Primary Pane so Alpha Two remains active
+      fireEvent.mouseDown(within(primaryPane).getByLabelText('마크다운 미리보기'))
+      expect(outlineButtons()).toHaveLength(3)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // Pin Alpha Three in Primary Pane, then scroll INACTIVE Secondary Pane (Raw beta.md) to ## Beta Two
+      await user.click(outlineButtons()[2])
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+
+      const secondaryScroller = secondaryPane.querySelector('.cm-scroller') as HTMLElement
+      let betaScrollTop = 42 // Line 4: ## Beta Two (index 1)
+      stubScrollLayout(secondaryScroller, () => ({
+        scrollTop: betaScrollTop,
+        scrollHeight: 500,
+        clientHeight: 200,
+        top: 100
+      }))
+      fireEvent.wheel(secondaryScroller)
+      fireEvent.scroll(secondaryScroller)
+
+      // Active Primary Pane's Document Outline & pin must remain untouched by inactive Pane scroll
+      expect(outlineButtons()).toHaveLength(3)
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+
+      // 4. Focusing Secondary Pane immediately syncs Document Outline to Beta Two WITHOUT resetting to null or scrolling
+      fireEvent.mouseDown(secondaryScroller)
+      expect(outlineButtons()).toHaveLength(2)
+      expect(within(outline).getByText('Beta One')).toBeInTheDocument()
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[1]).toHaveClass('is-active')
+
+      // 5. Switch Split Mode to vertical (상하 분할) and focus back to Primary Pane -> immediately restores Alpha Two (pin was cleared on focus switch)
+      fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /beta\.md/i }))
+      fireEvent.drop(await screen.findByTestId('split-drop-zone-vertical'))
+      expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'vertical')
+      fireEvent.mouseDown(within(primaryPane).getByLabelText('마크다운 미리보기'))
+      expect(outlineButtons()).toHaveLength(3)
+      expect(within(outline).getByText('Alpha Two')).toBeInTheDocument()
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // Verify inactive Secondary Pane can also scroll to top while Primary Pane is focused without affecting Primary Pane
+      betaScrollTop = 0
+      fireEvent.wheel(secondaryScroller)
+      fireEvent.scroll(secondaryScroller)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
     } finally {
       restore()
     }

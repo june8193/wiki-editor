@@ -52,7 +52,7 @@ export interface LineActiveHeadingInput extends ScrollContainerMetrics {
  * Returns true when a scrollable container has actually been scrolled (`scrollTop > 0`)
  * to within `OUTLINE_SPY_BOTTOM_EPSILON_PX` of its bottom edge.
  */
-export function isScrollAtBottom(metrics: ScrollContainerMetrics): boolean {
+function isScrollAtBottom(metrics: ScrollContainerMetrics): boolean {
   const { scrollTop, scrollHeight, clientHeight } = metrics
   return (
     scrollTop > 0 &&
@@ -134,6 +134,38 @@ function resolveMatchingHeadingElements(
   return matched.length === headings.length ? matched : allHeadings
 }
 
+function hasMeasuredElementBox(
+  el: HTMLElement,
+  rect: DOMRect = el.getBoundingClientRect()
+): boolean {
+  return el.clientHeight > 0 || el.scrollHeight > 0 || rect.height > 0
+}
+
+function resolveDocumentPaddingTop(
+  documentPaddingTop: number | undefined,
+  contentDOM: HTMLElement
+): number {
+  if (typeof documentPaddingTop === 'number' && documentPaddingTop > 0) {
+    return documentPaddingTop
+  }
+  const parsed = Number.parseFloat(getComputedStyle(contentDOM).paddingTop)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
+export interface RawScrollViewportLike {
+  scrollDOM: HTMLElement
+  contentDOM: HTMLElement
+  documentPadding?: { top: number }
+  defaultLineHeight?: number
+  state: {
+    doc: {
+      lines: number
+      lineAt: (pos: number) => { number: number }
+    }
+  }
+  lineBlockAtHeight: (height: number) => { from: number; top?: number; bottom?: number }
+}
+
 /**
  * Measures heading positions inside a scrollable rendered markdown container (Preview / WYSIWYG)
  * and resolves the active 0-based outline heading index, returning `null` when layout geometry
@@ -151,9 +183,7 @@ export function measureActiveHeadingIndexInContainer(
   const containerRect = container.getBoundingClientRect()
   const headingRects = headingEls.map((el) => el.getBoundingClientRect())
   const hasLayoutGeometry =
-    container.clientHeight > 0 ||
-    container.scrollHeight > 0 ||
-    containerRect.height > 0 ||
+    hasMeasuredElementBox(container, containerRect) ||
     headingRects.some((rect) => rect.height > 0 || rect.top !== containerRect.top)
 
   if (!hasLayoutGeometry) {
@@ -166,5 +196,52 @@ export function measureActiveHeadingIndexInContainer(
     scrollTop: container.scrollTop,
     scrollHeight: container.scrollHeight,
     clientHeight: container.clientHeight
+  })
+}
+
+/**
+ * Resolves the active 0-based outline heading index from a CodeMirror 6 Raw editor viewport,
+ * returning `null` when layout geometry is absent (e.g., unmocked jsdom) or when the top
+ * visible line sits in the preface.
+ */
+export function measureActiveHeadingIndexInRawEditor(
+  view: RawScrollViewportLike,
+  headings: readonly Pick<MarkdownHeading, 'line'>[]
+): number | null {
+  if (headings.length === 0) return null
+
+  const { scrollDOM, contentDOM } = view
+  if (!hasMeasuredElementBox(scrollDOM)) {
+    return null
+  }
+
+  const paddingTop = resolveDocumentPaddingTop(view.documentPadding?.top, contentDOM)
+  const baselineHeight = Math.max(
+    0,
+    scrollDOM.scrollTop + OUTLINE_SPY_TOP_THRESHOLD_PX - paddingTop
+  )
+  const topBlock = view.lineBlockAtHeight(baselineHeight)
+  let topLine = view.state.doc.lineAt(topBlock.from).number
+  // In headless jsdom after a CM6 DOM measure cycle, zero-height `.cm-line` rects collapse
+  // `heightMap` blocks to zero height (`bottom <= top`); fall back to `defaultLineHeight`.
+  const isZeroHeightBlock =
+    typeof topBlock.bottom === 'number' && topBlock.bottom <= (topBlock.top ?? 0)
+  if (isZeroHeightBlock && baselineHeight > 0) {
+    const fallbackLineHeight =
+      typeof view.defaultLineHeight === 'number' && view.defaultLineHeight > 0
+        ? view.defaultLineHeight
+        : 14
+    topLine = Math.max(
+      1,
+      Math.min(view.state.doc.lines, Math.floor(baselineHeight / fallbackLineHeight) + 1)
+    )
+  }
+
+  return resolveActiveHeadingIndexByLine({
+    headings,
+    topLine,
+    scrollTop: scrollDOM.scrollTop,
+    scrollHeight: scrollDOM.scrollHeight,
+    clientHeight: scrollDOM.clientHeight
   })
 }

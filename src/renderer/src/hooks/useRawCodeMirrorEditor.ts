@@ -26,8 +26,13 @@ import {
   insertOrUpdateTocBlock,
   tryReplaceSlashTocAtLine
 } from '../editor/MarkdownTocEngine'
+import {
+  type HeadingScrollSpySample,
+  measureActiveHeadingIndexInRawEditor
+} from '../editor/outlineScrollSpy'
 import { detectSlashQuery, resolveSlashCommandSnippet } from '../editor/SlashCommandEngine'
 import type { CursorPosition } from '../stores/PaneTabStore'
+import { useEditorOutlineSpy } from './useEditorOutlineSpy'
 import { useOneShotScroll } from './useOneShotScroll'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from './useSlashMenu'
 import { syncElementScrollTop } from './useSyncScrollTop'
@@ -79,8 +84,10 @@ export interface UseRawCodeMirrorEditorOptions {
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
   scrollRequest?: RawScrollRequest | null
+  isActive?: boolean
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
+  onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
 }
 
 const markdownHighlightStyle = HighlightStyle.define([
@@ -185,12 +192,21 @@ export function useRawCodeMirrorEditor({
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
   scrollRequest,
+  isActive = true,
   onChangeContent,
-  onUpdateViewState
+  onUpdateViewState,
+  onActiveHeadingChange
 }: UseRawCodeMirrorEditorOptions) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const outlineSpyRef = useRef<{
+    handleContainerScroll: () => void
+    attachScrollIntentListeners: (element: HTMLElement) => () => void
+  }>({
+    handleContainerScroll: () => {},
+    attachScrollIntentListeners: () => () => {}
+  })
   const compartmentsRef = useRef({
     language: new Compartment(),
     theme: new Compartment(),
@@ -375,10 +391,13 @@ export function useRawCodeMirrorEditor({
 
     const handleScroll = (): void => {
       runtimeRef.current.onUpdateViewState({ scrollTop: view.scrollDOM.scrollTop })
+      outlineSpyRef.current.handleContainerScroll()
     }
     view.scrollDOM.addEventListener('scroll', handleScroll)
+    const detachScrollIntent = outlineSpyRef.current.attachScrollIntentListeners(view.scrollDOM)
 
     return () => {
+      detachScrollIntent()
       view.scrollDOM.removeEventListener('scroll', handleScroll)
       view.destroy()
       viewRef.current = null
@@ -459,6 +478,18 @@ export function useRawCodeMirrorEditor({
     syncElementScrollTop(view.scrollDOM, scrollTop)
   }, [scrollTop])
 
+  const outlineSpy = useEditorOutlineSpy({
+    content,
+    isReady: language === 'markdown',
+    isActive,
+    measure: (headings) => {
+      const view = viewRef.current
+      return view ? measureActiveHeadingIndexInRawEditor(view, headings) : null
+    },
+    onActiveHeadingChange
+  })
+  outlineSpyRef.current = outlineSpy
+
   useOneShotScroll(scrollRequest, true, (req) => {
     const view = viewRef.current
     if (!view) return false
@@ -466,6 +497,7 @@ export function useRawCodeMirrorEditor({
     const lineCount = view.state.doc.lines
     const clampedLine = Math.max(1, Math.min(req.line, lineCount))
     const lineInfo = view.state.doc.line(clampedLine)
+    outlineSpy.resetScrollIntent()
     view.dispatch({
       selection: { anchor: lineInfo.from },
       effects: EditorView.scrollIntoView(lineInfo.from, { y: 'start' })
