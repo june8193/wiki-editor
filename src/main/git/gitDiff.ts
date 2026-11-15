@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
-import { open, stat } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { open, realpath, stat } from 'node:fs/promises'
+import { relative, resolve } from 'node:path'
 import { GIT_DIFF_MAX_BYTES, GIT_EMPTY_TREE_HASH, type GitDiffRequest, type GitFileDiff } from '@shared/git'
-import { isErrnoCode } from '../fs/pathSecurity'
+import { hasBlockedPathSegment, isErrnoCode, isPathInsideRoot } from '../fs/pathSecurity'
+import { IGNORED_ENTRY_NAMES } from '../workspace/WorkspaceFsService'
 import { assertValidCommitHash } from './gitCommitDetail'
 
 export interface GitBufferResult {
@@ -11,12 +12,16 @@ export interface GitBufferResult {
   hasNullByte: boolean
 }
 
-export interface GitDiffExecArgs {
-  cwd: string
-  args: readonly string[]
+export interface GitDiffExecOptions {
   env: NodeJS.ProcessEnv
   timeoutMs: number
   onFailureMeta?: (error: unknown, cwd: string, args: string[]) => void
+}
+
+export interface GitDiffExecArgs {
+  cwd: string
+  args: readonly string[]
+  execOptions: GitDiffExecOptions
 }
 
 function utf8SequenceLength(leadByte: number): number {
@@ -71,16 +76,26 @@ export function isGitBinaryPatchOutput(patchText: string, hasNullByte: boolean):
   return false
 }
 
-export async function checkFileExistsInWorkspace(
+export async function inspectTargetFileState(
   repoRoot: string,
+  workspaceRealRoot: string,
   safeRelativePath: string
-): Promise<boolean> {
+): Promise<{ existsOnDisk: boolean; existsInWorkspace: boolean }> {
+  const candidate = resolve(repoRoot, safeRelativePath)
   try {
-    const stats = await stat(resolve(repoRoot, safeRelativePath))
-    return stats.isFile()
+    const stats = await stat(candidate)
+    if (!stats.isFile()) {
+      return { existsOnDisk: false, existsInWorkspace: false }
+    }
+    const realCandidate = await realpath(candidate)
+    const existsInWorkspace =
+      isPathInsideRoot(workspaceRealRoot, candidate) &&
+      isPathInsideRoot(workspaceRealRoot, realCandidate) &&
+      !hasBlockedPathSegment(relative(workspaceRealRoot, realCandidate), IGNORED_ENTRY_NAMES)
+    return { existsOnDisk: true, existsInWorkspace }
   } catch (error) {
     if (isErrnoCode(error, 'ENOENT') || isErrnoCode(error, 'ENOTDIR')) {
-      return false
+      return { existsOnDisk: false, existsInWorkspace: false }
     }
     throw error
   }
@@ -89,10 +104,9 @@ export async function checkFileExistsInWorkspace(
 async function execGitStdoutCapped({
   cwd,
   args,
-  env,
-  timeoutMs,
-  onFailureMeta
+  execOptions
 }: GitDiffExecArgs): Promise<GitBufferResult> {
+  const { env, timeoutMs, onFailureMeta } = execOptions
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn('git', [...args], {
       cwd,
@@ -222,9 +236,10 @@ function buildUntrackedUnifiedPatch(safePath: string, text: string): string {
 async function readUntrackedFileDiff(
   repoRoot: string,
   safePath: string,
+  existsOnDisk: boolean,
   existsInWorkspace: boolean
 ): Promise<GitFileDiff> {
-  if (!existsInWorkspace) {
+  if (!existsOnDisk) {
     return {
       path: safePath,
       status: '?',
@@ -255,7 +270,7 @@ async function readUntrackedFileDiff(
       status: '?',
       isBinary: true,
       isTruncated: false,
-      existsInWorkspace: true,
+      existsInWorkspace,
       rawPatch: ''
     }
   }
@@ -276,36 +291,38 @@ async function readUntrackedFileDiff(
     status: '?',
     isBinary: false,
     isTruncated: textTruncated || patchExceeded,
-    existsInWorkspace: true,
+    existsInWorkspace,
     rawPatch: boundedPatch
   }
 }
 
 export interface ComputeGitDiffOptions {
   repoRoot: string
+  workspaceRealRoot: string
   request: GitDiffRequest
   safePath: string
   safeOrigPath?: string
   hasHeadCommit: boolean
-  env: NodeJS.ProcessEnv
-  timeoutMs: number
-  onFailureMeta?: (error: unknown, cwd: string, args: string[]) => void
+  execOptions: GitDiffExecOptions
 }
 
 export async function computeGitDiff({
   repoRoot,
+  workspaceRealRoot,
   request,
   safePath,
   safeOrigPath,
   hasHeadCommit,
-  env,
-  timeoutMs,
-  onFailureMeta
+  execOptions
 }: ComputeGitDiffOptions): Promise<GitFileDiff> {
-  const existsInWorkspace = await checkFileExistsInWorkspace(repoRoot, safePath)
+  const { existsOnDisk, existsInWorkspace } = await inspectTargetFileState(
+    repoRoot,
+    workspaceRealRoot,
+    safePath
+  )
 
   if (request.kind === 'unstaged' && request.status === '?') {
-    return readUntrackedFileDiff(repoRoot, safePath, existsInWorkspace)
+    return readUntrackedFileDiff(repoRoot, safePath, existsOnDisk, existsInWorkspace)
   }
 
   const pathArgs = safeOrigPath ? [safeOrigPath, safePath] : [safePath]
@@ -355,9 +372,7 @@ export async function computeGitDiff({
   const { buffer, truncated, hasNullByte } = await execGitStdoutCapped({
     cwd: repoRoot,
     args: gitArgs,
-    env,
-    timeoutMs,
-    onFailureMeta
+    execOptions
   })
 
   const preliminaryText = buffer.toString('utf8')

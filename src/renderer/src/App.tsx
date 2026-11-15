@@ -3,7 +3,14 @@ import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand } from '@shared/ipc'
 import { getGitChangedCount, type GitDiffRequest } from '@shared/git'
-import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
+import {
+  getWorkspacePathKey,
+  isFavoriteWorkspacePath,
+  isNestedOrSamePath,
+  joinWorkspacePath,
+  normalizeWorkspacePath,
+  WorkspaceEntry
+} from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
 import type { OutlineScrollRequest } from './components/DocumentEditor'
@@ -413,13 +420,27 @@ export function App() {
     (repoRelativePath: string): void => {
       const baseRoot = git.status?.repoRoot ?? workspace?.rootPath
       if (!baseRoot) return
-      const sep = baseRoot.includes('\\') && !baseRoot.includes('/') ? '\\' : '/'
-      const normalizedRel = sep === '\\' ? repoRelativePath.replace(/\//g, '\\') : repoRelativePath
-      const fullPath = `${baseRoot.replace(/[\\/]+$/, '')}${sep}${normalizedRel}`
+      const fullPath = joinWorkspacePath(baseRoot, repoRelativePath)
+      let relativePath = repoRelativePath
+      if (workspace?.rootPath) {
+        const normFull = normalizeWorkspacePath(fullPath)
+        const normWorkspace = normalizeWorkspacePath(workspace.rootPath)
+        const keyFull = getWorkspacePathKey(normFull)
+        const keyWorkspace = getWorkspacePathKey(normWorkspace)
+        if (!isNestedOrSamePath(keyFull, keyWorkspace)) {
+          return
+        }
+        if (keyFull.length > keyWorkspace.length) {
+          relativePath = normFull
+            .slice(normWorkspace.length)
+            .replace(/^[\\/]+/, '')
+            .replace(/\\/g, '/')
+        }
+      }
       void openWorkspaceFile({
         name: getGitFileBaseName(repoRelativePath),
         path: fullPath,
-        relativePath: repoRelativePath,
+        relativePath,
         kind: 'file'
       })
     },

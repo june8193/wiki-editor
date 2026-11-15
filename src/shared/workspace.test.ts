@@ -6,6 +6,8 @@ import {
   isFavoriteWorkspacePath,
   isNestedOrSamePath,
   isSameWorkspacePath,
+  joinWorkspacePath,
+  matchPathSeparators,
   normalizeWorkspacePath,
   recordRecentWorkspace,
   remapPathPrefix,
@@ -86,5 +88,9 @@ describe('shared workspace path and favorites helpers', () => {
     expect(remapPathPrefix('C:\\wiki\\docs\\a.md', 'C:\\wiki\\docs', 'C:\\wiki\\guides')).toBe(
       'C:\\wiki\\guides\\a.md'
     )
+    expect(matchPathSeparators('sub/a.md', 'C:\\wiki\\root')).toBe('sub\\a.md')
+    expect(matchPathSeparators('sub\\a.md', '/repo/root')).toBe('sub/a.md')
+    expect(joinWorkspacePath('C:\\wiki\\root\\', 'sub/doc.md')).toBe('C:\\wiki\\root\\sub\\doc.md')
+    expect(joinWorkspacePath('/repo/root/', 'sub\\doc.md')).toBe('/repo/root/sub/doc.md')
   })
 })

@@ -827,6 +827,35 @@ describe('GitService integration (isolated temp repos)', () => {
     expect(stagedRenameDiff.rawPatch).toContain('rename from keep-old.md')
     expect(stagedRenameDiff.rawPatch).toContain('rename to sub/moved.md')
 
+    // Subdirectory workspace: files inside workspace root & non-ignored have existsInWorkspace=true,
+    // while files outside the opened subdirectory or under IGNORED_ENTRY_NAMES have existsInWorkspace=false.
+    const subRepoDiff = await service.diff(join(repoDir, 'sub'), {
+      kind: 'staged',
+      path: 'sub/moved.md',
+      origPath: 'keep-old.md',
+      status: 'R'
+    })
+    expect(subRepoDiff.existsInWorkspace).toBe(true)
+
+    const parentOutsideDiff = await service.diff(join(repoDir, 'sub'), {
+      kind: 'staged',
+      path: 'base.md',
+      status: 'M'
+    })
+    expect(parentOutsideDiff.existsInWorkspace).toBe(false)
+    expect(parentOutsideDiff.rawPatch).toContain('+line 2 updated')
+
+    await mkdir(join(repoDir, 'sub', 'node_modules'), { recursive: true })
+    await writeFile(join(repoDir, 'sub', 'node_modules', 'ignored.md'), '# Ignored\n', 'utf8')
+    const ignoredEntryDiff = await service.diff(join(repoDir, 'sub'), {
+      kind: 'unstaged',
+      path: 'sub/node_modules/ignored.md',
+      status: '?'
+    })
+    expect(ignoredEntryDiff.existsInWorkspace).toBe(false)
+    expect(ignoredEntryDiff.rawPatch).toContain('+# Ignored')
+    await rm(join(repoDir, 'sub', 'node_modules'), { recursive: true, force: true })
+
     await service.commit(repoDir, 'modify and move')
     await rm(join(repoDir, 'base.md'))
     const unstagedDeletedDiff = await service.diff(repoDir, {

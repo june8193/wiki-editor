@@ -387,6 +387,7 @@ export class GitService {
     }
 
     const repoRoot = await this.requireRepoRoot(workspacePath)
+    const workspaceRealRoot = await realpath(resolve(workspacePath))
     const rawPaths = request.origPath ? [request.path, request.origPath] : [request.path]
     const [safePath, safeOrigPath] = await this.validateRepoRelativePaths(repoRoot, rawPaths)
 
@@ -394,15 +395,18 @@ export class GitService {
       const hasHeadCommit = request.kind === 'staged' ? await this.hasHeadCommit(repoRoot) : true
       return await computeGitDiff({
         repoRoot,
+        workspaceRealRoot,
         request,
         safePath,
         safeOrigPath,
         hasHeadCommit,
-        env: this.createGitChildEnv(),
-        timeoutMs: this.localTimeoutMs,
-        onFailureMeta: (error, cwd, args) => {
-          if (typeof error === 'object' && error !== null) {
-            this.failedExecMeta.set(error, { cwd, args })
+        execOptions: {
+          env: this.createGitChildEnv(),
+          timeoutMs: this.localTimeoutMs,
+          onFailureMeta: (error, cwd, args) => {
+            if (typeof error === 'object' && error !== null) {
+              this.failedExecMeta.set(error, { cwd, args })
+            }
           }
         }
       })

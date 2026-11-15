@@ -190,3 +190,21 @@ export function removeRecentWorkspace(
 ): string[] {
   return recents.filter((item) => !isSameWorkspacePath(item, workspacePath))
 }
+
+/**
+ * Converts path separators in `fragment` to match `referencePath`'s separator style.
+ */
+export function matchPathSeparators(fragment: string, referencePath: string): string {
+  const usePosixSep = referencePath.includes('/') && !referencePath.includes('\\')
+  return usePosixSep ? fragment.replace(/\\/g, '/') : fragment.replace(/\//g, '\\')
+}
+
+/**
+ * Joins a workspace or repository root with a relative path using the root's separator style.
+ */
+export function joinWorkspacePath(baseRoot: string, relativePath: string): string {
+  const cleanRoot = baseRoot.replace(/[\\/]+$/, '')
+  const sep = baseRoot.includes('/') && !baseRoot.includes('\\') ? '/' : '\\'
+  const cleanRel = relativePath.replace(/^[\\/]+/, '')
+  return cleanRel ? `${cleanRoot}${sep}${matchPathSeparators(cleanRel, baseRoot)}` : cleanRoot
+}
