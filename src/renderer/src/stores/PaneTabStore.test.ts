@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { canSplitWithTab, PaneTabStore, type PaneTabTransition } from './PaneTabStore'
+import {
+  canSplitWithTab,
+  normalizeSplitRatio,
+  PaneTabStore,
+  type PaneTabTransition
+} from './PaneTabStore'
 
 describe('PaneTabStore', () => {
   it('opens tabs, deduplicates within a pane, switches active tab, and selects neighbor on close', () => {
@@ -313,5 +318,48 @@ describe('PaneTabStore', () => {
     expect(singlePaneStore.getSnapshot().splitMode).toBe('horizontal')
     expect(singlePaneStore.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([sole.id])
     expect(singlePaneStore.getSnapshot().panes.secondary.tabs).toHaveLength(0)
+  })
+
+  it('supports split editor mode and per-tab clamped splitPreviewRatio preserved across mode changes without spurious transitions', () => {
+    const transitions: PaneTabTransition[] = []
+    const store = new PaneTabStore({
+      onTransition: (transition) => transitions.push(transition)
+    })
+
+    const tabA = store.openTab('c:/wiki/a.md')
+    const tabB = store.openTab('c:/wiki/b.md')
+    expect(tabA.splitPreviewRatio).toBe(0.5)
+    expect(tabB.splitPreviewRatio).toBe(0.5)
+
+    // Switch tabA to split mode -> emits editor-mode-changed:raw->split
+    store.updateTabViewState('primary', tabA.id, { mode: 'split' })
+    expect(store.getTab('primary', tabA.id)?.mode).toBe('split')
+
+    // Adjust splitPreviewRatio within and outside [0.15, 0.85] -> clamped, no transition emitted
+    const countBeforeRatio = transitions.length
+    store.updateTabViewState('primary', tabA.id, { splitPreviewRatio: 0.05 })
+    expect(store.getTab('primary', tabA.id)?.splitPreviewRatio).toBe(0.15)
+    store.updateTabViewState('primary', tabA.id, { splitPreviewRatio: 0.95 })
+    expect(store.getTab('primary', tabA.id)?.splitPreviewRatio).toBe(0.85)
+    store.updateTabViewState('primary', tabA.id, { splitPreviewRatio: 0.35 })
+    expect(store.getTab('primary', tabA.id)?.splitPreviewRatio).toBe(0.35)
+    expect(transitions).toHaveLength(countBeforeRatio)
+
+    // Switching mode away and back preserves tabA's splitPreviewRatio while tabB remains 0.5
+    store.updateTabViewState('primary', tabA.id, { mode: 'raw' })
+    store.updateTabViewState('primary', tabA.id, { mode: 'split' })
+    expect(store.getTab('primary', tabA.id)?.splitPreviewRatio).toBe(0.35)
+    expect(store.getTab('primary', tabB.id)?.splitPreviewRatio).toBe(0.5)
+
+    expect(
+      transitions
+        .filter((t) => t.type === 'editor-mode-changed')
+        .map((t) => `${t.from}->${t.to}`)
+    ).toEqual(['raw->split', 'split->raw', 'raw->split'])
+
+    expect(normalizeSplitRatio(0.55 + 0.05)).toBe(0.6)
+    expect(normalizeSplitRatio(Number.NaN)).toBe(0.5)
+    expect(normalizeSplitRatio(0.01)).toBe(0.15)
+    expect(normalizeSplitRatio(0.99)).toBe(0.85)
   })
 })

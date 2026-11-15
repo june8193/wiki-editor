@@ -2459,7 +2459,7 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
     })
     expect(getFilesSnapshot().get('C:/wiki/modes/doc.md')).toContain('Live Paragraph')
 
-    // Roundtrip Raw -> 위지윅 -> Preview -> Raw without editing must keep buffer clean and formatting intact
+    // Roundtrip Raw -> 위지윅 -> Preview -> Split -> Raw without editing must keep buffer clean and formatting intact
     fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '2', ctrlKey: true })
     expect(
       within(primaryPane).getByRole('toolbar', { name: '위지윅 서식 툴바' })
@@ -2467,6 +2467,14 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
 
     fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '3', ctrlKey: true })
     expect(within(primaryPane).getByLabelText('마크다운 미리보기')).toBeInTheDocument()
+
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), {
+      key: 'M',
+      ctrlKey: true,
+      shiftKey: true
+    })
+    expect(within(primaryPane).getByTestId('split-markdown-preview')).toBeInTheDocument()
+    expect(within(primaryPane).queryByTestId('dirty-indicator')).not.toBeInTheDocument()
 
     fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), {
       key: 'M',
@@ -5918,6 +5926,328 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
       expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
     } finally {
       restore()
+    }
+  })
+})
+
+describe('Split editor mode and bidirectional scroll sync', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('integrates Split mode live preview/Mermaid, per-tab clamped splitter ratio, 2-pane workspace independence, non-markdown lock, Outline TOC cursor insertion, and split breadcrumbs', async () => {
+    const user = userEvent.setup()
+    const entries: RendererLogPayload[] = []
+    const alphaInitial = [
+      '# SECRET_ALPHA_TITLE',
+      '',
+      '## Intro',
+      '',
+      '## Details',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  Start --> InitialNode',
+      '```'
+    ].join('\n')
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/split-mode',
+        workspaces: {
+          'C:/wiki/split-mode': {
+            'alpha.md': alphaInitial,
+            'beta.md': '# SECRET_BETA_TITLE',
+            'notes.txt': 'plain text file'
+          }
+        },
+        log: {
+          write: (payload) => {
+            entries.push(payload)
+            return Promise.resolve()
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+
+    // Non-markdown .txt buffer locks Split button and Ctrl+4 / Ctrl+Shift+M
+    await user.click(await within(explorer).findByText('notes.txt'))
+    const primaryPane = screen.getByTestId('pane-primary')
+    const primaryModeGroup = within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })
+    expect(within(primaryModeGroup).getByRole('button', { name: 'Split' })).toBeDisabled()
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '4', ctrlKey: true })
+    fireEvent.keyDown(window, { key: '4', ctrlKey: true })
+    expect(within(primaryPane).queryByTestId('split-markdown-preview')).not.toBeInTheDocument()
+
+    // Open alpha.md and switch to Split via Ctrl+4
+    await user.click(within(explorer).getByText('alpha.md'))
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '4', ctrlKey: true })
+    const alphaPreview = within(primaryPane).getByTestId('split-markdown-preview')
+    const alphaModeGroup = within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })
+    expect(within(alphaModeGroup).getByRole('button', { name: 'Split' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(within(primaryPane).getByRole('toolbar', { name: 'Raw 표 편집 툴바' })).toBeInTheDocument()
+
+    // Edit Mermaid diagram & heading in left Raw editor -> live right Preview updates
+    const alphaUpdated = alphaInitial
+      .replace('SECRET_ALPHA_TITLE', 'SECRET_ALPHA_UPDATED')
+      .replace('InitialNode', 'LiveUpdatedNode')
+    setRawEditorText(within(primaryPane).getByTestId('document-editor'), alphaUpdated)
+    expect(within(alphaPreview).getByRole('heading', { level: 1 }).textContent).toContain(
+      'SECRET_ALPHA_UPDATED'
+    )
+    await waitFor(() => {
+      expect(mermaidMockState.render).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.stringContaining('LiveUpdatedNode')
+      )
+      expect(within(alphaPreview).getByTestId('mermaid-svg')).toBeInTheDocument()
+    })
+
+    // Adjust internal split splitter via drag + double-click + ArrowRight, and persist per tab across tab & mode switches
+    const alphaSplitter = within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
+    const alphaContainer = within(primaryPane).getByTestId('editor-split-container')
+    vi.spyOn(alphaContainer, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1000,
+      bottom: 600,
+      width: 1000,
+      height: 600,
+      toJSON: () => ({})
+    })
+    fireEvent.mouseDown(alphaSplitter)
+    fireEvent.mouseMove(window, { clientX: 600 })
+    fireEvent.mouseUp(window)
+    expect(alphaSplitter).toHaveAttribute('aria-valuenow', '60')
+
+    fireEvent.doubleClick(alphaSplitter)
+    expect(alphaSplitter).toHaveAttribute('aria-valuenow', '50')
+
+    fireEvent.keyDown(alphaSplitter, { key: 'ArrowRight' })
+    fireEvent.keyDown(alphaSplitter, { key: 'ArrowRight' })
+    fireEvent.keyDown(alphaSplitter, { key: 'ArrowRight' })
+    expect(alphaSplitter).toHaveAttribute('aria-valuenow', '65')
+
+    // Switch to beta.md -> back to alpha.md -> toggle Raw -> Split: ratio 65 stays preserved for alpha.md
+    await user.click(within(explorer).getByText('beta.md'))
+    await user.click(within(primaryPane).getByRole('tab', { name: /alpha\.md/ }))
+    expect(
+      within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
+    ).toHaveAttribute('aria-valuenow', '65')
+
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '1', ctrlKey: true })
+    expect(within(primaryPane).queryByTestId('split-markdown-preview')).not.toBeInTheDocument()
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '4', ctrlKey: true })
+    expect(
+      within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
+    ).toHaveAttribute('aria-valuenow', '65')
+
+    // Outline '본문에 목차(/toc) 삽입' in Split mode inserts TOC at Raw cursor line (not top fallback)
+    const cursorPos = alphaUpdated.indexOf('## Details')
+    setRawEditorSelection(within(primaryPane).getByTestId('document-editor'), cursorPos, cursorPos)
+    const outlineSidebar = screen.getByLabelText('문서 목차 (Outline)')
+    await user.click(within(outlineSidebar).getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
+
+    const textAfterToc = getRawEditorText(within(primaryPane).getByTestId('document-editor'))
+    expect(textAfterToc.indexOf('<!-- toc -->')).toBeGreaterThan(-1)
+    expect(textAfterToc.indexOf('<!-- toc -->')).toBeGreaterThan(
+      textAfterToc.indexOf('## Intro')
+    )
+
+    // Workspace 2-pane split + Editor Split mode coexistence & independent splitters
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /beta\.md/ }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역에 복제 열기'
+      })
+    )
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    await user.click(
+      within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Split' }
+      )
+    )
+    const secondarySplitter = within(secondaryPane).getByRole('separator', {
+      name: '에디터 분할 크기 조절'
+    })
+    expect(secondarySplitter).toHaveAttribute('aria-valuenow', '50')
+    fireEvent.keyDown(secondarySplitter, { key: 'ArrowLeft' })
+    fireEvent.keyDown(secondarySplitter, { key: 'ArrowLeft' })
+    expect(secondarySplitter).toHaveAttribute('aria-valuenow', '40')
+
+    // Primary editor splitter & workspace splitter remain completely independent
+    expect(
+      within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
+    ).toHaveAttribute('aria-valuenow', '65')
+    expect(screen.getByRole('separator', { name: '화면 분할 크기 조절' })).toHaveAttribute(
+      'aria-valuenow',
+      '50'
+    )
+
+    // Breadcrumb logs include 'split' transitions with zero content leakage
+    const modeChanges = entries.filter(
+      (entry) => entry.category === 'ui' && entry.message === 'Editor mode changed'
+    )
+    expect(modeChanges.map((entry) => ({ from: entry.data?.from, to: entry.data?.to }))).toEqual([
+      { from: 'raw', to: 'split' },
+      { from: 'split', to: 'raw' },
+      { from: 'raw', to: 'split' },
+      { from: 'raw', to: 'split' }
+    ])
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('SECRET_ALPHA')
+    expect(serialized).not.toContain('SECRET_BETA')
+  })
+
+  it('synchronizes Split mode scroll bidirectionally with PaneTabStore persistence and jumps both Raw and Preview on Outline click', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewMock = vi.fn()
+    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollIntoView'
+    )
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+    try {
+      const mermaidBlock = [
+        '```mermaid',
+        'flowchart LR',
+        '  A --> B',
+        '  B --> C',
+        '  C --> D',
+        '  D --> E',
+        '  E --> F',
+        '```'
+      ]
+      const listItems = Array.from({ length: 40 }, (_, i) => `- Item ${i + 1}`)
+      const docContent = [
+        '# Overview',
+        '',
+        ...mermaidBlock, // lines 3..10
+        '',
+        '## Architecture', // line 12
+        '',
+        ...listItems // lines 14..53
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { autoSave: false, showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:/wiki/split-scroll',
+          workspaces: {
+            'C:/wiki/split-scroll': {
+              'diagram-doc.md': docContent
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('diagram-doc.md'))
+
+      // Switch to Split mode via Ctrl+4
+      fireEvent.keyDown(screen.getByTestId('document-editor'), { key: '4', ctrlKey: true })
+      const previewRegion = screen.getByTestId('split-markdown-preview')
+      await waitFor(() => {
+        expect(within(previewRegion).getByTestId('mermaid-svg')).toBeInTheDocument()
+      })
+
+      // Verify post-sanitize top-level source line annotations
+      const h1El = previewRegion.querySelector('h1[data-source-line="1"]') as HTMLElement
+      const mermaidEl = within(previewRegion).getByTestId('mermaid-diagram')
+      const h2El = previewRegion.querySelector('h2[data-source-line="12"]') as HTMLElement
+      const ulEl = previewRegion.querySelector('ul[data-source-line="14"]') as HTMLElement
+      expect(mermaidEl).toHaveAttribute('data-source-line', '3')
+      expect(mermaidEl).toHaveAttribute('data-source-end-line', '10')
+      expect(ulEl).toHaveAttribute('data-source-end-line', '53')
+
+      const rawEditorEl = screen.getByTestId('document-editor')
+      const cmView = getRawEditorView(rawEditorEl)
+      const rawScroller = getRawEditorScroller(rawEditorEl)
+
+      Object.defineProperty(rawScroller, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(rawScroller, 'scrollHeight', {
+        configurable: true,
+        get: () => cmView.contentHeight
+      })
+      Object.defineProperty(previewRegion, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(previewRegion, 'scrollHeight', { configurable: true, value: 1480 })
+      previewRegion.getBoundingClientRect = () =>
+        ({ top: 0, left: 0, right: 500, bottom: 200, width: 500, height: 200, x: 0, y: 0, toJSON: () => ({}) })
+
+      const mockRect = (el: HTMLElement, docTop: number, height: number) => {
+        el.getBoundingClientRect = () => {
+          const y = docTop - previewRegion.scrollTop
+          return { top: y, left: 0, right: 500, bottom: y + height, width: 500, height, x: 0, y, toJSON: () => ({}) }
+        }
+      }
+      mockRect(h1El, 0, 40)
+      mockRect(mermaidEl, 60, 560)
+      mockRect(h2El, 640, 40)
+      mockRect(ulEl, 700, 780)
+
+      // 1. Raw -> Preview interpolation inside Mermaid block (line 7 = 50% of [3, 11] => 60 + 0.5*560 = 340)
+      const line7Top = cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(7).from).top
+      rawScroller.scrollTop = line7Top
+      fireEvent.scroll(rawScroller)
+      expect(previewRegion.scrollTop).toBeCloseTo(340, 5)
+
+      // Echo scroll on Preview does not ping-pong back to Raw
+      fireEvent.scroll(previewRegion)
+      expect(rawScroller.scrollTop).toBe(line7Top)
+
+      // 2. Preview -> Raw interpolation in list (50% of [14, 54] => line 34, 700 + 0.5*780 = 1090)
+      previewRegion.scrollTop = 1090
+      fireEvent.scroll(previewRegion)
+      const expectedLine34Top =
+        cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(34).from).top
+      expect(rawScroller.scrollTop).toBeCloseTo(expectedLine34Top, 5)
+
+      // Switching Split -> Raw restores synced scrollTop persisted in PaneTabStore
+      fireEvent.keyDown(rawEditorEl, { key: '1', ctrlKey: true })
+      const rawOnlyEditor = screen.getByTestId('document-editor')
+      expect(getRawEditorScroller(rawOnlyEditor).scrollTop).toBeCloseTo(expectedLine34Top, 5)
+
+      // Switch back to Split and test Outline heading jump scrolls both Raw and Preview
+      fireEvent.keyDown(rawOnlyEditor, { key: '4', ctrlKey: true })
+      scrollIntoViewMock.mockClear()
+
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const archBtn = within(outline).getByRole('button', { name: /Architecture/ })
+      await user.click(archBtn)
+
+      await waitFor(() => {
+        expect(getRawEditorSelection(screen.getByTestId('document-editor')).start).toBe(
+          docContent.indexOf('## Architecture')
+        )
+        expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+        expect(archBtn).toHaveAttribute('aria-current', 'location')
+      })
+      const jumpedPreview = screen.getByTestId('split-markdown-preview')
+      const jumpedArchHeading = within(jumpedPreview).getByRole('heading', { level: 2, name: 'Architecture' })
+      expect(scrollIntoViewMock.mock.instances).toContain(jumpedArchHeading)
+    } finally {
+      if (origScrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+      }
     }
   })
 })

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { getWorkspacePathKey, WorkspaceEntry } from '@shared/workspace'
-import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
+import { resolveEditorShortcut, resolveEffectiveEditorMode } from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
 import { DocumentBuffer, DocumentBufferStore } from '../stores/DocumentBufferStore'
 import {
@@ -290,9 +290,12 @@ export function useEditorWorkspace({
       const activeTab = tabStore.getActiveTab()
       if (!activeTab) return
       const activeBuffer = bufferStore.getBuffer(activeTab.bufferKey)
-      const allowRichModes = activeBuffer ? isMarkdownDocument(activeBuffer) : false
+      const { allowRichModes, effectiveMode } = resolveEffectiveEditorMode(
+        activeBuffer,
+        activeTab.mode
+      )
 
-      const shortcut = resolveEditorShortcut(event, activeTab.mode, allowRichModes)
+      const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes)
       if (!shortcut) return
 
       event.preventDefault()

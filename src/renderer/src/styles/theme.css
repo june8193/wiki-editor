@@ -748,6 +748,7 @@ body.is-resizing-sidebar .pane-workspace {
 .wysiwyg-shell {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   min-width: 0;
   display: flex;
@@ -868,8 +869,9 @@ body.is-resizing-sidebar .pane-workspace {
 
 .markdown-preview {
   flex: 1;
-  min-height: 0;
   min-width: 0;
+  min-height: 0;
+  overflow-x: auto;
   overflow-y: auto;
   padding: 16px 24px;
   background-color: var(--bg-app);
@@ -877,6 +879,23 @@ body.is-resizing-sidebar .pane-workspace {
   line-height: 1.65;
   font-size: 15px;
   outline: none;
+}
+
+.editor-split-container {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+.editor-split-region {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .markdown-preview-empty {
@@ -1510,6 +1529,31 @@ body.is-resizing-sidebar .pane-workspace {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   overflow-x: auto;
+}
+
+.mermaid-inline-error-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--danger-color);
+  border-radius: 6px;
+  background-color: var(--bg-elevated);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.mermaid-inline-error-title {
+  color: var(--danger-color);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mermaid-inline-error-message {
+  color: var(--text-secondary);
+  word-break: break-word;
 }
 
 .wysiwyg-mermaid-node {

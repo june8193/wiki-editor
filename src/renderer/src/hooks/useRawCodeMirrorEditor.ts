@@ -84,9 +84,11 @@ export interface UseRawCodeMirrorEditorOptions {
   documentTitle?: string
   scrollRequest?: RawScrollRequest | null
   isActive?: boolean
+  editorViewRef?: { current: EditorView | null }
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
+  onRawScroll?: () => void
 }
 
 const markdownHighlightStyle = HighlightStyle.define([
@@ -192,9 +194,11 @@ export function useRawCodeMirrorEditor({
   documentTitle,
   scrollRequest,
   isActive = true,
+  editorViewRef,
   onChangeContent,
   onUpdateViewState,
-  onActiveHeadingChange
+  onActiveHeadingChange,
+  onRawScroll
 }: UseRawCodeMirrorEditorOptions) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -220,7 +224,8 @@ export function useRawCodeMirrorEditor({
     customCommands,
     documentTitle,
     onChangeContent,
-    onUpdateViewState
+    onUpdateViewState,
+    onRawScroll
   })
   runtimeRef.current = {
     content,
@@ -233,7 +238,8 @@ export function useRawCodeMirrorEditor({
     customCommands,
     documentTitle,
     onChangeContent,
-    onUpdateViewState
+    onUpdateViewState,
+    onRawScroll
   }
 
   const {
@@ -385,6 +391,9 @@ export function useRawCodeMirrorEditor({
     syncSelectionAttrs(view)
     view.scrollDOM.scrollTop = initial.scrollTop
     viewRef.current = view
+    if (editorViewRef) {
+      editorViewRef.current = view
+    }
 
     const detachOutlineScroll = outlineSpyRef.current.attachScrollElement(view.scrollDOM)
 
@@ -392,6 +401,9 @@ export function useRawCodeMirrorEditor({
       detachOutlineScroll()
       view.destroy()
       viewRef.current = null
+      if (editorViewRef) {
+        editorViewRef.current = null
+      }
     }
   }, [])
 
@@ -491,6 +503,7 @@ export function useRawCodeMirrorEditor({
     },
     onScrollTopChange: (nextScrollTop) => {
       runtimeRef.current.onUpdateViewState({ scrollTop: nextScrollTop })
+      runtimeRef.current.onRawScroll?.()
     },
     measure: (headings) => {
       const view = viewRef.current

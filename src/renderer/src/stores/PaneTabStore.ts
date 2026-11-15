@@ -3,7 +3,7 @@ import type { BufferKeyRemap } from './DocumentBufferStore'
 export type PaneId = 'primary' | 'secondary'
 export type SplitMode = 'single' | 'horizontal' | 'vertical'
 export type SplitDirection = Exclude<SplitMode, 'single'>
-export type EditorMode = 'raw' | 'preview' | 'wysiwyg'
+export type EditorMode = 'raw' | 'preview' | 'wysiwyg' | 'split'
 
 export interface CursorPosition {
   selectionStart: number
@@ -16,6 +16,8 @@ export interface TabItem {
   mode: EditorMode
   cursor: CursorPosition
   scrollTop: number
+  /** Left Raw region width fraction in Split mode (0.15..0.85, default 0.5); named splitPreviewRatio per spec contract. */
+  splitPreviewRatio: number
 }
 
 export interface PaneState {
@@ -40,6 +42,7 @@ export interface TabViewPatch {
   mode?: EditorMode
   cursor?: CursorPosition
   scrollTop?: number
+  splitPreviewRatio?: number
 }
 
 export interface CloseTabResult {
@@ -72,18 +75,33 @@ export interface PaneTabStoreOptions {
   onTransition?: (transition: PaneTabTransition) => void
 }
 
-const MIN_SPLIT_RATIO = 0.15
-const MAX_SPLIT_RATIO = 0.85
+export const DEFAULT_SPLIT_RATIO = 0.5
+export const MIN_SPLIT_RATIO = 0.15
+export const MAX_SPLIT_RATIO = 0.85
 
-function clampSplitRatio(ratio: number): number {
-  if (!Number.isFinite(ratio)) return 0.5
+export function clampSplitRatio(ratio: number): number {
+  if (!Number.isFinite(ratio)) return DEFAULT_SPLIT_RATIO
   return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio))
+}
+
+/**
+ * Rounds split ratios to 4 decimals so repeated steps avoid IEEE-754 float drift.
+ */
+export function roundSplitRatio(ratio: number): number {
+  return Math.round(ratio * 10000) / 10000
+}
+
+/**
+ * Clamps and rounds a split ratio to the allowed `[0.15, 0.85]` interval.
+ */
+export function normalizeSplitRatio(ratio: number): number {
+  return roundSplitRatio(clampSplitRatio(ratio))
 }
 
 function createInitialState(): PaneLayoutState {
   return {
     splitMode: 'single',
-    splitRatio: 0.5,
+    splitRatio: DEFAULT_SPLIT_RATIO,
     activePaneId: 'primary',
     panes: {
       primary: { id: 'primary', tabs: [], activeTabId: null },
@@ -284,7 +302,8 @@ export class PaneTabStore {
       bufferKey,
       mode: options.mode ?? 'raw',
       cursor: { selectionStart: 0, selectionEnd: 0 },
-      scrollTop: 0
+      scrollTop: 0,
+      splitPreviewRatio: DEFAULT_SPLIT_RATIO
     }
 
     this.commit(
@@ -604,12 +623,17 @@ export class PaneTabStore {
     const nextMode = patch.mode ?? current.mode
     const nextCursor = patch.cursor ?? current.cursor
     const nextScrollTop = patch.scrollTop ?? current.scrollTop
+    const nextSplitPreviewRatio =
+      patch.splitPreviewRatio !== undefined
+        ? clampSplitRatio(patch.splitPreviewRatio)
+        : current.splitPreviewRatio
 
     if (
       nextMode === current.mode &&
       nextCursor.selectionStart === current.cursor.selectionStart &&
       nextCursor.selectionEnd === current.cursor.selectionEnd &&
-      nextScrollTop === current.scrollTop
+      nextScrollTop === current.scrollTop &&
+      nextSplitPreviewRatio === current.splitPreviewRatio
     ) {
       return
     }
@@ -618,7 +642,8 @@ export class PaneTabStore {
       ...current,
       mode: nextMode,
       cursor: { ...nextCursor },
-      scrollTop: nextScrollTop
+      scrollTop: nextScrollTop,
+      splitPreviewRatio: nextSplitPreviewRatio
     }
     const nextTabs = [...pane.tabs]
     nextTabs[index] = updatedTab
