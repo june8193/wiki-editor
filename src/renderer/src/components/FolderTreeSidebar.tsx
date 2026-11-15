@@ -298,10 +298,7 @@ export function FolderTreeSidebar({
     <section className="workspace-sidebar" aria-label="워크스페이스 탐색기">
       <div className="sidebar-header">
         <div className="sidebar-title-row">
-          <span
-            className="sidebar-title sidebar-workspace-name"
-            title={workspace?.rootPath}
-          >
+          <span className="sidebar-title" title={workspace?.rootPath}>
             {workspace ? workspace.name : '탐색기'}
           </span>
         </div>

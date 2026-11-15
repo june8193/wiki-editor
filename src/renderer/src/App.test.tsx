@@ -1204,10 +1204,9 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
     expect(within(workspaceView).getByText('C:/wiki/alpha')).toBeInTheDocument()
     expect(within(workspaceView).getByRole('button', { name: '폴더 열기...' })).toBeInTheDocument()
-    expect(within(workspaceView).getByRole('button', { name: '즐겨찾기 해제' })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    )
+    const activeFavoriteBtn = within(workspaceView).getByRole('button', { name: '즐겨찾기 해제' })
+    expect(activeFavoriteBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(activeFavoriteBtn).toHaveAttribute('title', '즐겨찾기 해제')
     const activeAlphaBtn = within(workspaceView).getByRole('button', { name: /★\s*alpha/i })
     expect(activeAlphaBtn).toHaveAttribute('aria-current', 'true')
     expect(activeAlphaBtn).toHaveClass('is-active')
@@ -1231,10 +1230,9 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     await clickActivityBarButton(user, '워크스페이스')
     const nextWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
     expect(within(nextWorkspaceView).getByText('C:/wiki/recent-ws')).toBeInTheDocument()
-    expect(within(nextWorkspaceView).getByRole('button', { name: '즐겨찾기 추가' })).toHaveAttribute(
-      'aria-pressed',
-      'false'
-    )
+    const nextFavoriteBtn = within(nextWorkspaceView).getByRole('button', { name: '즐겨찾기 추가' })
+    expect(nextFavoriteBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(nextFavoriteBtn).toHaveAttribute('title', '즐겨찾기 추가')
     expect(within(nextWorkspaceView).getByRole('button', { name: /^recent-ws$/i })).toHaveAttribute(
       'aria-current',
       'true'
@@ -1287,7 +1285,11 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     // Return to Workspace View and remove beta from favorites via × button
     await clickActivityBarButton(user, '워크스페이스')
     const updatedWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
-    await user.click(within(updatedWorkspaceView).getByRole('button', { name: 'beta 즐겨찾기 해제' }))
+    const removeBetaBtn = within(updatedWorkspaceView).getByRole('button', {
+      name: 'beta 즐겨찾기 해제'
+    })
+    expect(removeBetaBtn).toHaveAttribute('title', 'beta 즐겨찾기 해제')
+    await user.click(removeBetaBtn)
 
     await waitFor(() => {
       expect(

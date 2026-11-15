@@ -59,6 +59,7 @@ function WorkspaceSection({
                     type="button"
                     className="workspace-view-remove-btn"
                     aria-label={option.removeAriaLabel}
+                    title={option.removeAriaLabel}
                     onClick={option.onRemove}
                   >
                     ×
@@ -98,6 +99,7 @@ export function WorkspaceView({
   onRemoveFavorite
 }: WorkspaceViewProps): ReactElement {
   const activeRootPath = workspace?.rootPath ?? null
+  const favoriteLabel = isFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'
 
   const favoriteOptions: WorkspaceOption[] = favoriteWorkspaces.map((fav) => ({
     path: fav.path,
@@ -128,7 +130,8 @@ export function WorkspaceView({
                 <button
                   type="button"
                   className={`icon-btn${isFavorite ? ' is-favorite' : ''}`}
-                  aria-label={isFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'}
+                  aria-label={favoriteLabel}
+                  title={favoriteLabel}
                   aria-pressed={isFavorite}
                   onClick={onToggleFavorite}
                 >
