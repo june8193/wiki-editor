@@ -8,10 +8,20 @@ import {
 import { DocumentBufferStore, mergePendingLocalBuffer } from '@shared/documentBufferStore'
 import { toErrorMessage } from '@shared/errors'
 import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
-import { canDetachTabFromWindow, extractTabViewState, toTabTransferPayload } from '@shared/window'
+import {
+  canDetachTabFromWindow,
+  extractTabViewState,
+  toTabTransferPayload,
+  type TabTransferPayload
+} from '@shared/window'
 import { countBufferKeys } from '@shared/windowTabTracker'
 import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
-import { type PaneId, PaneTabStore, type TabItem } from './PaneTabStore'
+import {
+  type PaneId,
+  PaneTabStore,
+  type TabItem,
+  type TransferredTabDropTarget
+} from './PaneTabStore'
 
 export interface DirtyTabClosePrompt {
   paneId: PaneId
@@ -752,6 +762,35 @@ export class RendererBufferSyncClient {
   isBufferReadyForImmediateDrag = (bufferKey: string): boolean => {
     const resolvedKey = this.resolveLatestKey(bufferKey)
     return !this.pendingCreateFlushes.has(resolvedKey) && resolvedKey in this.latestHubBuffers
+  }
+
+  hasPendingTransferSync = (paneId: PaneId, tabId: string): boolean => {
+    const tab = this.tabStore.getTab(paneId, tabId)
+    if (!tab) return false
+    return this.needsAsyncHubSync(this.resolveLatestKey(tab.bufferKey))
+  }
+
+  acceptTransferredTab = (
+    buffer: DocumentBuffer,
+    payload: TabTransferPayload,
+    target?: TransferredTabDropTarget
+  ): TabItem | null => {
+    const targetKey = this.resolveLatestKey(buffer.key)
+    const latestBuf = this.latestHubBuffers[targetKey]
+    const targetBuf =
+      latestBuf && (targetKey !== buffer.key || latestBuf.version > buffer.version)
+        ? latestBuf
+        : buffer
+    if (!this.pendingLocalEditCounts.has(targetKey) && !this.unsyncedLocalKeys.has(targetKey)) {
+      this.bufferStore.upsertBuffer(targetBuf)
+      this.latestHubBuffers = { ...this.latestHubBuffers, [targetBuf.key]: targetBuf }
+    }
+    const accepted = this.tabStore.acceptTransferredTab(
+      { ...payload, bufferKey: targetKey },
+      target
+    )
+    this.syncCurrentLayoutTabs()
+    return accepted
   }
 
   syncTabBufferForTransfer = async (paneId: PaneId, tabId: string): Promise<TabItem | null> => {

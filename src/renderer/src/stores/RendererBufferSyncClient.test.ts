@@ -249,6 +249,7 @@ describe('RendererBufferSyncClient race guards', () => {
         outcome: 'pending'
       }),
       updateTabDragOutcome: async () => null,
+      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
       endTabDrag: async () => ({ detached: false, outcome: 'cancelled' }),
       onTabDragStateChanged: () => () => undefined,
       closeCurrent: async () => undefined

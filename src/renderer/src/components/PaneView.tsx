@@ -1,11 +1,13 @@
 import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
+import type { ActiveTabDragSession } from '@shared/window'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
 import {
   DraggingTabPayload,
   handleTabMoveDrop,
+  isExternalTabDragEvent,
   isPaneTabTriggerTarget,
   PaneInteractionActions,
   PaneTabBar
@@ -24,6 +26,7 @@ interface PaneViewProps {
   isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
+  externalDragSession?: ActiveTabDragSession | null
   actions: PaneInteractionActions
 }
 
@@ -40,6 +43,7 @@ export function PaneView({
   isShortcutDisabled = false,
   buffers,
   draggingTab,
+  externalDragSession = null,
   actions
 }: PaneViewProps) {
   const activeTab = getPaneActiveTab(pane)
@@ -66,7 +70,11 @@ export function PaneView({
       onMouseDown={handlePaneFocusEvent}
       onFocusCapture={handlePaneFocusEvent}
       onDragOver={(event) => {
-        if (draggingTab && draggingTab.paneId !== pane.id) {
+        const acceptsLocal = Boolean(draggingTab && draggingTab.paneId !== pane.id)
+        const acceptsExternalEmpty =
+          pane.tabs.length === 0 &&
+          isExternalTabDragEvent(event, draggingTab, externalDragSession)
+        if (acceptsLocal || acceptsExternalEmpty) {
           event.preventDefault()
         }
       }}
@@ -77,7 +85,12 @@ export function PaneView({
           actions.onDropTabInWindow,
           pane.id,
           actions.onMoveTab,
-          { ignoreSamePane: true }
+          {
+            externalDragSession,
+            canAcceptExternal: pane.tabs.length === 0,
+            onDropExternalTab: actions.onDropExternalTab,
+            ignoreSamePane: true
+          }
         )
       }
     >
@@ -89,6 +102,7 @@ export function PaneView({
           canMoveToSplit={canMoveToSplit}
           buffers={buffers}
           draggingTab={draggingTab}
+          externalDragSession={externalDragSession}
           actions={actions}
         />
       )}

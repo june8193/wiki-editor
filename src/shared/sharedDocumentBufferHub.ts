@@ -90,6 +90,11 @@ export class SharedDocumentBufferHub {
     return this.store.getBuffer(pathOrKey) !== undefined
   }
 
+  getBuffer(pathOrKey: string): DocumentBuffer | undefined {
+    const buffer = this.store.getBuffer(pathOrKey)
+    return buffer ? { ...buffer } : undefined
+  }
+
   getBufferName(pathOrKey: string): string | undefined {
     return this.store.getBuffer(pathOrKey)?.name
   }

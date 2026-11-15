@@ -9,6 +9,8 @@ import type {
   SyncWindowTabsOptions
 } from './documentBuffer'
 import type {
+  AcceptTabDragDropInput,
+  AcceptTabDragDropResult,
   ActiveTabDragSession,
   DetachTabToNewWindowResult,
   TabDragEndInput,
@@ -98,6 +100,7 @@ export const WINDOW_IPC_CHANNELS = {
   detachTabToNewWindow: 'window:detach-tab-to-new-window',
   startTabDrag: 'window:start-tab-drag',
   updateTabDragOutcome: 'window:update-tab-drag-outcome',
+  acceptTabDragDrop: 'window:accept-tab-drag-drop',
   endTabDrag: 'window:end-tab-drag',
   dragStateChanged: 'window:drag-state-changed',
   closeCurrent: 'window:close-current'
@@ -187,6 +190,7 @@ export interface WikiWindowApi {
     dragSessionId: string,
     outcome: TabDragResolution
   ): Promise<ActiveTabDragSession | null>
+  acceptTabDragDrop(input?: AcceptTabDragDropInput): Promise<AcceptTabDragDropResult>
   endTabDrag(input: TabDragEndInput): Promise<TabDragEndResult>
   onTabDragStateChanged(listener: (session: ActiveTabDragSession | null) => void): () => void
   closeCurrent(): Promise<void>

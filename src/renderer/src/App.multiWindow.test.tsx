@@ -30,6 +30,23 @@ function dispatchDragEndAtScreenPoint(
   fireEvent(target, event)
 }
 
+function createCrossWindowDataTransfer(options?: { allowGetData?: boolean }) {
+  const store = new Map<string, string>()
+  return {
+    dropEffect: 'move',
+    effectAllowed: 'move',
+    get types() {
+      return Array.from(store.keys())
+    },
+    setData(mime: string, value: string) {
+      store.set(mime, value)
+    },
+    getData(mime: string) {
+      return options?.allowGetData === false ? '' : (store.get(mime) ?? '')
+    }
+  }
+}
+
 function deferBufferMethod<K extends 'syncWindowTabs' | 'updateContent'>(
   bufferApi: InMemoryWindowHandle['api']['buffer'],
   method: K
@@ -1477,5 +1494,351 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     } finally {
       unsubDrag()
     }
+  })
+
+  it('merges tabs bidirectionally between main and auxiliary windows, inserts at tab index or end, deduplicates by bufferKey, suppresses duplicate spawn, and auto-closes empty auxiliary windows', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\reattach',
+        workspaces: {
+          'C:\\wiki\\reattach': {
+            'alpha.md': '# Alpha initial content',
+            'beta.md': '# Beta initial content',
+            'gamma.md': '# Gamma initial content'
+          }
+        },
+        mainBounds: { x: 100, y: 120, width: 1280, height: 820 },
+        screen: {
+          getDisplayNearestPoint: () => ({
+            workArea: { x: 0, y: 0, width: 2560, height: 1440 }
+          })
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+
+    const sidebar = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('alpha.md'))
+    await user.click(await within(sidebar).findByText('beta.md'))
+    await user.click(await within(sidebar).findByText('gamma.md'))
+    await waitFor(() => {
+      expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(3)
+    })
+
+    // Detach beta.md -> aux1, gamma.md -> aux2 (leaving alpha.md in main)
+    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /beta\.md/ }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
+        'menuitem',
+        { name: '새 창으로 이동' }
+      )
+    )
+    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /gamma\.md/ }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
+        'menuitem',
+        { name: '새 창으로 이동' }
+      )
+    )
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+      expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(1)
+    })
+
+    const [aux1, aux2] = harness.getAuxiliaryWindows()
+    const aux1Rendered = render(<App wikiApi={aux1.api} />)
+    const aux2Rendered = render(<App wikiApi={aux2.api} />)
+
+    const aux1Editor = await within(aux1Rendered.container).findByTestId('document-editor')
+    setRawEditorText(aux1Editor, '# Beta cross-window edit')
+    setRawEditorSelection(aux1Editor, 2, 8)
+    const aux1Scroller = getRawEditorScroller(aux1Editor)
+    aux1Scroller.scrollTop = 145
+    fireEvent.scroll(aux1Scroller)
+    await waitFor(() => {
+      expect(within(aux1Rendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+
+    // 1. Aux1 (beta.md, sole tab) -> Main tab bar at index 0 (before alpha.md)
+    const aux1BetaTab = within(aux1Rendered.container).getByRole('tab', { name: /beta\.md/ })
+    const dt1 = createCrossWindowDataTransfer()
+    fireEvent.dragStart(aux1BetaTab, { dataTransfer: dt1 })
+
+    const mainAlphaTab = within(mainRendered.container).getByRole('tab', { name: /alpha\.md/ })
+    fireEvent.drop(mainAlphaTab, { dataTransfer: dt1 })
+    dispatchDragEndAtScreenPoint(aux1BetaTab, 2100, 900)
+
+    await waitFor(() => {
+      expect(aux1.isClosed()).toBe(true)
+      const mainTabLabels = within(mainRendered.container)
+        .getAllByRole('tab')
+        .map((el) => el.textContent)
+      expect(mainTabLabels.map((label) => label?.replace(/●/g, '').trim())).toEqual([
+        'beta.md',
+        'alpha.md'
+      ])
+    })
+
+    // Duplicate auxiliary spawn was suppressed even though dragend fired at (2100, 900)
+    expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+    const mainBetaEditor = await within(mainRendered.container).findByTestId('document-editor')
+    expect(getRawEditorText(mainBetaEditor)).toBe('# Beta cross-window edit')
+    expect(getRawEditorSelection(mainBetaEditor)).toEqual({ start: 2, end: 8 })
+    expect(getRawEditorScroller(mainBetaEditor).scrollTop).toBe(145)
+
+    // 2. Duplicate bufferKey prevention: open gamma.md in Main too, then drag gamma.md from aux2 onto Main tab bar
+    await user.click(await within(sidebar).findByText('gamma.md'))
+    await waitFor(() => {
+      expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(3)
+    })
+    await user.click(within(mainRendered.container).getByRole('tab', { name: /alpha\.md/ }))
+    const aux2Editor = await within(aux2Rendered.container).findByTestId('document-editor')
+    setRawEditorText(aux2Editor, '# Gamma synced edit')
+    await waitFor(() => {
+      expect(within(aux2Rendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+
+    const aux2GammaTab = within(aux2Rendered.container).getByRole('tab', { name: /gamma\.md/ })
+    const dt2 = createCrossWindowDataTransfer()
+    fireEvent.dragStart(aux2GammaTab, { dataTransfer: dt2 })
+    fireEvent.drop(within(mainRendered.container).getByRole('tablist', { name: '주 탭 목록' }), {
+      dataTransfer: dt2
+    })
+
+    await waitFor(() => {
+      expect(aux2.isClosed()).toBe(true)
+      expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(3)
+      expect(
+        within(mainRendered.container).getByRole('tab', { name: /gamma\.md/ })
+      ).toHaveAttribute('aria-selected', 'true')
+    })
+    expect(
+      getRawEditorText(await within(mainRendered.container).findByTestId('document-editor'))
+    ).toBe('# Gamma synced edit')
+
+    // 3. Main -> Aux and Aux A -> Aux B bidirectional transfer
+    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /beta\.md/ }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
+        'menuitem',
+        { name: '새 창으로 이동' }
+      )
+    )
+    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /gamma\.md/ }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
+        'menuitem',
+        { name: '새 창으로 이동' }
+      )
+    )
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(4)
+      expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(1)
+    })
+
+    const aux3 = harness.getAuxiliaryWindows()[2]
+    const aux4 = harness.getAuxiliaryWindows()[3]
+    const aux3Rendered = render(<App wikiApi={aux3.api} />)
+    const aux4Rendered = render(<App wikiApi={aux4.api} />)
+    await waitFor(() => {
+      expect(within(aux3Rendered.container).getAllByRole('tab')).toHaveLength(1)
+      expect(within(aux4Rendered.container).getAllByRole('tab')).toHaveLength(1)
+    })
+
+    // Main (alpha.md) -> aux3 tab bar (append at end -> [beta.md, alpha.md])
+    const mainAlphaAgain = within(mainRendered.container).getByRole('tab', { name: /alpha\.md/ })
+    const dt3 = createCrossWindowDataTransfer()
+    fireEvent.dragStart(mainAlphaAgain, { dataTransfer: dt3 })
+    fireEvent.drop(within(aux3Rendered.container).getByRole('tablist', { name: '주 탭 목록' }), {
+      dataTransfer: dt3
+    })
+
+    await waitFor(() => {
+      const aux3Tabs = within(aux3Rendered.container)
+        .getAllByRole('tab')
+        .map((el) => el.textContent?.replace(/●/g, '').trim())
+      expect(aux3Tabs).toEqual(['beta.md', 'alpha.md'])
+      expect(within(mainRendered.container).queryAllByRole('tab')).toHaveLength(0)
+    })
+
+    // Aux3 (alpha.md) -> Aux4 tab bar (insert at index 0 before gamma.md -> [alpha.md, gamma.md]); aux3 remains open with [beta.md]
+    const aux3AlphaTab = within(aux3Rendered.container).getByRole('tab', { name: /alpha\.md/ })
+    const dt4 = createCrossWindowDataTransfer()
+    fireEvent.dragStart(aux3AlphaTab, { dataTransfer: dt4 })
+    fireEvent.drop(within(aux4Rendered.container).getByRole('tab', { name: /gamma\.md/ }), {
+      dataTransfer: dt4
+    })
+
+    await waitFor(() => {
+      const aux4Tabs = within(aux4Rendered.container)
+        .getAllByRole('tab')
+        .map((el) => el.textContent?.replace(/●/g, '').trim())
+      expect(aux4Tabs).toEqual(['alpha.md', 'gamma.md'])
+      expect(within(aux3Rendered.container).getAllByRole('tab')).toHaveLength(1)
+      expect(aux3.isClosed()).toBe(false)
+    })
+  })
+
+  it('activates both split drop zones on 1-tab single-mode target windows via MIME types or session broadcast, rejects non-drop areas, and supports empty main window drop', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\splitdrop',
+        workspaces: {
+          'C:\\wiki\\splitdrop': {
+            'one.md': '# One',
+            'two.md': '# Two',
+            'three.md': '# Three'
+          }
+        },
+        mainBounds: { x: 100, y: 120, width: 1280, height: 820 },
+        screen: {
+          getDisplayNearestPoint: () => ({
+            workArea: { x: 0, y: 0, width: 2560, height: 1440 }
+          })
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+
+    const sidebar = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('one.md'))
+    await user.click(await within(sidebar).findByText('two.md'))
+    await user.click(await within(sidebar).findByText('three.md'))
+    await waitFor(() => {
+      expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(3)
+    })
+
+    // Switch two.md to wysiwyg before detaching to aux1
+    await user.click(within(mainRendered.container).getByRole('tab', { name: /two\.md/ }))
+    await user.click(within(mainRendered.container).getByRole('button', { name: '위지윅' }))
+    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /two\.md/ }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
+        'menuitem',
+        { name: '새 창으로 이동' }
+      )
+    )
+    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /three\.md/ }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
+        'menuitem',
+        { name: '새 창으로 이동' }
+      )
+    )
+
+    // Main now has ONLY 1 tab (one.md) in single mode
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+      expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(1)
+    })
+
+    const [aux1, aux2] = harness.getAuxiliaryWindows()
+    const aux1Rendered = render(<App wikiApi={aux1.api} />)
+    const aux2Rendered = render(<App wikiApi={aux2.api} />)
+    await waitFor(() => {
+      expect(within(aux1Rendered.container).getByRole('tab', { name: /two\.md/ })).toBeInTheDocument()
+      expect(within(aux2Rendered.container).getByRole('tab', { name: /three\.md/ })).toBeInTheDocument()
+    })
+
+    // 1. Synchronous MIME-only detection (before getData or session broadcast settles) on 1-tab single-mode Main
+    const blockedGetDataDt = createCrossWindowDataTransfer({ allowGetData: false })
+    const aux1Tab = within(aux1Rendered.container).getByRole('tab', { name: /two\.md/ })
+    fireEvent.dragStart(aux1Tab, { dataTransfer: blockedGetDataDt })
+
+    const mainWorkspace = within(mainRendered.container).getByTestId('pane-workspace')
+    expect(mainWorkspace).toHaveAttribute('data-split-mode', 'single')
+    fireEvent.dragEnter(mainWorkspace, { dataTransfer: blockedGetDataDt })
+    expect(within(mainRendered.container).getByTestId('split-drop-zone-horizontal')).toBeInTheDocument()
+    expect(within(mainRendered.container).getByTestId('split-drop-zone-vertical')).toBeInTheDocument()
+
+    // dragleave hides split drop zones
+    fireEvent.dragLeave(mainWorkspace)
+    expect(
+      within(mainRendered.container).queryByTestId('split-drop-zone-horizontal')
+    ).not.toBeInTheDocument()
+
+    // Non-drop areas (left sidebar, non-empty editor body) neither merge/split nor spawn auxiliary windows
+    fireEvent.drop(sidebar, { dataTransfer: blockedGetDataDt })
+    fireEvent.drop(within(mainRendered.container).getByTestId('document-editor'), {
+      dataTransfer: blockedGetDataDt
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(1)
+    expect(aux1.isClosed()).toBe(false)
+    expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+
+    // Re-enter and drop onto horizontal split drop zone -> splits Main horizontally with wysiwyg two.md, auto-closes aux1
+    fireEvent.dragOver(mainWorkspace, { dataTransfer: blockedGetDataDt })
+    const horizZone = within(mainRendered.container).getByTestId('split-drop-zone-horizontal')
+    fireEvent.drop(horizZone, { dataTransfer: blockedGetDataDt })
+
+    await waitFor(() => {
+      expect(aux1.isClosed()).toBe(true)
+      expect(mainWorkspace).toHaveAttribute('data-split-mode', 'horizontal')
+      expect(within(mainRendered.container).getByTestId('pane-secondary')).toBeInTheDocument()
+    })
+    const mainSecondary = within(mainRendered.container).getByTestId('pane-secondary')
+    expect(within(mainSecondary).getByRole('tab', { name: /two\.md/ })).toBeInTheDocument()
+    expect(within(mainSecondary).getByLabelText('위지윅 문서 에디터')).toBeInTheDocument()
+    expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+
+    // 2. Broadcast-only detection (no DataTransfer on target!) -> Main drags two.md into 1-tab single-mode Aux2 vertical split
+    const mainTwoTab = within(mainSecondary).getByRole('tab', { name: /two\.md/ })
+    fireEvent.dragStart(mainTwoTab)
+
+    const aux2Workspace = within(aux2Rendered.container).getByTestId('pane-workspace')
+    await waitFor(() => {
+      fireEvent.dragOver(aux2Workspace)
+      expect(within(aux2Rendered.container).getByTestId('split-drop-zone-horizontal')).toBeInTheDocument()
+      expect(within(aux2Rendered.container).getByTestId('split-drop-zone-vertical')).toBeInTheDocument()
+    })
+    fireEvent.drop(within(aux2Rendered.container).getByTestId('split-drop-zone-vertical'))
+
+    await waitFor(() => {
+      expect(aux2Workspace).toHaveAttribute('data-split-mode', 'vertical')
+      expect(
+        within(within(aux2Rendered.container).getByTestId('pane-secondary')).getByRole('tab', {
+          name: /two\.md/
+        })
+      ).toBeInTheDocument()
+      expect(within(mainRendered.container).queryByTestId('pane-secondary')).not.toBeInTheDocument()
+    })
+
+    // 3. Empty 0-tab Main window accepts external tab drop into primary without split zones
+    await user.click(within(mainRendered.container).getByRole('button', { name: 'one.md 탭 닫기' }))
+    await waitFor(() => {
+      expect(within(mainRendered.container).queryAllByRole('tab')).toHaveLength(0)
+      expect(within(mainRendered.container).getByText('마크다운 위키 에디터 준비 완료')).toBeInTheDocument()
+    })
+
+    const aux2TwoTab = within(aux2Rendered.container).getByRole('tab', { name: /two\.md/ })
+    const dtEmpty = createCrossWindowDataTransfer()
+    fireEvent.dragStart(aux2TwoTab, { dataTransfer: dtEmpty })
+    fireEvent.dragEnter(mainWorkspace, { dataTransfer: dtEmpty })
+    expect(
+      within(mainRendered.container).queryByTestId('split-drop-zone-horizontal')
+    ).not.toBeInTheDocument()
+    fireEvent.drop(within(mainRendered.container).getByTestId('pane-primary'), {
+      dataTransfer: dtEmpty
+    })
+
+    await waitFor(() => {
+      expect(within(mainRendered.container).getByRole('tab', { name: /two\.md/ })).toBeInTheDocument()
+      expect(aux2Workspace).toHaveAttribute('data-split-mode', 'single')
+      expect(within(aux2Rendered.container).getAllByRole('tab')).toHaveLength(1)
+    })
   })
 })

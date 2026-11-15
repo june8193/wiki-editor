@@ -1,5 +1,11 @@
 import type { BufferKeyRemap } from '@shared/documentBuffer'
-import type { CursorPosition, EditorMode, PaneId, TabViewState } from '@shared/window'
+import type {
+  CursorPosition,
+  EditorMode,
+  PaneId,
+  TabTransferPayload,
+  TabViewState
+} from '@shared/window'
 
 export type { CursorPosition, EditorMode, PaneId, TabViewState }
 export type SplitMode = 'single' | 'horizontal' | 'vertical'
@@ -26,6 +32,17 @@ export interface PaneLayoutState {
 export interface OpenTabOptions extends Partial<TabViewState> {
   paneId?: PaneId
 }
+
+export type TransferredTabDropTarget =
+  | {
+      kind: 'pane'
+      paneId: PaneId
+      targetIndex?: number
+    }
+  | {
+      kind: 'split'
+      direction: SplitDirection
+    }
 
 export type TabViewPatch = Partial<TabViewState>
 
@@ -185,6 +202,14 @@ export function canSplitWithTab(layout: PaneLayoutState): boolean {
   return layout.panes.primary.tabs.length > 1 || hasPopulatedSplitPanes(layout)
 }
 
+/**
+ * External cross-window drags add a tab rather than moving one out of `primary`, so even a
+ * 1-tab `single`-mode window can split safely into `secondary`.
+ */
+export function canAcceptIncomingSplitDrop(layout: PaneLayoutState): boolean {
+  return layout.panes.primary.tabs.length > 0
+}
+
 export function extractLayoutBufferKeys(layout: PaneLayoutState): string[] {
   const keys: string[] = []
   for (const paneId of ['primary', 'secondary'] as const) {
@@ -278,17 +303,57 @@ export class PaneTabStore {
   openTab = (bufferKey: string, options: OpenTabOptions = {}): TabItem =>
     this.openOrFocusTab(bufferKey, options)
 
+  /**
+   * Inserts or activates a transferred tab from another window on either a target pane tab bar
+   * (optionally at `targetIndex`) or a newly activated split pane.
+   */
+  acceptTransferredTab = (
+    payload: TabTransferPayload,
+    target?: TransferredTabDropTarget
+  ): TabItem => {
+    const viewOptions: OpenTabOptions = {
+      mode: payload.mode,
+      cursor: payload.cursor,
+      scrollTop: payload.scrollTop
+    }
+    if (target?.kind === 'split') {
+      if (this.state.panes.primary.tabs.length === 0) {
+        return this.openOrFocusTab(payload.bufferKey, { ...viewOptions, paneId: 'primary' })
+      }
+      return this.openOrFocusTab(
+        payload.bufferKey,
+        { ...viewOptions, paneId: 'secondary' },
+        undefined,
+        { splitDirection: target.direction }
+      )
+    }
+
+    const requestedPaneId = target?.paneId ?? this.state.activePaneId
+    const paneId: PaneId =
+      requestedPaneId === 'secondary' && this.state.panes.primary.tabs.length === 0
+        ? 'primary'
+        : requestedPaneId
+    return this.openOrFocusTab(
+      payload.bufferKey,
+      { ...viewOptions, paneId },
+      undefined,
+      { targetIndex: target?.targetIndex }
+    )
+  }
+
   private openOrFocusTab(
     bufferKey: string,
     options: OpenTabOptions = {},
-    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string }
+    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string },
+    placement?: { targetIndex?: number; splitDirection?: SplitDirection }
   ): TabItem {
     const targetPaneId = options.paneId ?? this.state.activePaneId
     const targetPane = this.state.panes[targetPaneId]
     const nextSplitMode =
-      targetPaneId === 'secondary' && this.state.splitMode === 'single'
+      placement?.splitDirection ??
+      (targetPaneId === 'secondary' && this.state.splitMode === 'single'
         ? 'horizontal'
-        : this.state.splitMode
+        : this.state.splitMode)
 
     const existing = targetPane.tabs.find((tab) => tab.bufferKey === bufferKey)
     if (existing) {
@@ -313,7 +378,7 @@ export class PaneTabStore {
           ...this.state.panes,
           [targetPaneId]: {
             ...targetPane,
-            tabs: [...targetPane.tabs, created],
+            tabs: insertTabAt(targetPane.tabs, created, placement?.targetIndex),
             activeTabId: created.id
           }
         }

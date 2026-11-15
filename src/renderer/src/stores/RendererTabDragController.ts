@@ -1,3 +1,4 @@
+import type { DocumentBuffer } from '@shared/documentBuffer'
 import { toErrorMessage } from '@shared/errors'
 import type { WikiWindowApi } from '@shared/ipc'
 import {
@@ -5,18 +6,29 @@ import {
   type ActiveTabDragSession,
   type PaneId,
   type ScreenPoint,
-  type TabDragResolution
+  type TabDragResolution,
+  type TabTransferPayload
 } from '@shared/window'
 import type { DraggingTabPayload } from '../components/PaneTabBar'
-import type { PaneTabStore, TabItem } from './PaneTabStore'
+import type { PaneTabStore, TabItem, TransferredTabDropTarget } from './PaneTabStore'
+
+export interface TabDragBufferBridge {
+  getWindowId(): number | null
+  isBufferReadyForImmediateDrag(bufferKey: string): boolean
+  hasPendingTransferSync(paneId: PaneId, tabId: string): boolean
+  syncTabBufferForTransfer(paneId: PaneId, tabId: string): Promise<TabItem | null>
+  forceCloseTab(paneId: PaneId, tabId: string): void
+  acceptTransferredTab(
+    buffer: DocumentBuffer,
+    payload: TabTransferPayload,
+    target?: TransferredTabDropTarget
+  ): TabItem | null
+}
 
 export interface RendererTabDragControllerOptions {
   tabStore: PaneTabStore
+  bufferSync: TabDragBufferBridge
   windowApi?: WikiWindowApi
-  getWindowId: () => number | null
-  isBufferReadyForImmediateDrag: (bufferKey: string) => boolean
-  syncTabBufferForTransfer: (paneId: PaneId, tabId: string) => Promise<TabItem | null>
-  closeDetachedTab: (paneId: PaneId, tabId: string) => void
   onError: (message: string | null, error?: unknown) => void
 }
 
@@ -27,34 +39,45 @@ interface ActiveLocalDragState {
   resolvedSessionId: string | null
   outcomeOverride: TabDragResolution | null
   pendingOutcomeSync: Promise<unknown> | null
+  closed: boolean
   superseded: boolean
 }
 
+function isSameDragSession(
+  left: ActiveTabDragSession | null,
+  right: ActiveTabDragSession | null
+): boolean {
+  if (left === right) return true
+  if (!left || !right) return false
+  return (
+    left.dragSessionId === right.dragSessionId &&
+    left.outcome === right.outcome &&
+    left.targetWindowId === right.targetWindowId &&
+    left.payload.bufferKey === right.payload.bufferKey
+  )
+}
+
 /**
- * Owns renderer tab-drag UI state (`draggingTab`) and coordinates the main-process
- * drag session lifecycle, Escape cancellation, in-window completion, and dirty-buffer flush on detach.
+ * Owns renderer tab-drag UI state (`draggingTab`, `externalDragSession`) and coordinates
+ * the main-process drag session lifecycle, Escape cancellation, in-window/cross-window
+ * completion, and dirty-buffer flush on detach/transfer.
  */
 export class RendererTabDragController {
   private readonly tabStore: PaneTabStore
+  private readonly bufferSync: TabDragBufferBridge
   private readonly windowApi?: WikiWindowApi
-  private readonly getWindowId: () => number | null
-  private readonly isBufferReadyForImmediateDrag: (bufferKey: string) => boolean
-  private readonly syncTabBufferForTransfer: (paneId: PaneId, tabId: string) => Promise<TabItem | null>
-  private readonly closeDetachedTab: (paneId: PaneId, tabId: string) => void
   private readonly onError: (message: string | null, error?: unknown) => void
 
   private readonly listeners = new Set<() => void>()
   private draggingTab: DraggingTabPayload | null = null
+  private externalDragSession: ActiveTabDragSession | null = null
   private activeDrag: ActiveLocalDragState | null = null
   private mounted = false
 
   constructor(options: RendererTabDragControllerOptions) {
     this.tabStore = options.tabStore
+    this.bufferSync = options.bufferSync
     this.windowApi = options.windowApi
-    this.getWindowId = options.getWindowId
-    this.isBufferReadyForImmediateDrag = options.isBufferReadyForImmediateDrag
-    this.syncTabBufferForTransfer = options.syncTabBufferForTransfer
-    this.closeDetachedTab = options.closeDetachedTab
     this.onError = options.onError
   }
 
@@ -66,6 +89,8 @@ export class RendererTabDragController {
   }
 
   getSnapshot = (): DraggingTabPayload | null => this.draggingTab
+
+  getExternalDragSnapshot = (): ActiveTabDragSession | null => this.externalDragSession
 
   start(): () => void {
     this.mounted = true
@@ -98,15 +123,16 @@ export class RendererTabDragController {
       resolvedSessionId: null,
       outcomeOverride: null,
       pendingOutcomeSync: null,
+      closed: false,
       superseded: false
     }
     this.activeDrag = dragState
 
     dragState.startPromise = (async () => {
       try {
-        const latestTab = this.isBufferReadyForImmediateDrag(initialTab.bufferKey)
+        const latestTab = this.bufferSync.isBufferReadyForImmediateDrag(initialTab.bufferKey)
           ? this.tabStore.getTab(paneId, tabId)
-          : await this.syncTabBufferForTransfer(paneId, tabId)
+          : await this.bufferSync.syncTabBufferForTransfer(paneId, tabId)
         if (!latestTab || !this.mounted || dragState.superseded) {
           return null
         }
@@ -178,7 +204,7 @@ export class RendererTabDragController {
         return
       }
 
-      const latestTab = await this.syncTabBufferForTransfer(drag.paneId, drag.tabId)
+      const latestTab = await this.bufferSync.syncTabBufferForTransfer(drag.paneId, drag.tabId)
       if (!this.mounted) return
 
       const result = await this.windowApi.endTabDrag({
@@ -186,8 +212,13 @@ export class RendererTabDragController {
         screenPoint,
         ...(latestTab ? { payload: toTabTransferPayload(latestTab) } : {})
       })
-      if (result.detached && this.mounted) {
-        this.closeDetachedTab(drag.paneId, drag.tabId)
+      if (
+        this.mounted &&
+        !drag.closed &&
+        (result.detached || result.outcome === 'dropped-in-window')
+      ) {
+        drag.closed = true
+        this.bufferSync.forceCloseTab(drag.paneId, drag.tabId)
       }
     } catch (error: unknown) {
       if (activeSessionId) {
@@ -199,6 +230,40 @@ export class RendererTabDragController {
       if (this.mounted) {
         this.onError(toErrorMessage(error, '새 창으로 이동하지 못했습니다.'), error)
       }
+    }
+  }
+
+  /**
+   * Accepts an incoming external tab drop onto a target pane tab bar or split direction,
+   * fetching the authoritative buffer via IPC before mutating local layout state.
+   */
+  acceptExternalDrop = async (
+    target: TransferredTabDropTarget,
+    dragSessionId?: string
+  ): Promise<boolean> => {
+    if (!this.windowApi || !this.mounted) {
+      return false
+    }
+
+    try {
+      const result = await this.windowApi.acceptTabDragDrop(
+        dragSessionId ? { dragSessionId } : undefined
+      )
+      if (!this.mounted) {
+        return false
+      }
+      this.setExternalDragSession(null)
+      if (!result.accepted) {
+        return false
+      }
+      this.bufferSync.acceptTransferredTab(result.buffer, result.payload, target)
+      return true
+    } catch (error: unknown) {
+      this.setExternalDragSession(null)
+      if (this.mounted) {
+        this.onError(toErrorMessage(error, '탭을 옮기지 못했습니다.'), error)
+      }
+      return false
     }
   }
 
@@ -228,28 +293,75 @@ export class RendererTabDragController {
 
   private clearCurrentDrag(): void {
     this.setDraggingTab(null)
+    this.setExternalDragSession(null)
     if (this.activeDrag) {
       this.activeDrag.superseded = true
       this.activeDrag = null
     }
   }
 
-  private handleMainDragStateChanged(session: ActiveTabDragSession | null): void {
+  private matchesActiveLocalDrag(session: ActiveTabDragSession): boolean {
     const drag = this.activeDrag
-    if (!this.mounted || !drag || !session || session.outcome !== 'cancelled') {
-      return
-    }
-    const localWindowId = this.getWindowId()
-    const matchesSession =
+    if (!drag) return false
+    const localWindowId = this.bufferSync.getWindowId()
+    return (
       drag.resolvedSessionId === session.dragSessionId ||
       (drag.resolvedSessionId === null &&
         (localWindowId === null || localWindowId === session.sourceWindowId) &&
         drag.paneId === session.paneId &&
         drag.tabId === session.tabId)
-    if (!matchesSession) return
+    )
+  }
 
-    drag.outcomeOverride = 'cancelled'
-    this.setDraggingTab(null)
+  private async finalizeCrossWindowSourceTransfer(
+    drag: ActiveLocalDragState,
+    dragSessionId: string
+  ): Promise<void> {
+    if (this.bufferSync.hasPendingTransferSync(drag.paneId, drag.tabId)) {
+      await this.bufferSync.syncTabBufferForTransfer(drag.paneId, drag.tabId).catch(() => null)
+    }
+    if (!this.mounted) return
+    if (!drag.closed) {
+      drag.closed = true
+      this.bufferSync.forceCloseTab(drag.paneId, drag.tabId)
+    }
+    await this.windowApi?.endTabDrag({ dragSessionId }).catch(() => undefined)
+  }
+
+  private handleMainDragStateChanged(session: ActiveTabDragSession | null): void {
+    if (!this.mounted) return
+
+    if (!session || session.outcome !== 'pending') {
+      this.setExternalDragSession(null)
+    } else {
+      const localWindowId = this.bufferSync.getWindowId()
+      const isOwnWindow =
+        (localWindowId !== null && localWindowId === session.sourceWindowId) ||
+        this.matchesActiveLocalDrag(session)
+      this.setExternalDragSession(isOwnWindow ? null : session)
+    }
+
+    const drag = this.activeDrag
+    if (!drag || !session || !this.matchesActiveLocalDrag(session)) {
+      return
+    }
+
+    if (session.outcome === 'cancelled') {
+      drag.outcomeOverride = 'cancelled'
+      this.setDraggingTab(null)
+      return
+    }
+
+    if (
+      session.outcome === 'dropped-in-window' &&
+      session.targetWindowId !== undefined &&
+      session.targetWindowId !== session.sourceWindowId
+    ) {
+      drag.outcomeOverride = 'dropped-in-window'
+      this.activeDrag = null
+      this.setDraggingTab(null)
+      void this.finalizeCrossWindowSourceTransfer(drag, session.dragSessionId)
+    }
   }
 
   private setDraggingTab(next: DraggingTabPayload | null): void {
@@ -261,6 +373,18 @@ export class RendererTabDragController {
       return
     }
     this.draggingTab = next
+    this.notifyListeners()
+  }
+
+  private setExternalDragSession(next: ActiveTabDragSession | null): void {
+    if (isSameDragSession(this.externalDragSession, next)) {
+      return
+    }
+    this.externalDragSession = next
+    this.notifyListeners()
+  }
+
+  private notifyListeners(): void {
     for (const listener of this.listeners) {
       listener()
     }

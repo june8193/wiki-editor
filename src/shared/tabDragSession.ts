@@ -1,7 +1,9 @@
+import type { BufferKeyRemap, DocumentBuffer } from '@shared/documentBuffer'
 import {
   computeCursorAuxiliaryBounds,
   isPointOutsideAllWindows,
   toTabTransferPayload,
+  type AcceptTabDragDropResult,
   type ActiveTabDragSession,
   type ScreenLike,
   type TabDragEndInput,
@@ -11,6 +13,13 @@ import {
   type TabTransferPayload,
   type WindowBounds
 } from '@shared/window'
+
+export interface AcceptCrossWindowDropParams {
+  targetWindowId: number
+  dragSessionId?: string
+  getBuffer: (bufferKey: string) => DocumentBuffer | undefined
+  onReserveTransfer: (targetWindowId: number, bufferKey: string) => void
+}
 
 export interface BeforeInputKeyEventLike {
   type?: string
@@ -86,7 +95,8 @@ export class TabDragCoordinator {
    * Transitions a pending active session to a terminal outcome and broadcasts the change.
    */
   private transitionPendingOutcome(
-    targetOutcome: TabDragResolution
+    targetOutcome: TabDragResolution,
+    targetWindowId?: number
   ): ActiveTabDragSession | null {
     const session = this.activeSession
     if (!session) return null
@@ -94,6 +104,9 @@ export class TabDragCoordinator {
       return cloneSession(session)
     }
     session.outcome = targetOutcome
+    if (targetWindowId !== undefined) {
+      session.targetWindowId = targetWindowId
+    }
     const snapshot = cloneSession(session)
     this.emit(snapshot)
     return cloneSession(snapshot)
@@ -113,6 +126,61 @@ export class TabDragCoordinator {
       return null
     }
     return this.transitionPendingOutcome(outcome)
+  }
+
+  /**
+   * Atomically validates a cross-window drop target, reserves buffer ownership on the target
+   * window before broadcasting, marks the active drag session `'dropped-in-window'`, and returns
+   * the authoritative shared `DocumentBuffer` and transferred tab state.
+   */
+  acceptCrossWindowDrop(params: AcceptCrossWindowDropParams): AcceptTabDragDropResult {
+    const session = this.activeSession
+    if (!session) {
+      return { accepted: false, reason: 'no-active-drag' }
+    }
+    if (session.outcome !== 'pending') {
+      return { accepted: false, reason: 'drag-not-pending' }
+    }
+    if (params.dragSessionId && params.dragSessionId !== session.dragSessionId) {
+      return { accepted: false, reason: 'session-mismatch' }
+    }
+    if (session.sourceWindowId === params.targetWindowId) {
+      return { accepted: false, reason: 'same-window' }
+    }
+
+    const buffer = params.getBuffer(session.payload.bufferKey)
+    if (!buffer) {
+      return { accepted: false, reason: 'unknown-buffer' }
+    }
+
+    // Reserve pending transfer ownership BEFORE broadcasting 'dropped-in-window' so an
+    // eager source window tab close cannot prune the last buffer reference in flight.
+    params.onReserveTransfer(params.targetWindowId, buffer.key)
+    const payload = toTabTransferPayload({ ...session.payload, bufferKey: buffer.key })
+    session.payload = toTabTransferPayload(payload)
+    this.transitionPendingOutcome('dropped-in-window', params.targetWindowId)
+
+    return {
+      accepted: true,
+      dragSessionId: session.dragSessionId,
+      sourceWindowId: session.sourceWindowId,
+      targetWindowId: params.targetWindowId,
+      payload,
+      buffer: { ...buffer }
+    }
+  }
+
+  /**
+   * Remaps the active drag session's bufferKey when a shared document path is renamed mid-drag.
+   */
+  remapPayloadKeys(remappings: readonly BufferKeyRemap[]): void {
+    const session = this.activeSession
+    if (!session || remappings.length === 0) return
+    const keyMap = new Map(remappings.map((item) => [item.oldKey, item.newKey]))
+    const nextKey = keyMap.get(session.payload.bufferKey)
+    if (!nextKey || nextKey === session.payload.bufferKey) return
+    session.payload.bufferKey = nextKey
+    this.emit(cloneSession(session))
   }
 
   /**

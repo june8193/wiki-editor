@@ -293,6 +293,7 @@ describe('createWikiApi', () => {
       payload: transferPayload
     })
     await auxApi.window.updateTabDragOutcome('drag-1', 'cancelled')
+    await auxApi.window.acceptTabDragDrop({ dragSessionId: 'drag-1' })
     await auxApi.window.endTabDrag({
       dragSessionId: 'drag-1',
       screenPoint: { x: 1500, y: 300 },
@@ -329,6 +330,10 @@ describe('createWikiApi', () => {
       {
         channel: WINDOW_IPC_CHANNELS.updateTabDragOutcome,
         args: ['drag-1', 'cancelled']
+      },
+      {
+        channel: WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        args: [{ dragSessionId: 'drag-1' }]
       },
       {
         channel: WINDOW_IPC_CHANNELS.endTabDrag,

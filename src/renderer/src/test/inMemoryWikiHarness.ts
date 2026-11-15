@@ -293,6 +293,12 @@ export function createMultiWindowWikiHarness(
     }
   })
 
+  const unsubscribeCoordinatorHub = hub.subscribe((event) => {
+    if (event.type === 'paths-remapped') {
+      dragCoordinator.remapPayloadKeys(event.remappings)
+    }
+  })
+
   const listDir = (dirPath: string): WorkspaceEntry[] => {
     const target = normalizePosix(dirPath === '.' && activeRoot ? activeRoot : dirPath)
     readDirCalls.push(target)
@@ -666,6 +672,19 @@ export function createMultiWindowWikiHarness(
           if (destroyed) return null
           return dragCoordinator.updateOutcome(windowId, dragSessionId, outcome)
         },
+        async acceptTabDragDrop(input) {
+          if (destroyed) {
+            return { accepted: false, reason: 'no-active-drag' }
+          }
+          return dragCoordinator.acceptCrossWindowDrop({
+            targetWindowId: windowId,
+            dragSessionId: input?.dragSessionId,
+            getBuffer: (key) => hub.getBuffer(key),
+            onReserveTransfer: (targetId, bufferKey) => {
+              hub.registerPendingTransfer(targetId, bufferKey)
+            }
+          })
+        },
         async endTabDrag(input) {
           if (destroyed) {
             return { detached: false, outcome: 'cancelled' }
@@ -765,6 +784,7 @@ export function createMultiWindowWikiHarness(
     readDirCalls,
     hub,
     dispose() {
+      unsubscribeCoordinatorHub()
       dragCoordinator.dispose()
       openWindows.clear()
       dragListenersByWindow.clear()

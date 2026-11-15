@@ -1,5 +1,6 @@
 import { WINDOW_IPC_CHANNELS } from '@shared/ipc'
 import type {
+  AcceptTabDragDropInput,
   TabDragEndInput,
   TabDragResolution,
   TabDragStartInput,
@@ -62,6 +63,14 @@ export function registerWindowIpc({
           resolveSenderWebContents(event),
           dragSessionId as string,
           outcome as TabDragResolution
+        )
+    ],
+    [
+      WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+      (event, input) =>
+        windowManager.acceptTabDragDrop(
+          resolveSenderWebContents(event),
+          input as AcceptTabDragDropInput | undefined
         )
     ],
     [

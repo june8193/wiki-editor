@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { canSplitWithTab, PaneTabStore, type PaneTabTransition } from './PaneTabStore'
+import {
+  canAcceptIncomingSplitDrop,
+  canSplitWithTab,
+  PaneTabStore,
+  type PaneTabTransition
+} from './PaneTabStore'
 
 describe('PaneTabStore', () => {
   it('opens tabs, deduplicates within a pane, switches active tab, and selects neighbor on close', () => {
@@ -331,5 +336,80 @@ describe('PaneTabStore', () => {
 
     store.openTab('c:/wiki/b.md', { paneId: 'secondary', mode: 'preview' })
     expect(store.getTotalTabCount()).toBe(2)
+  })
+
+  it('inserts transferred tabs at specific indices or end, deduplicates by bufferKey per pane, and allows incoming split drop even in 1-tab single mode', () => {
+    const store = new PaneTabStore()
+    expect(canAcceptIncomingSplitDrop(store.getSnapshot())).toBe(false)
+
+    // Empty window split drop falls back cleanly to primary single pane
+    const first = store.acceptTransferredTab(
+      {
+        bufferKey: 'c:/wiki/alpha.md',
+        mode: 'wysiwyg',
+        cursor: { selectionStart: 2, selectionEnd: 6 },
+        scrollTop: 42
+      },
+      { kind: 'split', direction: 'horizontal' }
+    )
+    expect(store.getSnapshot().splitMode).toBe('single')
+    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([first.id])
+    expect(first.mode).toBe('wysiwyg')
+    expect(first.cursor).toEqual({ selectionStart: 2, selectionEnd: 6 })
+    expect(first.scrollTop).toBe(42)
+
+    // Even with 1 tab in single mode, incoming external split drop is allowed (unlike same-window split)
+    expect(canSplitWithTab(store.getSnapshot())).toBe(false)
+    expect(canAcceptIncomingSplitDrop(store.getSnapshot())).toBe(true)
+
+    // Insert at specific index 0 in primary
+    const second = store.acceptTransferredTab(
+      {
+        bufferKey: 'c:/wiki/beta.md',
+        mode: 'preview',
+        cursor: { selectionStart: 0, selectionEnd: 0 },
+        scrollTop: 100
+      },
+      { kind: 'pane', paneId: 'primary', targetIndex: 0 }
+    )
+    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.bufferKey)).toEqual([
+      'c:/wiki/beta.md',
+      'c:/wiki/alpha.md'
+    ])
+    expect(store.getSnapshot().panes.primary.activeTabId).toBe(second.id)
+
+    // Same bufferKey dropped onto same pane activates existing tab instead of duplicating
+    const focused = store.acceptTransferredTab(
+      {
+        bufferKey: 'c:/wiki/alpha.md',
+        mode: 'raw',
+        cursor: { selectionStart: 0, selectionEnd: 0 },
+        scrollTop: 0
+      },
+      { kind: 'pane', paneId: 'primary' }
+    )
+    expect(focused.id).toBe(first.id)
+    expect(store.getSnapshot().panes.primary.tabs).toHaveLength(2)
+    expect(store.getSnapshot().panes.primary.activeTabId).toBe(first.id)
+
+    // Single-tab target window splits cleanly when accepting external split drop
+    const singleStore = new PaneTabStore()
+    singleStore.openTab('c:/wiki/main.md')
+    const splitTab = singleStore.acceptTransferredTab(
+      {
+        bufferKey: 'c:/wiki/side.md',
+        mode: 'wysiwyg',
+        cursor: { selectionStart: 4, selectionEnd: 9 },
+        scrollTop: 155
+      },
+      { kind: 'split', direction: 'vertical' }
+    )
+    const splitSnap = singleStore.getSnapshot()
+    expect(splitSnap.splitMode).toBe('vertical')
+    expect(splitSnap.activePaneId).toBe('secondary')
+    expect(splitSnap.panes.primary.tabs.map((t) => t.bufferKey)).toEqual(['c:/wiki/main.md'])
+    expect(splitSnap.panes.secondary.tabs.map((t) => t.id)).toEqual([splitTab.id])
+    expect(splitTab.mode).toBe('wysiwyg')
+    expect(splitTab.scrollTop).toBe(155)
   })
 })

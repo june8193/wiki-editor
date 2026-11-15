@@ -60,11 +60,8 @@ function createDragControllerHarness(windowApi: WikiWindowApi) {
   })
   const controller = new RendererTabDragController({
     tabStore,
+    bufferSync: syncClient,
     windowApi,
-    getWindowId: syncClient.getWindowId,
-    isBufferReadyForImmediateDrag: syncClient.isBufferReadyForImmediateDrag,
-    syncTabBufferForTransfer: syncClient.syncTabBufferForTransfer,
-    closeDetachedTab: syncClient.forceCloseTab,
     onError
   })
 
@@ -97,6 +94,7 @@ describe('RendererTabDragController', () => {
         outcomeUpdates.push({ dragSessionId, outcome })
         return null
       },
+      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
       endTabDrag: async (input) => {
         endInputs.push(input)
         return { detached: false, outcome: 'cancelled' } satisfies TabDragEndResult
@@ -163,6 +161,7 @@ describe('RendererTabDragController', () => {
         outcome: 'pending'
       }),
       updateTabDragOutcome: async () => null,
+      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
       endTabDrag: async (input) => {
         endPayloads.push(input)
         hubRef.registerPendingTransfer(2, input.payload!.bufferKey)
@@ -226,6 +225,7 @@ describe('RendererTabDragController', () => {
         outcomeUpdates.push({ dragSessionId, outcome })
         return null
       },
+      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
       endTabDrag: async (input) => {
         endCalls.push(input)
         return { detached: false, outcome: 'cancelled' }
@@ -287,6 +287,7 @@ describe('RendererTabDragController', () => {
         outcomeUpdates.push({ dragSessionId, outcome })
         return null
       },
+      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
       endTabDrag: async (input) => {
         endCalls.push(input)
         return { detached: false, outcome: 'dropped-in-window' }
@@ -322,6 +323,169 @@ describe('RendererTabDragController', () => {
         screenPoint: undefined,
         payload: expect.objectContaining({ bufferKey: 'c:/wiki/note.md' })
       })
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('tracks external drag sessions, accepts cross-window drops into buffer/tab stores, and reconciles remote dropped-in-window on source without spawning duplicate detach', async () => {
+    const dragListeners = new Set<(session: ActiveTabDragSession | null) => void>()
+    const emitDragState = (session: ActiveTabDragSession | null): void => {
+      for (const listener of dragListeners) {
+        listener(session)
+      }
+    }
+    const endCalls: TabDragEndInput[] = []
+    let acceptResult: Awaited<ReturnType<WikiWindowApi['acceptTabDragDrop']>> = {
+      accepted: false,
+      reason: 'no-active-drag'
+    }
+
+    const targetWindowApi: WikiWindowApi = {
+      role: 'main',
+      getInitContext: async () => ({ role: 'main', initialTabs: [] }),
+      detachTabToNewWindow: async () => ({ windowId: 2 }),
+      startTabDrag: async (input) => ({
+        dragSessionId: 'drag-target-own',
+        sourceWindowId: 1,
+        paneId: input.paneId,
+        tabId: input.tabId,
+        payload: input.payload,
+        outcome: 'pending'
+      }),
+      updateTabDragOutcome: async () => null,
+      acceptTabDragDrop: async () => acceptResult,
+      endTabDrag: async (input) => {
+        endCalls.push(input)
+        return { detached: false, outcome: 'dropped-in-window' }
+      },
+      onTabDragStateChanged: (listener) => {
+        dragListeners.add(listener)
+        return () => dragListeners.delete(listener)
+      },
+      closeCurrent: async () => undefined
+    }
+
+    const { hub, tabStore, syncClient, controller, start } =
+      createDragControllerHarness(targetWindowApi)
+    const cleanup = start()
+
+    try {
+      await syncClient.openWorkspaceFile({
+        name: 'note.md',
+        path: 'C:/wiki/note.md',
+        relativePath: 'note.md',
+        kind: 'file'
+      })
+
+      // Own window drag does not populate externalDragSnapshot
+      const ownTabId = tabStore.getSnapshot().panes.primary.tabs[0].id
+      controller.startDrag('primary', ownTabId)
+      emitDragState({
+        dragSessionId: 'drag-target-own',
+        sourceWindowId: 1,
+        paneId: 'primary',
+        tabId: ownTabId,
+        payload: {
+          bufferKey: 'c:/wiki/note.md',
+          mode: 'raw',
+          cursor: { selectionStart: 0, selectionEnd: 0 },
+          scrollTop: 0
+        },
+        outcome: 'pending'
+      })
+      expect(controller.getExternalDragSnapshot()).toBeNull()
+
+      // Remote dropped-in-window closes source tab, clears draggingTab, invokes endTabDrag, and ignores late endDrag
+      emitDragState({
+        dragSessionId: 'drag-target-own',
+        sourceWindowId: 1,
+        targetWindowId: 2,
+        paneId: 'primary',
+        tabId: ownTabId,
+        payload: {
+          bufferKey: 'c:/wiki/note.md',
+          mode: 'raw',
+          cursor: { selectionStart: 0, selectionEnd: 0 },
+          scrollTop: 0
+        },
+        outcome: 'dropped-in-window'
+      })
+      expect(controller.getSnapshot()).toBeNull()
+      expect(tabStore.getBufferKeys()).toEqual([])
+      await Promise.resolve()
+      expect(endCalls).toEqual([{ dragSessionId: 'drag-target-own' }])
+
+      await controller.endDrag({ x: 1800, y: 200 })
+      expect(endCalls).toHaveLength(1)
+
+      // External drag from window 2 populates externalDragSnapshot, clears on cancel, and accepts drop cleanly
+      const externalSession: ActiveTabDragSession = {
+        dragSessionId: 'drag-ext-1',
+        sourceWindowId: 2,
+        paneId: 'primary',
+        tabId: 'tab-ext',
+        payload: {
+          bufferKey: 'c:/wiki/external.md',
+          mode: 'wysiwyg',
+          cursor: { selectionStart: 4, selectionEnd: 8 },
+          scrollTop: 120
+        },
+        outcome: 'pending'
+      }
+      emitDragState(externalSession)
+      expect(controller.getExternalDragSnapshot()).toEqual(externalSession)
+
+      emitDragState({ ...externalSession, outcome: 'cancelled' })
+      expect(controller.getExternalDragSnapshot()).toBeNull()
+
+      // Accepted external drop inserts buffer and tab (splitting even in 1-tab single mode)
+      await syncClient.openWorkspaceFile({
+        name: 'note.md',
+        path: 'C:/wiki/note.md',
+        relativePath: 'note.md',
+        kind: 'file'
+      })
+      emitDragState(externalSession)
+      acceptResult = {
+        accepted: true,
+        dragSessionId: 'drag-ext-1',
+        sourceWindowId: 2,
+        targetWindowId: 1,
+        payload: externalSession.payload,
+        buffer: {
+          key: 'c:/wiki/external.md',
+          path: 'C:/wiki/external.md',
+          name: 'external.md',
+          kind: 'workspace',
+          content: '# Dirty external content',
+          savedContent: '# Clean disk',
+          isDirty: true,
+          version: 2,
+          isSaving: false
+        }
+      }
+
+      const accepted = await controller.acceptExternalDrop(
+        { kind: 'split', direction: 'vertical' },
+        externalSession.dragSessionId
+      )
+      expect(accepted).toBe(true)
+      expect(controller.getExternalDragSnapshot()).toBeNull()
+      expect(tabStore.getSnapshot().splitMode).toBe('vertical')
+      expect(tabStore.getSnapshot().panes.secondary.tabs[0]).toMatchObject({
+        bufferKey: 'c:/wiki/external.md',
+        mode: 'wysiwyg',
+        cursor: { selectionStart: 4, selectionEnd: 8 },
+        scrollTop: 120
+      })
+
+      // Rejection clears externalDragSnapshot and leaves tabs untouched
+      emitDragState(externalSession)
+      acceptResult = { accepted: false, reason: 'drag-not-pending' }
+      expect(await controller.acceptExternalDrop({ kind: 'pane', paneId: 'primary' })).toBe(false)
+      expect(controller.getExternalDragSnapshot()).toBeNull()
+      expect(hub.getSnapshot().revision).toBeGreaterThanOrEqual(0)
     } finally {
       cleanup()
     }

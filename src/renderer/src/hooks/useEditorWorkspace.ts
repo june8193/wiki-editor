@@ -144,11 +144,8 @@ export function useEditorWorkspace({
     })
     const tabDragController = new RendererTabDragController({
       tabStore,
+      bufferSync: syncClient,
       windowApi: wikiApi.window,
-      getWindowId: syncClient.getWindowId,
-      isBufferReadyForImmediateDrag: syncClient.isBufferReadyForImmediateDrag,
-      syncTabBufferForTransfer: syncClient.syncTabBufferForTransfer,
-      closeDetachedTab: syncClient.forceCloseTab,
       onError: (message, error) => callbacksRef.current.onError(message, error)
     })
     storesRef.current = { bufferStore, tabStore, syncClient, tabDragController }
@@ -160,6 +157,10 @@ export function useEditorWorkspace({
   const draggingTab = useSyncExternalStore(
     tabDragController.subscribe,
     tabDragController.getSnapshot
+  )
+  const externalDragSession = useSyncExternalStore(
+    tabDragController.subscribe,
+    tabDragController.getExternalDragSnapshot
   )
   const activeTab = getPaneActiveTab(layout.panes[layout.activePaneId])
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
@@ -181,6 +182,8 @@ export function useEditorWorkspace({
           }
         : {}),
       onStartTabDrag: tabDragController.startDrag,
+      onDropExternalTab: (target, dragSessionId) =>
+        void tabDragController.acceptExternalDrop(target, dragSessionId),
       onDropTabInWindow: tabDragController.completeInWindowDrop,
       onCancelTabDrag: tabDragController.cancelDrag,
       onEndTabDrag: (screenPoint) => void tabDragController.endDrag(screenPoint),
@@ -243,6 +246,7 @@ export function useEditorWorkspace({
     activeFilePath,
     totalTabCount,
     draggingTab,
+    externalDragSession,
     paneActions,
     openWorkspaceFile: syncClient.openWorkspaceFile,
     openConfigDocument: syncClient.openConfigDocument,

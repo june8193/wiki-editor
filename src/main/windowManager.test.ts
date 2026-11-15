@@ -8,6 +8,7 @@ import { BUFFER_IPC_CHANNELS, WINDOW_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
   WINDOW_BASE_TITLE,
+  type AcceptTabDragDropResult,
   type ActiveTabDragSession,
   type DetachTabToNewWindowResult,
   type ScreenLike,
@@ -849,6 +850,247 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
         channel: WINDOW_IPC_CHANNELS.dragStateChanged,
         payload: null
       })
+    } finally {
+      disposeScoped()
+    }
+  })
+
+  it('accepts cross-window tab drops across main and auxiliary windows, preserves dirty buffers, suppresses duplicate spawn, and auto-closes empty source auxiliary window', async () => {
+    await writeFile(join(workspaceDir, 'alpha.md'), '# Alpha disk', 'utf-8')
+    await writeFile(join(workspaceDir, 'beta.md'), '# Beta disk', 'utf-8')
+    await writeFile(join(workspaceDir, 'gamma.md'), '# Gamma disk', 'utf-8')
+
+    let screenCursor = { x: 1600, y: 200 }
+    const {
+      factory,
+      manager,
+      scopedIpc: ipc,
+      dispose: disposeScoped
+    } = setupScopedDragHarness(
+      {
+        getDisplayNearestPoint: () => ({
+          workArea: { x: 0, y: 0, width: 1920, height: 1080 }
+        }),
+        getCursorScreenPoint: () => ({ ...screenCursor })
+      },
+      { x: 0, y: 0, width: 1200, height: 800 }
+    )
+
+    try {
+      const mainWin = manager.createMainWindow() as FakeWindowInstance
+      await ipc.invokeFrom(mainWin.webContents, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+      const alphaBuf = await ipc.invokeFrom<DocumentBuffer>(
+        mainWin.webContents,
+        BUFFER_IPC_CHANNELS.openWorkspaceFile,
+        join(workspaceDir, 'alpha.md')
+      )
+      const betaBuf = await ipc.invokeFrom<DocumentBuffer>(
+        mainWin.webContents,
+        BUFFER_IPC_CHANNELS.openWorkspaceFile,
+        join(workspaceDir, 'beta.md')
+      )
+      const gammaBuf = await ipc.invokeFrom<DocumentBuffer>(
+        mainWin.webContents,
+        BUFFER_IPC_CHANNELS.openWorkspaceFile,
+        join(workspaceDir, 'gamma.md')
+      )
+      await ipc.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+        alphaBuf.key,
+        betaBuf.key,
+        gammaBuf.key
+      ])
+
+      const betaPayload: TabTransferPayload = {
+        bufferKey: betaBuf.key,
+        mode: 'wysiwyg',
+        cursor: { selectionStart: 3, selectionEnd: 9 },
+        scrollTop: 84
+      }
+      const gammaPayload: TabTransferPayload = {
+        bufferKey: gammaBuf.key,
+        mode: 'raw',
+        cursor: { selectionStart: 2, selectionEnd: 5 },
+        scrollTop: 12
+      }
+
+      // 1. Detach beta and gamma into two auxiliary windows (aux1, aux2)
+      await ipc.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, betaPayload)
+      const aux1 = factory.createdWindows[1]
+      await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [betaBuf.key])
+
+      await ipc.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, gammaPayload)
+      const aux2 = factory.createdWindows[2]
+      await ipc.invokeFrom(aux2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [gammaBuf.key])
+      await ipc.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [alphaBuf.key])
+
+      // Make beta dirty in aux1 before dragging across windows
+      await ipc.invokeFrom(
+        aux1.webContents,
+        BUFFER_IPC_CHANNELS.updateContent,
+        betaBuf.key,
+        '# Beta unsaved edit',
+        1
+      )
+
+      // 2. Aux1 -> Main drop acceptance + rejection guards
+      const noActiveResult = await ipc.invokeFrom<AcceptTabDragDropResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        {}
+      )
+      expect(noActiveResult).toEqual({ accepted: false, reason: 'no-active-drag' })
+
+      const aux1Drag = await ipc.invokeFrom<ActiveTabDragSession>(
+        aux1.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        {
+          paneId: 'primary',
+          tabId: 'tab-beta',
+          payload: betaPayload
+        }
+      )
+
+      // Same-window drop is rejected without mutating the pending session
+      const sameWindowResult = await ipc.invokeFrom<AcceptTabDragDropResult>(
+        aux1.webContents,
+        WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        { dragSessionId: aux1Drag.dragSessionId }
+      )
+      expect(sameWindowResult).toEqual({ accepted: false, reason: 'same-window' })
+
+      // Mismatched session id is rejected
+      const mismatchResult = await ipc.invokeFrom<AcceptTabDragDropResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        { dragSessionId: 'wrong-session' }
+      )
+      expect(mismatchResult).toEqual({ accepted: false, reason: 'session-mismatch' })
+
+      // Valid drop onto main window (even without passing dragSessionId explicitly)
+      const acceptedOnMain = await ipc.invokeFrom<AcceptTabDragDropResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        {}
+      )
+      expect(acceptedOnMain).toMatchObject({
+        accepted: true,
+        dragSessionId: aux1Drag.dragSessionId,
+        sourceWindowId: aux1.webContents.id,
+        targetWindowId: mainWin.webContents.id,
+        payload: betaPayload,
+        buffer: {
+          key: betaBuf.key,
+          content: '# Beta unsaved edit',
+          isDirty: true
+        }
+      })
+
+      // Broadcast informs source window with dropped-in-window + targetWindowId
+      expect(aux1.sentMessages[aux1.sentMessages.length - 1]).toEqual({
+        channel: WINDOW_IPC_CHANNELS.dragStateChanged,
+        payload: {
+          ...aux1Drag,
+          targetWindowId: mainWin.webContents.id,
+          outcome: 'dropped-in-window'
+        }
+      })
+
+      // Second drop attempt on the same resolved session fails with drag-not-pending
+      const duplicateAccept = await ipc.invokeFrom<AcceptTabDragDropResult>(
+        aux2.webContents,
+        WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        { dragSessionId: aux1Drag.dragSessionId }
+      )
+      expect(duplicateAccept).toEqual({ accepted: false, reason: 'drag-not-pending' })
+
+      // Even if source syncs empty tabs BEFORE main syncs beta, dirty buffer stays alive via pending transfer
+      await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [])
+      expect(aux1.closedCount).toBe(1)
+      expect(bufferHub.hasBuffer(betaBuf.key)).toBe(true)
+      expect(bufferHub.getBuffer(betaBuf.key)?.content).toBe('# Beta unsaved edit')
+
+      // Source endTabDrag does NOT spawn an extra auxiliary window even if cursor is outside all bounds
+      screenCursor = { x: 1850, y: 950 }
+      const aux1End = await ipc.invokeFrom<TabDragEndResult>(
+        aux1.webContents,
+        WINDOW_IPC_CHANNELS.endTabDrag,
+        { dragSessionId: aux1Drag.dragSessionId, screenPoint: screenCursor }
+      )
+      expect(aux1End).toEqual({ detached: false, outcome: 'cancelled' })
+      expect(factory.createdWindows).toHaveLength(3)
+
+      // Target main commits tab ownership
+      await ipc.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+        alphaBuf.key,
+        betaBuf.key
+      ])
+
+      // 3. Main -> Aux2 drop acceptance
+      const mainToAuxDrag = await ipc.invokeFrom<ActiveTabDragSession>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        {
+          paneId: 'primary',
+          tabId: 'tab-beta',
+          payload: betaPayload
+        }
+      )
+      const acceptedOnAux2 = await ipc.invokeFrom<AcceptTabDragDropResult>(
+        aux2.webContents,
+        WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        { dragSessionId: mainToAuxDrag.dragSessionId }
+      )
+      expect(acceptedOnAux2).toMatchObject({
+        accepted: true,
+        sourceWindowId: mainWin.webContents.id,
+        targetWindowId: aux2.webContents.id,
+        buffer: { key: betaBuf.key, content: '# Beta unsaved edit', isDirty: true }
+      })
+      const mainEnd = await ipc.invokeFrom<TabDragEndResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.endTabDrag,
+        { dragSessionId: mainToAuxDrag.dragSessionId, screenPoint: { x: 1850, y: 950 } }
+      )
+      expect(mainEnd).toEqual({ detached: false, outcome: 'dropped-in-window' })
+      expect(factory.createdWindows).toHaveLength(3)
+
+      // 4. Aux2 -> Main drop closes aux2 only when its tab count becomes 0, and endTabDrag ignores cancelled sessions
+      await ipc.invokeFrom(aux2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+        gammaBuf.key,
+        betaBuf.key
+      ])
+      const aux2ToMain = await ipc.invokeFrom<ActiveTabDragSession>(
+        aux2.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        { paneId: 'primary', tabId: 'tab-gamma', payload: gammaPayload }
+      )
+      const acceptedGamma = await ipc.invokeFrom<AcceptTabDragDropResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        { dragSessionId: aux2ToMain.dragSessionId }
+      )
+      expect(acceptedGamma.accepted).toBe(true)
+      await ipc.invokeFrom(aux2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [betaBuf.key])
+      expect(aux2.closedCount).toBe(0)
+
+      // Cancelled drag session rejects acceptTabDragDrop
+      const aux2BetaDrag = await ipc.invokeFrom<ActiveTabDragSession>(
+        aux2.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        { paneId: 'primary', tabId: 'tab-beta', payload: betaPayload }
+      )
+      await ipc.invokeFrom(
+        aux2.webContents,
+        WINDOW_IPC_CHANNELS.updateTabDragOutcome,
+        aux2BetaDrag.dragSessionId,
+        'cancelled'
+      )
+      const cancelledAccept = await ipc.invokeFrom<AcceptTabDragDropResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        {}
+      )
+      expect(cancelledAccept).toEqual({ accepted: false, reason: 'drag-not-pending' })
     } finally {
       disposeScoped()
     }

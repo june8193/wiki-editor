@@ -1,8 +1,8 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
 import { useDismissable } from '../hooks/useDismissable'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
-import type { ScreenPoint } from '@shared/window'
-import { PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import type { ActiveTabDragSession, ScreenPoint } from '@shared/window'
+import { PaneId, TabItem, TabViewPatch, type TransferredTabDropTarget } from '../stores/PaneTabStore'
 
 export interface DraggingTabPayload {
   paneId: PaneId
@@ -21,6 +21,7 @@ export interface PaneInteractionActions {
   ) => void
   onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
   onDetachTabToNewWindow?: (paneId: PaneId, tabId: string) => void
+  onDropExternalTab?: (target: TransferredTabDropTarget, dragSessionId?: string) => void
   onStartTabDrag: (paneId: PaneId, tabId: string) => void
   onDropTabInWindow: () => void
   onCancelTabDrag: () => void
@@ -38,23 +39,71 @@ interface TabContextMenuState {
 
 const TAB_DRAG_MIME = 'application/x-wiki-tab'
 
+function hasWikiTabDragMime(dataTransfer: DataTransfer | null | undefined): boolean {
+  const types = dataTransfer?.types
+  if (!types) return false
+  for (let i = 0; i < types.length; i += 1) {
+    if (types[i] === TAB_DRAG_MIME) return true
+  }
+  return false
+}
+
+function readTabDragMimeJson(event: DragEvent): Record<string, unknown> | null {
+  try {
+    const raw = event.dataTransfer?.getData(TAB_DRAG_MIME)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
+}
+
+export function isExternalTabDragEvent(
+  event: DragEvent,
+  draggingTab: DraggingTabPayload | null,
+  externalDragSession: ActiveTabDragSession | null | undefined
+): boolean {
+  if (draggingTab !== null) {
+    return false
+  }
+  return externalDragSession != null || hasWikiTabDragMime(event.dataTransfer)
+}
+
+export function isWikiTabDragActive(
+  event: DragEvent,
+  draggingTab: DraggingTabPayload | null,
+  externalDragSession: ActiveTabDragSession | null | undefined
+): boolean {
+  return draggingTab !== null || isExternalTabDragEvent(event, draggingTab, externalDragSession)
+}
+
+function resolveExternalDragSessionId(
+  event: DragEvent,
+  externalDragSession: ActiveTabDragSession | null | undefined
+): string | undefined {
+  if (externalDragSession?.dragSessionId) {
+    return externalDragSession.dragSessionId
+  }
+  const parsed = readTabDragMimeJson(event)
+  return typeof parsed?.dragSessionId === 'string' && parsed.dragSessionId
+    ? parsed.dragSessionId
+    : undefined
+}
+
 export function parseDraggingTabPayload(
   event: DragEvent,
   fallback: DraggingTabPayload | null
 ): DraggingTabPayload | null {
-  try {
-    const raw = event.dataTransfer?.getData(TAB_DRAG_MIME)
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<DraggingTabPayload>
-      if (
-        (parsed.paneId === 'primary' || parsed.paneId === 'secondary') &&
-        typeof parsed.tabId === 'string'
-      ) {
-        return { paneId: parsed.paneId, tabId: parsed.tabId }
-      }
-    }
-  } catch {
-    // Ignore malformed drag payload and fall back to in-memory dragging state
+  const parsed = readTabDragMimeJson(event)
+  if (
+    parsed &&
+    (parsed.paneId === 'primary' || parsed.paneId === 'secondary') &&
+    typeof parsed.tabId === 'string'
+  ) {
+    return { paneId: parsed.paneId, tabId: parsed.tabId }
   }
   return fallback
 }
@@ -65,19 +114,37 @@ export function dispatchTabDrop(
   onDropInWindow: () => void,
   onValidDrop: (payload: DraggingTabPayload) => void,
   options?: {
-    shouldAccept?: (payload: DraggingTabPayload) => boolean
+    externalDragSession?: ActiveTabDragSession | null
+    shouldAcceptLocal?: (payload: DraggingTabPayload) => boolean
+    canAcceptExternal?: boolean
+    onExternalDrop?: (dragSessionId?: string) => void
     stopPropagation?: boolean
   }
 ): void {
+  const executeDrop = (commit: () => void): void => {
+    event.preventDefault()
+    if (options?.stopPropagation) {
+      event.stopPropagation()
+    }
+    commit()
+  }
+
+  if (isExternalTabDragEvent(event, draggingTab, options?.externalDragSession)) {
+    if (!options?.onExternalDrop || options.canAcceptExternal === false) {
+      return
+    }
+    const dragSessionId = resolveExternalDragSessionId(event, options.externalDragSession)
+    executeDrop(() => options.onExternalDrop?.(dragSessionId))
+    return
+  }
+
   const payload = parseDraggingTabPayload(event, draggingTab)
   if (!payload) return
-  if (options?.shouldAccept && !options.shouldAccept(payload)) return
-  event.preventDefault()
-  if (options?.stopPropagation) {
-    event.stopPropagation()
-  }
-  onValidDrop(payload)
-  onDropInWindow()
+  if (options?.shouldAcceptLocal && !options.shouldAcceptLocal(payload)) return
+  executeDrop(() => {
+    onValidDrop(payload)
+    onDropInWindow()
+  })
 }
 
 export function handleTabMoveDrop(
@@ -87,6 +154,9 @@ export function handleTabMoveDrop(
   targetPaneId: PaneId,
   onMoveTab: PaneInteractionActions['onMoveTab'],
   options?: {
+    externalDragSession?: ActiveTabDragSession | null
+    canAcceptExternal?: boolean
+    onDropExternalTab?: PaneInteractionActions['onDropExternalTab']
     targetIndex?: number
     ignoreSamePane?: boolean
     stopPropagation?: boolean
@@ -98,7 +168,16 @@ export function handleTabMoveDrop(
     onDropInWindow,
     (payload) => onMoveTab(payload.paneId, targetPaneId, payload.tabId, options?.targetIndex),
     {
-      shouldAccept: options?.ignoreSamePane
+      externalDragSession: options?.externalDragSession,
+      canAcceptExternal: options?.canAcceptExternal,
+      onExternalDrop: options?.onDropExternalTab
+        ? (dragSessionId) =>
+            options.onDropExternalTab?.(
+              { kind: 'pane', paneId: targetPaneId, targetIndex: options?.targetIndex },
+              dragSessionId
+            )
+        : undefined,
+      shouldAcceptLocal: options?.ignoreSamePane
         ? (payload) => payload.paneId !== targetPaneId
         : undefined,
       stopPropagation: options?.stopPropagation
@@ -119,6 +198,7 @@ interface PaneTabBarProps {
   canMoveToSplit: boolean
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
+  externalDragSession?: ActiveTabDragSession | null
   actions: Pick<
     PaneInteractionActions,
     | 'onActivateTab'
@@ -126,6 +206,7 @@ interface PaneTabBarProps {
     | 'onMoveTab'
     | 'onDuplicateTab'
     | 'onDetachTabToNewWindow'
+    | 'onDropExternalTab'
     | 'onStartTabDrag'
     | 'onDropTabInWindow'
     | 'onEndTabDrag'
@@ -143,6 +224,7 @@ export function PaneTabBar({
   canMoveToSplit,
   buffers,
   draggingTab,
+  externalDragSession = null,
   actions
 }: PaneTabBarProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
@@ -159,10 +241,14 @@ export function PaneTabBar({
       role="tablist"
       aria-label={paneId === 'primary' ? '주 탭 목록' : '보조 탭 목록'}
       onDragOver={(event) => {
-        event.preventDefault()
+        if (isWikiTabDragActive(event, draggingTab, externalDragSession)) {
+          event.preventDefault()
+        }
       }}
       onDrop={(event) =>
         handleTabMoveDrop(event, draggingTab, actions.onDropTabInWindow, paneId, actions.onMoveTab, {
+          externalDragSession,
+          onDropExternalTab: actions.onDropExternalTab,
           stopPropagation: true
         })
       }
@@ -191,7 +277,9 @@ export function PaneTabBar({
             }}
             onDragEnd={(event) => actions.onEndTabDrag(extractDragEndScreenPoint(event))}
             onDragOver={(event) => {
-              event.preventDefault()
+              if (isWikiTabDragActive(event, draggingTab, externalDragSession)) {
+                event.preventDefault()
+              }
             }}
             onDrop={(event) =>
               handleTabMoveDrop(
@@ -201,6 +289,8 @@ export function PaneTabBar({
                 paneId,
                 actions.onMoveTab,
                 {
+                  externalDragSession,
+                  onDropExternalTab: actions.onDropExternalTab,
                   targetIndex: index,
                   stopPropagation: true
                 }

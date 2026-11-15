@@ -11,6 +11,8 @@ import {
   computeOffsetAuxiliaryBounds,
   formatWindowTitle,
   WINDOW_ROLE_QUERY_PARAM,
+  type AcceptTabDragDropInput,
+  type AcceptTabDragDropResult,
   type ActiveTabDragSession,
   type DetachTabToNewWindowResult,
   type ScreenLike,
@@ -308,6 +310,25 @@ export class WindowManager {
     return this.dragCoordinator.updateOutcome(sourceRecord.webContentsId, dragSessionId, outcome)
   }
 
+  /**
+   * Accepts an active external tab drag drop onto the sender window, reserving shared buffer
+   * ownership for the target window before broadcasting `'dropped-in-window'`.
+   */
+  acceptTabDragDrop(sender: unknown, input?: AcceptTabDragDropInput): AcceptTabDragDropResult {
+    const targetRecord = this.resolveRecordFromSender(sender)
+    if (!targetRecord || targetRecord.window.isDestroyed()) {
+      return { accepted: false, reason: 'no-active-drag' }
+    }
+    return this.dragCoordinator.acceptCrossWindowDrop({
+      targetWindowId: targetRecord.webContentsId,
+      dragSessionId: input?.dragSessionId,
+      getBuffer: (key) => this.bufferHub.getBuffer(key),
+      onReserveTransfer: (targetId, bufferKey) => {
+        this.bufferHub.registerPendingTransfer(targetId, bufferKey)
+      }
+    })
+  }
+
   endTabDrag(sender: unknown, input: TabDragEndInput): TabDragEndResult {
     const sourceRecord = this.resolveRecordFromSender(sender)
     if (!sourceRecord || sourceRecord.window.isDestroyed()) {
@@ -362,6 +383,7 @@ export class WindowManager {
     if (this.disposed) return
 
     if (event.type === 'paths-remapped') {
+      this.dragCoordinator.remapPayloadKeys(event.remappings)
       const remappings = new Map(event.remappings.map((item) => [item.oldKey, item.newKey]))
       for (const record of this.windowsByWebContentsId.values()) {
         if (record.role !== 'auxiliary') continue

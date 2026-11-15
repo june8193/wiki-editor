@@ -1,3 +1,5 @@
+import type { DocumentBuffer } from './documentBuffer'
+
 export type WindowRole = 'main' | 'auxiliary'
 
 export const AUXILIARY_WINDOW_DEFAULT_WIDTH = 960
@@ -197,11 +199,38 @@ export interface TabDragStartInput {
 export interface ActiveTabDragSession {
   dragSessionId: string
   sourceWindowId: number
+  /** Target IPC window id assigned once a cross-window drop is accepted. */
+  targetWindowId?: number
   paneId: PaneId
   tabId: string
   payload: TabTransferPayload
   outcome: TabDragOutcome
 }
+
+export interface AcceptTabDragDropInput {
+  dragSessionId?: string
+}
+
+export type AcceptTabDragDropRejectReason =
+  | 'no-active-drag'
+  | 'drag-not-pending'
+  | 'session-mismatch'
+  | 'same-window'
+  | 'unknown-buffer'
+
+export type AcceptTabDragDropResult =
+  | {
+      accepted: true
+      dragSessionId: string
+      sourceWindowId: number
+      targetWindowId: number
+      payload: TabTransferPayload
+      buffer: DocumentBuffer
+    }
+  | {
+      accepted: false
+      reason: AcceptTabDragDropRejectReason
+    }
 
 export interface TabDragEndInput {
   dragSessionId: string

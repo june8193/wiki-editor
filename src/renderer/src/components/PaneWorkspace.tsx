@@ -1,9 +1,22 @@
-import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
+import { DragEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
-import { canSplitWithTab, PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
+import type { ActiveTabDragSession } from '@shared/window'
+import {
+  canAcceptIncomingSplitDrop,
+  canSplitWithTab,
+  PaneId,
+  PaneLayoutState,
+  SplitDirection
+} from '../stores/PaneTabStore'
 import type { OutlineScrollRequest } from './DocumentEditor'
-import { dispatchTabDrop, DraggingTabPayload, PaneInteractionActions } from './PaneTabBar'
+import {
+  dispatchTabDrop,
+  DraggingTabPayload,
+  isExternalTabDragEvent,
+  isWikiTabDragActive,
+  PaneInteractionActions
+} from './PaneTabBar'
 import { PaneView } from './PaneView'
 
 export interface PaneWorkspaceProps {
@@ -16,6 +29,7 @@ export interface PaneWorkspaceProps {
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   draggingTab: DraggingTabPayload | null
+  externalDragSession?: ActiveTabDragSession | null
   onSetSplitRatio: (ratio: number) => void
   onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
   actions: PaneInteractionActions
@@ -42,12 +56,16 @@ export function PaneWorkspace({
   scrollRequest = null,
   isShortcutDisabled = false,
   draggingTab,
+  externalDragSession = null,
   onSetSplitRatio,
   onSplitWithTab,
   actions
 }: PaneWorkspaceProps) {
   const [isResizing, setIsResizing] = useState(false)
+  const [isExternalDragOver, setIsExternalDragOver] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const externalDragDepthRef = useRef(0)
+  const prevExternalSessionRef = useRef<ActiveTabDragSession | null>(externalDragSession)
 
   useEffect(() => {
     if (!isResizing) return
@@ -105,11 +123,62 @@ export function PaneWorkspace({
     }
   }, [hasDraggingTab, actions])
 
+  useEffect(() => {
+    const prevSession = prevExternalSessionRef.current
+    prevExternalSessionRef.current = externalDragSession
+    if (draggingTab !== null || (prevSession !== null && externalDragSession === null)) {
+      externalDragDepthRef.current = 0
+      setIsExternalDragOver(false)
+    }
+  }, [draggingTab, externalDragSession])
+
+  const resetExternalDragHover = (): void => {
+    externalDragDepthRef.current = 0
+    setIsExternalDragOver(false)
+  }
+
+  const handleWorkspaceDragEnter = (event: DragEvent<HTMLDivElement>): void => {
+    if (!isExternalTabDragEvent(event, draggingTab, externalDragSession)) return
+    externalDragDepthRef.current += 1
+    if (!isExternalDragOver) {
+      setIsExternalDragOver(true)
+    }
+  }
+
+  const handleWorkspaceDragOver = (event: DragEvent<HTMLDivElement>): void => {
+    if (!isExternalTabDragEvent(event, draggingTab, externalDragSession)) return
+    if (externalDragDepthRef.current === 0) {
+      externalDragDepthRef.current = 1
+    }
+    if (!isExternalDragOver) {
+      setIsExternalDragOver(true)
+    }
+  }
+
+  const handleWorkspaceDragLeave = (event: DragEvent<HTMLDivElement>): void => {
+    const nextTarget = event.relatedTarget
+    if (nextTarget instanceof Node) {
+      if (event.currentTarget.contains(nextTarget)) {
+        externalDragDepthRef.current = Math.max(1, externalDragDepthRef.current - 1)
+        return
+      }
+      resetExternalDragHover()
+      return
+    }
+    externalDragDepthRef.current = Math.max(0, externalDragDepthRef.current - 1)
+    if (externalDragDepthRef.current === 0) {
+      setIsExternalDragOver(false)
+    }
+  }
+
   const isSplit = layout.splitMode !== 'single'
-  const canDropToSplit = draggingTab !== null && canSplitWithTab(layout)
-  const visibleDropZones = canDropToSplit
-    ? SPLIT_DROP_ZONES.filter((zone) => zone.direction !== layout.splitMode)
-    : []
+  const canDropLocalToSplit = draggingTab !== null && canSplitWithTab(layout)
+  const canDropExternalToSplit =
+    draggingTab === null && isExternalDragOver && canAcceptIncomingSplitDrop(layout)
+  const visibleDropZones =
+    canDropLocalToSplit || canDropExternalToSplit
+      ? SPLIT_DROP_ZONES.filter((zone) => zone.direction !== layout.splitMode)
+      : []
   const sharedPaneProps = {
     splitMode: layout.splitMode,
     theme,
@@ -120,6 +189,7 @@ export function PaneWorkspace({
     isShortcutDisabled,
     buffers,
     draggingTab,
+    externalDragSession,
     actions
   }
 
@@ -129,6 +199,10 @@ export function PaneWorkspace({
       className={`pane-workspace is-${layout.splitMode}`}
       data-testid="pane-workspace"
       data-split-mode={layout.splitMode}
+      onDragEnter={handleWorkspaceDragEnter}
+      onDragOver={handleWorkspaceDragOver}
+      onDragLeave={handleWorkspaceDragLeave}
+      onDropCapture={resetExternalDragHover}
     >
       <PaneView
         pane={layout.panes.primary}
@@ -143,14 +217,28 @@ export function PaneWorkspace({
           className={`split-drop-zone is-${zone.direction}`}
           data-testid={zone.testId}
           aria-label={zone.label}
-          onDragOver={(event) => event.preventDefault()}
+          onDragOver={(event) => {
+            if (isWikiTabDragActive(event, draggingTab, externalDragSession)) {
+              event.preventDefault()
+            }
+          }}
           onDrop={(event) =>
             dispatchTabDrop(
               event,
               draggingTab,
               actions.onDropTabInWindow,
               (payload) => onSplitWithTab(payload.paneId, payload.tabId, zone.direction),
-              { stopPropagation: true }
+              {
+                externalDragSession,
+                onExternalDrop: actions.onDropExternalTab
+                  ? (dragSessionId) =>
+                      actions.onDropExternalTab?.(
+                        { kind: 'split', direction: zone.direction },
+                        dragSessionId
+                      )
+                  : undefined,
+                stopPropagation: true
+              }
             )
           }
         >
