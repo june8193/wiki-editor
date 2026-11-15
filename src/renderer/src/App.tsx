@@ -16,14 +16,12 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { SidebarResizer } from './components/SidebarResizer'
 import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
-import {
-  findMarkdownHeadingBySlug,
-  resolveMarkdownLinkTarget
-} from './editor/MarkdownLinkNavigation'
+import { resolveMarkdownLinkTarget } from './editor/MarkdownLinkNavigation'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
   applyHeadingNumbers,
   findFirstNonFencedSlashTocLine,
+  findMarkdownHeadingBySlug,
   insertOrUpdateTocBlock,
   type MarkdownHeading,
   resolveRawCursorLine,

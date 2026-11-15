@@ -488,3 +488,38 @@ export function applyHeadingNumbers(markdown: string): string {
 export function stripHeadingNumbers(markdown: string): string {
   return transformHeadingLines(markdown, (coreContent) => stripHeadingNumberPrefix(coreContent))
 }
+
+export interface MarkdownHeadingTarget {
+  heading: MarkdownHeading
+  index: number
+}
+
+export function decodeSlugSafely(rawSlug: string): string {
+  try {
+    return decodeURIComponent(rawSlug)
+  } catch {
+    return rawSlug
+  }
+}
+
+/**
+ * Finds the heading and its 0-based outline index matching `rawSlug` (decoding percent escapes).
+ */
+export function findMarkdownHeadingBySlug(
+  markdownContent: string,
+  rawSlug: string
+): MarkdownHeadingTarget | null {
+  const targetSlug = decodeSlugSafely(rawSlug)
+  if (targetSlug.length === 0) {
+    return null
+  }
+
+  const headings = parseMarkdownHeadings(markdownContent)
+  for (let index = 0; index < headings.length; index++) {
+    const heading = headings[index]
+    if (heading.slug === targetSlug) {
+      return { heading, index }
+    }
+  }
+  return null
+}

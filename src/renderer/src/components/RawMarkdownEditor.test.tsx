@@ -1089,7 +1089,7 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
     fireEvent.click(fencedTarget, { ctrlKey: true })
     expect(onLinkNavigate).toHaveBeenCalledTimes(3)
 
-    // Clicking .cm-content directly when cursor is inside a link uses selection head fallback
+    // Clicking .cm-content directly when cursor is inside a link uses selection head fallback for zero-coord synthetic events
     act(() => {
       view.dispatch({
         selection: { anchor: content.indexOf('섹션') + 1 }
@@ -1097,5 +1097,12 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
     })
     fireEvent.click(cmContent, { ctrlKey: true })
     expect(onLinkNavigate).toHaveBeenNthCalledWith(4, '#%EA%B0%9C%EC%9A%94')
+
+    // Non-zero pointer coordinates returning null from posAtCoords (blank whitespace/padding) must NOT trigger navigation
+    const posAtCoordsSpy = vi.spyOn(view, 'posAtCoords').mockReturnValue(null)
+    fireEvent.click(cmContent, { ctrlKey: true, clientX: 500, clientY: 20 })
+    fireEvent.click(lines[0], { ctrlKey: true, clientX: 500, clientY: 20 })
+    posAtCoordsSpy.mockRestore()
+    expect(onLinkNavigate).toHaveBeenCalledTimes(4)
   })
 })

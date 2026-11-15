@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
-  extractMarkdownLinkAtOffset,
-  findMarkdownHeadingBySlug,
+  extractMarkdownLinkHrefAtOffset,
   isLinkNavigationClick,
   resolveMarkdownLinkTarget
 } from './MarkdownLinkNavigation'
+import { findMarkdownHeadingBySlug } from './MarkdownTocEngine'
 
 describe('isLinkNavigationClick', () => {
   it('allows normal primary click in Preview mode', () => {
@@ -66,53 +66,32 @@ describe('isLinkNavigationClick', () => {
       ).toBe(false)
     }
   })
-
-  it('never triggers for unsupported editor mode', () => {
-    expect(
-      isLinkNavigationClick('unsupported', {
-        button: 0,
-        ctrlKey: true,
-        metaKey: true,
-        altKey: false
-      })
-    ).toBe(false)
-  })
 })
 
-describe('extractMarkdownLinkAtOffset', () => {
-  it('extracts href and span for inline markdown links at any offset inside [label](href)', () => {
+describe('extractMarkdownLinkHrefAtOffset', () => {
+  it('extracts href for inline markdown links at any offset inside [label](href)', () => {
     const content = 'See [API 가이드](#api-가이드) and [Guide](./sub/guide%20%281%29.md#intro).'
     const firstStart = content.indexOf('[API 가이드]')
     const firstEnd = content.indexOf(')') + 1
-    expect(extractMarkdownLinkAtOffset(content, firstStart)).toEqual({
-      href: '#api-가이드',
-      from: firstStart,
-      to: firstEnd
-    })
-    expect(extractMarkdownLinkAtOffset(content, firstEnd - 2)).toEqual({
-      href: '#api-가이드',
-      from: firstStart,
-      to: firstEnd
-    })
+    expect(extractMarkdownLinkHrefAtOffset(content, firstStart)).toBe('#api-가이드')
+    expect(extractMarkdownLinkHrefAtOffset(content, firstEnd - 2)).toBe('#api-가이드')
 
-    const secondStart = content.indexOf('[Guide]')
     const secondHrefPos = content.indexOf('./sub/guide')
-    expect(extractMarkdownLinkAtOffset(content, secondHrefPos)).toEqual({
-      href: './sub/guide%20%281%29.md#intro',
-      from: secondStart,
-      to: content.length - 1
-    })
+    expect(extractMarkdownLinkHrefAtOffset(content, secondHrefPos)).toBe(
+      './sub/guide%20%281%29.md#intro'
+    )
 
-    expect(extractMarkdownLinkAtOffset(content, 0)).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(content, 0)).toBeNull()
   })
 
   it('supports inline code inside labels, angle-bracket destinations, and optional titles', () => {
     const content = 'Jump [`parseHeader`](#parseheader) or [Doc](<./my docs/readme.md> "Readme")'
-    const firstPos = content.indexOf('parseHeader')
-    expect(extractMarkdownLinkAtOffset(content, firstPos)?.href).toBe('#parseheader')
-
-    const secondPos = content.indexOf('my docs')
-    expect(extractMarkdownLinkAtOffset(content, secondPos)?.href).toBe('./my docs/readme.md')
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('parseHeader'))).toBe(
+      '#parseheader'
+    )
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('my docs'))).toBe(
+      './my docs/readme.md'
+    )
   })
 
   it('ignores markdown images, inline code spans, and fenced code blocks', () => {
@@ -126,10 +105,10 @@ describe('extractMarkdownLinkAtOffset', () => {
       '[real](./c.md)'
     ].join('\n')
 
-    expect(extractMarkdownLinkAtOffset(content, content.indexOf('./pic.png'))).toBeNull()
-    expect(extractMarkdownLinkAtOffset(content, content.indexOf('./a.md'))).toBeNull()
-    expect(extractMarkdownLinkAtOffset(content, content.indexOf('./b.md'))).toBeNull()
-    expect(extractMarkdownLinkAtOffset(content, content.indexOf('./c.md'))?.href).toBe('./c.md')
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('./pic.png'))).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('./a.md'))).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('./b.md'))).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('./c.md'))).toBe('./c.md')
   })
 })
 
@@ -145,29 +124,24 @@ describe('resolveMarkdownLinkTarget', () => {
 
   it('treats http, https, and mailto links as external without reading files', () => {
     expect(resolveMarkdownLinkTarget('https://example.com/docs', posixCtx)).toEqual({
-      kind: 'external',
-      href: 'https://example.com/docs'
+      kind: 'external'
     })
     expect(resolveMarkdownLinkTarget('HTTP://example.com', posixCtx)).toEqual({
-      kind: 'external',
-      href: 'HTTP://example.com'
+      kind: 'external'
     })
     expect(resolveMarkdownLinkTarget('mailto:team@example.com', posixCtx)).toEqual({
-      kind: 'external',
-      href: 'mailto:team@example.com'
+      kind: 'external'
     })
   })
 
   it('resolves same-document section links including percent-encoded slugs', () => {
     expect(resolveMarkdownLinkTarget('#section-1', posixCtx)).toEqual({
       kind: 'same-doc-section',
-      slug: 'section-1',
-      rawHref: '#section-1'
+      slug: 'section-1'
     })
     expect(resolveMarkdownLinkTarget('#%EA%B0%9C%EC%9A%94-%EB%AA%A9%EC%B0%A8', posixCtx)).toEqual({
       kind: 'same-doc-section',
-      slug: '개요-목차',
-      rawHref: '#%EA%B0%9C%EC%9A%94-%EB%AA%A9%EC%B0%A8'
+      slug: '개요-목차'
     })
   })
 
@@ -175,8 +149,7 @@ describe('resolveMarkdownLinkTarget', () => {
     expect(resolveMarkdownLinkTarget('./sibling.md', posixCtx)).toEqual({
       kind: 'workspace-file',
       targetPath: '/wiki/notes/docs/sibling.md',
-      slug: null,
-      rawHref: './sibling.md'
+      slug: null
     })
 
     expect(
@@ -184,51 +157,31 @@ describe('resolveMarkdownLinkTarget', () => {
     ).toEqual({
       kind: 'workspace-file',
       targetPath: '/wiki/notes/guide (1).md',
-      slug: '설정',
-      rawHref: '../guide%20%281%29.md#%EC%84%A4%EC%A0%95'
+      slug: '설정'
     })
 
     expect(resolveMarkdownLinkTarget('../sub/target.md#intro', winCtx)).toEqual({
       kind: 'workspace-file',
       targetPath: 'C:\\wiki\\notes\\sub\\target.md',
-      slug: 'intro',
-      rawHref: '../sub/target.md#intro'
+      slug: 'intro'
     })
   })
 
   it('rejects paths escaping workspace root, absolute paths, and malformed links', () => {
-    const escapedPosix = resolveMarkdownLinkTarget('../../outside.md', posixCtx)
-    expect(escapedPosix.kind).toBe('error')
-    if (escapedPosix.kind === 'error') {
-      expect(escapedPosix.reason).toBe('outside-workspace')
+    for (const badOutside of [
+      resolveMarkdownLinkTarget('../../outside.md', posixCtx),
+      resolveMarkdownLinkTarget('../../../secret.md', winCtx),
+      resolveMarkdownLinkTarget('/etc/passwd.md', posixCtx),
+      resolveMarkdownLinkTarget('D:\\other\\doc.md', winCtx)
+    ]) {
+      expect(badOutside.kind).toBe('error')
+      if (badOutside.kind === 'error') {
+        expect(badOutside.message).toMatch(/워크스페이스 루트 밖/)
+      }
     }
 
-    const escapedWin = resolveMarkdownLinkTarget('../../../secret.md', winCtx)
-    expect(escapedWin.kind).toBe('error')
-    if (escapedWin.kind === 'error') {
-      expect(escapedWin.reason).toBe('outside-workspace')
-    }
-
-    const absUnix = resolveMarkdownLinkTarget('/etc/passwd.md', posixCtx)
-    expect(absUnix.kind).toBe('error')
-    if (absUnix.kind === 'error') {
-      expect(absUnix.reason).toBe('outside-workspace')
-    }
-
-    const absWin = resolveMarkdownLinkTarget('D:\\other\\doc.md', winCtx)
-    expect(absWin.kind).toBe('error')
-    if (absWin.kind === 'error') {
-      expect(absWin.reason).toBe('outside-workspace')
-    }
-
-    const emptyHref = resolveMarkdownLinkTarget('', posixCtx)
-    expect(emptyHref.kind).toBe('error')
-
-    const badPercent = resolveMarkdownLinkTarget('./bad%ZZ.md', posixCtx)
-    expect(badPercent.kind).toBe('error')
-    if (badPercent.kind === 'error') {
-      expect(badPercent.reason).toBe('invalid-path')
-    }
+    expect(resolveMarkdownLinkTarget('', posixCtx).kind).toBe('error')
+    expect(resolveMarkdownLinkTarget('./bad%ZZ.md', posixCtx).kind).toBe('error')
   })
 })
 

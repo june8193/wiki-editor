@@ -52,20 +52,29 @@ describe('MarkdownPreview link navigation', () => {
 
   it('keeps standalone same-document anchor scrolling when onLinkNavigate is omitted', () => {
     const scrollIntoView = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
       configurable: true,
       writable: true,
       value: scrollIntoView
     })
 
-    render(
-      <MarkdownPreview
-        content={'# 첫 섹션\n\n[이동](#첫-섹션)'}
-        scrollTop={0}
-      />
-    )
+    try {
+      render(
+        <MarkdownPreview
+          content={'# 첫 섹션\n\n[이동](#첫-섹션)'}
+          scrollTop={0}
+        />
+      )
 
-    fireEvent.click(screen.getByRole('link', { name: '이동' }))
-    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+      fireEvent.click(screen.getByRole('link', { name: '이동' }))
+      expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        writable: true,
+        value: originalScrollIntoView
+      })
+    }
   })
 })

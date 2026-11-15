@@ -28,7 +28,7 @@ import {
   type LinkQueryMatch
 } from '../editor/LinkAutocompleteEngine'
 import {
-  extractMarkdownLinkAtOffset,
+  extractMarkdownLinkHrefAtOffset,
   isLinkNavigationClick
 } from '../editor/MarkdownLinkNavigation'
 import {
@@ -122,10 +122,7 @@ function normalizeDocText(text: string): string {
 
 function resolveRawClickOffset(view: EditorView, event: MouseEvent): number | null {
   if (event.clientX !== 0 || event.clientY !== 0) {
-    const coordPos = view.posAtCoords({ x: event.clientX, y: event.clientY })
-    if (coordPos !== null) {
-      return coordPos
-    }
+    return view.posAtCoords({ x: event.clientX, y: event.clientY })
   }
 
   const target = event.target
@@ -411,12 +408,12 @@ export function useRawCodeMirrorEditor({
             if (offset === null) {
               return false
             }
-            const match = extractMarkdownLinkAtOffset(view.state.doc.toString(), offset)
-            if (!match) {
+            const href = extractMarkdownLinkHrefAtOffset(view.state.doc.toString(), offset)
+            if (href === null) {
               return false
             }
             event.preventDefault()
-            navigate(match.href)
+            navigate(href)
             return true
           }
         }),

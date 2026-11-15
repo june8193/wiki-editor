@@ -26,7 +26,8 @@ import {
 } from './MarkdownTocEngine'
 import type { MermaidRenderer } from './mermaidRenderer'
 
-import { decodeSlugSafely, isLinkNavigationClick } from './MarkdownLinkNavigation'
+import { isLinkNavigationClick } from './MarkdownLinkNavigation'
+import { decodeSlugSafely } from './MarkdownTocEngine'
 
 export interface MarkdownPreviewRenderOptions {
   theme?: ThemeMode

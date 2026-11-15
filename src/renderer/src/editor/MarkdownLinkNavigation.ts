@@ -1,5 +1,5 @@
 import type { EditorMode } from '../stores/PaneTabStore'
-import { type MarkdownHeading, parseMarkdownHeadings } from './MarkdownTocEngine'
+import { decodeSlugSafely, isOffsetInCodeFence } from './MarkdownTocEngine'
 
 export interface LinkClickModifierState {
   button: number
@@ -8,51 +8,16 @@ export interface LinkClickModifierState {
   altKey: boolean
 }
 
-export interface MarkdownInlineLinkMatch {
-  href: string
-  from: number
-  to: number
-}
-
 export interface MarkdownLinkContext {
   workspaceRootPath: string | null
   activeFilePath: string | null
 }
 
-export type MarkdownLinkErrorReason =
-  | 'empty-target'
-  | 'missing-context'
-  | 'invalid-path'
-  | 'outside-workspace'
-  | 'unsupported-scheme'
-
 export type ResolvedMarkdownLinkTarget =
-  | {
-      kind: 'external'
-      href: string
-    }
-  | {
-      kind: 'same-doc-section'
-      slug: string
-      rawHref: string
-    }
-  | {
-      kind: 'workspace-file'
-      targetPath: string
-      slug: string | null
-      rawHref: string
-    }
-  | {
-      kind: 'error'
-      reason: MarkdownLinkErrorReason
-      message: string
-      rawHref: string
-    }
-
-export interface MarkdownHeadingTarget {
-  heading: MarkdownHeading
-  index: number
-}
+  | { kind: 'external' }
+  | { kind: 'same-doc-section'; slug: string }
+  | { kind: 'workspace-file'; targetPath: string; slug: string | null }
+  | { kind: 'error'; message: string }
 
 const EXTERNAL_SCHEME_REGEX = /^(https?:|mailto:)/i
 const URI_SCHEME_REGEX = /^([a-zA-Z][a-zA-Z0-9+.-]{1,}):/
@@ -64,40 +29,22 @@ const UNC_PREFIX_REGEX = /^([/\\]{2}[^/\\]+[/\\][^/\\]+)([/\\]?)/
  * Preview navigates on primary click, whereas Raw and WYSIWYG require Ctrl/Meta+click so normal
  * clicks continue to move the editing caret.
  */
-export function isLinkNavigationClick(
-  mode: EditorMode | 'unsupported',
-  event: LinkClickModifierState
-): boolean {
+export function isLinkNavigationClick(mode: EditorMode, event: LinkClickModifierState): boolean {
   if (event.button !== 0 || event.altKey) {
     return false
   }
   if (mode === 'preview') {
     return true
   }
-  if (mode === 'raw' || mode === 'wysiwyg') {
-    return event.ctrlKey || event.metaKey
-  }
-  return false
-}
-
-export function decodeSlugSafely(rawSlug: string): string {
-  try {
-    return decodeURIComponent(rawSlug)
-  } catch {
-    return rawSlug
-  }
-}
-
-function countPrecedingBackslashes(text: string, index: number): number {
-  let count = 0
-  for (let i = index - 1; i >= 0 && text[i] === '\\'; i--) {
-    count++
-  }
-  return count
+  return event.ctrlKey || event.metaKey
 }
 
 function isEscapedAt(text: string, index: number): boolean {
-  return countPrecedingBackslashes(text, index) % 2 === 1
+  let backslashes = 0
+  for (let i = index - 1; i >= 0 && text[i] === '\\'; i--) {
+    backslashes++
+  }
+  return backslashes % 2 === 1
 }
 
 function findInlineCodeClose(text: string, start: number, limit: number): number {
@@ -126,71 +73,16 @@ function findInlineCodeClose(text: string, start: number, limit: number): number
   return -1
 }
 
-function parseOpeningFence(line: string): { marker: '`' | '~'; length: number } | null {
-  const match = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/)
-  if (!match) {
-    return null
-  }
-  const fence = match[1]
-  const marker = fence[0] as '`' | '~'
-  const info = match[2]
-  if (marker === '`' && info.includes('`')) {
-    return null
-  }
-  return { marker, length: fence.length }
-}
-
-function isClosingFence(line: string, marker: '`' | '~', openLength: number): boolean {
-  const trimmed = line.match(/^ {0,3}(`+|~+)[ \t]*$/)
-  if (!trimmed) {
-    return false
-  }
-  const fence = trimmed[1]
-  return fence[0] === marker && fence.length >= openLength
-}
-
-function findLineBoundsWithFenceState(
+function findLineBoundsAtOffset(
   text: string,
   offset: number
-): { lineStart: number; lineEnd: number; isFenced: boolean } {
-  let pos = 0
-  let activeFence: { marker: '`' | '~'; length: number } | null = null
-
-  while (pos <= text.length) {
-    const nlIndex = text.indexOf('\n', pos)
-    const rawLineEnd = nlIndex === -1 ? text.length : nlIndex
-    const lineContentEnd =
-      rawLineEnd > pos && text[rawLineEnd - 1] === '\r' ? rawLineEnd - 1 : rawLineEnd
-    const line = text.slice(pos, lineContentEnd)
-
-    let lineIsFenced = activeFence !== null
-    if (activeFence === null) {
-      const opening = parseOpeningFence(line)
-      if (opening) {
-        activeFence = opening
-        lineIsFenced = true
-      }
-    } else if (isClosingFence(line, activeFence.marker, activeFence.length)) {
-      activeFence = null
-      lineIsFenced = true
-    }
-
-    const nextLineStart = nlIndex === -1 ? text.length + 1 : nlIndex + 1
-    if (offset >= pos && offset <= rawLineEnd) {
-      return {
-        lineStart: pos,
-        lineEnd: lineContentEnd,
-        isFenced: lineIsFenced
-      }
-    }
-
-    if (nlIndex === -1) {
-      break
-    }
-    pos = nextLineStart
-  }
-
-  return { lineStart: 0, lineEnd: 0, isFenced: false }
+): { lineStart: number; lineEnd: number } {
+  const lineStart = offset === 0 ? 0 : text.lastIndexOf('\n', offset - 1) + 1
+  const nlIndex = text.indexOf('\n', lineStart)
+  const rawLineEnd = nlIndex === -1 ? text.length : nlIndex
+  const lineEnd =
+    rawLineEnd > lineStart && text[rawLineEnd - 1] === '\r' ? rawLineEnd - 1 : rawLineEnd
+  return { lineStart, lineEnd }
 }
 
 function findClosingBracket(text: string, openBracket: number, lineEnd: number): number {
@@ -222,11 +114,7 @@ function findClosingBracket(text: string, openBracket: number, lineEnd: number):
   return -1
 }
 
-function skipOptionalTitleAndFindParen(
-  text: string,
-  start: number,
-  lineEnd: number
-): number {
+function skipOptionalTitleAndFindParen(text: string, start: number, lineEnd: number): number {
   let cursor = start
   while (cursor < lineEnd && (text[cursor] === ' ' || text[cursor] === '\t')) {
     cursor++
@@ -312,10 +200,7 @@ function parseLinkDestination(
     if (ch === ')') {
       parenDepth--
       if (parenDepth === 0) {
-        return {
-          href: text.slice(hrefStart, cursor),
-          closeParen: cursor
-        }
+        return { href: text.slice(hrefStart, cursor), closeParen: cursor }
       }
       cursor++
       continue
@@ -332,19 +217,16 @@ function parseLinkDestination(
 }
 
 /**
- * Finds the inline Markdown link `[label](href)` enclosing `offset` on non-fenced lines,
- * ignoring Markdown images (`![alt](src)`), inline code spans, and fenced code blocks.
+ * Extracts the `href` of the inline Markdown link `[label](href)` enclosing `offset` on
+ * non-fenced lines, ignoring Markdown images (`![alt](src)`), inline code spans, and fences.
  */
-export function extractMarkdownLinkAtOffset(
-  text: string,
-  offset: number
-): MarkdownInlineLinkMatch | null {
-  if (offset < 0 || offset > text.length || text.length === 0) {
+export function extractMarkdownLinkHrefAtOffset(text: string, offset: number): string | null {
+  if (offset < 0 || offset > text.length || text.length === 0 || isOffsetInCodeFence(text, offset)) {
     return null
   }
 
-  const { lineStart, lineEnd, isFenced } = findLineBoundsWithFenceState(text, offset)
-  if (isFenced || offset > lineEnd) {
+  const { lineStart, lineEnd } = findLineBoundsAtOffset(text, offset)
+  if (offset > lineEnd) {
     return null
   }
 
@@ -366,8 +248,7 @@ export function extractMarkdownLinkAtOffset(
       }
     }
     if (ch === '[') {
-      const precededByBang = cursor > lineStart && text[cursor - 1] === '!'
-      const isImage = precededByBang && !isEscapedAt(text, cursor - 1)
+      const isImage = cursor > lineStart && text[cursor - 1] === '!' && !isEscapedAt(text, cursor - 1)
       if (!isImage) {
         const closeBracket = findClosingBracket(text, cursor, lineEnd)
         if (closeBracket !== -1 && closeBracket + 1 < lineEnd && text[closeBracket + 1] === '(') {
@@ -375,11 +256,7 @@ export function extractMarkdownLinkAtOffset(
           if (parsedDest) {
             const linkTo = parsedDest.closeParen + 1
             if (offset >= cursor && offset < linkTo) {
-              return {
-                href: parsedDest.href,
-                from: cursor,
-                to: linkTo
-              }
+              return parsedDest.href
             }
             cursor = linkTo
             continue
@@ -400,34 +277,45 @@ interface ParsedFsPath {
   segments: string[]
 }
 
+function normalizeRawSegments(raw: string): string[] {
+  const stack: string[] = []
+  for (const part of raw.split(/[/\\]+/)) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (stack.length > 0) stack.pop()
+      continue
+    }
+    stack.push(part)
+  }
+  return stack
+}
+
 function parseFsPath(inputPath: string): ParsedFsPath | null {
   const trimmed = inputPath.trim()
-  if (trimmed.length === 0) {
-    return null
-  }
+  if (trimmed.length === 0) return null
 
   const uncMatch = trimmed.match(UNC_PREFIX_REGEX)
   if (uncMatch) {
-    const prefix = uncMatch[1].replace(/\//g, '\\')
-    const rest = trimmed.slice(uncMatch[0].length)
     return {
-      rootPrefix: prefix,
+      rootPrefix: uncMatch[1].replace(/\//g, '\\'),
       separator: '\\',
       caseInsensitive: true,
-      segments: normalizeRawSegments(rest)
+      segments: normalizeRawSegments(trimmed.slice(uncMatch[0].length))
     }
   }
 
   const winDriveMatch = trimmed.match(WINDOWS_DRIVE_PREFIX_REGEX)
   if (winDriveMatch) {
-    const drivePrefix = winDriveMatch[1]
-    const separator: '/' | '\\' = trimmed.includes('\\') && !trimmed.includes('/') ? '\\' : winDriveMatch[2] === '\\' ? '\\' : '/'
-    const rest = trimmed.slice(winDriveMatch[0].length)
+    const separator: '/' | '\\' = trimmed.includes('\\')
+      ? '\\'
+      : winDriveMatch[2] === '\\'
+        ? '\\'
+        : '/'
     return {
-      rootPrefix: drivePrefix,
-      separator: trimmed.includes('\\') ? '\\' : separator,
+      rootPrefix: winDriveMatch[1],
+      separator,
       caseInsensitive: true,
-      segments: normalizeRawSegments(rest)
+      segments: normalizeRawSegments(trimmed.slice(winDriveMatch[0].length))
     }
   }
 
@@ -443,53 +331,31 @@ function parseFsPath(inputPath: string): ParsedFsPath | null {
   return null
 }
 
-function normalizeRawSegments(raw: string): string[] {
-  const stack: string[] = []
-  for (const part of raw.split(/[/\\]+/)) {
-    if (part === '' || part === '.') {
-      continue
-    }
-    if (part === '..') {
-      if (stack.length > 0) {
-        stack.pop()
-      }
-      continue
-    }
-    stack.push(part)
-  }
-  return stack
-}
-
-function formatParsedFsPath(parsed: ParsedFsPath, segments: readonly string[]): string {
-  if (parsed.rootPrefix === '/') {
-    return `/${segments.join('/')}`
-  }
-  return `${parsed.rootPrefix}${parsed.separator}${segments.join(parsed.separator)}`
-}
-
 function segmentsStartWith(
   target: readonly string[],
   root: readonly string[],
   caseInsensitive: boolean
 ): boolean {
-  if (target.length <= root.length) {
-    return false
-  }
+  if (target.length <= root.length) return false
   for (let i = 0; i < root.length; i++) {
     const left = caseInsensitive ? target[i].toLowerCase() : target[i]
     const right = caseInsensitive ? root[i].toLowerCase() : root[i]
-    if (left !== right) {
-      return false
-    }
+    if (left !== right) return false
   }
   return true
 }
 
-function prefixesEqual(left: ParsedFsPath, right: ParsedFsPath): boolean {
-  if (left.caseInsensitive || right.caseInsensitive) {
-    return left.rootPrefix.toLowerCase() === right.rootPrefix.toLowerCase()
+function hasAbsoluteOrDrivePrefix(value: string): boolean {
+  return (
+    WINDOWS_DRIVE_PREFIX_REGEX.test(value) || value.startsWith('/') || value.startsWith('\\')
+  )
+}
+
+function outsideWorkspaceError(targetHref: string): ResolvedMarkdownLinkTarget {
+  return {
+    kind: 'error',
+    message: `워크스페이스 루트 밖의 경로에는 접근할 수 없습니다: ${targetHref}`
   }
-  return left.rootPrefix === right.rootPrefix
 }
 
 function unwrapLinkHref(rawHref: string): string {
@@ -510,59 +376,24 @@ export function resolveMarkdownLinkTarget(
 ): ResolvedMarkdownLinkTarget {
   const trimmed = unwrapLinkHref(rawHref)
   if (trimmed.length === 0) {
-    return {
-      kind: 'error',
-      reason: 'empty-target',
-      message: '링크 대상을 찾을 수 없습니다.',
-      rawHref: trimmed
-    }
+    return { kind: 'error', message: '링크 대상을 찾을 수 없습니다.' }
   }
-
   if (EXTERNAL_SCHEME_REGEX.test(trimmed)) {
-    return {
-      kind: 'external',
-      href: trimmed
-    }
+    return { kind: 'external' }
   }
-
-  if (
-    WINDOWS_DRIVE_PREFIX_REGEX.test(trimmed) ||
-    trimmed.startsWith('/') ||
-    trimmed.startsWith('\\')
-  ) {
-    return {
-      kind: 'error',
-      reason: 'outside-workspace',
-      message: `워크스페이스 루트 밖의 경로에는 접근할 수 없습니다: ${trimmed}`,
-      rawHref: trimmed
-    }
+  if (hasAbsoluteOrDrivePrefix(trimmed)) {
+    return outsideWorkspaceError(trimmed)
   }
-
   if (URI_SCHEME_REGEX.test(trimmed)) {
-    return {
-      kind: 'error',
-      reason: 'unsupported-scheme',
-      message: `지원하지 않는 링크 형식입니다: ${trimmed}`,
-      rawHref: trimmed
-    }
+    return { kind: 'error', message: `지원하지 않는 링크 형식입니다: ${trimmed}` }
   }
 
   if (trimmed.startsWith('#')) {
-    const rawFragment = trimmed.slice(1)
-    const slug = decodeSlugSafely(rawFragment)
+    const slug = decodeSlugSafely(trimmed.slice(1))
     if (slug.trim().length === 0) {
-      return {
-        kind: 'error',
-        reason: 'empty-target',
-        message: '섹션을 찾을 수 없습니다: #',
-        rawHref: trimmed
-      }
+      return { kind: 'error', message: '섹션을 찾을 수 없습니다: #' }
     }
-    return {
-      kind: 'same-doc-section',
-      slug,
-      rawHref: trimmed
-    }
+    return { kind: 'same-doc-section', slug }
   }
 
   const hashIndex = trimmed.indexOf('#')
@@ -573,75 +404,46 @@ export function resolveMarkdownLinkTarget(
   try {
     decodedPathPart = decodeURIComponent(rawPathPart)
   } catch {
-    return {
-      kind: 'error',
-      reason: 'invalid-path',
-      message: `잘못된 링크 경로입니다: ${trimmed}`,
-      rawHref: trimmed
-    }
+    return { kind: 'error', message: `잘못된 링크 경로입니다: ${trimmed}` }
   }
 
+  const rawSegments = decodedPathPart.split(/[/\\]+/)
+  const lastRawSegment = rawSegments[rawSegments.length - 1]
   if (
     decodedPathPart.length === 0 ||
     decodedPathPart.includes('\0') ||
     decodedPathPart.endsWith('/') ||
-    decodedPathPart.endsWith('\\')
+    decodedPathPart.endsWith('\\') ||
+    lastRawSegment === '.' ||
+    lastRawSegment === '..'
   ) {
-    return {
-      kind: 'error',
-      reason: 'invalid-path',
-      message: `대상 파일을 찾을 수 없습니다: ${trimmed}`,
-      rawHref: trimmed
-    }
+    return { kind: 'error', message: `대상 파일을 찾을 수 없습니다: ${trimmed}` }
   }
-
-  if (
-    WINDOWS_DRIVE_PREFIX_REGEX.test(decodedPathPart) ||
-    decodedPathPart.startsWith('/') ||
-    decodedPathPart.startsWith('\\')
-  ) {
-    return {
-      kind: 'error',
-      reason: 'outside-workspace',
-      message: `워크스페이스 루트 밖의 경로에는 접근할 수 없습니다: ${trimmed}`,
-      rawHref: trimmed
-    }
+  if (hasAbsoluteOrDrivePrefix(decodedPathPart)) {
+    return outsideWorkspaceError(trimmed)
   }
-
   if (!context.workspaceRootPath || !context.activeFilePath) {
-    return {
-      kind: 'error',
-      reason: 'missing-context',
-      message: '현재 문서 경로를 확인할 수 없습니다.',
-      rawHref: trimmed
-    }
+    return { kind: 'error', message: '현재 문서 경로를 확인할 수 없습니다.' }
   }
 
   const parsedRoot = parseFsPath(context.workspaceRootPath)
   const parsedActive = parseFsPath(context.activeFilePath)
-  if (!parsedRoot || !parsedActive || !prefixesEqual(parsedRoot, parsedActive)) {
-    return {
-      kind: 'error',
-      reason: 'outside-workspace',
-      message: `워크스페이스 루트 밖의 경로에는 접근할 수 없습니다: ${trimmed}`,
-      rawHref: trimmed
-    }
+  if (!parsedRoot || !parsedActive) {
+    return outsideWorkspaceError(trimmed)
+  }
+  const sameRootPrefix =
+    parsedRoot.caseInsensitive || parsedActive.caseInsensitive
+      ? parsedRoot.rootPrefix.toLowerCase() === parsedActive.rootPrefix.toLowerCase()
+      : parsedRoot.rootPrefix === parsedActive.rootPrefix
+  if (!sameRootPrefix) {
+    return outsideWorkspaceError(trimmed)
   }
 
   const resolvedSegments = parsedActive.segments.slice(0, -1)
-  for (const segment of decodedPathPart.split(/[/\\]+/)) {
-    if (segment === '' || segment === '.') {
-      continue
-    }
+  for (const segment of rawSegments) {
+    if (segment === '' || segment === '.') continue
     if (segment === '..') {
-      if (resolvedSegments.length === 0) {
-        return {
-          kind: 'error',
-          reason: 'outside-workspace',
-          message: `워크스페이스 루트 밖의 경로에는 접근할 수 없습니다: ${trimmed}`,
-          rawHref: trimmed
-        }
-      }
+      if (resolvedSegments.length === 0) return outsideWorkspaceError(trimmed)
       resolvedSegments.pop()
       continue
     }
@@ -649,43 +451,14 @@ export function resolveMarkdownLinkTarget(
   }
 
   if (!segmentsStartWith(resolvedSegments, parsedRoot.segments, parsedRoot.caseInsensitive)) {
-    return {
-      kind: 'error',
-      reason: 'outside-workspace',
-      message: `워크스페이스 루트 밖의 경로에는 접근할 수 없습니다: ${trimmed}`,
-      rawHref: trimmed
-    }
+    return outsideWorkspaceError(trimmed)
   }
 
-  const targetPath = formatParsedFsPath(parsedRoot, resolvedSegments)
+  const targetPath =
+    parsedRoot.rootPrefix === '/'
+      ? `/${resolvedSegments.join('/')}`
+      : `${parsedRoot.rootPrefix}${parsedRoot.separator}${resolvedSegments.join(parsedRoot.separator)}`
   const slug = rawFragmentPart !== null ? decodeSlugSafely(rawFragmentPart) : null
 
-  return {
-    kind: 'workspace-file',
-    targetPath,
-    slug,
-    rawHref: trimmed
-  }
-}
-
-/**
- * Finds the heading and its 0-based outline index matching `rawSlug` (decoding percent escapes).
- */
-export function findMarkdownHeadingBySlug(
-  markdownContent: string,
-  rawSlug: string
-): MarkdownHeadingTarget | null {
-  const targetSlug = decodeSlugSafely(rawSlug)
-  if (targetSlug.length === 0) {
-    return null
-  }
-
-  const headings = parseMarkdownHeadings(markdownContent)
-  for (let index = 0; index < headings.length; index++) {
-    const heading = headings[index]
-    if (heading.slug === targetSlug) {
-      return { heading, index }
-    }
-  }
-  return null
+  return { kind: 'workspace-file', targetPath, slug }
 }

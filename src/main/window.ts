@@ -1,5 +1,10 @@
 import type { BrowserWindowConstructorOptions } from 'electron'
 
+export interface NavigationGuardedWebContents {
+  on(event: 'will-navigate', listener: (event: { preventDefault: () => void }, url: string) => void): unknown
+  setWindowOpenHandler(handler: (details: { url: string }) => { action: 'allow' | 'deny' }): void
+}
+
 /**
  * Creates secure BrowserWindow options enforcing context isolation and disabled Node integration.
  */
@@ -18,4 +23,14 @@ export function createMainWindowOptions(preloadPath: string): BrowserWindowConst
       sandbox: true
     }
   }
+}
+
+/**
+ * Blocks renderer-initiated document navigations and popups at the Electron BrowserWindow layer.
+ */
+export function registerWindowNavigationGuard(webContents: NavigationGuardedWebContents): void {
+  webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  webContents.on('will-navigate', (event) => {
+    event.preventDefault()
+  })
 }
