@@ -6,6 +6,13 @@ export function resolveWindowRole(rawRole?: string | null): WindowRole {
   return rawRole === 'auxiliary' ? 'auxiliary' : 'main'
 }
 
+export function canDetachTabFromWindow(
+  role: WindowRole | undefined,
+  totalTabCount: number
+): boolean {
+  return role !== 'auxiliary' || totalTabCount > 1
+}
+
 export type EditorMode = 'raw' | 'preview' | 'wysiwyg'
 
 export interface CursorPosition {

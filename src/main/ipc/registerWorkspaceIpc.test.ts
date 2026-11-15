@@ -6,43 +6,9 @@ import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import { ConfigService } from '../config/ConfigService'
 import { LogService } from '../logging/LogService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
-import type { IpcMainLike, WebContentsLike } from './registerConfigIpc'
+import { createFakeIpcMain } from './ipcTestHelpers'
+import type { WebContentsLike } from './registerConfigIpc'
 import { registerWorkspaceIpc } from './registerWorkspaceIpc'
-
-type Handler = (event: unknown, ...args: unknown[]) => unknown
-
-function createFakeIpcMain(): IpcMainLike & {
-  invoke(channel: string, ...args: unknown[]): Promise<unknown>
-  invokeFrom(sender: unknown, channel: string, ...args: unknown[]): Promise<unknown>
-  hasHandler(channel: string): boolean
-} {
-  const handlers = new Map<string, Handler>()
-  return {
-    handle(channel, listener) {
-      handlers.set(channel, listener)
-    },
-    removeHandler(channel) {
-      handlers.delete(channel)
-    },
-    async invoke(channel, ...args) {
-      const handler = handlers.get(channel)
-      if (!handler) {
-        throw new Error(`No handler registered for ${channel}`)
-      }
-      return handler({}, ...args)
-    },
-    async invokeFrom(sender, channel, ...args) {
-      const handler = handlers.get(channel)
-      if (!handler) {
-        throw new Error(`No handler registered for ${channel}`)
-      }
-      return handler({ sender }, ...args)
-    },
-    hasHandler(channel) {
-      return handlers.has(channel)
-    }
-  }
-}
 
 describe('registerWorkspaceIpc', () => {
   let tempDir: string

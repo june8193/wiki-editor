@@ -13,7 +13,7 @@ import {
   type WindowInitContext
 } from '@shared/window'
 import { ConfigService } from './config/ConfigService'
-import type { IpcMainLike } from './ipc/ipcHelpers'
+import { createFakeIpcMain, type FakeIpcMain } from './ipc/ipcTestHelpers'
 import { createSharedDocumentBufferHub, registerBufferIpc, type BufferWebContentsLike } from './ipc/registerBufferIpc'
 import { registerWindowIpc } from './ipc/registerWindowIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
@@ -31,36 +31,6 @@ interface FakeWindowInstance extends BrowserWindowLike {
   sentMessages: Array<{ channel: string; payload: unknown }>
   emitReadyToShow: () => void
   simulateUserClose: () => void
-}
-
-function createMultiWindowIpcHarness() {
-  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
-  const ipcMain: IpcMainLike = {
-    handle(channel, listener) {
-      handlers.set(channel, listener)
-    },
-    removeHandler(channel) {
-      handlers.delete(channel)
-    }
-  }
-
-  return {
-    ipcMain,
-    async invokeFrom<T = unknown>(
-      sender: BufferWebContentsLike,
-      channel: string,
-      ...args: unknown[]
-    ): Promise<T> {
-      const handler = handlers.get(channel)
-      if (!handler) {
-        throw new Error(`No handler registered for ${channel}`)
-      }
-      return (await handler({ sender }, ...args)) as T
-    },
-    hasHandler(channel: string): boolean {
-      return handlers.has(channel)
-    }
-  }
 }
 
 function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, y: 120, width: 1280, height: 820 }) {
@@ -170,7 +140,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
   let configService: ConfigService
   let bufferHub: SharedDocumentBufferHub
   let windowManager: WindowManager
-  let ipcHarness: ReturnType<typeof createMultiWindowIpcHarness>
+  let ipcHarness: FakeIpcMain
   let createdWindows: FakeWindowInstance[]
   let disposeFns: Array<() => void>
   let fakeScreen: ScreenLike
@@ -185,7 +155,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
 
     workspaceService = new WorkspaceFsService({ watchDebounceMs: 30 })
     configService = new ConfigService(configPath)
-    ipcHarness = createMultiWindowIpcHarness()
+    ipcHarness = createFakeIpcMain()
 
     const factory = createFakeBrowserWindowFactory()
     createdWindows = factory.createdWindows
@@ -211,13 +181,13 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
 
     disposeFns = [
       registerBufferIpc({
-        ipcMain: ipcHarness.ipcMain,
+        ipcMain: ipcHarness,
         configService,
         hub: bufferHub,
         getTargets: () => windowManager.getWebContentsTargets()
       }),
       registerWorkspaceIpc({
-        ipcMain: ipcHarness.ipcMain,
+        ipcMain: ipcHarness,
         workspaceService,
         configService,
         selectDirectory: async () => workspaceDir,
@@ -225,7 +195,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
         isMainWindowSender: (sender) => windowManager.isMainWebContents(sender)
       }),
       registerWindowIpc({
-        ipcMain: ipcHarness.ipcMain,
+        ipcMain: ipcHarness,
         windowManager
       })
     ]

@@ -2,6 +2,7 @@ import type { BrowserWindowConstructorOptions } from 'electron'
 import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
+  canDetachTabFromWindow,
   cloneTabTransferPayloads,
   formatWindowTitle,
   WINDOW_ROLE_QUERY_PARAM,
@@ -205,8 +206,10 @@ export class WindowManager {
     }
 
     if (
-      sourceRecord.role === 'auxiliary' &&
-      this.bufferHub.getWindowTabCount(sourceRecord.webContentsId) <= 1
+      !canDetachTabFromWindow(
+        sourceRecord.role,
+        this.bufferHub.getWindowTabCount(sourceRecord.webContentsId)
+      )
     ) {
       throw new Error('Cannot detach the last tab from an auxiliary window')
     }

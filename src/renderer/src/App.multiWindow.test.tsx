@@ -63,6 +63,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
 
   beforeEach(() => {
     document.documentElement.removeAttribute('data-theme')
+    document.title = ''
     vi.useRealTimers()
   })
 

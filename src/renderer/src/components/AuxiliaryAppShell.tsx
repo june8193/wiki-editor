@@ -5,7 +5,7 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
 import { useWikiApi } from '../hooks/useWikiApi'
-import { EditorWindowFrame } from './EditorWindowFrame'
+import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 
 /**
  * Auxiliary window shell dedicated to detached document tabs: omits application menu bar,
@@ -19,9 +19,10 @@ export function AuxiliaryAppShell() {
   const { config, toggleShowHeadingNumbers } = useConfigController({
     onError: reportErrorBanner
   })
+  const isDialogOpen = pendingDialog !== null
   const editor = useEditorWorkspace({
-    isAutoSavePaused: pendingDialog !== null,
-    isShortcutDisabled: pendingDialog !== null,
+    isAutoSavePaused: isDialogOpen,
+    isShortcutDisabled: isDialogOpen,
     onError: reportErrorBanner,
     onConfirmCloseDirtyTab: confirmCloseDirtyTab
   })
@@ -48,18 +49,7 @@ export function AuxiliaryAppShell() {
       pendingDialog={pendingDialog}
       onDismissDialog={dismissDialog}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
-      paneWorkspaceProps={{
-        layout: editor.layout,
-        buffers: editor.buffers,
-        theme: config.theme,
-        autoSave: config.autoSave,
-        showHeadingNumbers: config.showHeadingNumbers,
-        customCommands: config.customCommands,
-        isShortcutDisabled: pendingDialog !== null,
-        onSetSplitRatio: editor.setSplitRatio,
-        onSplitWithTab: editor.splitWithTab,
-        actions: editor.paneActions
-      }}
+      paneWorkspaceProps={buildPaneWorkspaceProps(config, editor, isDialogOpen)}
     />
   )
 }

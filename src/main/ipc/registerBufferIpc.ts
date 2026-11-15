@@ -24,15 +24,13 @@ export interface CreateSharedDocumentBufferHubDependencies {
   initialAutoSaveConfig?: AutoSaveConfig
 }
 
-export type RegisterBufferIpcDependencies = {
+export interface RegisterBufferIpcDependencies {
   ipcMain: IpcMainLike
   configService: ConfigService
+  hub: SharedDocumentBufferHub
   getTargets: () => BufferWebContentsLike[]
   logService?: LogService
-} & (
-  | { hub: SharedDocumentBufferHub }
-  | { workspaceService: WorkspaceFsService; initialAutoSaveConfig?: AutoSaveConfig }
-)
+}
 
 let nextFallbackHubWindowId = 1
 const assignedHubWindowIds = new WeakMap<object, number>()
@@ -102,52 +100,24 @@ export function createSharedDocumentBufferHub({
  * Registers main-process IPC handlers for shared document buffers and broadcasts hub updates
  * to all active renderer BrowserWindow targets.
  */
-export function registerBufferIpc(deps: RegisterBufferIpcDependencies): () => void {
-  const { ipcMain, configService, getTargets, logService } = deps
-  let disposed = false
-  const initialAutoSaveConfig = 'hub' in deps ? undefined : deps.initialAutoSaveConfig
-
-  const hub =
-    'hub' in deps
-      ? deps.hub
-      : createSharedDocumentBufferHub({
-          workspaceService: deps.workspaceService,
-          configService,
-          logService,
-          initialAutoSaveConfig
-        })
-
+export function registerBufferIpc({
+  ipcMain,
+  configService,
+  hub,
+  getTargets,
+  logService
+}: RegisterBufferIpcDependencies): () => void {
   const resolveWindowId = (event: unknown): number | undefined => {
     const sender = resolveSenderWebContents<BufferWebContentsLike>(event)
     return sender ? trackHubWindowWebContents(hub, sender) : undefined
   }
 
-  let hasConfigUpdate = false
   const unsubscribeConfig = configService.onChanged((config) => {
-    hasConfigUpdate = true
     hub.setAutoSaveConfig({
       autoSave: config.autoSave,
       autoSaveDelayMs: config.autoSaveDelayMs
     })
   })
-
-  if (
-    !('hub' in deps) &&
-    (initialAutoSaveConfig?.autoSave === undefined ||
-      initialAutoSaveConfig?.autoSaveDelayMs === undefined)
-  ) {
-    void configService.get().then(
-      (config) => {
-        if (!disposed && !hasConfigUpdate) {
-          hub.setAutoSaveConfig({
-            autoSave: initialAutoSaveConfig?.autoSave ?? config.autoSave,
-            autoSaveDelayMs: initialAutoSaveConfig?.autoSaveDelayMs ?? config.autoSaveDelayMs
-          })
-        }
-      },
-      () => undefined
-    )
-  }
 
   const unsubscribeHub = hub.subscribe((hubEvent) => {
     broadcastIpcEvent(getTargets, BUFFER_IPC_CHANNELS.event, hubEvent)
@@ -221,7 +191,6 @@ export function registerBufferIpc(deps: RegisterBufferIpcDependencies): () => vo
   )
 
   return () => {
-    disposed = true
     unsubscribeHub()
     unsubscribeConfig()
     hub.dispose()

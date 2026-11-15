@@ -11,6 +11,7 @@ import { createEmptyGitStatus } from '@shared/git'
 import type { AppMenuCommand, WikiApi, WikiBufferApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
+  canDetachTabFromWindow,
   cloneTabTransferPayloads,
   type TabTransferPayload,
   type WindowInitContext,
@@ -592,7 +593,7 @@ export function createMultiWindowWikiHarness(
           if (!hub.hasBuffer(payload.bufferKey)) {
             throw new Error('Cannot detach unknown document buffer')
           }
-          if (role === 'auxiliary' && hub.getWindowTabCount(windowId) <= 1) {
+          if (!canDetachTabFromWindow(role, hub.getWindowTabCount(windowId))) {
             throw new Error('Cannot detach the last tab from an auxiliary window')
           }
           const aux = createWindow({ role: 'auxiliary', initialTabs: [payload] })

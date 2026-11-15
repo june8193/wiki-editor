@@ -1,5 +1,6 @@
 import { type ReactNode, useCallback, useState } from 'react'
 import { ListTree } from 'lucide-react'
+import type { AppConfig } from '@shared/config'
 import type { ConfirmDialogState } from '../hooks/useConfirmDialog'
 import { useDocumentOutline } from '../hooks/useDocumentOutline'
 import {
@@ -17,20 +18,46 @@ interface RightSidebarState {
   width: number
 }
 
+export type WindowFramePaneWorkspaceProps = Omit<PaneWorkspaceProps, 'scrollRequest'>
+
+export function buildPaneWorkspaceProps(
+  config: Pick<AppConfig, 'theme' | 'autoSave' | 'showHeadingNumbers' | 'customCommands'>,
+  editor: Pick<WindowFramePaneWorkspaceProps, 'layout' | 'buffers'> & {
+    paneActions: WindowFramePaneWorkspaceProps['actions']
+    setSplitRatio: WindowFramePaneWorkspaceProps['onSetSplitRatio']
+    splitWithTab: WindowFramePaneWorkspaceProps['onSplitWithTab']
+  },
+  isShortcutDisabled: boolean
+): WindowFramePaneWorkspaceProps {
+  return {
+    layout: editor.layout,
+    buffers: editor.buffers,
+    theme: config.theme,
+    autoSave: config.autoSave,
+    showHeadingNumbers: config.showHeadingNumbers,
+    customCommands: config.customCommands,
+    isShortcutDisabled,
+    onSetSplitRatio: editor.setSplitRatio,
+    onSplitWithTab: editor.splitWithTab,
+    actions: editor.paneActions
+  }
+}
+
 export interface EditorWindowFrameProps {
-  paneWorkspaceProps: Omit<PaneWorkspaceProps, 'scrollRequest'>
+  paneWorkspaceProps: WindowFramePaneWorkspaceProps
   onToggleHeadingNumbers: () => void
   initialRightSidebarCollapsed?: boolean
   errorMessage: string | null
   pendingDialog: ConfirmDialogState | null
   onDismissDialog: () => void
-  leftChrome?: ReactNode
-  overlay?: ReactNode
+  leftSidebarSlot?: ReactNode
+  settingsPanelSlot?: ReactNode
 }
 
 /**
- * Shared window frame rendering the error banner, optional left sidebar chrome, pane workspace,
- * collapsible right sidebar (document outline), optional settings panel, and confirm dialog.
+ * Shared window frame rendering the error banner, optional activity bar and left sidebar slot,
+ * pane workspace, collapsible right sidebar (document outline), optional settings panel slot,
+ * and confirm dialog.
  */
 export function EditorWindowFrame({
   paneWorkspaceProps,
@@ -39,8 +66,8 @@ export function EditorWindowFrame({
   errorMessage,
   pendingDialog,
   onDismissDialog,
-  leftChrome,
-  overlay
+  leftSidebarSlot,
+  settingsPanelSlot
 }: EditorWindowFrameProps) {
   const [rightSidebar, setRightSidebar] = useState<RightSidebarState>(() => ({
     isCollapsed: initialRightSidebarCollapsed,
@@ -77,7 +104,7 @@ export function EditorWindowFrame({
       )}
 
       <main className="app-main">
-        {leftChrome}
+        {leftSidebarSlot}
 
         <PaneWorkspace
           {...paneWorkspaceProps}
@@ -120,7 +147,7 @@ export function EditorWindowFrame({
         )}
       </main>
 
-      {overlay}
+      {settingsPanelSlot}
 
       {pendingDialog && (
         <ConfirmDialog

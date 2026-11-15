@@ -18,7 +18,7 @@ import {
   LEFT_SIDEBAR_DEFAULT_WIDTH
 } from '../utils/sidebarWidth'
 import { ActivityBar, type LeftSidebarView } from './ActivityBar'
-import { EditorWindowFrame } from './EditorWindowFrame'
+import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 import { FolderTreeSidebar } from './FolderTreeSidebar'
 import { GitSidebarPanel } from './GitSidebarPanel'
 import { SettingsPanel } from './SettingsPanel'
@@ -367,7 +367,7 @@ export function MainAppShell() {
     workspace !== null && isFavoriteWorkspacePath(config.favoriteWorkspaces, workspace.rootPath)
   const gitChangedCount = getGitChangedCount(workspace?.rootPath ?? null, git.status)
 
-  const leftChrome = (
+  const leftSidebarSlot = (
     <>
       <ActivityBar
         activeView={leftSidebar.activeView}
@@ -450,7 +450,7 @@ export function MainAppShell() {
     </>
   )
 
-  const overlay = isSettingsOpen ? (
+  const settingsPanelSlot = isSettingsOpen ? (
     <SettingsPanel
       theme={config.theme}
       autoSave={config.autoSave}
@@ -474,20 +474,9 @@ export function MainAppShell() {
       pendingDialog={pendingDialog}
       onDismissDialog={dismissDialog}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
-      paneWorkspaceProps={{
-        layout: editor.layout,
-        buffers: editor.buffers,
-        theme: config.theme,
-        autoSave: config.autoSave,
-        showHeadingNumbers: config.showHeadingNumbers,
-        customCommands: config.customCommands,
-        isShortcutDisabled: isEditorShortcutDisabled,
-        onSetSplitRatio: editor.setSplitRatio,
-        onSplitWithTab: editor.splitWithTab,
-        actions: editor.paneActions
-      }}
-      leftChrome={leftChrome}
-      overlay={overlay}
+      paneWorkspaceProps={buildPaneWorkspaceProps(config, editor, isEditorShortcutDisabled)}
+      leftSidebarSlot={leftSidebarSlot}
+      settingsPanelSlot={settingsPanelSlot}
     />
   )
 }

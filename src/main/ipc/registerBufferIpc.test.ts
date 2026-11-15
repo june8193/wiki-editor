@@ -11,11 +11,13 @@ import { BUFFER_IPC_CHANNELS } from '@shared/ipc'
 import { getWorkspacePathKey } from '@shared/workspace'
 import { ConfigService } from '../config/ConfigService'
 import { LogService } from '../logging/LogService'
-import type { IpcMainLike } from './ipcHelpers'
-import { registerBufferIpc, type BufferWebContentsLike } from './registerBufferIpc'
+import { createFakeIpcMain } from './ipcTestHelpers'
+import {
+  createSharedDocumentBufferHub,
+  registerBufferIpc,
+  type BufferWebContentsLike
+} from './registerBufferIpc'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
-
-type BufferHandler = (event: { sender?: BufferWebContentsLike }, ...args: unknown[]) => unknown
 
 interface FakeWindowWebContents extends BufferWebContentsLike {
   events: SharedBufferHubEvent[]
@@ -52,39 +54,6 @@ function createFakeWindowWebContents(id: number): FakeWindowWebContents {
   }
 }
 
-function createMultiWindowFakeIpcMain(): IpcMainLike & {
-  invokeFrom: <T = unknown>(
-    sender: BufferWebContentsLike,
-    channel: string,
-    ...args: unknown[]
-  ) => Promise<T>
-  hasHandler: (channel: string) => boolean
-} {
-  const handlers = new Map<string, BufferHandler>()
-  return {
-    handle(channel, listener) {
-      handlers.set(channel, listener as BufferHandler)
-    },
-    removeHandler(channel) {
-      handlers.delete(channel)
-    },
-    async invokeFrom<T = unknown>(
-      sender: BufferWebContentsLike,
-      channel: string,
-      ...args: unknown[]
-    ): Promise<T> {
-      const handler = handlers.get(channel)
-      if (!handler) {
-        throw new Error(`No handler registered for ${channel}`)
-      }
-      return (await handler({ sender }, ...args)) as T
-    },
-    hasHandler(channel) {
-      return handlers.has(channel)
-    }
-  }
-}
-
 describe('registerBufferIpc', () => {
   let tempDir: string
   let workspaceDir: string
@@ -112,15 +81,15 @@ describe('registerBufferIpc', () => {
     const configService = new ConfigService(configPath)
     await configService.get()
 
-    const ipcMain = createMultiWindowFakeIpcMain()
+    const ipcMain = createFakeIpcMain()
     const win1 = createFakeWindowWebContents(101)
     const win2 = createFakeWindowWebContents(102)
     const liveWindows = [win1, win2]
 
     const dispose = registerBufferIpc({
       ipcMain,
-      workspaceService,
       configService,
+      hub: createSharedDocumentBufferHub({ workspaceService, configService }),
       getTargets: () => liveWindows
     })
 
@@ -213,15 +182,15 @@ describe('registerBufferIpc', () => {
     const configService = new ConfigService(configPath)
     await configService.get()
 
-    const ipcMain = createMultiWindowFakeIpcMain()
+    const ipcMain = createFakeIpcMain()
     const win1 = createFakeWindowWebContents(201)
     const win2 = createFakeWindowWebContents(202)
     const liveWindows = [win1, win2]
 
     const dispose = registerBufferIpc({
       ipcMain,
-      workspaceService,
       configService,
+      hub: createSharedDocumentBufferHub({ workspaceService, configService }),
       getTargets: () => liveWindows
     })
 
@@ -266,15 +235,22 @@ describe('registerBufferIpc', () => {
 
     const configService = new ConfigService(configPath)
     await configService.get()
-    await configService.update({ autoSave: true, autoSaveDelayMs: 40 })
+    const initialConfig = await configService.update({ autoSave: true, autoSaveDelayMs: 40 })
 
-    const ipcMain = createMultiWindowFakeIpcMain()
+    const ipcMain = createFakeIpcMain()
     const win1 = createFakeWindowWebContents(301)
     const win2 = createFakeWindowWebContents(302)
     const dispose = registerBufferIpc({
       ipcMain,
-      workspaceService,
       configService,
+      hub: createSharedDocumentBufferHub({
+        workspaceService,
+        configService,
+        initialAutoSaveConfig: {
+          autoSave: initialConfig.autoSave,
+          autoSaveDelayMs: initialConfig.autoSaveDelayMs
+        }
+      }),
       getTargets: () => [win1, win2]
     })
 
@@ -343,13 +319,13 @@ describe('registerBufferIpc', () => {
     const logService = new LogService(join(tempDir, 'logs'))
     const infoSpy = vi.spyOn(logService, 'info')
 
-    const ipcMain = createMultiWindowFakeIpcMain()
+    const ipcMain = createFakeIpcMain()
     const win1 = createFakeWindowWebContents(401)
     const win2 = createFakeWindowWebContents(402)
     const dispose = registerBufferIpc({
       ipcMain,
-      workspaceService,
       configService,
+      hub: createSharedDocumentBufferHub({ workspaceService, configService, logService }),
       getTargets: () => [win1, win2],
       logService
     })
@@ -453,15 +429,15 @@ describe('registerBufferIpc', () => {
     const noteKey = getWorkspacePathKey(notePath)
     await writeFile(notePath, '# Shared Open', 'utf8')
 
-    const ipcMain = createMultiWindowFakeIpcMain()
+    const ipcMain = createFakeIpcMain()
     const win1 = createFakeWindowWebContents(101)
     const win2 = createFakeWindowWebContents(102)
     const targets = [win1, win2]
 
     const dispose = registerBufferIpc({
       ipcMain,
-      workspaceService,
       configService,
+      hub: createSharedDocumentBufferHub({ workspaceService, configService }),
       getTargets: () => targets.filter((t) => !t.isDestroyed())
     })
 

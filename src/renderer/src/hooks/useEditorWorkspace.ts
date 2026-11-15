@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
+import { canDetachTabFromWindow } from '@shared/window'
 import type { PaneInteractionActions } from '../components/PaneTabBar'
 import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
@@ -149,7 +150,7 @@ export function useEditorWorkspace({
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
   const totalTabCount = countLayoutTabs(layout)
-  const canDetachToNewWindow = wikiApi.window?.role !== 'auxiliary' || totalTabCount > 1
+  const canDetachToNewWindow = canDetachTabFromWindow(wikiApi.window?.role, totalTabCount)
 
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({

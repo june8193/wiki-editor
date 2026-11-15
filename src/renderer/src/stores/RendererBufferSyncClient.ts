@@ -8,7 +8,7 @@ import {
 import { DocumentBufferStore, mergePendingLocalBuffer } from '@shared/documentBufferStore'
 import { toErrorMessage } from '@shared/errors'
 import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
-import { extractTabViewState, toTabTransferPayload } from '@shared/window'
+import { canDetachTabFromWindow, extractTabViewState, toTabTransferPayload } from '@shared/window'
 import { countBufferKeys } from '@shared/windowTabTracker'
 import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
 import { type PaneId, PaneTabStore } from './PaneTabStore'
@@ -608,16 +608,27 @@ export class RendererBufferSyncClient {
     this.unsyncedLocalKeys.delete(key)
   }
 
+  private needsAsyncHubSync(key: string): boolean {
+    return this.hasPendingUpdatesForKey(key) || this.needsHubContentSync(key)
+  }
+
+  private async syncBufferKeyToHub(initialKey: string): Promise<string> {
+    const currentKey = this.hasPendingUpdatesForKey(initialKey)
+      ? await this.flushPendingUpdatesForKey(initialKey)
+      : initialKey
+    if (this.mounted && this.needsHubContentSync(currentKey)) {
+      await this.pushLocalContentToHub(currentKey)
+    }
+    return currentKey
+  }
+
   private async runSaveBufferRequest(key: string): Promise<boolean> {
     const initialKey = this.resolveLatestKey(key)
     this.pendingManualSaveKeys.add(initialKey)
     try {
-      const currentKey = this.hasPendingUpdatesForKey(initialKey)
-        ? await this.flushPendingUpdatesForKey(initialKey)
+      const currentKey = this.needsAsyncHubSync(initialKey)
+        ? await this.syncBufferKeyToHub(initialKey)
         : initialKey
-      if (this.needsHubContentSync(currentKey)) {
-        await this.pushLocalContentToHub(currentKey)
-      }
       const result = await this.bufferApi.saveBuffer(currentKey)
       return result.ok
     } catch (error: unknown) {
@@ -740,24 +751,20 @@ export class RendererBufferSyncClient {
     if (!this.windowApi) return
     const initialTab = this.tabStore.getTab(paneId, tabId)
     if (!initialTab) return
-    if (this.windowApi.role === 'auxiliary' && this.tabStore.getTotalTabCount() <= 1) {
+    if (!canDetachTabFromWindow(this.windowApi.role, this.tabStore.getTotalTabCount())) {
       return
     }
 
     try {
-      const currentKey = this.hasPendingUpdatesForKey(initialTab.bufferKey)
-        ? await this.flushPendingUpdatesForKey(initialTab.bufferKey)
-        : this.resolveLatestKey(initialTab.bufferKey)
-      if (!this.mounted) return
-
-      if (this.needsHubContentSync(currentKey)) {
-        await this.pushLocalContentToHub(currentKey)
+      const initialKey = this.resolveLatestKey(initialTab.bufferKey)
+      if (this.needsAsyncHubSync(initialKey)) {
+        await this.syncBufferKeyToHub(initialKey)
         if (!this.mounted) return
       }
 
       const latestTab = this.tabStore.getTab(paneId, tabId)
       if (!latestTab) return
-      if (this.windowApi.role === 'auxiliary' && this.tabStore.getTotalTabCount() <= 1) {
+      if (!canDetachTabFromWindow(this.windowApi.role, this.tabStore.getTotalTabCount())) {
         return
       }
 
