@@ -1,6 +1,7 @@
 import type { GitDiffRequest } from '@shared/git'
 import {
   CONFIG_IPC_CHANNELS,
+  DIAGRAM_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS
@@ -48,7 +49,10 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
       ...(req?.path ? { path: req.path } : {}),
       ...(req?.kind === 'commit' && req.commitHash ? { commitHash: req.commitHash } : {})
     }
-  }
+  },
+  [DIAGRAM_IPC_CHANNELS.copyText]: ([text]) => ({
+    textLength: typeof text === 'string' ? text.length : 0
+  })
 }
 
 function extractIpcMetadata(channel: string, args: unknown[]): Record<string, unknown> {

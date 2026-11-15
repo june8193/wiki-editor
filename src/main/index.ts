@@ -14,6 +14,7 @@ import {
 import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
+import { registerDiagramIpc } from './ipc/registerDiagramIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerLogIpc } from './ipc/registerLogIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
@@ -58,6 +59,7 @@ function showMessageBox(options: MessageBoxOptions): Promise<Electron.MessageBox
 const logService = new LogService(join(app.getPath('userData'), 'logs'))
 
 let disposeConfigIpc: (() => void) | undefined
+let disposeDiagramIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
@@ -66,6 +68,8 @@ let workspaceService: WorkspaceFsService | undefined
 function disposeMainResources(): void {
   disposeLogIpc?.()
   disposeLogIpc = undefined
+  disposeDiagramIpc?.()
+  disposeDiagramIpc = undefined
   disposeGitIpc?.()
   disposeGitIpc = undefined
   disposeWorkspaceIpc?.()
@@ -109,6 +113,11 @@ void app.whenReady().then(async () => {
 
   disposeLogIpc = registerLogIpc(ipcMain, logService)
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)
+  disposeDiagramIpc = registerDiagramIpc({
+    ipcMain,
+    writeClipboardText: (text) => clipboard.writeText(text),
+    logService
+  })
   disposeGitIpc = registerGitIpc({
     ipcMain,
     gitService,

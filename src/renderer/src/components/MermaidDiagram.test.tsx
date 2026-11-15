@@ -1,9 +1,11 @@
 import { StrictMode } from 'react'
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { WikiApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
+import themeCss from '../styles/theme.css?raw'
 import { MermaidDiagram } from './MermaidDiagram'
 
 describe('MermaidDiagram', () => {
@@ -432,5 +434,323 @@ describe('MermaidDiagram', () => {
       await Promise.resolve()
     })
     expect(screen.getByTestId('mermaid-svg')).toHaveTextContent('Strict-->Ok')
+  })
+
+  it('copies raw Mermaid source on floating action bar click, shows 1500ms check feedback, resets timer on consecutive runs, prevents duplicate in-flight clicks, and isolates multiple blocks', async () => {
+    vi.useFakeTimers()
+    const copyResolvers: Array<() => void> = []
+    const copyText = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          copyResolvers.push(resolve)
+        })
+    )
+    window.wikiApi = {
+      diagram: { copyText }
+    } as unknown as WikiApi
+
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => ({
+        svg: `<svg><text>${text.trim()}</text></svg>`
+      }))
+    }
+    const renderer = createMermaidRenderer(driver)
+    const firstCode = 'graph TD\n  A-->B'
+    const secondCode = 'sequenceDiagram\n  Alice->>Bob: Hi'
+
+    const { unmount } = render(
+      <div>
+        <MermaidDiagram code={firstCode} theme="light" renderer={renderer} debounceMs={0} />
+        <MermaidDiagram code={secondCode} theme="light" renderer={renderer} debounceMs={0} />
+      </div>
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    const blocks = screen.getAllByTestId('mermaid-diagram')
+    expect(blocks).toHaveLength(2)
+
+    const firstToolbar = within(blocks[0]).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+    const secondToolbar = within(blocks[1]).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+    const firstCopyBtn = within(firstToolbar).getByRole('button', { name: '코드 복사' })
+    const secondCopyBtn = within(secondToolbar).getByRole('button', { name: '코드 복사' })
+
+    expect(firstCopyBtn).toHaveAttribute('title', '코드 복사')
+    expect(firstCopyBtn).toBeEnabled()
+
+    // Click while in-flight -> blocks duplicate click and keeps bar visible
+    fireEvent.click(firstCopyBtn)
+    fireEvent.click(firstCopyBtn)
+    expect(copyText).toHaveBeenCalledTimes(1)
+    expect(copyText).toHaveBeenCalledWith(firstCode)
+    expect(firstToolbar).toHaveClass('is-visible')
+
+    await act(async () => {
+      copyResolvers.shift()?.()
+      await Promise.resolve()
+    })
+
+    // Shows check state & 복사됨 feedback for 1500ms while second block stays idle
+    expect(firstCopyBtn).toHaveTextContent('복사됨')
+    expect(firstCopyBtn).toHaveAttribute('title', '복사됨')
+    expect(firstCopyBtn).toHaveClass('is-copied')
+    expect(firstToolbar).toHaveClass('is-visible')
+    expect(secondCopyBtn).not.toHaveTextContent('복사됨')
+    expect(secondCopyBtn).toHaveAttribute('title', '코드 복사')
+
+    // Consecutive run at t=1000ms resets the 1500ms timer
+    act(() => {
+      vi.advanceTimersByTime(1000)
+    })
+    expect(firstCopyBtn).toHaveTextContent('복사됨')
+
+    fireEvent.click(firstCopyBtn)
+    await act(async () => {
+      copyResolvers.shift()?.()
+      await Promise.resolve()
+    })
+    expect(copyText).toHaveBeenCalledTimes(2)
+
+    // 600ms after second completion (1600ms since first) -> still copied because timer reset!
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(firstCopyBtn).toHaveTextContent('복사됨')
+
+    // Remaining 900ms -> automatically reverts to idle
+    act(() => {
+      vi.advanceTimersByTime(900)
+    })
+    expect(firstCopyBtn).not.toHaveTextContent('복사됨')
+    expect(firstCopyBtn).toHaveAttribute('title', '코드 복사')
+    expect(firstCopyBtn).not.toHaveClass('is-copied')
+    expect(firstToolbar).not.toHaveClass('is-visible')
+
+    // Trigger copy on second block then unmount before 1500ms -> no timer leak/warning
+    fireEvent.click(secondCopyBtn)
+    await act(async () => {
+      copyResolvers.shift()?.()
+      await Promise.resolve()
+    })
+    expect(secondCopyBtn).toHaveTextContent('복사됨')
+    unmount()
+    act(() => {
+      vi.advanceTimersByTime(2000)
+    })
+  })
+
+  it('reveals floating action bar via hover, keyboard focus (:focus-within), and active feedback while keeping button keyboard-tabbable', async () => {
+    const user = userEvent.setup()
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    try {
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async () => ({ svg: '<svg><rect width="20" height="20"/></svg>' }))
+      }
+      const renderer = createMermaidRenderer(driver)
+
+      render(
+        <div>
+          <button type="button">Before Diagram</button>
+          <MermaidDiagram code={'graph TD\n  A-->B'} theme="light" renderer={renderer} debounceMs={0} />
+        </div>
+      )
+
+      const block = screen.getByTestId('mermaid-diagram')
+      const toolbar = within(block).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+      const copyBtn = within(toolbar).getByRole('button', { name: '코드 복사' })
+      const beforeBtn = screen.getByRole('button', { name: 'Before Diagram' })
+
+      expect(toolbar).toHaveClass('is-floating')
+      expect(getComputedStyle(toolbar).opacity).toBe('0')
+
+      // Tab from preceding control reaches copy button directly
+      beforeBtn.focus()
+      await user.tab()
+      expect(copyBtn).toHaveFocus()
+      expect(getComputedStyle(toolbar).opacity).toBe('1')
+
+      // Moving focus away hides until hover
+      beforeBtn.focus()
+      expect(getComputedStyle(toolbar).opacity).toBe('0')
+
+      await user.hover(block)
+      expect(toolbar).toHaveClass('is-visible')
+      expect(getComputedStyle(toolbar).opacity).toBe('1')
+
+      await user.unhover(block)
+      expect(toolbar).not.toHaveClass('is-visible')
+      expect(getComputedStyle(toolbar).opacity).toBe('0')
+    } finally {
+      styleEl.remove()
+    }
+  })
+
+  it('disables 코드 복사 only when source is whitespace-only and allows copy during loading, retained-SVG error, and fallback error states', async () => {
+    const copyText = vi.fn(async () => {})
+    window.wikiApi = {
+      diagram: { copyText }
+    } as unknown as WikiApi
+
+    let resolvePendingRender!: (result: { svg: string }) => void
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => {
+        if (text.includes('pending')) {
+          return new Promise<{ svg: string }>((resolve) => {
+            resolvePendingRender = resolve
+          })
+        }
+        if (text.includes('broken')) {
+          throw new Error('Parse error')
+        }
+        return { svg: `<svg><text>${text.trim()}</text></svg>` }
+      })
+    }
+    const renderer = createMermaidRenderer(driver)
+
+    // 1. Loading state (initial pending render before SVG or error exists) -> copy enabled
+    const pendingCode = 'graph TD\n  pending_node'
+    const { rerender, unmount } = render(
+      <MermaidDiagram code={pendingCode} theme="light" renderer={renderer} debounceMs={0} />
+    )
+    const block = screen.getByTestId('mermaid-diagram')
+    expect(within(block).getByText('Mermaid 다이어그램 렌더링 중...')).toBeInTheDocument()
+    const loadingCopyBtn = within(block).getByRole('button', { name: '코드 복사' })
+    expect(loadingCopyBtn).toBeEnabled()
+    await act(async () => {
+      fireEvent.click(loadingCopyBtn)
+      await Promise.resolve()
+    })
+    expect(copyText).toHaveBeenLastCalledWith(pendingCode)
+
+    await act(async () => {
+      resolvePendingRender({ svg: '<svg><text>pending_node</text></svg>' })
+      await Promise.resolve()
+    })
+
+    // 2. Retained-SVG syntax error state -> copies current broken source, not retained SVG code
+    const retainedBrokenCode = 'graph TD\n  broken_after_valid'
+    rerender(<MermaidDiagram code={retainedBrokenCode} theme="light" renderer={renderer} debounceMs={0} />)
+    await screen.findByText('Mermaid 문법 오류')
+    expect(within(block).getByTestId('mermaid-svg')).toHaveTextContent('pending_node')
+    await act(async () => {
+      fireEvent.click(within(block).getByRole('button', { name: '코드 복사' }))
+      await Promise.resolve()
+    })
+    expect(copyText).toHaveBeenLastCalledWith(retainedBrokenCode)
+    unmount()
+
+    // 3. Fallback error box (initial broken diagram without lastValid) -> copy enabled with raw broken source
+    const fallbackBrokenCode = 'graph TD\n  broken_initial'
+    const fallbackView = render(
+      <MermaidDiagram code={fallbackBrokenCode} theme="light" renderer={renderer} debounceMs={0} />
+    )
+    const fallbackBlock = screen.getByTestId('mermaid-diagram')
+    await within(fallbackBlock).findByText('Mermaid 다이어그램 문법 오류')
+    expect(within(fallbackBlock).getByRole('button', { name: '코드 복사' })).toBeEnabled()
+    await act(async () => {
+      fireEvent.click(within(fallbackBlock).getByRole('button', { name: '코드 복사' }))
+      await Promise.resolve()
+    })
+    expect(copyText).toHaveBeenLastCalledWith(fallbackBrokenCode)
+
+    // 4. Whitespace-only source -> button disabled and click does not call IPC
+    const callsBeforeBlank = copyText.mock.calls.length
+    fallbackView.rerender(
+      <MermaidDiagram code={'   \n\t  '} theme="light" renderer={renderer} debounceMs={0} />
+    )
+    const blankCopyBtn = within(fallbackBlock).getByRole('button', { name: '코드 복사' })
+    expect(blankCopyBtn).toBeDisabled()
+    fireEvent.click(blankCopyBtn)
+    expect(copyText).toHaveBeenCalledTimes(callsBeforeBlank)
+  })
+
+  it('logs sanitized metadata on copy failure, shows inline role="alert" scoped to that block, clears feedback on code change, and recovers on retry', async () => {
+    const entries: RendererLogPayload[] = []
+    let shouldFail = true
+    const copyText = vi.fn(async () => {
+      if (shouldFail) {
+        throw new Error('클립보드에 접근할 수 없습니다.')
+      }
+    })
+    window.wikiApi = {
+      diagram: { copyText },
+      log: {
+        write: vi.fn(async (payload: RendererLogPayload) => {
+          entries.push(payload)
+        })
+      }
+    } as unknown as WikiApi
+
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => ({ svg: `<svg><text>${text.trim()}</text></svg>` }))
+    }
+    const renderer = createMermaidRenderer(driver)
+    const secretSource = 'graph TD\n  TOP_SECRET_BLOCK --> DEST'
+
+    const { rerender } = render(
+      <div>
+        <MermaidDiagram code={secretSource} theme="light" renderer={renderer} debounceMs={0} />
+        <MermaidDiagram code={'graph TD\n  B-->C'} theme="light" renderer={renderer} debounceMs={0} />
+      </div>
+    )
+    await screen.findAllByTestId('mermaid-svg')
+
+    const blocks = screen.getAllByTestId('mermaid-diagram')
+    const firstBtn = within(blocks[0]).getByRole('button', { name: '코드 복사' })
+    await act(async () => {
+      fireEvent.click(firstBtn)
+      await Promise.resolve()
+    })
+
+    expect(within(blocks[0]).getByRole('alert')).toHaveTextContent('클립보드에 접근할 수 없습니다.')
+    expect(within(blocks[1]).queryByRole('alert')).not.toBeInTheDocument()
+    expect(firstBtn).not.toHaveTextContent('복사됨')
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      level: 'error',
+      category: 'ui',
+      message: 'Mermaid code copy failed',
+      data: {
+        codeLength: secretSource.length
+      }
+    })
+    expect(JSON.stringify(entries)).not.toContain('TOP_SECRET_BLOCK')
+
+    // Retry succeeds -> clears alert and displays copied feedback
+    shouldFail = false
+    await act(async () => {
+      fireEvent.click(firstBtn)
+      await Promise.resolve()
+    })
+    expect(within(blocks[0]).queryByRole('alert')).not.toBeInTheDocument()
+    expect(firstBtn).toHaveTextContent('복사됨')
+
+    // Source changes -> stale completed feedback is reset
+    rerender(
+      <div>
+        <MermaidDiagram code={'graph TD\n  UPDATED-->NODE'} theme="light" renderer={renderer} debounceMs={0} />
+        <MermaidDiagram code={'graph TD\n  B-->C'} theme="light" renderer={renderer} debounceMs={0} />
+      </div>
+    )
+    await screen.findAllByTestId('mermaid-svg')
+    expect(within(blocks[0]).getByRole('button', { name: '코드 복사' })).not.toHaveTextContent('복사됨')
+    expect(within(blocks[0]).queryByRole('alert')).not.toBeInTheDocument()
+
+    // Missing diagram bridge falls back cleanly to inline alert
+    delete (window as { wikiApi?: WikiApi }).wikiApi
+    await act(async () => {
+      fireEvent.click(within(blocks[0]).getByRole('button', { name: '코드 복사' }))
+      await Promise.resolve()
+    })
+    expect(within(blocks[0]).getByRole('alert')).toHaveTextContent('클립보드 복사 API를 사용할 수 없습니다.')
   })
 })

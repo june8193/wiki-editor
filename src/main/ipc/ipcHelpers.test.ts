@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   CONFIG_IPC_CHANNELS,
+  DIAGRAM_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS
@@ -218,6 +219,60 @@ describe('registerIpcHandlers logging wrapper', () => {
         path: 'docs/secret.md'
       }
     })
+    dispose()
+  })
+
+  it('logs diagram:copy-text metadata with textLength only and redacts raw Mermaid source', async () => {
+    const ipcMain = createFakeIpcMain()
+    const secretMermaidCode = 'flowchart TD\n  SECRET_SOURCE --> SECRET_TARGET'
+    const dispose = registerIpcHandlers(
+      ipcMain,
+      [
+        [
+          DIAGRAM_IPC_CHANNELS.copyText,
+          async (_event, text) => {
+            if (typeof text !== 'string') {
+              throw new TypeError('Invalid clipboard text')
+            }
+          }
+        ]
+      ],
+      { logService }
+    )
+
+    await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.copyText, secretMermaidCode)
+    await expect(ipcMain.invoke(DIAGRAM_IPC_CHANNELS.copyText, 12345)).rejects.toThrow(
+      'Invalid clipboard text'
+    )
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(2)
+    expect(JSON.stringify(entries)).not.toContain('SECRET_SOURCE')
+    expect(JSON.stringify(entries)).not.toContain('SECRET_TARGET')
+
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.copyText,
+        success: true,
+        textLength: secretMermaidCode.length
+      }
+    })
+    expect(entries[1]).toMatchObject({
+      level: 'error',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.copyText,
+        success: false,
+        textLength: 0
+      },
+      error: {
+        name: 'TypeError',
+        message: 'Invalid clipboard text'
+      }
+    })
+
     dispose()
   })
 })

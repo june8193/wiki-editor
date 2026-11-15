@@ -1509,17 +1509,95 @@ body.is-resizing-sidebar .pane-workspace {
 
 /* Mermaid diagram rendering & error isolation */
 .mermaid-diagram-block {
+  position: relative;
+  min-height: 44px;
   margin: 12px 0;
   padding: 12px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
   background-color: var(--bg-surface);
-  overflow-x: auto;
 }
 
 .mermaid-svg-container {
   display: flex;
   justify-content: center;
+  overflow-x: auto;
+}
+
+.mermaid-action-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mermaid-action-bar.is-floating {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  padding: 2px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--bg-surface);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.mermaid-diagram-block:hover .mermaid-action-bar.is-floating,
+.mermaid-diagram-block:focus-within .mermaid-action-bar.is-floating,
+.mermaid-action-bar.is-floating.is-visible {
+  opacity: 1;
+}
+
+.mermaid-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mermaid-action-btn:hover:not(:disabled) {
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.mermaid-action-btn:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.mermaid-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mermaid-action-btn.is-copied {
+  color: var(--accent-color);
+}
+
+.mermaid-action-feedback {
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mermaid-action-error {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--danger-color);
+  border-radius: 4px;
+  background-color: var(--bg-elevated);
+  color: var(--danger-color);
+  font-size: 12px;
 }
 
 .mermaid-svg-container svg {
@@ -1600,7 +1678,14 @@ body.is-resizing-sidebar .pane-workspace {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   margin-bottom: 6px;
+}
+
+.mermaid-node-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .mermaid-node-badge {

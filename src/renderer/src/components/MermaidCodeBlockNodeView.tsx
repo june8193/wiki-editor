@@ -2,6 +2,8 @@ import { createContext, useContext, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
 import { NodeViewContent, type NodeViewProps, NodeViewWrapper } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
+import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
+import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
 import { MermaidDiagram } from './MermaidDiagram'
 
 export interface WysiwygMermaidContextValue {
@@ -17,6 +19,8 @@ export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
   const { theme, mermaidRenderer } = useContext(WysiwygMermaidContext)
   const [showSource, setShowSource] = useState(false)
   const language = typeof node.attrs.language === 'string' ? node.attrs.language : ''
+  const { canCopyCode, activeAction, completedAction, errorMessage, handleCopyCode } =
+    useMermaidDiagramActions({ code: language === 'mermaid' ? node.textContent : '' })
 
   if (language !== 'mermaid') {
     return (
@@ -38,13 +42,23 @@ export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
         onMouseDown={(event) => event.stopPropagation()}
       >
         <span className="mermaid-node-badge">Mermaid</span>
-        <button
-          type="button"
-          className="toolbar-btn"
-          onClick={() => setShowSource((prev) => !prev)}
-        >
-          {showSource ? '코드 숨기기' : '코드 편집'}
-        </button>
+        <div className="mermaid-node-header-actions">
+          <MermaidActionBar
+            variant="inline"
+            isVisible
+            canCopyCode={canCopyCode}
+            activeAction={activeAction}
+            completedAction={completedAction}
+            onCopyCode={handleCopyCode}
+          />
+          <button
+            type="button"
+            className="toolbar-btn"
+            onClick={() => setShowSource((prev) => !prev)}
+          >
+            {showSource ? '코드 숨기기' : '코드 편집'}
+          </button>
+        </div>
       </div>
 
       <div
@@ -61,8 +75,15 @@ export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
         contentEditable={false}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <MermaidDiagram code={node.textContent} theme={theme} renderer={mermaidRenderer} />
+        <MermaidDiagram
+          code={node.textContent}
+          theme={theme}
+          renderer={mermaidRenderer}
+          showActionBar={false}
+        />
       </div>
+
+      <MermaidActionErrorAlert message={errorMessage} />
     </NodeViewWrapper>
   )
 }

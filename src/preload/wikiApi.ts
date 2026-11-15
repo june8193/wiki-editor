@@ -11,6 +11,7 @@ import type {
 import {
   type AppMenuCommand,
   CONFIG_IPC_CHANNELS,
+  DIAGRAM_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
@@ -150,6 +151,9 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
     },
     log: {
       write: (payload) => ipcRenderer.invoke(LOG_IPC_CHANNELS.write, payload) as Promise<void>
+    },
+    diagram: {
+      copyText: (text) => ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyText, text) as Promise<void>
     }
   }
 }

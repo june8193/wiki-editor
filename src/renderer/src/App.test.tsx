@@ -15,7 +15,7 @@ import {
   type GitGraphCommit,
   type GitLogResult
 } from '@shared/git'
-import type { AppMenuCommand, WikiApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
+import type { AppMenuCommand, WikiApi, WikiDiagramApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import {
   addFavoriteWorkspace,
@@ -89,6 +89,7 @@ interface VirtualFsOptions {
   workspaces?: Record<string, Record<string, string | null>>
   selectedFolder?: string | null
   git?: Partial<WikiGitApi>
+  diagram?: Partial<WikiDiagramApi>
   log?: WikiLogApi
 }
 
@@ -467,6 +468,10 @@ function createInMemoryWikiApi(
           menuListeners.delete(listener)
         }
       }
+    },
+    diagram: {
+      copyText: vi.fn(async () => {}),
+      ...fsOptions.diagram
     },
     ...(fsOptions.log ? { log: fsOptions.log } : {})
   }
@@ -2729,7 +2734,9 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     await waitFor(() => {
       const blocks = within(screen.getByTestId('document-editor')).getAllByTestId('wysiwyg-mermaid-block')
       expect(blocks).toHaveLength(2)
-      expect(blocks[0].querySelector('svg')?.getAttribute('data-mermaid-theme')).toBe('default')
+      expect(blocks[0].querySelector('.mermaid-svg-container svg')?.getAttribute('data-mermaid-theme')).toBe(
+        'default'
+      )
       expect(within(blocks[1]).getByRole('alert').textContent).toContain('SYNTAX_ERROR broken node')
     })
 
@@ -2737,6 +2744,173 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
     expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(diagramDoc)
     expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+  })
+
+  it('supports Mermaid action bar code copy, keyboard/hover reveal, WYSIWYG single-header placement, syntax-error/blank handling, and failure alerts across Preview, Split, and WYSIWYG modes', async () => {
+    const user = userEvent.setup()
+    const validSource = 'graph TD\n  SECRET_APP_FLOW --> ServiceB'
+    const brokenSource = 'graph TD\n  SYNTAX_ERROR'
+    const docContent = [
+      '# Mermaid Copy E2E',
+      '',
+      '```mermaid',
+      validSource,
+      '```',
+      '',
+      '```mermaid',
+      brokenSource,
+      '```',
+      '',
+      '```mermaid',
+      '   ',
+      '```'
+    ].join('\n')
+
+    const logEntries: RendererLogPayload[] = []
+    let shouldFailCopy = false
+    const copyText = vi.fn(async () => {
+      if (shouldFailCopy) {
+        throw new Error('App clipboard failure')
+      }
+    })
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\mermaid-copy',
+        workspaces: {
+          'C:\\wiki\\mermaid-copy': {
+            'actions.md': docContent
+          }
+        },
+        diagram: { copyText },
+        log: {
+          write: vi.fn(async (payload: RendererLogPayload) => {
+            logEntries.push(payload)
+          })
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { rootEl, cleanup } = mountThemeStylesAndRoot()
+    try {
+      render(<App />, { container: rootEl })
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      await user.click(await screen.findByText('actions.md'))
+
+      const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+
+      // 1. Preview mode: floating bar hover/focus reveal, blank disabled, broken syntax copy allowed, multi-block isolation
+      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      await waitFor(() => {
+        expect(screen.getAllByTestId('mermaid-diagram')).toHaveLength(3)
+        expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
+      })
+
+      const previewBlocks = screen.getAllByTestId('mermaid-diagram')
+      const previewValidToolbar = within(previewBlocks[0]).getByRole('toolbar', {
+        name: 'Mermaid 다이어그램 작업'
+      })
+      const previewValidCopyBtn = within(previewValidToolbar).getByRole('button', { name: '코드 복사' })
+      const previewBrokenCopyBtn = within(previewBlocks[1]).getByRole('button', { name: '코드 복사' })
+      const previewBlankCopyBtn = within(previewBlocks[2]).getByRole('button', { name: '코드 복사' })
+
+      expect(previewValidToolbar).toHaveClass('is-floating')
+      expect(getComputedStyle(previewValidToolbar).opacity).toBe('0')
+      expect(previewBlankCopyBtn).toBeDisabled()
+
+      // Hover & focus reveal floating toolbar in Preview
+      await user.hover(previewBlocks[0])
+      expect(previewValidToolbar).toHaveClass('is-visible')
+      expect(getComputedStyle(previewValidToolbar).opacity).toBe('1')
+      await user.unhover(previewBlocks[0])
+      expect(getComputedStyle(previewValidToolbar).opacity).toBe('0')
+
+      previewValidCopyBtn.focus()
+      expect(previewValidCopyBtn).toHaveFocus()
+      expect(getComputedStyle(previewValidToolbar).opacity).toBe('1')
+
+      // Click copy on valid block and broken syntax block -> independent feedback
+      await user.click(previewValidCopyBtn)
+      expect(copyText).toHaveBeenCalledWith(validSource)
+      expect(previewValidCopyBtn).toHaveTextContent('복사됨')
+      expect(previewBrokenCopyBtn).not.toHaveTextContent('복사됨')
+
+      await user.hover(previewBlocks[1])
+      await user.click(previewBrokenCopyBtn)
+      expect(copyText).toHaveBeenLastCalledWith(brokenSource)
+
+      // 2. Split mode: right preview pane renders floating action bar and copies source
+      await user.click(within(modeGroup).getByRole('button', { name: 'Split' }))
+      const splitPreview = await screen.findByTestId('split-markdown-preview')
+      const splitBlocks = within(splitPreview).getAllByTestId('mermaid-diagram')
+      expect(splitBlocks).toHaveLength(3)
+      const splitValidToolbar = within(splitBlocks[0]).getByRole('toolbar', {
+        name: 'Mermaid 다이어그램 작업'
+      })
+      expect(splitValidToolbar).toHaveClass('is-floating')
+      await user.hover(splitBlocks[0])
+      await user.click(within(splitValidToolbar).getByRole('button', { name: '코드 복사' }))
+      expect(copyText).toHaveBeenLastCalledWith(validSource)
+
+      // 3. WYSIWYG mode: single integrated header toolbar beside 코드 편집 (zero floating preview toolbar)
+      await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+      await waitFor(() => {
+        expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
+      })
+      const wysiwygBlocks = screen.getAllByTestId('wysiwyg-mermaid-block')
+      const wysiwygValidHeader = wysiwygBlocks[0].querySelector('.mermaid-node-header') as HTMLElement
+      const wysiwygValidPreview = wysiwygBlocks[0].querySelector('.mermaid-node-preview') as HTMLElement
+      expect(
+        within(wysiwygBlocks[0]).getAllByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+      ).toHaveLength(1)
+      expect(
+        within(wysiwygValidHeader).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+      ).toHaveClass('is-inline')
+      expect(within(wysiwygValidHeader).getByRole('button', { name: '코드 편집' })).toBeInTheDocument()
+      expect(
+        within(wysiwygValidPreview).queryByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+      ).not.toBeInTheDocument()
+      expect(within(wysiwygBlocks[2]).getByRole('button', { name: '코드 복사' })).toBeDisabled()
+
+      // Copy failure displays inline role="alert" scoped to that block + sanitized log without raw source
+      shouldFailCopy = true
+      const wysiwygValidCopyBtn = within(wysiwygValidHeader).getByRole('button', { name: '코드 복사' })
+      await user.click(wysiwygValidCopyBtn)
+      expect(within(wysiwygBlocks[0]).getByRole('alert')).toHaveTextContent('App clipboard failure')
+      const failureLogs = logEntries.filter((entry) => entry.message === 'Mermaid code copy failed')
+      expect(failureLogs).toHaveLength(1)
+      expect(failureLogs[0]).toMatchObject({
+        level: 'error',
+        category: 'ui',
+        data: { codeLength: validSource.length }
+      })
+      expect(JSON.stringify(logEntries)).not.toContain('SECRET_APP_FLOW')
+
+      // Retry success with fake timers -> clears alert and reverts check feedback after 1500ms
+      shouldFailCopy = false
+      vi.useFakeTimers()
+      await act(async () => {
+        fireEvent.click(wysiwygValidCopyBtn)
+        await Promise.resolve()
+      })
+      expect(within(wysiwygBlocks[0]).queryByRole('alert')).not.toBeInTheDocument()
+      expect(wysiwygValidCopyBtn).toHaveTextContent('복사됨')
+      act(() => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(wysiwygValidCopyBtn).not.toHaveTextContent('복사됨')
+      vi.useRealTimers()
+
+      // Return to Raw: lossless roundtrip and clean buffer without dirty flag
+      await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+      expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(docContent)
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+      cleanup()
+    }
   })
 
   it('updates sidebar Outline ignoring code fences, toggles showHeadingNumbers cleanly with persistence, and scrolls to headings across modes', async () => {

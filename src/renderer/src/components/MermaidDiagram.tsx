@@ -6,7 +6,9 @@ import {
   type MermaidRenderer,
   type MermaidTheme
 } from '../editor/mermaidRenderer'
+import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { logRendererWarn } from '../logging/rendererLogger'
+import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
 
 interface MermaidDiagramProps {
   code: string
@@ -16,6 +18,7 @@ interface MermaidDiagramProps {
   className?: string
   sourceLine?: string
   sourceEndLine?: string
+  showActionBar?: boolean
 }
 
 interface ValidDiagramSnapshot {
@@ -81,7 +84,8 @@ export function MermaidDiagram({
   debounceMs = DEFAULT_DEBOUNCE_MS,
   className,
   sourceLine,
-  sourceEndLine
+  sourceEndLine,
+  showActionBar = true
 }: MermaidDiagramProps) {
   const mermaidTheme = mapThemeToMermaidTheme(theme)
   const cachedSvg = renderer.getCachedSvg(code, theme)
@@ -90,6 +94,9 @@ export function MermaidDiagram({
     lastValid: cachedSvg !== null ? { code, mermaidTheme, svg: cachedSvg } : null,
     error: null
   }))
+  const [isHovered, setIsHovered] = useState(false)
+  const { canCopyCode, activeAction, completedAction, errorMessage, handleCopyCode } =
+    useMermaidDiagramActions({ code })
   const lastValidRef = useRef<ValidDiagramSnapshot | null>(asyncState.lastValid)
   const mountedThemeRef = useRef<ThemeMode | null>(null)
 
@@ -177,6 +184,8 @@ export function MermaidDiagram({
       data-mermaid-theme={mermaidTheme}
       data-source-line={sourceLine}
       data-source-end-line={sourceEndLine}
+      onMouseEnter={showActionBar ? () => setIsHovered(true) : undefined}
+      onMouseLeave={showActionBar ? () => setIsHovered(false) : undefined}
     >
       {showFallbackErrorBox ? (
         <div className="mermaid-error-box" role="alert">
@@ -206,6 +215,19 @@ export function MermaidDiagram({
               Mermaid 다이어그램 렌더링 중...
             </div>
           )}
+        </>
+      )}
+      {showActionBar && (
+        <>
+          <MermaidActionBar
+            variant="floating"
+            isVisible={isHovered}
+            canCopyCode={canCopyCode}
+            activeAction={activeAction}
+            completedAction={completedAction}
+            onCopyCode={handleCopyCode}
+          />
+          <MermaidActionErrorAlert message={errorMessage} />
         </>
       )}
     </div>

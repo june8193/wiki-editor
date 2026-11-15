@@ -3,6 +3,7 @@ import { DEFAULT_APP_CONFIG } from '@shared/config'
 import {
   type AppMenuCommand,
   CONFIG_IPC_CHANNELS,
+  DIAGRAM_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
@@ -203,6 +204,18 @@ describe('createWikiApi', () => {
     await api.log.write(payload)
 
     expect(ipc.lastInvoked).toEqual([{ channel: LOG_IPC_CHANNELS.write, args: [payload] }])
+  })
+
+  it('routes diagram.copyText through diagram:copy-text IPC channel with exact source string', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+    const diagramSource = 'flowchart LR\n  A --> B'
+
+    await api.diagram.copyText(diagramSource)
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: DIAGRAM_IPC_CHANNELS.copyText, args: [diagramSource] }
+    ])
   })
 
   it('subscribes to menu:command without exposing Electron event and cleans up on unsubscribe', () => {
