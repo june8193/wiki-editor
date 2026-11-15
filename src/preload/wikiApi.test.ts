@@ -108,6 +108,7 @@ describe('createWikiApi', () => {
     await api.workspace.selectFolder()
     await api.workspace.open('C:\\wiki')
     await api.workspace.readDir('C:\\wiki\\docs')
+    await api.workspace.listMarkdownFiles()
     await api.workspace.readFile('C:\\wiki\\readme.md')
     await api.workspace.writeFile('C:\\wiki\\readme.md', '# Hi')
     await api.workspace.createEntry('C:\\wiki', 'note.md', 'file', '')
@@ -132,6 +133,7 @@ describe('createWikiApi', () => {
       WORKSPACE_IPC_CHANNELS.selectFolder,
       WORKSPACE_IPC_CHANNELS.open,
       WORKSPACE_IPC_CHANNELS.readDir,
+      WORKSPACE_IPC_CHANNELS.listMarkdownFiles,
       WORKSPACE_IPC_CHANNELS.readFile,
       WORKSPACE_IPC_CHANNELS.writeFile,
       WORKSPACE_IPC_CHANNELS.createEntry,

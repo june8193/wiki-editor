@@ -51,6 +51,7 @@ export function registerWorkspaceIpc({
       }
     ],
     [WORKSPACE_IPC_CHANNELS.readDir, (_event, dirPath) => workspaceService.readDir(dirPath as string | undefined)],
+    [WORKSPACE_IPC_CHANNELS.listMarkdownFiles, () => workspaceService.listMarkdownFiles()],
     [WORKSPACE_IPC_CHANNELS.readFile, (_event, filePath) => workspaceService.readFile(filePath as string)],
     [
       WORKSPACE_IPC_CHANNELS.writeFile,

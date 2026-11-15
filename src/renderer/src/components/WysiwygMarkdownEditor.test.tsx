@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { CustomCommandConfig } from '@shared/config'
+import type { WorkspaceEntry } from '@shared/workspace'
 import { describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
@@ -646,5 +647,53 @@ describe('WysiwygMarkdownEditor link autocomplete & Ctrl+K', () => {
     placeCaretInProseMirror(editorEl, targetP)
     fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
     expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+  })
+
+  it('위지윅 모드에서 워크스페이스 파일 후보를 표시하고 상대 경로 마크다운 링크를 삽입한다', async () => {
+    const user = userEvent.setup()
+    const onChangeContent = vi.fn()
+    const files: WorkspaceEntry[] = [
+      {
+        name: 'current.md',
+        path: 'C:\\wiki\\docs\\current.md',
+        relativePath: 'docs/current.md',
+        kind: 'file'
+      },
+      {
+        name: 'guide (1).md',
+        path: 'C:\\wiki\\other\\guide (1).md',
+        relativePath: 'other/guide (1).md',
+        kind: 'file'
+      }
+    ]
+
+    render(
+      <WysiwygMarkdownEditor
+        content={'# 현재\n\n본문'}
+        scrollTop={0}
+        workspaceMarkdownFiles={files}
+        activeFilePath="C:\\wiki\\docs\\current.md"
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const targetP = Array.from(editorEl.querySelectorAll('p')).find((p) =>
+      p.textContent?.includes('본문')
+    )!
+    placeCaretInProseMirror(editorEl, targetP)
+
+    await user.keyboard(' [[](../')
+    const listbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(listbox).queryByText('current.md')).not.toBeInTheDocument()
+    const guideOption = within(listbox).getByRole('option', { name: /guide \(1\)\.md/ })
+    expect(guideOption).toHaveTextContent('other/guide (1).md')
+
+    await user.click(guideOption)
+    await waitFor(() => {
+      expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain(
+        '[guide (1)](../other/guide%20%281%29.md)'
+      )
+    })
   })
 })

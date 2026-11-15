@@ -1,20 +1,20 @@
 import type { RefObject } from 'react'
-import type { HeadingLinkCandidate } from '../editor/LinkAutocompleteEngine'
+import type { LinkCandidate } from '../editor/LinkAutocompleteEngine'
 import { useDismissable } from '../hooks/useDismissable'
 import type { LinkMenuPosition } from '../hooks/useLinkMenu'
 
 export interface LinkAutocompleteMenuProps {
   isOpen: boolean
-  candidates: readonly HeadingLinkCandidate[]
+  candidates: readonly LinkCandidate[]
   selectedIndex: number
   position: LinkMenuPosition
   menuRef: RefObject<HTMLDivElement | null>
-  onSelect: (candidate: HeadingLinkCandidate) => void
+  onSelect: (candidate: LinkCandidate) => void
   onHoverIndex: (index: number) => void
   onDismiss: () => void
 }
 
-/** Floating cursor-anchored listbox popup for section link autocomplete candidates. */
+/** Floating cursor-anchored listbox popup for section and workspace file link autocomplete candidates. */
 export function LinkAutocompleteMenu({
   isOpen,
   candidates,
@@ -41,6 +41,9 @@ export function LinkAutocompleteMenu({
     >
       {candidates.map((candidate, index) => {
         const isSelected = index === selectedIndex
+        const badge = candidate.kind === 'heading' ? `H${candidate.heading.level}` : 'MD'
+        const label = candidate.kind === 'heading' ? candidate.title : candidate.name
+        const meta = candidate.kind === 'heading' ? `#${candidate.slug}` : candidate.relativePath
         return (
           <button
             key={candidate.id}
@@ -55,10 +58,10 @@ export function LinkAutocompleteMenu({
             onMouseEnter={() => onHoverIndex(index)}
             onClick={() => onSelect(candidate)}
           >
-            <span className="link-autocomplete-badge">{`H${candidate.heading.level}`}</span>
+            <span className="link-autocomplete-badge">{badge}</span>
             <span className="link-autocomplete-content">
-              <span className="link-autocomplete-title">{candidate.title}</span>
-              <span className="link-autocomplete-slug">{`#${candidate.slug}`}</span>
+              <span className="link-autocomplete-title">{label}</span>
+              <span className="link-autocomplete-slug">{meta}</span>
             </span>
           </button>
         )

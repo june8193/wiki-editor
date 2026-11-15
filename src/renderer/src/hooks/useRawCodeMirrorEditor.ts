@@ -19,10 +19,11 @@ import {
   type CustomCommandConfig,
   type ThemeMode
 } from '@shared/config'
+import type { WorkspaceEntry } from '@shared/workspace'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
 import {
-  buildRawSectionLinkEdit,
+  buildRawLinkEdit,
   detectLinkQuery,
   type LinkQueryMatch
 } from '../editor/LinkAutocompleteEngine'
@@ -88,6 +89,8 @@ export interface UseRawCodeMirrorEditorOptions {
   isShortcutDisabled?: boolean
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
+  workspaceMarkdownFiles?: readonly WorkspaceEntry[]
+  activeFilePath?: string | null
   scrollRequest?: RawScrollRequest | null
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
@@ -196,6 +199,8 @@ export function useRawCodeMirrorEditor({
   isShortcutDisabled = false,
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
+  workspaceMarkdownFiles,
+  activeFilePath,
   scrollRequest,
   onChangeContent,
   onUpdateViewState
@@ -281,6 +286,8 @@ export function useRawCodeMirrorEditor({
 
   const { linkControlsRef, linkMenuProps } = useLinkMenu({
     documentContent: content,
+    workspaceMarkdownFiles,
+    activeFilePath,
     onOpenMenu: dismissSlashMenu,
     onSelectCandidate: (candidate, match: LinkQueryMatch) => {
       const view = viewRef.current
@@ -288,7 +295,7 @@ export function useRawCodeMirrorEditor({
         return
       }
       const docText = view.state.doc.toString()
-      const edit = buildRawSectionLinkEdit(docText, match, candidate)
+      const edit = buildRawLinkEdit(docText, match, candidate)
       view.dispatch({
         changes: { from: edit.from, to: edit.to, insert: edit.text },
         selection: { anchor: edit.cursorOffset },

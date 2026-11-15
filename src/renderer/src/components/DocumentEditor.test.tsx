@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
+import type { WorkspaceEntry } from '@shared/workspace'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { DocumentEditor } from './DocumentEditor'
 import type { DocumentBuffer } from '../stores/DocumentBufferStore'
@@ -368,5 +369,65 @@ describe('DocumentEditor link autocomplete & Ctrl+K gating', () => {
     expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
     fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
     expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+  })
+
+  it('Raw 와 위지윅 모드 모두 workspaceMarkdownFiles 를 받아 현재 문서를 제외한 파일 후보를 자동완성에 전달한다', async () => {
+    const files: WorkspaceEntry[] = [
+      {
+        name: 'doc.md',
+        path: 'C:/wiki/doc.md',
+        relativePath: 'doc.md',
+        kind: 'file'
+      },
+      {
+        name: 'sub-guide.md',
+        path: 'C:/wiki/docs/sub-guide.md',
+        relativePath: 'docs/sub-guide.md',
+        kind: 'file'
+      }
+    ]
+    const mdDoc = createDoc({ content: '# 제목\n\n본문' })
+    const rawEndTab = {
+      ...createTab('raw'),
+      cursor: { selectionStart: mdDoc.content.length, selectionEnd: mdDoc.content.length }
+    }
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={mdDoc}
+        tab={rawEndTab}
+        theme="light"
+        autoSave={false}
+        workspaceMarkdownFiles={files}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'k', ctrlKey: true })
+    const rawListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(rawListbox).queryByText('doc.md')).not.toBeInTheDocument()
+    expect(within(rawListbox).getByText('docs/sub-guide.md')).toBeInTheDocument()
+
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'Escape' })
+
+    rerender(
+      <DocumentEditor
+        document={mdDoc}
+        tab={createTab('wysiwyg')}
+        theme="light"
+        autoSave={false}
+        workspaceMarkdownFiles={files}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'k', ctrlKey: true })
+    const wysiwygListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(wysiwygListbox).queryByText('doc.md')).not.toBeInTheDocument()
+    expect(within(wysiwygListbox).getByText('docs/sub-guide.md')).toBeInTheDocument()
   })
 })

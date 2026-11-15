@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { CustomCommandConfig } from '@shared/config'
+import type { WorkspaceEntry } from '@shared/workspace'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 
 describe('RawMarkdownEditor (CodeMirror 6)', () => {
@@ -947,5 +948,85 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
     )
     fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
     expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+  })
+
+  it('워크스페이스 파일 후보를 병합해 상대 경로(../, ./) 링크와 확장자 제거 자동 채움·인코딩을 삽입한다', async () => {
+    const user = userEvent.setup()
+    const onChangeContent = vi.fn()
+    const files: WorkspaceEntry[] = [
+      {
+        name: 'current.md',
+        path: 'C:\\wiki\\docs\\current.md',
+        relativePath: 'docs/current.md',
+        kind: 'file'
+      },
+      {
+        name: 'A | B.md',
+        path: 'C:\\wiki\\docs\\A | B.md',
+        relativePath: 'docs/A | B.md',
+        kind: 'file'
+      },
+      {
+        name: 'guide (1).markdown',
+        path: 'C:\\wiki\\other\\guide (1).markdown',
+        relativePath: 'other/guide (1).markdown',
+        kind: 'file'
+      }
+    ]
+
+    const { container } = render(
+      <RawMarkdownEditor
+        content={'# 현재 문서\n\n본문 '}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 12, selectionEnd: 12 }}
+        scrollTop={0}
+        workspaceMarkdownFiles={files}
+        activeFilePath="C:\\wiki\\docs\\current.md"
+        onChangeContent={onChangeContent}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const cmContent = container.querySelector('.cm-content')!
+    const view = EditorView.findFromDOM(cmContent as HTMLElement)!
+    act(() => {
+      view.dispatch({
+        changes: { from: 12, to: 12, insert: '[](' },
+        selection: { anchor: 15 }
+      })
+    })
+
+    const listbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(listbox).queryByText('current.md')).not.toBeInTheDocument()
+    expect(within(listbox).getByText('docs/A | B.md')).toBeInTheDocument()
+    expect(within(listbox).getByText('other/guide (1).markdown')).toBeInTheDocument()
+
+    act(() => {
+      view.dispatch({
+        changes: { from: 15, to: 15, insert: '../' },
+        selection: { anchor: 18 }
+      })
+    })
+
+    await waitFor(() => {
+      const updatedListbox = screen.getByRole('listbox', { name: '링크 자동완성' })
+      expect(within(updatedListbox).queryByText('A | B.md')).not.toBeInTheDocument()
+      expect(within(updatedListbox).getByText('guide (1).markdown')).toBeInTheDocument()
+    })
+
+    await user.click(within(screen.getByRole('listbox', { name: '링크 자동완성' })).getByRole('option'))
+    expect(view.state.doc.toString()).toContain('[guide (1)](../other/guide%20%281%29.markdown)')
+
+    const pipeDoc = '| 항목 | 링크 |\n| --- | --- |\n| r | []( |'
+    act(() => {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: pipeDoc },
+        selection: { anchor: pipeDoc.lastIndexOf(' |') }
+      })
+    })
+    const tableListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    await user.click(within(tableListbox).getByRole('option', { name: /A \| B\.md/ }))
+    expect(view.state.doc.toString()).toContain('[A \\| B](./A%20%7C%20B.md)')
   })
 })

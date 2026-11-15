@@ -190,3 +190,33 @@ export function removeRecentWorkspace(
 ): string[] {
   return recents.filter((item) => !isSameWorkspacePath(item, workspacePath))
 }
+
+const MARKDOWN_EXTENSION_RE = /\.(?:md|markdown)$/i
+
+/**
+ * Returns true when the file name ends with `.md` or `.markdown` (case-insensitive).
+ */
+export function isMarkdownFileName(fileName: string): boolean {
+  return MARKDOWN_EXTENSION_RE.test(fileName)
+}
+
+/**
+ * Removes a trailing `.md` or `.markdown` extension for display labels, keeping dotfiles intact.
+ */
+export function stripMarkdownExtension(fileName: string): string {
+  const stripped = fileName.replace(MARKDOWN_EXTENSION_RE, '')
+  return stripped || fileName
+}
+
+/**
+ * Compares workspace entries alphabetically by workspace-root `relativePath`.
+ */
+export function compareWorkspaceEntriesByRelativePath(
+  a: Pick<WorkspaceEntry, 'relativePath'>,
+  b: Pick<WorkspaceEntry, 'relativePath'>
+): number {
+  const baseOrder = a.relativePath.localeCompare(b.relativePath, undefined, {
+    sensitivity: 'base'
+  })
+  return baseOrder !== 0 ? baseOrder : a.relativePath.localeCompare(b.relativePath)
+}

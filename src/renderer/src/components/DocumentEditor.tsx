@@ -1,5 +1,6 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { WorkspaceEntry } from '@shared/workspace'
 import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
@@ -29,6 +30,7 @@ interface DocumentEditorProps {
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
+  workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   onChangeContent: (nextContent: string) => void
   onSave: () => void
   onUpdateViewState: (patch: TabViewPatch) => void
@@ -55,10 +57,12 @@ export function DocumentEditor({
   mermaidRenderer,
   scrollRequest = null,
   isShortcutDisabled = false,
+  workspaceMarkdownFiles,
   onChangeContent,
   onSave,
   onUpdateViewState
 }: DocumentEditorProps) {
+  const activeFilePath = activeDoc.kind === 'workspace' ? activeDoc.path : null
   const allowRichModes = isMarkdownDocument(activeDoc)
   const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
   const rawLanguage = getRawEditorLanguage(activeDoc)
@@ -180,6 +184,8 @@ export function DocumentEditor({
           isShortcutDisabled={isShortcutDisabled}
           customCommands={customCommands}
           documentTitle={documentTitle}
+          workspaceMarkdownFiles={workspaceMarkdownFiles}
+          activeFilePath={activeFilePath}
           scrollRequest={
             matchedScrollRequest
               ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
@@ -200,6 +206,8 @@ export function DocumentEditor({
           isShortcutDisabled={isShortcutDisabled}
           customCommands={customCommands}
           documentTitle={documentTitle}
+          workspaceMarkdownFiles={workspaceMarkdownFiles}
+          activeFilePath={activeFilePath}
           mermaidRenderer={mermaidRenderer}
           scrollRequest={
             matchedScrollRequest

@@ -27,7 +27,9 @@ import { unified } from 'unified'
 import { MermaidCodeBlockNodeView } from '../components/MermaidCodeBlockNodeView'
 import {
   detectLinkQueryFromSegments,
-  type HeadingLinkCandidate,
+  getLinkCandidateAutoLabel,
+  getLinkCandidateHref,
+  type LinkCandidate,
   type InlineLinkSegment,
   type InlineLinkSegmentMatch
 } from './LinkAutocompleteEngine'
@@ -667,11 +669,11 @@ export function detectProseMirrorLinkQuery(state: EditorState): ProseMirrorLinkQ
 }
 
 /**
- * 감지된 `[라벨](쿼리` 구간을 섹션 `link` 마크로 치환하고 인접 `)`와 마크 번짐을 정리한다.
+ * 감지된 `[라벨](쿼리` 구간을 `link` 마크(섹션/상대 파일 경로)로 치환하고 인접 `)`와 마크 번짐을 정리한다.
  */
-export function insertWysiwygSectionLink(
+export function insertWysiwygLink(
   editor: Editor,
-  candidate: HeadingLinkCandidate,
+  candidate: LinkCandidate,
   match: ProseMirrorLinkQueryMatch
 ): boolean {
   const linkMarkType = editor.state.schema.marks.link
@@ -686,7 +688,8 @@ export function insertWysiwygSectionLink(
     state.doc.textBetween(match.rangeTo, match.rangeTo + 1, '') === ')'
   const replaceTo = hasTrailingCloseParen ? match.rangeTo + 1 : match.rangeTo
 
-  const linkMark = linkMarkType.create({ href: `#${candidate.slug}` })
+  const href = getLinkCandidateHref(candidate)
+  const linkMark = linkMarkType.create({ href })
   const tr = state.tr.setMeta(linkInsertPluginKey, true)
   let linkEndPos: number
 
@@ -696,10 +699,10 @@ export function insertWysiwygSectionLink(
     linkEndPos = match.closeBracketPos - 1
     tr.addMark(match.rangeFrom, linkEndPos, linkMark)
   } else {
-    const titleText = candidate.title || candidate.slug
-    const linkedNode = state.schema.text(titleText, [linkMark])
+    const labelText = getLinkCandidateAutoLabel(candidate) || href
+    const linkedNode = state.schema.text(labelText, [linkMark])
     tr.replaceWith(match.rangeFrom, replaceTo, linkedNode)
-    linkEndPos = match.rangeFrom + titleText.length
+    linkEndPos = match.rangeFrom + labelText.length
   }
 
   tr.setSelection(TextSelection.create(tr.doc, linkEndPos))

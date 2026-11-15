@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import type { WorkspaceEntry } from '@shared/workspace'
 import {
+  buildFileLinkCandidates,
   buildHeadingLinkCandidates,
-  buildRawSectionLinkEdit,
+  buildRawLinkEdit,
+  computeRelativeMarkdownHref,
   detectLinkQuery,
-  filterAndRankLinkCandidates
+  encodeMarkdownPathSegment,
+  filterAndRankLinkCandidates,
+  type LinkCandidate
 } from './LinkAutocompleteEngine'
 
 describe('detectLinkQuery', () => {
@@ -196,7 +201,7 @@ describe('buildHeadingLinkCandidates & filterAndRankLinkCandidates', () => {
   })
 })
 
-describe('buildRawSectionLinkEdit', () => {
+describe('buildRawLinkEdit (sections)', () => {
   it('사용자 입력 [텍스트] 및 [`심볼`] 을 그대로 유지하고 커서 직후 ) 가 있으면 중복 닫기 없이 치환한다', () => {
     const md = '# 1.1. 개요\n\n참고 [`parseMarkdownHeadings`](|) 끝\n## `parseMarkdownHeadings`'
     const cursor = md.indexOf('|)')
@@ -204,7 +209,7 @@ describe('buildRawSectionLinkEdit', () => {
     const match = detectLinkQuery(cleaned, cursor)!
     const candidate = buildHeadingLinkCandidates(cleaned)[1]
 
-    const edit = buildRawSectionLinkEdit(cleaned, match, candidate)
+    const edit = buildRawLinkEdit(cleaned, match, candidate)
     expect(edit).toEqual({
       from: cleaned.indexOf('[`parseMarkdownHeadings`]'),
       to: cleaned.indexOf(')') + 1,
@@ -221,10 +226,266 @@ describe('buildRawSectionLinkEdit', () => {
     const match = detectLinkQuery(md, docBeforePipe.length)!
     const candidates = buildHeadingLinkCandidates(md)
 
-    const editHeading1 = buildRawSectionLinkEdit(md, match, candidates[0])
+    const editHeading1 = buildRawLinkEdit(md, match, candidates[0])
     expect(editHeading1.text).toBe('[개요](#11-개요)')
 
-    const editPipeHeading = buildRawSectionLinkEdit(md, match, candidates[1])
+    const editPipeHeading = buildRawLinkEdit(md, match, candidates[1])
     expect(editPipeHeading.text).toBe('[A \\| B 표기](#a-b-표기)')
+  })
+})
+
+describe('encodeMarkdownPathSegment, computeRelativeMarkdownHref & buildFileLinkCandidates', () => {
+  it('경로 세그먼트 내 공백/괄호/특수문자를 percent-encode 하고 한글 등 일반 유니코드는 가독성을 위해 유지한다', () => {
+    expect(encodeMarkdownPathSegment('my (guide) #1?.md')).toBe('my%20%28guide%29%20%231%3F.md')
+    expect(encodeMarkdownPathSegment('가이드 [v1]%20.md')).toBe('가이드%20%5Bv1%5D%2520.md')
+    expect(encodeMarkdownPathSegment('가이드.md')).toBe('가이드.md')
+  })
+
+  it('현재 활성 문서 폴더 기준 POSIX 상대 경로(./, ./sub/, ../)를 계산한다', () => {
+    expect(
+      computeRelativeMarkdownHref('C:\\wiki\\docs\\a.md', {
+        path: 'C:\\wiki\\docs\\b.md',
+        relativePath: 'docs/b.md'
+      })
+    ).toBe('./b.md')
+
+    expect(
+      computeRelativeMarkdownHref('c:/wiki/root.md', {
+        path: 'C:\\Wiki\\docs\\api\\spec.markdown',
+        relativePath: 'docs/api/spec.markdown'
+      })
+    ).toBe('./docs/api/spec.markdown')
+
+    expect(
+      computeRelativeMarkdownHref('/wiki/docs/api/spec.md', {
+        path: '/wiki/root.md',
+        relativePath: 'root.md'
+      })
+    ).toBe('../../root.md')
+
+    expect(
+      computeRelativeMarkdownHref('C:\\wiki\\guides\\start.md', {
+        path: 'C:\\wiki\\my docs\\note (1).md',
+        relativePath: 'my docs/note (1).md'
+      })
+    ).toBe('../my%20docs/note%20%281%29.md')
+
+    expect(
+      computeRelativeMarkdownHref(null, {
+        path: 'C:\\wiki\\docs\\guide.md',
+        relativePath: 'docs/guide.md'
+      })
+    ).toBe('./docs/guide.md')
+  })
+
+  it('현재 활성 문서를 제외하고 relativePath 오름차순으로 FileLinkCandidate 목록을 생성한다', () => {
+    const entries: WorkspaceEntry[] = [
+      {
+        name: 'active.md',
+        path: 'C:\\Wiki\\docs\\active.md',
+        relativePath: 'docs/active.md',
+        kind: 'file'
+      },
+      {
+        name: 'zebra.MarkDown',
+        path: 'C:\\Wiki\\zebra.MarkDown',
+        relativePath: 'zebra.MarkDown',
+        kind: 'file'
+      },
+      {
+        name: 'guide (2).MD',
+        path: 'C:\\Wiki\\docs\\sub\\guide (2).MD',
+        relativePath: 'docs/sub/guide (2).MD',
+        kind: 'file'
+      },
+      {
+        name: 'image.png',
+        path: 'C:\\Wiki\\docs\\image.png',
+        relativePath: 'docs/image.png',
+        kind: 'file'
+      },
+      {
+        name: 'sub',
+        path: 'C:\\Wiki\\docs\\sub',
+        relativePath: 'docs/sub',
+        kind: 'directory'
+      }
+    ]
+
+    expect(buildFileLinkCandidates(entries, 'c:/wiki/docs/ACTIVE.md')).toEqual([
+      {
+        kind: 'file',
+        id: 'file:docs/sub/guide (2).MD',
+        name: 'guide (2).MD',
+        path: 'C:\\Wiki\\docs\\sub\\guide (2).MD',
+        relativePath: 'docs/sub/guide (2).MD',
+        href: './sub/guide%20%282%29.MD',
+        displayName: 'guide (2)'
+      },
+      {
+        kind: 'file',
+        id: 'file:zebra.MarkDown',
+        name: 'zebra.MarkDown',
+        path: 'C:\\Wiki\\zebra.MarkDown',
+        relativePath: 'zebra.MarkDown',
+        href: '../zebra.MarkDown',
+        displayName: 'zebra'
+      }
+    ])
+  })
+})
+
+describe('filterAndRankLinkCandidates & buildRawLinkEdit (headings + workspace files)', () => {
+  const sampleMarkdown = [
+    '# 개요',
+    '## API',
+    '## `Setup Guide`'
+  ].join('\n')
+
+  const activeFilePath = 'C:\\wiki\\docs\\current.md'
+  const workspaceFiles: WorkspaceEntry[] = [
+    {
+      name: 'intro.md',
+      path: 'C:\\wiki\\docs\\intro.md',
+      relativePath: 'docs/intro.md',
+      kind: 'file'
+    },
+    {
+      name: 'api.markdown',
+      path: 'C:\\wiki\\docs\\sub\\api.markdown',
+      relativePath: 'docs/sub/api.markdown',
+      kind: 'file'
+    },
+    {
+      name: 'sub-note.md',
+      path: 'C:\\wiki\\other\\sub\\sub-note.md',
+      relativePath: 'other/sub/sub-note.md',
+      kind: 'file'
+    },
+    {
+      name: 'setup (1).md',
+      path: 'C:\\wiki\\root\\setup (1).md',
+      relativePath: 'root/setup (1).md',
+      kind: 'file'
+    }
+  ]
+
+  const buildMixedCandidates = (): LinkCandidate[] => [
+    ...buildHeadingLinkCandidates(sampleMarkdown),
+    ...buildFileLinkCandidates(workspaceFiles, activeFilePath)
+  ]
+
+  it('빈 쿼리 []( 는 현재 문서 헤딩 후 relativePath 순 파일 목록을 반환하고, [label]( 는 양쪽 일치를 최상단에 올린다', () => {
+    const candidates = buildMixedCandidates()
+
+    expect(filterAndRankLinkCandidates(candidates, '', '').map((c) => c.id)).toEqual([
+      'heading:1:개요',
+      'heading:2:api',
+      'heading:3:setup-guide',
+      'file:docs/intro.md',
+      'file:docs/sub/api.markdown',
+      'file:other/sub/sub-note.md',
+      'file:root/setup (1).md'
+    ])
+
+    // [api]( -> exact heading beats exact displayName file; remaining headings -> remaining files
+    expect(filterAndRankLinkCandidates(candidates, 'api', '').map((c) => c.id)).toEqual([
+      'heading:2:api',
+      'file:docs/sub/api.markdown',
+      'heading:1:개요',
+      'heading:3:setup-guide',
+      'file:docs/intro.md',
+      'file:other/sub/sub-note.md',
+      'file:root/setup (1).md'
+    ])
+  })
+
+  it('# 접두사는 헤딩만, ./ 와 ../ 접두사는 해당 상대 경로 방향의 파일만 필터링한다', () => {
+    const candidates = buildMixedCandidates()
+
+    expect(filterAndRankLinkCandidates(candidates, '개요', '#').map((c) => c.id)).toEqual([
+      'heading:1:개요',
+      'heading:2:api',
+      'heading:3:setup-guide'
+    ])
+    expect(filterAndRankLinkCandidates(candidates, '', '#api').map((c) => c.id)).toEqual([
+      'heading:2:api'
+    ])
+
+    // ./ excludes ../ files and headings
+    expect(filterAndRankLinkCandidates(candidates, 'sub', './').map((c) => c.id)).toEqual([
+      'file:docs/sub/api.markdown',
+      'file:docs/intro.md'
+    ])
+    // ./sub must NOT accidentally match ../other/sub/sub-note.md
+    expect(filterAndRankLinkCandidates(candidates, '', './sub').map((c) => c.id)).toEqual([
+      'file:docs/sub/api.markdown'
+    ])
+    // ../ only returns parent/sibling files
+    expect(filterAndRankLinkCandidates(candidates, '', '../').map((c) => c.id)).toEqual([
+      'file:other/sub/sub-note.md',
+      'file:root/setup (1).md'
+    ])
+    expect(filterAndRankLinkCandidates(candidates, '', '../other').map((c) => c.id)).toEqual([
+      'file:other/sub/sub-note.md'
+    ])
+  })
+
+  it('일반 쿼리는 헤딩과 파일을 통합 필터링·랭킹하고 일치 항목이 없으면 빈 배열을 반환한다', () => {
+    const candidates = buildMixedCandidates()
+
+    // 'intro' matches exact displayName 'intro.md' even though headings exist
+    expect(filterAndRankLinkCandidates(candidates, '', 'intro').map((c) => c.id)).toEqual([
+      'file:docs/intro.md'
+    ])
+    // 'api' matches both heading 'API' and file 'api.markdown', heading wins tie
+    expect(filterAndRankLinkCandidates(candidates, '', 'api').map((c) => c.id)).toEqual([
+      'heading:2:api',
+      'file:docs/sub/api.markdown'
+    ])
+    expect(filterAndRankLinkCandidates(candidates, '', 'nonexistent')).toEqual([])
+  })
+
+  it('buildRawLinkEdit 로 파일 링크 완성 시 사용자 레이블 유지, 빈 레이블 자동 채움, 인코딩 경로, 테이블 파이프 이스케이프를 처리한다', () => {
+    const candidates = buildFileLinkCandidates(
+      [
+        {
+          name: 'A | B.markdown',
+          path: 'C:\\wiki\\docs\\A | B.markdown',
+          relativePath: 'docs/A | B.markdown',
+          kind: 'file'
+        },
+        {
+          name: 'guide (1).md',
+          path: 'C:\\wiki\\other\\guide (1).md',
+          relativePath: 'other/guide (1).md',
+          kind: 'file'
+        }
+      ],
+      activeFilePath
+    )
+    const tablePipeCandidate = candidates[0]
+    const siblingEncodedCandidate = candidates[1]
+
+    const labeledDoc = '참고: [내 문서](|)'
+    const labeledMatch = detectLinkQuery(labeledDoc.replace('|)', ')'), labeledDoc.indexOf('|)'))!
+    const labeledEdit = buildRawLinkEdit(
+      labeledDoc.replace('|)', ')'),
+      labeledMatch,
+      siblingEncodedCandidate
+    )
+    expect(labeledEdit.text).toBe('[내 문서](../other/guide%20%281%29.md)')
+
+    const emptyDoc = '바로가기 []('
+    const emptyMatch = detectLinkQuery(emptyDoc, emptyDoc.length)!
+    expect(buildRawLinkEdit(emptyDoc, emptyMatch, siblingEncodedCandidate).text).toBe(
+      '[guide (1)](../other/guide%20%281%29.md)'
+    )
+
+    const tableDoc = '| 이름 | 링크 |\n| --- | --- |\n| doc | []( |'
+    const tableMatch = detectLinkQuery(tableDoc, tableDoc.lastIndexOf(' |'))!
+    expect(buildRawLinkEdit(tableDoc, tableMatch, tablePipeCandidate).text).toBe(
+      '[A \\| B](./A%20%7C%20B.markdown)'
+    )
   })
 })

@@ -67,6 +67,8 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.open, rootPath) as Promise<WorkspaceInfo>,
       readDir: (dirPath) =>
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.readDir, dirPath) as Promise<WorkspaceEntry[]>,
+      listMarkdownFiles: () =>
+        ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.listMarkdownFiles) as Promise<WorkspaceEntry[]>,
       readFile: (filePath) =>
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.readFile, filePath) as Promise<string>,
       writeFile: (filePath, content) =>

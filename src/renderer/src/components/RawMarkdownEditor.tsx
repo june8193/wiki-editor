@@ -1,4 +1,5 @@
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { WorkspaceEntry } from '@shared/workspace'
 import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
 import type { CursorPosition } from '../stores/PaneTabStore'
@@ -17,6 +18,8 @@ interface RawMarkdownEditorProps {
   isShortcutDisabled?: boolean
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
+  workspaceMarkdownFiles?: readonly WorkspaceEntry[]
+  activeFilePath?: string | null
   scrollRequest?: RawScrollRequest | null
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
@@ -51,6 +54,8 @@ export function RawMarkdownEditor({
   isShortcutDisabled = false,
   customCommands,
   documentTitle,
+  workspaceMarkdownFiles,
+  activeFilePath,
   scrollRequest,
   onChangeContent,
   onUpdateViewState
@@ -68,6 +73,8 @@ export function RawMarkdownEditor({
       isShortcutDisabled,
       customCommands,
       documentTitle,
+      workspaceMarkdownFiles,
+      activeFilePath,
       scrollRequest,
       onChangeContent,
       onUpdateViewState

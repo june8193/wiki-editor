@@ -199,4 +199,60 @@ describe('WorkspaceFsService', () => {
     await new Promise((resolve) => setTimeout(resolve, 250))
     expect(events.length).toBe(countAfterStop)
   })
+
+  it('recursively lists markdown files (.md/.markdown case-insensitive), excludes system folders and unsafe symlinks, and requires an open workspace', async () => {
+    await expect(service.listMarkdownFiles()).rejects.toThrow(/워크스페이스/)
+
+    await mkdir(join(workspaceDir, '.git', 'hooks'), { recursive: true })
+    await mkdir(join(workspaceDir, 'node_modules', 'pkg'), { recursive: true })
+    await mkdir(join(workspaceDir, 'docs', 'api'), { recursive: true })
+    await mkdir(join(workspaceDir, 'notes.md'), { recursive: true })
+
+    await writeFile(join(workspaceDir, '.git', 'COMMIT_EDITMSG.md'), 'ignored', 'utf8')
+    await writeFile(join(workspaceDir, 'node_modules', 'pkg', 'README.md'), 'ignored', 'utf8')
+    await writeFile(join(workspaceDir, 'root.MD'), '# Root', 'utf8')
+    await writeFile(join(workspaceDir, 'docs', 'guide.markdown'), '# Guide', 'utf8')
+    await writeFile(join(workspaceDir, 'docs', 'api', 'spec.MarkDown'), '# Spec', 'utf8')
+    await writeFile(join(workspaceDir, 'notes.md', 'inside-md-dir.md'), '# Inside', 'utf8')
+    await writeFile(join(workspaceDir, 'docs', 'plain.txt'), 'text', 'utf8')
+    await writeFile(join(workspaceDir, 'docs', 'README'), 'no ext', 'utf8')
+    await writeFile(join(outsideDir, 'external.md'), '# External', 'utf8')
+
+    let dirSymlinkCreated = false
+    let fileSymlinkCreated = false
+    try {
+      await symlink(outsideDir, join(workspaceDir, 'outside-dir-link'), 'junction')
+      await symlink(join(workspaceDir, '.git'), join(workspaceDir, 'git-dir-link'), 'junction')
+      await symlink(join(workspaceDir, 'docs'), join(workspaceDir, 'docs', 'loop-link'), 'junction')
+      dirSymlinkCreated = true
+    } catch {
+      dirSymlinkCreated = false
+    }
+    try {
+      await symlink(join(outsideDir, 'external.md'), join(workspaceDir, 'outside-file.md'), 'file')
+      await symlink(join(outsideDir, 'missing.md'), join(workspaceDir, 'dangling.md'), 'file')
+      fileSymlinkCreated = true
+    } catch {
+      fileSymlinkCreated = false
+    }
+
+    await service.openWorkspace(workspaceDir)
+    const entries = await service.listMarkdownFiles()
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual([
+      'docs/api/spec.MarkDown',
+      'docs/guide.markdown',
+      'notes.md/inside-md-dir.md',
+      'root.MD'
+    ])
+    expect(entries.every((entry) => entry.kind === 'file')).toBe(true)
+    if (dirSymlinkCreated) {
+      expect(entries.some((entry) => entry.relativePath.includes('outside-dir-link'))).toBe(false)
+      expect(entries.some((entry) => entry.relativePath.includes('git-dir-link'))).toBe(false)
+    }
+    if (fileSymlinkCreated) {
+      expect(entries.some((entry) => entry.name === 'outside-file.md')).toBe(false)
+      expect(entries.some((entry) => entry.name === 'dangling.md')).toBe(false)
+    }
+  })
 })

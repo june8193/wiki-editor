@@ -12,7 +12,10 @@ import {
 } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
+  compareWorkspaceEntriesByRelativePath,
   getWorkspaceDisplayName,
+  getWorkspacePathKey,
+  isMarkdownFileName,
   isSameWorkspacePath,
   WorkspaceChangeEvent,
   WorkspaceEntry,
@@ -160,6 +163,80 @@ export class WorkspaceFsService {
     }
 
     return entries.sort(compareEntries)
+  }
+
+  /**
+   * Recursively collects all workspace Markdown files (`.md` / `.markdown`), excluding ignored
+   * system directories, unsafe symlinks, and cyclic directory links.
+   */
+  async listMarkdownFiles(): Promise<WorkspaceEntry[]> {
+    const root = this.requireWorkspaceRoot()
+    const visitedRealDirs = new Set<string>([getWorkspacePathKey(root)])
+    const realDirQueue: string[] = [root]
+    const symlinkDirQueue: string[] = []
+    const entries: WorkspaceEntry[] = []
+
+    const scanDir = async (dirPath: string): Promise<void> => {
+      let dirents: Dirent[]
+      try {
+        dirents = await readdir(dirPath, { withFileTypes: true })
+      } catch (error) {
+        if (isErrnoCode(error, 'ENOENT') || isErrnoCode(error, 'ENOTDIR')) {
+          return
+        }
+        throw error
+      }
+
+      for (const dirent of dirents) {
+        if (IGNORED_ENTRY_NAMES.has(dirent.name)) {
+          continue
+        }
+        const entryPath = join(dirPath, dirent.name)
+        const kind = await this.resolveEntryKind(root, dirent, entryPath)
+        if (kind === 'file') {
+          if (isMarkdownFileName(dirent.name)) {
+            entries.push(buildEntry(root, entryPath, 'file'))
+          }
+          continue
+        }
+        if (kind === 'directory') {
+          if (dirent.isDirectory()) {
+            realDirQueue.push(entryPath)
+          } else {
+            symlinkDirQueue.push(entryPath)
+          }
+        }
+      }
+    }
+
+    const drainQueue = async (queue: string[]): Promise<void> => {
+      while (queue.length > 0) {
+        const nextDir = queue.shift()!
+        if (nextDir !== root) {
+          let realDirPath: string
+          try {
+            realDirPath = await realpath(nextDir)
+          } catch {
+            continue
+          }
+          const dirKey = getWorkspacePathKey(realDirPath)
+          if (
+            !isPathInsideRoot(root, realDirPath) ||
+            hasBlockedPathSegment(relative(root, realDirPath), IGNORED_ENTRY_NAMES) ||
+            visitedRealDirs.has(dirKey)
+          ) {
+            continue
+          }
+          visitedRealDirs.add(dirKey)
+        }
+        await scanDir(nextDir)
+      }
+    }
+
+    await drainQueue(realDirQueue)
+    await drainQueue(symlinkDirQueue)
+
+    return entries.sort(compareWorkspaceEntriesByRelativePath)
   }
 
   async readFile(filePath: string): Promise<string> {

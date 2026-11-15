@@ -4,6 +4,7 @@ import {
   getParentPath,
   getWorkspaceDisplayName,
   isFavoriteWorkspacePath,
+  isMarkdownFileName,
   isNestedOrSamePath,
   isSameWorkspacePath,
   normalizeWorkspacePath,
@@ -11,6 +12,7 @@ import {
   remapPathPrefix,
   removeFavoriteWorkspace,
   removeRecentWorkspace,
+  stripMarkdownExtension,
   toggleFavoriteWorkspace
 } from './workspace'
 
@@ -86,5 +88,19 @@ describe('shared workspace path and favorites helpers', () => {
     expect(remapPathPrefix('C:\\wiki\\docs\\a.md', 'C:\\wiki\\docs', 'C:\\wiki\\guides')).toBe(
       'C:\\wiki\\guides\\a.md'
     )
+  })
+
+  it('identifies and strips .md and .markdown extensions case-insensitively', () => {
+    expect(isMarkdownFileName('guide.md')).toBe(true)
+    expect(isMarkdownFileName('GUIDE.MD')).toBe(true)
+    expect(isMarkdownFileName('spec.MarkDown')).toBe(true)
+    expect(isMarkdownFileName('guide.md.txt')).toBe(false)
+    expect(isMarkdownFileName('README')).toBe(false)
+
+    expect(stripMarkdownExtension('guide.md')).toBe('guide')
+    expect(stripMarkdownExtension('spec.MarkDown')).toBe('spec')
+    expect(stripMarkdownExtension('v1.2.MD')).toBe('v1.2')
+    expect(stripMarkdownExtension('.md')).toBe('.md')
+    expect(stripMarkdownExtension('plain.txt')).toBe('plain.txt')
   })
 })

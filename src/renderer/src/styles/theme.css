@@ -1580,6 +1580,9 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .link-autocomplete-slug {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--text-muted);
 }

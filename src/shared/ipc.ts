@@ -23,6 +23,7 @@ export const WORKSPACE_IPC_CHANNELS = {
   selectFolder: 'workspace:select-folder',
   open: 'workspace:open',
   readDir: 'workspace:read-dir',
+  listMarkdownFiles: 'workspace:list-markdown-files',
   readFile: 'workspace:read-file',
   writeFile: 'workspace:write-file',
   createEntry: 'workspace:create-entry',
@@ -73,6 +74,7 @@ export interface WikiWorkspaceApi {
   selectFolder(): Promise<string | null>
   open(rootPath: string): Promise<WorkspaceInfo>
   readDir(dirPath?: string): Promise<WorkspaceEntry[]>
+  listMarkdownFiles(): Promise<WorkspaceEntry[]>
   readFile(filePath: string): Promise<string>
   writeFile(filePath: string, content: string): Promise<void>
   createEntry(

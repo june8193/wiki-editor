@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { WorkspaceEntry } from '@shared/workspace'
 import {
+  buildFileLinkCandidates,
   buildHeadingLinkCandidates,
   filterAndRankLinkCandidates,
-  type HeadingLinkCandidate,
+  type LinkCandidate,
   type LinkQueryMatch
 } from '../editor/LinkAutocompleteEngine'
 import {
@@ -17,7 +19,7 @@ export type LinkMenuPosition = SlashMenuPosition
 
 export interface LinkMenuState<TMatch extends LinkQueryMatch = LinkQueryMatch> {
   isOpen: boolean
-  candidates: HeadingLinkCandidate[]
+  candidates: LinkCandidate[]
   selectedIndex: number
   match: TMatch | null
   position: LinkMenuPosition
@@ -50,9 +52,13 @@ export interface LinkMenuControls<TMatch extends LinkQueryMatch = LinkQueryMatch
 
 export interface UseLinkMenuOptions<TMatch extends LinkQueryMatch = LinkQueryMatch> {
   documentContent: string
-  onSelectCandidate: (candidate: HeadingLinkCandidate, match: TMatch) => void
+  workspaceMarkdownFiles?: readonly WorkspaceEntry[]
+  activeFilePath?: string | null
+  onSelectCandidate: (candidate: LinkCandidate, match: TMatch) => void
   onOpenMenu?: () => void
 }
+
+const EMPTY_MARKDOWN_FILES: readonly WorkspaceEntry[] = []
 
 const CLOSED_LINK_MENU_STATE: LinkMenuState<never> = {
   isOpen: false,
@@ -65,6 +71,8 @@ const CLOSED_LINK_MENU_STATE: LinkMenuState<never> = {
 /** Manages link autocomplete popup state, ranking, keyboard/hover selection, and dismissal. */
 export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
   documentContent,
+  workspaceMarkdownFiles = EMPTY_MARKDOWN_FILES,
+  activeFilePath = null,
   onSelectCandidate,
   onOpenMenu
 }: UseLinkMenuOptions<TMatch>) {
@@ -72,11 +80,15 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
   const menuRef = useRef<HTMLDivElement | null>(null)
   const stateRef = useRef<LinkMenuState<TMatch>>(state)
   const documentContentRef = useRef(documentContent)
+  const workspaceMarkdownFilesRef = useRef(workspaceMarkdownFiles)
+  const activeFilePathRef = useRef(activeFilePath)
   const onSelectCandidateRef = useRef(onSelectCandidate)
   const onOpenMenuRef = useRef(onOpenMenu)
 
   stateRef.current = state
   documentContentRef.current = documentContent
+  workspaceMarkdownFilesRef.current = workspaceMarkdownFiles
+  activeFilePathRef.current = activeFilePath
   onSelectCandidateRef.current = onSelectCandidate
   onOpenMenuRef.current = onOpenMenu
 
@@ -106,7 +118,10 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
       }
 
       const content = overrideContent ?? documentContentRef.current
-      const allCandidates = buildHeadingLinkCandidates(content)
+      const allCandidates: LinkCandidate[] = [
+        ...buildHeadingLinkCandidates(content),
+        ...buildFileLinkCandidates(workspaceMarkdownFilesRef.current, activeFilePathRef.current)
+      ]
       const candidates = filterAndRankLinkCandidates(allCandidates, match.label, match.query)
       if (candidates.length === 0) {
         dismiss()
@@ -188,7 +203,7 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
   )
 
   const selectCandidate = useCallback(
-    (candidate: HeadingLinkCandidate) => {
+    (candidate: LinkCandidate) => {
       const match = stateRef.current.match
       if (!match) {
         dismiss()
@@ -234,6 +249,14 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
     },
     [dismiss, updateFromMatch]
   )
+
+  useEffect(() => {
+    const current = stateRef.current
+    if (!current.isOpen || !current.match) {
+      return
+    }
+    updateFromMatch(current.match, null, null)
+  }, [workspaceMarkdownFiles, activeFilePath, updateFromMatch])
 
   const controlsRef = useRef<LinkMenuControls<TMatch>>({
     stateRef,

@@ -1,5 +1,6 @@
 import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { WorkspaceEntry } from '@shared/workspace'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
@@ -22,6 +23,7 @@ interface PaneViewProps {
   customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
+  workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
@@ -40,6 +42,7 @@ export function PaneView({
   customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
+  workspaceMarkdownFiles,
   buffers,
   draggingTab,
   onDragStartTab,
@@ -105,6 +108,7 @@ export function PaneView({
           customCommands={customCommands}
           scrollRequest={activeScrollRequest}
           isShortcutDisabled={isShortcutDisabled}
+          workspaceMarkdownFiles={workspaceMarkdownFiles}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}

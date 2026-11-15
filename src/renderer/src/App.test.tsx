@@ -13,7 +13,9 @@ import type { AppMenuCommand, WikiApi, WikiGitApi, WikiLogApi } from '@shared/ip
 import type { RendererLogPayload } from '@shared/logging'
 import {
   addFavoriteWorkspace,
+  compareWorkspaceEntriesByRelativePath,
   getWorkspaceDisplayName,
+  isMarkdownFileName,
   recordRecentWorkspace,
   removeFavoriteWorkspace,
   toggleFavoriteWorkspace,
@@ -286,6 +288,26 @@ function createInMemoryWikiApi(
       async readDir(dirPath) {
         if (!activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
         return listDir(dirPath ?? activeRoot)
+      },
+      async listMarkdownFiles() {
+        if (!activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+        const prefix = `${activeRoot}/`
+        const ignoredSegments = new Set(['.git', 'node_modules', '.hg', '.svn', '.DS_Store', 'Thumbs.db'])
+        const markdownEntries: WorkspaceEntry[] = []
+        for (const file of files.keys()) {
+          if (!file.startsWith(prefix)) continue
+          const relativePath = file.slice(prefix.length)
+          if (relativePath.split('/').some((seg) => ignoredSegments.has(seg))) continue
+          const name = baseNameOf(file)
+          if (!isMarkdownFileName(name)) continue
+          markdownEntries.push({
+            name,
+            path: file,
+            relativePath,
+            kind: 'file'
+          })
+        }
+        return markdownEntries.sort(compareWorkspaceEntriesByRelativePath)
       },
       async readFile(filePath) {
         const normalized = normalizePosix(filePath)
@@ -5089,5 +5111,171 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
     expect(confirmDialog).toBeInTheDocument()
     fireEvent.keyDown(activeMdEditor, { key: 'k', ctrlKey: true })
     expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+  })
+
+  it('surfaces nested workspace markdown files in Raw and WYSIWYG link autocomplete without expanding collapsed folders, excluding active doc and encoding relative hrefs', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, readDirCalls } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:/wiki',
+        workspaces: {
+          'C:/wiki': {
+            'docs/active.md': '# 현재 개요\n\n',
+            'docs/sub/api (1).md': '# API 1',
+            'guides/setup.markdown': '# Setup',
+            'notes.txt': 'ignored',
+            '.git/secret.md': 'ignored'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+
+    expect(readDirCalls).toEqual(['C:/wiki'])
+    await user.click(await within(explorer).findByText('docs'))
+    await user.click(await within(explorer).findByText('active.md'))
+
+    const rawEl = await screen.findByTestId('document-editor')
+    appendRawEditorText(rawEl, '[](')
+
+    const listbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(listbox).queryByText('active.md')).not.toBeInTheDocument()
+    expect(within(listbox).queryByText('notes.txt')).not.toBeInTheDocument()
+    expect(within(listbox).queryByText('secret.md')).not.toBeInTheDocument()
+    expect(within(listbox).getByText('docs/sub/api (1).md')).toBeInTheDocument()
+    expect(within(listbox).getByText('guides/setup.markdown')).toBeInTheDocument()
+
+    // Collapsed folders ('docs/sub', 'guides') must NOT be expanded via readDir
+    expect(readDirCalls).toEqual(['C:/wiki', 'C:/wiki/docs'])
+
+    appendRawEditorText(rawEl, './')
+    await waitFor(() => {
+      const updated = screen.getByRole('listbox', { name: '링크 자동완성' })
+      expect(within(updated).queryByText('guides/setup.markdown')).not.toBeInTheDocument()
+      expect(within(updated).getByText('docs/sub/api (1).md')).toBeInTheDocument()
+    })
+    await user.click(within(screen.getByRole('listbox', { name: '링크 자동완성' })).getByRole('option'))
+    expect(getRawEditorText(rawEl)).toContain('[api (1)](./sub/api%20%281%29.md)')
+
+    // Switch to 위지윅 and insert a parent-relative ../ link
+    await user.click(screen.getByRole('button', { name: '위지윅' }))
+    const wysiwygEl = await screen.findByTestId('document-editor')
+    expect(wysiwygEl.querySelector('a[href="./sub/api%20%281%29.md"]')).not.toBeNull()
+
+    const paragraphs = wysiwygEl.querySelectorAll('p')
+    const lastP = paragraphs[paragraphs.length - 1]!
+    const range = document.createRange()
+    range.selectNodeContents(lastP)
+    range.collapse(false)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+    wysiwygEl.focus()
+    document.dispatchEvent(new Event('selectionchange'))
+
+    await user.keyboard(' [[셋업](../')
+    const wListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(wListbox).queryByText('docs/sub/api (1).md')).not.toBeInTheDocument()
+    await user.click(within(wListbox).getByRole('option', { name: /setup\.markdown/ }))
+
+    await user.click(screen.getByRole('button', { name: 'Raw' }))
+    expect(getRawEditorText(await screen.findByTestId('document-editor'))).toContain(
+      '[셋업](../guides/setup.markdown)'
+    )
+    expect(readDirCalls).toEqual(['C:/wiki', 'C:/wiki/docs'])
+  })
+
+  it('keeps workspace file link candidates synchronized across file creation, collapsed folder rename, file deletion, and workspace:changed events', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, emitWorkspaceChange } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:/wiki',
+        workspaces: {
+          'C:/wiki': {
+            'root.md': '# Root\n\n',
+            'guides/start.md': '# Start',
+            'guides/extra.md': '# Extra'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const sidebar = screen.getByLabelText('왼쪽 사이드바')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+
+    await user.click(await within(explorer).findByText('root.md'))
+    await screen.findByTestId('document-editor')
+
+    // Create a new file via Explorer -> synced into autocomplete
+    await user.click(within(sidebar).getByRole('button', { name: /새 파일/i }))
+    await user.type(await within(sidebar).findByLabelText('새 파일 이름'), 'draft.md{Enter}')
+    await waitFor(() => {
+      expect(within(explorer).getByText('draft.md')).toBeInTheDocument()
+    })
+
+    // Return to root.md tab so root.md is active
+    await user.click(screen.getByRole('tab', { name: /root\.md/ }))
+    const rootRawEl = await screen.findByTestId('document-editor')
+    appendRawEditorText(rootRawEl, '[](')
+    const afterCreateMenu = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(afterCreateMenu).getByRole('option', { name: /draft\.md/ })).toBeInTheDocument()
+    expect(within(afterCreateMenu).getByText('guides/start.md')).toBeInTheDocument()
+    fireEvent.keyDown(rootRawEl, { key: 'Escape' })
+
+    // Rename collapsed folder 'guides' -> 'manuals' via F2
+    const guidesItem = within(sidebar).getByRole('treeitem', { name: 'guides' })
+    guidesItem.focus()
+    fireEvent.keyDown(guidesItem, { key: 'F2' })
+    const renameInput = await within(sidebar).findByLabelText('새 이름 입력')
+    await user.clear(renameInput)
+    await user.type(renameInput, 'manuals{Enter}')
+    await waitFor(() => {
+      expect(within(explorer).getByText('manuals')).toBeInTheDocument()
+    })
+
+    fireEvent.keyDown(rootRawEl, { key: 'k', ctrlKey: true })
+    const afterRenameMenu = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(afterRenameMenu).queryByText('guides/start.md')).not.toBeInTheDocument()
+    expect(within(afterRenameMenu).getByText('manuals/start.md')).toBeInTheDocument()
+    expect(within(afterRenameMenu).getByText('manuals/extra.md')).toBeInTheDocument()
+    fireEvent.keyDown(rootRawEl, { key: 'Escape' })
+
+    // Expand 'manuals' and delete 'extra.md' -> removed from autocomplete
+    await user.click(within(explorer).getByText('manuals'))
+    const extraEl = await within(explorer).findByText('extra.md')
+    fireEvent.contextMenu(extraEl)
+    await user.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: /삭제/i }))
+    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /삭제 확인/i }))
+    await waitFor(() => {
+      expect(within(explorer).queryByText('extra.md')).not.toBeInTheDocument()
+    })
+
+    // Open menu then simulate external file creation + workspace:changed while menu is open
+    fireEvent.keyDown(rootRawEl, { key: 'k', ctrlKey: true })
+    const beforeWatchMenu = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(beforeWatchMenu).queryByText('manuals/extra.md')).not.toBeInTheDocument()
+
+    await api.workspace.createEntry('C:/wiki', 'watched-doc.md', 'file', '# Watch')
+    act(() => {
+      emitWorkspaceChange({
+        rootPath: 'C:/wiki',
+        eventType: 'rename',
+        relativePath: 'watched-doc.md'
+      })
+    })
+
+    await waitFor(() => {
+      const refreshedMenu = screen.getByRole('listbox', { name: '링크 자동완성' })
+      expect(within(refreshedMenu).getByRole('option', { name: /watched-doc\.md/ })).toBeInTheDocument()
+    })
   })
 })

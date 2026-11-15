@@ -104,6 +104,11 @@ describe('registerWorkspaceIpc', () => {
     }>
     expect(entries.map((item) => item.name)).toEqual(['intro.md'])
 
+    const markdownFiles = (await ipcMain.invoke(
+      WORKSPACE_IPC_CHANNELS.listMarkdownFiles
+    )) as Array<{ relativePath: string }>
+    expect(markdownFiles.map((item) => item.relativePath)).toEqual(['guides/intro.md'])
+
     const renamed = (await ipcMain.invoke(
       WORKSPACE_IPC_CHANNELS.renameEntry,
       created.path,

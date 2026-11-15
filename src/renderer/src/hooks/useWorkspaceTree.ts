@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   getParentPath,
+  isMarkdownFileName,
   isNestedOrSamePath,
   isSameWorkspacePath,
   remapPathPrefix,
@@ -47,6 +48,7 @@ export function useWorkspaceTree({
   const [workspace, setWorkspace] = useState<WorkspaceSummary | null>(null)
   const [rootEntries, setRootEntries] = useState<WorkspaceEntry[]>([])
   const [childrenByDir, setChildrenByDir] = useState<Record<string, WorkspaceEntry[]>>({})
+  const [markdownFiles, setMarkdownFiles] = useState<WorkspaceEntry[]>([])
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set())
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(() => new Set())
   const [selectedTreePath, setSelectedTreePath] = useState<string | null>(null)
@@ -55,6 +57,7 @@ export function useWorkspaceTree({
   const workspaceRef = useRef<WorkspaceSummary | null>(null)
   const expandedDirsRef = useRef<Set<string>>(expandedDirs)
   const openRequestSeqRef = useRef<number>(0)
+  const markdownFilesSeqRef = useRef<number>(0)
   const callbacksRef = useRef({
     onError,
     onWorkspaceOpened,
@@ -75,10 +78,35 @@ export function useWorkspaceTree({
     onFileCreated
   }
 
+  const refreshMarkdownFiles = useCallback(async (expectedRootPath?: string): Promise<void> => {
+    const targetRoot = expectedRootPath ?? workspaceRef.current?.rootPath
+    if (!targetRoot) {
+      markdownFilesSeqRef.current += 1
+      setMarkdownFiles([])
+      return
+    }
+
+    const seq = ++markdownFilesSeqRef.current
+    try {
+      const files = await window.wikiApi.workspace.listMarkdownFiles()
+      if (
+        !mountedRef.current ||
+        seq !== markdownFilesSeqRef.current ||
+        workspaceRef.current?.rootPath !== targetRoot
+      ) {
+        return
+      }
+      setMarkdownFiles(files)
+    } catch {
+      // Keep the last known list if background file enumeration fails transiently.
+    }
+  }, [])
+
   const refreshTree = useCallback(async (): Promise<void> => {
     const currentWs = workspaceRef.current
     if (!currentWs) return
 
+    void refreshMarkdownFiles(currentWs.rootPath)
     try {
       const topEntries = await window.wikiApi.workspace.readDir()
       if (!mountedRef.current || workspaceRef.current?.rootPath !== currentWs.rootPath) return
@@ -113,7 +141,7 @@ export function useWorkspaceTree({
         )
       }
     }
-  }, [])
+  }, [refreshMarkdownFiles])
 
   useEffect(() => {
     mountedRef.current = true
@@ -139,9 +167,21 @@ export function useWorkspaceTree({
       try {
         const info = await window.wikiApi.workspace.open(targetPath)
         if (!mountedRef.current || seq !== openRequestSeqRef.current) return false
+        const mdSeq = ++markdownFilesSeqRef.current
+        const initialMarkdownFiles = await window.wikiApi.workspace
+          .listMarkdownFiles()
+          .catch(() => [] as WorkspaceEntry[])
+        if (
+          !mountedRef.current ||
+          seq !== openRequestSeqRef.current ||
+          mdSeq !== markdownFilesSeqRef.current
+        ) {
+          return false
+        }
         setWorkspace({ rootPath: info.rootPath, name: info.name })
         setRootEntries(info.entries)
         setChildrenByDir({})
+        setMarkdownFiles(initialMarkdownFiles)
         setExpandedDirs(new Set())
         setSelectedTreePath(null)
         logRendererInfo('ui', 'Workspace opened', { rootPath: info.rootPath, name: info.name })
@@ -248,11 +288,15 @@ export function useWorkspaceTree({
 
   const createEntry = useCallback(
     async (parentDirPath: string, name: string, kind: WorkspaceEntryKind): Promise<void> => {
+      const currentWs = workspaceRef.current
       callbacksRef.current.onError(null)
       try {
         const created = await window.wikiApi.workspace.createEntry(parentDirPath, name, kind, '')
         if (!mountedRef.current) return
         await refreshDirectory(parentDirPath)
+        if (currentWs && kind === 'file' && isMarkdownFileName(created.name)) {
+          await refreshMarkdownFiles(currentWs.rootPath)
+        }
         setSelectedTreePath(created.path)
         if (kind === 'file') {
           callbacksRef.current.onFileCreated?.(created)
@@ -266,7 +310,7 @@ export function useWorkspaceTree({
         }
       }
     },
-    [refreshDirectory]
+    [refreshDirectory, refreshMarkdownFiles]
   )
 
   const renameEntry = useCallback(
@@ -280,6 +324,13 @@ export function useWorkspaceTree({
 
         const parentDir = getParentPath(targetPath, currentWs.rootPath)
         await refreshDirectory(parentDir)
+        if (
+          renamed.kind === 'directory' ||
+          isMarkdownFileName(renamed.name) ||
+          isMarkdownFileName(targetPath)
+        ) {
+          await refreshMarkdownFiles(currentWs.rootPath)
+        }
         setSelectedTreePath(renamed.path)
 
         if (renamed.kind === 'directory') {
@@ -310,7 +361,7 @@ export function useWorkspaceTree({
         }
       }
     },
-    [refreshDirectory]
+    [refreshDirectory, refreshMarkdownFiles]
   )
 
   const deleteEntry = useCallback(
@@ -324,6 +375,9 @@ export function useWorkspaceTree({
 
         const parentDir = getParentPath(entry.path, currentWs.rootPath)
         await refreshDirectory(parentDir)
+        if (entry.kind === 'directory' || isMarkdownFileName(entry.name)) {
+          await refreshMarkdownFiles(currentWs.rootPath)
+        }
 
         setExpandedDirs((prev) => {
           const next = new Set<string>()
@@ -356,7 +410,7 @@ export function useWorkspaceTree({
         }
       }
     },
-    [refreshDirectory]
+    [refreshDirectory, refreshMarkdownFiles]
   )
 
   const treeState: WorkspaceTreeState = {
@@ -370,6 +424,7 @@ export function useWorkspaceTree({
   return {
     workspace,
     treeState,
+    markdownFiles,
     setSelectedTreePath,
     resolveCreateParentDir,
     openWorkspace,

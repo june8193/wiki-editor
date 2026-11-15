@@ -1,5 +1,6 @@
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { WorkspaceEntry } from '@shared/workspace'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { canSplitWithTab, PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
 import type { OutlineScrollRequest } from './DocumentEditor'
@@ -15,6 +16,7 @@ interface PaneWorkspaceProps {
   customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
+  workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   onSetSplitRatio: (ratio: number) => void
   onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
   actions: PaneInteractionActions
@@ -40,6 +42,7 @@ export function PaneWorkspace({
   customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
+  workspaceMarkdownFiles,
   onSetSplitRatio,
   onSplitWithTab,
   actions
@@ -104,6 +107,7 @@ export function PaneWorkspace({
     customCommands,
     scrollRequest,
     isShortcutDisabled,
+    workspaceMarkdownFiles,
     buffers,
     draggingTab,
     onDragStartTab: setDraggingTab,

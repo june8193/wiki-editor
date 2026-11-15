@@ -4,6 +4,7 @@ import {
   type CustomCommandConfig,
   type ThemeMode
 } from '@shared/config'
+import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
@@ -16,8 +17,8 @@ import {
   detectProseMirrorLinkQuery,
   detectProseMirrorSlashQuery,
   headingNumberingPluginKey,
+  insertWysiwygLink,
   insertWysiwygMarkdownWithCursor,
-  insertWysiwygSectionLink,
   linkInsertPluginKey,
   prepareMarkdownForTiptap,
   type ProseMirrorLinkQueryMatch,
@@ -48,6 +49,8 @@ interface WysiwygMarkdownEditorProps {
   mermaidRenderer?: MermaidRenderer
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
+  workspaceMarkdownFiles?: readonly WorkspaceEntry[]
+  activeFilePath?: string | null
   scrollRequest?: WysiwygScrollRequest | null
   onChangeContent: (nextContent: string) => void
   onScrollTopChange?: (scrollTop: number) => void
@@ -225,6 +228,8 @@ export function WysiwygMarkdownEditor({
   mermaidRenderer,
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
+  workspaceMarkdownFiles,
+  activeFilePath,
   scrollRequest,
   onChangeContent,
   onScrollTopChange
@@ -266,13 +271,15 @@ export function WysiwygMarkdownEditor({
 
   const { linkControlsRef, linkMenuProps } = useLinkMenu<ProseMirrorLinkQueryMatch>({
     documentContent: content,
+    workspaceMarkdownFiles,
+    activeFilePath,
     onOpenMenu: dismissSlashMenu,
     onSelectCandidate: (candidate, match) => {
       const instance = editorRef.current
       if (!instance || !enableLinkAutocompleteRef.current) {
         return
       }
-      insertWysiwygSectionLink(instance, candidate, match)
+      insertWysiwygLink(instance, candidate, match)
     }
   })
   const dismissLinkMenu = linkMenuProps.onDismiss

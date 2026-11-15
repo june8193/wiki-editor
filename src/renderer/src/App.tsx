@@ -240,6 +240,7 @@ export function App() {
   const {
     workspace,
     treeState,
+    markdownFiles,
     setSelectedTreePath,
     resolveCreateParentDir,
     openWorkspace,
@@ -666,6 +667,7 @@ export function App() {
           customCommands={config.customCommands}
           scrollRequest={outlineScrollRequest}
           isShortcutDisabled={isEditorShortcutDisabled}
+          workspaceMarkdownFiles={markdownFiles}
           onSetSplitRatio={setSplitRatio}
           onSplitWithTab={splitWithTab}
           actions={paneActions}

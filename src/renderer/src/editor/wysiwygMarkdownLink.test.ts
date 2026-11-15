@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { Editor } from '@tiptap/core'
-import { buildHeadingLinkCandidates } from './LinkAutocompleteEngine'
+import { buildFileLinkCandidates, buildHeadingLinkCandidates } from './LinkAutocompleteEngine'
 import {
   applyWysiwygCtrlK,
   createWysiwygExtensions,
   detectProseMirrorLinkQuery,
-  insertWysiwygSectionLink
+  insertWysiwygLink
 } from './wysiwygMarkdown'
 
 function createMarkdownEditor(markdown = ''): Editor {
@@ -103,7 +103,7 @@ describe('wysiwygMarkdown link extensions & helpers', () => {
     }
   })
 
-  it('insertWysiwygSectionLink 는 [`심볼`] 코드 마크를 보존하고, []( 자동 채움과 커서 마크 이탈을 보장한다', () => {
+  it('insertWysiwygLink 는 [`심볼`] 코드 마크를 보존하고, []( 자동 채움과 커서 마크 이탈을 보장한다', () => {
     const md = ['# 1.1. 개요', '', '## `parseMarkdownHeadings`', '', '## A | B 표기'].join('\n')
     const candidates = buildHeadingLinkCandidates(md)
     const editor = createMarkdownEditor(md)
@@ -119,7 +119,7 @@ describe('wysiwygMarkdown link extensions & helpers', () => {
 
       const codeMatch = detectProseMirrorLinkQuery(editor.state)!
       expect(codeMatch).not.toBeNull()
-      expect(insertWysiwygSectionLink(editor, candidates[1], codeMatch)).toBe(true)
+      expect(insertWysiwygLink(editor, candidates[1], codeMatch)).toBe(true)
 
       editor.commands.insertContent(' 다음')
       expect(editor.getMarkdown()).toContain('[`parseMarkdownHeadings`](#parsemarkdownheadings) 다음')
@@ -128,7 +128,7 @@ describe('wysiwygMarkdown link extensions & helpers', () => {
       const parenPos = getParagraphPosAtText(editor, '[]()')
       editor.commands.setTextSelection(parenPos + 3)
       const emptyMatch = detectProseMirrorLinkQuery(editor.state)!
-      expect(insertWysiwygSectionLink(editor, candidates[0], emptyMatch)).toBe(true)
+      expect(insertWysiwygLink(editor, candidates[0], emptyMatch)).toBe(true)
       editor.commands.insertContent(' 확인')
       expect(editor.getMarkdown()).toContain('[개요](#11-개요) 확인')
 
@@ -139,7 +139,7 @@ describe('wysiwygMarkdown link extensions & helpers', () => {
       editor.commands.setTextSelection({ from: tableCellPos, to: tableCellPos + 4 })
       editor.commands.insertContent('[](')
       const tableMatch = detectProseMirrorLinkQuery(editor.state)!
-      expect(insertWysiwygSectionLink(editor, candidates[2], tableMatch)).toBe(true)
+      expect(insertWysiwygLink(editor, candidates[2], tableMatch)).toBe(true)
       expect(editor.getMarkdown()).toContain('[A \\| B 표기](#a-b-표기)')
     } finally {
       editor.destroy()
@@ -181,6 +181,58 @@ describe('wysiwygMarkdown link extensions & helpers', () => {
       const cbPos = getParagraphPosAtText(editor, 'const')
       editor.commands.setTextSelection(cbPos)
       expect(applyWysiwygCtrlK(editor)).toBe(false)
+    } finally {
+      editor.destroy()
+    }
+  })
+
+  it('insertWysiwygLink 는 워크스페이스 파일 링크에 대해 라벨 보존, []( 확장자 제거 자동 채움, 인코딩 상대 경로 및 테이블 파이프 처리를 수행한다', () => {
+    const fileCandidates = buildFileLinkCandidates(
+      [
+        {
+          name: 'guide (1).md',
+          path: 'C:\\wiki\\other\\guide (1).md',
+          relativePath: 'other/guide (1).md',
+          kind: 'file'
+        },
+        {
+          name: 'A | B.markdown',
+          path: 'C:\\wiki\\docs\\A | B.markdown',
+          relativePath: 'docs/A | B.markdown',
+          kind: 'file'
+        }
+      ],
+      'C:\\wiki\\docs\\current.md'
+    )
+    const pipeCandidate = fileCandidates[0]
+    const encodedCandidate = fileCandidates[1]
+    const editor = createMarkdownEditor('')
+
+    try {
+      editor.commands.focus('end')
+      editor.commands.insertContent('[참고 문서](../')
+      const labeledMatch = detectProseMirrorLinkQuery(editor.state)!
+      expect(insertWysiwygLink(editor, encodedCandidate, labeledMatch)).toBe(true)
+      editor.commands.insertContent(' 뒤')
+      expect(editor.getMarkdown()).toContain('[참고 문서](../other/guide%20%281%29.md) 뒤')
+
+      editor.commands.insertContent('\n\n[]()')
+      const parenPos = getParagraphPosAtText(editor, '[]()')
+      editor.commands.setTextSelection(parenPos + 3)
+      const emptyMatch = detectProseMirrorLinkQuery(editor.state)!
+      expect(insertWysiwygLink(editor, encodedCandidate, emptyMatch)).toBe(true)
+      editor.commands.insertContent(' 다음')
+      expect(editor.getMarkdown()).toContain('[guide (1)](../other/guide%20%281%29.md) 다음')
+
+      editor.commands.setContent('| 항목 | 링크 |\n| --- | --- |\n| row | cell |', {
+        contentType: 'markdown'
+      })
+      const tableCellPos = getParagraphPosAtText(editor, 'cell')
+      editor.commands.setTextSelection({ from: tableCellPos, to: tableCellPos + 4 })
+      editor.commands.insertContent('[](')
+      const tableMatch = detectProseMirrorLinkQuery(editor.state)!
+      expect(insertWysiwygLink(editor, pipeCandidate, tableMatch)).toBe(true)
+      expect(editor.getMarkdown()).toContain('[A \\| B](./A%20%7C%20B.markdown)')
     } finally {
       editor.destroy()
     }
