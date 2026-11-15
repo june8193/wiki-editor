@@ -70,8 +70,8 @@ export function DocumentEditor({
 }: DocumentEditorProps) {
   const allowRichModes = isMarkdownDocument(activeDoc)
   const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
-  const rawPaneRatio = roundSplitRatio(clampSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO))
-  const previewPaneRatio = roundSplitRatio(1 - rawPaneRatio)
+  const rawRatio = roundSplitRatio(clampSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO))
+  const previewRatio = roundSplitRatio(1 - rawRatio)
   const rawLanguage = getRawEditorLanguage(activeDoc)
   const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
   const matchedScrollRequest =
@@ -254,18 +254,18 @@ export function DocumentEditor({
           className="editor-split-container"
           data-testid="editor-split-container"
         >
-          <div className="editor-split-pane is-raw" style={{ flex: `${rawPaneRatio} 1 0%` }}>
+          <div className="editor-split-region is-raw" style={{ flex: `${rawRatio} 1 0%` }}>
             {rawEditorElement}
           </div>
           <SplitSplitter
             containerRef={splitContainerRef}
             direction="horizontal"
-            ratio={rawPaneRatio}
+            ratio={rawRatio}
             ariaLabel="에디터 분할 크기 조절"
             onChangeRatio={handleSplitRatioChange}
-            onResetRatio={handleSplitRatioChange}
+            allowReset
           />
-          <div className="editor-split-pane is-preview" style={{ flex: `${previewPaneRatio} 1 0%` }}>
+          <div className="editor-split-region is-preview" style={{ flex: `${previewRatio} 1 0%` }}>
             <MarkdownPreview
               content={activeDoc.content}
               scrollTop={0}

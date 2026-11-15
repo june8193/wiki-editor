@@ -3829,7 +3829,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
       textAfterToc.indexOf('## Intro')
     )
 
-    // Workspace 2-pane split + Editor Split mode coexistence & independent dividers
+    // Workspace 2-pane split + Editor Split mode coexistence & independent splitters
     fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /beta\.md/ }))
     await user.click(
       within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {

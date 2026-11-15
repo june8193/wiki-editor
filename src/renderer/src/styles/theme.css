@@ -728,7 +728,7 @@ body,
   overflow: hidden;
 }
 
-.editor-split-pane {
+.editor-split-region {
   min-width: 0;
   min-height: 0;
   display: flex;

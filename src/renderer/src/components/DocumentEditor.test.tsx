@@ -478,7 +478,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(screen.getByRole('listbox', { name: '슬래시 명령어 자동완성' })).toBeInTheDocument()
   })
 
-  it('resizes split panes via splitter mouse drag, ArrowLeft/ArrowRight keys (0.15~0.85 clamp), and double-click reset to 0.5', () => {
+  it('resizes split regions via splitter mouse drag, ArrowLeft/ArrowRight keys (0.15~0.85 clamp), and double-click reset to 0.5', () => {
     let tab = createTab('split', 0.5)
     const doc = createDoc({ content: '# Left\n\nRight', savedContent: '# Left\n\nRight' })
     const onUpdateViewState = vi.fn((patch: Partial<TabItem>) => {
@@ -504,10 +504,10 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(separator).toHaveAttribute('aria-valuenow', '50')
 
     const splitContainer = screen.getByTestId('editor-split-container')
-    const panes = splitContainer.querySelectorAll('.editor-split-pane')
-    expect(panes).toHaveLength(2)
-    expect((panes[0] as HTMLElement).style.flex).toBe('0.5 1 0%')
-    expect((panes[1] as HTMLElement).style.flex).toBe('0.5 1 0%')
+    const regions = splitContainer.querySelectorAll('.editor-split-region')
+    expect(regions).toHaveLength(2)
+    expect((regions[0] as HTMLElement).style.flex).toBe('0.5 1 0%')
+    expect((regions[1] as HTMLElement).style.flex).toBe('0.5 1 0%')
 
     vi.spyOn(splitContainer, 'getBoundingClientRect').mockReturnValue({
       x: 100,
@@ -550,8 +550,8 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       />
     )
     expect(separator).toHaveAttribute('aria-valuenow', '65')
-    expect((panes[0] as HTMLElement).style.flex).toBe('0.65 1 0%')
-    expect((panes[1] as HTMLElement).style.flex).toBe('0.35 1 0%')
+    expect((regions[0] as HTMLElement).style.flex).toBe('0.65 1 0%')
+    expect((regions[1] as HTMLElement).style.flex).toBe('0.35 1 0%')
 
     // Keyboard ArrowLeft / ArrowRight step +-0.05 and clamp
     fireEvent.keyDown(separator, { key: 'ArrowLeft' })

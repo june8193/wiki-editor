@@ -22,11 +22,11 @@ interface SplitSplitterProps {
   ratio: number
   ariaLabel: string
   onChangeRatio: (nextRatio: number) => void
-  onResetRatio?: (defaultRatio: number) => void
+  allowReset?: boolean
 }
 
 /**
- * Accessible drag- and keyboard-resizable splitter between two split panes.
+ * Accessible drag- and keyboard-resizable splitter between two split areas.
  */
 export function SplitSplitter({
   containerRef,
@@ -34,7 +34,7 @@ export function SplitSplitter({
   ratio,
   ariaLabel,
   onChangeRatio,
-  onResetRatio
+  allowReset = false
 }: SplitSplitterProps) {
   const [isResizing, setIsResizing] = useState(false)
   const onChangeRatioRef = useRef(onChangeRatio)
@@ -99,7 +99,7 @@ export function SplitSplitter({
         event.preventDefault()
         setIsResizing(true)
       }}
-      onDoubleClick={onResetRatio ? () => onResetRatio(DEFAULT_SPLIT_RATIO) : undefined}
+      onDoubleClick={allowReset ? () => onChangeRatio(DEFAULT_SPLIT_RATIO) : undefined}
       onKeyDown={handleKeyDown}
     />
   )
