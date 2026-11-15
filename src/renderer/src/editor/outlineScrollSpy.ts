@@ -129,8 +129,8 @@ function collectVisibleHeadingText(node: Node): string {
   return text
 }
 
-function normalizeDomHeadingText(el: HTMLElement): string {
-  return stripHeadingNumberPrefix(collectVisibleHeadingText(el)).replace(/\s+/g, ' ').trim()
+function normalizeHeadingTitleText(text: string): string {
+  return stripHeadingNumberPrefix(text).replace(/\s+/g, ' ').trim()
 }
 
 function matchHeadingsBySlugId(
@@ -157,25 +157,46 @@ function matchHeadingsBySlugId(
   return matched.length === headings.length ? matched : null
 }
 
-function matchHeadingsSequentially(
-  candidates: readonly HTMLElement[],
+export interface OutlineHeadingCandidate {
+  level: number
+  text: string
+  hasMedia?: boolean
+}
+
+/**
+ * Aligns un-id'd heading candidates (such as rendered TipTap DOM headings or ProseMirror
+ * heading nodes) against parsed Document Outline ATX headings, excluding empty `# `,
+ * blockquote, and Setext headings omitted by `parseMarkdownHeadings`.
+ */
+export function resolveMatchingOutlineCandidates<T extends OutlineHeadingCandidate>(
+  candidates: readonly T[],
   headings: readonly MarkdownHeading[]
-): HTMLElement[] | null {
-  const matched: HTMLElement[] = []
+): T[] {
+  if (candidates.length === headings.length) {
+    return [...candidates]
+  }
+
+  const matched: T[] = []
   let cursor = 0
   for (const heading of headings) {
     const expectedTitle = heading.title.replace(/\s+/g, ' ').trim()
     while (cursor < candidates.length) {
       const candidate = candidates[cursor]
       cursor += 1
-      const level = Number(candidate.tagName[1])
-      if (level === heading.level && normalizeDomHeadingText(candidate) === expectedTitle) {
+      if (candidate.level === heading.level && normalizeHeadingTitleText(candidate.text) === expectedTitle) {
         matched.push(candidate)
         break
       }
     }
   }
-  return matched.length === headings.length ? matched : null
+  if (matched.length === headings.length) {
+    return matched
+  }
+
+  const nonEmpty = candidates.filter(
+    (candidate) => normalizeHeadingTitleText(candidate.text).length > 0 || candidate.hasMedia === true
+  )
+  return nonEmpty.length === headings.length ? nonEmpty : [...candidates]
 }
 
 function resolveMatchingHeadingElements(
@@ -194,16 +215,16 @@ function resolveMatchingHeadingElements(
 
   // TipTap headings lack id attributes and may include empty `# `, blockquote, or Setext headings
   // omitted by `parseMarkdownHeadings`; align monotonically on visible heading level and title.
-  const outlineCandidates = allHeadings.filter((el) => !el.closest('blockquote, pre, svg'))
-  const matchedByText = matchHeadingsSequentially(outlineCandidates, headings)
-  if (matchedByText) {
-    return matchedByText
-  }
-
-  const nonEmptyCandidates = outlineCandidates.filter(
-    (el) => normalizeDomHeadingText(el).length > 0 || el.querySelector('img') !== null
-  )
-  return nonEmptyCandidates.length === headings.length ? nonEmptyCandidates : allHeadings
+  const outlineCandidates = allHeadings
+    .filter((el) => !el.closest('blockquote, pre, svg'))
+    .map((el) => ({
+      el,
+      level: Number(el.tagName[1]),
+      text: collectVisibleHeadingText(el),
+      hasMedia: el.querySelector('img') !== null
+    }))
+  const matched = resolveMatchingOutlineCandidates(outlineCandidates, headings)
+  return matched.length === headings.length ? matched.map((item) => item.el) : allHeadings
 }
 
 function hasMeasuredElementBox(

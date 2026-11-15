@@ -1,4 +1,4 @@
-import { type RefObject, type UIEvent, useCallback, useEffect, useMemo, useRef } from 'react'
+import { type RefObject, useCallback, useEffect, useMemo, useRef } from 'react'
 import { type MarkdownHeading, parseMarkdownHeadings } from '../editor/MarkdownTocEngine'
 import {
   type HeadingScrollSpySample,
@@ -14,7 +14,7 @@ export interface UseEditorOutlineSpyOptions<TReq extends { nonce: number } = { n
   isActive?: boolean
   scrollRequest?: TReq | null
   isScrollRequestReady?: boolean
-  onScrollRequest?: (req: TReq) => boolean | void
+  onScrollRequest?: (req: TReq, headings: readonly MarkdownHeading[]) => boolean | void
   onScrollTopChange?: (scrollTop: number) => void
   measure: (headings: readonly MarkdownHeading[]) => number | null
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
@@ -59,11 +59,12 @@ export function useEditorOutlineSpy<TReq extends { nonce: number } = { nonce: nu
     markUserScrollIntent,
     resetScrollIntent,
     consumeUserScrollIntent,
-    scrollIntentHandlers,
     attachScrollIntentListeners
   } = useUserScrollIntent()
 
   const parsedHeadings = useMemo(() => parseMarkdownHeadings(content), [content])
+  const parsedHeadingsRef = useRef(parsedHeadings)
+  parsedHeadingsRef.current = parsedHeadings
 
   const reportActiveHeading = useCallback(
     (isUserScroll: boolean): void => {
@@ -83,7 +84,7 @@ export function useEditorOutlineSpy<TReq extends { nonce: number } = { nonce: nu
 
   useOneShotScroll(scrollRequest, isScrollRequestReady ?? isReady, (req) => {
     resetScrollIntent()
-    return onScrollRequestRef.current?.(req) ?? true
+    return onScrollRequestRef.current?.(req, parsedHeadingsRef.current) ?? true
   })
 
   const handleContainerScroll = useCallback((): void => {
@@ -110,17 +111,6 @@ export function useEditorOutlineSpy<TReq extends { nonce: number } = { nonce: nu
     [attachScrollIntentListeners]
   )
 
-  const scrollContainerProps = useMemo(
-    () => ({
-      ...scrollIntentHandlers,
-      onScroll: (event: UIEvent<HTMLElement>) => {
-        onScrollTopChangeRef.current?.(event.currentTarget.scrollTop)
-        handleContainerScroll()
-      }
-    }),
-    [handleContainerScroll, scrollIntentHandlers]
-  )
-
   const runWithUserScrollIntent = useCallback(
     (action: () => void): void => {
       markUserScrollIntent()
@@ -131,32 +121,38 @@ export function useEditorOutlineSpy<TReq extends { nonce: number } = { nonce: nu
 
   return {
     attachScrollElement,
-    scrollContainerProps,
     runWithUserScrollIntent
   }
 }
 
 /**
- * Scroll-spy and scroll-top synchronization wrapper for React scrollable DOM containers
- * used by Preview and 위지윅 modes.
+ * Scroll-spy, scroll-top synchronization, and DOM listener attachment for React scrollable
+ * containers used by Preview and 위지윅 modes.
  */
 export function useContainerOutlineSpy<TReq extends { nonce: number } = { nonce: number }>({
   containerRef,
   scrollTop,
+  isReady,
   ...spyOptions
 }: UseContainerOutlineSpyOptions<TReq>) {
   useSyncScrollTop(containerRef, scrollTop)
 
-  const { scrollContainerProps, runWithUserScrollIntent } = useEditorOutlineSpy({
+  const { attachScrollElement, runWithUserScrollIntent } = useEditorOutlineSpy({
     ...spyOptions,
+    isReady,
     measure: (headings) => {
       const container = containerRef.current
       return container ? measureActiveHeadingIndexInContainer(container, headings) : null
     }
   })
 
+  useEffect(() => {
+    if (!isReady) return
+    const container = containerRef.current
+    return container ? attachScrollElement(container) : undefined
+  }, [attachScrollElement, containerRef, isReady])
+
   return {
-    scrollContainerProps,
     runWithUserScrollIntent
   }
 }

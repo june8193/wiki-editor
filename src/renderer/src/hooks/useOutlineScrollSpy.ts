@@ -52,11 +52,15 @@ function isSpyValidForContext(
   return spy !== null && activeContext !== null && isSameOutlineContext(spy.context, activeContext)
 }
 
-function readValidCachedSpyForPane(
-  latestSpyByPane: Partial<Record<PaneId, ActiveOutlineHeadingState>>,
-  activeContext: OutlineContextTarget | null
+function resolveValidSpyState(
+  spy: ActiveOutlineHeadingState | null,
+  activeContext: OutlineContextTarget | null,
+  latestSpyByPane: Partial<Record<PaneId, ActiveOutlineHeadingState>>
 ): ActiveOutlineHeadingState | null {
   if (!activeContext) return null
+  if (isSpyValidForContext(spy, activeContext)) {
+    return spy
+  }
   const cached = latestSpyByPane[activeContext.paneId] ?? null
   return isSpyValidForContext(cached, activeContext) ? cached : null
 }
@@ -79,9 +83,11 @@ export function useOutlineScrollSpy({
   const activeContextRef = useRef<OutlineContextTarget | null>(activeContext)
   activeContextRef.current = activeContext
 
-  const activeSpy = isSpyValidForContext(spyOutlineHeading, activeContext)
-    ? spyOutlineHeading
-    : readValidCachedSpyForPane(latestSpyByPaneRef.current, activeContext)
+  const activeSpy = resolveValidSpyState(
+    spyOutlineHeading,
+    activeContext,
+    latestSpyByPaneRef.current
+  )
 
   const activeHeadingIndex = isPinValidForContext(
     pinnedOutlineHeading,
@@ -98,9 +104,7 @@ export function useOutlineScrollSpy({
       isPinValidForContext(prev, activeContext, bufferContent) ? prev : null
     )
     setSpyOutlineHeading((prev) =>
-      isSpyValidForContext(prev, activeContext)
-        ? prev
-        : readValidCachedSpyForPane(latestSpyByPaneRef.current, activeContext)
+      resolveValidSpyState(prev, activeContext, latestSpyByPaneRef.current)
     )
   }, [activeContext, bufferContent])
 

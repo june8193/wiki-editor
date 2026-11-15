@@ -667,4 +667,49 @@ describe('WysiwygMarkdownEditor', () => {
       rectSpy.mockRestore()
     }
   })
+
+  it('targets matching ATX heading on click-to-scroll even when empty, blockquote, or Setext headings precede it', async () => {
+    const markdown = [
+      '# Alpha',
+      '',
+      '# ',
+      '',
+      '> # Quoted Heading',
+      '',
+      'Setext Heading',
+      '===',
+      '',
+      '## Beta'
+    ].join('\n')
+
+    const { container, rerender } = render(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        isActive
+        onChangeContent={vi.fn()}
+      />
+    )
+
+    const scrollContainer = container.querySelector('.wysiwyg-scroll-container') as HTMLElement
+    const betaHeading = Array.from(scrollContainer.querySelectorAll('h2')).find(
+      (el) => el.textContent?.trim() === 'Beta'
+    )
+    expect(betaHeading).toBeTruthy()
+    const scrollIntoViewMock = vi.fn()
+    betaHeading!.scrollIntoView = scrollIntoViewMock
+
+    // Index 1 in parsed outline is `## Beta` (empty `# `, blockquote, and Setext headings are omitted)
+    rerender(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        isActive
+        scrollRequest={{ index: 1, nonce: 1 }}
+        onChangeContent={vi.fn()}
+      />
+    )
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+  })
 })

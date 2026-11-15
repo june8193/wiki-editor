@@ -59,7 +59,7 @@ export function MarkdownPreview({
     }
   }, [])
 
-  const { scrollContainerProps, runWithUserScrollIntent } = useContainerOutlineSpy({
+  const { runWithUserScrollIntent } = useContainerOutlineSpy({
     containerRef,
     content,
     scrollTop,
@@ -96,7 +96,6 @@ export function MarkdownPreview({
       data-testid="document-editor"
       aria-label="마크다운 미리보기"
       tabIndex={0}
-      {...scrollContainerProps}
     >
       {content.trim().length === 0 ? (
         <p className="markdown-preview-empty">미리 볼 내용이 없습니다.</p>

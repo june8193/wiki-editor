@@ -8,7 +8,10 @@ import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
-import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
+import {
+  type HeadingScrollSpySample,
+  resolveMatchingOutlineCandidates
+} from '../editor/outlineScrollSpy'
 import {
   addTableRowBeforeSafely,
   createWysiwygExtensions,
@@ -385,26 +388,40 @@ export function WysiwygMarkdownEditor({
     }
   }, [editor, showHeadingNumbers])
 
-  const { scrollContainerProps } = useContainerOutlineSpy({
+  useContainerOutlineSpy({
     containerRef: scrollContainerRef,
     content,
     scrollTop,
     isReady: Boolean(editor),
     isActive,
     scrollRequest,
-    onScrollRequest: (req) => {
+    onScrollRequest: (req, headings) => {
       if (!editor) return false
 
-      const headingPositions: number[] = []
+      const candidates: Array<{ pos: number; level: number; text: string; hasMedia: boolean }> = []
       editor.state.doc.descendants((node, pos) => {
         if (node.type.name === 'heading') {
-          headingPositions.push(pos)
+          let hasMedia = false
+          node.descendants((child) => {
+            if (child.type.name === 'image') {
+              hasMedia = true
+              return false
+            }
+            return true
+          })
+          candidates.push({
+            pos,
+            level: Number(node.attrs.level ?? 1),
+            text: node.textContent,
+            hasMedia
+          })
           return false
         }
-        return node.type.name !== 'codeBlock'
+        return node.type.name !== 'codeBlock' && node.type.name !== 'blockquote'
       })
 
-      const targetPos = headingPositions[req.index]
+      const matchedHeadings = resolveMatchingOutlineCandidates(candidates, headings)
+      const targetPos = matchedHeadings[req.index]?.pos
       if (targetPos === undefined) return true
 
       const dom = editor.view.nodeDOM(targetPos)
@@ -474,7 +491,6 @@ export function WysiwygMarkdownEditor({
       <div
         ref={scrollContainerRef}
         className="wysiwyg-scroll-container"
-        {...scrollContainerProps}
         onContextMenu={(event) => {
           const target = event.target as HTMLElement | null
           const cellEl = target?.closest('td, th')

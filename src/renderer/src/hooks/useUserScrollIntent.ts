@@ -1,11 +1,4 @@
-import {
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef
-} from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 const USER_SCROLL_INTENT_WINDOW_MS = 250
 const POINTER_RELEASE_EVENTS = ['pointerup', 'pointercancel', 'mouseup', 'blur'] as const
@@ -86,26 +79,15 @@ export function useUserScrollIntent() {
     [markUserScrollIntent]
   )
 
-  const handlePointerStart = useCallback(
-    (event: ReactPointerEvent<HTMLElement> | ReactMouseEvent<HTMLElement>): void => {
-      applyPointerStart(event.currentTarget, event)
-    },
-    [applyPointerStart]
-  )
-
-  const handleKeyDown = useCallback(
-    (event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'metaKey' | 'key'>): void => {
-      if (isScrollNavigationKey(event)) {
-        markUserScrollIntent()
-      }
-    },
-    [markUserScrollIntent]
-  )
-
   const attachScrollIntentListeners = useCallback(
     (element: HTMLElement): (() => void) => {
       const onPointerStart = (event: MouseEvent | PointerEvent): void => {
         applyPointerStart(element, event)
+      }
+      const onKeyDown = (event: KeyboardEvent): void => {
+        if (isScrollNavigationKey(event)) {
+          markUserScrollIntent()
+        }
       }
       const bindings: ReadonlyArray<
         readonly [keyof HTMLElementEventMap, EventListener, AddEventListenerOptions?]
@@ -117,7 +99,7 @@ export function useUserScrollIntent() {
         ['pointerup', clearPointerDown],
         ['pointercancel', clearPointerDown],
         ['mouseup', clearPointerDown],
-        ['keydown', handleKeyDown as unknown as EventListener]
+        ['keydown', onKeyDown as EventListener]
       ]
 
       for (const [eventName, handler, options] of bindings) {
@@ -129,28 +111,13 @@ export function useUserScrollIntent() {
         }
       }
     },
-    [applyPointerStart, clearPointerDown, handleKeyDown, markUserScrollIntent]
-  )
-
-  const scrollIntentHandlers = useMemo(
-    () => ({
-      onWheel: markUserScrollIntent,
-      onTouchStart: markUserScrollIntent,
-      onPointerDown: handlePointerStart,
-      onMouseDown: handlePointerStart,
-      onPointerUp: clearPointerDown,
-      onPointerCancel: clearPointerDown,
-      onMouseUp: clearPointerDown,
-      onKeyDown: handleKeyDown
-    }),
-    [clearPointerDown, handleKeyDown, handlePointerStart, markUserScrollIntent]
+    [applyPointerStart, clearPointerDown, markUserScrollIntent]
   )
 
   return {
     markUserScrollIntent,
     resetScrollIntent,
     consumeUserScrollIntent,
-    scrollIntentHandlers,
     attachScrollIntentListeners
   }
 }
