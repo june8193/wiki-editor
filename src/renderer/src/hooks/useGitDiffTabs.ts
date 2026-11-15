@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GitDiffRequest, GitStatus } from '@shared/git'
 import type { GitDiffContentState } from '../components/GitDiffViewer'
-import type { DiffTabItem, PaneLayoutState } from '../stores/PaneTabStore'
-import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
+import type { PaneLayoutState } from '../stores/PaneTabStore'
+import { formatGitDiffTabKey, toGitDiffRequest } from '../utils/gitFilePresentation'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
 interface UseGitDiffTabsOptions {
@@ -16,7 +16,7 @@ function collectOpenDiffRequests(layout: PaneLayoutState): Map<string, GitDiffRe
   for (const pane of [layout.panes.primary, layout.panes.secondary]) {
     for (const tab of pane.tabs) {
       if (tab.kind === 'diff') {
-        map.set(tab.bufferKey, (tab as DiffTabItem).diff.request)
+        map.set(formatGitDiffTabKey(tab.diff.request), tab.diff.request)
       }
     }
   }
@@ -35,15 +35,7 @@ function resolveEffectiveDiffRequest(
     const match = status.staged.find(
       (item) => item.path === request.path && item.origPath === request.origPath
     )
-    if (match) {
-      return {
-        kind: 'staged',
-        path: match.path,
-        ...(match.origPath ? { origPath: match.origPath } : {}),
-        status: match.status
-      }
-    }
-    return request
+    return match ? toGitDiffRequest('staged', match) : request
   }
 
   const untrackedMatch = status.untracked.find((item) => item.path === request.path)
@@ -53,12 +45,7 @@ function resolveEffectiveDiffRequest(
 
   const unstagedMatch = status.unstaged.find((item) => item.path === request.path)
   if (unstagedMatch) {
-    return {
-      kind: 'unstaged',
-      path: unstagedMatch.path,
-      ...(unstagedMatch.origPath ? { origPath: unstagedMatch.origPath } : {}),
-      status: unstagedMatch.status
-    }
+    return toGitDiffRequest('unstaged', unstagedMatch)
   }
 
   // If previously untracked file was staged/reverted, query tracked diff so git returns empty patch cleanly.
@@ -121,32 +108,24 @@ export function useGitDiffTabs({
         )
       }
 
+      const isCurrentOpenRequest = (): boolean =>
+        mountedRef.current &&
+        workspaceEpochRef.current === epoch &&
+        openKeysRef.current.has(tabKey) &&
+        inFlightSeqRef.current.get(tabKey) === nextSeq
+
       const effectiveRequest = resolveEffectiveDiffRequest(request, gitStatusRef.current)
       void window.wikiApi.git
         .diff(rootPath, effectiveRequest)
         .then((diff) => {
-          if (
-            !mountedRef.current ||
-            workspaceEpochRef.current !== epoch ||
-            !openKeysRef.current.has(tabKey) ||
-            inFlightSeqRef.current.get(tabKey) !== nextSeq
-          ) {
-            return
-          }
+          if (!isCurrentOpenRequest()) return
           setDiffsByKey((prev) => ({
             ...prev,
             [tabKey]: { status: 'loaded', diff }
           }))
         })
         .catch((error: unknown) => {
-          if (
-            !mountedRef.current ||
-            workspaceEpochRef.current !== epoch ||
-            !openKeysRef.current.has(tabKey) ||
-            inFlightSeqRef.current.get(tabKey) !== nextSeq
-          ) {
-            return
-          }
+          if (!isCurrentOpenRequest()) return
           setDiffsByKey((prev) => ({
             ...prev,
             [tabKey]: {

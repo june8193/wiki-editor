@@ -46,3 +46,18 @@ export function formatGitDiffTabKey(request: GitDiffRequest): string {
   }
   return `diff:${request.kind}:${request.status}:${renamePart}:${request.path}`
 }
+
+/**
+ * Converts a changed working-tree entry into a GitDiffRequest payload.
+ */
+export function toGitDiffRequest(
+  kind: 'staged' | 'unstaged',
+  file: GitChangedFile
+): GitDiffRequest {
+  return {
+    kind,
+    path: file.path,
+    ...(file.origPath ? { origPath: file.origPath } : {}),
+    status: file.status
+  }
+}

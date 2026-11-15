@@ -4,7 +4,7 @@ import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from 
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
-import { EditorMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import { DocumentTabItem, EditorMode, PaneId, TabViewPatch } from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
@@ -21,7 +21,7 @@ export interface OutlineScrollRequest {
 
 interface DocumentEditorProps {
   document: DocumentBuffer
-  tab: TabItem
+  tab: DocumentTabItem
   theme: ThemeMode
   autoSave: boolean
   showHeadingNumbers?: boolean

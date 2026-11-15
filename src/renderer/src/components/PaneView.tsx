@@ -2,6 +2,7 @@ import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
+import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
 import { type GitDiffContentState, GitDiffViewer } from './GitDiffViewer'
 import {
@@ -54,7 +55,7 @@ export function PaneView({
     activeTab?.kind === 'document' ? (buffers[activeTab.bufferKey] ?? null) : null
   const activeDiffState =
     activeTab?.kind === 'diff'
-      ? (diffsByKey[activeTab.bufferKey] ?? { status: 'loading' as const })
+      ? (diffsByKey[formatGitDiffTabKey(activeTab.diff.request)] ?? { status: 'loading' as const })
       : null
   const activeScrollRequest =
     activeTab && scrollRequest && scrollRequest.paneId === pane.id && scrollRequest.tabId === activeTab.id

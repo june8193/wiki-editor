@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { DocumentEditor } from './DocumentEditor'
 import type { DocumentBuffer } from '../stores/DocumentBufferStore'
-import type { EditorMode, TabItem } from '../stores/PaneTabStore'
+import type { DocumentTabItem, EditorMode } from '../stores/PaneTabStore'
 
 function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
   return {
@@ -21,7 +21,7 @@ function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
   }
 }
 
-function createTab(mode: EditorMode = 'raw'): TabItem {
+function createTab(mode: EditorMode = 'raw'): DocumentTabItem {
   return {
     id: 'tab-1',
     kind: 'document',

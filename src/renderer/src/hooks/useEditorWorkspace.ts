@@ -40,6 +40,8 @@ function logPaneTabTransition(
     tab.kind === 'diff'
       ? tab.diff.request.path
       : (bufferStore.getBuffer(tab.bufferKey)?.path ?? tab.bufferKey)
+  const resolveTabModeMeta = (tab: TabItem): Record<string, string> =>
+    tab.kind === 'document' ? { mode: tab.mode } : { kind: 'diff' }
 
   switch (transition.type) {
     case 'tab-opened':
@@ -47,7 +49,7 @@ function logPaneTabTransition(
         paneId: transition.paneId,
         tabId: transition.tab.id,
         filePath: resolveTabPath(transition.tab),
-        mode: transition.tab.mode
+        ...resolveTabModeMeta(transition.tab)
       })
       return
     case 'tab-duplicated':
@@ -57,7 +59,7 @@ function logPaneTabTransition(
         sourceTabId: transition.sourceTabId,
         tabId: transition.tab.id,
         filePath: resolveTabPath(transition.tab),
-        mode: transition.tab.mode
+        ...resolveTabModeMeta(transition.tab)
       })
       return
     case 'tab-switched':
@@ -65,7 +67,7 @@ function logPaneTabTransition(
         paneId: transition.paneId,
         tabId: transition.tab.id,
         filePath: resolveTabPath(transition.tab),
-        mode: transition.tab.mode
+        ...resolveTabModeMeta(transition.tab)
       })
       return
     case 'tab-moved':

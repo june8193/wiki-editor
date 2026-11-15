@@ -884,6 +884,23 @@ describe('GitService integration (isolated temp repos)', () => {
     expect(Buffer.byteLength(hugeTrackedDiff.rawPatch, 'utf8')).toBeLessThanOrEqual(
       GIT_DIFF_MAX_BYTES
     )
+
+    // Untracked >1MB file with multi-byte UTF-8 split across 1MB boundary must not produce replacement chars
+    await writeFile(
+      join(repoDir, 'huge-utf8-untracked.md'),
+      'x'.repeat(GIT_DIFF_MAX_BYTES - 1) + '가'.repeat(20),
+      'utf8'
+    )
+    const hugeUtf8Untracked = await service.diff(repoDir, {
+      kind: 'unstaged',
+      path: 'huge-utf8-untracked.md',
+      status: '?'
+    })
+    expect(hugeUtf8Untracked.isTruncated).toBe(true)
+    expect(hugeUtf8Untracked.rawPatch).not.toContain('\uFFFD')
+    expect(Buffer.byteLength(hugeUtf8Untracked.rawPatch, 'utf8')).toBeLessThanOrEqual(
+      GIT_DIFF_MAX_BYTES
+    )
   }, 30_000)
 })
 

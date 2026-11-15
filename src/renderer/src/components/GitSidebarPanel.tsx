@@ -17,7 +17,7 @@ import {
   type GitStatus
 } from '@shared/git'
 import type { GitGraphState } from '../hooks/useGitGraphLog'
-import { formatGitFileLabel, getGitFileBadgeModifier } from '../utils/gitFilePresentation'
+import { formatGitFileLabel, getGitFileBadgeModifier, toGitDiffRequest } from '../utils/gitFilePresentation'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
 import { GitGraphScopeToggle, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
@@ -463,14 +463,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 itemActionTitle="Unstage"
                 isBusy={isBusy}
                 onBulkAction={onUnstageAll}
-                onSelectFile={(file) =>
-                  onOpenFileDiff({
-                    kind: 'staged',
-                    path: file.path,
-                    ...(file.origPath ? { origPath: file.origPath } : {}),
-                    status: file.status
-                  })
-                }
+                onSelectFile={(file) => onOpenFileDiff(toGitDiffRequest('staged', file))}
                 onItemAction={(file) => onUnstageFile(file.path, file.origPath)}
               />
 
@@ -484,14 +477,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 itemActionTitle="Stage"
                 isBusy={isBusy}
                 onBulkAction={onStageAll}
-                onSelectFile={(file) =>
-                  onOpenFileDiff({
-                    kind: 'unstaged',
-                    path: file.path,
-                    ...(file.origPath ? { origPath: file.origPath } : {}),
-                    status: file.status
-                  })
-                }
+                onSelectFile={(file) => onOpenFileDiff(toGitDiffRequest('unstaged', file))}
                 onItemAction={(file) => onStageFile(file.path)}
               />
             </GitAccordionSection>

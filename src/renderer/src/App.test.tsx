@@ -5672,6 +5672,15 @@ describe('Git Diff viewer tab and Changes section integration', () => {
             staged: currentStaged,
             unstaged: currentUnstaged
           }),
+          stage: async (workspacePath) => {
+            patchCounter += 1
+            return {
+              ...createEmptyGitStatus(true, workspacePath),
+              branch: 'main',
+              staged: currentStaged,
+              unstaged: currentUnstaged
+            }
+          },
           commit: async (workspacePath) => {
             currentStaged = []
             patchCounter += 1
@@ -5735,22 +5744,42 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     expect(writeFileSpy).not.toHaveBeenCalled()
 
-    // Commit -> triggers Git refresh -> open Diff tabs auto-refresh (staged doc.md empties, unstaged other.md gets v2)
+    // Saving a regular document tab refreshes Git status -> open Diff tab auto-refreshes (after v2)
+    await user.click(within(primaryPane).getByRole('tab', { name: 'doc.md' }))
+    const docEditor = await within(primaryPane).findByTestId('document-editor')
+    patchCounter = 2
+    appendRawEditorText(docEditor, ' updated')
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(writeFileSpy).toHaveBeenCalled()
+    })
+    await user.click(within(primaryPane).getByRole('tab', { name: /Diff\s*other\.md/ }))
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('after v2')).toBeInTheDocument()
+    })
+
+    // Stage action refreshes Git status -> open Diff tab auto-refreshes (after v3)
+    await user.click(within(gitPanel).getByRole('button', { name: 'other.md Stage' }))
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('after v3')).toBeInTheDocument()
+    })
+
+    // Commit -> triggers Git refresh -> open Diff tabs auto-refresh (staged doc.md empties, unstaged other.md gets v4)
     await user.type(within(gitPanel).getByLabelText('커밋 메시지'), 'commit staged')
     await user.click(within(gitPanel).getByRole('button', { name: 'Commit' }))
 
     await waitFor(() => {
-      expect(within(primaryPane).getByText('after v2')).toBeInTheDocument()
+      expect(within(primaryPane).getByText('after v4')).toBeInTheDocument()
       expect(within(secondaryPane).getByText('표시할 텍스트 변경 사항이 없습니다.')).toBeInTheDocument()
     })
 
     // External FS change event triggers Git refresh -> open unstaged Diff tab refreshes automatically
-    patchCounter = 3
+    patchCounter = 5
     act(() => {
       emitWorkspaceChange({ rootPath: 'C:/wiki/diff-one', eventType: 'change', relativePath: 'other.md' })
     })
     await waitFor(() => {
-      expect(within(primaryPane).getByText('after v3')).toBeInTheDocument()
+      expect(within(primaryPane).getByText('after v5')).toBeInTheDocument()
     })
 
     // Closing Diff tab never shows unsaved alertdialog

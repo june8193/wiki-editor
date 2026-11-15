@@ -11,7 +11,9 @@ describe('PaneTabStore', () => {
     const t2 = store.openTab('c:/wiki/b.md')
     const t3 = store.openTab('c:/wiki/c.md')
 
-    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.bufferKey)).toEqual([
+    expect(
+      store.getSnapshot().panes.primary.tabs.map((t) => (t.kind === 'document' ? t.bufferKey : ''))
+    ).toEqual([
       'c:/wiki/a.md',
       'c:/wiki/b.md',
       'c:/wiki/c.md'
@@ -46,7 +48,7 @@ describe('PaneTabStore', () => {
     expect(store.getSnapshot().splitMode).toBe('horizontal')
     expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(1)
     expect(s1!.id).not.toBe(p1.id)
-    expect(s1!.bufferKey).toBe('c:/wiki/shared.md')
+    expect(s1).toMatchObject({ kind: 'document', bufferKey: 'c:/wiki/shared.md' })
 
     // Closing one reference leaves isLastReferenceForBuffer = false because primary still holds shared.md
     expect(store.hasOtherTabForBuffer('c:/wiki/shared.md', s1!.id)).toBe(true)
@@ -103,15 +105,19 @@ describe('PaneTabStore', () => {
 
     // Rename updates bufferKey in both panes without losing per-tab view state
     store.remapBufferKeys([{ oldKey: 'c:/wiki/doc.md', newKey: 'c:/wiki/renamed.md' }])
-    expect(store.getSnapshot().panes.primary.tabs[0].bufferKey).toBe('c:/wiki/renamed.md')
-    expect(store.getSnapshot().panes.secondary.tabs[0].bufferKey).toBe('c:/wiki/renamed.md')
-    expect(store.getSnapshot().panes.secondary.tabs[0].mode).toBe('preview')
+    expect(store.getSnapshot().panes.primary.tabs[0]).toMatchObject({ bufferKey: 'c:/wiki/renamed.md' })
+    expect(store.getSnapshot().panes.secondary.tabs[0]).toMatchObject({
+      bufferKey: 'c:/wiki/renamed.md',
+      mode: 'preview'
+    })
 
     // Open unique file in secondary then collapse to single -> merges unique tab into primary
     const extraTab = store.openTab('c:/wiki/extra.md', { paneId: 'secondary' })
     store.setSplitMode('single')
     expect(store.getSnapshot().splitMode).toBe('single')
-    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.bufferKey)).toEqual([
+    expect(
+      store.getSnapshot().panes.primary.tabs.map((t) => (t.kind === 'document' ? t.bufferKey : ''))
+    ).toEqual([
       'c:/wiki/renamed.md',
       'c:/wiki/extra.md'
     ])
@@ -149,7 +155,7 @@ describe('PaneTabStore', () => {
     store.setSplitMode('single')
     expect(store.getSnapshot().splitMode).toBe('single')
     expect(store.getSnapshot().panes.primary.activeTabId).toBe(sharedPrimary.id)
-    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.bufferKey)).not.toHaveLength(0)
+    expect(store.getSnapshot().panes.primary.tabs).not.toHaveLength(0)
   })
 
   it('blocks moving the sole primary tab to secondary in single mode, but promotes secondary when emptying primary in split mode', () => {

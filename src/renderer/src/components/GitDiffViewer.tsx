@@ -26,6 +26,24 @@ interface GitDiffViewerProps {
   onOpenFile: (repoRelativePath: string) => void
 }
 
+const DIFF_ROW_TYPE_CLASS: Record<UnifiedDiffSideCell['type'], string> = {
+  context: '',
+  delete: ' is-delete',
+  add: ' is-add',
+  note: ' is-note'
+}
+
+function DiffCodeContent({ marker, content }: { marker: string; content: string }) {
+  return (
+    <>
+      <span className="git-diff-marker" aria-hidden="true">
+        {marker}
+      </span>
+      <span className="git-diff-line-text">{content}</span>
+    </>
+  )
+}
+
 function SideCell({ cell, side }: { cell: UnifiedDiffSideCell | null; side: 'old' | 'new' }) {
   if (!cell) {
     return (
@@ -36,14 +54,7 @@ function SideCell({ cell, side }: { cell: UnifiedDiffSideCell | null; side: 'old
     )
   }
 
-  const lineClass =
-    cell.type === 'delete'
-      ? ' is-delete'
-      : cell.type === 'add'
-        ? ' is-add'
-        : cell.type === 'note'
-          ? ' is-note'
-          : ''
+  const lineClass = DIFF_ROW_TYPE_CLASS[cell.type]
 
   return (
     <>
@@ -51,10 +62,7 @@ function SideCell({ cell, side }: { cell: UnifiedDiffSideCell | null; side: 'old
         {cell.lineNumber ?? ''}
       </td>
       <td className={`git-diff-code${lineClass} is-${side}`}>
-        <span className="git-diff-marker" aria-hidden="true">
-          {cell.marker}
-        </span>
-        <span className="git-diff-line-text">{cell.content}</span>
+        <DiffCodeContent marker={cell.marker} content={cell.content} />
       </td>
     </>
   )
@@ -189,25 +197,11 @@ export function GitDiffViewer({
                     </td>
                   </tr>
                 ) : (
-                  <tr
-                    key={`row-${idx}`}
-                    className={`git-diff-row${
-                      row.lineType === 'delete'
-                        ? ' is-delete'
-                        : row.lineType === 'add'
-                          ? ' is-add'
-                          : row.lineType === 'note'
-                            ? ' is-note'
-                            : ''
-                    }`}
-                  >
+                  <tr key={`row-${idx}`} className={`git-diff-row${DIFF_ROW_TYPE_CLASS[row.lineType]}`}>
                     <td className="git-diff-gutter">{row.oldLineNumber ?? ''}</td>
                     <td className="git-diff-gutter">{row.newLineNumber ?? ''}</td>
                     <td className="git-diff-code">
-                      <span className="git-diff-marker" aria-hidden="true">
-                        {row.marker}
-                      </span>
-                      <span className="git-diff-line-text">{row.content}</span>
+                      <DiffCodeContent marker={row.marker} content={row.content} />
                     </td>
                   </tr>
                 )

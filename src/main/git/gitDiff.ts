@@ -260,9 +260,8 @@ async function readUntrackedFileDiff(
     }
   }
 
-  const fileExceeded = totalRead > GIT_DIFF_MAX_BYTES
   const { text, isTruncated: textTruncated } = truncateUtf8BufferToMaxBytes(
-    chunk.subarray(0, Math.min(totalRead, GIT_DIFF_MAX_BYTES)),
+    chunk,
     GIT_DIFF_MAX_BYTES
   )
   const fullPatch = buildUntrackedUnifiedPatch(safePath, text)
@@ -276,7 +275,7 @@ async function readUntrackedFileDiff(
     path: safePath,
     status: '?',
     isBinary: false,
-    isTruncated: fileExceeded || textTruncated || patchExceeded,
+    isTruncated: textTruncated || patchExceeded,
     existsInWorkspace: true,
     rawPatch: boundedPatch
   }

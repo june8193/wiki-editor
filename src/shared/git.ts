@@ -91,21 +91,15 @@ export const GIT_EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 export const GIT_DIFF_MAX_BYTES = 1024 * 1024
 
 export type GitDiffRequest =
-  | { kind: 'staged'; path: string; origPath?: string; status: GitFileStatusCode }
-  | { kind: 'unstaged'; path: string; origPath?: string; status: GitFileStatusCode }
-  | {
+  | ({ kind: 'staged' } & GitChangedFile)
+  | ({ kind: 'unstaged' } & GitChangedFile)
+  | ({
       kind: 'commit'
       commitHash: string
       shortHash: string
-      path: string
-      origPath?: string
-      status: GitFileStatusCode
-    }
+    } & GitChangedFile)
 
-export interface GitFileDiff {
-  path: string
-  origPath?: string
-  status: GitFileStatusCode
+export interface GitFileDiff extends GitChangedFile {
   isBinary: boolean
   isTruncated: boolean
   existsInWorkspace: boolean

@@ -535,7 +535,7 @@ export function App() {
 
   const handleSelectOutlineHeading = useCallback(
     (heading: MarkdownHeading, index: number): void => {
-      if (!activeTab || !isActiveMarkdown) return
+      if (!activeTab || activeTab.kind !== 'document' || !isActiveMarkdown) return
       scrollNonceRef.current += 1
       setOutlineScrollRequest({
         paneId: activePane.id,
@@ -556,15 +556,20 @@ export function App() {
     }
   }, [outlineScrollRequest])
 
+  const activeRawCursorStart =
+    activeTab?.kind === 'document' && activeTab.mode === 'raw'
+      ? activeTab.cursor.selectionStart
+      : null
+
   const handleOutlineInsertToc = useCallback((): void => {
     applyActiveMarkdownTransform((content) => {
       const cursorLine =
-        activeTab?.mode === 'raw'
-          ? resolveRawCursorLine(content, activeTab.cursor.selectionStart)
+        activeRawCursorStart !== null
+          ? resolveRawCursorLine(content, activeRawCursorStart)
           : findFirstNonFencedSlashTocLine(content)
       return insertOrUpdateTocBlock(content, cursorLine)
     })
-  }, [activeTab?.cursor.selectionStart, activeTab?.mode, applyActiveMarkdownTransform])
+  }, [activeRawCursorStart, applyActiveMarkdownTransform])
 
   const handleOutlineApplyHeadingNumbers = useCallback((): void => {
     applyActiveMarkdownTransform(applyHeadingNumbers)
