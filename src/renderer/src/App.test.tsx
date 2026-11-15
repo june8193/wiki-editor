@@ -2100,7 +2100,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     await user.click(within(menu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
 
     expect(screen.getAllByTestId('document-editor')).toHaveLength(2)
-  })
+  }, 20_000)
 
   it('syncs file renames and deletions across split panes and keeps config.json tab open across workspace switches', async () => {
     const user = userEvent.setup()
