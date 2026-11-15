@@ -6,10 +6,15 @@
 
 **Blocked by:** `01-split-editor-mode-and-resizable-pane`
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Preview 렌더링 결과의 최상위 블록 요소(헤딩, 문단, 목록, 인용, 표 래퍼, 일반 코드 블록, **Mermaid 다이어그램 블록**)에 1-기반 `data-source-line` 및 `data-source-end-line` 속성이 정확히 부여되며, 사용자가 마크다운 내에 직접 작성한 원시 HTML의 임의 `data-source-line` 속성은 새니타이즈 단계에서 제거되어 위변조되지 않습니다.
-- [ ] 원본 줄 번호 ↔ Preview 블록 오프셋 보간 모듈이 문서 최상단(`scrollTop = 0`), 중간 블록(블록 내 줄 진행률 선형 보간), 최하단 경계에 대해 Raw → Preview 및 Preview → Raw 양방향 목표 스크롤 위치를 정확히 계산합니다.
-- [ ] `Split` 모드에서 좌측 Raw 에디터를 스크롤하면 우측 Preview 위치가 줄 번호 기준으로 동기화되고, 우측 Preview를 스크롤하면 좌측 Raw 에디터 위치가 역보간으로 동기화되며, 프로그래밍 방식 스크롤 반영으로 인한 역방향 재귀(무한 스크롤 핑퐁 루프)가 발생하지 않습니다.
-- [ ] `Split` 모드에서 **문서 목차**의 헤딩 항목을 클릭하면 좌측 Raw 에디터(해당 줄)와 우측 Preview(해당 헤딩)가 모두 목표 헤딩 위치로 이동합니다.
-- [ ] 줄 번호 어노테이션 테스트, 양방향 스크롤 보간·루프 가드 단위 테스트, `<DocumentEditor />` / `<App />` 통합 테스트가 모두 통과합니다.
+- [x] Preview 렌더링 결과의 최상위 블록 요소(헤딩, 문단, 목록, 인용, 표 래퍼, 일반 코드 블록, **Mermaid 다이어그램 블록**)에 1-기반 `data-source-line` 및 `data-source-end-line` 속성이 정확히 부여되며, 사용자가 마크다운 내에 직접 작성한 원시 HTML의 임의 `data-source-line` 속성은 새니타이즈 단계에서 제거되어 위변조되지 않습니다.
+- [x] 원본 줄 번호 ↔ Preview 블록 오프셋 보간 모듈이 문서 최상단(`scrollTop = 0`), 중간 블록(블록 내 줄 진행률 선형 보간), 최하단 경계에 대해 Raw → Preview 및 Preview → Raw 양방향 목표 스크롤 위치를 정확히 계산합니다.
+- [x] `Split` 모드에서 좌측 Raw 에디터를 스크롤하면 우측 Preview 위치가 줄 번호 기준으로 동기화되고, 우측 Preview를 스크롤하면 좌측 Raw 에디터 위치가 역보간으로 동기화되며, 프로그래밍 방식 스크롤 반영으로 인한 역방향 재귀(무한 스크롤 핑퐁 루프)가 발생하지 않습니다.
+- [x] `Split` 모드에서 **문서 목차**의 헤딩 항목을 클릭하면 좌측 Raw 에디터(해당 줄)와 우측 Preview(해당 헤딩)가 모두 목표 헤딩 위치로 이동합니다.
+- [x] 줄 번호 어노테이션 테스트, 양방향 스크롤 보간·루프 가드 단위 테스트, `<DocumentEditor />` / `<App />` 통합 테스트가 모두 통과합니다.
+
+## Comments
+
+- Commits: `0b017b3`, `bd9b33b`, `0c5b51a`, `dc62cb0`
+- Verification: `npm run typecheck` passed, `npm test` passed (`38 passed (38)`, `236 passed (236)`), `npm run build` passed, parallel `/code-review` converged to 0 Spec findings and 0 actionable Standards findings after 4 iterations (1 non-actionable judgement-call note retained).
