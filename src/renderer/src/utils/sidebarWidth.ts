@@ -3,10 +3,20 @@ export const LEFT_SIDEBAR_MIN_WIDTH = 180
 export const LEFT_SIDEBAR_MAX_WIDTH = 600
 export const LEFT_SIDEBAR_MAX_WINDOW_RATIO = 0.5
 
+export const RIGHT_SIDEBAR_DEFAULT_WIDTH = 240
+export const RIGHT_SIDEBAR_MIN_WIDTH = 180
+export const RIGHT_SIDEBAR_MAX_WIDTH = 500
+
 export interface SidebarWidthBounds {
   min: number
   max: number
   defaultWidth: number
+}
+
+export const RIGHT_SIDEBAR_WIDTH_BOUNDS: SidebarWidthBounds = {
+  min: RIGHT_SIDEBAR_MIN_WIDTH,
+  max: RIGHT_SIDEBAR_MAX_WIDTH,
+  defaultWidth: RIGHT_SIDEBAR_DEFAULT_WIDTH
 }
 
 /**

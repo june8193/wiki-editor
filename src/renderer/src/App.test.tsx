@@ -3005,10 +3005,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
     expect(rightSidebar).toHaveStyle({ width: '240px' })
     const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
-    expect(within(outline).getByRole('button', { name: /Outline/i })).toHaveAttribute(
-      'aria-expanded',
-      'true'
-    )
+    expect(within(outline).getByText('Outline')).toBeInTheDocument()
+    expect(within(outline).getByRole('button', { name: '문서 목차 접기' })).toBeInTheDocument()
     expect(within(outline).getByText('열린 문서 없음')).toBeInTheDocument()
   })
 
@@ -4436,6 +4434,181 @@ describe('Left sidebar resizing', () => {
     expect(screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })).toHaveAttribute(
       'aria-valuenow',
       '260'
+    )
+  })
+})
+
+describe('Right sidebar collapse, expand, and resizing', () => {
+  it('collapses right sidebar via header button to thin vertical expand tab and re-expands cleanly', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:/wiki/right-collapse',
+        workspaces: {
+          'C:/wiki/right-collapse': {
+            'first.md': '# First Heading\n\n## Sub Heading',
+            'second.md': '# Second Heading'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('first.md'))
+
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    expect(rightSidebar).toHaveStyle({ width: '240px' })
+    expect(screen.queryByRole('button', { name: '문서 목차 펼치기' })).not.toBeInTheDocument()
+
+    const collapseBtn = within(rightSidebar).getByRole('button', { name: '문서 목차 접기' })
+    expect(collapseBtn).toHaveAttribute('title', '문서 목차 접기')
+    expect(collapseBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    await user.click(collapseBtn)
+
+    expect(screen.queryByRole('complementary', { name: '우측 사이드바' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '문서 목차 (Outline)' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('separator', { name: '우측 사이드바 너비 조절' })).not.toBeInTheDocument()
+
+    const expandTab = screen.getByRole('button', { name: '문서 목차 펼치기' })
+    expect(expandTab).toHaveAttribute('title', '문서 목차 펼치기')
+    expect(expandTab.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    // Switching files while collapsed keeps right sidebar collapsed
+    await user.click(within(explorer).getByText('second.md'))
+    expect(screen.queryByRole('complementary', { name: '우측 사이드바' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '문서 목차 펼치기' })).toBeInTheDocument()
+
+    // Re-expand via vertical tab restores right sidebar and reflects active document
+    await user.click(screen.getByRole('button', { name: '문서 목차 펼치기' }))
+    expect(screen.queryByRole('button', { name: '문서 목차 펼치기' })).not.toBeInTheDocument()
+    const reopenedSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    expect(reopenedSidebar).toHaveStyle({ width: '240px' })
+    expect(within(reopenedSidebar).getByText('Second Heading')).toBeInTheDocument()
+  })
+
+  it('renders vertical separator with bounds [180, 500] and resizes right sidebar via ArrowLeft/ArrowRight and double-click', async () => {
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const paneWorkspace = screen.getByTestId('pane-workspace')
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const resizer = screen.getByRole('separator', { name: '우측 사이드바 너비 조절' })
+
+    expect(
+      paneWorkspace.compareDocumentPosition(resizer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      resizer.compareDocumentPosition(rightSidebar) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    expect(rightSidebar).toHaveStyle({ width: '240px' })
+    expect(resizer).toHaveAttribute('aria-orientation', 'vertical')
+    expect(resizer).toHaveAttribute('aria-valuemin', '180')
+    expect(resizer).toHaveAttribute('aria-valuemax', '500')
+    expect(resizer).toHaveAttribute('aria-valuenow', '240')
+    expect(resizer).toHaveAttribute('tabindex', '0')
+
+    // ArrowLeft widens the right sidebar (left boundary moves left)
+    fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    const widened = Number(resizer.getAttribute('aria-valuenow'))
+    expect(widened).toBeGreaterThan(240)
+    expect(rightSidebar).toHaveStyle({ width: `${widened}px` })
+
+    // ArrowRight narrows it back
+    fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '240')
+    expect(rightSidebar).toHaveStyle({ width: '240px' })
+
+    // Repeated ArrowRight clamps at minimum 180px without collapsing
+    for (let i = 0; i < 10; i += 1) {
+      fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+    }
+    expect(resizer).toHaveAttribute('aria-valuenow', '180')
+    expect(rightSidebar).toHaveStyle({ width: '180px' })
+    expect(screen.getByRole('complementary', { name: '우측 사이드바' })).toBeInTheDocument()
+
+    // Repeated ArrowLeft clamps at maximum 500px
+    for (let i = 0; i < 20; i += 1) {
+      fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    }
+    expect(resizer).toHaveAttribute('aria-valuenow', '500')
+    expect(rightSidebar).toHaveStyle({ width: '500px' })
+
+    // Double-click restores default 240px
+    fireEvent.doubleClick(resizer)
+    expect(resizer).toHaveAttribute('aria-valuenow', '240')
+    expect(rightSidebar).toHaveStyle({ width: '240px' })
+  })
+
+  it('resizes right sidebar via pointer drag, preserves width across collapse/expand, and resets session-only on remount', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    const view = render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const resizer = screen.getByRole('separator', { name: '우측 사이드바 너비 조절' })
+
+    // Pointer drag left widens, right narrows, clamped to [180, 500]
+    fireEvent.pointerDown(resizer, { button: 0, clientX: 784 })
+    expect(document.body).toHaveClass('is-resizing-sidebar')
+    fireEvent.pointerMove(window, { clientX: 684 })
+    expect(rightSidebar).toHaveStyle({ width: '340px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '340')
+
+    fireEvent.pointerMove(window, { clientX: 900 })
+    expect(rightSidebar).toHaveStyle({ width: '180px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '180')
+
+    fireEvent.pointerMove(window, { clientX: 704 })
+    expect(rightSidebar).toHaveStyle({ width: '320px' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '320')
+
+    fireEvent.pointerUp(window)
+    expect(document.body).not.toHaveClass('is-resizing-sidebar')
+
+    // Collapse hides resizer and sidebar, expand restores previous 320px width
+    await user.click(within(rightSidebar).getByRole('button', { name: '문서 목차 접기' }))
+    expect(screen.queryByRole('separator', { name: '우측 사이드바 너비 조절' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '문서 목차 펼치기' }))
+    const reopenedSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    const reopenedResizer = screen.getByRole('separator', { name: '우측 사이드바 너비 조절' })
+    expect(reopenedSidebar).toHaveStyle({ width: '320px' })
+    expect(reopenedResizer).toHaveAttribute('aria-valuenow', '320')
+
+    // Session-only: config.json untouched, remount resets to expanded 240px
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+    view.unmount()
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+    expect(screen.getByRole('complementary', { name: '우측 사이드바' })).toHaveStyle({
+      width: '240px'
+    })
+    expect(screen.getByRole('separator', { name: '우측 사이드바 너비 조절' })).toHaveAttribute(
+      'aria-valuenow',
+      '240'
     )
   })
 })

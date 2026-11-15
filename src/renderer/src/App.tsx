@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ListTree } from 'lucide-react'
 import type { AppMenuCommand } from '@shared/ipc'
 import type { GitStatus } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
@@ -33,14 +34,19 @@ import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneT
 import {
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
-  LEFT_SIDEBAR_DEFAULT_WIDTH
+  LEFT_SIDEBAR_DEFAULT_WIDTH,
+  RIGHT_SIDEBAR_DEFAULT_WIDTH,
+  RIGHT_SIDEBAR_WIDTH_BOUNDS
 } from './utils/sidebarWidth'
 import { toErrorMessage } from './utils/toErrorMessage'
 
-const RIGHT_SIDEBAR_DEFAULT_WIDTH = 240
-
 interface LeftSidebarState {
   activeView: LeftSidebarView
+  isCollapsed: boolean
+  width: number
+}
+
+interface RightSidebarState {
   isCollapsed: boolean
   width: number
 }
@@ -79,6 +85,10 @@ export function App() {
     isCollapsed: false,
     width: LEFT_SIDEBAR_DEFAULT_WIDTH
   })
+  const [rightSidebar, setRightSidebar] = useState<RightSidebarState>({
+    isCollapsed: false,
+    width: RIGHT_SIDEBAR_DEFAULT_WIDTH
+  })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const windowWidth = useWindowWidth()
@@ -97,6 +107,21 @@ export function App() {
 
   const handleResizeLeftSidebar = useCallback((nextWidth: number): void => {
     setLeftSidebar((prev) => (prev.width === nextWidth ? prev : { ...prev, width: nextWidth }))
+  }, [])
+
+  const handleCollapseRightSidebar = useCallback((): void => {
+    setRightSidebar((prev) => (prev.isCollapsed ? prev : { ...prev, isCollapsed: true }))
+  }, [])
+
+  const handleExpandRightSidebar = useCallback((): void => {
+    setRightSidebar((prev) => (prev.isCollapsed ? { ...prev, isCollapsed: false } : prev))
+  }, [])
+
+  const handleResizeRightSidebar = useCallback((nextWidth: number): void => {
+    const clampedWidth = clampSidebarWidth(nextWidth, RIGHT_SIDEBAR_WIDTH_BOUNDS)
+    setRightSidebar((prev) =>
+      prev.width === clampedWidth ? prev : { ...prev, width: clampedWidth }
+    )
   }, [])
 
   const reportErrorBanner = useCallback((message: string | null, error?: unknown): void => {
@@ -600,23 +625,45 @@ export function App() {
           actions={paneActions}
         />
 
-        <aside
-          className="right-sidebar"
-          aria-label="우측 사이드바"
-          style={{ width: `${RIGHT_SIDEBAR_DEFAULT_WIDTH}px` }}
-        >
-          <DocumentOutlinePanel
-            documentName={activeBuffer?.name ?? null}
-            content={activeBuffer?.content ?? ''}
-            isMarkdownDocument={isActiveMarkdown}
-            showHeadingNumbers={config.showHeadingNumbers}
-            onToggleHeadingNumbers={toggleShowHeadingNumbers}
-            onSelectHeading={handleSelectOutlineHeading}
-            onInsertToc={handleOutlineInsertToc}
-            onApplyHeadingNumbers={handleOutlineApplyHeadingNumbers}
-            onStripHeadingNumbers={handleOutlineStripHeadingNumbers}
-          />
-        </aside>
+        {!rightSidebar.isCollapsed ? (
+          <>
+            <SidebarResizer
+              edge="left"
+              width={rightSidebar.width}
+              bounds={RIGHT_SIDEBAR_WIDTH_BOUNDS}
+              ariaLabel="우측 사이드바 너비 조절"
+              onResize={handleResizeRightSidebar}
+            />
+            <aside
+              className="right-sidebar"
+              aria-label="우측 사이드바"
+              style={{ width: `${rightSidebar.width}px` }}
+            >
+              <DocumentOutlinePanel
+                documentName={activeBuffer?.name ?? null}
+                content={activeBuffer?.content ?? ''}
+                isMarkdownDocument={isActiveMarkdown}
+                showHeadingNumbers={config.showHeadingNumbers}
+                onToggleHeadingNumbers={toggleShowHeadingNumbers}
+                onSelectHeading={handleSelectOutlineHeading}
+                onInsertToc={handleOutlineInsertToc}
+                onApplyHeadingNumbers={handleOutlineApplyHeadingNumbers}
+                onStripHeadingNumbers={handleOutlineStripHeadingNumbers}
+                onCollapse={handleCollapseRightSidebar}
+              />
+            </aside>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="right-sidebar-expand-tab"
+            aria-label="문서 목차 펼치기"
+            title="문서 목차 펼치기"
+            onClick={handleExpandRightSidebar}
+          >
+            <ListTree size={18} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+        )}
 
         {isSettingsOpen && (
           <SettingsPanel

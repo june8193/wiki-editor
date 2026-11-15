@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
-  LEFT_SIDEBAR_DEFAULT_WIDTH
+  LEFT_SIDEBAR_DEFAULT_WIDTH,
+  RIGHT_SIDEBAR_DEFAULT_WIDTH,
+  RIGHT_SIDEBAR_MAX_WIDTH,
+  RIGHT_SIDEBAR_MIN_WIDTH,
+  RIGHT_SIDEBAR_WIDTH_BOUNDS
 } from './sidebarWidth'
 
 describe('sidebarWidth', () => {
@@ -72,12 +76,22 @@ describe('sidebarWidth', () => {
     expect(clampSidebarWidth(260, minOnlyBounds)).toBe(180)
   })
 
-  it('clamps widths against arbitrary min/max/default bounds', () => {
-    const fixedBounds = { min: 180, max: 500, defaultWidth: 240 }
-    expect(clampSidebarWidth(120, fixedBounds)).toBe(180)
-    expect(clampSidebarWidth(240, fixedBounds)).toBe(240)
-    expect(clampSidebarWidth(620, fixedBounds)).toBe(500)
-    expect(clampSidebarWidth(Number.NaN, fixedBounds)).toBe(240)
+  it('exposes right sidebar bounds (180..500, default 240) and clamps widths against them', () => {
+    expect(RIGHT_SIDEBAR_DEFAULT_WIDTH).toBe(240)
+    expect(RIGHT_SIDEBAR_MIN_WIDTH).toBe(180)
+    expect(RIGHT_SIDEBAR_MAX_WIDTH).toBe(500)
+    expect(RIGHT_SIDEBAR_WIDTH_BOUNDS).toEqual({
+      min: 180,
+      max: 500,
+      defaultWidth: 240
+    })
+
+    expect(clampSidebarWidth(120, RIGHT_SIDEBAR_WIDTH_BOUNDS)).toBe(180)
+    expect(clampSidebarWidth(180, RIGHT_SIDEBAR_WIDTH_BOUNDS)).toBe(180)
+    expect(clampSidebarWidth(240, RIGHT_SIDEBAR_WIDTH_BOUNDS)).toBe(240)
+    expect(clampSidebarWidth(500, RIGHT_SIDEBAR_WIDTH_BOUNDS)).toBe(500)
+    expect(clampSidebarWidth(620, RIGHT_SIDEBAR_WIDTH_BOUNDS)).toBe(500)
+    expect(clampSidebarWidth(Number.NaN, RIGHT_SIDEBAR_WIDTH_BOUNDS)).toBe(240)
     expect(clampSidebarWidth(Number.NaN, { min: 180, max: 200, defaultWidth: 240 })).toBe(200)
   })
 })

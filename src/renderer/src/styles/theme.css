@@ -408,13 +408,37 @@ body.is-resizing-sidebar .pane-workspace {
 .right-sidebar {
   width: 240px;
   flex-shrink: 0;
-  min-width: 0;
+  min-width: 180px;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background-color: var(--bg-surface);
   border-left: 1px solid var(--border-color);
   overflow: hidden;
+}
+
+.right-sidebar-expand-tab {
+  width: 34px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  border: none;
+  border-left: 1px solid var(--border-color);
+  background-color: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.right-sidebar-expand-tab:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-elevated);
+}
+
+.right-sidebar-expand-tab:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
 }
 
 .workspace-sidebar {
@@ -1230,6 +1254,7 @@ body.is-resizing-sidebar .pane-workspace {
 /* Sidebar Outline panel */
 .outline-sidebar {
   flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1242,26 +1267,32 @@ body.is-resizing-sidebar .pane-workspace {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+  min-width: 0;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-color);
 }
 
-.outline-collapse-btn {
+.outline-title-group {
   display: flex;
   align-items: center;
   gap: 6px;
-  border: none;
-  background: transparent;
+  min-width: 0;
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 600;
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
 }
 
-.outline-collapse-btn:hover {
-  background-color: var(--bg-elevated);
+.outline-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.outline-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .outline-count {
