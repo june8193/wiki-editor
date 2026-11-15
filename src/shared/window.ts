@@ -212,6 +212,7 @@ export interface AcceptTabDragDropInput {
 }
 
 export type AcceptTabDragDropRejectReason =
+  | 'invalid-target-window'
   | 'no-active-drag'
   | 'drag-not-pending'
   | 'session-mismatch'

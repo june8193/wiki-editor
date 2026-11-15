@@ -317,7 +317,7 @@ export class WindowManager {
   acceptTabDragDrop(sender: unknown, input?: AcceptTabDragDropInput): AcceptTabDragDropResult {
     const targetRecord = this.resolveRecordFromSender(sender)
     if (!targetRecord || targetRecord.window.isDestroyed()) {
-      return { accepted: false, reason: 'no-active-drag' }
+      return { accepted: false, reason: 'invalid-target-window' }
     }
     return this.dragCoordinator.acceptCrossWindowDrop({
       targetWindowId: targetRecord.webContentsId,

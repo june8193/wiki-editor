@@ -91,6 +91,16 @@ async function openFolderAndNoteInWindow(
   return within(container).findByTestId('document-editor')
 }
 
+async function detachTabViaContextMenu(
+  user: ReturnType<typeof userEvent.setup>,
+  container: HTMLElement,
+  tabNamePattern: RegExp
+): Promise<void> {
+  fireEvent.contextMenu(within(container).getByRole('tab', { name: tabNamePattern }))
+  const menu = await within(container).findByRole('menu', { name: '탭 작업 메뉴' })
+  await user.click(within(menu).getByRole('menuitem', { name: '새 창으로 이동' }))
+}
+
 describe('Multi-window shared document buffer integration (<App />)', () => {
   const activeDisposers: Array<() => void> = []
 
@@ -1532,20 +1542,8 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     })
 
     // Detach beta.md -> aux1, gamma.md -> aux2 (leaving alpha.md in main)
-    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /beta\.md/ }))
-    await user.click(
-      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
-        'menuitem',
-        { name: '새 창으로 이동' }
-      )
-    )
-    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /gamma\.md/ }))
-    await user.click(
-      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
-        'menuitem',
-        { name: '새 창으로 이동' }
-      )
-    )
+    await detachTabViaContextMenu(user, mainRendered.container, /beta\.md/)
+    await detachTabViaContextMenu(user, mainRendered.container, /gamma\.md/)
 
     await waitFor(() => {
       expect(harness.getAuxiliaryWindows()).toHaveLength(2)
@@ -1624,20 +1622,8 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     ).toBe('# Gamma synced edit')
 
     // 3. Main -> Aux and Aux A -> Aux B bidirectional transfer
-    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /beta\.md/ }))
-    await user.click(
-      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
-        'menuitem',
-        { name: '새 창으로 이동' }
-      )
-    )
-    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /gamma\.md/ }))
-    await user.click(
-      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
-        'menuitem',
-        { name: '새 창으로 이동' }
-      )
-    )
+    await detachTabViaContextMenu(user, mainRendered.container, /beta\.md/)
+    await detachTabViaContextMenu(user, mainRendered.container, /gamma\.md/)
     await waitFor(() => {
       expect(harness.getAuxiliaryWindows()).toHaveLength(4)
       expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(1)
@@ -1724,20 +1710,8 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     // Switch two.md to wysiwyg before detaching to aux1
     await user.click(within(mainRendered.container).getByRole('tab', { name: /two\.md/ }))
     await user.click(within(mainRendered.container).getByRole('button', { name: '위지윅' }))
-    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /two\.md/ }))
-    await user.click(
-      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
-        'menuitem',
-        { name: '새 창으로 이동' }
-      )
-    )
-    fireEvent.contextMenu(within(mainRendered.container).getByRole('tab', { name: /three\.md/ }))
-    await user.click(
-      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
-        'menuitem',
-        { name: '새 창으로 이동' }
-      )
-    )
+    await detachTabViaContextMenu(user, mainRendered.container, /two\.md/)
+    await detachTabViaContextMenu(user, mainRendered.container, /three\.md/)
 
     // Main now has ONLY 1 tab (one.md) in single mode
     await waitFor(() => {

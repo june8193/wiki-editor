@@ -932,6 +932,13 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
         1
       )
 
+      const invalidTargetResult = await ipc.invokeFrom<AcceptTabDragDropResult>(
+        { id: 999999 } as never,
+        WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        {}
+      )
+      expect(invalidTargetResult).toEqual({ accepted: false, reason: 'invalid-target-window' })
+
       // 2. Aux1 -> Main drop acceptance + rejection guards
       const noActiveResult = await ipc.invokeFrom<AcceptTabDragDropResult>(
         mainWin.webContents,

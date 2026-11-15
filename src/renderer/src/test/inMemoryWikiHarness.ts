@@ -674,7 +674,7 @@ export function createMultiWindowWikiHarness(
         },
         async acceptTabDragDrop(input) {
           if (destroyed) {
-            return { accepted: false, reason: 'no-active-drag' }
+            return { accepted: false, reason: 'invalid-target-window' }
           }
           return dragCoordinator.acceptCrossWindowDrop({
             targetWindowId: windowId,

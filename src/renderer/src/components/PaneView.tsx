@@ -75,18 +75,10 @@ export function PaneView({
         }
       }}
       onDrop={(event) =>
-        handleTabMoveDrop(
-          event,
-          dragState,
-          actions.onDropTabInWindow,
-          pane.id,
-          actions.onMoveTab,
-          {
-            canAcceptExternal: pane.tabs.length === 0,
-            onDropExternalTab: actions.onDropExternalTab,
-            ignoreSamePane: true
-          }
-        )
+        handleTabMoveDrop(event, dragState, pane.id, actions, {
+          canAcceptExternal: pane.tabs.length === 0,
+          ignoreSamePane: true
+        })
       }
     >
       {pane.tabs.length > 0 && (

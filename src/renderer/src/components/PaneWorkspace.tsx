@@ -223,18 +223,10 @@ export function PaneWorkspace({
             dispatchTabDrop(
               event,
               dragState,
-              actions.onDropTabInWindow,
+              { kind: 'split', direction: zone.direction },
+              actions,
               (payload) => onSplitWithTab(payload.paneId, payload.tabId, zone.direction),
-              {
-                onExternalDrop: actions.onDropExternalTab
-                  ? (dragSessionId) =>
-                      actions.onDropExternalTab?.(
-                        { kind: 'split', direction: zone.direction },
-                        dragSessionId
-                      )
-                  : undefined,
-                stopPropagation: true
-              }
+              { stopPropagation: true }
             )
           }
         >
