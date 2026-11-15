@@ -1,13 +1,21 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useRef } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
-import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
+import { getRawEditorLanguage, resolveEditorShortcut, resolveEffectiveEditorMode } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
-import { DEFAULT_SPLIT_RATIO, EditorMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import {
+  DEFAULT_SPLIT_RATIO,
+  EditorMode,
+  PaneId,
+  TabItem,
+  TabViewPatch,
+  normalizeSplitRatio,
+  roundSplitRatio
+} from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
-import { SplitSplitter, normalizeSplitRatio, roundSplitRatio } from './SplitSplitter'
+import { SplitSplitter } from './SplitSplitter'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 export interface OutlineScrollRequest {
@@ -61,8 +69,7 @@ export function DocumentEditor({
   onSave,
   onUpdateViewState
 }: DocumentEditorProps) {
-  const allowRichModes = isMarkdownDocument(activeDoc)
-  const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
+  const { allowRichModes, effectiveMode } = resolveEffectiveEditorMode(activeDoc, tab.mode)
   const rawRatio = normalizeSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
   const previewRatio = roundSplitRatio(1 - rawRatio)
   const rawLanguage = getRawEditorLanguage(activeDoc)

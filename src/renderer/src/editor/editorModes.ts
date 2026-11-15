@@ -23,7 +23,7 @@ const DIGIT_SHORTCUT_MODES: Readonly<Record<string, EditorMode>> = {
 }
 
 /**
- * Determines whether rich Markdown modes (WYSIWYG / Preview) are enabled for a buffer.
+ * Determines whether rich Markdown modes (WYSIWYG / Preview / Split) are enabled for a buffer.
  * Extensionless files default to Markdown, while `.json`, `.txt`, and `config` stay Raw-only.
  */
 export function isMarkdownDocument(doc: Pick<DocumentBuffer, 'kind' | 'name'>): boolean {
@@ -36,6 +36,20 @@ export function isMarkdownDocument(doc: Pick<DocumentBuffer, 'kind' | 'name'>): 
   }
   const ext = doc.name.slice(lastDot).toLowerCase()
   return ext === '.md' || ext === '.markdown'
+}
+
+/**
+ * Resolves whether rich Markdown modes are enabled alongside the effective editor mode for a buffer.
+ */
+export function resolveEffectiveEditorMode(
+  doc: Pick<DocumentBuffer, 'kind' | 'name'> | null | undefined,
+  requestedMode: EditorMode
+): { allowRichModes: boolean; effectiveMode: EditorMode } {
+  const allowRichModes = doc ? isMarkdownDocument(doc) : false
+  return {
+    allowRichModes,
+    effectiveMode: allowRichModes ? requestedMode : 'raw'
+  }
 }
 
 /**

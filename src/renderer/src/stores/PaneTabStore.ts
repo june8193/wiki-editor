@@ -84,6 +84,20 @@ export function clampSplitRatio(ratio: number): number {
   return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio))
 }
 
+/**
+ * Rounds split ratios to 4 decimals so repeated steps avoid IEEE-754 float drift.
+ */
+export function roundSplitRatio(ratio: number): number {
+  return Math.round(ratio * 10000) / 10000
+}
+
+/**
+ * Clamps and rounds a split ratio to the allowed `[0.15, 0.85]` interval.
+ */
+export function normalizeSplitRatio(ratio: number): number {
+  return roundSplitRatio(clampSplitRatio(ratio))
+}
+
 function createInitialState(): PaneLayoutState {
   return {
     splitMode: 'single',

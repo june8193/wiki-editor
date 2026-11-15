@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { canSplitWithTab, PaneTabStore, type PaneTabTransition } from './PaneTabStore'
+import {
+  canSplitWithTab,
+  normalizeSplitRatio,
+  PaneTabStore,
+  type PaneTabTransition
+} from './PaneTabStore'
 
 describe('PaneTabStore', () => {
   it('opens tabs, deduplicates within a pane, switches active tab, and selects neighbor on close', () => {
@@ -351,5 +356,10 @@ describe('PaneTabStore', () => {
         .filter((t) => t.type === 'editor-mode-changed')
         .map((t) => `${t.from}->${t.to}`)
     ).toEqual(['raw->split', 'split->raw', 'raw->split'])
+
+    expect(normalizeSplitRatio(0.55 + 0.05)).toBe(0.6)
+    expect(normalizeSplitRatio(Number.NaN)).toBe(0.5)
+    expect(normalizeSplitRatio(0.01)).toBe(0.15)
+    expect(normalizeSplitRatio(0.99)).toBe(0.85)
   })
 })

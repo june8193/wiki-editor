@@ -4,6 +4,7 @@ import {
   getRawEditorLanguage,
   isMarkdownDocument,
   resolveEditorShortcut,
+  resolveEffectiveEditorMode,
   resolveModeShortcut
 } from './editorModes'
 
@@ -19,6 +20,19 @@ describe('editorModes helpers', () => {
     expect(getRawEditorLanguage({ kind: 'config', name: 'config.json' })).toBe('json')
     expect(getRawEditorLanguage({ kind: 'workspace', name: 'data.json' })).toBe('json')
     expect(getRawEditorLanguage({ kind: 'workspace', name: 'doc.md' })).toBe('markdown')
+
+    expect(resolveEffectiveEditorMode({ kind: 'workspace', name: 'readme.md' }, 'split')).toEqual({
+      allowRichModes: true,
+      effectiveMode: 'split'
+    })
+    expect(resolveEffectiveEditorMode({ kind: 'workspace', name: 'notes.txt' }, 'split')).toEqual({
+      allowRichModes: false,
+      effectiveMode: 'raw'
+    })
+    expect(resolveEffectiveEditorMode(undefined, 'split')).toEqual({
+      allowRichModes: false,
+      effectiveMode: 'raw'
+    })
   })
 
   it('cycles modes and resolves Ctrl/Cmd+1/2/3/4 and Ctrl/Cmd+Shift+M shortcuts', () => {
