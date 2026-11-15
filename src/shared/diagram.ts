@@ -21,11 +21,11 @@ export function normalizeDiagramSuggestedFileName(
     return `mermaid-diagram.${format}`
   }
 
-  const withoutForbidden = suggestedName
+  const cleanedBase = suggestedName
     .replace(WINDOWS_FORBIDDEN_FILENAME_CHARS_RE, '')
     .replace(/[\s.]+$/g, '')
-  const withoutExtension = withoutForbidden.replace(/\.(png|svg)$/i, '')
-  const cleanedBase = sanitizeDiagramFileNamePart(withoutExtension)
+    .replace(/\.(png|svg)$/i, '')
+    .replace(EDGE_SPACES_AND_DOTS_RE, '')
   const baseName = cleanedBase.length > 0 ? cleanedBase : 'mermaid-diagram'
   return `${baseName}.${format}`
 }

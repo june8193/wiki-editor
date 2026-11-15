@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
+import type { DiagramExportFormat } from '@shared/ipc'
 import {
   buildMermaidExportFileName,
   normalizeMermaidSvg,
@@ -41,6 +42,24 @@ const COPY_CODE_FAILED_FALLBACK_MESSAGE = 'Mermaid 코드 복사에 실패했습
 const COPY_IMAGE_FAILED_FALLBACK_MESSAGE = 'Mermaid 이미지 복사에 실패했습니다.'
 const SAVE_PNG_FAILED_FALLBACK_MESSAGE = 'Mermaid PNG 파일 저장에 실패했습니다.'
 const SAVE_SVG_FAILED_FALLBACK_MESSAGE = 'Mermaid SVG 파일 저장에 실패했습니다.'
+
+function resolveSaveFileSender(
+  format: DiagramExportFormat,
+  documentTitle?: string
+): (data: Uint8Array | string) => Promise<boolean> {
+  const saveFile = window.wikiApi?.diagram?.saveFile
+  if (typeof saveFile !== 'function') {
+    throw new Error('다이어그램 파일 저장 API를 사용할 수 없습니다.')
+  }
+  return async (data) => {
+    const result = await saveFile({
+      format,
+      suggestedName: buildMermaidExportFileName(documentTitle, format),
+      data
+    })
+    return !result.canceled
+  }
+}
 
 /**
  * Coordinates Mermaid block toolbar actions (`copy-image`, `copy-code`, `save-png`, `save-svg`),
@@ -223,20 +242,7 @@ export function useMermaidDiagramActions({
         event: 'Mermaid PNG save failed',
         fallbackMessage: SAVE_PNG_FAILED_FALLBACK_MESSAGE,
         extraLogData: { format: 'png' },
-        resolveSender: () => {
-          const saveFile = window.wikiApi?.diagram?.saveFile
-          if (typeof saveFile !== 'function') {
-            throw new Error('다이어그램 파일 저장 API를 사용할 수 없습니다.')
-          }
-          return async (pngBytes) => {
-            const result = await saveFile({
-              format: 'png',
-              suggestedName: buildMermaidExportFileName(documentTitle, 'png'),
-              data: pngBytes
-            })
-            return !result.canceled
-          }
-        }
+        resolveSender: () => resolveSaveFileSender('png', documentTitle)
       }),
     [documentTitle, executePngExportAction]
   )
@@ -250,19 +256,10 @@ export function useMermaidDiagramActions({
         if (confirmedSvg === null) {
           throw new Error(SAVE_SVG_FAILED_FALLBACK_MESSAGE)
         }
-        const saveFile = window.wikiApi?.diagram?.saveFile
-        if (typeof saveFile !== 'function') {
-          throw new Error('다이어그램 파일 저장 API를 사용할 수 없습니다.')
-        }
-
+        const sendSvg = resolveSaveFileSender('svg', documentTitle)
         const normalized = normalizeMermaidSvg(confirmedSvg, theme)
         normalizedSvgLength = normalized.svg.length
-        const result = await saveFile({
-          format: 'svg',
-          suggestedName: buildMermaidExportFileName(documentTitle, 'svg'),
-          data: normalized.svg
-        })
-        return !result.canceled
+        return await sendSvg(normalized.svg)
       },
       {
         event: 'Mermaid SVG save failed',
