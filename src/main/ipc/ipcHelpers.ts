@@ -1,4 +1,9 @@
-import { CONFIG_IPC_CHANNELS, LOG_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import {
+  CLIPBOARD_IPC_CHANNELS,
+  CONFIG_IPC_CHANNELS,
+  LOG_IPC_CHANNELS,
+  WORKSPACE_IPC_CHANNELS
+} from '@shared/ipc'
 import type { LogService } from '../logging/LogService'
 
 export interface IpcMainLike {
@@ -33,6 +38,9 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
   }),
   [CONFIG_IPC_CHANNELS.saveRaw]: ([raw]) => ({
     contentLength: typeof raw === 'string' ? raw.length : 0
+  }),
+  [CLIPBOARD_IPC_CHANNELS.writeText]: ([text]) => ({
+    textLength: typeof text === 'string' ? text.length : 0
   })
 }
 

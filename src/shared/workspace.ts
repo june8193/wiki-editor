@@ -118,6 +118,40 @@ export function remapPathPrefix(targetPath: string, oldPrefix: string, newPrefix
   return targetPath
 }
 
+export function toWorkspaceRelativePath(rootPath: string, targetPath: string): string {
+  const normRoot = normalizeWorkspacePath(rootPath)
+  const normTarget = normalizeWorkspacePath(targetPath)
+  if (!normRoot || !normTarget || isSameWorkspacePath(normRoot, normTarget)) {
+    return ''
+  }
+
+  const rootSlash = normRoot.replace(/\\/g, '/')
+  const targetSlash = normTarget.replace(/\\/g, '/')
+  const rootPrefix = rootSlash.endsWith('/') ? rootSlash : `${rootSlash}/`
+  const matchesRoot = isWindowsPathStyle(normRoot)
+    ? targetSlash.toLowerCase().startsWith(rootPrefix.toLowerCase())
+    : targetSlash.startsWith(rootPrefix)
+
+  return matchesRoot ? targetSlash.slice(rootPrefix.length) : ''
+}
+
+export function formatRelativeEntryPath(
+  entry: Pick<WorkspaceEntry, 'path' | 'relativePath'>,
+  workspaceRootPath?: string | null
+): string {
+  if (workspaceRootPath) {
+    const computed = toWorkspaceRelativePath(workspaceRootPath, entry.path)
+    if (computed) {
+      return computed
+    }
+  }
+  return entry.relativePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+}
+
+export function formatAbsoluteEntryPath(entry: Pick<WorkspaceEntry, 'path'>): string {
+  return normalizeWorkspacePath(entry.path) || entry.path
+}
+
 export function isFavoriteWorkspacePath(
   favorites: readonly FavoriteWorkspace[],
   workspacePath: string

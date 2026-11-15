@@ -5,6 +5,7 @@ import {
   MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState
 } from 'react'
@@ -80,6 +81,8 @@ function treeIndentStyle(depth: number): CSSProperties {
   return { paddingLeft: `${12 + depth * 14}px` }
 }
 
+export type EntryPathCopyMode = 'relative' | 'absolute'
+
 interface FolderTreeSidebarProps {
   workspace: WorkspaceSummary | null
   tree: WorkspaceTreeState
@@ -93,6 +96,7 @@ interface FolderTreeSidebarProps {
   onCreateEntry: (parentDirPath: string, name: string, kind: WorkspaceEntryKind) => Promise<void>
   onRenameEntry: (targetPath: string, newName: string) => Promise<void>
   onRequestDelete: (entry: WorkspaceEntry) => void
+  onCopyEntryPath: (entry: WorkspaceEntry, mode: EntryPathCopyMode) => void
 }
 
 export function FolderTreeSidebar({
@@ -107,7 +111,8 @@ export function FolderTreeSidebar({
   onRefreshTree,
   onCreateEntry,
   onRenameEntry,
-  onRequestDelete
+  onRequestDelete,
+  onCopyEntryPath
 }: FolderTreeSidebarProps) {
   const [inlineCreate, setInlineCreate] = useState<InlineCreateState | null>(null)
   const [createValue, setCreateValue] = useState('')
@@ -118,6 +123,22 @@ export function FolderTreeSidebar({
   const closeContextMenu = useCallback(() => setContextMenu(null), [])
 
   useDismissable(contextMenu !== null, menuRef, closeContextMenu)
+
+  useLayoutEffect(() => {
+    if (!contextMenu || !menuRef.current) return
+    const rect = menuRef.current.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+
+    const margin = 8
+    const maxX = Math.max(margin, window.innerWidth - rect.width - margin)
+    const maxY = Math.max(margin, window.innerHeight - rect.height - margin)
+    const clampedX = Math.min(Math.max(margin, contextMenu.x), maxX)
+    const clampedY = Math.min(Math.max(margin, contextMenu.y), maxY)
+
+    if (clampedX !== contextMenu.x || clampedY !== contextMenu.y) {
+      setContextMenu((prev) => (prev ? { ...prev, x: clampedX, y: clampedY } : null))
+    }
+  }, [contextMenu])
 
   // Reset transient editing states whenever active workspace changes
   useEffect(() => {
@@ -206,6 +227,13 @@ export function FolderTreeSidebar({
     event.stopPropagation()
     onSelectPath(entry.path)
     setContextMenu({ entry, x: event.clientX, y: event.clientY })
+  }
+
+  const handleCopyPath = (mode: EntryPathCopyMode): void => {
+    if (!contextMenu) return
+    const target = contextMenu.entry
+    setContextMenu(null)
+    onCopyEntryPath(target, mode)
   }
 
   const renderInlineCreateRow = (depth: number) => {
@@ -390,6 +418,24 @@ export function FolderTreeSidebar({
               열기
             </button>
           )}
+          <div role="separator" className="context-menu-separator" />
+          <button
+            type="button"
+            role="menuitem"
+            className="context-menu-item"
+            onClick={() => handleCopyPath('relative')}
+          >
+            상대 경로 복사
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="context-menu-item"
+            onClick={() => handleCopyPath('absolute')}
+          >
+            절대 경로 복사
+          </button>
+          <div role="separator" className="context-menu-separator" />
           <button
             type="button"
             role="menuitem"

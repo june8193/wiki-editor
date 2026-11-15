@@ -58,6 +58,10 @@ export const LOG_IPC_CHANNELS = {
   write: 'log:write'
 } as const
 
+export const CLIPBOARD_IPC_CHANNELS = {
+  writeText: 'clipboard:write-text'
+} as const
+
 export interface WikiConfigApi {
   get(): Promise<AppConfig>
   update(patch: Partial<AppConfig>): Promise<AppConfig>
@@ -111,10 +115,15 @@ export interface WikiLogApi {
   write(payload: RendererLogPayload): Promise<void>
 }
 
+export interface WikiClipboardApi {
+  writeText(text: string): Promise<void>
+}
+
 export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
   git: WikiGitApi
   menu: WikiMenuApi
   log?: WikiLogApi
+  clipboard?: WikiClipboardApi
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_APP_CONFIG } from '@shared/config'
 import {
   type AppMenuCommand,
+  CLIPBOARD_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
@@ -189,6 +190,17 @@ describe('createWikiApi', () => {
     await api.log.write(payload)
 
     expect(ipc.lastInvoked).toEqual([{ channel: LOG_IPC_CHANNELS.write, args: [payload] }])
+  })
+
+  it('routes clipboard.writeText through clipboard:write-text IPC channel with exact text', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+
+    await api.clipboard.writeText('guides/setup.md')
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: CLIPBOARD_IPC_CHANNELS.writeText, args: ['guides/setup.md'] }
+    ])
   })
 
   it('subscribes to menu:command without exposing Electron event and cleans up on unsubscribe', () => {

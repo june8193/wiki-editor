@@ -3,11 +3,16 @@ import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand } from '@shared/ipc'
 import type { GitStatus } from '@shared/git'
-import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
+import {
+  formatAbsoluteEntryPath,
+  formatRelativeEntryPath,
+  isFavoriteWorkspacePath,
+  WorkspaceEntry
+} from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
 import { DocumentOutlinePanel } from './components/DocumentOutlinePanel'
-import { FolderTreeSidebar } from './components/FolderTreeSidebar'
+import { type EntryPathCopyMode, FolderTreeSidebar } from './components/FolderTreeSidebar'
 import { GitSidebarPanel } from './components/GitSidebarPanel'
 import { PaneInteractionActions } from './components/PaneTabBar'
 import { PaneWorkspace } from './components/PaneWorkspace'
@@ -67,6 +72,18 @@ function getGitChangedCount(workspaceRootPath: string | null, status: GitStatus 
     return 0
   }
   return status.staged.length + status.unstaged.length + status.untracked.length
+}
+
+async function writeTextToClipboard(text: string): Promise<void> {
+  if (window.wikiApi.clipboard?.writeText) {
+    await window.wikiApi.clipboard.writeText(text)
+    return
+  }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  throw new Error('클립보드를 사용할 수 없습니다.')
 }
 
 interface PendingDialogState {
@@ -464,6 +481,21 @@ export function App() {
     [deleteEntry]
   )
 
+  const handleCopyEntryPath = useCallback(
+    (entry: WorkspaceEntry, mode: EntryPathCopyMode): void => {
+      reportErrorBanner(null)
+      const textToCopy =
+        mode === 'relative'
+          ? formatRelativeEntryPath(entry, workspace?.rootPath)
+          : formatAbsoluteEntryPath(entry)
+
+      void writeTextToClipboard(textToCopy).catch((error: unknown) => {
+        reportErrorBanner(toErrorMessage(error, '경로를 클립보드에 복사하지 못했습니다.'), error)
+      })
+    },
+    [reportErrorBanner, workspace?.rootPath]
+  )
+
   const activePane = layout.panes[layout.activePaneId]
   const activeTab = getPaneActiveTab(activePane)
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
@@ -619,6 +651,7 @@ export function App() {
                   onCreateEntry={createEntry}
                   onRenameEntry={renameEntry}
                   onRequestDelete={handleRequestDelete}
+                  onCopyEntryPath={handleCopyEntryPath}
                 />
               )}
 

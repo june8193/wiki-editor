@@ -13,6 +13,7 @@ import {
 } from 'electron'
 import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
+import { registerClipboardIpc } from './ipc/registerClipboardIpc'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerLogIpc } from './ipc/registerLogIpc'
@@ -61,9 +62,12 @@ let disposeConfigIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
+let disposeClipboardIpc: (() => void) | undefined
 let workspaceService: WorkspaceFsService | undefined
 
 function disposeMainResources(): void {
+  disposeClipboardIpc?.()
+  disposeClipboardIpc = undefined
   disposeLogIpc?.()
   disposeLogIpc = undefined
   disposeGitIpc?.()
@@ -108,6 +112,11 @@ void app.whenReady().then(async () => {
   }
 
   disposeLogIpc = registerLogIpc(ipcMain, logService)
+  disposeClipboardIpc = registerClipboardIpc({
+    ipcMain,
+    writeClipboardText: (text) => clipboard.writeText(text),
+    logService
+  })
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)
   disposeGitIpc = registerGitIpc({
     ipcMain,

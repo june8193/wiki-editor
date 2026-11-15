@@ -9,7 +9,7 @@ import {
   validateConfigRaw
 } from '@shared/config'
 import { createEmptyGitStatus, type GitFileStatusCode } from '@shared/git'
-import type { AppMenuCommand, WikiApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
+import type { AppMenuCommand, WikiApi, WikiClipboardApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import {
   addFavoriteWorkspace,
@@ -84,6 +84,7 @@ interface VirtualFsOptions {
   selectedFolder?: string | null
   git?: Partial<WikiGitApi>
   log?: WikiLogApi
+  clipboard?: Partial<WikiClipboardApi>
 }
 
 function normalizePosix(pathValue: string): string {
@@ -166,6 +167,7 @@ function createInMemoryWikiApi(
   getMenuListenerCount: () => number
   getFilesSnapshot: () => Map<string, string>
   readDirCalls: string[]
+  copiedTexts: string[]
 } {
   let state: AppConfig = {
     ...cloneAppConfig(DEFAULT_APP_CONFIG),
@@ -180,6 +182,7 @@ function createInMemoryWikiApi(
   const dirs = new Set<string>()
   const files = new Map<string, string>()
   const readDirCalls: string[] = []
+  const copiedTexts: string[] = []
   let activeRoot: string | null = null
   let selectedFolder: string | null = fsOptions.selectedFolder ?? null
 
@@ -441,7 +444,13 @@ function createInMemoryWikiApi(
         }
       }
     },
-    ...(fsOptions.log ? { log: fsOptions.log } : {})
+    ...(fsOptions.log ? { log: fsOptions.log } : {}),
+    clipboard: {
+      async writeText(text: string) {
+        copiedTexts.push(text)
+      },
+      ...fsOptions.clipboard
+    }
   }
 
   return {
@@ -462,7 +471,8 @@ function createInMemoryWikiApi(
     getListenerCount: () => configListeners.size,
     getMenuListenerCount: () => menuListeners.size,
     getFilesSnapshot: () => new Map(files),
-    readDirCalls
+    readDirCalls,
+    copiedTexts
   }
 }
 
@@ -6249,5 +6259,155 @@ describe('Split editor mode and bidirectional scroll sync', () => {
         delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
       }
     }
+  })
+})
+
+describe('Folder tree context menu path copy', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('shows separated relative and absolute path copy items in folder tree context menu and copies formatted paths', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, copiedTexts } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:/wiki/notes',
+        workspaces: {
+          'C:/wiki/notes': {
+            'guides/setup.md': '# Setup'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const sidebar = await screen.findByLabelText('워크스페이스 탐색기')
+    const guidesNode = await within(sidebar).findByText('guides')
+
+    fireEvent.contextMenu(guidesNode)
+    const dirMenu = await screen.findByRole('menu')
+    expect(
+      within(dirMenu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent?.trim())
+    ).toEqual(['새 파일', '새 폴더', '상대 경로 복사', '절대 경로 복사', '이름 변경 (F2)', '삭제'])
+    expect(within(dirMenu).getAllByRole('separator')).toHaveLength(2)
+
+    await user.click(within(dirMenu).getByRole('menuitem', { name: '상대 경로 복사' }))
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(copiedTexts.at(-1)).toBe('guides')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    fireEvent.contextMenu(guidesNode)
+    const dirMenu2 = await screen.findByRole('menu')
+    await user.click(within(dirMenu2).getByRole('menuitem', { name: '절대 경로 복사' }))
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(copiedTexts.at(-1)).toBe('C:\\wiki\\notes\\guides')
+
+    await user.click(guidesNode)
+    const setupFileNode = await within(sidebar).findByText('setup.md')
+
+    fireEvent.contextMenu(setupFileNode)
+    const fileMenu = await screen.findByRole('menu')
+    expect(
+      within(fileMenu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent?.trim())
+    ).toEqual(['열기', '상대 경로 복사', '절대 경로 복사', '이름 변경 (F2)', '삭제'])
+    expect(within(fileMenu).getAllByRole('separator')).toHaveLength(2)
+
+    await user.click(within(fileMenu).getByRole('menuitem', { name: '상대 경로 복사' }))
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(copiedTexts.at(-1)).toBe('guides/setup.md')
+
+    fireEvent.contextMenu(setupFileNode)
+    const fileMenu2 = await screen.findByRole('menu')
+    await user.click(within(fileMenu2).getByRole('menuitem', { name: '절대 경로 복사' }))
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(copiedTexts.at(-1)).toBe('C:\\wiki\\notes\\guides\\setup.md')
+  })
+
+  it('copies updated relative and absolute paths for nested entries immediately after renaming an expanded parent folder', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, copiedTexts } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:/wiki/notes',
+        workspaces: {
+          'C:/wiki/notes': {
+            'guides/setup.md': '# Setup'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const sidebar = await screen.findByLabelText('워크스페이스 탐색기')
+    const guidesNode = await within(sidebar).findByText('guides')
+    await user.click(guidesNode)
+    expect(await within(sidebar).findByText('setup.md')).toBeInTheDocument()
+
+    const guidesTreeItem = within(sidebar).getByRole('treeitem', { name: 'guides' })
+    guidesTreeItem.focus()
+    fireEvent.keyDown(guidesTreeItem, { key: 'F2' })
+    const renameInput = await within(sidebar).findByLabelText('새 이름 입력')
+    await user.clear(renameInput)
+    await user.type(renameInput, 'handbook{Enter}')
+
+    expect(await within(sidebar).findByText('handbook')).toBeInTheDocument()
+    const nestedSetup = within(sidebar).getByText('setup.md')
+
+    fireEvent.contextMenu(nestedSetup)
+    const menu1 = await screen.findByRole('menu')
+    await user.click(within(menu1).getByRole('menuitem', { name: '상대 경로 복사' }))
+    expect(copiedTexts.at(-1)).toBe('handbook/setup.md')
+
+    fireEvent.contextMenu(nestedSetup)
+    const menu2 = await screen.findByRole('menu')
+    await user.click(within(menu2).getByRole('menuitem', { name: '절대 경로 복사' }))
+    expect(copiedTexts.at(-1)).toBe('C:\\wiki\\notes\\handbook\\setup.md')
+  })
+
+  it('closes context menu and displays error banner when clipboard path copy fails', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:/wiki/notes',
+        workspaces: {
+          'C:/wiki/notes': {
+            'guides/setup.md': '# Setup'
+          }
+        },
+        clipboard: {
+          async writeText() {
+            throw new Error('클립보드 접근이 거부되었습니다.')
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const sidebar = await screen.findByLabelText('워크스페이스 탐색기')
+    const guidesNode = await within(sidebar).findByText('guides')
+
+    fireEvent.contextMenu(guidesNode)
+    const menu = await screen.findByRole('menu')
+    await user.click(within(menu).getByRole('menuitem', { name: '상대 경로 복사' }))
+
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('클립보드 접근이 거부되었습니다.')
   })
 })

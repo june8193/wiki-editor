@@ -627,6 +627,12 @@ body.is-resizing-sidebar .pane-workspace {
   color: var(--danger-color);
 }
 
+.context-menu-separator {
+  height: 1px;
+  margin: 4px 2px;
+  background-color: var(--border-color);
+}
+
 .workspace-placeholder {
   flex: 1;
   min-width: 0;

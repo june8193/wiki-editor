@@ -4,6 +4,7 @@ import {
   isNestedOrSamePath,
   isSameWorkspacePath,
   remapPathPrefix,
+  toWorkspaceRelativePath,
   WorkspaceEntry,
   WorkspaceEntryKind,
   WorkspaceSummary
@@ -294,10 +295,15 @@ export function useWorkspaceTree({
             const next: Record<string, WorkspaceEntry[]> = {}
             for (const [dir, entries] of Object.entries(prev)) {
               const remappedDir = remapPathPrefix(dir, targetPath, renamed.path)
-              next[remappedDir] = entries.map((item) => ({
-                ...item,
-                path: remapPathPrefix(item.path, targetPath, renamed.path)
-              }))
+              next[remappedDir] = entries.map((item) => {
+                const remappedPath = remapPathPrefix(item.path, targetPath, renamed.path)
+                return {
+                  ...item,
+                  path: remappedPath,
+                  relativePath:
+                    toWorkspaceRelativePath(currentWs.rootPath, remappedPath) || item.relativePath
+                }
+              })
             }
             return next
           })

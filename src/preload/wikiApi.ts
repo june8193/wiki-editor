@@ -2,6 +2,7 @@ import type { AppConfig } from '@shared/config'
 import type { GitBranchList, GitStatus, GitSyncResult } from '@shared/git'
 import {
   type AppMenuCommand,
+  CLIPBOARD_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
@@ -132,6 +133,10 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
     },
     log: {
       write: (payload) => ipcRenderer.invoke(LOG_IPC_CHANNELS.write, payload) as Promise<void>
+    },
+    clipboard: {
+      writeText: (text) =>
+        ipcRenderer.invoke(CLIPBOARD_IPC_CHANNELS.writeText, text) as Promise<void>
     }
   }
 }
