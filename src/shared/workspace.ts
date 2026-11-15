@@ -102,12 +102,44 @@ export function getParentPath(targetPath: string, rootPath: string): string {
   return parent.length < rootPath.length ? rootPath : parent
 }
 
+/**
+ * Resolves the immediate normalized parent directory of a file path without requiring a workspace root.
+ */
+export function getParentDirectory(filePath: string): string {
+  const normalized = normalizeWorkspacePath(filePath)
+  const lastSlash = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
+  if (lastSlash < 0) return normalized
+  if (lastSlash === 0) return '/'
+  if (lastSlash === 2 && normalized[1] === ':') return normalized.slice(0, 3)
+  return normalized.slice(0, lastSlash)
+}
+
 export function isNestedOrSamePath(candidatePath: string, parentPath: string): boolean {
   return (
     candidatePath === parentPath ||
     candidatePath.startsWith(`${parentPath}/`) ||
     candidatePath.startsWith(`${parentPath}\\`)
   )
+}
+
+/**
+ * Returns true when a workspace watcher event (or an omitted mutation signal) may affect `targetPath`.
+ */
+export function isWorkspaceChangeAffectingPath(
+  targetPath: string,
+  changeEvent?: WorkspaceChangeEvent
+): boolean {
+  if (!changeEvent || !changeEvent.relativePath || changeEvent.relativePath === '.') {
+    return true
+  }
+  const rootNormalized = normalizeWorkspacePath(changeEvent.rootPath).replace(/[\\/]+$/, '')
+  const relNormalized = changeEvent.relativePath.replace(/^[\\/]+/, '')
+  const changedKey = getWorkspacePathKey(`${rootNormalized}/${relNormalized}`)
+  const targetKey = getWorkspacePathKey(targetPath)
+  if (!changedKey || !targetKey) {
+    return true
+  }
+  return isNestedOrSamePath(targetKey, changedKey)
 }
 
 export function remapPathPrefix(targetPath: string, oldPrefix: string, newPrefix: string): string {

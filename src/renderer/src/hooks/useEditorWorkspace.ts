@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { isSupportedImageFile } from '@shared/assets'
 import {
+  getParentDirectory,
   getWorkspacePathKey,
-  isNestedOrSamePath,
   isSameWorkspacePath,
-  normalizeWorkspacePath,
+  isWorkspaceChangeAffectingPath,
   WorkspaceChangeEvent,
   WorkspaceEntry
 } from '@shared/workspace'
@@ -44,33 +44,20 @@ function isMissingWorkspaceFileError(error: unknown): boolean {
   )
 }
 
+function isWritableWorkspaceTextBuffer(
+  buffer: DocumentBuffer | undefined
+): buffer is DocumentBuffer {
+  return Boolean(buffer && buffer.kind === 'workspace' && !isImageDocument(buffer))
+}
+
+function isAutoSavableBuffer(buffer: DocumentBuffer | undefined): buffer is DocumentBuffer {
+  return isWritableWorkspaceTextBuffer(buffer) && buffer.isDirty && !buffer.isSaving
+}
+
 type ImageParentDirReadResult =
   | { status: 'ok'; entries: readonly WorkspaceEntry[] }
   | { status: 'missing' }
   | { status: 'error' }
-
-function getParentDirectory(filePath: string): string {
-  const normalized = normalizeWorkspacePath(filePath)
-  const lastSlash = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
-  if (lastSlash < 0) return normalized
-  if (lastSlash === 0) return '/'
-  if (lastSlash === 2 && normalized[1] === ':') return normalized.slice(0, 3)
-  return normalized.slice(0, lastSlash)
-}
-
-function shouldRefreshImageAsset(imagePath: string, changeEvent?: WorkspaceChangeEvent): boolean {
-  if (!changeEvent || !changeEvent.relativePath || changeEvent.relativePath === '.') {
-    return true
-  }
-  const rootNormalized = normalizeWorkspacePath(changeEvent.rootPath).replace(/[\\/]+$/, '')
-  const relNormalized = changeEvent.relativePath.replace(/^[\\/]+/, '')
-  const changedKey = getWorkspacePathKey(`${rootNormalized}/${relNormalized}`)
-  const imageKey = getWorkspacePathKey(imagePath)
-  if (!changedKey || !imageKey) {
-    return true
-  }
-  return isNestedOrSamePath(imageKey, changedKey)
-}
 
 async function readImageParentDirectories(
   imageBuffers: readonly DocumentBuffer[]
@@ -406,14 +393,7 @@ export function useEditorWorkspace({
 
     for (const [key, entry] of timers.entries()) {
       const buf = buffers[key]
-      if (
-        !buf ||
-        buf.kind !== 'workspace' ||
-        isImageDocument(buf) ||
-        !buf.isDirty ||
-        buf.isSaving ||
-        buf.version !== entry.version
-      ) {
+      if (!isAutoSavableBuffer(buf) || buf.version !== entry.version) {
         window.clearTimeout(entry.timerId)
         timers.delete(key)
       }
@@ -421,13 +401,13 @@ export function useEditorWorkspace({
 
     for (const attemptedKey of lastAutoSaveAttemptVersionRef.current.keys()) {
       const buf = buffers[attemptedKey]
-      if (!buf || isImageDocument(buf) || !buf.isDirty) {
+      if (!isWritableWorkspaceTextBuffer(buf) || !buf.isDirty) {
         lastAutoSaveAttemptVersionRef.current.delete(attemptedKey)
       }
     }
 
     for (const buf of Object.values(buffers)) {
-      if (buf.kind !== 'workspace' || isImageDocument(buf) || !buf.isDirty || buf.isSaving) continue
+      if (!isAutoSavableBuffer(buf)) continue
       if (lastAutoSaveAttemptVersionRef.current.get(buf.key) === buf.version) continue
       if (timers.has(buf.key)) continue
 
@@ -436,13 +416,7 @@ export function useEditorWorkspace({
         timers.delete(buf.key)
         if (isAutoSavePausedRef.current) return
         const latest = bufferStore.getBuffer(buf.key)
-        if (
-          !latest ||
-          latest.kind !== 'workspace' ||
-          isImageDocument(latest) ||
-          !latest.isDirty ||
-          latest.isSaving
-        ) {
+        if (!isAutoSavableBuffer(latest)) {
           return
         }
         if (latest.version !== scheduledVersion) return
@@ -684,14 +658,14 @@ export function useEditorWorkspace({
       const reconcileTextTask = Promise.all(
         textBuffers.map(async (buffer) => {
           const latest = bufferStore.getBuffer(buffer.key)
-          if (!latest || latest.kind !== 'workspace' || isImageDocument(latest)) return
+          if (!isWritableWorkspaceTextBuffer(latest)) return
           if (latest.isSaving || inFlightSavesRef.current.has(latest.key)) return
 
           try {
             const diskContent = await window.wikiApi.workspace.readFile(latest.path)
             if (!mountedRef.current) return
             const current = bufferStore.getBuffer(latest.key)
-            if (!current || current.kind !== 'workspace' || isImageDocument(current)) return
+            if (!isWritableWorkspaceTextBuffer(current)) return
             if (current.isSaving || inFlightSavesRef.current.has(current.key)) return
 
             if (!current.isDirty) {
@@ -703,7 +677,7 @@ export function useEditorWorkspace({
           } catch (error: unknown) {
             if (!mountedRef.current) return
             const current = bufferStore.getBuffer(latest.key)
-            if (!current || current.kind !== 'workspace' || isImageDocument(current)) return
+            if (!isWritableWorkspaceTextBuffer(current)) return
             if (!isMissingWorkspaceFileError(error)) return
 
             if (!current.isDirty) {
@@ -735,7 +709,7 @@ export function useEditorWorkspace({
                 )
                 if (!exists) {
                   syncDeletedPath(current.path)
-                } else if (shouldRefreshImageAsset(current.path, changeEvent)) {
+                } else if (isWorkspaceChangeAffectingPath(current.path, changeEvent)) {
                   bufferStore.refreshImageAsset(current.key)
                 }
               }

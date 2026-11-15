@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   addFavoriteWorkspace,
+  getParentDirectory,
   getParentPath,
   getWorkspaceDisplayName,
   isFavoriteWorkspacePath,
   isNestedOrSamePath,
   isSameWorkspacePath,
+  isWorkspaceChangeAffectingPath,
   normalizeWorkspacePath,
   recordRecentWorkspace,
   remapPathPrefix,
@@ -86,5 +88,49 @@ describe('shared workspace path and favorites helpers', () => {
     expect(remapPathPrefix('C:\\wiki\\docs\\a.md', 'C:\\wiki\\docs', 'C:\\wiki\\guides')).toBe(
       'C:\\wiki\\guides\\a.md'
     )
+  })
+
+  it('resolves parent directory and matches workspace change events against target paths', () => {
+    expect(getParentDirectory('C:/wiki/assets/logo.png')).toBe('C:\\wiki\\assets')
+    expect(getParentDirectory('C:/logo.png')).toBe('C:\\')
+    expect(getParentDirectory('/wiki/assets/logo.png')).toBe('/wiki/assets')
+    expect(getParentDirectory('/logo.png')).toBe('/')
+
+    const target = 'C:/wiki/assets/logo.png'
+    expect(isWorkspaceChangeAffectingPath(target)).toBe(true)
+    expect(
+      isWorkspaceChangeAffectingPath(target, { rootPath: 'C:/wiki', eventType: 'change', relativePath: null })
+    ).toBe(true)
+    expect(
+      isWorkspaceChangeAffectingPath(target, { rootPath: 'C:/wiki', eventType: 'change', relativePath: '.' })
+    ).toBe(true)
+    expect(
+      isWorkspaceChangeAffectingPath(target, {
+        rootPath: 'C:\\Wiki\\',
+        eventType: 'change',
+        relativePath: 'Assets/logo.png'
+      })
+    ).toBe(true)
+    expect(
+      isWorkspaceChangeAffectingPath(target, {
+        rootPath: 'C:/wiki',
+        eventType: 'rename',
+        relativePath: 'assets'
+      })
+    ).toBe(true)
+    expect(
+      isWorkspaceChangeAffectingPath(target, {
+        rootPath: 'C:/wiki',
+        eventType: 'change',
+        relativePath: 'docs/other.md'
+      })
+    ).toBe(false)
+    expect(
+      isWorkspaceChangeAffectingPath(target, {
+        rootPath: 'C:/wiki',
+        eventType: 'change',
+        relativePath: 'assets-other/logo.png'
+      })
+    ).toBe(false)
   })
 })

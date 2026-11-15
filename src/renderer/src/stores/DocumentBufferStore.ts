@@ -142,60 +142,61 @@ export class DocumentBufferStore {
     return created
   }
 
-  updateContent(pathOrKey: string, nextContent: string): void {
-    const key = this.resolveKey(pathOrKey)
-    const current = this.buffers[key]
-    if (!current || current.contentKind === 'image' || current.content === nextContent) return
-
-    const updated: DocumentBuffer = {
-      ...current,
-      content: nextContent,
-      isDirty: nextContent !== current.savedContent,
-      version: current.version + 1
-    }
-    this.commit({ ...this.buffers, [key]: updated })
-  }
-
-  markSaved(pathOrKey: string, savedContent: string): void {
+  private updateMutableTextBuffer(
+    pathOrKey: string,
+    transform: (current: DocumentBuffer) => DocumentBuffer | null
+  ): void {
     const key = this.resolveKey(pathOrKey)
     const current = this.buffers[key]
     if (!current || current.contentKind === 'image') return
+    const updated = transform(current)
+    if (!updated) return
+    this.commit({ ...this.buffers, [key]: updated })
+  }
 
-    const updated: DocumentBuffer = {
+  updateContent(pathOrKey: string, nextContent: string): void {
+    this.updateMutableTextBuffer(pathOrKey, (current) => {
+      if (current.content === nextContent) return null
+      return {
+        ...current,
+        content: nextContent,
+        isDirty: nextContent !== current.savedContent,
+        version: current.version + 1
+      }
+    })
+  }
+
+  markSaved(pathOrKey: string, savedContent: string): void {
+    this.updateMutableTextBuffer(pathOrKey, (current) => ({
       ...current,
       savedContent,
       isDirty: current.content !== savedContent,
       version: current.version + 1
-    }
-    this.commit({ ...this.buffers, [key]: updated })
+    }))
   }
 
   setSaving(pathOrKey: string, isSaving: boolean): void {
-    const key = this.resolveKey(pathOrKey)
-    const current = this.buffers[key]
-    if (!current || current.contentKind === 'image' || current.isSaving === isSaving) return
-
-    const updated: DocumentBuffer = {
-      ...current,
-      isSaving
-    }
-    this.commit({ ...this.buffers, [key]: updated })
+    this.updateMutableTextBuffer(pathOrKey, (current) => {
+      if (current.isSaving === isSaving) return null
+      return {
+        ...current,
+        isSaving
+      }
+    })
   }
 
   refreshCleanContent(pathOrKey: string, freshContent: string): void {
-    const key = this.resolveKey(pathOrKey)
-    const current = this.buffers[key]
-    if (!current || current.contentKind === 'image' || current.isDirty) return
-    if (current.content === freshContent && current.savedContent === freshContent) return
-
-    const updated: DocumentBuffer = {
-      ...current,
-      content: freshContent,
-      savedContent: freshContent,
-      isDirty: false,
-      version: current.version + 1
-    }
-    this.commit({ ...this.buffers, [key]: updated })
+    this.updateMutableTextBuffer(pathOrKey, (current) => {
+      if (current.isDirty) return null
+      if (current.content === freshContent && current.savedContent === freshContent) return null
+      return {
+        ...current,
+        content: freshContent,
+        savedContent: freshContent,
+        isDirty: false,
+        version: current.version + 1
+      }
+    })
   }
 
   /**
