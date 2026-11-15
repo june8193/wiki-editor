@@ -15,6 +15,13 @@ export function isErrnoCode(error: unknown, code: string): boolean {
 }
 
 /**
+ * Returns true when an fs lookup fails because the path is absent or traverses a non-directory file.
+ */
+export function isMissingPathError(error: unknown): boolean {
+  return isErrnoCode(error, 'ENOENT') || isErrnoCode(error, 'ENOTDIR')
+}
+
+/**
  * Returns true if targetPath is equal to or nested inside rootPath lexically.
  */
 export function isPathInsideRoot(rootPath: string, targetPath: string): boolean {
@@ -63,11 +70,11 @@ export async function resolveRealPathWithAncestor(
       options.assertResolved?.(resolvedReal)
       return { resolvedReal, exists: tailSegments.length === 0 }
     } catch (error) {
-      if (!isErrnoCode(error, 'ENOENT')) {
+      if (!isMissingPathError(error)) {
         throw error
       }
       const linkStats = await lstat(cursor).catch((statErr) => {
-        if (isErrnoCode(statErr, 'ENOENT')) return null
+        if (isMissingPathError(statErr)) return null
         throw statErr
       })
       if (linkStats?.isSymbolicLink()) {

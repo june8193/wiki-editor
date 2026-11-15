@@ -17,8 +17,9 @@ import {
   type GitStatus
 } from '@shared/git'
 import type { GitGraphState } from '../hooks/useGitGraphLog'
-import { formatGitFileLabel, getGitFileBadgeModifier, toGitDiffRequest } from '../utils/gitFilePresentation'
+import { toGitDiffRequest } from '../utils/gitFilePresentation'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
+import { GitFileTriggerButton } from './GitFileTriggerButton'
 import { GitGraphScopeToggle, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
 
@@ -105,17 +106,11 @@ function GitFileSection({
         <ul className="git-file-list" role="list">
           {files.map((file) => (
             <li key={`${itemActionTitle}:${file.status}:${file.path}`} className="git-file-item">
-              <button
-                type="button"
-                className="git-file-trigger"
-                title={formatGitFileLabel(file)}
+              <GitFileTriggerButton
+                file={file}
+                pathClassName="git-file-path"
                 onClick={() => onSelectFile(file)}
-              >
-                <span className={`git-badge git-badge--${getGitFileBadgeModifier(file.status)}`}>
-                  {file.status}
-                </span>
-                <span className="git-file-path">{formatGitFileLabel(file)}</span>
-              </button>
+              />
               <button
                 type="button"
                 className="git-file-action-btn"

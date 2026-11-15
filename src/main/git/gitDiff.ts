@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { open, realpath, stat } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
 import { GIT_DIFF_MAX_BYTES, GIT_EMPTY_TREE_HASH, type GitDiffRequest, type GitFileDiff } from '@shared/git'
-import { hasBlockedPathSegment, isErrnoCode, isPathInsideRoot } from '../fs/pathSecurity'
+import { hasBlockedPathSegment, isMissingPathError, isPathInsideRoot } from '../fs/pathSecurity'
 import { IGNORED_ENTRY_NAMES } from '../workspace/WorkspaceFsService'
 import { assertValidCommitHash } from './gitCommitDetail'
 
@@ -94,7 +94,7 @@ export async function inspectTargetFileState(
       !hasBlockedPathSegment(relative(workspaceRealRoot, realCandidate), IGNORED_ENTRY_NAMES)
     return { existsOnDisk: true, existsInWorkspace }
   } catch (error) {
-    if (isErrnoCode(error, 'ENOENT') || isErrnoCode(error, 'ENOTDIR')) {
+    if (isMissingPathError(error)) {
       return { existsOnDisk: false, existsInWorkspace: false }
     }
     throw error

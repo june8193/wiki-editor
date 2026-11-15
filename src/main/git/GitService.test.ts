@@ -959,36 +959,21 @@ describe('GitService integration (isolated temp repos)', () => {
       ).rejects.toThrow(/커밋 해시/)
     }
 
-    await expect(
-      service.diff(repoDir, {
-        kind: 'commit',
-        commitHash: '1234567',
-        shortHash: '1234567',
-        path: '.git/config',
-        status: 'M'
-      })
-    ).rejects.toThrow()
-
-    await expect(
-      service.diff(repoDir, {
-        kind: 'commit',
-        commitHash: '1234567',
-        shortHash: '1234567',
-        path: '../outside.md',
-        status: 'M'
-      })
-    ).rejects.toThrow()
-
-    await expect(
-      service.diff(repoDir, {
-        kind: 'commit',
-        commitHash: '1234567',
-        shortHash: '1234567',
-        path: 'guide.md',
-        origPath: '../outside.md',
-        status: 'R'
-      })
-    ).rejects.toThrow()
+    const blockedPathCases: Array<{ path: string; origPath?: string; status: 'M' | 'R' }> = [
+      { path: '.git/config', status: 'M' },
+      { path: '../outside.md', status: 'M' },
+      { path: 'guide.md', origPath: '../outside.md', status: 'R' }
+    ]
+    for (const target of blockedPathCases) {
+      await expect(
+        service.diff(repoDir, {
+          kind: 'commit',
+          commitHash: '1234567',
+          shortHash: '1234567',
+          ...target
+        })
+      ).rejects.toThrow()
+    }
 
     // 1. Root commit (--root), including nested folder and binary asset
     await mkdir(join(repoDir, 'archived', 'sub'), { recursive: true })

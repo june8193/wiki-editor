@@ -8,11 +8,8 @@ import type {
   GitRefKind
 } from '@shared/git'
 import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
-import {
-  formatGitFileLabel,
-  getGitFileBadgeModifier,
-  toGitDiffRequest
-} from '../utils/gitFilePresentation'
+import { toGitDiffRequest } from '../utils/gitFilePresentation'
+import { GitFileTriggerButton } from './GitFileTriggerButton'
 import {
   buildGitGraphConnectionPath,
   computeGitGraphLayout,
@@ -239,38 +236,29 @@ function GitCommitDetailFiles({
     <div className="git-commit-detail-files-section">
       <div className="git-commit-detail-files-header">변경된 파일 ({detail.files.length})</div>
       <ul className="git-commit-detail-files" aria-label="변경된 파일">
-        {detail.files.map((file) => {
-          const label = formatGitFileLabel(file)
-          return (
-            <li
-              key={`${file.status}:${file.origPath ?? ''}:${file.path}`}
-              className="git-commit-detail-file-item"
-            >
-              <button
-                type="button"
-                className="git-file-trigger"
-                title={label}
-                onClick={() =>
-                  onOpenFileDiff(
-                    toGitDiffRequest(
-                      {
-                        kind: 'commit',
-                        commitHash: detail.hash,
-                        shortHash: detail.shortHash
-                      },
-                      file
-                    )
+        {detail.files.map((file) => (
+          <li
+            key={`${file.status}:${file.origPath ?? ''}:${file.path}`}
+            className="git-commit-detail-file-item"
+          >
+            <GitFileTriggerButton
+              file={file}
+              pathClassName="git-commit-detail-file-path"
+              onClick={() =>
+                onOpenFileDiff(
+                  toGitDiffRequest(
+                    {
+                      kind: 'commit',
+                      commitHash: detail.hash,
+                      shortHash: detail.shortHash
+                    },
+                    file
                   )
-                }
-              >
-                <span className={`git-badge git-badge--${getGitFileBadgeModifier(file.status)}`}>
-                  {file.status}
-                </span>
-                <span className="git-commit-detail-file-path">{label}</span>
-              </button>
-            </li>
-          )
-        })}
+                )
+              }
+            />
+          </li>
+        ))}
       </ul>
     </div>
   )

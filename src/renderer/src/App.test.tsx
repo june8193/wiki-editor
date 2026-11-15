@@ -5796,7 +5796,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
 })
 
 describe('Git Graph commit file diff integration', () => {
-  it('opens read-only commit Diff tabs from Graph commit files, reuses active pane tabs while preserving split pane, toggles layout, and gates 파일 열기 by workspace existence', async () => {
+  it('opens read-only commit Diff tabs from Graph commit files, reuses active pane tabs while preserving split pane, toggles diff view mode, and gates 파일 열기 by workspace existence', async () => {
     const user = userEvent.setup()
     const commitHash = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'
     const shortHash = 'a1b2c3d'
