@@ -17,6 +17,7 @@ interface MarkdownPreviewProps {
   theme?: ThemeMode
   showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
+  documentTitle?: string
   scrollRequest?: PreviewScrollRequest | null
   isActive?: boolean
   scrollContainerRef?: { current: HTMLDivElement | null }
@@ -37,6 +38,7 @@ export function MarkdownPreview({
   theme = 'light',
   showHeadingNumbers = false,
   mermaidRenderer,
+  documentTitle,
   scrollRequest,
   isActive = true,
   scrollContainerRef,
@@ -88,9 +90,10 @@ export function MarkdownPreview({
         theme,
         showHeadingNumbers,
         mermaidRenderer,
+        documentTitle,
         onAnchorNavigate: handleAnchorNavigate
       }),
-    [content, handleAnchorNavigate, mermaidRenderer, showHeadingNumbers, theme]
+    [content, documentTitle, handleAnchorNavigate, mermaidRenderer, showHeadingNumbers, theme]
   )
 
   return (

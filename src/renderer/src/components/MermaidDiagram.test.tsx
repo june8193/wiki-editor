@@ -568,18 +568,26 @@ describe('MermaidDiagram', () => {
       const toolbar = within(block).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
       const copyImageBtn = within(toolbar).getByRole('button', { name: '이미지 복사' })
       const copyBtn = within(toolbar).getByRole('button', { name: '코드 복사' })
+      const savePngBtn = within(toolbar).getByRole('button', { name: 'PNG 저장' })
+      const saveSvgBtn = within(toolbar).getByRole('button', { name: 'SVG 저장' })
       const beforeBtn = screen.getByRole('button', { name: 'Before Diagram' })
 
       expect(toolbar).toHaveClass('is-floating')
       expect(getComputedStyle(toolbar).opacity).toBe('0')
 
-      // Tab from preceding control reaches image-copy then code-copy while keeping toolbar visible
+      // Tab from preceding control reaches all 4 action buttons while keeping toolbar visible
       beforeBtn.focus()
       await user.tab()
       expect(copyImageBtn).toHaveFocus()
       expect(getComputedStyle(toolbar).opacity).toBe('1')
       await user.tab()
       expect(copyBtn).toHaveFocus()
+      expect(getComputedStyle(toolbar).opacity).toBe('1')
+      await user.tab()
+      expect(savePngBtn).toHaveFocus()
+      expect(getComputedStyle(toolbar).opacity).toBe('1')
+      await user.tab()
+      expect(saveSvgBtn).toHaveFocus()
       expect(getComputedStyle(toolbar).opacity).toBe('1')
 
       // Moving focus away hides until hover
@@ -808,7 +816,9 @@ describe('MermaidDiagram', () => {
       const buttons = within(firstToolbar).getAllByRole('button')
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
         '이미지 복사',
-        '코드 복사'
+        '코드 복사',
+        'PNG 저장',
+        'SVG 저장'
       ])
 
       const firstImageBtn = buttons[0]
@@ -1163,6 +1173,396 @@ describe('MermaidDiagram', () => {
           '이미지 클립보드 복사 API를 사용할 수 없습니다.'
         )
       })
+    } finally {
+      canvasStub.restore()
+    }
+  })
+
+  it('saves 2x theme-backed PNG and standalone XML SVG with sanitized document-based names, handles 1500ms 저장됨 feedback vs dialog cancel, and blocks duplicates', async () => {
+    vi.useFakeTimers()
+    const canvasStub = installSvgCanvasStub()
+
+    try {
+      const saveRequests: Array<{ format: string; suggestedName: string; data: Uint8Array | string }> = []
+      let nextCanceled = false
+      let deferSave = false
+      let resolveDeferredSave!: (res: { canceled: boolean; filePath?: string }) => void
+
+      const saveFile = vi.fn((req: { format: 'png' | 'svg'; suggestedName: string; data: Uint8Array | string }) => {
+        saveRequests.push(req)
+        if (deferSave) {
+          return new Promise<{ canceled: boolean; filePath?: string }>((resolve) => {
+            resolveDeferredSave = resolve
+          })
+        }
+        return Promise.resolve(
+          nextCanceled
+            ? { canceled: true }
+            : { canceled: false, filePath: `C:\\exports\\${req.suggestedName}` }
+        )
+      })
+
+      window.wikiApi = {
+        diagram: {
+          copyText: vi.fn(async () => {}),
+          copyImage: vi.fn(async () => {}),
+          saveFile
+        }
+      } as unknown as WikiApi
+
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => ({
+          svg: `<svg viewBox="0 0 100 50" width="100%" style="max-width: 100px;"><g><foreignObject width="60" height="20"><div xmlns="http://www.w3.org/1999/xhtml"><span>${text.trim()}<br>OK</span></div></foreignObject></g></svg>`
+        }))
+      }
+      const renderer = createMermaidRenderer(driver)
+
+      const { rerender, unmount } = render(
+        <div>
+          <MermaidDiagram
+            code={'graph TD\n  SAVE_A-->SAVE_B'}
+            theme="light"
+            documentTitle="  ..Design: <v1>...  "
+            renderer={renderer}
+            debounceMs={0}
+          />
+          <MermaidDiagram
+            code={'graph TD\n  OTHER-->SAVE'}
+            theme="light"
+            renderer={renderer}
+            debounceMs={0}
+          />
+        </div>
+      )
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      const blocks = screen.getAllByTestId('mermaid-diagram')
+      const firstToolbar = within(blocks[0]).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+      const savePngBtn = within(firstToolbar).getByRole('button', { name: 'PNG 저장' })
+      const saveSvgBtn = within(firstToolbar).getByRole('button', { name: 'SVG 저장' })
+      const secondSavePngBtn = within(blocks[1]).getByRole('button', { name: 'PNG 저장' })
+
+      // 1. Confirmed PNG save: sanitized document title + 2x light #ffffff PNG + 1500ms 저장됨 feedback
+      await act(async () => {
+        fireEvent.click(savePngBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      expect(saveRequests).toHaveLength(1)
+      expect(saveRequests[0].format).toBe('png')
+      expect(saveRequests[0].suggestedName).toBe('Design v1-diagram.png')
+      expect(saveRequests[0].data).toEqual(new Uint8Array([137, 80, 78, 71, 1, 264 & 0xff]))
+      expect(canvasStub.calls[0].decodedSvg).toContain('fill="#ffffff"')
+      expect(savePngBtn).toHaveClass('is-saved')
+      expect(savePngBtn).toHaveTextContent('저장됨')
+      expect(savePngBtn).toHaveAttribute('title', '저장됨')
+      expect(firstToolbar).toHaveClass('is-visible')
+      expect(secondSavePngBtn).not.toHaveTextContent('저장됨')
+
+      act(() => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(savePngBtn).not.toHaveTextContent('저장됨')
+      expect(savePngBtn).toHaveAttribute('title', 'PNG 저장')
+      expect(firstToolbar).not.toHaveClass('is-visible')
+
+      // 2. Confirmed SVG save in dark theme: standalone XML SVG with #161b22 background & 16px margin + fallback name when title sanitizes empty
+      rerender(
+        <div>
+          <MermaidDiagram
+            code={'graph TD\n  SAVE_A-->SAVE_B'}
+            theme="dark"
+            documentTitle="<>..."
+            renderer={renderer}
+            debounceMs={0}
+          />
+          <MermaidDiagram
+            code={'graph TD\n  OTHER-->SAVE'}
+            theme="light"
+            renderer={renderer}
+            debounceMs={0}
+          />
+        </div>
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      await act(async () => {
+        fireEvent.click(saveSvgBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      expect(saveRequests).toHaveLength(2)
+      expect(saveRequests[1].format).toBe('svg')
+      expect(saveRequests[1].suggestedName).toBe('mermaid-diagram.svg')
+      const svgText = saveRequests[1].data as string
+      const parsedSvgDoc = new DOMParser().parseFromString(svgText, 'image/svg+xml')
+      expect(parsedSvgDoc.querySelector('parsererror')).toBeNull()
+      expect(parsedSvgDoc.documentElement.getAttribute('viewBox')).toBe('-16 -16 132 82')
+      expect(parsedSvgDoc.documentElement.firstElementChild?.getAttribute('fill')).toBe('#161b22')
+      expect(svgText).not.toContain('max-width')
+      expect(svgText).toContain('<br />')
+      expect(saveSvgBtn).toHaveTextContent('저장됨')
+
+      // 3. Canceled save dialog: clears prior feedback, shows neither 저장됨 nor alert, returns idle immediately
+      nextCanceled = true
+      await act(async () => {
+        fireEvent.click(savePngBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(saveRequests).toHaveLength(3)
+      expect(saveRequests[2].suggestedName).toBe('mermaid-diagram.png')
+      expect(savePngBtn).not.toHaveTextContent('저장됨')
+      expect(saveSvgBtn).not.toHaveTextContent('저장됨')
+      expect(firstToolbar).not.toHaveClass('is-visible')
+      expect(within(blocks[0]).queryByRole('alert')).not.toBeInTheDocument()
+
+      // 4. In-flight save blocks duplicate clicks across toolbar buttons
+      nextCanceled = false
+      deferSave = true
+      await act(async () => {
+        fireEvent.click(saveSvgBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(saveSvgBtn).toHaveAttribute('aria-busy', 'true')
+      await act(async () => {
+        fireEvent.click(saveSvgBtn)
+        fireEvent.click(savePngBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(saveFile).toHaveBeenCalledTimes(4)
+
+      await act(async () => {
+        resolveDeferredSave({ canceled: true })
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(saveSvgBtn).not.toHaveAttribute('aria-busy')
+      expect(saveSvgBtn).not.toHaveTextContent('저장됨')
+
+      // 5. Unmounting mid-PNG rasterization cancels before calling saveFile
+      deferSave = false
+      canvasStub.setDeferLoad(true)
+      const callsBeforeUnmount = saveFile.mock.calls.length
+      await act(async () => {
+        fireEvent.click(savePngBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      unmount()
+      await act(async () => {
+        canvasStub.resolveNextLoad()
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(saveFile).toHaveBeenCalledTimes(callsBeforeUnmount)
+    } finally {
+      canvasStub.restore()
+    }
+  })
+
+  it('disables PNG 저장 and SVG 저장 alongside 이미지 복사 during loading, debounce, syntax errors, and whitespace-only, and reports sanitized save failure alerts', async () => {
+    vi.useFakeTimers()
+    const canvasStub = installSvgCanvasStub()
+
+    try {
+      const entries: RendererLogPayload[] = []
+      let failSave = true
+      const saveFile = vi.fn(async () => {
+        if (failSave) {
+          throw new Error('파일을 디스크에 쓸 수 없습니다.')
+        }
+        return { canceled: false, filePath: 'C:\\exports\\ok.svg' }
+      })
+      window.wikiApi = {
+        diagram: {
+          copyText: vi.fn(async () => {}),
+          copyImage: vi.fn(async () => {}),
+          saveFile
+        },
+        log: {
+          write: vi.fn(async (payload: RendererLogPayload) => {
+            entries.push(payload)
+          })
+        }
+      } as unknown as WikiApi
+
+      let resolvePending!: (res: { svg: string }) => void
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => {
+          if (text.includes('pending')) {
+            return new Promise<{ svg: string }>((resolve) => {
+              resolvePending = resolve
+            })
+          }
+          if (text.includes('broken')) {
+            throw new Error('Parse error')
+          }
+          return { svg: `<svg viewBox="0 0 80 40"><g><text>${text.trim()}</text></g></svg>` }
+        })
+      }
+      const renderer = createMermaidRenderer(driver)
+
+      // 1. Loading -> PNG 저장 & SVG 저장 disabled, 코드 복사 enabled
+      const { rerender, unmount } = render(
+        <MermaidDiagram
+          code={'graph TD\n  pending_export'}
+          theme="light"
+          documentTitle="SECRET_DOC_TITLE"
+          renderer={renderer}
+          debounceMs={200}
+        />
+      )
+      const block = screen.getByTestId('mermaid-diagram')
+      const imageBtn = within(block).getByRole('button', { name: '이미지 복사' })
+      const codeBtn = within(block).getByRole('button', { name: '코드 복사' })
+      const pngBtn = within(block).getByRole('button', { name: 'PNG 저장' })
+      const svgBtn = within(block).getByRole('button', { name: 'SVG 저장' })
+      expect(imageBtn).toBeDisabled()
+      expect(pngBtn).toBeDisabled()
+      expect(svgBtn).toBeDisabled()
+      expect(codeBtn).toBeEnabled()
+
+      await act(async () => {
+        resolvePending({
+          svg: '<svg viewBox="0 0 80 40"><g><text>pending_export</text></g></svg>'
+        })
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(pngBtn).toBeEnabled()
+      expect(svgBtn).toBeEnabled()
+
+      // 2. Debounce pending -> PNG 저장 & SVG 저장 immediately disabled
+      rerender(
+        <MermaidDiagram
+          code={'graph TD\n  SECRET_SAVE_NODE --> B'}
+          theme="light"
+          documentTitle="SECRET_DOC_TITLE"
+          renderer={renderer}
+          debounceMs={200}
+        />
+      )
+      expect(pngBtn).toBeDisabled()
+      expect(svgBtn).toBeDisabled()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200)
+      })
+      expect(pngBtn).toBeEnabled()
+      expect(svgBtn).toBeEnabled()
+
+      // 3. Syntax error with retained SVG -> PNG 저장 & SVG 저장 disabled
+      rerender(
+        <MermaidDiagram
+          code={'graph TD\n  broken_retained'}
+          theme="light"
+          documentTitle="SECRET_DOC_TITLE"
+          renderer={renderer}
+          debounceMs={0}
+        />
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(within(block).getByText('Mermaid 문법 오류')).toBeInTheDocument()
+      expect(pngBtn).toBeDisabled()
+      expect(svgBtn).toBeDisabled()
+      expect(codeBtn).toBeEnabled()
+
+      // 4. Recover valid -> failure shows inline role="alert" & sanitized log (no source/SVG/PNG/title), retry succeeds
+      rerender(
+        <MermaidDiagram
+          code={'graph TD\n  SECRET_SAVE_NODE --> B'}
+          theme="light"
+          documentTitle="SECRET_DOC_TITLE"
+          renderer={renderer}
+          debounceMs={0}
+        />
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      await act(async () => {
+        fireEvent.click(pngBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(within(block).getByRole('alert')).toHaveTextContent('파일을 디스크에 쓸 수 없습니다.')
+      const errorEntries = entries.filter((entry) => entry.level === 'error')
+      expect(errorEntries).toHaveLength(1)
+      expect(errorEntries[0]).toMatchObject({
+        level: 'error',
+        category: 'ui',
+        message: 'Mermaid PNG save failed',
+        data: {
+          format: 'png',
+          theme: 'light',
+          codeLength: 'graph TD\n  SECRET_SAVE_NODE --> B'.length,
+          byteLength: 6
+        }
+      })
+      expect(JSON.stringify(entries)).not.toContain('SECRET_SAVE_NODE')
+      expect(JSON.stringify(entries)).not.toContain('SECRET_DOC_TITLE')
+      expect(JSON.stringify(entries)).not.toContain('<svg')
+      expect(JSON.stringify(errorEntries[0].data)).not.toContain('137')
+
+      await act(async () => {
+        fireEvent.click(svgBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const updatedErrorEntries = entries.filter((entry) => entry.level === 'error')
+      expect(updatedErrorEntries).toHaveLength(2)
+      expect(updatedErrorEntries[1]).toMatchObject({
+        level: 'error',
+        category: 'ui',
+        message: 'Mermaid SVG save failed',
+        data: {
+          format: 'svg',
+          theme: 'light',
+          codeLength: 'graph TD\n  SECRET_SAVE_NODE --> B'.length
+        }
+      })
+      expect(JSON.stringify(updatedErrorEntries[1])).not.toContain('SECRET_SAVE_NODE')
+      expect(JSON.stringify(updatedErrorEntries[1])).not.toContain('<svg')
+
+      failSave = false
+      await act(async () => {
+        fireEvent.click(svgBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(within(block).queryByRole('alert')).not.toBeInTheDocument()
+      expect(svgBtn).toHaveTextContent('저장됨')
+
+      // 5. Missing saveFile API falls back to inline role="alert"
+      delete (window as { wikiApi?: WikiApi }).wikiApi
+      await act(async () => {
+        fireEvent.click(pngBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(within(block).getByRole('alert')).toHaveTextContent(
+        '다이어그램 파일 저장 API를 사용할 수 없습니다.'
+      )
+
+      // 6. Whitespace-only disables all 4 actions; fallback error disables PNG/SVG
+      rerender(<MermaidDiagram code={'   '} theme="light" renderer={renderer} debounceMs={0} />)
+      expect(imageBtn).toBeDisabled()
+      expect(codeBtn).toBeDisabled()
+      expect(pngBtn).toBeDisabled()
+      expect(svgBtn).toBeDisabled()
+      unmount()
+
+      render(
+        <MermaidDiagram code={'graph TD\n  broken_initial'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const fallbackBlock = screen.getByTestId('mermaid-diagram')
+      expect(within(fallbackBlock).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
+      expect(within(fallbackBlock).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
+      expect(within(fallbackBlock).getByRole('button', { name: '코드 복사' })).toBeEnabled()
     } finally {
       canvasStub.restore()
     }

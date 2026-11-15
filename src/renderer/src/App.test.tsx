@@ -15,7 +15,14 @@ import {
   type GitGraphCommit,
   type GitLogResult
 } from '@shared/git'
-import type { AppMenuCommand, WikiApi, WikiDiagramApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
+import type {
+  AppMenuCommand,
+  DiagramSaveRequest,
+  WikiApi,
+  WikiDiagramApi,
+  WikiGitApi,
+  WikiLogApi
+} from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import {
   addFavoriteWorkspace,
@@ -473,6 +480,7 @@ function createInMemoryWikiApi(
     diagram: {
       copyText: vi.fn(async () => {}),
       copyImage: vi.fn(async () => {}),
+      saveFile: vi.fn(async () => ({ canceled: true })),
       ...fsOptions.diagram
     },
     ...(fsOptions.log ? { log: fsOptions.log } : {})
@@ -2988,7 +2996,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         within(previewValidToolbar)
           .getAllByRole('button')
           .map((button) => button.getAttribute('aria-label'))
-      ).toEqual(['이미지 복사', '코드 복사'])
+      ).toEqual(['이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
 
       const previewValidImageBtn = within(previewValidToolbar).getByRole('button', {
         name: '이미지 복사'
@@ -3110,7 +3118,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         within(wysiwygValidToolbar)
           .getAllByRole('button')
           .map((button) => button.getAttribute('aria-label'))
-      ).toEqual(['이미지 복사', '코드 복사'])
+      ).toEqual(['이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
       expect(
         within(wysiwygBlocks[1]).getByRole('button', { name: '이미지 복사' })
       ).toBeDisabled()
@@ -3164,6 +3172,311 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         vi.advanceTimersByTime(1500)
       })
       expect(wysiwygValidImageBtn).not.toHaveTextContent('복사됨')
+      vi.useRealTimers()
+
+      // Return to Raw: lossless roundtrip and clean buffer without dirty flag
+      await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+      expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(docContent)
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    } finally {
+      canvasStub.restore()
+      vi.useRealTimers()
+      cleanup()
+    }
+  })
+
+  it('supports Mermaid PNG and SVG file export with sanitized document title across Preview, Split, and WYSIWYG modes', async () => {
+    const user = userEvent.setup()
+    const validSource = 'graph TD\n  SECRET_APP_SAVE --> ServiceC'
+    const brokenSource = 'graph TD\n  SYNTAX_ERROR'
+    const docContent = [
+      '# Mermaid Save E2E',
+      '',
+      '```mermaid',
+      validSource,
+      '```',
+      '',
+      '```mermaid',
+      brokenSource,
+      '```',
+      '',
+      '```mermaid',
+      '   ',
+      '```'
+    ].join('\n')
+
+    const logEntries: RendererLogPayload[] = []
+    let nextSaveOutcome: 'confirm' | 'cancel' | 'fail' = 'confirm'
+    const savedRequests: DiagramSaveRequest[] = []
+    const saveFile = vi.fn(async (request: DiagramSaveRequest) => {
+      savedRequests.push(request)
+      if (nextSaveOutcome === 'fail') {
+        throw new Error('App diagram file save failed')
+      }
+      if (nextSaveOutcome === 'cancel') {
+        return { canceled: true }
+      }
+      return {
+        canceled: false,
+        filePath: `C:\\exports\\${request.suggestedName}`
+      }
+    })
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\mermaid-file-save',
+        workspaces: {
+          'C:\\wiki\\mermaid-file-save': {
+            '아키텍처<설계>-v1.md': docContent
+          }
+        },
+        diagram: { saveFile },
+        log: {
+          write: vi.fn(async (payload: RendererLogPayload) => {
+            logEntries.push(payload)
+          })
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const canvasStub = installSvgCanvasStub()
+    const { rootEl, cleanup } = mountThemeStylesAndRoot()
+    try {
+      render(<App />, { container: rootEl })
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      await user.click(await screen.findByText('아키텍처<설계>-v1.md'))
+
+      const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+
+      // 1. Preview mode: 4 buttons in order, PNG light export, dark SVG export, dialog cancel, disabled states
+      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      await waitFor(() => {
+        expect(screen.getAllByTestId('mermaid-diagram')).toHaveLength(3)
+        expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
+      })
+
+      const previewBlocks = screen.getAllByTestId('mermaid-diagram')
+      const previewValidToolbar = within(previewBlocks[0]).getByRole('toolbar', {
+        name: 'Mermaid 다이어그램 작업'
+      })
+      expect(
+        within(previewValidToolbar)
+          .getAllByRole('button')
+          .map((button) => button.getAttribute('aria-label'))
+      ).toEqual(['이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
+
+      const previewSavePngBtn = within(previewValidToolbar).getByRole('button', {
+        name: 'PNG 저장'
+      })
+      const previewSaveSvgBtn = within(previewValidToolbar).getByRole('button', {
+        name: 'SVG 저장'
+      })
+      expect(previewSavePngBtn).toBeEnabled()
+      expect(previewSaveSvgBtn).toBeEnabled()
+      expect(within(previewBlocks[1]).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
+      expect(within(previewBlocks[1]).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
+      expect(within(previewBlocks[1]).getByRole('button', { name: '코드 복사' })).toBeEnabled()
+      expect(within(previewBlocks[2]).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
+      expect(within(previewBlocks[2]).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
+
+      await user.hover(previewBlocks[0])
+      await user.click(previewSavePngBtn)
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(1)
+        expect(previewSavePngBtn).toHaveTextContent('저장됨')
+      })
+      expect(previewSavePngBtn).toHaveAttribute('title', '저장됨')
+      expect(savedRequests[0].format).toBe('png')
+      expect(savedRequests[0].suggestedName).toBe('아키텍처설계-v1-diagram.png')
+      expect(savedRequests[0].data).toEqual(new Uint8Array([137, 80, 78, 71, 1, 544 & 0xff]))
+      expect(canvasStub.calls[0]).toMatchObject({ pixelWidth: 544, pixelHeight: 304 })
+      expect(canvasStub.calls[0].decodedSvg).toContain('width="272"')
+      expect(canvasStub.calls[0].decodedSvg).toContain('height="152"')
+      expect(canvasStub.calls[0].decodedSvg).toContain('fill="#ffffff"')
+
+      // Toggle dark theme -> SVG 저장 exports standalone XML SVG with #161b22 background and 16px margin
+      await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
+      await waitFor(() => {
+        expect(previewBlocks[0]).toHaveAttribute('data-mermaid-theme', 'dark')
+        expect(previewSaveSvgBtn).toBeEnabled()
+      })
+      await user.hover(previewBlocks[0])
+      await user.click(previewSaveSvgBtn)
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(2)
+        expect(previewSaveSvgBtn).toHaveTextContent('저장됨')
+      })
+      expect(savedRequests[1].format).toBe('svg')
+      expect(savedRequests[1].suggestedName).toBe('아키텍처설계-v1-diagram.svg')
+      const svgText = String(savedRequests[1].data)
+      const parsedSvgDoc = new DOMParser().parseFromString(svgText, 'image/svg+xml')
+      expect(parsedSvgDoc.querySelector('parsererror')).toBeNull()
+      expect(svgText).toContain('xmlns="http://www.w3.org/2000/svg"')
+      expect(svgText).toContain('width="272"')
+      expect(svgText).toContain('height="152"')
+      expect(svgText).toContain('fill="#161b22"')
+
+      // Dialog cancel leaves no saved feedback and no error alert
+      await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
+      await waitFor(() => {
+        expect(previewBlocks[0]).toHaveAttribute('data-mermaid-theme', 'default')
+        expect(previewSaveSvgBtn).toBeEnabled()
+      })
+      nextSaveOutcome = 'cancel'
+      await user.click(previewSavePngBtn)
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(3)
+        expect(previewSavePngBtn).toBeEnabled()
+      })
+      expect(previewSavePngBtn).not.toHaveTextContent('저장됨')
+      expect(previewBlocks[0].querySelector('.mermaid-action-error')).toBeNull()
+      nextSaveOutcome = 'confirm'
+
+      // 2. Split mode: PNG/SVG export uses document title, syntax error disables both while keeping 코드 복사 active
+      await user.click(within(modeGroup).getByRole('button', { name: 'Split' }))
+      const splitPreview = await screen.findByTestId('split-markdown-preview')
+      await waitFor(() => {
+        expect(within(splitPreview).getAllByTestId('mermaid-diagram')).toHaveLength(3)
+        expect(
+          within(within(splitPreview).getAllByTestId('mermaid-diagram')[0]).getByRole('button', {
+            name: 'PNG 저장'
+          })
+        ).toBeEnabled()
+      })
+
+      const splitBlocks = within(splitPreview).getAllByTestId('mermaid-diagram')
+      const splitSavePngBtn = within(splitBlocks[0]).getByRole('button', { name: 'PNG 저장' })
+      const splitSaveSvgBtn = within(splitBlocks[0]).getByRole('button', { name: 'SVG 저장' })
+      const splitCodeBtn = within(splitBlocks[0]).getByRole('button', { name: '코드 복사' })
+      await user.hover(splitBlocks[0])
+      await user.click(splitSaveSvgBtn)
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(4)
+      })
+      expect(savedRequests[3].format).toBe('svg')
+      expect(savedRequests[3].suggestedName).toBe('아키텍처설계-v1-diagram.svg')
+
+      const splitRawEditor = document.querySelector('.editor-split-region.is-raw') as HTMLElement
+      setRawEditorText(
+        splitRawEditor,
+        docContent.replace(validSource, 'graph TD\n  SYNTAX_ERROR_LIVE_SAVE')
+      )
+      expect(splitSavePngBtn).toBeDisabled()
+      expect(splitSaveSvgBtn).toBeDisabled()
+      expect(splitCodeBtn).toBeEnabled()
+      await waitFor(() => {
+        expect(within(splitBlocks[0]).getByText('Mermaid 문법 오류')).toBeInTheDocument()
+      })
+      expect(splitSavePngBtn).toBeDisabled()
+      expect(splitSaveSvgBtn).toBeDisabled()
+      expect(splitCodeBtn).toBeEnabled()
+
+      setRawEditorText(splitRawEditor, docContent)
+      await waitFor(() => {
+        expect(within(splitBlocks[0]).queryByText('Mermaid 문법 오류')).not.toBeInTheDocument()
+        expect(splitSavePngBtn).toBeEnabled()
+        expect(splitSaveSvgBtn).toBeEnabled()
+      })
+
+      // 3. WYSIWYG mode: 4 buttons, doc title propagation, failure alert + sanitized logs, and 1500ms timer revert
+      await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+      await waitFor(() => {
+        expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
+        expect(
+          within(screen.getAllByTestId('wysiwyg-mermaid-block')[0]).getByRole('button', {
+            name: 'SVG 저장'
+          })
+        ).toBeEnabled()
+      })
+
+      const wysiwygBlocks = screen.getAllByTestId('wysiwyg-mermaid-block')
+      const wysiwygValidToolbar = within(wysiwygBlocks[0]).getByRole('toolbar', {
+        name: 'Mermaid 다이어그램 작업'
+      })
+      expect(
+        within(wysiwygValidToolbar)
+          .getAllByRole('button')
+          .map((button) => button.getAttribute('aria-label'))
+      ).toEqual(['이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
+      expect(within(wysiwygBlocks[1]).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
+      expect(within(wysiwygBlocks[1]).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
+      expect(within(wysiwygBlocks[2]).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
+      expect(within(wysiwygBlocks[2]).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
+
+      const wysiwygSavePngBtn = within(wysiwygValidToolbar).getByRole('button', {
+        name: 'PNG 저장'
+      })
+      const wysiwygSaveSvgBtn = within(wysiwygValidToolbar).getByRole('button', {
+        name: 'SVG 저장'
+      })
+
+      nextSaveOutcome = 'fail'
+      await user.click(wysiwygSaveSvgBtn)
+      await waitFor(() => {
+        expect(wysiwygBlocks[0].querySelector('.mermaid-action-error')).toHaveTextContent(
+          'App diagram file save failed'
+        )
+      })
+      const svgSaveAlert = wysiwygBlocks[0].querySelector('.mermaid-action-error')
+      expect(svgSaveAlert).toHaveAttribute('role', 'alert')
+      expect(wysiwygBlocks[1].querySelector('.mermaid-action-error')).toBeNull()
+      expect(wysiwygBlocks[2].querySelector('.mermaid-action-error')).toBeNull()
+
+      await user.click(wysiwygSavePngBtn)
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(6)
+      })
+      expect(savedRequests[4].suggestedName).toBe('아키텍처설계-v1-diagram.svg')
+      expect(savedRequests[5].suggestedName).toBe('아키텍처설계-v1-diagram.png')
+
+      const saveFailureLogs = logEntries.filter(
+        (entry) =>
+          entry.level === 'error' &&
+          (entry.message === 'Mermaid SVG save failed' ||
+            entry.message === 'Mermaid PNG save failed')
+      )
+      expect(saveFailureLogs).toHaveLength(2)
+      expect(saveFailureLogs[0]).toMatchObject({
+        message: 'Mermaid SVG save failed',
+        data: {
+          format: 'svg',
+          theme: 'light',
+          codeLength: validSource.length
+        }
+      })
+      expect(typeof (saveFailureLogs[0].data as { svgLength?: unknown }).svgLength).toBe('number')
+      expect(saveFailureLogs[1]).toMatchObject({
+        message: 'Mermaid PNG save failed',
+        data: {
+          format: 'png',
+          theme: 'light',
+          codeLength: validSource.length,
+          byteLength: 6
+        }
+      })
+      const serializedFailureData = JSON.stringify(saveFailureLogs.map((entry) => entry.data))
+      expect(serializedFailureData).not.toContain('SECRET_APP_SAVE')
+      expect(serializedFailureData).not.toContain('아키텍처')
+      expect(serializedFailureData).not.toContain('<svg')
+      expect(serializedFailureData).not.toContain('137')
+
+      // Recover via PNG save and verify 1500ms '저장됨' indicator revert
+      nextSaveOutcome = 'confirm'
+      vi.useFakeTimers()
+      await act(async () => {
+        fireEvent.click(wysiwygSavePngBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(wysiwygBlocks[0].querySelector('.mermaid-action-error')).toBeNull()
+      expect(wysiwygSavePngBtn).toHaveTextContent('저장됨')
+      expect(wysiwygSavePngBtn).toHaveAttribute('title', '저장됨')
+      act(() => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(wysiwygSavePngBtn).not.toHaveTextContent('저장됨')
+      expect(wysiwygSavePngBtn).toHaveAttribute('title', 'PNG 저장')
       vi.useRealTimers()
 
       // Return to Raw: lossless roundtrip and clean buffer without dirty flag

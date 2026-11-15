@@ -1580,7 +1580,8 @@ body.is-resizing-sidebar .pane-workspace {
   cursor: not-allowed;
 }
 
-.mermaid-action-btn.is-copied {
+.mermaid-action-btn.is-copied,
+.mermaid-action-btn.is-saved {
   color: var(--accent-color);
 }
 

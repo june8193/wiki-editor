@@ -72,8 +72,22 @@ export const LOG_IPC_CHANNELS = {
 
 export const DIAGRAM_IPC_CHANNELS = {
   copyText: 'diagram:copy-text',
-  copyImage: 'diagram:copy-image'
+  copyImage: 'diagram:copy-image',
+  saveFile: 'diagram:save-file'
 } as const
+
+export type DiagramExportFormat = 'png' | 'svg'
+
+export interface DiagramSaveRequest {
+  format: DiagramExportFormat
+  suggestedName: string
+  data: Uint8Array | string
+}
+
+export interface DiagramSaveResult {
+  canceled: boolean
+  filePath?: string
+}
 
 export interface WikiConfigApi {
   get(): Promise<AppConfig>
@@ -134,6 +148,7 @@ export interface WikiLogApi {
 export interface WikiDiagramApi {
   copyText(text: string): Promise<void>
   copyImage(pngBytes: Uint8Array): Promise<void>
+  saveFile(request: DiagramSaveRequest): Promise<DiagramSaveResult>
 }
 
 export interface WikiApi {

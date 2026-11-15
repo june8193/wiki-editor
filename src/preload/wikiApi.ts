@@ -12,6 +12,7 @@ import {
   type AppMenuCommand,
   CONFIG_IPC_CHANNELS,
   DIAGRAM_IPC_CHANNELS,
+  type DiagramSaveResult,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
@@ -155,7 +156,9 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
     diagram: {
       copyText: (text) => ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyText, text) as Promise<void>,
       copyImage: (pngBytes) =>
-        ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyImage, pngBytes) as Promise<void>
+        ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyImage, pngBytes) as Promise<void>,
+      saveFile: (request) =>
+        ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.saveFile, request) as Promise<DiagramSaveResult>
     }
   }
 }

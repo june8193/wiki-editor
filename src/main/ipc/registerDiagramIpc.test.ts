@@ -57,6 +57,8 @@ describe('registerDiagramIpc', () => {
       writeClipboardText,
       createImageFromBuffer: () => ({ isEmpty: () => false }),
       writeClipboardImage: vi.fn(),
+      showSaveDialog: vi.fn(async () => ({ canceled: true })),
+      writeFile: vi.fn(async () => {}),
       logService
     })
 
@@ -116,6 +118,8 @@ describe('registerDiagramIpc', () => {
       writeClipboardText: vi.fn(),
       createImageFromBuffer,
       writeClipboardImage,
+      showSaveDialog: vi.fn(async () => ({ canceled: true })),
+      writeFile: vi.fn(async () => {}),
       logService
     })
 
@@ -176,5 +180,148 @@ describe('registerDiagramIpc', () => {
 
     dispose()
     expect(ipcMain.hasHandler(DIAGRAM_IPC_CHANNELS.copyImage)).toBe(false)
+  })
+
+  it('saves PNG binary and UTF-8 SVG via save dialog with format filters, sanitized default names, cancel handling, validation, and redacted audit logs', async () => {
+    const ipcMain = createFakeIpcMain()
+    const writtenFiles: Array<{ filePath: string; data: Buffer | string }> = []
+    let nextDialogResult: { canceled: boolean; filePath?: string } = {
+      canceled: false,
+      filePath: join(tempDir, 'exported-diagram.png')
+    }
+
+    const showSaveDialog = vi.fn(async () => nextDialogResult)
+    const writeFile = vi.fn(async (filePath: string, data: Buffer | string) => {
+      writtenFiles.push({ filePath, data })
+    })
+
+    const dispose = registerDiagramIpc({
+      ipcMain,
+      writeClipboardText: vi.fn(),
+      createImageFromBuffer: () => ({ isEmpty: () => false }),
+      writeClipboardImage: vi.fn(),
+      showSaveDialog,
+      writeFile,
+      logService
+    })
+
+    expect(ipcMain.hasHandler(DIAGRAM_IPC_CHANNELS.saveFile)).toBe(true)
+
+    // 1. Confirmed PNG save: slices Uint8Array by byteOffset/byteLength, applies PNG filter and sanitizes suggestedName
+    const backing = new Uint8Array([99, 137, 80, 78, 71, 211, 212, 213, 214, 88])
+    const pngSlice = backing.subarray(1, 9)
+    const pngResult = await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.saveFile, {
+      format: 'png',
+      suggestedName: '  ..Guide: <v1>\\chart..  ',
+      data: pngSlice
+    })
+
+    expect(showSaveDialog).toHaveBeenCalledTimes(1)
+    expect(showSaveDialog).toHaveBeenLastCalledWith({
+      defaultPath: 'Guide v1chart.png',
+      filters: [{ name: 'PNG Image', extensions: ['png'] }]
+    })
+    expect(pngResult).toEqual({
+      canceled: false,
+      filePath: join(tempDir, 'exported-diagram.png')
+    })
+    expect(writtenFiles).toHaveLength(1)
+    expect(Buffer.isBuffer(writtenFiles[0].data)).toBe(true)
+    expect(Array.from(writtenFiles[0].data as Buffer)).toEqual([
+      137, 80, 78, 71, 211, 212, 213, 214
+    ])
+
+    // 2. Confirmed SVG save: applies SVG filter, fixes mismatched extension, writes UTF-8 SVG string
+    const svgPath = join(tempDir, 'exported-diagram.svg')
+    nextDialogResult = { canceled: false, filePath: svgPath }
+    const svgMarkup = '<svg xmlns="http://www.w3.org/2000/svg"><text>SECRET_SVG_BODY</text></svg>'
+    const svgResult = await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.saveFile, {
+      format: 'svg',
+      suggestedName: 'architecture-diagram.png',
+      data: svgMarkup
+    })
+
+    expect(showSaveDialog).toHaveBeenLastCalledWith({
+      defaultPath: 'architecture-diagram.svg',
+      filters: [{ name: 'SVG Image', extensions: ['svg'] }]
+    })
+    expect(svgResult).toEqual({ canceled: false, filePath: svgPath })
+    expect(writtenFiles[1]).toEqual({ filePath: svgPath, data: svgMarkup })
+
+    // 3. Canceled save dialog: writes nothing and returns { canceled: true }, falls back to mermaid-diagram when name empty
+    nextDialogResult = { canceled: true }
+    const canceledResult = await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.saveFile, {
+      format: 'svg',
+      suggestedName: '  ...<>:"/\\|?*...svg  ',
+      data: svgMarkup
+    })
+    expect(showSaveDialog).toHaveBeenLastCalledWith({
+      defaultPath: 'mermaid-diagram.svg',
+      filters: [{ name: 'SVG Image', extensions: ['svg'] }]
+    })
+    expect(canceledResult).toEqual({ canceled: true })
+    expect(writtenFiles).toHaveLength(2)
+
+    // 4. Rejects malformed requests, invalid format, empty/non-Uint8Array PNG, and blank/non-string SVG without opening dialog
+    for (const invalidReq of [
+      null,
+      'bad',
+      { format: 'pdf', suggestedName: 'a.pdf', data: 'x' },
+      { format: 'png', suggestedName: 'a.png', data: 'not-bytes' },
+      { format: 'png', suggestedName: 'a.png', data: new Uint8Array(0) },
+      { format: 'svg', suggestedName: 'a.svg', data: new Uint8Array([1, 2]) },
+      { format: 'svg', suggestedName: 'a.svg', data: '   \n  ' }
+    ]) {
+      await expect(ipcMain.invoke(DIAGRAM_IPC_CHANNELS.saveFile, invalidReq)).rejects.toThrow()
+    }
+    expect(showSaveDialog).toHaveBeenCalledTimes(3)
+    expect(writeFile).toHaveBeenCalledTimes(2)
+
+    // 5. Audit log records format, byte/text length, and canceled status only (no raw bytes, SVG markup, or file paths)
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(10)
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('SECRET_SVG_BODY')
+    expect(serialized).not.toContain('211')
+    expect(serialized).not.toContain('214')
+    expect(serialized).not.toContain('exported-diagram')
+    expect(serialized).not.toContain('Guide v1chart')
+
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.saveFile,
+        success: true,
+        format: 'png',
+        byteLength: pngSlice.byteLength,
+        canceled: false
+      }
+    })
+    expect(entries[1]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.saveFile,
+        success: true,
+        format: 'svg',
+        textLength: svgMarkup.length,
+        canceled: false
+      }
+    })
+    expect(entries[2]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.saveFile,
+        success: true,
+        format: 'svg',
+        textLength: svgMarkup.length,
+        canceled: true
+      }
+    })
+
+    dispose()
+    expect(ipcMain.hasHandler(DIAGRAM_IPC_CHANNELS.saveFile)).toBe(false)
   })
 })

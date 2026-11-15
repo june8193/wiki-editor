@@ -277,6 +277,7 @@ export function DocumentEditor({
           theme={theme}
           showHeadingNumbers={showHeadingNumbers}
           mermaidRenderer={mermaidRenderer}
+          documentTitle={documentTitle}
           scrollRequest={previewScrollRequest}
           isActive={isActive}
           onScrollTopChange={handleScrollTopChange}
@@ -308,6 +309,7 @@ export function DocumentEditor({
               theme={theme}
               showHeadingNumbers={showHeadingNumbers}
               mermaidRenderer={mermaidRenderer}
+              documentTitle={documentTitle}
               scrollRequest={previewScrollRequest}
               isActive={isActive}
               onScrollTopChange={handleSplitPreviewScroll}

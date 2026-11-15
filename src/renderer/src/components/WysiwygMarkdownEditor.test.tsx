@@ -947,7 +947,9 @@ describe('WysiwygMarkdownEditor', () => {
       const toolbar = within(validBlock).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
       expect(within(toolbar).getAllByRole('button').map((btn) => btn.getAttribute('aria-label'))).toEqual([
         '이미지 복사',
-        '코드 복사'
+        '코드 복사',
+        'PNG 저장',
+        'SVG 저장'
       ])
 
       const validImageBtn = within(validBlock).getByRole('button', { name: '이미지 복사' })
@@ -1029,6 +1031,172 @@ describe('WysiwygMarkdownEditor', () => {
         vi.advanceTimersByTime(1500)
       })
       expect(validImageBtn).not.toHaveTextContent('복사됨')
+      expect(onChangeContent).not.toHaveBeenCalled()
+    } finally {
+      canvasStub.restore()
+    }
+  })
+
+  it('supports inline PNG 저장 and SVG 저장 in WYSIWYG with documentTitle context, 1500ms feedback, cancel reset, syntax-error disabling, and sanitized alerts', async () => {
+    const canvasStub = installSvgCanvasStub()
+
+    try {
+      const entries: RendererLogPayload[] = []
+      let nextCanceled = false
+      let failSave = false
+      const saveFile = vi.fn(async (req: { format: 'png' | 'svg'; suggestedName: string; data: Uint8Array | string }) => {
+        if (failSave) {
+          throw new Error('위지윅 파일 저장 실패')
+        }
+        return nextCanceled
+          ? { canceled: true }
+          : { canceled: false, filePath: `C:\\exports\\${req.suggestedName}` }
+      })
+      window.wikiApi = {
+        diagram: {
+          copyText: vi.fn(async () => {}),
+          copyImage: vi.fn(async () => {}),
+          saveFile
+        },
+        log: {
+          write: vi.fn(async (payload: RendererLogPayload) => {
+            entries.push(payload)
+          })
+        }
+      } as unknown as WikiApi
+
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => {
+          if (text.includes('broken_save')) {
+            throw new Error('Syntax error')
+          }
+          return {
+            svg: `<svg viewBox="0 0 120 60" width="100%" style="max-width: 120px;"><g><text>${text.trim()}</text></g></svg>`
+          }
+        })
+      }
+      const mermaidRenderer = createMermaidRenderer(driver)
+      const onChangeContent = vi.fn()
+      const validSource = 'graph TD\n  WYS_SAVE_SECRET --> End'
+      const markdown = [
+        '```mermaid',
+        validSource,
+        '```',
+        '',
+        '```mermaid',
+        'graph TD\n  broken_save',
+        '```',
+        '',
+        '```mermaid',
+        '   ',
+        '```'
+      ].join('\n')
+
+      const { rerender } = render(
+        <WysiwygMarkdownEditor
+          content={markdown}
+          scrollTop={0}
+          theme="light"
+          documentTitle="  ..Design: Spec...  "
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={onChangeContent}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
+        expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
+      })
+
+      const blocks = screen.getAllByTestId('wysiwyg-mermaid-block')
+      const validBlock = blocks[0]
+      const brokenBlock = blocks[1]
+      const blankBlock = blocks[2]
+
+      const validPngBtn = within(validBlock).getByRole('button', { name: 'PNG 저장' })
+      const validSvgBtn = within(validBlock).getByRole('button', { name: 'SVG 저장' })
+      expect(validPngBtn).toBeEnabled()
+      expect(validSvgBtn).toBeEnabled()
+      expect(within(brokenBlock).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
+      expect(within(brokenBlock).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
+      expect(within(blankBlock).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
+      expect(within(blankBlock).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
+
+      // Confirmed PNG save uses sanitized documentTitle
+      fireEvent.click(validPngBtn)
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(1)
+        expect(validPngBtn).toHaveTextContent('저장됨')
+      })
+      expect(saveFile).toHaveBeenLastCalledWith({
+        format: 'png',
+        suggestedName: 'Design Spec-diagram.png',
+        data: new Uint8Array([137, 80, 78, 71, 1, 304 & 0xff])
+      })
+
+      // Switch to dark theme + canceled SVG save -> no feedback or alert
+      rerender(
+        <WysiwygMarkdownEditor
+          content={markdown}
+          scrollTop={0}
+          theme="dark"
+          documentTitle="  ..Design: Spec...  "
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={onChangeContent}
+        />
+      )
+      await waitFor(() => {
+        expect(within(validBlock).getByTestId('mermaid-diagram')).toHaveAttribute(
+          'data-mermaid-theme',
+          'dark'
+        )
+        expect(validSvgBtn).toBeEnabled()
+      })
+
+      nextCanceled = true
+      fireEvent.click(validSvgBtn)
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(2)
+      })
+      expect(saveFile.mock.calls[1][0]).toMatchObject({
+        format: 'svg',
+        suggestedName: 'Design Spec-diagram.svg'
+      })
+      expect(saveFile.mock.calls[1][0].data).toContain('fill="#161b22"')
+      expect(validSvgBtn).not.toHaveTextContent('저장됨')
+      expect(within(validBlock).queryByRole('alert')).not.toBeInTheDocument()
+
+      // Failure displays inline alert and sanitized error log
+      nextCanceled = false
+      failSave = true
+      fireEvent.click(validSvgBtn)
+      await waitFor(() => {
+        expect(validBlock.querySelector('.mermaid-action-error')).toHaveTextContent('위지윅 파일 저장 실패')
+      })
+      const saveErrorLogs = entries.filter((e) => e.message === 'Mermaid SVG save failed')
+      expect(saveErrorLogs).toHaveLength(1)
+      expect(saveErrorLogs[0].data).toMatchObject({
+        format: 'svg',
+        theme: 'dark',
+        codeLength: validSource.length
+      })
+      expect(JSON.stringify(saveErrorLogs[0])).not.toContain('WYS_SAVE_SECRET')
+      expect(JSON.stringify(saveErrorLogs[0])).not.toContain('<svg')
+
+      // Retry confirmed SVG save with fake timers -> 1500ms 저장됨 feedback
+      failSave = false
+      vi.useFakeTimers()
+      await act(async () => {
+        fireEvent.click(validSvgBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(within(validBlock).queryByRole('alert')).not.toBeInTheDocument()
+      expect(validSvgBtn).toHaveTextContent('저장됨')
+      act(() => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(validSvgBtn).not.toHaveTextContent('저장됨')
       expect(onChangeContent).not.toHaveBeenCalled()
     } finally {
       canvasStub.restore()

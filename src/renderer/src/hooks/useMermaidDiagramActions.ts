@@ -1,27 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
-import { rasterizeMermaidSvgToPng } from '../editor/mermaidExport'
+import {
+  buildMermaidExportFileName,
+  normalizeMermaidSvg,
+  rasterizeMermaidSvgToPng
+} from '../editor/mermaidExport'
 import { logRendererError } from '../logging/rendererLogger'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
 export const MERMAID_ACTION_FEEDBACK_DURATION_MS = 1500
 
-export type MermaidActionId = 'copy-image' | 'copy-code'
+export type MermaidActionId = 'copy-image' | 'copy-code' | 'save-png' | 'save-svg'
 
 export interface UseMermaidDiagramActionsOptions {
   code: string
   theme: ThemeMode
   confirmedSvg: string | null
+  documentTitle?: string
 }
 
 export interface MermaidDiagramActionsState {
-  canCopyImage: boolean
+  canExport: boolean
   canCopyCode: boolean
   activeAction: MermaidActionId | null
   completedAction: MermaidActionId | null
   errorMessage: string | null
   handleCopyImage: () => Promise<void>
   handleCopyCode: () => Promise<void>
+  handleSavePng: () => Promise<void>
+  handleSaveSvg: () => Promise<void>
 }
 
 interface ActionFailureLogContext {
@@ -32,16 +39,19 @@ interface ActionFailureLogContext {
 
 const COPY_CODE_FAILED_FALLBACK_MESSAGE = 'Mermaid 코드 복사에 실패했습니다.'
 const COPY_IMAGE_FAILED_FALLBACK_MESSAGE = 'Mermaid 이미지 복사에 실패했습니다.'
+const SAVE_PNG_FAILED_FALLBACK_MESSAGE = 'Mermaid PNG 파일 저장에 실패했습니다.'
+const SAVE_SVG_FAILED_FALLBACK_MESSAGE = 'Mermaid SVG 파일 저장에 실패했습니다.'
 
 /**
- * Coordinates Mermaid block toolbar actions (`copy-image`, `copy-code`),
+ * Coordinates Mermaid block toolbar actions (`copy-image`, `copy-code`, `save-png`, `save-svg`),
  * shared busy locking, timed feedback badges, cancellation on code/theme change
  * or unmount, and sanitized failure reporting.
  */
 export function useMermaidDiagramActions({
   code,
   theme,
-  confirmedSvg
+  confirmedSvg,
+  documentTitle
 }: UseMermaidDiagramActionsOptions): MermaidDiagramActionsState {
   const [activeAction, setActiveAction] = useState<MermaidActionId | null>(null)
   const [completedAction, setCompletedAction] = useState<MermaidActionId | null>(null)
@@ -53,7 +63,7 @@ export function useMermaidDiagramActions({
   const previousContextRef = useRef({ code, theme })
 
   const canCopyCode = code.trim().length > 0
-  const canCopyImage = canCopyCode && confirmedSvg !== null
+  const canExport = canCopyCode && confirmedSvg !== null
 
   const clearFeedbackTimer = useCallback(() => {
     if (feedbackTimerRef.current !== null) {
@@ -88,7 +98,7 @@ export function useMermaidDiagramActions({
     async (
       actionId: MermaidActionId,
       canExecute: boolean,
-      run: (token: number) => Promise<void>,
+      run: (token: number) => Promise<boolean | void>,
       failureContext: ActionFailureLogContext
     ) => {
       if (isBusyRef.current || !canExecute) {
@@ -103,8 +113,8 @@ export function useMermaidDiagramActions({
       setErrorMessage(null)
 
       try {
-        await run(token)
-        if (!isMountedRef.current || executionTokenRef.current !== token) {
+        const completed = await run(token)
+        if (!isMountedRef.current || executionTokenRef.current !== token || completed === false) {
           return
         }
 
@@ -138,43 +148,134 @@ export function useMermaidDiagramActions({
     [clearFeedbackTimer]
   )
 
-  const handleCopyImage = useCallback(async () => {
-    let pngByteLength: number | undefined
-    await executeAction(
-      'copy-image',
-      canCopyImage,
-      async (token) => {
-        if (confirmedSvg === null) {
-          throw new Error(COPY_IMAGE_FAILED_FALLBACK_MESSAGE)
-        }
-        const copyImage = window.wikiApi?.diagram?.copyImage
-        if (typeof copyImage !== 'function') {
-          throw new Error('이미지 클립보드 복사 API를 사용할 수 없습니다.')
-        }
+  const executePngExportAction = useCallback(
+    async ({
+      actionId,
+      event,
+      fallbackMessage,
+      extraLogData,
+      resolveSender
+    }: {
+      actionId: 'copy-image' | 'save-png'
+      event: string
+      fallbackMessage: string
+      extraLogData?: Record<string, unknown>
+      resolveSender: () => (pngBytes: Uint8Array) => Promise<boolean | void>
+    }) => {
+      let pngByteLength: number | undefined
+      await executeAction(
+        actionId,
+        canExport,
+        async (token) => {
+          if (confirmedSvg === null) {
+            throw new Error(fallbackMessage)
+          }
+          const sendPng = resolveSender()
 
-        const pngBytes = await rasterizeMermaidSvgToPng(confirmedSvg, theme)
-        if (!isMountedRef.current || executionTokenRef.current !== token) {
-          return
-        }
-        if (pngBytes.byteLength === 0) {
-          throw new Error('렌더링된 PNG 이미지가 비어 있습니다.')
-        }
+          const pngBytes = await rasterizeMermaidSvgToPng(confirmedSvg, theme)
+          if (!isMountedRef.current || executionTokenRef.current !== token) {
+            return false
+          }
+          if (pngBytes.byteLength === 0) {
+            throw new Error('렌더링된 PNG 이미지가 비어 있습니다.')
+          }
 
-        pngByteLength = pngBytes.byteLength
-        await copyImage(pngBytes)
-      },
-      {
+          pngByteLength = pngBytes.byteLength
+          return await sendPng(pngBytes)
+        },
+        {
+          event,
+          fallbackMessage,
+          buildData: () => ({
+            ...extraLogData,
+            theme,
+            codeLength: code.length,
+            svgLength: confirmedSvg?.length ?? 0,
+            ...(pngByteLength !== undefined ? { byteLength: pngByteLength } : {})
+          })
+        }
+      )
+    },
+    [canExport, code.length, confirmedSvg, executeAction, theme]
+  )
+
+  const handleCopyImage = useCallback(
+    () =>
+      executePngExportAction({
+        actionId: 'copy-image',
         event: 'Mermaid image copy failed',
         fallbackMessage: COPY_IMAGE_FAILED_FALLBACK_MESSAGE,
+        resolveSender: () => {
+          const copyImage = window.wikiApi?.diagram?.copyImage
+          if (typeof copyImage !== 'function') {
+            throw new Error('이미지 클립보드 복사 API를 사용할 수 없습니다.')
+          }
+          return copyImage
+        }
+      }),
+    [executePngExportAction]
+  )
+
+  const handleSavePng = useCallback(
+    () =>
+      executePngExportAction({
+        actionId: 'save-png',
+        event: 'Mermaid PNG save failed',
+        fallbackMessage: SAVE_PNG_FAILED_FALLBACK_MESSAGE,
+        extraLogData: { format: 'png' },
+        resolveSender: () => {
+          const saveFile = window.wikiApi?.diagram?.saveFile
+          if (typeof saveFile !== 'function') {
+            throw new Error('다이어그램 파일 저장 API를 사용할 수 없습니다.')
+          }
+          return async (pngBytes) => {
+            const result = await saveFile({
+              format: 'png',
+              suggestedName: buildMermaidExportFileName(documentTitle, 'png'),
+              data: pngBytes
+            })
+            return !result.canceled
+          }
+        }
+      }),
+    [documentTitle, executePngExportAction]
+  )
+
+  const handleSaveSvg = useCallback(async () => {
+    let normalizedSvgLength: number | undefined
+    await executeAction(
+      'save-svg',
+      canExport,
+      async () => {
+        if (confirmedSvg === null) {
+          throw new Error(SAVE_SVG_FAILED_FALLBACK_MESSAGE)
+        }
+        const saveFile = window.wikiApi?.diagram?.saveFile
+        if (typeof saveFile !== 'function') {
+          throw new Error('다이어그램 파일 저장 API를 사용할 수 없습니다.')
+        }
+
+        const normalized = normalizeMermaidSvg(confirmedSvg, theme)
+        normalizedSvgLength = normalized.svg.length
+        const result = await saveFile({
+          format: 'svg',
+          suggestedName: buildMermaidExportFileName(documentTitle, 'svg'),
+          data: normalized.svg
+        })
+        return !result.canceled
+      },
+      {
+        event: 'Mermaid SVG save failed',
+        fallbackMessage: SAVE_SVG_FAILED_FALLBACK_MESSAGE,
         buildData: () => ({
+          format: 'svg',
           theme,
           codeLength: code.length,
-          svgLength: confirmedSvg?.length ?? 0,
-          ...(pngByteLength !== undefined ? { byteLength: pngByteLength } : {})
+          svgLength: normalizedSvgLength ?? confirmedSvg?.length ?? 0
         })
       }
     )
-  }, [canCopyImage, code.length, confirmedSvg, executeAction, theme])
+  }, [canExport, code.length, confirmedSvg, documentTitle, executeAction, theme])
 
   const handleCopyCode = useCallback(async () => {
     await executeAction(
@@ -197,12 +298,14 @@ export function useMermaidDiagramActions({
   }, [canCopyCode, code, executeAction])
 
   return {
-    canCopyImage,
+    canExport,
     canCopyCode,
     activeAction,
     completedAction,
     errorMessage,
     handleCopyImage,
-    handleCopyCode
+    handleCopyCode,
+    handleSavePng,
+    handleSaveSvg
   }
 }

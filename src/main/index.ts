@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises'
 import { release as getOsRelease } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -125,6 +126,14 @@ void app.whenReady().then(async () => {
           'image/png': new Blob([new Uint8Array(image.toPNG())], { type: 'image/png' })
         })
       ]),
+    showSaveDialog: (options) => {
+      const targetWindow = getActiveWindow()
+      return targetWindow
+        ? dialog.showSaveDialog(targetWindow, options)
+        : dialog.showSaveDialog(options)
+    },
+    writeFile: (filePath, data) =>
+      typeof data === 'string' ? writeFile(filePath, data, 'utf8') : writeFile(filePath, data),
     logService
   })
   disposeGitIpc = registerGitIpc({

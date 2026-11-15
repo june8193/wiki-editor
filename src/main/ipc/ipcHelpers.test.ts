@@ -333,4 +333,73 @@ describe('registerIpcHandlers logging wrapper', () => {
 
     dispose()
   })
+
+  it('logs diagram:save-file metadata with format, byte/text length, and canceled flag without leaking file contents or names', async () => {
+    const ipcMain = createFakeIpcMain()
+    const secretPngBytes = new Uint8Array([137, 80, 78, 71, 201, 202, 203, 204])
+    const secretSvgMarkup = '<svg><text>SECRET_SVG_NODE</text></svg>'
+
+    const dispose = registerIpcHandlers(
+      ipcMain,
+      [
+        [
+          DIAGRAM_IPC_CHANNELS.saveFile,
+          async (_event, request) => {
+            const req = request as { format: string }
+            if (req.format === 'png') {
+              return { canceled: false, filePath: 'C:\\exports\\SECRET_PATH_PNG.png' }
+            }
+            return { canceled: true }
+          }
+        ]
+      ],
+      { logService }
+    )
+
+    await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.saveFile, {
+      format: 'png',
+      suggestedName: 'SECRET_SUGGESTED_PNG-diagram.png',
+      data: secretPngBytes
+    })
+    await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.saveFile, {
+      format: 'svg',
+      suggestedName: 'SECRET_SUGGESTED_SVG-diagram.svg',
+      data: secretSvgMarkup
+    })
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(2)
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('SECRET_SVG_NODE')
+    expect(serialized).not.toContain('SECRET_SUGGESTED_PNG')
+    expect(serialized).not.toContain('SECRET_SUGGESTED_SVG')
+    expect(serialized).not.toContain('SECRET_PATH_PNG')
+    expect(serialized).not.toContain('201')
+    expect(serialized).not.toContain('204')
+
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.saveFile,
+        success: true,
+        format: 'png',
+        byteLength: secretPngBytes.byteLength,
+        canceled: false
+      }
+    })
+    expect(entries[1]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.saveFile,
+        success: true,
+        format: 'svg',
+        textLength: secretSvgMarkup.length,
+        canceled: true
+      }
+    })
+
+    dispose()
+  })
 })

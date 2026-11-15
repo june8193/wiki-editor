@@ -84,6 +84,7 @@ export function MermaidDiagramView({
 interface MermaidDiagramProps {
   code: string
   theme: ThemeMode
+  documentTitle?: string
   renderer?: MermaidRenderer
   debounceMs?: number
   className?: string
@@ -98,6 +99,7 @@ interface MermaidDiagramProps {
 export function MermaidDiagram({
   code,
   theme,
+  documentTitle,
   renderer = defaultMermaidRenderer,
   debounceMs = DEFAULT_MERMAID_DEBOUNCE_MS,
   className,
@@ -116,7 +118,8 @@ export function MermaidDiagram({
   const actions = useMermaidDiagramActions({
     code,
     theme,
-    confirmedSvg
+    confirmedSvg,
+    documentTitle
   })
 
   return (

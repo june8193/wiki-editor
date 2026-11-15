@@ -10,6 +10,7 @@ import { MermaidDiagramView } from './MermaidDiagram'
 export interface WysiwygMermaidContextValue {
   theme: ThemeMode
   mermaidRenderer?: MermaidRenderer
+  documentTitle?: string
 }
 
 export const WysiwygMermaidContext = createContext<WysiwygMermaidContextValue>({
@@ -17,7 +18,7 @@ export const WysiwygMermaidContext = createContext<WysiwygMermaidContextValue>({
 })
 
 function WysiwygMermaidBlock({ code }: { code: string }) {
-  const { theme, mermaidRenderer } = useContext(WysiwygMermaidContext)
+  const { theme, mermaidRenderer, documentTitle } = useContext(WysiwygMermaidContext)
   const [showSource, setShowSource] = useState(false)
 
   const { mermaidTheme, displaySvg, confirmedSvg, displayError } = useMermaidRenderState({
@@ -29,7 +30,8 @@ function WysiwygMermaidBlock({ code }: { code: string }) {
   const actions = useMermaidDiagramActions({
     code,
     theme,
-    confirmedSvg
+    confirmedSvg,
+    documentTitle
   })
 
   return (

@@ -1,4 +1,6 @@
 import type { ThemeMode } from '@shared/config'
+import { sanitizeDiagramFileNamePart } from '@shared/diagram'
+import type { DiagramExportFormat } from '@shared/ipc'
 
 export const MERMAID_EXPORT_PADDING_PX = 16
 export const DEFAULT_PNG_EXPORT_SCALE = 2
@@ -266,4 +268,17 @@ export async function rasterizeMermaidSvgToPng(
   ctx.clearRect(0, 0, pixelWidth, pixelHeight)
   ctx.drawImage(img, 0, 0, pixelWidth, pixelHeight)
   return await canvasToPngBytes(canvas)
+}
+
+/**
+ * Generates a Windows-safe default filename (`<title>-diagram.<ext>`) from the active
+ * document title, falling back to `mermaid-diagram.<ext>` when empty after sanitization.
+ */
+export function buildMermaidExportFileName(
+  documentTitle: string | undefined,
+  format: DiagramExportFormat
+): string {
+  const sanitizedTitle = documentTitle ? sanitizeDiagramFileNamePart(documentTitle) : ''
+  const baseName = sanitizedTitle.length > 0 ? `${sanitizedTitle}-diagram` : 'mermaid-diagram'
+  return `${baseName}.${format}`
 }

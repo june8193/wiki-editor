@@ -434,8 +434,8 @@ export function WysiwygMarkdownEditor({
   })
 
   const mermaidContextValue = useMemo(
-    () => ({ theme, mermaidRenderer }),
-    [mermaidRenderer, theme]
+    () => ({ theme, mermaidRenderer, documentTitle }),
+    [documentTitle, mermaidRenderer, theme]
   )
 
   return (

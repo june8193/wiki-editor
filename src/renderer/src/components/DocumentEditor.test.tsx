@@ -1,8 +1,10 @@
 import { EditorView } from '@codemirror/view'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { WikiApi } from '@shared/ipc'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
+import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { DocumentEditor } from './DocumentEditor'
 import type { DocumentBuffer } from '../stores/DocumentBufferStore'
 import type { DocumentTabItem, EditorMode } from '../stores/PaneTabStore'
@@ -882,6 +884,106 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       expect(previewRegion.scrollTop).toBe(0)
     } finally {
       Element.prototype.scrollIntoView = origScrollIntoView
+    }
+  })
+})
+
+describe('DocumentEditor Mermaid export title propagation', () => {
+  const originalWikiApi = (window as { wikiApi?: WikiApi }).wikiApi
+
+  afterEach(() => {
+    if (originalWikiApi === undefined) {
+      delete (window as { wikiApi?: WikiApi }).wikiApi
+    } else {
+      window.wikiApi = originalWikiApi
+    }
+  })
+
+  it('propagates derived documentTitle from active DocumentBuffer into Preview, Split right preview, and WYSIWYG Mermaid blocks', async () => {
+    const canvasStub = installSvgCanvasStub()
+
+    try {
+      const saveFile = vi.fn(async () => ({ canceled: false, filePath: 'C:\\exports\\out' }))
+      window.wikiApi = {
+        diagram: {
+          copyText: vi.fn(async () => {}),
+          copyImage: vi.fn(async () => {}),
+          saveFile
+        }
+      } as unknown as WikiApi
+
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async () => ({
+          svg: '<svg viewBox="0 0 100 50"><g><text>Doc</text></g></svg>'
+        }))
+      }
+      const mermaidRenderer = createMermaidRenderer(driver)
+      const doc = createDoc({
+        key: 'c:/wiki/system-arch.md',
+        path: 'C:/wiki/system-arch.md',
+        name: 'System: <Arch>.md',
+        content: '# Arch\n\n```mermaid\ngraph TD\n  A --> B\n```',
+        savedContent: '# Arch\n\n```mermaid\ngraph TD\n  A --> B\n```'
+      })
+
+      const renderMode = (mode: EditorMode) => (
+        <DocumentEditor
+          document={doc}
+          tab={{ ...createTab(mode), bufferKey: doc.key }}
+          theme="light"
+          autoSave={false}
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      const { rerender } = render(renderMode('preview'))
+      await screen.findByTestId('mermaid-svg')
+      fireEvent.click(screen.getByRole('button', { name: 'PNG 저장' }))
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(1)
+      })
+      expect(saveFile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          format: 'png',
+          suggestedName: 'System Arch-diagram.png'
+        })
+      )
+
+      rerender(renderMode('split'))
+      const splitPreview = await screen.findByTestId('split-markdown-preview')
+      await within(splitPreview).findByTestId('mermaid-svg')
+      fireEvent.click(within(splitPreview).getByRole('button', { name: 'SVG 저장' }))
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(2)
+      })
+      expect(saveFile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          format: 'svg',
+          suggestedName: 'System Arch-diagram.svg'
+        })
+      )
+
+      rerender(renderMode('wysiwyg'))
+      await waitFor(() => {
+        expect(screen.getByTestId('wysiwyg-mermaid-block')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'PNG 저장' })).toBeEnabled()
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'PNG 저장' }))
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(3)
+      })
+      expect(saveFile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          format: 'png',
+          suggestedName: 'System Arch-diagram.png'
+        })
+      )
+    } finally {
+      canvasStub.restore()
     }
   })
 })

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
-import { normalizeMermaidSvg, rasterizeMermaidSvgToPng } from './mermaidExport'
+import {
+  buildMermaidExportFileName,
+  normalizeMermaidSvg,
+  rasterizeMermaidSvgToPng
+} from './mermaidExport'
 
 describe('mermaidExport', () => {
   it('normalizes Mermaid SVG with 16px padded viewBox, explicit dimensions, stripped max-width, bottom theme background rect, and valid XML foreignObject serialization', () => {
@@ -107,5 +111,30 @@ describe('mermaidExport', () => {
     } finally {
       stub.restore()
     }
+  })
+
+  it('builds default export file names from document titles, strips Windows forbidden characters and edge whitespace/periods, and falls back to mermaid-diagram', () => {
+    expect(buildMermaidExportFileName('architecture-guide', 'png')).toBe(
+      'architecture-guide-diagram.png'
+    )
+    expect(buildMermaidExportFileName('아키텍처 v1.2 문서', 'svg')).toBe(
+      '아키텍처 v1.2 문서-diagram.svg'
+    )
+    expect(buildMermaidExportFileName('  ..Guide: <v1>"a/b\\c|d?e*f\u0000\u001f...  ', 'png')).toBe(
+      'Guide v1abcdef-diagram.png'
+    )
+    expect(buildMermaidExportFileName('...  sub.title  ..', 'svg')).toBe(
+      'sub.title-diagram.svg'
+    )
+
+    // Missing or empty-after-sanitization titles fall back to mermaid-diagram.<ext>
+    expect(buildMermaidExportFileName(undefined, 'png')).toBe('mermaid-diagram.png')
+    expect(buildMermaidExportFileName(undefined, 'svg')).toBe('mermaid-diagram.svg')
+    expect(buildMermaidExportFileName('', 'png')).toBe('mermaid-diagram.png')
+    expect(buildMermaidExportFileName('   \t  ', 'svg')).toBe('mermaid-diagram.svg')
+    expect(buildMermaidExportFileName('...', 'png')).toBe('mermaid-diagram.png')
+    expect(buildMermaidExportFileName('<>:"/\\|?*\u0000\u001f . .', 'svg')).toBe(
+      'mermaid-diagram.svg'
+    )
   })
 })
