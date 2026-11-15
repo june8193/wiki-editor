@@ -6,9 +6,33 @@ import { App } from './App'
 import {
   createMultiWindowWikiHarness,
   getRawEditorText,
+  type InMemoryWindowHandle,
   setRawEditorText,
   triggerMenuCommand
 } from './test/inMemoryWikiHarness'
+
+function deferBufferMethod<K extends 'syncWindowTabs' | 'updateContent'>(
+  bufferApi: InMemoryWindowHandle['api']['buffer'],
+  method: K
+): { count: () => number; flushAll: () => void } {
+  const original = bufferApi[method].bind(bufferApi) as (...args: unknown[]) => Promise<unknown>
+  const deferred: Array<() => void> = []
+  bufferApi[method] = ((...args: unknown[]) =>
+    new Promise((resolve) => {
+      deferred.push(() => {
+        void original(...args).then(resolve)
+      })
+    })) as InMemoryWindowHandle['api']['buffer'][K]
+  return {
+    count: () => deferred.length,
+    flushAll: () => {
+      bufferApi[method] = original as InMemoryWindowHandle['api']['buffer'][K]
+      for (const flush of deferred.splice(0)) {
+        flush()
+      }
+    }
+  }
+}
 
 vi.mock('mermaid', () => ({
   default: {
@@ -528,14 +552,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     })
 
     // Hold the next syncWindowTabs IPC call unresolved while closing both split panes rapidly
-    const originalSyncWindowTabs = win1.api.buffer.syncWindowTabs
-    const deferredResolvers: Array<() => void> = []
-    win1.api.buffer.syncWindowTabs = (keys) =>
-      new Promise((resolve) => {
-        deferredResolvers.push(() => {
-          void originalSyncWindowTabs(keys).then(resolve)
-        })
-      })
+    const syncGate = deferBufferMethod(win1.api.buffer, 'syncWindowTabs')
 
     const closeButtonsBeforeFirst = within(rendered1.container).getAllByRole('button', {
       name: 'split.md 탭 닫기'
@@ -552,10 +569,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     await user.click(closeButtonsBeforeSecond[0])
     expect(within(rendered1.container).getByRole('alertdialog')).toBeInTheDocument()
 
-    win1.api.buffer.syncWindowTabs = originalSyncWindowTabs
-    for (const flush of deferredResolvers) {
-      flush()
-    }
+    syncGate.flushAll()
   })
 
   it('re-acquires shared buffers through the hub when opening in a second window races with closing in the first', async () => {
@@ -585,14 +599,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
 
     // Hold Window 2's syncWindowTabs so Window 1 closes its last tab before Window 2 syncs
     const openSpy = vi.spyOn(win2.api.buffer, 'openWorkspaceFile')
-    const originalWin2Sync = win2.api.buffer.syncWindowTabs
-    const deferredWin2Syncs: Array<() => void> = []
-    win2.api.buffer.syncWindowTabs = (keys) =>
-      new Promise((resolve) => {
-        deferredWin2Syncs.push(() => {
-          void originalWin2Sync(keys).then(resolve)
-        })
-      })
+    const win2SyncGate = deferBufferMethod(win2.api.buffer, 'syncWindowTabs')
 
     await user.click(await within(sidebar2).findByText('race.md'))
     await waitFor(() => {
@@ -605,10 +612,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
       expect(within(rendered1.container).queryByRole('tab', { name: /race\.md/ })).not.toBeInTheDocument()
     })
 
-    win2.api.buffer.syncWindowTabs = originalWin2Sync
-    for (const flush of deferredWin2Syncs) {
-      flush()
-    }
+    win2SyncGate.flushAll()
 
     await waitFor(() => {
       expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/race.md']).toBe(1)
@@ -648,17 +652,10 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     })
 
     // Hold bufferApi.updateContent unresolved so latestHubBuffers still reports isDirty === false
-    const originalUpdateContent = win1.api.buffer.updateContent
-    const deferredEdits: Array<() => void> = []
-    win1.api.buffer.updateContent = (key, nextContent) =>
-      new Promise((resolve) => {
-        deferredEdits.push(() => {
-          void originalUpdateContent(key, nextContent).then(resolve)
-        })
-      })
+    const editGate = deferBufferMethod(win1.api.buffer, 'updateContent')
 
     setRawEditorText(editor1, '# Flushed before close')
-    expect(deferredEdits).toHaveLength(1)
+    expect(editGate.count()).toBe(1)
     expect(harness.hub.getSnapshot().buffers['c:/wiki/docs/draft.md']?.isDirty).toBe(false)
 
     await user.click(within(rendered1.container).getByRole('button', { name: 'draft.md 탭 닫기' }))
@@ -666,10 +663,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     await user.click(within(dialog).getByRole('button', { name: '저장 후 닫기' }))
 
     // Flush the in-flight edit after saveAndCloseTab has started
-    win1.api.buffer.updateContent = originalUpdateContent
-    for (const flush of deferredEdits) {
-      flush()
-    }
+    editGate.flushAll()
 
     await waitFor(() => {
       expect(within(rendered1.container).queryByRole('tab', { name: /draft\.md/ })).not.toBeInTheDocument()
@@ -714,17 +708,10 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
       expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/note.md']).toBe(1)
     })
 
-    const originalUpdateContent = win1.api.buffer.updateContent
-    const deferredEdits: Array<() => void> = []
-    win1.api.buffer.updateContent = (key, nextContent) =>
-      new Promise((resolve) => {
-        deferredEdits.push(() => {
-          void originalUpdateContent(key, nextContent).then(resolve)
-        })
-      })
+    const editGate = deferBufferMethod(win1.api.buffer, 'updateContent')
 
     setRawEditorText(editor1, '# Flushed before workspace switch')
-    expect(deferredEdits).toHaveLength(1)
+    expect(editGate.count()).toBe(1)
 
     const activityBar = within(rendered1.container).getByRole('navigation', { name: '액티비티 바' })
     await user.click(within(activityBar).getByRole('button', { name: '워크스페이스' }))
@@ -736,10 +723,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     const dialog = await within(rendered1.container).findByRole('alertdialog')
     await user.click(within(dialog).getByRole('button', { name: /저장 후 이동/i }))
 
-    win1.api.buffer.updateContent = originalUpdateContent
-    for (const flush of deferredEdits) {
-      flush()
-    }
+    editGate.flushAll()
 
     const updatedSidebar = await within(rendered1.container).findByLabelText('워크스페이스 탐색기')
     expect(await within(updatedSidebar).findByText('next.md')).toBeInTheDocument()

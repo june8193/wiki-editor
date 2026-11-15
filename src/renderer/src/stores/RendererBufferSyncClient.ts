@@ -17,6 +17,17 @@ export interface DirtyTabClosePrompt {
   buffer: DocumentBuffer
 }
 
+function areStringArraysEqual(
+  left: readonly string[] | null,
+  right: readonly string[]
+): boolean {
+  if (!left || left.length !== right.length) return false
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false
+  }
+  return true
+}
+
 function countBufferKeys(keys: readonly string[]): Record<string, number> {
   const counts: Record<string, number> = {}
   for (const key of keys) {
@@ -98,7 +109,7 @@ export class RendererBufferSyncClient {
   private readonly creatingKeys = new Set<string>()
   private readonly pendingManualSaveKeys = new Set<string>()
   private readonly remappedKeys = new Map<string, string>()
-  private lastSyncedTabSignature: string | null = null
+  private lastSyncedTabKeys: readonly string[] | null = null
   private mounted = false
 
   constructor(options: RendererBufferSyncClientOptions) {
@@ -115,7 +126,7 @@ export class RendererBufferSyncClient {
 
   start(): () => void {
     this.mounted = true
-    this.lastSyncedTabSignature = null
+    this.lastSyncedTabKeys = null
     const unsubscribeHub = this.bufferApi.onEvent((event) => this.handleHubEvent(event))
 
     void this.bufferApi.getSnapshot().then(
@@ -277,11 +288,10 @@ export class RendererBufferSyncClient {
   }
 
   syncWindowTabs = (keys: string[]): void => {
-    const signature = keys.join('\0')
-    if (this.lastSyncedTabSignature === signature) {
+    if (areStringArraysEqual(this.lastSyncedTabKeys, keys)) {
       return
     }
-    this.lastSyncedTabSignature = signature
+    this.lastSyncedTabKeys = [...keys]
     this.inFlightTabSyncCount += 1
     void this.bufferApi
       .syncWindowTabs(keys)

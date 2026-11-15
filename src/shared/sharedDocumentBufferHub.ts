@@ -194,7 +194,7 @@ export class SharedDocumentBufferHub {
   private reconcileTabCountChanges(
     prevCounts: Readonly<Record<string, number>>,
     extraCandidateKeys: Iterable<string> = [],
-    options: { checkCountChange?: boolean; forceTimerReconcile?: boolean } = {}
+    forceTimerReconcile = false
   ): void {
     const nextCounts = this.computeTabCounts()
     const removedAnyBuffer = this.removeOrphanedBuffers(
@@ -202,11 +202,10 @@ export class SharedDocumentBufferHub {
       nextCounts,
       extraCandidateKeys
     )
-    const countsChanged =
-      (options.checkCountChange ?? true) && !areTabCountMapsEqual(prevCounts, nextCounts)
+    const countsChanged = !areTabCountMapsEqual(prevCounts, nextCounts)
     this.tabCounts = nextCounts
 
-    if (options.forceTimerReconcile || removedAnyBuffer || countsChanged) {
+    if (forceTimerReconcile || removedAnyBuffer || countsChanged) {
       this.reconcileAutoSaveTimers()
       if (removedAnyBuffer || countsChanged) {
         this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
@@ -231,7 +230,7 @@ export class SharedDocumentBufferHub {
 
   unregisterWindow(windowId: number): void {
     const wasPaused = this.autoSaveScheduler.removePausedWindow(windowId)
-    const hadTabs = this.windowTabs.delete(windowId)
+    this.windowTabs.delete(windowId)
     const prevCounts = this.tabCounts
 
     const depletedPendingKeys: string[] = []
@@ -241,10 +240,7 @@ export class SharedDocumentBufferHub {
       }
     }
 
-    this.reconcileTabCountChanges(prevCounts, depletedPendingKeys, {
-      checkCountChange: hadTabs,
-      forceTimerReconcile: wasPaused
-    })
+    this.reconcileTabCountChanges(prevCounts, depletedPendingKeys, wasPaused)
   }
 
   private claimExistingBuffer(existing: DocumentBuffer, windowId?: number): DocumentBuffer {
@@ -252,7 +248,7 @@ export class SharedDocumentBufferHub {
     return { ...existing }
   }
 
-  private openOrGetBuffer(
+  private openOrCreateBuffer(
     kind: DocumentKind,
     filePath: string,
     name: string | undefined,
@@ -276,25 +272,7 @@ export class SharedDocumentBufferHub {
     return { ...created }
   }
 
-  private dedupeOpenBuffer(
-    key: string,
-    loader: () => Promise<DocumentBuffer>
-  ): Promise<DocumentBuffer> {
-    const inFlight = this.inFlightOpens.get(key)
-    if (inFlight) {
-      return inFlight
-    }
-
-    const openPromise = loader().finally(() => {
-      if (this.inFlightOpens.get(key) === openPromise) {
-        this.inFlightOpens.delete(key)
-      }
-    })
-    this.inFlightOpens.set(key, openPromise)
-    return openPromise
-  }
-
-  private async openDedupedBuffer(
+  private async loadAndOpenBuffer(
     kind: DocumentKind,
     filePath: string,
     name: string | undefined,
@@ -309,19 +287,28 @@ export class SharedDocumentBufferHub {
 
     this.registerPendingOpenOwner(key, windowId)
     try {
-      return await this.dedupeOpenBuffer(key, async () => {
-        const content = await readContent()
-        const latest = this.store.getBuffer(key)
-        if (latest) {
-          return { ...latest }
-        }
-        // Skip persisting a newly loaded buffer if every tracked window closed mid-read.
-        if (windowId !== undefined && !this.hasActiveOrPendingOwner(key, this.tabCounts)) {
-          const tempStore = new DocumentBufferStore()
-          return tempStore.openBuffer({ kind, path: filePath, name, content })
-        }
-        return this.openOrGetBuffer(kind, filePath, name, content)
-      })
+      let openPromise = this.inFlightOpens.get(key)
+      if (!openPromise) {
+        openPromise = (async () => {
+          const content = await readContent()
+          const latest = this.store.getBuffer(key)
+          if (latest) {
+            return { ...latest }
+          }
+          // Skip persisting a newly loaded buffer if every tracked window closed mid-read.
+          if (windowId !== undefined && !this.hasActiveOrPendingOwner(key, this.tabCounts)) {
+            const tempStore = new DocumentBufferStore()
+            return tempStore.openBuffer({ kind, path: filePath, name, content })
+          }
+          return this.openOrCreateBuffer(kind, filePath, name, content)
+        })().finally(() => {
+          if (this.inFlightOpens.get(key) === openPromise) {
+            this.inFlightOpens.delete(key)
+          }
+        })
+        this.inFlightOpens.set(key, openPromise)
+      }
+      return await openPromise
     } catch (error: unknown) {
       if (!this.store.hasBuffer(key) && windowId !== undefined) {
         this.removePendingOpenOwner(key, windowId)
@@ -342,10 +329,10 @@ export class SharedDocumentBufferHub {
     }
 
     if (initialContent !== undefined) {
-      return this.openOrGetBuffer('workspace', filePath, name, initialContent, windowId)
+      return this.openOrCreateBuffer('workspace', filePath, name, initialContent, windowId)
     }
 
-    return this.openDedupedBuffer('workspace', filePath, name, windowId, () =>
+    return this.loadAndOpenBuffer('workspace', filePath, name, windowId, () =>
       this.storage.readWorkspaceFile(filePath)
     )
   }
@@ -357,7 +344,7 @@ export class SharedDocumentBufferHub {
     }
 
     const configPath = await this.storage.getConfigPath()
-    return this.openDedupedBuffer('config', configPath, 'config.json', windowId, () =>
+    return this.loadAndOpenBuffer('config', configPath, 'config.json', windowId, () =>
       this.storage.readConfigRaw()
     )
   }

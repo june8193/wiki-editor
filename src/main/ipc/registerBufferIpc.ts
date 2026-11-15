@@ -68,9 +68,9 @@ export function registerBufferIpc({
     }
   })
 
-  const resolveWindowId = (event: unknown): number => {
+  const resolveWindowId = (event: unknown): number | undefined => {
     const sender = resolveSenderWebContents(event)
-    if (!sender) return 0
+    if (!sender) return undefined
 
     const existingId = trackedSenders.get(sender)
     if (existingId !== undefined) {
@@ -138,16 +138,23 @@ export function registerBufferIpc({
       [BUFFER_IPC_CHANNELS.saveBuffer, (_event, key) => hub.saveBuffer(key as string)],
       [
         BUFFER_IPC_CHANNELS.syncWindowTabs,
-        (event, bufferKeys) =>
-          hub.syncWindowTabs(
-            resolveWindowId(event),
-            Array.isArray(bufferKeys) ? (bufferKeys as string[]) : []
-          )
+        (event, bufferKeys) => {
+          const windowId = resolveWindowId(event)
+          return windowId !== undefined
+            ? hub.syncWindowTabs(
+                windowId,
+                Array.isArray(bufferKeys) ? (bufferKeys as string[]) : []
+              )
+            : hub.getSnapshot()
+        }
       ],
       [
         BUFFER_IPC_CHANNELS.setAutoSavePaused,
         (event, paused) => {
-          hub.setAutoSavePaused(resolveWindowId(event), Boolean(paused))
+          const windowId = resolveWindowId(event)
+          if (windowId !== undefined) {
+            hub.setAutoSavePaused(windowId, Boolean(paused))
+          }
         }
       ],
       [
