@@ -595,3 +595,47 @@ export function insertWysiwygMarkdownWithCursor(
   editor.view.focus()
   return true
 }
+
+export interface WysiwygHeadingCandidate {
+  pos: number
+  level: number
+  text: string
+  hasMedia: boolean
+}
+
+/**
+ * Extracts top-level ProseMirror heading candidates (preserving inline image `alt` text and
+ * excluding `codeBlock` / `blockquote` subtrees) for alignment with Document Outline ATX headings.
+ */
+export function extractWysiwygHeadingCandidates(
+  doc: Editor['state']['doc']
+): WysiwygHeadingCandidate[] {
+  const candidates: WysiwygHeadingCandidate[] = []
+  doc.descendants((node, pos) => {
+    if (node.type.name === 'heading') {
+      let text = ''
+      let hasMedia = false
+      node.descendants((child) => {
+        if (child.isText) {
+          text += child.text ?? ''
+          return false
+        }
+        if (child.type.name === 'image') {
+          hasMedia = true
+          text += typeof child.attrs.alt === 'string' ? child.attrs.alt : ''
+          return false
+        }
+        return true
+      })
+      candidates.push({
+        pos,
+        level: Number(node.attrs.level ?? 1),
+        text,
+        hasMedia
+      })
+      return false
+    }
+    return node.type.name !== 'codeBlock' && node.type.name !== 'blockquote'
+  })
+  return candidates
+}

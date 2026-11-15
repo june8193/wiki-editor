@@ -78,6 +78,7 @@ body,
   padding: 0;
   width: 100%;
   height: 100%;
+  overflow: hidden;
   background-color: var(--bg-app);
   color: var(--text-primary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -87,6 +88,8 @@ body,
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background-color: var(--bg-app);
   color: var(--text-primary);
 }
@@ -297,11 +300,14 @@ body,
   flex: 1;
   display: flex;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .activity-bar {
   width: 46px;
   flex-shrink: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -309,6 +315,7 @@ body,
   padding: 6px 0;
   background-color: var(--bg-surface);
   border-right: 1px solid var(--border-color);
+  overflow: hidden;
 }
 
 .activity-bar-btn {
@@ -369,7 +376,7 @@ body,
   flex-direction: column;
   background-color: var(--bg-surface);
   border-right: 1px solid var(--border-color);
-  overflow: visible;
+  overflow: hidden;
 }
 
 .sidebar-resizer,
@@ -475,12 +482,12 @@ body.is-resizing-sidebar .pane-workspace {
 
 .workspace-sidebar {
   flex: 1 1 0;
-  min-height: 90px;
+  min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
   background-color: var(--bg-surface);
-  overflow: visible;
+  overflow: hidden;
 }
 
 .sidebar-empty {
@@ -654,6 +661,9 @@ body.is-resizing-sidebar .pane-workspace {
 
 .workspace-placeholder {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -671,12 +681,16 @@ body.is-resizing-sidebar .pane-workspace {
 .editor-pane {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background-color: var(--bg-app);
 }
 
 .editor-header {
+  flex-shrink: 0;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -766,7 +780,9 @@ body.is-resizing-sidebar .pane-workspace {
 .wysiwyg-shell {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -776,6 +792,7 @@ body.is-resizing-sidebar .pane-workspace {
 .codemirror-host {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -784,7 +801,12 @@ body.is-resizing-sidebar .pane-workspace {
 .codemirror-host .cm-editor {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   height: 100%;
+}
+
+.codemirror-host .cm-scroller {
+  min-height: 0;
 }
 
 .editor-toolbar,
@@ -859,6 +881,7 @@ body.is-resizing-sidebar .pane-workspace {
 .wysiwyg-scroll-container {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   padding: 16px 24px;
   background-color: var(--bg-app);
@@ -878,7 +901,9 @@ body.is-resizing-sidebar .pane-workspace {
 
 .markdown-preview {
   flex: 1;
+  min-width: 0;
   min-height: 0;
+  overflow-x: auto;
   overflow-y: auto;
   padding: 16px 24px;
   background-color: var(--bg-app);
@@ -886,6 +911,23 @@ body.is-resizing-sidebar .pane-workspace {
   line-height: 1.65;
   font-size: 15px;
   outline: none;
+}
+
+.editor-split-container {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+.editor-split-region {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .markdown-preview-empty {
@@ -1015,6 +1057,7 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .error-banner {
+  flex-shrink: 0;
   margin: 8px 16px 0;
   padding: 8px 12px;
   border-radius: 6px;
@@ -1142,6 +1185,7 @@ body.is-resizing-sidebar .pane-workspace {
   min-height: 0;
   display: flex;
   position: relative;
+  overflow: hidden;
 }
 
 .pane-workspace.is-single,
@@ -1159,6 +1203,7 @@ body.is-resizing-sidebar .pane-workspace {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background-color: var(--bg-app);
 }
 
@@ -1170,6 +1215,7 @@ body.is-resizing-sidebar .pane-workspace {
   display: flex;
   align-items: stretch;
   gap: 2px;
+  min-width: 0;
   min-height: 34px;
   padding: 4px 6px 0;
   background-color: var(--bg-surface);
@@ -1310,6 +1356,7 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .outline-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1365,6 +1412,7 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .outline-actions {
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -1373,7 +1421,7 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .outline-list-container {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   padding: 6px 4px;
@@ -1406,6 +1454,17 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .outline-item-btn:hover {
+  background-color: var(--bg-elevated);
+}
+
+.outline-item-btn.is-active {
+  background-color: var(--bg-elevated);
+  color: var(--accent-color);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 0 var(--accent-color);
+}
+
+.outline-item-btn.is-active:hover {
   background-color: var(--bg-elevated);
 }
 
@@ -1502,6 +1561,31 @@ body.is-resizing-sidebar .pane-workspace {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   overflow-x: auto;
+}
+
+.mermaid-inline-error-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--danger-color);
+  border-radius: 6px;
+  background-color: var(--bg-elevated);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.mermaid-inline-error-title {
+  color: var(--danger-color);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mermaid-inline-error-message {
+  color: var(--text-secondary);
+  word-break: break-word;
 }
 
 .wysiwyg-mermaid-node {
@@ -1773,12 +1857,17 @@ body.is-resizing-sidebar .pane-workspace {
 
 .git-header {
   flex-shrink: 0;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-color);
+}
+
+.git-header .btn {
+  flex-shrink: 0;
 }
 
 .git-header-title-group {
@@ -1808,11 +1897,16 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .git-branch-pill {
+  min-width: 0;
   max-width: 96px;
 }
 
+.git-ab-pill {
+  flex-shrink: 0;
+}
+
 .git-body {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   padding: 8px 10px;

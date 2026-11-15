@@ -1,9 +1,10 @@
 import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
-import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
+import { DocumentEditor } from './DocumentEditor'
 import { type GitDiffContentState, GitDiffViewer } from './GitDiffViewer'
 import {
   DraggingTabPayload,
@@ -29,6 +30,7 @@ interface PaneViewProps {
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
   onDragEndTab: () => void
+  onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
   actions: PaneInteractionActions
 }
 
@@ -48,6 +50,7 @@ export function PaneView({
   draggingTab,
   onDragStartTab,
   onDragEndTab,
+  onActiveHeadingChange,
   actions
 }: PaneViewProps) {
   const activeTab = getPaneActiveTab(pane)
@@ -123,10 +126,25 @@ export function PaneView({
           showHeadingNumbers={showHeadingNumbers}
           customCommands={customCommands}
           scrollRequest={activeScrollRequest}
+          isActive={isActivePane}
           isShortcutDisabled={isShortcutDisabled}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}
+          onActiveHeadingChange={
+            onActiveHeadingChange
+              ? (update) =>
+                  onActiveHeadingChange({
+                    context: {
+                      paneId: pane.id,
+                      tabId: activeTab.id,
+                      mode: update.mode
+                    },
+                    headingIndex: update.headingIndex,
+                    isUserScroll: update.isUserScroll
+                  })
+              : undefined
+          }
         />
       ) : (
         <section className="workspace-placeholder">

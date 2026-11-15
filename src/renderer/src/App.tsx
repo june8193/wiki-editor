@@ -10,7 +10,6 @@ import {
 } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
-import type { OutlineScrollRequest } from './components/DocumentEditor'
 import { DocumentOutlinePanel } from './components/DocumentOutlinePanel'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
 import { GitSidebarPanel } from './components/GitSidebarPanel'
@@ -20,12 +19,12 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { SidebarResizer } from './components/SidebarResizer'
 import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
+import type { OutlineContextTarget } from './editor/outlineScrollSpy'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
   applyHeadingNumbers,
   findFirstNonFencedSlashTocLine,
   insertOrUpdateTocBlock,
-  type MarkdownHeading,
   resolveRawCursorLine,
   stripHeadingNumbers
 } from './editor/MarkdownTocEngine'
@@ -33,6 +32,7 @@ import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
 import { useGitDiffTabs } from './hooks/useGitDiffTabs'
+import { useOutlineScrollSpy } from './hooks/useOutlineScrollSpy'
 import { useWindowWidth } from './hooks/useWindowWidth'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
@@ -157,8 +157,6 @@ export function App() {
     }
   }, [])
   const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null)
-  const [outlineScrollRequest, setOutlineScrollRequest] = useState<OutlineScrollRequest | null>(null)
-  const scrollNonceRef = useRef(0)
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
   const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(async () => [])
@@ -526,6 +524,28 @@ export function App() {
   const activeBuffer = activeTab?.kind === 'document' ? buffers[activeTab.bufferKey] : undefined
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
   const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
+  const activeBufferContent = activeBuffer?.content ?? ''
+  const activeTabId = activeTab?.kind === 'document' ? activeTab.id : null
+  const activeTabMode = activeTab?.kind === 'document' ? activeTab.mode : null
+
+  const activeOutlineContext = useMemo<OutlineContextTarget | null>(
+    () =>
+      activeTabId && activeTabMode && isActiveMarkdown
+        ? { paneId: activePane.id, tabId: activeTabId, mode: activeTabMode }
+        : null,
+    [activePane.id, activeTabId, activeTabMode, isActiveMarkdown]
+  )
+
+  const {
+    outlineScrollRequest,
+    activeHeadingIndex: activeOutlineHeadingIndex,
+    handleActiveHeadingReport,
+    selectHeading: handleSelectOutlineHeading,
+    clearScrollRequest: clearOutlineScrollRequest
+  } = useOutlineScrollSpy({
+    activeContext: activeOutlineContext,
+    bufferContent: activeBufferContent
+  })
 
   const applyActiveMarkdownTransform = useCallback(
     (transform: (content: string) => string): void => {
@@ -538,31 +558,8 @@ export function App() {
     [activeBuffer, isActiveMarkdown, updateBufferContent]
   )
 
-  const handleSelectOutlineHeading = useCallback(
-    (heading: MarkdownHeading, index: number): void => {
-      if (!activeTab || activeTab.kind !== 'document' || !isActiveMarkdown) return
-      scrollNonceRef.current += 1
-      setOutlineScrollRequest({
-        paneId: activePane.id,
-        tabId: activeTab.id,
-        mode: activeTab.mode,
-        line: heading.line,
-        slug: heading.slug,
-        index,
-        nonce: scrollNonceRef.current
-      })
-    },
-    [activePane.id, activeTab, isActiveMarkdown]
-  )
-
-  useEffect(() => {
-    if (outlineScrollRequest !== null) {
-      setOutlineScrollRequest(null)
-    }
-  }, [outlineScrollRequest])
-
   const activeRawCursorStart =
-    activeTab?.kind === 'document' && activeTab.mode === 'raw'
+    activeTab?.kind === 'document' && (activeTab.mode === 'raw' || activeTab.mode === 'split')
       ? activeTab.cursor.selectionStart
       : null
 
@@ -586,20 +583,20 @@ export function App() {
 
   const handlePaneChangeContent = useCallback(
     (bufferKey: string, nextContent: string): void => {
-      setOutlineScrollRequest(null)
+      clearOutlineScrollRequest()
       updateBufferContent(bufferKey, nextContent)
     },
-    [updateBufferContent]
+    [clearOutlineScrollRequest, updateBufferContent]
   )
 
   const handlePaneUpdateTabViewState = useCallback(
     (paneId: PaneId, tabId: string, patch: TabViewPatch): void => {
       if (patch.mode !== undefined) {
-        setOutlineScrollRequest(null)
+        clearOutlineScrollRequest()
       }
       updateTabViewState(paneId, tabId, patch)
     },
-    [updateTabViewState]
+    [clearOutlineScrollRequest, updateTabViewState]
   )
 
   const paneActions = useMemo<PaneInteractionActions>(
@@ -742,6 +739,7 @@ export function App() {
           isShortcutDisabled={isEditorShortcutDisabled}
           onSetSplitRatio={setSplitRatio}
           onSplitWithTab={splitWithTab}
+          onActiveHeadingChange={handleActiveHeadingReport}
           actions={paneActions}
         />
 
@@ -765,8 +763,10 @@ export function App() {
                     ? getGitFileBaseName(activeTab.diff.request.path)
                     : (activeBuffer?.name ?? null)
                 }
-                content={activeBuffer?.content ?? ''}
+                documentKey={activeBuffer?.key ?? null}
+                content={activeBufferContent}
                 isMarkdownDocument={isActiveMarkdown}
+                activeHeadingIndex={activeOutlineHeadingIndex}
                 showHeadingNumbers={config.showHeadingNumbers}
                 onToggleHeadingNumbers={toggleShowHeadingNumbers}
                 onSelectHeading={handleSelectOutlineHeading}

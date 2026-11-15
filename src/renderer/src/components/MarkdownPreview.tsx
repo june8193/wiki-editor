@@ -2,8 +2,8 @@ import { useCallback, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import { useOneShotScroll } from '../hooks/useOneShotScroll'
-import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
+import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
+import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
 
 export interface PreviewScrollRequest {
   slug?: string
@@ -18,7 +18,11 @@ interface MarkdownPreviewProps {
   showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: PreviewScrollRequest | null
+  isActive?: boolean
+  scrollContainerRef?: { current: HTMLDivElement | null }
+  testId?: string
   onScrollTopChange?: (scrollTop: number) => void
+  onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
 }
 
 function scrollHeadingIntoView(target: Element): void {
@@ -34,7 +38,11 @@ export function MarkdownPreview({
   showHeadingNumbers = false,
   mermaidRenderer,
   scrollRequest,
-  onScrollTopChange
+  isActive = true,
+  scrollContainerRef,
+  testId = 'document-editor',
+  onScrollTopChange,
+  onActiveHeadingChange
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -55,11 +63,23 @@ export function MarkdownPreview({
     }
   }, [])
 
+  const { runWithUserScrollIntent } = useContainerOutlineSpy({
+    containerRef,
+    content,
+    scrollTop,
+    isReady: true,
+    isActive,
+    scrollRequest,
+    onScrollRequest: (req) => scrollToHeading(req.slug, req.index),
+    onScrollTopChange,
+    onActiveHeadingChange
+  })
+
   const handleAnchorNavigate = useCallback(
     (slug: string): void => {
-      scrollToHeading(slug)
+      runWithUserScrollIntent(() => scrollToHeading(slug))
     },
-    [scrollToHeading]
+    [runWithUserScrollIntent, scrollToHeading]
   )
 
   const rendered = useMemo(
@@ -73,20 +93,18 @@ export function MarkdownPreview({
     [content, handleAnchorNavigate, mermaidRenderer, showHeadingNumbers, theme]
   )
 
-  useSyncScrollTop(containerRef, scrollTop)
-
-  useOneShotScroll(scrollRequest, true, (req) => {
-    scrollToHeading(req.slug, req.index)
-  })
-
   return (
     <div
-      ref={containerRef}
+      ref={(el) => {
+        containerRef.current = el
+        if (scrollContainerRef) {
+          scrollContainerRef.current = el
+        }
+      }}
       className="markdown-preview"
-      data-testid="document-editor"
+      data-testid={testId}
       aria-label="마크다운 미리보기"
       tabIndex={0}
-      onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
     >
       {content.trim().length === 0 ? (
         <p className="markdown-preview-empty">미리 볼 내용이 없습니다.</p>

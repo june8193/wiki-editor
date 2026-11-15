@@ -513,4 +513,222 @@ describe('WysiwygMarkdownEditor', () => {
     await user.keyboard('/')
     expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
   })
+
+  it('reports active heading on mount, user scroll, content update, click-to-scroll pin reset, and isActive activation', async () => {
+    const onActiveHeadingChange = vi.fn()
+    const content = '# First\n\nIntro body\n\n## Second\n\nMiddle body\n\n### Third\n\nEnd body'
+
+    const scrollTopSpy = { current: 0 }
+    const headingTops = new Map<string, number>([
+      ['First', 16],
+      ['Second', 260],
+      ['Third', 620]
+    ])
+
+    const { container, rerender } = render(
+      <WysiwygMarkdownEditor
+        content={content}
+        scrollTop={0}
+        isActive={false}
+        onChangeContent={vi.fn()}
+        onActiveHeadingChange={onActiveHeadingChange}
+      />
+    )
+
+    const scrollContainer = container.querySelector('.wysiwyg-scroll-container') as HTMLElement
+    expect(scrollContainer).toBeTruthy()
+    Object.defineProperties(scrollContainer, {
+      clientHeight: { value: 400, configurable: true },
+      scrollHeight: { value: 1200, configurable: true },
+      scrollTop: {
+        get: () => scrollTopSpy.current,
+        set: (val: number) => {
+          scrollTopSpy.current = val
+        },
+        configurable: true
+      }
+    })
+    const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (this === scrollContainer) {
+          return {
+            top: 0,
+            left: 0,
+            right: 600,
+            bottom: 400,
+            width: 600,
+            height: 400,
+            x: 0,
+            y: 0,
+            toJSON: () => ({})
+          } as DOMRect
+        }
+        if (/^H[1-6]$/.test(this.tagName) && scrollContainer.contains(this)) {
+          const text = this.textContent?.trim() ?? ''
+          const top = (headingTops.get(text) ?? 0) - scrollTopSpy.current
+          return {
+            top,
+            left: 0,
+            right: 600,
+            bottom: top + 28,
+            width: 600,
+            height: 28,
+            x: 0,
+            y: top,
+            toJSON: () => ({})
+          } as DOMRect
+        }
+        return originalGetBoundingClientRect.call(this)
+      })
+
+    try {
+      onActiveHeadingChange.mockClear()
+
+      // Becoming active immediately measures current scroll position
+      rerender(
+        <WysiwygMarkdownEditor
+          content={content}
+          scrollTop={0}
+          isActive
+          onChangeContent={vi.fn()}
+          onActiveHeadingChange={onActiveHeadingChange}
+        />
+      )
+      expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+        headingIndex: 0,
+        isUserScroll: false
+      })
+
+      // User wheel + scroll across heading 2 boundary (topOffset <= 24px -> 260 - 240 = 20px)
+      onActiveHeadingChange.mockClear()
+      fireEvent.wheel(scrollContainer)
+      scrollTopSpy.current = 240
+      fireEvent.scroll(scrollContainer)
+      expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+        headingIndex: 1,
+        isUserScroll: true
+      })
+
+      // Scroll to bottom -> selects last heading (index 2)
+      onActiveHeadingChange.mockClear()
+      fireEvent.wheel(scrollContainer)
+      scrollTopSpy.current = 799
+      fireEvent.scroll(scrollContainer)
+      expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+        headingIndex: 2,
+        isUserScroll: true
+      })
+
+      // Programmatic scrollRequest clears previously armed user scroll intent
+      onActiveHeadingChange.mockClear()
+      fireEvent.wheel(scrollContainer)
+      const targetHeading = Array.from(scrollContainer.querySelectorAll('h1, h2, h3'))[0]
+      targetHeading.scrollIntoView = vi.fn(() => {
+        scrollTopSpy.current = 0
+        fireEvent.scroll(scrollContainer)
+      })
+      rerender(
+        <WysiwygMarkdownEditor
+          content={content}
+          scrollTop={0}
+          isActive
+          scrollRequest={{ index: 0, nonce: 1 }}
+          onChangeContent={vi.fn()}
+          onActiveHeadingChange={onActiveHeadingChange}
+        />
+      )
+      expect(targetHeading.scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+      expect(onActiveHeadingChange).toHaveBeenCalledWith({
+        headingIndex: 0,
+        isUserScroll: false
+      })
+
+      // Content update immediately recalculates active heading without needing another scroll event
+      scrollTopSpy.current = 240
+      onActiveHeadingChange.mockClear()
+      const editedContent = '# Zero\n\n# First\n\nIntro body\n\n## Second\n\nMiddle body\n\n### Third\n\nEnd body'
+      headingTops.set('Zero', -120)
+      rerender(
+        <WysiwygMarkdownEditor
+          content={editedContent}
+          scrollTop={240}
+          isActive
+          onChangeContent={vi.fn()}
+          onActiveHeadingChange={onActiveHeadingChange}
+        />
+      )
+      expect(onActiveHeadingChange).toHaveBeenLastCalledWith({
+        headingIndex: 2,
+        isUserScroll: false
+      })
+    } finally {
+      rectSpy.mockRestore()
+    }
+  })
+
+  it('targets matching ATX heading on click-to-scroll even when empty, blockquote, Setext, or image-alt headings precede it', async () => {
+    const markdown = [
+      'Setext Heading',
+      '===',
+      '',
+      '# ![Logo](https://example.com/logo.png) Alpha',
+      '',
+      '# ',
+      '',
+      '> # Quoted Heading',
+      '',
+      '## Beta'
+    ].join('\n')
+
+    const { container, rerender } = render(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        isActive
+        onChangeContent={vi.fn()}
+      />
+    )
+
+    const scrollContainer = container.querySelector('.wysiwyg-scroll-container') as HTMLElement
+    const betaHeading = Array.from(scrollContainer.querySelectorAll('h2')).find(
+      (el) => el.textContent?.trim() === 'Beta'
+    )
+    expect(betaHeading).toBeTruthy()
+    const scrollIntoViewMock = vi.fn()
+    betaHeading!.scrollIntoView = scrollIntoViewMock
+
+    const alphaHeading = Array.from(scrollContainer.querySelectorAll('h1')).find((el) =>
+      el.textContent?.includes('Alpha')
+    )
+    expect(alphaHeading).toBeTruthy()
+    const alphaScrollMock = vi.fn()
+    alphaHeading!.scrollIntoView = alphaScrollMock
+
+    // Index 0 in parsed outline is `# ![Logo](...) Alpha` (inline img alt must match title)
+    rerender(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        isActive
+        scrollRequest={{ index: 0, nonce: 1 }}
+        onChangeContent={vi.fn()}
+      />
+    )
+    expect(alphaScrollMock).toHaveBeenCalledWith({ block: 'start' })
+
+    // Index 1 in parsed outline is `## Beta` (empty `# `, blockquote, and Setext headings are omitted)
+    rerender(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        isActive
+        scrollRequest={{ index: 1, nonce: 2 }}
+        onChangeContent={vi.fn()}
+      />
+    )
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+  })
 })

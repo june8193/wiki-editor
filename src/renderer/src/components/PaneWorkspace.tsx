@@ -1,11 +1,12 @@
-import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { canSplitWithTab, PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
-import type { OutlineScrollRequest } from './DocumentEditor'
+import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import type { GitDiffContentState } from './GitDiffViewer'
 import { dispatchTabDrop, DraggingTabPayload, PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
+import { SplitSplitter } from './SplitSplitter'
 
 interface PaneWorkspaceProps {
   layout: PaneLayoutState
@@ -19,10 +20,9 @@ interface PaneWorkspaceProps {
   isShortcutDisabled?: boolean
   onSetSplitRatio: (ratio: number) => void
   onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
+  onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
   actions: PaneInteractionActions
 }
-
-const KEYBOARD_RESIZE_STEP = 0.05
 
 const SPLIT_DROP_ZONES: ReadonlyArray<{
   direction: SplitDirection
@@ -45,53 +45,11 @@ export function PaneWorkspace({
   isShortcutDisabled = false,
   onSetSplitRatio,
   onSplitWithTab,
+  onActiveHeadingChange,
   actions
 }: PaneWorkspaceProps) {
   const [draggingTab, setDraggingTab] = useState<DraggingTabPayload | null>(null)
-  const [isResizing, setIsResizing] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (!isResizing) return
-
-    const handleMove = (event: MouseEvent): void => {
-      const container = containerRef.current
-      if (!container) return
-      const rect = container.getBoundingClientRect()
-      if (layout.splitMode === 'horizontal' && rect.width > 0) {
-        onSetSplitRatio((event.clientX - rect.left) / rect.width)
-      } else if (layout.splitMode === 'vertical' && rect.height > 0) {
-        onSetSplitRatio((event.clientY - rect.top) / rect.height)
-      }
-    }
-
-    const handleUp = (): void => {
-      setIsResizing(false)
-    }
-
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-    window.addEventListener('blur', handleUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-      window.removeEventListener('blur', handleUp)
-    }
-  }, [isResizing, layout.splitMode, onSetSplitRatio])
-
-  const handleSplitterKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    const isHorizontal = layout.splitMode === 'horizontal'
-    const decKey = isHorizontal ? 'ArrowLeft' : 'ArrowUp'
-    const incKey = isHorizontal ? 'ArrowRight' : 'ArrowDown'
-
-    if (event.key === decKey) {
-      event.preventDefault()
-      onSetSplitRatio(layout.splitRatio - KEYBOARD_RESIZE_STEP)
-    } else if (event.key === incKey) {
-      event.preventDefault()
-      onSetSplitRatio(layout.splitRatio + KEYBOARD_RESIZE_STEP)
-    }
-  }
 
   const clearDragging = (): void => setDraggingTab(null)
   const isSplit = layout.splitMode !== 'single'
@@ -112,6 +70,7 @@ export function PaneWorkspace({
     draggingTab,
     onDragStartTab: setDraggingTab,
     onDragEndTab: clearDragging,
+    onActiveHeadingChange,
     actions
   }
 
@@ -150,22 +109,14 @@ export function PaneWorkspace({
         </div>
       ))}
 
-      {isSplit && (
+      {layout.splitMode !== 'single' && (
         <>
-          <div
-            role="separator"
-            tabIndex={0}
-            aria-label="화면 분할 크기 조절"
-            aria-orientation={layout.splitMode === 'horizontal' ? 'vertical' : 'horizontal'}
-            aria-valuemin={15}
-            aria-valuemax={85}
-            aria-valuenow={Math.round(layout.splitRatio * 100)}
-            className={`split-divider is-${layout.splitMode}${isResizing ? ' is-dragging' : ''}`}
-            onMouseDown={(event) => {
-              event.preventDefault()
-              setIsResizing(true)
-            }}
-            onKeyDown={handleSplitterKeyDown}
+          <SplitSplitter
+            containerRef={containerRef}
+            direction={layout.splitMode}
+            ratio={layout.splitRatio}
+            ariaLabel="화면 분할 크기 조절"
+            onChangeRatio={onSetSplitRatio}
           />
 
           <PaneView

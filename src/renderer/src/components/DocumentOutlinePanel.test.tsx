@@ -171,4 +171,125 @@ describe('DocumentOutlinePanel', () => {
     expect(onCollapse).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('list')).toBeInTheDocument()
   })
+
+  it('highlights only the active heading with aria-current="location" and scrolls it into view with nearest block alignment', () => {
+    const scrollIntoViewMock = vi.fn()
+    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollIntoView'
+    )
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: scrollIntoViewMock
+    })
+
+    try {
+      const baseProps = {
+        documentName: 'note.md',
+        content: sampleMarkdown,
+        isMarkdownDocument: true,
+        showHeadingNumbers: true,
+        onToggleHeadingNumbers: vi.fn(),
+        onSelectHeading: vi.fn(),
+        onInsertToc: vi.fn(),
+        onApplyHeadingNumbers: vi.fn(),
+        onStripHeadingNumbers: vi.fn(),
+        onCollapse: vi.fn()
+      }
+
+      const { rerender } = render(<DocumentOutlinePanel {...baseProps} activeHeadingIndex={null} />)
+
+      const getButtons = () => within(screen.getByRole('list')).getAllByRole('button')
+      for (const btn of getButtons()) {
+        expect(btn).not.toHaveAttribute('aria-current')
+        expect(btn).not.toHaveClass('is-active')
+      }
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      // Activate heading index 1 -> highlights button 1 and calls scrollIntoView({ block: 'nearest' })
+      rerender(<DocumentOutlinePanel {...baseProps} activeHeadingIndex={1} />)
+      let buttons = getButtons()
+      expect(buttons[0]).not.toHaveAttribute('aria-current')
+      expect(buttons[1]).toHaveAttribute('aria-current', 'location')
+      expect(buttons[1]).toHaveClass('is-active')
+      expect(buttons[2]).not.toHaveAttribute('aria-current')
+      expect(buttons[3]).not.toHaveAttribute('aria-current')
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ block: 'nearest' })
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(buttons[1])
+
+      // Toggling showHeadingNumbers without changing activeHeadingIndex keeps highlight and does not re-scroll
+      scrollIntoViewMock.mockClear()
+      rerender(
+        <DocumentOutlinePanel {...baseProps} showHeadingNumbers={false} activeHeadingIndex={1} />
+      )
+      buttons = getButtons()
+      expect(buttons[1]).toHaveAttribute('aria-current', 'location')
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      // Moving activeHeadingIndex to 3 scrolls button 3 into view
+      rerender(
+        <DocumentOutlinePanel {...baseProps} showHeadingNumbers={false} activeHeadingIndex={3} />
+      )
+      buttons = getButtons()
+      expect(buttons[1]).not.toHaveAttribute('aria-current')
+      expect(buttons[1]).not.toHaveClass('is-active')
+      expect(buttons[3]).toHaveAttribute('aria-current', 'location')
+      expect(buttons[3]).toHaveClass('is-active')
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ block: 'nearest' })
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(buttons[3])
+
+      // Preface (null), out-of-range, non-markdown, no headings, and missing document clear active item without scrolling
+      scrollIntoViewMock.mockClear()
+      rerender(<DocumentOutlinePanel {...baseProps} activeHeadingIndex={null} />)
+      for (const btn of getButtons()) {
+        expect(btn).not.toHaveAttribute('aria-current')
+        expect(btn).not.toHaveClass('is-active')
+      }
+      rerender(<DocumentOutlinePanel {...baseProps} activeHeadingIndex={99} />)
+      for (const btn of getButtons()) {
+        expect(btn).not.toHaveAttribute('aria-current')
+      }
+      rerender(<DocumentOutlinePanel {...baseProps} content="Plain paragraph only" activeHeadingIndex={0} />)
+      expect(screen.queryByRole('list')).not.toBeInTheDocument()
+      rerender(<DocumentOutlinePanel {...baseProps} isMarkdownDocument={false} activeHeadingIndex={0} />)
+      expect(screen.queryByRole('list')).not.toBeInTheDocument()
+      rerender(<DocumentOutlinePanel {...baseProps} documentName={null} activeHeadingIndex={0} />)
+      expect(screen.queryByRole('list')).not.toBeInTheDocument()
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      rerender(
+        <DocumentOutlinePanel
+          {...baseProps}
+          documentName="README.md"
+          documentKey="workspace:C:/wiki/a/README.md"
+          activeHeadingIndex={1}
+        />
+      )
+      scrollIntoViewMock.mockClear()
+      rerender(
+        <DocumentOutlinePanel
+          {...baseProps}
+          documentName="README.md"
+          documentKey="workspace:C:/wiki/b/README.md"
+          activeHeadingIndex={1}
+        />
+      )
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ block: 'nearest' })
+
+      // Environment without scrollIntoView method skips auto-scroll safely
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+      rerender(<DocumentOutlinePanel {...baseProps} activeHeadingIndex={2} />)
+      expect(getButtons()[2]).toHaveAttribute('aria-current', 'location')
+    } finally {
+      if (origScrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+      }
+    }
+  })
 })

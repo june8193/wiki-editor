@@ -29,6 +29,7 @@ import {
 } from '@shared/workspace'
 import { defaultMermaidRenderer } from './editor/mermaidRenderer'
 import { App } from './App'
+import themeCss from './styles/theme.css?raw'
 
 const mermaidMockState = vi.hoisted(() => {
   let activeTheme = 'default'
@@ -60,6 +61,29 @@ vi.mock('mermaid', () => ({
     render: mermaidMockState.render
   }
 }))
+
+function mockPrototypeScrollIntoView(): {
+  mock: ReturnType<typeof vi.fn>
+  restore: () => void
+} {
+  const mock = vi.fn()
+  const origDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    writable: true,
+    value: mock
+  })
+  return {
+    mock,
+    restore: () => {
+      if (origDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origDescriptor)
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+      }
+    }
+  }
+}
 
 interface VirtualFsOptions {
   workspaces?: Record<string, Record<string, string | null>>
@@ -2462,7 +2486,7 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
     })
     expect(getFilesSnapshot().get('C:/wiki/modes/doc.md')).toContain('Live Paragraph')
 
-    // Roundtrip Raw -> 위지윅 -> Preview -> Raw without editing must keep buffer clean and formatting intact
+    // Roundtrip Raw -> 위지윅 -> Preview -> Split -> Raw without editing must keep buffer clean and formatting intact
     fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '2', ctrlKey: true })
     expect(
       within(primaryPane).getByRole('toolbar', { name: '위지윅 서식 툴바' })
@@ -2470,6 +2494,14 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
 
     fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '3', ctrlKey: true })
     expect(within(primaryPane).getByLabelText('마크다운 미리보기')).toBeInTheDocument()
+
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), {
+      key: 'M',
+      ctrlKey: true,
+      shiftKey: true
+    })
+    expect(within(primaryPane).getByTestId('split-markdown-preview')).toBeInTheDocument()
+    expect(within(primaryPane).queryByTestId('dirty-indicator')).not.toBeInTheDocument()
 
     fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), {
       key: 'M',
@@ -2709,12 +2741,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
   it('updates sidebar Outline ignoring code fences, toggles showHeadingNumbers cleanly with persistence, and scrolls to headings across modes', async () => {
     const user = userEvent.setup()
-    const scrollIntoViewMock = vi.fn()
-    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
-      HTMLElement.prototype,
-      'scrollIntoView'
-    )
-    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
 
     try {
       const guideDoc = [
@@ -2770,11 +2797,13 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
       scrollIntoViewMock.mockClear()
       await user.click(within(items[2]).getByRole('button'))
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
 
       // Toggle showHeadingNumbers off via Outline button -> hides numbers without dirtying buffer or re-scrolling
       await user.click(within(outline).getByRole('button', { name: '헤딩 번호 표시' }))
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
       expect(screen.getByRole('heading', { level: 2, name: 'Setup' }).textContent).toBe('Setup')
       expect(within(outline).queryByText('1.1.')).not.toBeInTheDocument()
       expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
@@ -2785,11 +2814,13 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       scrollIntoViewMock.mockClear()
       const currentItems = within(within(outline).getByRole('list')).getAllByRole('listitem')
       await user.click(within(currentItems[1]).getByRole('button'))
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
 
       // Open SettingsPanel, verify checkbox reflects false, toggle back true without re-scrolling and verify persistence across restart
       await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
       const settingsPanel = screen.getByLabelText('전역 설정 패널')
       const headingToggleCheckbox = within(settingsPanel).getByRole('checkbox', {
         name: /헤딩 자동 넘버링 표시/i
@@ -2810,11 +2841,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       ) as HTMLInputElement
       expect(reopenedCheckbox.checked).toBe(true)
     } finally {
-      if (origScrollIntoViewDescriptor) {
-        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
-      } else {
-        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
-      }
+      restore()
     }
   })
 
@@ -2954,16 +2981,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
   })
 
   it('does not replay stale outlineScrollRequest after tab switch or global Ctrl+1/Ctrl+3 shortcuts', async () => {
-    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
-      HTMLElement.prototype,
-      'scrollIntoView'
-    )
-    const scrollIntoViewMock = vi.fn()
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-      configurable: true,
-      writable: true,
-      value: scrollIntoViewMock
-    })
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
 
     try {
       const user = userEvent.setup()
@@ -2997,7 +3015,9 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
       const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
       await user.click(within(outline).getByRole('button', { name: /Target Heading/i }))
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
 
       scrollIntoViewMock.mockClear()
       await user.click(screen.getByRole('tab', { name: 'beta.md' }))
@@ -3005,7 +3025,9 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
 
       await user.click(within(outline).getByRole('button', { name: /Target Heading/i }))
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
 
       scrollIntoViewMock.mockClear()
       fireEvent.keyDown(window, { key: '1', ctrlKey: true })
@@ -3014,11 +3036,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(screen.getByRole('button', { name: 'Preview' })).toHaveAttribute('aria-pressed', 'true')
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
     } finally {
-      if (origScrollIntoViewDescriptor) {
-        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
-      } else {
-        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
-      }
+      restore()
     }
   })
 
@@ -6018,5 +6036,1373 @@ describe('Git Graph commit file diff integration', () => {
 
     await user.click(within(primaryPane).getByRole('button', { name: 'guide.md (a1b2c3d) 탭 닫기' }))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+})
+
+function mountThemeStylesAndRoot(): { rootEl: HTMLDivElement; cleanup: () => void } {
+  const styleEl = document.createElement('style')
+  styleEl.setAttribute('data-test-theme', 'true')
+  styleEl.textContent = themeCss
+  document.head.appendChild(styleEl)
+
+  const rootEl = document.createElement('div')
+  rootEl.id = 'root'
+  document.body.appendChild(rootEl)
+
+  return {
+    rootEl,
+    cleanup: () => {
+      rootEl.remove()
+      styleEl.remove()
+    }
+  }
+}
+
+function isZeroCssLength(value: string): boolean {
+  return value === '0px' || value === '0'
+}
+
+function assertSidebarPanelIsolation(
+  panel: HTMLElement,
+  header: HTMLElement,
+  scrollBody: HTMLElement
+): void {
+  expect(isZeroCssLength(getComputedStyle(panel).minHeight)).toBe(true)
+  expect(getComputedStyle(panel).overflow).toBe('hidden')
+  expect(getComputedStyle(header).flexShrink).toBe('0')
+  expect(isZeroCssLength(getComputedStyle(scrollBody).minHeight)).toBe(true)
+  expect(getComputedStyle(scrollBody).overflowY).toBe('auto')
+}
+
+describe('App shell viewport scroll isolation and left sidebar overflow contracts', () => {
+  it('enforces viewport overflow isolation, min-height: 0 flex chain, and non-shrinking headers/toolbars across Raw, 위지윅, Preview, and single/horizontal/vertical split modes', async () => {
+    const user = userEvent.setup()
+    const longMarkdown = Array.from({ length: 40 }, (_, idx) => `## Section ${idx + 1}\n\nParagraph ${idx + 1}`).join('\n\n')
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\scroll-layout',
+        workspaces: {
+          'C:\\wiki\\scroll-layout': {
+            'long-a.md': longMarkdown,
+            'long-b.md': longMarkdown
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { rootEl, cleanup } = mountThemeStylesAndRoot()
+    try {
+      render(<App />, { container: rootEl })
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('long-a.md'))
+
+      // Root document, #root, app shell, and main layout lock to viewport without whole-page scroll
+      const mainEl = screen.getByRole('main')
+      const appShell = mainEl.parentElement as HTMLElement
+      for (const el of [document.documentElement, document.body, rootEl, appShell]) {
+        expect(getComputedStyle(el).overflow).toBe('hidden')
+      }
+      expect(isZeroCssLength(getComputedStyle(appShell).minHeight)).toBe(true)
+
+      const mainStyle = getComputedStyle(mainEl)
+      expect(mainStyle.display).toBe('flex')
+      expect(isZeroCssLength(mainStyle.minHeight)).toBe(true)
+      expect(isZeroCssLength(mainStyle.minWidth)).toBe(true)
+      expect(mainStyle.overflow).toBe('hidden')
+
+      // Activity bar, left sidebar, right sidebar, and Document Outline scroll isolation
+      expect(getComputedStyle(screen.getByRole('navigation', { name: '액티비티 바' })).flexShrink).toBe('0')
+
+      for (const sidebar of [
+        screen.getByRole('complementary', { name: '왼쪽 사이드바' }),
+        screen.getByRole('complementary', { name: '우측 사이드바' })
+      ]) {
+        const sidebarStyle = getComputedStyle(sidebar)
+        expect(sidebarStyle.flexShrink).toBe('0')
+        expect(isZeroCssLength(sidebarStyle.minHeight)).toBe(true)
+        expect(sidebarStyle.overflow).toBe('hidden')
+      }
+
+      const outlineRegion = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineHeader = outlineRegion.firstElementChild as HTMLElement
+      const outlineActions = within(outlineRegion)
+        .getByRole('button', { name: '본문에 목차(/toc) 삽입' })
+        .parentElement as HTMLElement
+      const outlineListContainer = within(outlineRegion).getByRole('list').parentElement as HTMLElement
+      assertSidebarPanelIsolation(outlineRegion, outlineHeader, outlineListContainer)
+      expect(getComputedStyle(outlineActions).flexShrink).toBe('0')
+
+      const paneWorkspace = screen.getByTestId('pane-workspace')
+      expect(isZeroCssLength(getComputedStyle(paneWorkspace).minHeight)).toBe(true)
+      expect(isZeroCssLength(getComputedStyle(paneWorkspace).minWidth)).toBe(true)
+      expect(getComputedStyle(paneWorkspace).overflow).toBe('hidden')
+
+      const assertPaneIsolation = (pane: HTMLElement, mode: 'raw' | 'wysiwyg' | 'preview'): void => {
+        const paneStyle = getComputedStyle(pane)
+        expect(isZeroCssLength(paneStyle.minHeight)).toBe(true)
+        expect(isZeroCssLength(paneStyle.minWidth)).toBe(true)
+        expect(paneStyle.overflow).toBe('hidden')
+
+        const tabBar = within(pane).getByRole('tablist')
+        expect(getComputedStyle(tabBar).flexShrink).toBe('0')
+
+        const docEditor = within(pane).getByRole('region', { name: '문서 편집 영역' })
+        const docEditorStyle = getComputedStyle(docEditor)
+        expect(isZeroCssLength(docEditorStyle.minHeight)).toBe(true)
+        expect(isZeroCssLength(docEditorStyle.minWidth)).toBe(true)
+        expect(docEditorStyle.overflow).toBe('hidden')
+
+        const editorHeader = within(docEditor)
+          .getByRole('group', { name: '에디터 모드 전환' })
+          .parentElement as HTMLElement
+        expect(getComputedStyle(editorHeader).flexShrink).toBe('0')
+
+        if (mode === 'raw') {
+          const tableToolbar = within(docEditor).getByRole('toolbar', { name: 'Raw 표 편집 툴바' })
+          expect(getComputedStyle(tableToolbar).flexShrink).toBe('0')
+          const rawShell = tableToolbar.parentElement as HTMLElement
+          expect(isZeroCssLength(getComputedStyle(rawShell).minHeight)).toBe(true)
+          expect(getComputedStyle(rawShell).overflow).toBe('hidden')
+          const rawEditorEl = within(docEditor).getByTestId('document-editor')
+          const cmHost = rawEditorEl.closest('.codemirror-host') as HTMLElement
+          expect(isZeroCssLength(getComputedStyle(cmHost).minHeight)).toBe(true)
+          expect(getComputedStyle(cmHost).overflow).toBe('hidden')
+          const rawScroller = getRawEditorScroller(rawEditorEl)
+          expect(isZeroCssLength(getComputedStyle(rawScroller).minHeight)).toBe(true)
+          expect(getComputedStyle(rawScroller).overflowY).toBe('auto')
+        } else if (mode === 'wysiwyg') {
+          const formatToolbar = within(docEditor).getByRole('toolbar', { name: '위지윅 서식 툴바' })
+          expect(getComputedStyle(formatToolbar).flexShrink).toBe('0')
+          const wysiwygShell = formatToolbar.parentElement as HTMLElement
+          expect(isZeroCssLength(getComputedStyle(wysiwygShell).minHeight)).toBe(true)
+          expect(getComputedStyle(wysiwygShell).overflow).toBe('hidden')
+          const scrollContainer = within(docEditor)
+            .getByTestId('document-editor')
+            .closest('.wysiwyg-scroll-container') as HTMLElement
+          expect(isZeroCssLength(getComputedStyle(scrollContainer).minHeight)).toBe(true)
+          expect(getComputedStyle(scrollContainer).overflowY).toBe('auto')
+        } else {
+          const preview = within(docEditor).getByLabelText('마크다운 미리보기')
+          expect(isZeroCssLength(getComputedStyle(preview).minHeight)).toBe(true)
+          expect(getComputedStyle(preview).overflowY).toBe('auto')
+        }
+      }
+
+      const primaryPane = screen.getByRole('region', { name: '주 편집기 영역' })
+      assertPaneIsolation(primaryPane, 'raw')
+
+      // Switch to 위지윅 mode in single pane
+      await user.click(
+        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: '위지윅'
+        })
+      )
+      assertPaneIsolation(primaryPane, 'wysiwyg')
+
+      // Switch to Preview mode in single pane
+      await user.click(
+        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: 'Preview'
+        })
+      )
+      assertPaneIsolation(primaryPane, 'preview')
+
+      // Open second file and split horizontally (좌우 분할)
+      await user.click(within(explorer).getByText('long-b.md'))
+      const secondTab = within(primaryPane).getByRole('tab', { name: /long-b\.md/i })
+      fireEvent.dragStart(secondTab)
+      fireEvent.drop(await screen.findByTestId('split-drop-zone-horizontal'))
+      expect(paneWorkspace).toHaveAttribute('data-split-mode', 'horizontal')
+
+      const secondaryPane = screen.getByRole('region', { name: '보조 편집기 영역' })
+      await user.click(
+        within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: '위지윅'
+        })
+      )
+      assertPaneIsolation(primaryPane, 'preview')
+      assertPaneIsolation(secondaryPane, 'wysiwyg')
+
+      // Switch to vertical split (상하 분할)
+      fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /long-b\.md/i }))
+      fireEvent.drop(await screen.findByTestId('split-drop-zone-vertical'))
+      expect(paneWorkspace).toHaveAttribute('data-split-mode', 'vertical')
+      assertPaneIsolation(primaryPane, 'preview')
+      assertPaneIsolation(secondaryPane, 'wysiwyg')
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('isolates overflow for all three left sidebar views without clipping folder tree context menu or git branch selector', async () => {
+    const user = userEvent.setup()
+    const checkoutSpy = vi.fn(async (_workspacePath: string, branchName: string) => ({
+      ...createEmptyGitStatus(true, 'C:/wiki/sidebar-overflow'),
+      branch: branchName
+    }))
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\sidebar-overflow',
+        workspaces: {
+          'C:\\wiki\\sidebar-overflow': {
+            'doc.md': '# Doc'
+          }
+        },
+        git: {
+          status: async () => ({
+            ...createEmptyGitStatus(true, 'C:/wiki/sidebar-overflow'),
+            branch: 'main',
+            ahead: 1,
+            behind: 0,
+            unstaged: [{ path: 'doc.md', status: 'M' }]
+          }),
+          branches: async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [
+              { name: 'main', current: true, upstream: 'origin/main' },
+              { name: 'feature/layout', current: false, upstream: null }
+            ]
+          }),
+          checkout: checkoutSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { rootEl, cleanup } = mountThemeStylesAndRoot()
+    try {
+      render(<App />, { container: rootEl })
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+      // 1. Explorer view (Folder Tree)
+      const explorer = await screen.findByRole('region', { name: '워크스페이스 탐색기' })
+      assertSidebarPanelIsolation(
+        explorer,
+        explorer.firstElementChild as HTMLElement,
+        within(explorer).getByRole('tree')
+      )
+
+      // Context menu uses fixed positioning with no transform/filter containing block on ancestors
+      fireEvent.contextMenu(await within(explorer).findByText('doc.md'), { clientX: 80, clientY: 120 })
+      const contextMenu = await screen.findByRole('menu')
+      expect(getComputedStyle(contextMenu).position).toBe('fixed')
+      for (const ancestor of [
+        explorer,
+        screen.getByRole('complementary', { name: '왼쪽 사이드바' }),
+        screen.getByRole('main')
+      ]) {
+        const style = getComputedStyle(ancestor)
+        expect(['', 'none']).toContain(style.transform)
+        expect(['', 'none']).toContain(style.filter)
+        expect(['', 'none']).toContain(style.contain)
+      }
+      await user.click(within(contextMenu).getByRole('menuitem', { name: '열기' }))
+      expect(await screen.findByRole('tab', { name: 'doc.md' })).toBeInTheDocument()
+
+      // 2. Git view (Git Panel)
+      await clickActivityBarButton(user, 'Git')
+      const gitPanel = screen.getByRole('region', { name: 'Git 소스 제어' })
+      const gitHeader = within(gitPanel).getByText('Git').closest('.git-header') as HTMLElement
+      for (const btn of within(gitHeader).getAllByRole('button')) {
+        expect(btn).not.toHaveAttribute('aria-expanded')
+      }
+      const gitCommonArea = gitPanel.querySelector('.git-common-area') as HTMLElement
+      expect(getComputedStyle(gitCommonArea).flexShrink).toBe('0')
+      const gitSplitContainer = gitPanel.querySelector('.git-split-container') as HTMLElement
+      expect(isZeroCssLength(getComputedStyle(gitSplitContainer).minHeight)).toBe(true)
+      expect(getComputedStyle(gitSplitContainer).overflow).toBe('hidden')
+      const accordionBodies = Array.from(
+        gitPanel.querySelectorAll('.git-accordion-body')
+      ) as HTMLElement[]
+      expect(accordionBodies).toHaveLength(2)
+      for (const accordionBody of accordionBodies) {
+        assertSidebarPanelIsolation(gitPanel, gitHeader, accordionBody)
+      }
+
+      const branchSelect = within(gitPanel).getByLabelText('브랜치 선택') as HTMLSelectElement
+      await user.selectOptions(branchSelect, 'feature/layout')
+      await user.click(within(gitPanel).getByRole('button', { name: '브랜치 전환' }))
+      await waitFor(() => {
+        expect(checkoutSpy).toHaveBeenCalledWith('C:/wiki/sidebar-overflow', 'feature/layout')
+      })
+
+      // 3. Workspace view
+      await clickActivityBarButton(user, '워크스페이스')
+      const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+      assertSidebarPanelIsolation(
+        workspaceView,
+        workspaceView.firstElementChild as HTMLElement,
+        workspaceView.lastElementChild as HTMLElement
+      )
+    } finally {
+      cleanup()
+    }
+  })
+})
+
+function stubScrollLayout(
+  el: HTMLElement,
+  getGeometry: () => { scrollTop: number; scrollHeight: number; clientHeight: number; top: number }
+): void {
+  Object.defineProperty(el, 'scrollTop', {
+    configurable: true,
+    get: () => getGeometry().scrollTop,
+    set: () => undefined
+  })
+  Object.defineProperty(el, 'scrollHeight', {
+    configurable: true,
+    get: () => getGeometry().scrollHeight
+  })
+  Object.defineProperty(el, 'clientHeight', {
+    configurable: true,
+    get: () => getGeometry().clientHeight
+  })
+  el.getBoundingClientRect = () =>
+    ({
+      top: getGeometry().top,
+      bottom: getGeometry().top + getGeometry().clientHeight,
+      left: 0,
+      right: 600,
+      width: 600,
+      height: getGeometry().clientHeight,
+      x: 0,
+      y: getGeometry().top,
+      toJSON: () => ({})
+    }) as DOMRect
+}
+
+function createHeadingRect(top: number): DOMRect {
+  return {
+    top,
+    bottom: top + 28,
+    left: 0,
+    right: 500,
+    width: 500,
+    height: 28,
+    x: 0,
+    y: top,
+    toJSON: () => ({})
+  } as DOMRect
+}
+
+function stubHeadingTop(el: HTMLElement, getTop: () => number): void {
+  el.getBoundingClientRect = () => createHeadingRect(getTop())
+}
+
+function stubPreviewSpyLayout(
+  preview: HTMLElement,
+  docOffsets: number[],
+  getScrollTop: () => number,
+  {
+    scrollHeight = 1000,
+    clientHeight = 400,
+    top = 100
+  }: { scrollHeight?: number; clientHeight?: number; top?: number } = {}
+): HTMLElement[] {
+  stubScrollLayout(preview, () => ({
+    scrollTop: getScrollTop(),
+    scrollHeight,
+    clientHeight,
+    top
+  }))
+  const headings = Array.from(preview.querySelectorAll('h1, h2, h3, h4, h5, h6')) as HTMLElement[]
+  expect(headings).toHaveLength(docOffsets.length)
+  headings.forEach((el, idx) => {
+    stubHeadingTop(el, () => top + docOffsets[idx] - getScrollTop())
+  })
+  return headings
+}
+
+describe('Document Outline active heading scroll spy in Preview mode', () => {
+  it('tracks Preview scroll position in Document Outline with aria-current="location", auto-scroll, and no redundant updates within the same section', async () => {
+    const user = userEvent.setup()
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const docContent = [
+        'Intro preface before first heading.',
+        '',
+        '# Overview',
+        'Section 1 body',
+        '',
+        '## Architecture',
+        'Section 2 body',
+        '',
+        '### Details',
+        'Section 3 body',
+        '',
+        '## Summary',
+        'Short ending'
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\outline-spy',
+          workspaces: {
+            'C:\\wiki\\outline-spy': {
+              'guide.md': docContent,
+              'plain.md': 'Just text without any headings',
+              'notes.json': '{"ok":true}'
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('guide.md'))
+
+      await user.click(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: 'Preview'
+        })
+      )
+
+      const preview = screen.getByLabelText('마크다운 미리보기')
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+
+      // Stub layout: container top = 100, clientHeight = 400, scrollHeight = 1000
+      let currentScrollTop = 0
+      const docOffsets = [160, 340, 560, 880] // distance from document top (before scrollTop subtraction)
+      stubPreviewSpyLayout(preview, docOffsets, () => currentScrollTop)
+
+      // 1. Preface before first heading -> no outline item active
+      fireEvent.scroll(preview)
+      for (const btn of outlineButtons()) {
+        expect(btn).not.toHaveAttribute('aria-current')
+      }
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      // 2. Scroll to Overview (heading 0 at relativeTop = 100+160-150-100 = 10 <= 24)
+      currentScrollTop = 150
+      fireEvent.scroll(preview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[0]).toHaveClass('is-active')
+      expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ block: 'nearest' })
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(outlineButtons()[0])
+
+      // 3. Scroll within Overview section (heading 0 stays active) -> no redundant auto-scroll
+      scrollIntoViewMock.mockClear()
+      currentScrollTop = 210
+      fireEvent.scroll(preview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      // 4. Scroll to Architecture (heading 1 at relativeTop = 340 - 330 = 10 <= 24)
+      currentScrollTop = 330
+      fireEvent.scroll(preview)
+      expect(outlineButtons()[0]).not.toHaveAttribute('aria-current')
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(outlineButtons()[1])
+
+      // 5. Scroll to container bottom (scrollTop = 600, Summary still below baseline at 280) -> Summary active
+      currentScrollTop = 600
+      fireEvent.scroll(preview)
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+
+      // 6. Opening non-markdown file or markdown without headings clears active heading
+      await user.click(within(explorer).getByText('notes.json'))
+      expect(within(outline).queryByRole('list')).not.toBeInTheDocument()
+      await user.click(within(explorer).getByText('plain.md'))
+      expect(within(outline).queryByRole('list')).not.toBeInTheDocument()
+    } finally {
+      restore()
+    }
+  })
+
+  it('protects clicked Document Outline heading until user scroll, clears pin on tab/Editor Mode switch, and ignores inactive Split Mode Pane scroll', async () => {
+    const user = userEvent.setup()
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const guideDoc = [
+        'Intro preface before first heading.',
+        '',
+        '# Overview',
+        'Section 1 body',
+        '',
+        '## Architecture',
+        'Section 2 body',
+        '',
+        '### Details',
+        'Section 3 body',
+        '',
+        '## Summary',
+        'Short ending'
+      ].join('\n')
+      const sideDoc = ['# Side Alpha', 'Alpha body', '', '## Side Beta', 'Beta body'].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\outline-pin',
+          workspaces: {
+            'C:\\wiki\\outline-pin': {
+              'guide.md': guideDoc,
+              'side.md': sideDoc
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('side.md'))
+      await user.click(await within(explorer).findByText('guide.md'))
+
+      await user.click(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: 'Preview'
+        })
+      )
+
+      const primaryPane = screen.getByTestId('pane-primary')
+      let primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+
+      let currentScrollTop = 150
+      const docOffsets = [160, 340, 560, 880]
+      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+
+      // 1. Clicking short bottom heading ("Summary") pins it immediately and resists programmatic scroll overwrites
+      await user.click(outlineButtons()[3])
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[3]).toHaveClass('is-active')
+      expect(outlineButtons()[0]).not.toHaveAttribute('aria-current')
+
+      // Programmatic scroll fires while stopped before bottom (Architecture at top=10 <= 24, Summary still below baseline)
+      currentScrollTop = 330
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
+
+      // Non-scroll prose click inside Preview does not arm user-scroll intent
+      await user.click(within(primaryPreview).getByText('Section 1 body'))
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
+
+      // 2. Actual wheel scroll releases protection and lets scroll spy resume
+      scrollIntoViewMock.mockClear()
+      fireEvent.wheel(primaryPreview)
+      currentScrollTop = 335
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[3]).not.toHaveAttribute('aria-current')
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
+      expect(scrollIntoViewMock.mock.instances).toContain(outlineButtons()[1])
+
+      // 3. Keyboard scroll (PageUp) also releases protection
+      await user.click(outlineButtons()[3])
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      fireEvent.keyDown(primaryPreview, { key: 'PageUp' })
+      currentScrollTop = 150
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[3]).not.toHaveAttribute('aria-current')
+
+      // 4. Switching tabs clears click protection
+      await user.click(outlineButtons()[3])
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      await user.click(within(primaryPane).getByRole('tab', { name: /side\.md/i }))
+      await user.click(within(primaryPane).getByRole('tab', { name: /guide\.md/i }))
+      primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      expect(outlineButtons()[3]).not.toHaveAttribute('aria-current')
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+
+      // 5. Switching mode (Ctrl+1 -> Ctrl+3) clears click protection
+      await user.click(outlineButtons()[3])
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      fireEvent.keyDown(window, { key: '1', ctrlKey: true })
+      fireEvent.keyDown(window, { key: '3', ctrlKey: true })
+      primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      expect(outlineButtons()[3]).not.toHaveAttribute('aria-current')
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+
+      // 6. Scrolling an inactive Split Mode Pane's Preview does not overwrite active Pane's Document Outline highlight
+      fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /side\.md/i }))
+      const tabMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+      await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+      const secondaryPane = screen.getByTestId('pane-secondary')
+      await user.click(
+        within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+          'button',
+          { name: 'Preview' }
+        )
+      )
+
+      // Keep primaryPane focused on guide.md at Overview (index 0)
+      await user.click(within(primaryPane).getByRole('tab', { name: /guide\.md/i }))
+      primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+
+      // Scroll inactive secondaryPreview to Side Beta (index 1) without activating secondaryPane
+      const secondaryPreview = within(secondaryPane).getByLabelText('마크다운 미리보기')
+      const secondaryScrollTop = 450
+      stubPreviewSpyLayout(secondaryPreview, [60, 460], () => secondaryScrollTop)
+      fireEvent.wheel(secondaryPreview)
+      fireEvent.scroll(secondaryPreview)
+
+      expect(outlineButtons()).toHaveLength(4)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switches, and Split Mode Panes', () => {
+  it('tracks scroll, content edits, click pin protection, and user-scroll release in 위지윅 Editor Mode', async () => {
+    const user = userEvent.setup()
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const docContent = [
+        'Intro preface before first heading.',
+        '',
+        '# Overview',
+        'Section 1 body',
+        '',
+        '## Architecture',
+        'Section 2 body',
+        '',
+        '### Details',
+        'Section 3 body',
+        '',
+        '## Summary',
+        'Short ending'
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\wysiwyg-spy',
+          workspaces: {
+            'C:\\wiki\\wysiwyg-spy': {
+              'guide.md': docContent
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('guide.md'))
+
+      await user.click(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: '위지윅'
+        })
+      )
+
+      const primaryPane = screen.getByTestId('pane-primary')
+      const scrollContainer = primaryPane.querySelector('.wysiwyg-scroll-container') as HTMLElement
+      expect(scrollContainer).toBeTruthy()
+
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+
+      let currentScrollTop = 0
+      const headingOffsets = new Map<string, number>([
+        ['Overview', 160],
+        ['Architecture', 340],
+        ['Details', 560],
+        ['Summary', 880]
+      ])
+
+      stubScrollLayout(scrollContainer, () => ({
+        scrollTop: currentScrollTop,
+        scrollHeight: 1000,
+        clientHeight: 400,
+        top: 100
+      }))
+
+      const originalRect = HTMLElement.prototype.getBoundingClientRect
+      const rectSpy = vi
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockImplementation(function (this: HTMLElement) {
+          if (/^H[1-6]$/.test(this.tagName) && scrollContainer.contains(this)) {
+            const text = this.textContent?.trim() ?? ''
+            const offset = headingOffsets.get(text) ?? 0
+            return createHeadingRect(100 + offset - currentScrollTop)
+          }
+          return originalRect.call(this)
+        })
+
+      try {
+        // 1. Preface at top -> none active
+        fireEvent.scroll(scrollContainer)
+        for (const btn of outlineButtons()) {
+          expect(btn).not.toHaveAttribute('aria-current')
+        }
+
+        // 2. Scroll to Architecture -> index 1 active and auto-scrolled in Document Outline
+        scrollIntoViewMock.mockClear()
+        currentScrollTop = 320
+        fireEvent.scroll(scrollContainer)
+        expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+        expect(outlineButtons()[1]).toHaveClass('is-active')
+        expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
+
+        // 3. Click Summary in Document Outline -> pin protected until explicit user scroll
+        await user.click(outlineButtons()[3])
+        expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+        currentScrollTop = 330
+        fireEvent.scroll(scrollContainer)
+        expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+
+        // User wheel scroll releases pin and tracks active heading cleanly
+        fireEvent.wheel(scrollContainer)
+        currentScrollTop = 335
+        fireEvent.scroll(scrollContainer)
+        expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+        // 4. Editing content inserts a new heading above Architecture, recalculating active index
+        headingOffsets.set('Intro preface before first heading.', 80)
+        const docEl = within(primaryPane).getByTestId('document-editor')
+        const firstParagraph = docEl.querySelector('p')!
+        const docWithElementFromPoint = document as Document & {
+          elementFromPoint?: (x: number, y: number) => Element | null
+        }
+        const hadOwnElementFromPoint = Object.prototype.hasOwnProperty.call(
+          docWithElementFromPoint,
+          'elementFromPoint'
+        )
+        const prevElementFromPoint = docWithElementFromPoint.elementFromPoint
+        docWithElementFromPoint.elementFromPoint = () => firstParagraph
+        try {
+          await user.click(firstParagraph)
+        } finally {
+          if (hadOwnElementFromPoint) {
+            docWithElementFromPoint.elementFromPoint = prevElementFromPoint
+          } else {
+            Reflect.deleteProperty(docWithElementFromPoint, 'elementFromPoint')
+          }
+        }
+        await user.click(within(primaryPane).getByRole('button', { name: 'H1' }))
+        await waitFor(() => {
+          expect(outlineButtons()).toHaveLength(5)
+        })
+        expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+      } finally {
+        rectSpy.mockRestore()
+      }
+    } finally {
+      restore()
+    }
+  })
+
+  it('tracks Raw scroll by 1-based top line (excluding code fences), content edits, click pin protection, and ignores cursor-only moves', async () => {
+    const user = userEvent.setup()
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const rawDoc = [
+        'Preface intro line 1',
+        '# Alpha Heading',
+        '```bash',
+        '# bash comment inside fence',
+        'echo ok',
+        '```',
+        '## Beta Heading',
+        'Beta paragraph line 8',
+        '### Gamma Heading',
+        'Closing line 10'
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\raw-spy',
+          workspaces: {
+            'C:\\wiki\\raw-spy': {
+              'raw-guide.md': rawDoc
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('raw-guide.md'))
+
+      const primaryPane = screen.getByTestId('pane-primary')
+      const scroller = primaryPane.querySelector('.cm-scroller') as HTMLElement
+      expect(scroller).toBeTruthy()
+      const rawEditorEl = within(primaryPane).getByTestId('document-editor')
+      const rawView = getRawEditorView(rawEditorEl)
+
+      let currentScrollTop = 0
+      stubScrollLayout(scroller, () => ({
+        scrollTop: currentScrollTop,
+        scrollHeight: 500,
+        clientHeight: 200,
+        top: 100
+      }))
+
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+      expect(outlineButtons()).toHaveLength(3)
+
+      // 1. Preface at scrollTop=0 -> none active
+      fireEvent.scroll(scroller)
+      for (const btn of outlineButtons()) {
+        expect(btn).not.toHaveAttribute('aria-current')
+      }
+
+      // 2. Scroll onto fenced `# bash comment` (line 4, scrollTop=42) -> stays on # Alpha Heading (index 0)
+      scrollIntoViewMock.mockClear()
+      currentScrollTop = 42
+      fireEvent.scroll(scroller)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[0]).toHaveClass('is-active')
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
+
+      // 3. Cursor movement alone without scrolling does NOT shift Document Outline highlight
+      const endPos = rawView.state.doc.length
+      act(() => {
+        rawView.dispatch({ selection: { anchor: endPos } })
+      })
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[2]).not.toHaveAttribute('aria-current')
+
+      // 4. Click Gamma Heading (index 2) -> pin protected across programmatic scroll; wheel releases pin
+      await user.click(outlineButtons()[2])
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+      currentScrollTop = 84 // Line 7: Beta Heading
+      fireEvent.scroll(scroller)
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+
+      fireEvent.wheel(scroller)
+      fireEvent.scroll(scroller)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // 5. Scroll to bottom (scrollHeight 500, clientHeight 200, scrollTop 299) -> highlights last heading
+      currentScrollTop = 299
+      fireEvent.scroll(scroller)
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+
+      // 6. Editing Raw content shifts heading indices at the same scroll position (scrollTop=100, line 8)
+      fireEvent.wheel(scroller)
+      currentScrollTop = 100
+      fireEvent.scroll(scroller)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      setRawEditorText(rawEditorEl, '# Prepended Top\n' + rawDoc)
+      expect(outlineButtons()).toHaveLength(4)
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+    } finally {
+      restore()
+    }
+  })
+
+  it('synchronizes Document Outline immediately across Editor Mode switches, same-Pane Tab switches, and Split Mode Pane focus switches', async () => {
+    const user = userEvent.setup()
+    const { restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const alphaDoc = [
+        'Alpha preface',
+        '# Alpha One',
+        'Alpha paragraph',
+        '## Alpha Two',
+        'Alpha section',
+        '### Alpha Three',
+        'Alpha ending'
+      ].join('\n')
+      const betaDoc = [
+        'Beta preface',
+        '# Beta One',
+        'Beta paragraph',
+        '## Beta Two',
+        'Beta ending'
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\sync-modes',
+          workspaces: {
+            'C:\\wiki\\sync-modes': {
+              'alpha.md': alphaDoc,
+              'beta.md': betaDoc,
+              'meta.json': '{"name":"wiki"}'
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('beta.md'))
+      await user.click(await within(explorer).findByText('meta.json'))
+      await user.click(await within(explorer).findByText('alpha.md'))
+
+      const primaryPane = screen.getByTestId('pane-primary')
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+
+      // 1. Raw -> 위지윅 -> Preview Editor Mode switches immediately recalculate active heading
+      const rawScroller = primaryPane.querySelector('.cm-scroller') as HTMLElement
+      let alphaScrollTop = 42 // Line 4: ## Alpha Two
+      stubScrollLayout(rawScroller, () => ({
+        scrollTop: alphaScrollTop,
+        scrollHeight: 500,
+        clientHeight: 200,
+        top: 100
+      }))
+      fireEvent.scroll(rawScroller)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // Pin heading 2 then switch Editor Mode to 위지윅 -> pin clears and new mode recalculates
+      await user.click(outlineButtons()[2])
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+
+      await user.click(
+        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+          'button',
+          { name: '위지윅' }
+        )
+      )
+      const wysiwygContainer = primaryPane.querySelector('.wysiwyg-scroll-container') as HTMLElement
+      alphaScrollTop = 0
+      stubPreviewSpyLayout(wysiwygContainer, [120, 320, 520], () => alphaScrollTop)
+      // Trigger measurement on stubbed WYSIWYG container -> heading 0 active on mode change vs top
+      fireEvent.scroll(wysiwygContainer)
+      for (const btn of outlineButtons()) {
+        expect(btn).not.toHaveAttribute('aria-current')
+      }
+
+      // Switch to Preview mode and scroll to Alpha Two (index 1)
+      await user.click(
+        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+          'button',
+          { name: 'Preview' }
+        )
+      )
+      const primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      alphaScrollTop = 310
+      stubPreviewSpyLayout(primaryPreview, [120, 320, 520], () => alphaScrollTop)
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // 2. Same-Pane Tab switch to non-markdown (.json) clears Document Outline, returning restores Alpha Two
+      await user.click(within(primaryPane).getByRole('tab', { name: /meta\.json/i }))
+      expect(within(outline).queryByRole('list')).not.toBeInTheDocument()
+
+      await user.click(within(primaryPane).getByRole('tab', { name: /alpha\.md/i }))
+      const restoredPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      stubPreviewSpyLayout(restoredPreview, [120, 320, 520], () => alphaScrollTop)
+      fireEvent.scroll(restoredPreview)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // 3. Split Mode (좌우 분할): move beta.md to Secondary Pane while keeping Primary Pane active
+      fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /beta\.md/i }))
+      const tabMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+      await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+      const secondaryPane = screen.getByTestId('pane-secondary')
+      // Click back into Primary Pane so Alpha Two remains active
+      fireEvent.mouseDown(within(primaryPane).getByLabelText('마크다운 미리보기'))
+      expect(outlineButtons()).toHaveLength(3)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // Pin Alpha Three in Primary Pane, then scroll INACTIVE Secondary Pane (Raw beta.md) to ## Beta Two
+      await user.click(outlineButtons()[2])
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+
+      const secondaryScroller = secondaryPane.querySelector('.cm-scroller') as HTMLElement
+      let betaScrollTop = 42 // Line 4: ## Beta Two (index 1)
+      stubScrollLayout(secondaryScroller, () => ({
+        scrollTop: betaScrollTop,
+        scrollHeight: 500,
+        clientHeight: 200,
+        top: 100
+      }))
+      fireEvent.wheel(secondaryScroller)
+      fireEvent.scroll(secondaryScroller)
+
+      // Active Primary Pane's Document Outline & pin must remain untouched by inactive Pane scroll
+      expect(outlineButtons()).toHaveLength(3)
+      expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
+
+      // 4. Focusing Secondary Pane immediately syncs Document Outline to Beta Two WITHOUT resetting to null or scrolling
+      fireEvent.mouseDown(secondaryScroller)
+      expect(outlineButtons()).toHaveLength(2)
+      expect(within(outline).getByText('Beta One')).toBeInTheDocument()
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[1]).toHaveClass('is-active')
+
+      // 5. Switch Split Mode to vertical (상하 분할) and focus back to Primary Pane -> immediately restores Alpha Two (pin was cleared on focus switch)
+      fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /beta\.md/i }))
+      fireEvent.drop(await screen.findByTestId('split-drop-zone-vertical'))
+      expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'vertical')
+      fireEvent.mouseDown(within(primaryPane).getByLabelText('마크다운 미리보기'))
+      expect(outlineButtons()).toHaveLength(3)
+      expect(within(outline).getByText('Alpha Two')).toBeInTheDocument()
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // Verify inactive Secondary Pane can also scroll to top while Primary Pane is focused without affecting Primary Pane
+      betaScrollTop = 0
+      fireEvent.wheel(secondaryScroller)
+      fireEvent.scroll(secondaryScroller)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe('Split editor mode and bidirectional scroll sync', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('integrates Split mode live preview/Mermaid, per-tab clamped splitter ratio, 2-pane workspace independence, non-markdown lock, Outline TOC cursor insertion, and split breadcrumbs', async () => {
+    const user = userEvent.setup()
+    const entries: RendererLogPayload[] = []
+    const alphaInitial = [
+      '# SECRET_ALPHA_TITLE',
+      '',
+      '## Intro',
+      '',
+      '## Details',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  Start --> InitialNode',
+      '```'
+    ].join('\n')
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/split-mode',
+        workspaces: {
+          'C:/wiki/split-mode': {
+            'alpha.md': alphaInitial,
+            'beta.md': '# SECRET_BETA_TITLE',
+            'notes.txt': 'plain text file'
+          }
+        },
+        log: {
+          write: (payload) => {
+            entries.push(payload)
+            return Promise.resolve()
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+
+    // Non-markdown .txt buffer locks Split button and Ctrl+4 / Ctrl+Shift+M
+    await user.click(await within(explorer).findByText('notes.txt'))
+    const primaryPane = screen.getByTestId('pane-primary')
+    const primaryModeGroup = within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })
+    expect(within(primaryModeGroup).getByRole('button', { name: 'Split' })).toBeDisabled()
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '4', ctrlKey: true })
+    fireEvent.keyDown(window, { key: '4', ctrlKey: true })
+    expect(within(primaryPane).queryByTestId('split-markdown-preview')).not.toBeInTheDocument()
+
+    // Open alpha.md and switch to Split via Ctrl+4
+    await user.click(within(explorer).getByText('alpha.md'))
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '4', ctrlKey: true })
+    const alphaPreview = within(primaryPane).getByTestId('split-markdown-preview')
+    const alphaModeGroup = within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })
+    expect(within(alphaModeGroup).getByRole('button', { name: 'Split' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(within(primaryPane).getByRole('toolbar', { name: 'Raw 표 편집 툴바' })).toBeInTheDocument()
+
+    // Edit Mermaid diagram & heading in left Raw editor -> live right Preview updates
+    const alphaUpdated = alphaInitial
+      .replace('SECRET_ALPHA_TITLE', 'SECRET_ALPHA_UPDATED')
+      .replace('InitialNode', 'LiveUpdatedNode')
+    setRawEditorText(within(primaryPane).getByTestId('document-editor'), alphaUpdated)
+    expect(within(alphaPreview).getByRole('heading', { level: 1 }).textContent).toContain(
+      'SECRET_ALPHA_UPDATED'
+    )
+    await waitFor(() => {
+      expect(mermaidMockState.render).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.stringContaining('LiveUpdatedNode')
+      )
+      expect(within(alphaPreview).getByTestId('mermaid-svg')).toBeInTheDocument()
+    })
+
+    // Adjust internal split splitter via drag + double-click + ArrowRight, and persist per tab across tab & mode switches
+    const alphaSplitter = within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
+    const alphaContainer = within(primaryPane).getByTestId('editor-split-container')
+    vi.spyOn(alphaContainer, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1000,
+      bottom: 600,
+      width: 1000,
+      height: 600,
+      toJSON: () => ({})
+    })
+    fireEvent.mouseDown(alphaSplitter)
+    fireEvent.mouseMove(window, { clientX: 600 })
+    fireEvent.mouseUp(window)
+    expect(alphaSplitter).toHaveAttribute('aria-valuenow', '60')
+
+    fireEvent.doubleClick(alphaSplitter)
+    expect(alphaSplitter).toHaveAttribute('aria-valuenow', '50')
+
+    fireEvent.keyDown(alphaSplitter, { key: 'ArrowRight' })
+    fireEvent.keyDown(alphaSplitter, { key: 'ArrowRight' })
+    fireEvent.keyDown(alphaSplitter, { key: 'ArrowRight' })
+    expect(alphaSplitter).toHaveAttribute('aria-valuenow', '65')
+
+    // Switch to beta.md -> back to alpha.md -> toggle Raw -> Split: ratio 65 stays preserved for alpha.md
+    await user.click(within(explorer).getByText('beta.md'))
+    await user.click(within(primaryPane).getByRole('tab', { name: /alpha\.md/ }))
+    expect(
+      within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
+    ).toHaveAttribute('aria-valuenow', '65')
+
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '1', ctrlKey: true })
+    expect(within(primaryPane).queryByTestId('split-markdown-preview')).not.toBeInTheDocument()
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: '4', ctrlKey: true })
+    expect(
+      within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
+    ).toHaveAttribute('aria-valuenow', '65')
+
+    // Outline '본문에 목차(/toc) 삽입' in Split mode inserts TOC at Raw cursor line (not top fallback)
+    const cursorPos = alphaUpdated.indexOf('## Details')
+    setRawEditorSelection(within(primaryPane).getByTestId('document-editor'), cursorPos, cursorPos)
+    const outlineSidebar = screen.getByLabelText('문서 목차 (Outline)')
+    await user.click(within(outlineSidebar).getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
+
+    const textAfterToc = getRawEditorText(within(primaryPane).getByTestId('document-editor'))
+    expect(textAfterToc.indexOf('<!-- toc -->')).toBeGreaterThan(-1)
+    expect(textAfterToc.indexOf('<!-- toc -->')).toBeGreaterThan(
+      textAfterToc.indexOf('## Intro')
+    )
+
+    // Workspace 2-pane split + Editor Split mode coexistence & independent splitters
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /beta\.md/ }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역에 복제 열기'
+      })
+    )
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    await user.click(
+      within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Split' }
+      )
+    )
+    const secondarySplitter = within(secondaryPane).getByRole('separator', {
+      name: '에디터 분할 크기 조절'
+    })
+    expect(secondarySplitter).toHaveAttribute('aria-valuenow', '50')
+    fireEvent.keyDown(secondarySplitter, { key: 'ArrowLeft' })
+    fireEvent.keyDown(secondarySplitter, { key: 'ArrowLeft' })
+    expect(secondarySplitter).toHaveAttribute('aria-valuenow', '40')
+
+    // Primary editor splitter & workspace splitter remain completely independent
+    expect(
+      within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
+    ).toHaveAttribute('aria-valuenow', '65')
+    expect(screen.getByRole('separator', { name: '화면 분할 크기 조절' })).toHaveAttribute(
+      'aria-valuenow',
+      '50'
+    )
+
+    // Breadcrumb logs include 'split' transitions with zero content leakage
+    const modeChanges = entries.filter(
+      (entry) => entry.category === 'ui' && entry.message === 'Editor mode changed'
+    )
+    expect(modeChanges.map((entry) => ({ from: entry.data?.from, to: entry.data?.to }))).toEqual([
+      { from: 'raw', to: 'split' },
+      { from: 'split', to: 'raw' },
+      { from: 'raw', to: 'split' },
+      { from: 'raw', to: 'split' }
+    ])
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('SECRET_ALPHA')
+    expect(serialized).not.toContain('SECRET_BETA')
+  })
+
+  it('synchronizes Split mode scroll bidirectionally with PaneTabStore persistence and jumps both Raw and Preview on Outline click', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewMock = vi.fn()
+    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollIntoView'
+    )
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+    try {
+      const mermaidBlock = [
+        '```mermaid',
+        'flowchart LR',
+        '  A --> B',
+        '  B --> C',
+        '  C --> D',
+        '  D --> E',
+        '  E --> F',
+        '```'
+      ]
+      const listItems = Array.from({ length: 40 }, (_, i) => `- Item ${i + 1}`)
+      const docContent = [
+        '# Overview',
+        '',
+        ...mermaidBlock, // lines 3..10
+        '',
+        '## Architecture', // line 12
+        '',
+        ...listItems // lines 14..53
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { autoSave: false, showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:/wiki/split-scroll',
+          workspaces: {
+            'C:/wiki/split-scroll': {
+              'diagram-doc.md': docContent
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('diagram-doc.md'))
+
+      // Switch to Split mode via Ctrl+4
+      fireEvent.keyDown(screen.getByTestId('document-editor'), { key: '4', ctrlKey: true })
+      const previewRegion = screen.getByTestId('split-markdown-preview')
+      await waitFor(() => {
+        expect(within(previewRegion).getByTestId('mermaid-svg')).toBeInTheDocument()
+      })
+
+      // Verify post-sanitize top-level source line annotations
+      const h1El = previewRegion.querySelector('h1[data-source-line="1"]') as HTMLElement
+      const mermaidEl = within(previewRegion).getByTestId('mermaid-diagram')
+      const h2El = previewRegion.querySelector('h2[data-source-line="12"]') as HTMLElement
+      const ulEl = previewRegion.querySelector('ul[data-source-line="14"]') as HTMLElement
+      expect(mermaidEl).toHaveAttribute('data-source-line', '3')
+      expect(mermaidEl).toHaveAttribute('data-source-end-line', '10')
+      expect(ulEl).toHaveAttribute('data-source-end-line', '53')
+
+      const rawEditorEl = screen.getByTestId('document-editor')
+      const cmView = getRawEditorView(rawEditorEl)
+      const rawScroller = getRawEditorScroller(rawEditorEl)
+
+      Object.defineProperty(rawScroller, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(rawScroller, 'scrollHeight', {
+        configurable: true,
+        get: () => cmView.contentHeight
+      })
+      Object.defineProperty(previewRegion, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(previewRegion, 'scrollHeight', { configurable: true, value: 1480 })
+      previewRegion.getBoundingClientRect = () =>
+        ({ top: 0, left: 0, right: 500, bottom: 200, width: 500, height: 200, x: 0, y: 0, toJSON: () => ({}) })
+
+      const mockRect = (el: HTMLElement, docTop: number, height: number) => {
+        el.getBoundingClientRect = () => {
+          const y = docTop - previewRegion.scrollTop
+          return { top: y, left: 0, right: 500, bottom: y + height, width: 500, height, x: 0, y, toJSON: () => ({}) }
+        }
+      }
+      mockRect(h1El, 0, 40)
+      mockRect(mermaidEl, 60, 560)
+      mockRect(h2El, 640, 40)
+      mockRect(ulEl, 700, 780)
+
+      // 1. Raw -> Preview interpolation inside Mermaid block (line 7 = 50% of [3, 11] => 60 + 0.5*560 = 340)
+      const line7Top = cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(7).from).top
+      rawScroller.scrollTop = line7Top
+      fireEvent.scroll(rawScroller)
+      expect(previewRegion.scrollTop).toBeCloseTo(340, 5)
+
+      // Echo scroll on Preview does not ping-pong back to Raw
+      fireEvent.scroll(previewRegion)
+      expect(rawScroller.scrollTop).toBe(line7Top)
+
+      // 2. Preview -> Raw interpolation in list (50% of [14, 54] => line 34, 700 + 0.5*780 = 1090)
+      previewRegion.scrollTop = 1090
+      fireEvent.scroll(previewRegion)
+      const expectedLine34Top =
+        cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(34).from).top
+      expect(rawScroller.scrollTop).toBeCloseTo(expectedLine34Top, 5)
+
+      // Switching Split -> Raw restores synced scrollTop persisted in PaneTabStore
+      fireEvent.keyDown(rawEditorEl, { key: '1', ctrlKey: true })
+      const rawOnlyEditor = screen.getByTestId('document-editor')
+      expect(getRawEditorScroller(rawOnlyEditor).scrollTop).toBeCloseTo(expectedLine34Top, 5)
+
+      // Switch back to Split and test Outline heading jump scrolls both Raw and Preview
+      fireEvent.keyDown(rawOnlyEditor, { key: '4', ctrlKey: true })
+      scrollIntoViewMock.mockClear()
+
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const archBtn = within(outline).getByRole('button', { name: /Architecture/ })
+      await user.click(archBtn)
+
+      await waitFor(() => {
+        expect(getRawEditorSelection(screen.getByTestId('document-editor')).start).toBe(
+          docContent.indexOf('## Architecture')
+        )
+        expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+        expect(archBtn).toHaveAttribute('aria-current', 'location')
+      })
+      const jumpedPreview = screen.getByTestId('split-markdown-preview')
+      const jumpedArchHeading = within(jumpedPreview).getByRole('heading', { level: 2, name: 'Architecture' })
+      expect(scrollIntoViewMock.mock.instances).toContain(jumpedArchHeading)
+    } finally {
+      if (origScrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+      }
+    }
   })
 })
