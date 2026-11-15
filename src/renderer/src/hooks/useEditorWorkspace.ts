@@ -49,7 +49,7 @@ type ImageParentDirReadResult =
   | { status: 'missing' }
   | { status: 'error' }
 
-function getImageParentDirectory(filePath: string): string {
+function getParentDirectory(filePath: string): string {
   const normalized = normalizeWorkspacePath(filePath)
   const lastSlash = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
   if (lastSlash < 0) return normalized
@@ -77,7 +77,7 @@ async function readImageParentDirectories(
 ): Promise<Map<string, ImageParentDirReadResult>> {
   const parentDirByKey = new Map<string, string>()
   for (const buffer of imageBuffers) {
-    const parentDir = getImageParentDirectory(buffer.path)
+    const parentDir = getParentDirectory(buffer.path)
     const parentKey = getWorkspacePathKey(parentDir)
     if (!parentDirByKey.has(parentKey)) {
       parentDirByKey.set(parentKey, parentDir)
@@ -375,17 +375,12 @@ export function useEditorWorkspace({
       )
 
       const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes, isImage)
-      if (!shortcut) {
-        if (isImage && resolveEditorShortcut(event, 'raw', true) !== null) {
-          event.preventDefault()
-        }
-        return
-      }
+      if (!shortcut) return
 
       event.preventDefault()
       if (shortcut.type === 'save') {
         saveActivePaneDocument()
-      } else if (shortcut.mode !== activeTab.mode) {
+      } else if (shortcut.type === 'mode' && shortcut.mode !== activeTab.mode) {
         tabStore.updateTabViewState(tabStore.getSnapshot().activePaneId, activeTab.id, {
           mode: shortcut.mode
         })
@@ -728,7 +723,7 @@ export function useEditorWorkspace({
               for (const buffer of imageBuffers) {
                 const current = bufferStore.getBuffer(buffer.key)
                 if (!current || current.kind !== 'workspace' || !isImageDocument(current)) continue
-                const parentKey = getWorkspacePathKey(getImageParentDirectory(current.path))
+                const parentKey = getWorkspacePathKey(getParentDirectory(current.path))
                 const dirResult = dirResults.get(parentKey)
                 if (!dirResult || dirResult.status === 'error') continue
                 if (dirResult.status === 'missing') {

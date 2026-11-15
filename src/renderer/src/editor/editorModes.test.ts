@@ -136,15 +136,18 @@ describe('editorModes helpers', () => {
     ).toBe(true)
     expect(
       resolveEditorShortcut({ key: 's', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false, true)
-    ).toBeNull()
+    ).toEqual({ type: 'suppressed' })
     expect(
       resolveEditorShortcut({ key: '1', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false, true)
-    ).toBeNull()
+    ).toEqual({ type: 'suppressed' })
     expect(
       resolveEditorShortcut({ key: '2', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false, true)
-    ).toBeNull()
+    ).toEqual({ type: 'suppressed' })
     expect(
       resolveEditorShortcut({ key: 'M', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, 'raw', false, true)
+    ).toEqual({ type: 'suppressed' })
+    expect(
+      resolveEditorShortcut({ key: 'k', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false, true)
     ).toBeNull()
   })
 })

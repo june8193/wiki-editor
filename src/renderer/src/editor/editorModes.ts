@@ -12,6 +12,7 @@ export interface ModeShortcutEvent {
 export type EditorShortcutAction =
   | { type: 'save' }
   | { type: 'mode'; mode: EditorMode }
+  | { type: 'suppressed' }
 
 const MODE_ORDER: readonly EditorMode[] = ['raw', 'wysiwyg', 'preview', 'split']
 
@@ -127,6 +128,8 @@ export function isSaveShortcut(event: ModeShortcutEvent): boolean {
 
 /**
  * Resolves global/editor application shortcuts (`Ctrl/Cmd+S` save or mode-switch keys).
+ * When `isReadOnly` is true, matching editor shortcuts resolve to `{ type: 'suppressed' }`
+ * so callers can block browser defaults without invoking save or mode switches.
  */
 export function resolveEditorShortcut(
   event: ModeShortcutEvent,
@@ -134,12 +137,12 @@ export function resolveEditorShortcut(
   allowRichModes: boolean,
   isReadOnly = false
 ): EditorShortcutAction | null {
-  if (isReadOnly) {
+  if (isSaveShortcut(event)) {
+    return isReadOnly ? { type: 'suppressed' } : { type: 'save' }
+  }
+  const mode = resolveModeShortcut(event, currentMode, isReadOnly ? true : allowRichModes)
+  if (!mode) {
     return null
   }
-  if (isSaveShortcut(event)) {
-    return { type: 'save' }
-  }
-  const mode = resolveModeShortcut(event, currentMode, allowRichModes)
-  return mode ? { type: 'mode', mode } : null
+  return isReadOnly ? { type: 'suppressed' } : { type: 'mode', mode }
 }

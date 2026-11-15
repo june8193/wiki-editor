@@ -144,22 +144,14 @@ export function DocumentEditor({
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (isShortcutDisabled) return
 
-    if (isImage) {
-      if (resolveEditorShortcut(event, 'raw', true) !== null) {
-        event.preventDefault()
-        event.stopPropagation()
-      }
-      return
-    }
-
-    const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes)
+    const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes, isImage)
     if (!shortcut) return
 
     event.preventDefault()
     event.stopPropagation()
     if (shortcut.type === 'save') {
       onSave()
-    } else {
+    } else if (shortcut.type === 'mode') {
       handleModeSelect(shortcut.mode)
     }
   }

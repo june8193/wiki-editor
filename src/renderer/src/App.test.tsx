@@ -6740,7 +6740,7 @@ describe('Read-only image preview tabs', () => {
     }
   })
 
-  it('supports tab switching, moving, duplicating across panes, and horizontal/vertical split views alongside markdown tabs', async () => {
+  it('supports tab switching, moving, duplicating across panes, and horizontal/vertical split modes alongside markdown tabs', async () => {
     const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
       { autoSave: false },
       {
@@ -6778,7 +6778,7 @@ describe('Read-only image preview tabs', () => {
     await user.click(within(primaryPane).getByRole('tab', { name: /mockup\.png/i }))
     expect(within(primaryPane).getByTestId('image-preview')).toBeInTheDocument()
 
-    // Move image tab into horizontal split view next to markdown tab
+    // Move image tab into horizontal Split Mode next to markdown tab
     fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /mockup\.png/i }))
     const tabMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
     await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
