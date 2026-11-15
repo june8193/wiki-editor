@@ -4,11 +4,8 @@ import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand } from '@shared/ipc'
 import { getGitChangedCount, type GitDiffRequest } from '@shared/git'
 import {
-  getWorkspacePathKey,
   isFavoriteWorkspacePath,
-  isNestedOrSamePath,
-  joinWorkspacePath,
-  normalizeWorkspacePath,
+  resolveRepoFileInWorkspace,
   WorkspaceEntry
 } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
@@ -418,29 +415,16 @@ export function App() {
 
   const handleOpenDiffTargetFile = useCallback(
     (repoRelativePath: string): void => {
-      const baseRoot = git.status?.repoRoot ?? workspace?.rootPath
-      if (!baseRoot) return
-      const fullPath = joinWorkspacePath(baseRoot, repoRelativePath)
-      let relativePath = repoRelativePath
-      if (workspace?.rootPath) {
-        const normFull = normalizeWorkspacePath(fullPath)
-        const normWorkspace = normalizeWorkspacePath(workspace.rootPath)
-        const keyFull = getWorkspacePathKey(normFull)
-        const keyWorkspace = getWorkspacePathKey(normWorkspace)
-        if (!isNestedOrSamePath(keyFull, keyWorkspace)) {
-          return
-        }
-        if (keyFull.length > keyWorkspace.length) {
-          relativePath = normFull
-            .slice(normWorkspace.length)
-            .replace(/^[\\/]+/, '')
-            .replace(/\\/g, '/')
-        }
-      }
+      const target = resolveRepoFileInWorkspace(
+        git.status?.repoRoot,
+        workspace?.rootPath,
+        repoRelativePath
+      )
+      if (!target) return
       void openWorkspaceFile({
         name: getGitFileBaseName(repoRelativePath),
-        path: fullPath,
-        relativePath,
+        path: target.path,
+        relativePath: target.relativePath,
         kind: 'file'
       })
     },

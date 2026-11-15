@@ -13,6 +13,7 @@ import {
   remapPathPrefix,
   removeFavoriteWorkspace,
   removeRecentWorkspace,
+  resolveRepoFileInWorkspace,
   toggleFavoriteWorkspace
 } from './workspace'
 
@@ -92,5 +93,10 @@ describe('shared workspace path and favorites helpers', () => {
     expect(matchPathSeparators('sub\\a.md', '/repo/root')).toBe('sub/a.md')
     expect(joinWorkspacePath('C:\\wiki\\root\\', 'sub/doc.md')).toBe('C:\\wiki\\root\\sub\\doc.md')
     expect(joinWorkspacePath('/repo/root/', 'sub\\doc.md')).toBe('/repo/root/sub/doc.md')
+    expect(resolveRepoFileInWorkspace('C:/repo', 'C:/repo/sub', 'sub/doc.md')).toEqual({
+      path: 'C:/repo/sub/doc.md',
+      relativePath: 'doc.md'
+    })
+    expect(resolveRepoFileInWorkspace('C:/repo', 'C:/repo/sub', 'other.md')).toBeNull()
   })
 })

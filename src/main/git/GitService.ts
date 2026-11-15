@@ -403,11 +403,7 @@ export class GitService {
         execOptions: {
           env: this.createGitChildEnv(),
           timeoutMs: this.localTimeoutMs,
-          onFailureMeta: (error, cwd, args) => {
-            if (typeof error === 'object' && error !== null) {
-              this.failedExecMeta.set(error, { cwd, args })
-            }
-          }
+          onFailureMeta: this.recordFailedExecMeta
         }
       })
     } catch (error) {
@@ -661,6 +657,12 @@ export class GitService {
     return childEnv
   }
 
+  private recordFailedExecMeta = (error: unknown, cwd: string, args: string[]): void => {
+    if (typeof error === 'object' && error !== null) {
+      this.failedExecMeta.set(error, { cwd, args })
+    }
+  }
+
   private async execGit(
     cwd: string,
     args: readonly string[],
@@ -679,9 +681,7 @@ export class GitService {
       })
       return stdout
     } catch (error) {
-      if (typeof error === 'object' && error !== null) {
-        this.failedExecMeta.set(error, { cwd, args: [...args] })
-      }
+      this.recordFailedExecMeta(error, cwd, [...args])
       throw error
     }
   }
