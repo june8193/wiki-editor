@@ -49,6 +49,13 @@ interface PreviewLineSegment {
   offsetEnd: number
 }
 
+interface NormalizedPreviewLayout {
+  blocks: readonly PreviewSourceBlock[]
+  clientHeight: number
+  scrollHeight: number
+  totalLines?: number
+}
+
 const DEFAULT_GUARD_WINDOW_MS = 150
 const DEFAULT_GUARD_TOLERANCE_PX = 2
 
@@ -97,11 +104,8 @@ function normalizeBlocks(blocks: readonly PreviewSourceBlock[]): PreviewSourceBl
   return normalized
 }
 
-function buildPreviewLineSegments(
-  blocks: readonly PreviewSourceBlock[],
-  scrollHeight: number,
-  totalLines?: number
-): PreviewLineSegment[] {
+function buildPreviewLineSegments(layout: NormalizedPreviewLayout): PreviewLineSegment[] {
+  const { blocks, scrollHeight, totalLines } = layout
   if (blocks.length === 0) return []
 
   const segments: PreviewLineSegment[] = []
@@ -156,15 +160,15 @@ function buildPreviewLineSegments(
   return segments
 }
 
-function mapLineAcrossBlocks(
-  line: number,
-  blocks: readonly PreviewSourceBlock[],
-  clientHeight: number,
-  scrollHeight: number,
-  totalLines?: number
-): number {
-  const maxScrollTop = Math.max(0, scrollHeight - clientHeight)
-  const segments = buildPreviewLineSegments(blocks, scrollHeight, totalLines)
+function mapRawScrollTopToLine(raw: RawScrollGeometry): number {
+  if (raw.scrollTop <= 0) return 1
+  const docY = Math.max(0, raw.scrollTop - raw.paddingTop)
+  return raw.getLineAtOffset(docY)
+}
+
+function mapLineAcrossBlocks(line: number, layout: NormalizedPreviewLayout): number {
+  const maxScrollTop = Math.max(0, layout.scrollHeight - layout.clientHeight)
+  const segments = buildPreviewLineSegments(layout)
   if (segments.length === 0) return 0
 
   for (const seg of segments) {
@@ -180,13 +184,8 @@ function mapLineAcrossBlocks(
   return clamp(segments[segments.length - 1].offsetEnd, 0, maxScrollTop)
 }
 
-function mapOffsetAcrossBlocks(
-  scrollTop: number,
-  blocks: readonly PreviewSourceBlock[],
-  scrollHeight: number,
-  totalLines?: number
-): number {
-  const segments = buildPreviewLineSegments(blocks, scrollHeight, totalLines)
+function mapOffsetAcrossBlocks(scrollTop: number, layout: NormalizedPreviewLayout): number {
+  const segments = buildPreviewLineSegments(layout)
   if (segments.length === 0) return 1
 
   const y = Math.max(0, scrollTop)
@@ -199,19 +198,44 @@ function mapOffsetAcrossBlocks(
   return segments[segments.length - 1].lineEnd
 }
 
-function resolveBoundaryOrFallback(
+function prepareSplitSync(
   sourceTop: number,
   sourceMax: number,
   targetMax: number,
-  blocks: readonly PreviewSourceBlock[]
-): number | null {
-  if (sourceMax <= 0 || targetMax <= 0) return null
-  if (sourceTop <= 0) return 0
-  if (isAtBottomBoundary(sourceTop, sourceMax)) return targetMax
-  if (blocks.length === 0) {
-    return clamp((sourceTop / sourceMax) * targetMax, 0, targetMax)
+  rawPaddingTop: number,
+  preview: Omit<PreviewScrollMetrics, 'scrollTop'>,
+  fallbackTotalLines: number
+):
+  | { kind: 'resolved'; scrollTop: number | null }
+  | { kind: 'interpolate'; layout: NormalizedPreviewLayout; hasTopPaddingBridge: boolean } {
+  if (sourceMax <= 0 || targetMax <= 0) {
+    return { kind: 'resolved', scrollTop: null }
   }
-  return null
+  if (sourceTop <= 0) {
+    return { kind: 'resolved', scrollTop: 0 }
+  }
+  if (isAtBottomBoundary(sourceTop, sourceMax)) {
+    return { kind: 'resolved', scrollTop: targetMax }
+  }
+
+  const blocks = normalizeBlocks(preview.blocks)
+  if (blocks.length === 0) {
+    return {
+      kind: 'resolved',
+      scrollTop: clamp((sourceTop / sourceMax) * targetMax, 0, targetMax)
+    }
+  }
+
+  return {
+    kind: 'interpolate',
+    layout: {
+      blocks,
+      clientHeight: preview.clientHeight,
+      scrollHeight: preview.scrollHeight,
+      totalLines: preview.totalLines ?? fallbackTotalLines
+    },
+    hasTopPaddingBridge: rawPaddingTop > 0 && blocks[0].startLine === 1 && blocks[0].top > 0
+  }
 }
 
 /**
@@ -287,47 +311,12 @@ export function createCodeMirrorRawScrollGeometry(view: EditorView): RawScrollGe
 }
 
 /**
- * Maps Raw `scrollTop` to a fractional 1-based source line number.
- */
-export function mapRawScrollTopToLine(raw: RawScrollGeometry): number {
-  if (raw.scrollTop <= 0) return 1
-  const docY = Math.max(0, raw.scrollTop - raw.paddingTop)
-  return raw.getLineAtOffset(docY)
-}
-
-/**
- * Maps a fractional 1-based source line number to a clamped Raw `scrollTop` offset.
+ * Maps a 1-based fractional source line to a clamped Raw `scrollTop` offset (preserving `paddingTop`).
  */
 export function mapLineToRawScrollTop(line: number, raw: RawScrollGeometry): number {
   const maxScrollTop = Math.max(0, raw.scrollHeight - raw.clientHeight)
-  if (line <= 1 || maxScrollTop <= 0) return 0
+  if (maxScrollTop <= 0) return 0
   return clamp(raw.paddingTop + raw.getOffsetForLine(line), 0, maxScrollTop)
-}
-
-/**
- * Maps a fractional 1-based source line number to a clamped Preview `scrollTop` offset
- * by linearly interpolating across `[data-source-line]` blocks and inter-block gaps.
- */
-export function mapLineToPreviewScrollTop(
-  line: number,
-  preview: Omit<PreviewScrollMetrics, 'scrollTop'>
-): number {
-  const blocks = normalizeBlocks(preview.blocks)
-  return mapLineAcrossBlocks(
-    line,
-    blocks,
-    preview.clientHeight,
-    preview.scrollHeight,
-    preview.totalLines
-  )
-}
-
-/**
- * Inverse-interpolates Preview `scrollTop` to a fractional 1-based source line number.
- */
-export function mapPreviewScrollTopToLine(preview: PreviewScrollMetrics): number {
-  const blocks = normalizeBlocks(preview.blocks)
-  return mapOffsetAcrossBlocks(preview.scrollTop, blocks, preview.scrollHeight, preview.totalLines)
 }
 
 /**
@@ -340,29 +329,25 @@ export function computePreviewScrollTopFromRaw(
 ): number | null {
   const rawMax = Math.max(0, raw.scrollHeight - raw.clientHeight)
   const previewMax = Math.max(0, preview.scrollHeight - preview.clientHeight)
-  const blocks = normalizeBlocks(preview.blocks)
-  const boundaryOrFallback = resolveBoundaryOrFallback(raw.scrollTop, rawMax, previewMax, blocks)
-  if (boundaryOrFallback !== null || rawMax <= 0 || previewMax <= 0) {
-    return boundaryOrFallback
-  }
-
-  if (
-    raw.paddingTop > 0 &&
-    raw.scrollTop < raw.paddingTop &&
-    blocks[0].startLine === 1 &&
-    blocks[0].top > 0
-  ) {
-    return clamp(interpolateLinear(raw.scrollTop, 0, raw.paddingTop, 0, blocks[0].top), 0, previewMax)
-  }
-
-  const line = mapRawScrollTopToLine(raw)
-  return mapLineAcrossBlocks(
-    line,
-    blocks,
-    preview.clientHeight,
-    preview.scrollHeight,
-    preview.totalLines ?? raw.totalLines
+  const prep = prepareSplitSync(
+    raw.scrollTop,
+    rawMax,
+    previewMax,
+    raw.paddingTop,
+    preview,
+    raw.totalLines
   )
+  if (prep.kind === 'resolved') return prep.scrollTop
+
+  if (prep.hasTopPaddingBridge && raw.scrollTop < raw.paddingTop) {
+    return clamp(
+      interpolateLinear(raw.scrollTop, 0, raw.paddingTop, 0, prep.layout.blocks[0].top),
+      0,
+      previewMax
+    )
+  }
+
+  return mapLineAcrossBlocks(mapRawScrollTopToLine(raw), prep.layout)
 }
 
 /**
@@ -375,27 +360,25 @@ export function computeRawScrollTopFromPreview(
 ): number | null {
   const previewMax = Math.max(0, preview.scrollHeight - preview.clientHeight)
   const rawMax = Math.max(0, raw.scrollHeight - raw.clientHeight)
-  const blocks = normalizeBlocks(preview.blocks)
-  const boundaryOrFallback = resolveBoundaryOrFallback(preview.scrollTop, previewMax, rawMax, blocks)
-  if (boundaryOrFallback !== null || previewMax <= 0 || rawMax <= 0) {
-    return boundaryOrFallback
-  }
-
-  if (
-    raw.paddingTop > 0 &&
-    blocks[0].startLine === 1 &&
-    blocks[0].top > 0 &&
-    preview.scrollTop < blocks[0].top
-  ) {
-    return clamp(interpolateLinear(preview.scrollTop, 0, blocks[0].top, 0, raw.paddingTop), 0, rawMax)
-  }
-
-  const line = mapOffsetAcrossBlocks(
+  const prep = prepareSplitSync(
     preview.scrollTop,
-    blocks,
-    preview.scrollHeight,
-    preview.totalLines ?? raw.totalLines
+    previewMax,
+    rawMax,
+    raw.paddingTop,
+    preview,
+    raw.totalLines
   )
+  if (prep.kind === 'resolved') return prep.scrollTop
+
+  if (prep.hasTopPaddingBridge && preview.scrollTop < prep.layout.blocks[0].top) {
+    return clamp(
+      interpolateLinear(preview.scrollTop, 0, prep.layout.blocks[0].top, 0, raw.paddingTop),
+      0,
+      rawMax
+    )
+  }
+
+  const line = mapOffsetAcrossBlocks(preview.scrollTop, prep.layout)
   return mapLineToRawScrollTop(line, raw)
 }
 

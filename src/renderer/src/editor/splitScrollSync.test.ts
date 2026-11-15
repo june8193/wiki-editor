@@ -4,8 +4,6 @@ import {
   computePreviewScrollTopFromRaw,
   computeRawScrollTopFromPreview,
   createScrollSyncLoopGuard,
-  mapLineToPreviewScrollTop,
-  mapPreviewScrollTopToLine,
   type PreviewSourceBlock,
   type RawScrollGeometry
 } from './splitScrollSync'
@@ -90,6 +88,12 @@ describe('splitScrollSync bidirectional line-based interpolation & loop guard', 
 
     const previewAtBottom = { ...previewMetrics, scrollTop: 532 }
     expect(computeRawScrollTopFromPreview(previewAtBottom, rawAtTop)).toBe(320)
+
+    // Top-padding bridge remains continuous across scrollTop = 0 .. paddingTop (16) -> blocks[0].top (16)
+    expect(computePreviewScrollTopFromRaw({ ...rawAtTop, scrollTop: 8 }, previewMetrics)).toBe(8)
+    expect(computeRawScrollTopFromPreview({ ...previewMetrics, scrollTop: 8 }, rawAtTop)).toBe(8)
+    expect(computePreviewScrollTopFromRaw({ ...rawAtTop, scrollTop: 16 }, previewMetrics)).toBe(16)
+    expect(computeRawScrollTopFromPreview({ ...previewMetrics, scrollTop: 16 }, rawAtTop)).toBe(16)
   })
 
   it('linearly interpolates within multi-line blocks and inter-block gaps bidirectionally', () => {
@@ -133,24 +137,23 @@ describe('splitScrollSync bidirectional line-based interpolation & loop guard', 
     const delayedBlocks: readonly PreviewSourceBlock[] = [
       { startLine: 5, endLine: 6, top: 40, height: 60 }
     ]
-    // Between line 1 (y=0) and line 5 (y=40), line 3 is 50% -> y = 20
-    expect(
-      mapLineToPreviewScrollTop(3, {
-        clientHeight: 200,
-        scrollHeight: 600,
-        blocks: delayedBlocks,
-        totalLines: 10
-      })
-    ).toBe(20)
-    expect(
-      mapPreviewScrollTopToLine({
-        scrollTop: 20,
-        clientHeight: 200,
-        scrollHeight: 600,
-        blocks: delayedBlocks,
-        totalLines: 10
-      })
-    ).toBe(3)
+    // Between line 1 (y=0) and line 5 (y=40), line 3 (raw scrollTop = 40 at 20px/line) is 50% -> y = 20
+    const delayedRaw = createUniformRawScrollGeometry({
+      scrollTop: 40,
+      clientHeight: 200,
+      scrollHeight: 600,
+      lineHeight: 20,
+      totalLines: 10
+    })
+    const delayedPreview = {
+      scrollTop: 20,
+      clientHeight: 200,
+      scrollHeight: 600,
+      blocks: delayedBlocks,
+      totalLines: 10
+    }
+    expect(computePreviewScrollTopFromRaw(delayedRaw, delayedPreview)).toBe(20)
+    expect(computeRawScrollTopFromPreview(delayedPreview, delayedRaw)).toBe(40)
 
     // Unscrollable region (scrollHeight <= clientHeight) returns null so jsdom/short docs don't jump
     const unscrollableRaw = createUniformRawScrollGeometry({

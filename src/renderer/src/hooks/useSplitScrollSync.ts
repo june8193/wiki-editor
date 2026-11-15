@@ -7,9 +7,11 @@ import {
   computePreviewScrollTopFromRaw,
   computeRawScrollTopFromPreview,
   createCodeMirrorRawScrollGeometry,
-  createScrollSyncLoopGuard
+  createScrollSyncLoopGuard,
+  mapLineToRawScrollTop
 } from '../editor/splitScrollSync'
 import type { EditorMode } from '../stores/PaneTabStore'
+import { useOneShotScroll } from './useOneShotScroll'
 
 export interface SplitOutlineJumpRequest {
   line: number
@@ -112,23 +114,20 @@ export function useSplitScrollSync({
     }
   }, [effectiveMode, matchedScrollRequest, syncSplitScroll])
 
-  useEffect(() => {
-    if (effectiveMode !== 'split' || !matchedScrollRequest) return
+  useOneShotScroll(matchedScrollRequest, effectiveMode === 'split', (req) => {
     const view = rawEditorViewRef.current
     const previewEl = splitPreviewContainerRef.current
-    if (!view || !previewEl) return
+    if (!view || !previewEl) return false
 
     const guard = getScrollSyncGuard()
     guard.markProgrammaticScroll('preview', previewEl.scrollTop)
 
     const rawGeometry = createCodeMirrorRawScrollGeometry(view)
-    const rawMax = Math.max(0, rawGeometry.scrollHeight - rawGeometry.clientHeight)
-    const rawOffset =
-      rawGeometry.paddingTop + rawGeometry.getOffsetForLine(matchedScrollRequest.line)
-    const expectedRawScrollTop = rawMax > 0 ? Math.min(rawMax, rawOffset) : 0
+    const expectedRawScrollTop = mapLineToRawScrollTop(req.line, rawGeometry)
     // CodeMirror scrollIntoView({ y: 'start' }) subtracts a 5px yMargin before clamping to [0, rawMax].
     guard.markProgrammaticScroll('raw', expectedRawScrollTop, 6)
-  }, [effectiveMode, getScrollSyncGuard, matchedScrollRequest])
+    return true
+  })
 
   return {
     rawEditorViewRef,
