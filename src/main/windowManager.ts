@@ -379,19 +379,13 @@ export class WindowManager {
     }
   }
 
-  private hasCloseGuardDirtyBuffers(record: WindowRecord): boolean {
-    return record.role === 'main'
-      ? this.bufferHub.hasAnyDirtyBuffer()
-      : this.bufferHub.getDirtyBuffersLostOnWindowClose(record.webContentsId).length > 0
-  }
-
   private handleWindowClose(record: WindowRecord, event: WindowCloseEventLike): void {
     if (this.disposed || record.closing) return
     if (record.closePromptPending) {
       event.preventDefault()
       return
     }
-    if (!this.hasCloseGuardDirtyBuffers(record)) {
+    if (!this.bufferHub.hasDirtyBuffersForWindowClose(record.role, record.webContentsId)) {
       if (record.role === 'main') {
         record.closing = true
         this.closeAllAuxiliaryWindows()

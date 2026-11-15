@@ -1,12 +1,12 @@
-import { useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useRef } from 'react'
 import type { WikiApi } from '@shared/ipc'
-import type { ConfirmDialogState } from './useConfirmDialog'
+import type { UnsavedChangesDialogRequest } from './useConfirmDialog'
 
 export interface UseWindowCloseGuardOptions {
   wikiApi: WikiApi
   getDirtySummary: () => string | null
   saveDirtyBuffers: () => Promise<boolean>
-  setPendingDialog: Dispatch<SetStateAction<ConfirmDialogState | null>>
+  confirmUnsavedChanges: (request: UnsavedChangesDialogRequest) => () => void
   onBeforeShowDialog?: () => void
 }
 
@@ -18,7 +18,7 @@ export function useWindowCloseGuard({
   wikiApi,
   getDirtySummary,
   saveDirtyBuffers,
-  setPendingDialog,
+  confirmUnsavedChanges,
   onBeforeShowDialog
 }: UseWindowCloseGuardOptions): void {
   const callbacksRef = useRef({
@@ -49,30 +49,15 @@ export function useWindowCloseGuard({
       activeCancelRef.current?.()
       callbacksRef.current.onBeforeShowDialog?.()
 
-      let settled = false
-      const settle = (approved: boolean): void => {
-        if (settled) return
-        settled = true
-        activeCancelRef.current = null
-        void windowApi.resolveCloseRequest(approved).catch(() => undefined)
-      }
-      activeCancelRef.current = () => settle(false)
-
-      setPendingDialog({
-        title: '저장하지 않은 변경 사항',
+      activeCancelRef.current = confirmUnsavedChanges({
         message: `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. 저장하고 닫을까요?`,
         confirmLabel: '저장 후 닫기',
         secondaryLabel: '버리고 닫기',
-        onConfirm: async () => {
-          setPendingDialog(null)
-          const saved = await callbacksRef.current.saveDirtyBuffers()
-          settle(saved)
-        },
-        onSecondary: () => {
-          setPendingDialog(null)
-          settle(true)
-        },
-        onCancel: () => settle(false)
+        onSave: () => callbacksRef.current.saveDirtyBuffers(),
+        onResolve: (approved) => {
+          activeCancelRef.current = null
+          void windowApi.resolveCloseRequest(approved).catch(() => undefined)
+        }
       })
     })
 
@@ -80,5 +65,5 @@ export function useWindowCloseGuard({
       activeCancelRef.current?.()
       unsubscribe()
     }
-  }, [setPendingDialog, wikiApi])
+  }, [confirmUnsavedChanges, wikiApi])
 }

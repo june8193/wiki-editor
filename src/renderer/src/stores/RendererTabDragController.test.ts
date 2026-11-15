@@ -79,31 +79,47 @@ function createDragControllerHarness(windowApi: WikiWindowApi) {
   return { hub, bufferApi, tabStore, syncClient, controller, onError, start }
 }
 
+function createMockWindowApi(overrides: Partial<WikiWindowApi> = {}): WikiWindowApi {
+  return {
+    role: 'main',
+    getInitContext: async () => ({ role: 'main', initialTabs: [] }),
+    detachTabToNewWindow: async () => ({ windowId: 2 }),
+    startTabDrag: async (input) => ({
+      dragSessionId: 'drag-1',
+      sourceWindowId: 1,
+      paneId: input.paneId,
+      tabId: input.tabId,
+      payload: input.payload,
+      outcome: 'pending'
+    }),
+    updateTabDragOutcome: async () => null,
+    acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
+    endTabDrag: async () => ({ detached: false, outcome: 'cancelled' }),
+    onTabDragStateChanged: () => () => undefined,
+    closeCurrent: async () => undefined,
+    onCloseRequested: () => () => undefined,
+    resolveCloseRequest: async () => undefined,
+    ...overrides
+  }
+}
+
 describe('RendererTabDragController', () => {
   it('handles sync-before-async Escape cancellation without detaching or closing the tab', async () => {
     const startGate = createDeferred<ActiveTabDragSession>()
     const outcomeUpdates: Array<{ dragSessionId: string; outcome: TabDragResolution }> = []
     const endInputs: TabDragEndInput[] = []
 
-    const windowApi: WikiWindowApi = {
-      role: 'main',
-      getInitContext: async () => ({ role: 'main', initialTabs: [] }),
-      detachTabToNewWindow: async () => ({ windowId: 2 }),
+    const windowApi = createMockWindowApi({
       startTabDrag: async (_input: TabDragStartInput) => startGate.promise,
       updateTabDragOutcome: async (dragSessionId, outcome) => {
         outcomeUpdates.push({ dragSessionId, outcome })
         return null
       },
-      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
       endTabDrag: async (input) => {
         endInputs.push(input)
         return { detached: false, outcome: 'cancelled' } satisfies TabDragEndResult
-      },
-      onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined,
-      onCloseRequested: () => () => undefined,
-      resolveCloseRequest: async () => undefined
-    }
+      }
+    })
 
     const { tabStore, syncClient, controller, start } = createDragControllerHarness(windowApi)
     const cleanup = start()
@@ -150,10 +166,7 @@ describe('RendererTabDragController', () => {
   it('flushes dirty edits to hub before endDrag detaches and closes local tab only on success', async () => {
     let hubRef!: SharedDocumentBufferHub
     const endPayloads: TabDragEndInput[] = []
-    const windowApi: WikiWindowApi = {
-      role: 'main',
-      getInitContext: async () => ({ role: 'main', initialTabs: [] }),
-      detachTabToNewWindow: async () => ({ windowId: 2 }),
+    const windowApi = createMockWindowApi({
       startTabDrag: async (input) => ({
         dragSessionId: 'drag-dirty-1',
         sourceWindowId: 1,
@@ -162,18 +175,12 @@ describe('RendererTabDragController', () => {
         payload: input.payload,
         outcome: 'pending'
       }),
-      updateTabDragOutcome: async () => null,
-      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
       endTabDrag: async (input) => {
         endPayloads.push(input)
         hubRef.registerPendingTransfer(2, input.payload!.bufferKey)
         return { detached: true, windowId: 2 }
-      },
-      onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined,
-      onCloseRequested: () => () => undefined,
-      resolveCloseRequest: async () => undefined
-    }
+      }
+    })
 
     const { hub, bufferApi, tabStore, syncClient, controller, start } =
       createDragControllerHarness(windowApi)
@@ -213,10 +220,7 @@ describe('RendererTabDragController', () => {
   it('aborts detach, surfaces error, and preserves dirty tab when buffer sync fails during endDrag', async () => {
     const outcomeUpdates: Array<{ dragSessionId: string; outcome: TabDragResolution }> = []
     const endCalls: TabDragEndInput[] = []
-    const windowApi: WikiWindowApi = {
-      role: 'main',
-      getInitContext: async () => ({ role: 'main', initialTabs: [] }),
-      detachTabToNewWindow: async () => ({ windowId: 2 }),
+    const windowApi = createMockWindowApi({
       startTabDrag: async (input) => ({
         dragSessionId: 'drag-sync-fail',
         sourceWindowId: 1,
@@ -229,16 +233,11 @@ describe('RendererTabDragController', () => {
         outcomeUpdates.push({ dragSessionId, outcome })
         return null
       },
-      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
       endTabDrag: async (input) => {
         endCalls.push(input)
         return { detached: false, outcome: 'cancelled' }
-      },
-      onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined,
-      onCloseRequested: () => () => undefined,
-      resolveCloseRequest: async () => undefined
-    }
+      }
+    })
 
     const { bufferApi, tabStore, syncClient, controller, onError, start } =
       createDragControllerHarness(windowApi)
@@ -277,10 +276,7 @@ describe('RendererTabDragController', () => {
     const endCalls: TabDragEndInput[] = []
     let counter = 0
 
-    const windowApi: WikiWindowApi = {
-      role: 'main',
-      getInitContext: async () => ({ role: 'main', initialTabs: [] }),
-      detachTabToNewWindow: async () => ({ windowId: 2 }),
+    const windowApi = createMockWindowApi({
       startTabDrag: async (input) => ({
         dragSessionId: `drag-${++counter}`,
         sourceWindowId: 1,
@@ -293,16 +289,11 @@ describe('RendererTabDragController', () => {
         outcomeUpdates.push({ dragSessionId, outcome })
         return null
       },
-      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
       endTabDrag: async (input) => {
         endCalls.push(input)
         return { detached: false, outcome: 'dropped-in-window' }
-      },
-      onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined,
-      onCloseRequested: () => () => undefined,
-      resolveCloseRequest: async () => undefined
-    }
+      }
+    })
 
     const { tabStore, syncClient, controller, start } = createDragControllerHarness(windowApi)
     const cleanup = start()
@@ -349,10 +340,7 @@ describe('RendererTabDragController', () => {
       reason: 'no-active-drag'
     }
 
-    const targetWindowApi: WikiWindowApi = {
-      role: 'main',
-      getInitContext: async () => ({ role: 'main', initialTabs: [] }),
-      detachTabToNewWindow: async () => ({ windowId: 2 }),
+    const targetWindowApi = createMockWindowApi({
       startTabDrag: async (input) => ({
         dragSessionId: 'drag-target-own',
         sourceWindowId: 1,
@@ -361,7 +349,6 @@ describe('RendererTabDragController', () => {
         payload: input.payload,
         outcome: 'pending'
       }),
-      updateTabDragOutcome: async () => null,
       acceptTabDragDrop: async () => acceptResult,
       endTabDrag: async (input) => {
         endCalls.push(input)
@@ -370,11 +357,8 @@ describe('RendererTabDragController', () => {
       onTabDragStateChanged: (listener) => {
         dragListeners.add(listener)
         return () => dragListeners.delete(listener)
-      },
-      closeCurrent: async () => undefined,
-      onCloseRequested: () => () => undefined,
-      resolveCloseRequest: async () => undefined
-    }
+      }
+    })
 
     const { hub, tabStore, syncClient, controller, start } =
       createDragControllerHarness(targetWindowApi)

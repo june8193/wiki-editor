@@ -694,9 +694,17 @@ export class RendererBufferSyncClient {
     return this.windowApi?.role === 'auxiliary' ? 'exclusive-window-close' : 'all-windows-close'
   }
 
+  private hasLocalPendingState(key: string): boolean {
+    return (
+      (this.pendingLocalEditCounts.get(key) ?? 0) > 0 ||
+      this.unsyncedLocalKeys.has(key) ||
+      this.creatingKeys.has(key)
+    )
+  }
+
   private getScopeCandidates(
     scope: DirtyBufferScope
-  ): Array<{ key: string; buffer: DocumentBuffer; hasPendingLocal: boolean }> {
+  ): Array<{ key: string; buffer: DocumentBuffer }> {
     const localSnapshot = this.bufferStore.getSnapshot()
     const candidateKeys = new Set<string>()
     for (const rawKey of [
@@ -707,15 +715,11 @@ export class RendererBufferSyncClient {
       candidateKeys.add(this.resolveLatestKey(rawKey))
     }
 
-    const candidates: Array<{ key: string; buffer: DocumentBuffer; hasPendingLocal: boolean }> = []
+    const candidates: Array<{ key: string; buffer: DocumentBuffer }> = []
     for (const key of candidateKeys) {
       const localBuf = localSnapshot[key]
       const hubBuf = this.latestHubBuffers[key]
-      const hasPendingLocal =
-        (this.pendingLocalEditCounts.get(key) ?? 0) > 0 ||
-        this.unsyncedLocalKeys.has(key) ||
-        this.creatingKeys.has(key) ||
-        this.hasPendingUpdatesForKey(key)
+      const hasPendingLocal = this.hasLocalPendingState(key) || this.hasPendingUpdatesForKey(key)
       const buffer = hasPendingLocal && localBuf ? localBuf : (hubBuf ?? localBuf)
       if (!buffer) continue
 
@@ -727,20 +731,14 @@ export class RendererBufferSyncClient {
         }
       }
 
-      candidates.push({ key, buffer, hasPendingLocal })
+      candidates.push({ key, buffer })
     }
     return candidates
   }
 
   private getDirtySummaryForScope(scope: DirtyBufferScope): string | null {
     const dirty = this.getScopeCandidates(scope)
-      .filter(
-        ({ key, buffer }) =>
-          buffer.isDirty ||
-          this.unsyncedLocalKeys.has(key) ||
-          this.creatingKeys.has(key) ||
-          (this.pendingLocalEditCounts.get(key) ?? 0) > 0
-      )
+      .filter(({ key, buffer }) => buffer.isDirty || this.hasLocalPendingState(key))
       .map(({ buffer }) => buffer)
     if (dirty.length === 0) return null
     if (dirty.length === 1) return dirty[0].name

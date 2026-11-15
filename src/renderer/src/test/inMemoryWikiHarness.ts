@@ -441,11 +441,7 @@ export function createMultiWindowWikiHarness(
 
     const requestCloseWindow = (): void => {
       if (destroyed || closing || closePromptPending) return
-      const hasDirty =
-        role === 'main'
-          ? hub.hasAnyDirtyBuffer()
-          : hub.getDirtyBuffersLostOnWindowClose(windowId).length > 0
-      if (!hasDirty) {
+      if (!hub.hasDirtyBuffersForWindowClose(role, windowId)) {
         forceCloseWindow()
         return
       }

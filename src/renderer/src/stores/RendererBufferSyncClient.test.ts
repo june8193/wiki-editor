@@ -68,6 +68,33 @@ function createHubClientHarness(windowId = 1, windowApi?: WikiWindowApi) {
   return { hub, files, ...attachWindowClient(hub, windowId, windowApi) }
 }
 
+function createMockWindowApi(
+  role: 'main' | 'auxiliary' = 'main',
+  overrides: Partial<WikiWindowApi> = {}
+): WikiWindowApi {
+  return {
+    role,
+    getInitContext: async () => ({ role, initialTabs: [] }),
+    detachTabToNewWindow: async () => ({ windowId: 99 }),
+    startTabDrag: async (input) => ({
+      dragSessionId: 'drag-1',
+      sourceWindowId: 1,
+      paneId: input.paneId,
+      tabId: input.tabId,
+      payload: input.payload,
+      outcome: 'pending'
+    }),
+    updateTabDragOutcome: async () => null,
+    acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
+    endTabDrag: async () => ({ detached: false, outcome: 'cancelled' }),
+    onTabDragStateChanged: () => () => undefined,
+    closeCurrent: async () => undefined,
+    onCloseRequested: () => () => undefined,
+    resolveCloseRequest: async () => undefined,
+    ...overrides
+  }
+}
+
 describe('RendererBufferSyncClient race guards', () => {
   it('does not re-insert a closed buffer into local bufferStore when an in-flight updateContent settles', async () => {
     const { hub, bufferApi, bufferStore, tabStore, client } = createHubClientHarness(1)
@@ -232,30 +259,13 @@ describe('RendererBufferSyncClient race guards', () => {
   it('re-pushes unsynced local edits after an earlier updateContent failure before detaching a tab', async () => {
     const detachTabCalls: unknown[] = []
     let hubRef!: SharedDocumentBufferHub
-    const windowApi: WikiWindowApi = {
-      role: 'main',
-      getInitContext: async () => ({ role: 'main', initialTabs: [] }),
+    const windowApi = createMockWindowApi('main', {
       detachTabToNewWindow: async (payload) => {
         detachTabCalls.push(payload)
         hubRef.registerPendingTransfer(2, payload.bufferKey)
         return { windowId: 2 }
-      },
-      startTabDrag: async (input) => ({
-        dragSessionId: 'drag-1',
-        sourceWindowId: 1,
-        paneId: input.paneId,
-        tabId: input.tabId,
-        payload: input.payload,
-        outcome: 'pending'
-      }),
-      updateTabDragOutcome: async () => null,
-      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
-      endTabDrag: async () => ({ detached: false, outcome: 'cancelled' }),
-      onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined,
-      onCloseRequested: () => () => undefined,
-      resolveCloseRequest: async () => undefined
-    }
+      }
+    })
     const { hub, bufferApi, bufferStore, tabStore, client, onError } = createHubClientHarness(
       1,
       windowApi
@@ -519,29 +529,8 @@ describe('RendererBufferSyncClient race guards', () => {
       }
     })
 
-    const createWindowApi = (role: 'main' | 'auxiliary'): WikiWindowApi => ({
-      role,
-      getInitContext: async () => ({ role, initialTabs: [] }),
-      detachTabToNewWindow: async () => ({ windowId: 99 }),
-      startTabDrag: async (input) => ({
-        dragSessionId: 'drag-1',
-        sourceWindowId: 1,
-        paneId: input.paneId,
-        tabId: input.tabId,
-        payload: input.payload,
-        outcome: 'pending'
-      }),
-      updateTabDragOutcome: async () => null,
-      acceptTabDragDrop: async () => ({ accepted: false, reason: 'no-active-drag' }),
-      endTabDrag: async () => ({ detached: false, outcome: 'cancelled' }),
-      onTabDragStateChanged: () => () => undefined,
-      closeCurrent: async () => undefined,
-      onCloseRequested: () => () => undefined,
-      resolveCloseRequest: async () => undefined
-    })
-
-    const win1 = attachWindowClient(hub, 1, createWindowApi('main'))
-    const win2 = attachWindowClient(hub, 2, createWindowApi('auxiliary'))
+    const win1 = attachWindowClient(hub, 1, createMockWindowApi('main'))
+    const win2 = attachWindowClient(hub, 2, createMockWindowApi('auxiliary'))
     const stop1 = win1.client.start()
     const stop2 = win2.client.start()
 

@@ -62,7 +62,8 @@ export function MainAppShell() {
     setPendingDialog,
     dismissDialog,
     isDialogOpenRef,
-    confirmCloseDirtyTab
+    confirmCloseDirtyTab,
+    confirmUnsavedChanges
   } = useConfirmDialog()
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
@@ -215,7 +216,7 @@ export function MainAppShell() {
     wikiApi,
     getDirtySummary: editor.getDirtyCloseSummary,
     saveDirtyBuffers: editor.ensureCloseBuffersSaved,
-    setPendingDialog,
+    confirmUnsavedChanges,
     onBeforeShowDialog: () => pendingGitConfirmCancelRef.current?.()
   })
 
@@ -232,34 +233,23 @@ export function MainAppShell() {
       }
 
       return new Promise<boolean>((resolve) => {
-        let settled = false
-        const finish = (accepted: boolean): void => {
-          if (settled) return
-          settled = true
-          pendingGitConfirmCancelRef.current = null
-          resolve(accepted)
-        }
-        pendingGitConfirmCancelRef.current = () => finish(false)
-
-        setPendingDialog({
-          title: '저장하지 않은 변경 사항',
+        pendingGitConfirmCancelRef.current = confirmUnsavedChanges({
           message: options.message(dirtySummary),
           confirmLabel: options.confirmLabel,
           secondaryLabel: options.secondaryLabel,
-          onConfirm: async () => {
-            setPendingDialog(null)
-            const saved = await ensureAllWorkspaceBuffersSaved()
-            finish(saved)
-          },
-          onSecondary: () => {
-            setPendingDialog(null)
-            finish(true)
-          },
-          onCancel: () => finish(false)
+          onSave: ensureAllWorkspaceBuffersSaved,
+          onResolve: (accepted) => {
+            pendingGitConfirmCancelRef.current = null
+            resolve(accepted)
+          }
         })
       })
     },
-    [ensureAllWorkspaceBuffersSaved, getDirtyWorkspaceSummary, setPendingDialog]
+    [
+      confirmUnsavedChanges,
+      ensureAllWorkspaceBuffersSaved,
+      getDirtyWorkspaceSummary
+    ]
   )
 
   const confirmDirtyBuffersBeforeGitMutation = useCallback(

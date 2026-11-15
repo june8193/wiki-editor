@@ -14,6 +14,7 @@ import {
 } from './documentBuffer'
 import { createDocumentBuffer, DocumentBufferStore } from './documentBufferStore'
 import { toErrorMessage } from './errors'
+import type { WindowRole } from './window'
 import { type TabCountChange, WindowTabTracker } from './windowTabTracker'
 import { getWorkspaceDisplayName, getWorkspacePathKey } from './workspace'
 
@@ -121,6 +122,13 @@ export class SharedDocumentBufferHub {
           !this.tabTracker.hasOtherWindowReference(buffer.key, windowId)
       )
       .map((buffer) => ({ ...buffer }))
+  }
+
+  /** Returns whether closing a window of `role` requires an unsaved-changes close confirmation. */
+  hasDirtyBuffersForWindowClose(role: WindowRole, windowId: number): boolean {
+    return role === 'main'
+      ? this.hasAnyDirtyBuffer()
+      : this.getDirtyBuffersLostOnWindowClose(windowId).length > 0
   }
 
   registerPendingTransfer(windowId: number, pathOrKey: string): void {

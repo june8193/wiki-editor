@@ -11,8 +11,16 @@ export interface ConfirmDialogState {
   onCancel?: () => void
 }
 
+export interface UnsavedChangesDialogRequest {
+  message: string
+  confirmLabel: string
+  secondaryLabel: string
+  onSave: () => Promise<boolean>
+  onResolve: (approved: boolean) => void
+}
+
 /**
- * Manages the window's confirm dialog state and unsaved tab close confirmation flow.
+ * Manages the window's confirm dialog state and unsaved close/action confirmation flows.
  */
 export function useConfirmDialog() {
   const [pendingDialog, setPendingDialog] = useState<ConfirmDialogState | null>(null)
@@ -40,11 +48,40 @@ export function useConfirmDialog() {
     })
   }, [])
 
+  const confirmUnsavedChanges = useCallback((request: UnsavedChangesDialogRequest): (() => void) => {
+    let settled = false
+    const settle = (approved: boolean): void => {
+      if (settled) return
+      settled = true
+      request.onResolve(approved)
+    }
+
+    setPendingDialog({
+      title: '저장하지 않은 변경 사항',
+      message: request.message,
+      confirmLabel: request.confirmLabel,
+      secondaryLabel: request.secondaryLabel,
+      onConfirm: async () => {
+        setPendingDialog(null)
+        const saved = await request.onSave()
+        settle(saved)
+      },
+      onSecondary: () => {
+        setPendingDialog(null)
+        settle(true)
+      },
+      onCancel: () => settle(false)
+    })
+
+    return () => settle(false)
+  }, [])
+
   return {
     pendingDialog,
     setPendingDialog,
     dismissDialog,
     isDialogOpenRef,
-    confirmCloseDirtyTab
+    confirmCloseDirtyTab,
+    confirmUnsavedChanges
   }
 }

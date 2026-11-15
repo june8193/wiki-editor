@@ -16,7 +16,8 @@ import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 export function AuxiliaryAppShell() {
   const wikiApi = useWikiApi()
   const { errorMessage, reportErrorBanner } = useErrorBanner()
-  const { pendingDialog, setPendingDialog, dismissDialog, confirmCloseDirtyTab } = useConfirmDialog()
+  const { pendingDialog, dismissDialog, confirmCloseDirtyTab, confirmUnsavedChanges } =
+    useConfirmDialog()
   const { config, toggleShowHeadingNumbers } = useConfigController({
     onError: reportErrorBanner
   })
@@ -32,7 +33,7 @@ export function AuxiliaryAppShell() {
     wikiApi,
     getDirtySummary: editor.getDirtyCloseSummary,
     saveDirtyBuffers: editor.ensureCloseBuffersSaved,
-    setPendingDialog
+    confirmUnsavedChanges
   })
 
   useEffect(() => {
