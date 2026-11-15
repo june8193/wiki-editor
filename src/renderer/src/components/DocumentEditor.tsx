@@ -29,7 +29,6 @@ interface DocumentEditorProps {
   tab: DocumentTabItem
   theme: ThemeMode
   autoSave: boolean
-  showHeadingNumbers?: boolean
   customCommands?: readonly CustomCommandConfig[]
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: OutlineScrollRequest | null
@@ -60,7 +59,6 @@ export function DocumentEditor({
   tab,
   theme,
   autoSave,
-  showHeadingNumbers = true,
   customCommands,
   mermaidRenderer,
   scrollRequest = null,
@@ -265,7 +263,6 @@ export function DocumentEditor({
           content={activeDoc.content}
           scrollTop={tab.scrollTop}
           theme={theme}
-          showHeadingNumbers={showHeadingNumbers}
           enableLinkAutocomplete={allowRichModes}
           isShortcutDisabled={isShortcutDisabled}
           customCommands={customCommands}
@@ -291,7 +288,6 @@ export function DocumentEditor({
           content={activeDoc.content}
           scrollTop={tab.scrollTop}
           theme={theme}
-          showHeadingNumbers={showHeadingNumbers}
           mermaidRenderer={mermaidRenderer}
           scrollRequest={previewScrollRequest}
           isActive={isActive}
@@ -323,7 +319,6 @@ export function DocumentEditor({
               content={activeDoc.content}
               scrollTop={0}
               theme={theme}
-              showHeadingNumbers={showHeadingNumbers}
               mermaidRenderer={mermaidRenderer}
               scrollRequest={previewScrollRequest}
               isActive={isActive}

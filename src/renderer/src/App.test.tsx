@@ -2771,7 +2771,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
   })
 
-  it('updates sidebar Outline ignoring code fences, toggles showHeadingNumbers cleanly with persistence, and scrolls to headings across modes', async () => {
+  it('updates sidebar Outline ignoring code fences, toggles showHeadingNumbers only for Outline with persistence, and scrolls to headings across modes', async () => {
     const user = userEvent.setup()
     const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
 
@@ -2821,11 +2821,11 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         )
       })
 
-      // Switch to Preview mode and verify dynamic heading numbers + one-shot click-to-scroll
+      // Preview renders source headings without dynamic numbering even when showHeadingNumbers is true
       const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
       await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
       const setupHeading = screen.getByRole('heading', { level: 2, name: 'Setup' })
-      expect(setupHeading.textContent).toBe('1.1. Setup')
+      expect(setupHeading.textContent).toBe('Setup')
 
       scrollIntoViewMock.mockClear()
       await user.click(within(items[2]).getByRole('button'))
@@ -2833,16 +2833,20 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
       expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
 
-      // Toggle showHeadingNumbers off via Outline button -> hides numbers without dirtying buffer or re-scrolling
-      await user.click(within(outline).getByRole('button', { name: '헤딩 번호 표시' }))
+      // Toggle "목차 번호 표시" off via Outline button -> hides numbers in Outline only without dirtying buffer or re-scrolling
+      const outlineToggleBtn = within(outline).getByRole('button', { name: '목차 번호 표시' })
+      expect(outlineToggleBtn).toHaveAttribute('aria-pressed', 'true')
+      await user.click(outlineToggleBtn)
+      expect(outlineToggleBtn).toHaveAttribute('aria-pressed', 'false')
       expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
       expect(screen.getByRole('heading', { level: 2, name: 'Setup' }).textContent).toBe('Setup')
       expect(within(outline).queryByText('1.1.')).not.toBeInTheDocument()
       expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
       expect(getFilesSnapshot().get('C:/wiki/outline/guide.md')).toBe(guideDoc)
 
-      // Verify WYSIWYG mode reflects dynamic heading numbering toggle and one-shot click-to-scroll too
+      // Verify WYSIWYG mode renders without dynamic numbers and performs one-shot click-to-scroll
       await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+      expect(screen.getByTestId('document-editor').querySelector('.heading-number')).toBeNull()
       scrollIntoViewMock.mockClear()
       const currentItems = within(within(outline).getByRole('list')).getAllByRole('listitem')
       await user.click(within(currentItems[1]).getByRole('button'))
@@ -2850,54 +2854,40 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
       expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
 
-      // Open SettingsPanel, verify checkbox reflects false, toggle back true without re-scrolling and verify persistence across restart
+      // SettingsPanel no longer includes "헤딩 자동 넘버링 표시"; outline toggle state persists across restart
       await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
       expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
       const settingsPanel = screen.getByLabelText('전역 설정 패널')
-      const headingToggleCheckbox = within(settingsPanel).getByRole('checkbox', {
-        name: /헤딩 자동 넘버링 표시/i
-      }) as HTMLInputElement
-      expect(headingToggleCheckbox.checked).toBe(false)
-
-      await user.click(headingToggleCheckbox)
-      expect(headingToggleCheckbox.checked).toBe(true)
+      expect(
+        within(settingsPanel).queryByRole('checkbox', { name: /헤딩 자동 넘버링 표시/i })
+      ).not.toBeInTheDocument()
+      await user.click(within(settingsPanel).getByRole('button', { name: '닫기' }))
 
       firstRender.unmount()
       render(<App />)
-      await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
-      const reopenedCheckbox = within(screen.getByLabelText('전역 설정 패널')).getByRole(
-        'checkbox',
-        {
-          name: /헤딩 자동 넘버링 표시/i
-        }
-      ) as HTMLInputElement
-      expect(reopenedCheckbox.checked).toBe(true)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      await user.click(await screen.findByText('guide.md'))
+      const reopenedOutline = within(
+        screen.getByRole('complementary', { name: '우측 사이드바' })
+      ).getByRole('region', { name: '문서 목차 (Outline)' })
+      expect(
+        within(reopenedOutline).getByRole('button', { name: '목차 번호 표시' })
+      ).toHaveAttribute('aria-pressed', 'false')
+      expect(within(reopenedOutline).queryByText('1.1.')).not.toBeInTheDocument()
     } finally {
       restore()
     }
   })
 
-  it('inserts /toc and writes/strips heading numbers outside code fences with split-pane sync', async () => {
+  it('does not render removed TOC insertion or body heading numbering buttons in Outline or editor toolbars', async () => {
     const user = userEvent.setup()
-    const initialDoc = [
-      '# Title',
-      '',
-      '```python',
-      '# 99. Code comment must stay unchanged',
-      '```',
-      '',
-      '## First Section',
-      '## Second Section'
-    ].join('\n')
-
     const { api, emitMenuCommand } = createInMemoryWikiApi(
       { theme: 'light', showHeadingNumbers: true },
       {
-        selectedFolder: 'C:\\wiki\\actions',
+        selectedFolder: 'C:\\wiki\\no-toc-actions',
         workspaces: {
-          'C:\\wiki\\actions': {
-            'manual.md': initialDoc,
-            'other.md': '# Other'
+          'C:\\wiki\\no-toc-actions': {
+            'manual.md': '# Title\n\n## Section'
           }
         }
       }
@@ -2906,110 +2896,33 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
     render(<App />)
     await triggerMenuCommand(emitMenuCommand, 'open-folder')
-    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
-    await user.click(within(sidebar).getByText('manual.md'))
-    await user.click(within(sidebar).getByText('other.md'))
+    await user.click(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('manual.md'))
 
-    // Open horizontal split panes by duplicating manual.md and keep <= 2 editor DOM instances
-    const primaryPane = screen.getByTestId('pane-primary')
-
-    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
-    await user.click(
-      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
-        name: '분할 영역에 복제 열기'
-      })
-    )
-    const secondaryPane = screen.getByTestId('pane-secondary')
-    await user.click(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
-    await user.click(
-      within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
-        'button',
-        { name: 'Preview' }
-      )
-    )
-    expect(screen.getAllByTestId('document-editor')).toHaveLength(2)
-
-    // Focus primary pane and run "본문 헤딩 번호 쓰기"
-    await user.click(within(primaryPane).getByRole('tab', { name: 'manual.md' }))
-    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
-    const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
-
-    await user.click(within(outline).getByRole('button', { name: '본문 헤딩 번호 쓰기' }))
-    expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toContain(
-      '# 1. Title'
-    )
-    expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toContain(
-      '## 1.1. First Section'
-    )
-    expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toContain(
-      '# 99. Code comment must stay unchanged'
-    )
-    expect(within(primaryPane).getByTestId('dirty-indicator')).toBeInTheDocument()
-
-    // Verify Preview pane displays explicit heading without double numbering ("1.1. 1.1. First Section")
+    const outline = within(
+      screen.getByRole('complementary', { name: '우측 사이드바' })
+    ).getByRole('region', { name: '문서 목차 (Outline)' })
     expect(
-      within(secondaryPane).getByRole('heading', { level: 2, name: 'First Section' }).textContent
-    ).toBe('1.1. First Section')
-
-    // Run "본문에 목차(/toc) 삽입"
-    await user.click(within(outline).getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
-    const afterToc = getRawEditorText(within(primaryPane).getByTestId('document-editor'))
-    expect(afterToc).toContain('<!-- toc -->')
-    expect(afterToc).toContain('- [1.1. First Section](#11-first-section)')
-    expect(afterToc).toContain('<!-- /toc -->')
+      within(outline).queryByRole('button', { name: '본문에 목차(/toc) 삽입' })
+    ).not.toBeInTheDocument()
     expect(
-      within(secondaryPane).getByRole('link', { name: '1.1. First Section' })
-    ).toHaveAttribute('href', '#11-first-section')
+      within(outline).queryByRole('button', { name: '본문 헤딩 번호 쓰기' })
+    ).not.toBeInTheDocument()
+    expect(
+      within(outline).queryByRole('button', { name: '본문 헤딩 번호 제거' })
+    ).not.toBeInTheDocument()
 
-    // Run "본문 헤딩 번호 제거" -> strips headings outside code fence only
-    await user.click(within(outline).getByRole('button', { name: '본문 헤딩 번호 제거' }))
-    const afterStrip = getRawEditorText(within(primaryPane).getByTestId('document-editor'))
-    expect(afterStrip).toContain('# Title')
-    expect(afterStrip).toContain('## First Section')
-    expect(afterStrip).not.toContain('## 1.1. First Section')
-    expect(afterStrip).toContain('# 99. Code comment must stay unchanged')
-  })
-
-  it('replaces non-fenced /toc placeholder when running Outline insert TOC in WYSIWYG mode', async () => {
-    const user = userEvent.setup()
-    const { api, emitMenuCommand } = createInMemoryWikiApi(
-      { theme: 'light', showHeadingNumbers: false },
-      {
-        selectedFolder: 'C:\\wiki\\wysiwyg-toc',
-        workspaces: {
-          'C:\\wiki\\wysiwyg-toc': {
-            'doc.md': ['# Heading', '', '/toc', '', '## Details'].join('\n')
-          }
-        }
-      }
-    )
-    window.wikiApi = api
-
-    render(<App />)
-    await triggerMenuCommand(emitMenuCommand, 'open-folder')
-    await user.click(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('doc.md'))
+    const rawToolbar = screen.getByRole('toolbar', { name: 'Raw 표 편집 툴바' })
+    expect(within(rawToolbar).queryByRole('button', { name: '목차 삽입' })).not.toBeInTheDocument()
 
     await user.click(
       within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
         name: '위지윅'
       })
     )
-
-    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
-    const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
-    await user.click(within(outline).getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
-
-    await user.click(
-      within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
-        name: 'Raw'
-      })
-    )
-    const rawText = getRawEditorText(screen.getByTestId('document-editor'))
-    expect(rawText).toContain('<!-- toc -->')
-    expect(rawText).toContain('- [Heading](#heading)')
-    expect(rawText).toContain('  - [Details](#details)')
-    expect(rawText).toContain('<!-- /toc -->')
-    expect(rawText).not.toMatch(/^\/toc$/m)
+    const wysiwygToolbar = screen.getByRole('toolbar', { name: '위지윅 서식 툴바' })
+    expect(
+      within(wysiwygToolbar).queryByRole('button', { name: '목차 삽입' })
+    ).not.toBeInTheDocument()
   })
 
   it('does not replay stale outlineScrollRequest after tab switch or global Ctrl+1/Ctrl+3 shortcuts', async () => {
@@ -3128,9 +3041,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     const explorer = screen.getByLabelText('워크스페이스 탐색기')
 
     expect(within(rightSidebar).getByText('열린 문서 없음')).toBeInTheDocument()
-    expect(
-      within(rightSidebar).getByRole('button', { name: '본문에 목차(/toc) 삽입' })
-    ).toBeDisabled()
+    expect(within(rightSidebar).getByRole('button', { name: '목차 번호 표시' })).toBeInTheDocument()
 
     await user.click(await within(explorer).findByText('notes.txt'))
     expect(screen.getByRole('complementary', { name: '우측 사이드바' })).toBe(rightSidebar)
@@ -3138,14 +3049,14 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       within(rightSidebar).getByText('마크다운 문서에서만 목차를 지원합니다.')
     ).toBeInTheDocument()
     expect(
-      within(rightSidebar).getByRole('button', { name: '본문에 목차(/toc) 삽입' })
-    ).toBeDisabled()
+      within(rightSidebar).queryByRole('button', { name: '본문에 목차(/toc) 삽입' })
+    ).not.toBeInTheDocument()
     expect(
-      within(rightSidebar).getByRole('button', { name: '본문 헤딩 번호 쓰기' })
-    ).toBeDisabled()
+      within(rightSidebar).queryByRole('button', { name: '본문 헤딩 번호 쓰기' })
+    ).not.toBeInTheDocument()
     expect(
-      within(rightSidebar).getByRole('button', { name: '본문 헤딩 번호 제거' })
-    ).toBeDisabled()
+      within(rightSidebar).queryByRole('button', { name: '본문 헤딩 번호 제거' })
+    ).not.toBeInTheDocument()
 
     await user.click(within(explorer).getByText('blank.md'))
     expect(within(rightSidebar).getByText('표시할 헤딩이 없습니다.')).toBeInTheDocument()
@@ -3188,13 +3099,13 @@ describe('Custom slash commands, Settings UI management, and direct config.json 
     await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
     const settingsPanel = screen.getByLabelText('전역 설정 패널')
 
-    // Built-in default seed commands appear in Settings UI
+    // Built-in default seed commands appear in Settings UI (without removed /toc)
     const commandList = within(settingsPanel).getByRole('list', { name: '커스텀 명령어 목록' })
     expect(within(commandList).getByText('/function')).toBeInTheDocument()
     expect(within(commandList).getByText('/struct')).toBeInTheDocument()
     expect(within(commandList).getByText('/table')).toBeInTheDocument()
     expect(within(commandList).getByText('/mermaid')).toBeInTheDocument()
-    expect(within(commandList).getByText('/toc')).toBeInTheDocument()
+    expect(within(commandList).queryByText('/toc')).not.toBeInTheDocument()
 
     // Rejects whitespace in trigger and does not emit role="alert"
     const triggerInput = within(settingsPanel).getByLabelText(/트리거명/i)
@@ -6161,12 +6072,8 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
 
       const outlineRegion = screen.getByRole('region', { name: '문서 목차 (Outline)' })
       const outlineHeader = outlineRegion.firstElementChild as HTMLElement
-      const outlineActions = within(outlineRegion)
-        .getByRole('button', { name: '본문에 목차(/toc) 삽입' })
-        .parentElement as HTMLElement
       const outlineListContainer = within(outlineRegion).getByRole('list').parentElement as HTMLElement
       assertSidebarPanelIsolation(outlineRegion, outlineHeader, outlineListContainer)
-      expect(getComputedStyle(outlineActions).flexShrink).toBe('0')
 
       const paneWorkspace = screen.getByTestId('pane-workspace')
       expect(isZeroCssLength(getComputedStyle(paneWorkspace).minHeight)).toBe(true)
@@ -7123,7 +7030,7 @@ describe('Split editor mode and bidirectional scroll sync', () => {
     vi.useRealTimers()
   })
 
-  it('integrates Split mode live preview/Mermaid, per-tab clamped splitter ratio, 2-pane workspace independence, non-markdown lock, Outline TOC cursor insertion, and split breadcrumbs', async () => {
+  it('integrates Split mode live preview/Mermaid, per-tab clamped splitter ratio, 2-pane workspace independence, non-markdown lock, and split breadcrumbs', async () => {
     const user = userEvent.setup()
     const entries: RendererLogPayload[] = []
     const alphaInitial = [
@@ -7241,18 +7148,6 @@ describe('Split editor mode and bidirectional scroll sync', () => {
     expect(
       within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
     ).toHaveAttribute('aria-valuenow', '65')
-
-    // Outline '본문에 목차(/toc) 삽입' in Split mode inserts TOC at Raw cursor line (not top fallback)
-    const cursorPos = alphaUpdated.indexOf('## Details')
-    setRawEditorSelection(within(primaryPane).getByTestId('document-editor'), cursorPos, cursorPos)
-    const outlineSidebar = screen.getByLabelText('문서 목차 (Outline)')
-    await user.click(within(outlineSidebar).getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
-
-    const textAfterToc = getRawEditorText(within(primaryPane).getByTestId('document-editor'))
-    expect(textAfterToc.indexOf('<!-- toc -->')).toBeGreaterThan(-1)
-    expect(textAfterToc.indexOf('<!-- toc -->')).toBeGreaterThan(
-      textAfterToc.indexOf('## Intro')
-    )
 
     // Workspace 2-pane split + Editor Split mode coexistence & independent splitters
     fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /beta\.md/ }))

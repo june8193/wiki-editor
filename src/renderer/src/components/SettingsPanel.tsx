@@ -9,14 +9,12 @@ import { CustomCommandsSection } from './CustomCommandsSection'
 interface SettingsPanelProps {
   theme: ThemeMode
   autoSave: boolean
-  showHeadingNumbers?: boolean
   configPath: string
   customCommands?: readonly CustomCommandConfig[]
   previewTitle?: string
   isDismissDisabled?: boolean
   onToggleTheme: () => void
   onToggleAutoSave: () => void
-  onToggleShowHeadingNumbers?: () => void
   onSaveCustomCommands?: (nextCommands: CustomCommandConfig[]) => Promise<boolean> | boolean
   onOpenConfigEditor: () => void
   onClose: () => void
@@ -27,14 +25,12 @@ const NOOP_SAVE_CUSTOM_COMMANDS = async (): Promise<boolean> => true
 export function SettingsPanel({
   theme,
   autoSave,
-  showHeadingNumbers = true,
   configPath,
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   previewTitle,
   isDismissDisabled = false,
   onToggleTheme,
   onToggleAutoSave,
-  onToggleShowHeadingNumbers,
   onSaveCustomCommands = NOOP_SAVE_CUSTOM_COMMANDS,
   onOpenConfigEditor,
   onClose
@@ -103,18 +99,6 @@ export function SettingsPanel({
             <label className="settings-toggle-row">
               <input type="checkbox" checked={autoSave} onChange={onToggleAutoSave} />
               <span>자동 저장 (Auto-save)</span>
-            </label>
-          </section>
-
-          <section className="settings-section">
-            <h3 className="settings-section-title">문서 표시</h3>
-            <label className="settings-toggle-row">
-              <input
-                type="checkbox"
-                checked={showHeadingNumbers}
-                onChange={onToggleShowHeadingNumbers}
-              />
-              <span>헤딩 자동 넘버링 표시</span>
             </label>
           </section>
 

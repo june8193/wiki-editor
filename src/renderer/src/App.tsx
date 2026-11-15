@@ -23,13 +23,6 @@ import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
 import type { OutlineContextTarget } from './editor/outlineScrollSpy'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
-import {
-  applyHeadingNumbers,
-  findFirstNonFencedSlashTocLine,
-  insertOrUpdateTocBlock,
-  resolveRawCursorLine,
-  stripHeadingNumbers
-} from './editor/MarkdownTocEngine'
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
@@ -574,40 +567,6 @@ export function App() {
     bufferContent: activeBufferContent
   })
 
-  const applyActiveMarkdownTransform = useCallback(
-    (transform: (content: string) => string): void => {
-      if (!activeBuffer || !isActiveMarkdown) return
-      const nextContent = transform(activeBuffer.content)
-      if (nextContent !== activeBuffer.content) {
-        updateBufferContent(activeBuffer.key, nextContent)
-      }
-    },
-    [activeBuffer, isActiveMarkdown, updateBufferContent]
-  )
-
-  const activeRawCursorStart =
-    activeTab?.kind === 'document' && (activeTab.mode === 'raw' || activeTab.mode === 'split')
-      ? activeTab.cursor.selectionStart
-      : null
-
-  const handleOutlineInsertToc = useCallback((): void => {
-    applyActiveMarkdownTransform((content) => {
-      const cursorLine =
-        activeRawCursorStart !== null
-          ? resolveRawCursorLine(content, activeRawCursorStart)
-          : findFirstNonFencedSlashTocLine(content)
-      return insertOrUpdateTocBlock(content, cursorLine)
-    })
-  }, [activeRawCursorStart, applyActiveMarkdownTransform])
-
-  const handleOutlineApplyHeadingNumbers = useCallback((): void => {
-    applyActiveMarkdownTransform(applyHeadingNumbers)
-  }, [applyActiveMarkdownTransform])
-
-  const handleOutlineStripHeadingNumbers = useCallback((): void => {
-    applyActiveMarkdownTransform(stripHeadingNumbers)
-  }, [applyActiveMarkdownTransform])
-
   const handlePaneChangeContent = useCallback(
     (bufferKey: string, nextContent: string): void => {
       clearOutlineScrollRequest()
@@ -772,7 +731,6 @@ export function App() {
           diffsByKey={diffsByKey}
           theme={config.theme}
           autoSave={config.autoSave}
-          showHeadingNumbers={config.showHeadingNumbers}
           customCommands={config.customCommands}
           scrollRequest={outlineScrollRequest}
           isShortcutDisabled={isEditorShortcutDisabled}
@@ -810,9 +768,6 @@ export function App() {
                 showHeadingNumbers={config.showHeadingNumbers}
                 onToggleHeadingNumbers={toggleShowHeadingNumbers}
                 onSelectHeading={handleSelectOutlineHeading}
-                onInsertToc={handleOutlineInsertToc}
-                onApplyHeadingNumbers={handleOutlineApplyHeadingNumbers}
-                onStripHeadingNumbers={handleOutlineStripHeadingNumbers}
                 onCollapse={handleCollapseRightSidebar}
               />
             </aside>
@@ -834,14 +789,12 @@ export function App() {
         <SettingsPanel
           theme={config.theme}
           autoSave={config.autoSave}
-          showHeadingNumbers={config.showHeadingNumbers}
           configPath={configPath}
           customCommands={config.customCommands}
           previewTitle={activeBuffer ? deriveDocumentTitle(activeBuffer.name) : undefined}
           isDismissDisabled={pendingDialog !== null}
           onToggleTheme={toggleTheme}
           onToggleAutoSave={toggleAutoSave}
-          onToggleShowHeadingNumbers={toggleShowHeadingNumbers}
           onSaveCustomCommands={updateCustomCommands}
           onOpenConfigEditor={handleOpenConfigEditor}
           onClose={() => setIsSettingsOpen(false)}

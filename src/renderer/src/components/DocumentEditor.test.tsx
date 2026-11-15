@@ -279,7 +279,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(onUpdateViewState).not.toHaveBeenCalled()
   })
 
-  it('threads showHeadingNumbers, mermaidRenderer, and scrollRequest cleanly while roundtripping mermaid blocks', async () => {
+  it('threads mermaidRenderer and scrollRequest cleanly without dynamic heading numbers while roundtripping mermaid blocks', async () => {
     const user = userEvent.setup()
     let mode: EditorMode = 'raw'
     const mermaidDoc = createDoc({
@@ -302,7 +302,6 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
         tab={createTab(mode)}
         theme="light"
         autoSave={false}
-        showHeadingNumbers
         mermaidRenderer={mermaidRenderer}
         onChangeContent={onChangeContent}
         onSave={vi.fn()}
@@ -319,7 +318,6 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
         tab={createTab(mode)}
         theme="light"
         autoSave={false}
-        showHeadingNumbers
         mermaidRenderer={mermaidRenderer}
         onChangeContent={onChangeContent}
         onSave={vi.fn()}
@@ -329,6 +327,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     await waitFor(() => {
       expect(screen.getByTestId('wysiwyg-mermaid-block').querySelector('svg')).not.toBeNull()
     })
+    expect(screen.getByTestId('document-editor').querySelector('.heading-number')).toBeNull()
 
     await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
     rerender(
@@ -337,7 +336,6 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
         tab={createTab(mode)}
         theme="light"
         autoSave={false}
-        showHeadingNumbers={false}
         mermaidRenderer={mermaidRenderer}
         onChangeContent={onChangeContent}
         onSave={vi.fn()}
@@ -353,7 +351,6 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
         tab={createTab(mode)}
         theme="light"
         autoSave={false}
-        showHeadingNumbers={false}
         mermaidRenderer={mermaidRenderer}
         scrollRequest={{
           paneId: 'primary',
@@ -407,7 +404,6 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
         tab={latestTab}
         theme="light"
         autoSave={false}
-        showHeadingNumbers
         mermaidRenderer={mermaidRenderer}
         onChangeContent={(nextContent) => {
           doc = { ...doc, content: nextContent, isDirty: nextContent !== doc.savedContent }
@@ -417,7 +413,6 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
               tab={latestTab}
               theme="light"
               autoSave={false}
-              showHeadingNumbers
               mermaidRenderer={mermaidRenderer}
               onChangeContent={vi.fn()}
               onSave={vi.fn()}
@@ -436,10 +431,10 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(container.querySelector('.cm-line span')).not.toBeNull()
     expect(screen.getByRole('toolbar', { name: 'Raw 표 편집 툴바' })).toBeInTheDocument()
 
-    // Right: Preview region with unique testId, heading numbers, and initial Mermaid SVG
+    // Right: Preview region with unique testId, plain heading text, and initial Mermaid SVG
     const previewRegion = screen.getByTestId('split-markdown-preview')
     expect(previewRegion).toHaveAttribute('aria-label', '마크다운 미리보기')
-    expect(within(previewRegion).getByRole('heading', { level: 1 }).textContent).toContain('1. Arch')
+    expect(within(previewRegion).getByRole('heading', { level: 1 }).textContent).toBe('Arch')
     await waitFor(() => {
       expect(within(previewRegion).getByTestId('mermaid-svg').textContent).toContain('A --> B')
     })
@@ -461,7 +456,6 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
           tab={nextTab}
           theme="light"
           autoSave={false}
-          showHeadingNumbers
           mermaidRenderer={mermaidRenderer}
           onChangeContent={handleContent}
           onSave={vi.fn()}
@@ -480,8 +474,8 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       cursor: { selectionStart: updatedContent.length, selectionEnd: updatedContent.length }
     })
 
-    expect(within(previewRegion).getByRole('heading', { level: 1 }).textContent).toContain(
-      '1. Arch Updated'
+    expect(within(previewRegion).getByRole('heading', { level: 1 }).textContent).toBe(
+      'Arch Updated'
     )
     await waitFor(() => {
       expect(within(previewRegion).getByTestId('mermaid-svg').textContent).toContain('A --> C')
@@ -792,7 +786,6 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
           tab={tab}
           theme={theme}
           autoSave={false}
-          showHeadingNumbers={false}
           scrollRequest={request}
           onChangeContent={onChangeContent}
           onSave={vi.fn()}
@@ -902,7 +895,6 @@ describe('DocumentEditor link autocomplete & Ctrl+K gating', () => {
         tab={rawEndTab}
         theme="light"
         autoSave={false}
-        showHeadingNumbers={false}
         isShortcutDisabled={false}
         onChangeContent={vi.fn()}
         onSave={vi.fn()}
@@ -920,7 +912,6 @@ describe('DocumentEditor link autocomplete & Ctrl+K gating', () => {
         tab={rawEndTab}
         theme="light"
         autoSave={false}
-        showHeadingNumbers={false}
         isShortcutDisabled
         onChangeContent={vi.fn()}
         onSave={vi.fn()}
@@ -936,7 +927,6 @@ describe('DocumentEditor link autocomplete & Ctrl+K gating', () => {
         tab={createTab('wysiwyg')}
         theme="light"
         autoSave={false}
-        showHeadingNumbers={false}
         isShortcutDisabled={false}
         onChangeContent={vi.fn()}
         onSave={vi.fn()}
@@ -953,7 +943,6 @@ describe('DocumentEditor link autocomplete & Ctrl+K gating', () => {
         tab={createTab('wysiwyg')}
         theme="light"
         autoSave={false}
-        showHeadingNumbers={false}
         isShortcutDisabled
         onChangeContent={vi.fn()}
         onSave={vi.fn()}
@@ -975,7 +964,6 @@ describe('DocumentEditor link autocomplete & Ctrl+K gating', () => {
         tab={{ ...createTab('raw'), bufferKey: txtDoc.key }}
         theme="light"
         autoSave={false}
-        showHeadingNumbers={false}
         isShortcutDisabled={false}
         onChangeContent={vi.fn()}
         onSave={vi.fn()}

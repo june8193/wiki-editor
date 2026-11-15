@@ -15,7 +15,6 @@ interface MarkdownPreviewProps {
   content: string
   scrollTop: number
   theme?: ThemeMode
-  showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: PreviewScrollRequest | null
   isActive?: boolean
@@ -36,7 +35,6 @@ export function MarkdownPreview({
   content,
   scrollTop,
   theme = 'light',
-  showHeadingNumbers = false,
   mermaidRenderer,
   scrollRequest,
   isActive = true,
@@ -88,12 +86,11 @@ export function MarkdownPreview({
     () =>
       renderMarkdownToReact(content, {
         theme,
-        showHeadingNumbers,
         mermaidRenderer,
         onAnchorNavigate: onLinkNavigate ? undefined : handleAnchorNavigate,
         onLinkNavigate
       }),
-    [content, handleAnchorNavigate, mermaidRenderer, onLinkNavigate, showHeadingNumbers, theme]
+    [content, handleAnchorNavigate, mermaidRenderer, onLinkNavigate, theme]
   )
 
   return (

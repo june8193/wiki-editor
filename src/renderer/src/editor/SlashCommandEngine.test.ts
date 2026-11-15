@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_CUSTOM_COMMANDS, type CustomCommandConfig } from '@shared/config'
+import type { CustomCommandConfig } from '@shared/config'
 import {
   deriveDocumentTitle,
   detectSlashQuery,
   expandSlashTemplate,
-  filterSlashCommands,
-  resolveSlashCommandSnippet
+  filterSlashCommands
 } from './SlashCommandEngine'
 
 describe('SlashCommandEngine', () => {
@@ -120,15 +119,14 @@ describe('SlashCommandEngine', () => {
     expect(withoutCursor.cursorOffset).toBe(withoutCursor.text.length)
   })
 
-  it('resolves command snippets with title/date/cursor placeholders accurately across multiline templates', () => {
+  it('expands multiline templates with title/date/cursor placeholders and detects CRLF slash queries accurately', () => {
     const cmd: CustomCommandConfig = {
       trigger: 'fn',
       label: 'Fn',
       template: '### {{title}}\nDate: {{date}}\nBody: {{cursor}}end'
     }
 
-    const doc = '# Top\n\n/fn\n\nAfter'
-    const resolved = resolveSlashCommandSnippet(doc, cmd, {
+    const resolved = expandSlashTemplate(cmd.template, {
       fileName: 'guide.md',
       date: '2026-11-14'
     })
@@ -142,24 +140,5 @@ describe('SlashCommandEngine', () => {
       rangeFrom: crlfDoc.indexOf('/fn'),
       rangeTo: crlfDoc.indexOf('/fn') + 3
     })
-  })
-
-  it('generates live TOC markup for the default toc command while honoring user-customized toc templates', () => {
-    const defaultToc = DEFAULT_CUSTOM_COMMANDS.find((cmd) => cmd.trigger === 'toc')!
-    const doc = '# Overview\n\n/toc\n\n## Details'
-    const resolved = resolveSlashCommandSnippet(doc, defaultToc)
-    expect(resolved.text).toContain('<!-- toc -->')
-    expect(resolved.text).toContain('- [Overview](#overview)')
-    expect(resolved.text).toContain('  - [Details](#details)')
-    expect(resolved.text).toContain('<!-- /toc -->')
-
-    const customToc: CustomCommandConfig = {
-      trigger: 'toc',
-      label: 'Custom TOC',
-      template: '## Contents\n{{cursor}}'
-    }
-    const customResolved = resolveSlashCommandSnippet(doc, customToc)
-    expect(customResolved.text).toBe('## Contents\n')
-    expect(customResolved.cursorOffset).toBe('## Contents\n'.length)
   })
 })

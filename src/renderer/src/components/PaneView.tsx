@@ -22,7 +22,6 @@ interface PaneViewProps {
   flexRatio?: number
   theme: ThemeMode
   autoSave: boolean
-  showHeadingNumbers?: boolean
   customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
@@ -43,7 +42,6 @@ export function PaneView({
   flexRatio,
   theme,
   autoSave,
-  showHeadingNumbers = true,
   customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
@@ -126,7 +124,6 @@ export function PaneView({
           tab={activeTab}
           theme={theme}
           autoSave={autoSave}
-          showHeadingNumbers={showHeadingNumbers}
           customCommands={customCommands}
           scrollRequest={activeScrollRequest}
           isActive={isActivePane}

@@ -15,7 +15,6 @@ interface PaneWorkspaceProps {
   diffsByKey: Record<string, GitDiffContentState>
   theme: ThemeMode
   autoSave: boolean
-  showHeadingNumbers?: boolean
   customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
@@ -41,7 +40,6 @@ export function PaneWorkspace({
   diffsByKey,
   theme,
   autoSave,
-  showHeadingNumbers = true,
   customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
@@ -64,7 +62,6 @@ export function PaneWorkspace({
     splitMode: layout.splitMode,
     theme,
     autoSave,
-    showHeadingNumbers,
     customCommands,
     scrollRequest,
     isShortcutDisabled,

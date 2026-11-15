@@ -72,7 +72,7 @@ export function RawMarkdownEditor({
   onActiveHeadingChange,
   onRawScroll
 }: RawMarkdownEditorProps) {
-  const { shellRef, hostRef, inTable, runTableAction, insertToc, slashMenuProps, linkMenuProps } =
+  const { shellRef, hostRef, inTable, runTableAction, slashMenuProps, linkMenuProps } =
     useRawCodeMirrorEditor({
       content,
       language,
@@ -112,15 +112,6 @@ export function RawMarkdownEditor({
               {btn.label}
             </button>
           ))}
-          <span className="toolbar-divider" aria-hidden="true" />
-          <button
-            type="button"
-            className="toolbar-btn"
-            onClick={insertToc}
-            title="본문에 목차(/toc) 삽입 또는 갱신"
-          >
-            목차 삽입
-          </button>
         </div>
       )}
       <div ref={hostRef} className="codemirror-host" />

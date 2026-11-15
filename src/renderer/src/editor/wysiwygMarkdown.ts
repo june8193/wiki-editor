@@ -1,4 +1,4 @@
-import { AnyExtension, createNodeFromContent, Editor, Extension, Node as TiptapNode } from '@tiptap/core'
+import { AnyExtension, createNodeFromContent, Editor } from '@tiptap/core'
 import Code from '@tiptap/extension-code'
 import CodeBlock from '@tiptap/extension-code-block'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
@@ -8,13 +8,11 @@ import { Markdown } from '@tiptap/markdown'
 import { Fragment, type Mark, type Schema, Slice } from '@tiptap/pm/model'
 import {
   type EditorState,
-  Plugin,
   PluginKey,
   TextSelection,
   type Transaction
 } from '@tiptap/pm/state'
 import { deleteRow as pmDeleteRow, isInTable } from '@tiptap/pm/tables'
-import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { ReactNodeViewRenderer } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import type { CustomCommandConfig } from '@shared/config'
@@ -37,20 +35,8 @@ import { isSafeMarkdownUrl, MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 import {
   detectSlashQuery,
   expandSlashTemplate,
-  isDefaultTocCommand,
-  resolveSlashCommandSnippet,
   type SlashQueryMatch
 } from './SlashCommandEngine'
-import {
-  createHeadingNumberTracker,
-  hasHeadingNumberPrefix,
-  LEADING_HEADING_NUMBER_RE,
-  stripHeadingNumberPrefix
-} from './MarkdownTocEngine'
-
-const TOC_MARKER_COMMENT_RE = /^[ \t]*<!--\s*(\/?toc)\s*-->[ \t]*$/i
-const TOC_MARKER_LINE_RE = /^[ \t]*<!--\s*(\/?toc)\s*-->[ \t]*(?:\r?\n|$)/i
-const TOC_MARKER_SEARCH_RE = /<!--\s*\/?toc\s*-->/i
 
 interface MdastPositionNode {
   type?: string
@@ -63,168 +49,12 @@ interface MdastPositionNode {
   }
 }
 
-export interface WysiwygExtensionOptions {
-  showHeadingNumbers?: boolean
-}
-
-export const headingNumberingPluginKey = new PluginKey<boolean>('headingNumbering')
 export const slashInsertPluginKey = new PluginKey<boolean>('wysiwygSlashInsert')
 export const linkInsertPluginKey = new PluginKey<boolean>('wysiwygLinkInsert')
-
-const HeadingNumberingExtension = Extension.create<{ showHeadingNumbers: boolean }>({
-  name: 'headingNumbering',
-  addOptions() {
-    return {
-      showHeadingNumbers: false
-    }
-  },
-  addProseMirrorPlugins() {
-    const initialEnabled = this.options.showHeadingNumbers
-    return [
-      new Plugin<boolean>({
-        key: headingNumberingPluginKey,
-        state: {
-          init: () => initialEnabled,
-          apply: (tr, prev) => {
-            const meta = tr.getMeta(headingNumberingPluginKey)
-            return typeof meta === 'boolean' ? meta : prev
-          }
-        },
-        props: {
-          decorations: (state) => {
-            const enabled = headingNumberingPluginKey.getState(state)
-            if (!enabled) {
-              return DecorationSet.empty
-            }
-
-            const tracker = createHeadingNumberTracker()
-            const decorations: Decoration[] = []
-
-            state.doc.descendants((node, pos) => {
-              if (node.type.name === 'heading') {
-                const level = Number(node.attrs.level ?? 1)
-                const { number } = tracker.next(level)
-                const text = node.textContent
-                if (stripHeadingNumberPrefix(text).trim().length > 0) {
-                  if (hasHeadingNumberPrefix(text)) {
-                    const firstChild = node.firstChild
-                    const explicitMatch =
-                      firstChild && firstChild.isText && firstChild.text
-                        ? LEADING_HEADING_NUMBER_RE.exec(firstChild.text)
-                        : null
-                    if (explicitMatch) {
-                      decorations.push(
-                        Decoration.inline(pos + 1, pos + 1 + explicitMatch[0].length, {
-                          class: 'heading-number-suppressed',
-                          'aria-hidden': 'true'
-                        })
-                      )
-                    }
-                  }
-                  decorations.push(
-                    Decoration.widget(
-                      pos + 1,
-                      () => {
-                        const span = document.createElement('span')
-                        span.className = 'heading-number'
-                        span.setAttribute('aria-hidden', 'true')
-                        span.textContent = `${number} `
-                        return span
-                      },
-                      {
-                        side: -1,
-                        key: `heading-num-${pos}-${number}`
-                      }
-                    )
-                  )
-                }
-                return false
-              }
-              return node.type.name !== 'codeBlock'
-            })
-
-            return DecorationSet.create(state.doc, decorations)
-          }
-        }
-      })
-    ]
-  }
-})
 
 const MermaidAwareCodeBlock = CodeBlock.extend({
   addNodeView() {
     return ReactNodeViewRenderer(MermaidCodeBlockNodeView)
-  }
-})
-
-/**
- * Preserves `<!-- toc -->` and `<!-- /toc -->` markers cleanly across WYSIWYG roundtrips
- * without weakening HTML comment/tag XSS sanitization for any other HTML input.
- */
-const TocMarker = TiptapNode.create({
-  name: 'tocMarker',
-  group: 'block',
-  atom: true,
-  selectable: false,
-  draggable: false,
-
-  addAttributes() {
-    return {
-      kind: {
-        default: 'start'
-      }
-    }
-  },
-
-  parseHTML() {
-    return [
-      {
-        tag: 'div[data-toc-marker]',
-        getAttrs: (el) => {
-          const raw = el instanceof Element ? el.getAttribute('data-toc-marker') : null
-          return { kind: raw === 'end' ? 'end' : 'start' }
-        }
-      }
-    ]
-  },
-
-  renderHTML({ node }) {
-    return [
-      'div',
-      {
-        'data-toc-marker': node.attrs.kind === 'end' ? 'end' : 'start',
-        'aria-hidden': 'true',
-        class: 'wysiwyg-toc-marker'
-      }
-    ]
-  },
-
-  markdownTokenizer: {
-    name: 'tocMarker',
-    level: 'block',
-    start: (src) => {
-      const match = TOC_MARKER_SEARCH_RE.exec(src)
-      return match ? match.index : -1
-    },
-    tokenize: (src) => {
-      const match = TOC_MARKER_LINE_RE.exec(src)
-      if (!match) return undefined
-      return {
-        type: 'tocMarker',
-        raw: match[0],
-        kind: match[1].toLowerCase() === '/toc' ? 'end' : 'start'
-      }
-    }
-  },
-
-  parseMarkdown(token, helpers) {
-    return helpers.createNode('tocMarker', {
-      kind: token.kind === 'end' ? 'end' : 'start'
-    })
-  },
-
-  renderMarkdown(node) {
-    return node.attrs?.kind === 'end' ? '<!-- /toc -->' : '<!-- toc -->'
   }
 })
 
@@ -276,9 +106,6 @@ export function prepareMarkdownForTiptap(markdown: string): string {
     if (typeof start === 'number' && typeof end === 'number') {
       if (node.type === 'html') {
         const rawHtml = normalized.slice(start, end)
-        if (TOC_MARKER_COMMENT_RE.test(rawHtml)) {
-          return
-        }
         patches.push({
           start,
           end,
@@ -387,7 +214,7 @@ export function deleteTableRowPreservingHeader(editor: Editor): boolean {
 
 /**
  * Returns the standard TipTap v3 extension stack for GFM WYSIWYG editing, Mermaid NodeView,
- * dynamic heading numbering decorations, and roundtrip serialization.
+ * and roundtrip serialization.
  */
 const CustomCode = Code.extend({
   excludes: 'bold italic strike underline'
@@ -397,7 +224,7 @@ const CustomLink = Link.extend({
   inclusive: false
 })
 
-export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): AnyExtension[] {
+export function createWysiwygExtensions(): AnyExtension[] {
   return [
     StarterKit.configure({
       code: false,
@@ -411,10 +238,6 @@ export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): 
       isAllowedUri: (url) => isSafeMarkdownUrl(url)
     }),
     MermaidAwareCodeBlock,
-    TocMarker,
-    HeadingNumberingExtension.configure({
-      showHeadingNumbers: options.showHeadingNumbers ?? false
-    }),
     Markdown.configure({
       markedOptions: {
         gfm: true,
@@ -480,20 +303,16 @@ function buildWysiwygCommandFragment(
   let markdownToInsert: string
   let sentinel: string | null = null
 
-  if (isDefaultTocCommand(command)) {
-    markdownToInsert = resolveSlashCommandSnippet(editor.getMarkdown(), command, context).text
+  const expanded = expandSlashTemplate(command.template, context)
+  if (expanded.hasCursorPlaceholder) {
+    const existingDocText = editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n')
+    sentinel = pickCursorSentinel(expanded.text, existingDocText)
+    markdownToInsert =
+      expanded.text.slice(0, expanded.cursorOffset) +
+      sentinel +
+      expanded.text.slice(expanded.cursorOffset)
   } else {
-    const expanded = expandSlashTemplate(command.template, context)
-    if (expanded.hasCursorPlaceholder) {
-      const existingDocText = editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n')
-      sentinel = pickCursorSentinel(expanded.text, existingDocText)
-      markdownToInsert =
-        expanded.text.slice(0, expanded.cursorOffset) +
-        sentinel +
-        expanded.text.slice(expanded.cursorOffset)
-    } else {
-      markdownToInsert = expanded.text
-    }
+    markdownToInsert = expanded.text
   }
 
   const prepared = prepareMarkdownForTiptap(markdownToInsert)

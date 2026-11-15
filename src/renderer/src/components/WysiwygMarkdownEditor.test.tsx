@@ -304,8 +304,7 @@ describe('WysiwygMarkdownEditor', () => {
     expect(within(mermaidBlock).getByRole('button', { name: '코드 숨기기' })).toBeInTheDocument()
   })
 
-  it('renders dynamic heading numbers via decorations without mutating markdown, scrolls on scrollRequest, and inserts /toc', async () => {
-    const user = userEvent.setup()
+  it('renders plain headings without dynamic heading decorations or TOC toolbar button, and scrolls once per scrollRequest', () => {
     const onChangeContent = vi.fn()
     const scrollIntoViewMock = vi.fn()
     const origScrollIntoView = Element.prototype.scrollIntoView
@@ -317,7 +316,6 @@ describe('WysiwygMarkdownEditor', () => {
         <WysiwygMarkdownEditor
           content={md}
           scrollTop={0}
-          showHeadingNumbers
           onChangeContent={onChangeContent}
         />
       )
@@ -326,25 +324,25 @@ describe('WysiwygMarkdownEditor', () => {
       const h1 = editorEl.querySelector('h1')!
       const h2 = editorEl.querySelector('h2')!
       const h3 = editorEl.querySelector('h3')!
-      expect(h1.querySelector('.heading-number')).toHaveTextContent('1.')
-      expect(h2.querySelector('.heading-number')).toHaveTextContent('1.1.')
-      // Stale explicit prefix "1. " under H1->H2 is visually suppressed and replaced with hierarchical "1.1.1."
-      expect(h3.querySelector('.heading-number')).toHaveTextContent('1.1.1.')
-      expect(h3.querySelector('.heading-number-suppressed')).toHaveTextContent('1.')
+      expect(editorEl.querySelector('.heading-number')).toBeNull()
+      expect(editorEl.querySelector('.heading-number-suppressed')).toBeNull()
+      expect(h1).toHaveTextContent('Intro')
+      expect(h2).toHaveTextContent('Details')
+      expect(h3).toHaveTextContent('1. Explicit')
       expect(onChangeContent).not.toHaveBeenCalled()
 
-      // Toggle off dynamic heading numbers + trigger scrollRequest to H2
+      const formatToolbar = screen.getByRole('toolbar', { name: '위지윅 서식 툴바' })
+      expect(within(formatToolbar).queryByRole('button', { name: '목차 삽입' })).not.toBeInTheDocument()
+
+      // Trigger scrollRequest to H2
       rerender(
         <WysiwygMarkdownEditor
           content={md}
           scrollTop={0}
-          showHeadingNumbers={false}
           scrollRequest={{ index: 1, nonce: 1 }}
           onChangeContent={onChangeContent}
         />
       )
-      expect(editorEl.querySelector('.heading-number')).toBeNull()
-      expect(editorEl.querySelector('.heading-number-suppressed')).toBeNull()
       expect(onChangeContent).not.toHaveBeenCalled()
       expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
       expect(scrollIntoViewMock.mock.instances[0]).toBe(h2)
@@ -355,48 +353,17 @@ describe('WysiwygMarkdownEditor', () => {
         <WysiwygMarkdownEditor
           content={md}
           scrollTop={80}
-          showHeadingNumbers={false}
           scrollRequest={{ index: 1, nonce: 1 }}
           onChangeContent={onChangeContent}
         />
       )
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
-
-      // Toolbar "목차 삽입" button inserts generated TOC links
-      const formatToolbar = screen.getByRole('toolbar', { name: '위지윅 서식 툴바' })
-      await user.click(within(formatToolbar).getByRole('button', { name: '목차 삽입' }))
-      expect(onChangeContent).toHaveBeenCalledTimes(1)
-      const withToc = onChangeContent.mock.calls[0][0] as string
-      expect(withToc).toContain('<!-- toc -->')
-      expect(withToc).toContain('- [Intro](#intro)')
     } finally {
       Element.prototype.scrollIntoView = origScrollIntoView
     }
   })
 
-  it('suppresses stale explicit numeric prefix when a heading starts with inline bold formatting', () => {
-    const { container } = render(
-      <WysiwygMarkdownEditor
-        content={'# Intro\n\n## 1. **Bold** Title'}
-        scrollTop={0}
-        theme="light"
-        showHeadingNumbers={true}
-        onChangeContent={vi.fn()}
-      />
-    )
-
-    const numberBadges = Array.from(container.querySelectorAll('.heading-number')).map(
-      (el) => el.textContent
-    )
-    expect(numberBadges).toEqual(['1. ', '1.1. '])
-
-    const headings = container.querySelectorAll('.ProseMirror h2')
-    expect(headings).toHaveLength(1)
-    const suppressed = headings[0]?.querySelector('.heading-number-suppressed')
-    expect(suppressed?.textContent).toBe('1. ')
-  })
-
-  it('opens slash autocomplete on /, supports keyboard navigation & click, places cursor at {{cursor}}, and supports /toc', async () => {
+  it('opens slash autocomplete on /, supports keyboard navigation & click, places cursor at {{cursor}}, and inserts commands cleanly', async () => {
     const user = userEvent.setup()
     const commands: CustomCommandConfig[] = [
       {
@@ -416,11 +383,6 @@ describe('WysiwygMarkdownEditor', () => {
         label: 'Async Function',
         description: '비동기 함수',
         template: 'async function {{cursor}}() {}'
-      },
-      {
-        trigger: 'toc',
-        label: '목차 (TOC)',
-        template: '<!-- toc -->\n<!-- /toc -->'
       }
     ]
     let latestMd = '# DocTitle\n\n'
@@ -475,19 +437,17 @@ describe('WysiwygMarkdownEditor', () => {
       expect(latestMd).toContain('### Function: buildTree()')
     })
 
-    // Escape dismisses, and mouse click inserts /toc
-    await user.keyboard('{Enter}/to')
+    // Escape dismisses, and mouse click inserts /struct
+    await user.keyboard('{Enter}/st')
     await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
     fireEvent.keyDown(editorEl, { key: 'Escape' })
     expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
 
     await user.keyboard('{Backspace}')
-    const tocListbox2 = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
-    await user.click(within(tocListbox2).getByRole('option', { name: /\/toc/ }))
+    const structListbox = await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })
+    await user.click(within(structListbox).getByRole('option', { name: /\/struct/ }))
     await waitFor(() => {
-      expect(latestMd).toContain('<!-- toc -->')
-      expect(latestMd).toContain('- [DocTitle](#doctitle)')
-      expect(latestMd).toContain('<!-- /toc -->')
+      expect(latestMd).toContain('### Struct:')
     })
   })
 

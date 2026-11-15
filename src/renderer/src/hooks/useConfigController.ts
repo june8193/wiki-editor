@@ -160,7 +160,7 @@ export function useConfigController({
   }, [toggleBooleanConfig])
 
   const toggleShowHeadingNumbers = useCallback((): void => {
-    toggleBooleanConfig('showHeadingNumbers', '헤딩 자동 넘버링 설정 변경에 실패했습니다.')
+    toggleBooleanConfig('showHeadingNumbers', '목차 번호 표시 설정 변경에 실패했습니다.')
   }, [toggleBooleanConfig])
 
   const updateCustomCommands = useCallback(

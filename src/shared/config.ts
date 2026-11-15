@@ -28,7 +28,7 @@ export interface AppConfig {
   customCommands: CustomCommandConfig[]
 }
 
-export const DEFAULT_TOC_COMMAND_TEMPLATE = '<!-- toc -->\n<!-- /toc -->'
+const LEGACY_BUILTIN_TOC_TEMPLATE = '<!-- toc -->\n<!-- /toc -->'
 
 export const DEFAULT_CUSTOM_COMMANDS: readonly CustomCommandConfig[] = [
   {
@@ -55,12 +55,6 @@ export const DEFAULT_CUSTOM_COMMANDS: readonly CustomCommandConfig[] = [
     label: 'Mermaid 다이어그램',
     description: 'Mermaid 플로우차트 다이어그램 코드 블록 삽입',
     template: '```mermaid\nflowchart TD\n  {{cursor}}A[시작] --> B[끝]\n```'
-  },
-  {
-    trigger: 'toc',
-    label: '목차 (TOC)',
-    description: '현재 문서 헤딩 기준 목차 블록 삽입',
-    template: DEFAULT_TOC_COMMAND_TEMPLATE
   }
 ]
 
@@ -159,6 +153,12 @@ function parseCustomCommands(value: unknown, strict: boolean): CustomCommandConf
       continue
     }
     const triggerKey = item.trigger.toLowerCase()
+    if (
+      triggerKey === 'toc' &&
+      item.template.replace(/\r\n/g, '\n') === LEGACY_BUILTIN_TOC_TEMPLATE
+    ) {
+      continue
+    }
     if (seenTriggers.has(triggerKey)) {
       if (strict) return null
       continue

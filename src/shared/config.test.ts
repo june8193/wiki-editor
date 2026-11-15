@@ -112,10 +112,11 @@ describe('shared config validation and normalization', () => {
     ).toThrow(/customCommands/i)
   })
 
-  it('seeds built-in custom commands by default and validates trigger syntax & uniqueness', () => {
+  it('seeds built-in custom commands without legacy /toc and validates trigger syntax & uniqueness', () => {
     const triggers = DEFAULT_APP_CONFIG.customCommands.map((cmd) => cmd.trigger)
-    expect(DEFAULT_CUSTOM_COMMANDS.length).toBeGreaterThanOrEqual(4)
-    expect(triggers).toEqual(expect.arrayContaining(['function', 'struct', 'table', 'mermaid', 'toc']))
+    expect(DEFAULT_CUSTOM_COMMANDS.length).toBe(4)
+    expect(triggers).toEqual(['function', 'struct', 'table', 'mermaid'])
+    expect(triggers).not.toContain('toc')
 
     expect(validateCustomCommandTrigger('function')).toBeNull()
     expect(validateCustomCommandTrigger('api-doc_2')).toBeNull()
@@ -156,5 +157,47 @@ describe('shared config validation and normalization', () => {
 
     const cleared = normalizeAppConfig({ customCommands: [] })
     expect(cleared.customCommands).toEqual([])
+  })
+
+  it('strips legacy built-in /toc stub commands while preserving user-customized /toc commands', () => {
+    const legacyLf = {
+      trigger: 'toc',
+      label: '목차 (TOC)',
+      description: '현재 문서 헤딩 기준 목차 블록 삽입',
+      template: '<!-- toc -->\n<!-- /toc -->'
+    }
+    const legacyCrlf = {
+      trigger: 'TOC',
+      label: '목차 (TOC)',
+      template: '<!-- toc -->\r\n<!-- /toc -->'
+    }
+    const customToc = {
+      trigger: 'toc',
+      label: 'Custom TOC',
+      template: '## Contents\n{{cursor}}'
+    }
+    const keptOther = {
+      trigger: 'function',
+      label: 'Function',
+      template: '### fn'
+    }
+
+    const normalized = normalizeAppConfig({
+      customCommands: [legacyLf, legacyCrlf, keptOther]
+    })
+    expect(normalized.customCommands).toEqual([keptOther])
+
+    const normalizedWithCustom = normalizeAppConfig({
+      customCommands: [legacyLf, customToc]
+    })
+    expect(normalizedWithCustom.customCommands).toEqual([customToc])
+
+    const rawValidated = validateConfigRaw(
+      JSON.stringify({
+        version: 1,
+        customCommands: [legacyLf, keptOther]
+      })
+    )
+    expect(rawValidated.customCommands).toEqual([keptOther])
   })
 })

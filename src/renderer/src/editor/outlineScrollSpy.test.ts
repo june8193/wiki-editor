@@ -290,19 +290,13 @@ describe('outlineScrollSpy', () => {
     expect(measureActiveHeadingIndexInRawEditor(collapsedViewport, headings)).toBe(0)
   })
 
-  it('matches un-id WYSIWYG container headings accurately when empty, blockquote, or Setext headings appear alongside dynamic numbering', () => {
+  it('matches un-id WYSIWYG container headings accurately when empty, blockquote, or Setext headings appear alongside explicit numbered headings', () => {
     const markdown = ['# 1. Alpha', '', '## Beta'].join('\n')
     const headings = parseMarkdownHeadings(markdown)
 
     const container = document.createElement('div')
     const hAlpha = document.createElement('h1')
-    const suppressedSpan = document.createElement('span')
-    suppressedSpan.className = 'heading-number-suppressed'
-    suppressedSpan.textContent = '1. '
-    const numberSpan = document.createElement('span')
-    numberSpan.className = 'heading-number'
-    numberSpan.textContent = '1. '
-    hAlpha.append(suppressedSpan, numberSpan, document.createTextNode('Alpha'))
+    hAlpha.textContent = '1. Alpha'
 
     const hEmpty = document.createElement('h1')
     hEmpty.appendChild(document.createElement('br'))

@@ -1,5 +1,5 @@
-import { type CustomCommandConfig, DEFAULT_TOC_COMMAND_TEMPLATE } from '@shared/config'
-import { generateTocMarkdown, isOffsetInCodeFence } from './MarkdownTocEngine'
+import { type CustomCommandConfig } from '@shared/config'
+import { isOffsetInCodeFence } from './MarkdownTocEngine'
 
 export interface SlashQueryMatch {
   query: string
@@ -154,35 +154,4 @@ export function expandSlashTemplate(
     cursorOffset: firstCursorIndex,
     hasCursorPlaceholder: true
   }
-}
-
-/**
- * Returns true when a command represents the uncustomized default dynamic TOC generator command.
- */
-export function isDefaultTocCommand(
-  command: Pick<CustomCommandConfig, 'trigger' | 'template'>
-): boolean {
-  return command.trigger === 'toc' && command.template === DEFAULT_TOC_COMMAND_TEMPLATE
-}
-
-/**
- * Resolves the markdown snippet to insert for a selected slash command, generating a live TOC
- * block for the default `toc` command or expanding template placeholders otherwise.
- */
-export function resolveSlashCommandSnippet(
-  documentText: string,
-  command: CustomCommandConfig,
-  context: SlashTemplateContext = {}
-): ExpandedSlashTemplate {
-  if (isDefaultTocCommand(command)) {
-    const tocBody = generateTocMarkdown(documentText)
-    const text = tocBody ? `<!-- toc -->\n${tocBody}\n<!-- /toc -->` : '<!-- toc -->\n<!-- /toc -->'
-    return {
-      text,
-      cursorOffset: text.length,
-      hasCursorPlaceholder: false
-    }
-  }
-
-  return expandSlashTemplate(command.template, context)
 }
