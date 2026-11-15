@@ -1,5 +1,7 @@
 import type { BufferKeyRemap } from './DocumentBufferStore'
 
+export const TAB_DRAG_MIME = 'application/x-wiki-tab'
+
 export type PaneId = 'primary' | 'secondary'
 export type SplitMode = 'single' | 'horizontal' | 'vertical'
 export type SplitDirection = Exclude<SplitMode, 'single'>

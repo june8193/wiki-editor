@@ -25,8 +25,6 @@ interface PaneViewProps {
   isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
-  draggingWorkspaceImagePath?: string | null
-  onClearDraggingWorkspaceImage?: () => void
   onDragStartTab: (payload: DraggingTabPayload) => void
   onDragEndTab: () => void
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
@@ -46,8 +44,6 @@ export function PaneView({
   isShortcutDisabled = false,
   buffers,
   draggingTab,
-  draggingWorkspaceImagePath = null,
-  onClearDraggingWorkspaceImage,
   onDragStartTab,
   onDragEndTab,
   onActiveHeadingChange,
@@ -113,9 +109,6 @@ export function PaneView({
           scrollRequest={activeScrollRequest}
           isActive={isActivePane}
           isShortcutDisabled={isShortcutDisabled}
-          draggingWorkspaceImagePath={draggingWorkspaceImagePath}
-          onClearDraggingWorkspaceImage={onClearDraggingWorkspaceImage}
-          onReportError={actions.onReportError}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}

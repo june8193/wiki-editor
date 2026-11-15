@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { WorkspaceImageIngestInput, WorkspaceImageIngestResult } from '@shared/assets'
 import {
   DEFAULT_CUSTOM_COMMANDS,
   type CustomCommandConfig,
@@ -7,12 +6,7 @@ import {
 } from '@shared/config'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
-import {
-  extractClipboardImageSources,
-  inspectDropTransfer,
-  type PendingImageSource,
-  resolvePendingImageSources
-} from '../editor/imageIngestion'
+import type { ImageIngestor } from '../editor/imageIngestion'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
@@ -34,6 +28,7 @@ import {
   syncWysiwygImageDisplaySources
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
+import { useEditorImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from '../hooks/useSlashMenu'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
@@ -62,7 +57,7 @@ interface WysiwygMarkdownEditorProps {
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
   onClearDraggingWorkspaceImage?: () => void
   onReportError?: (title: string, error: unknown) => void
-  ingestImage?: (input: WorkspaceImageIngestInput) => Promise<WorkspaceImageIngestResult>
+  ingestImage?: ImageIngestor
   getPathForFile?: (file: File) => string
 }
 
@@ -238,7 +233,7 @@ export function WysiwygMarkdownEditor({
   documentTitle,
   documentPath,
   enableImageInsertion = Boolean(documentPath),
-  draggingWorkspaceImagePath = null,
+  draggingWorkspaceImagePath,
   scrollRequest,
   isActive = true,
   onChangeContent,
@@ -264,109 +259,39 @@ export function WysiwygMarkdownEditor({
   documentTitleRef.current = documentTitle
   const documentPathRef = useRef(documentPath)
   documentPathRef.current = documentPath
-  const enableImageInsertionRef = useRef(enableImageInsertion)
-  enableImageInsertionRef.current = enableImageInsertion
-  const draggingWorkspaceImagePathRef = useRef(draggingWorkspaceImagePath)
-  draggingWorkspaceImagePathRef.current = draggingWorkspaceImagePath
-  const onClearDraggingWorkspaceImageRef = useRef(onClearDraggingWorkspaceImage)
-  onClearDraggingWorkspaceImageRef.current = onClearDraggingWorkspaceImage
-  const onReportErrorRef = useRef(onReportError)
-  onReportErrorRef.current = onReportError
-  const ingestImageRef = useRef(ingestImage)
-  ingestImageRef.current = ingestImage
-  const getPathForFileRef = useRef(getPathForFile)
-  getPathForFileRef.current = getPathForFile
   const insertTocRef = useRef<() => void>(() => undefined)
   const editorRef = useRef<Editor | null>(null)
 
-  const runImageInsertionRef = useRef<
-    (
-      targetDocumentPath: string,
-      sources: PendingImageSource[],
-      range: { from: number; to: number }
-    ) => void
-  >(() => undefined)
-  runImageInsertionRef.current = (targetDocumentPath, sources, range) => {
-    void (async () => {
-      try {
-        const results = await resolvePendingImageSources(
-          targetDocumentPath,
-          sources,
-          ingestImageRef.current
-        )
-        const instance = editorRef.current
-        if (!instance || instance.isDestroyed || documentPathRef.current !== targetDocumentPath) {
-          return
-        }
+  const {
+    handlePaste: handleImagePaste,
+    handleDragOver: handleImageDragOver,
+    handleDrop: handleImageDrop
+  } = useEditorImageTransfer<Editor['view']>({
+    documentPath: documentPath ?? null,
+    enableImageInsertion,
+    draggingWorkspaceImagePath,
+    onClearDraggingWorkspaceImage,
+    onReportError,
+    ingestImage,
+    getPathForFile,
+    onTabDrag: () => true,
+    getTarget: () => {
+      const instance = editorRef.current
+      return instance && !instance.isDestroyed ? instance.view : null
+    },
+    posAtCoords: (view, clientX, clientY) =>
+      view.posAtCoords({ left: clientX, top: clientY })?.pos ?? null,
+    getSelectionRange: (view) => ({
+      from: view.state.selection.from,
+      to: view.state.selection.to
+    }),
+    insertImages: (_view, results, range) => {
+      const instance = editorRef.current
+      if (instance && !instance.isDestroyed) {
         insertWysiwygImages(instance, results, range)
-      } catch (error) {
-        onReportErrorRef.current?.('이미지 삽입에 실패했습니다.', error)
-      }
-    })()
-  }
-
-  const handleImageDragOver = useCallback((event: DragEvent): boolean => {
-    if (event.defaultPrevented) {
-      return false
-    }
-    const inspected = inspectDropTransfer(event.dataTransfer, {
-      getPathForFile: getPathForFileRef.current,
-      draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
-    })
-    if (inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
-      return false
-    }
-    event.preventDefault()
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect =
-        enableImageInsertionRef.current && documentPathRef.current ? 'copy' : 'none'
-    }
-    return true
-  }, [])
-
-  const handleImageDrop = useCallback((event: DragEvent, view: Editor['view'] | null): boolean => {
-    if (event.defaultPrevented) {
-      return false
-    }
-    const inspected = inspectDropTransfer(event.dataTransfer, {
-      getPathForFile: getPathForFileRef.current,
-      draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
-    })
-    if (inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
-      return false
-    }
-    event.preventDefault()
-    event.stopPropagation()
-    onClearDraggingWorkspaceImageRef.current?.()
-
-    const targetDocumentPath = documentPathRef.current
-    if (!enableImageInsertionRef.current || !targetDocumentPath || inspected.sources.length === 0) {
-      return true
-    }
-
-    const activeView = view ?? editorRef.current?.view ?? null
-    if (!activeView) {
-      return true
-    }
-
-    let dropPos: { pos: number } | null = null
-    if (
-      typeof document.elementFromPoint === 'function' &&
-      (event.clientX > 0 || event.clientY > 0)
-    ) {
-      try {
-        dropPos = activeView.posAtCoords({ left: event.clientX, top: event.clientY })
-      } catch {
-        dropPos = null
       }
     }
-    const targetRange = dropPos
-      ? { from: dropPos.pos, to: dropPos.pos }
-      : { from: activeView.state.selection.from, to: activeView.state.selection.to }
-
-    runImageInsertionRef.current(targetDocumentPath, inspected.sources, targetRange)
-    return true
-  }, [])
+  })
 
   const {
     controlsRef: slashControlsRef,
@@ -403,45 +328,10 @@ export function WysiwygMarkdownEditor({
           'aria-label': '위지윅 문서 에디터'
         },
         transformPastedHTML: sanitizeHtmlWithRehype,
-        handlePaste: (view, event) => {
-          const targetDocumentPath = documentPathRef.current
-          if (!enableImageInsertionRef.current || !targetDocumentPath) {
-            return false
-          }
-          const sources = extractClipboardImageSources(event.clipboardData, {
-            getPathForFile: getPathForFileRef.current
-          })
-          if (sources.length === 0) {
-            return false
-          }
-          event.preventDefault()
-          runImageInsertionRef.current(targetDocumentPath, sources, {
-            from: view.state.selection.from,
-            to: view.state.selection.to
-          })
-          return true
-        },
+        handlePaste: (view, event) => handleImagePaste(event, view),
         handleDOMEvents: {
-          dragover: (_view, event) => {
-            const inspected = inspectDropTransfer(event.dataTransfer, {
-              getPathForFile: getPathForFileRef.current,
-              draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
-            })
-            if (inspected.isTabDrag) {
-              return true
-            }
-            return handleImageDragOver(event)
-          },
-          drop: (view, event) => {
-            const inspected = inspectDropTransfer(event.dataTransfer, {
-              getPathForFile: getPathForFileRef.current,
-              draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
-            })
-            if (inspected.isTabDrag) {
-              return true
-            }
-            return handleImageDrop(event, view)
-          }
+          dragover: (_view, event) => handleImageDragOver(event),
+          drop: (view, event) => handleImageDrop(event, view)
         },
         handleKeyDown: (view, event) => {
           const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey

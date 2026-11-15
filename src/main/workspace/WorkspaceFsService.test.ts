@@ -300,6 +300,18 @@ describe('WorkspaceFsService', () => {
       savedPath: join(docDir, 'assets', 'image.webp')
     })
     expect((await stat(reservedBytes.savedPath)).isFile()).toBe(true)
+
+    const uppercaseImg = join(outsideDir, 'Photo.PNG')
+    await writeFile(uppercaseImg, new Uint8Array([3, 2, 1]))
+    const uppercaseRes = await service.ingestImage({
+      documentPath: docPath,
+      source: { kind: 'filePath', filePath: uppercaseImg }
+    })
+    expect(uppercaseRes).toEqual({
+      markdownPath: './assets/Photo.PNG',
+      altText: 'Photo',
+      savedPath: join(docDir, 'assets', 'Photo.PNG')
+    })
   })
 
   it('references in-workspace images via POSIX relative CommonMark paths without copying or creating assets/', async () => {
@@ -375,7 +387,7 @@ describe('WorkspaceFsService', () => {
       })
     ).rejects.toThrow()
 
-    // Document outside workspace or inside .git
+    // Document outside workspace or inside .git, or workspace subdirectory / missing file
     const outsideDoc = join(outsideDir, 'outside.md')
     await writeFile(outsideDoc, '# Outside\n', 'utf8')
     await expect(
@@ -384,6 +396,19 @@ describe('WorkspaceFsService', () => {
         source: { kind: 'clipboard', bytes: new Uint8Array([1]), mimeType: 'image/png' }
       })
     ).rejects.toThrow()
+    await expect(
+      service.ingestImage({
+        documentPath: docDir,
+        source: { kind: 'clipboard', bytes: new Uint8Array([1]), mimeType: 'image/png' }
+      })
+    ).rejects.toThrow()
+    await expect(
+      service.ingestImage({
+        documentPath: join(docDir, 'missing.md'),
+        source: { kind: 'clipboard', bytes: new Uint8Array([1]), mimeType: 'image/png' }
+      })
+    ).rejects.toThrow()
+    await expect(lstat(join(workspaceDir, 'assets'))).rejects.toMatchObject({ code: 'ENOENT' })
 
     // In-workspace image inside ignored system folder (.git)
     const gitImg = join(workspaceDir, '.git', 'hidden.png')

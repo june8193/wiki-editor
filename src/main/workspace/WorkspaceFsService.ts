@@ -402,8 +402,9 @@ export class WorkspaceFsService {
       throw new Error('유효한 문서 경로가 필요합니다.')
     }
 
-    const resolvedDocPath = await this.resolveWritablePath(input.documentPath)
-    if (isSameWorkspacePath(root, resolvedDocPath)) {
+    const resolvedDocPath = await this.resolveExistingPath(input.documentPath)
+    const docStats = await stat(resolvedDocPath)
+    if (!docStats.isFile()) {
       throw new Error('문서 경로가 유효하지 않습니다.')
     }
     const docDir = dirname(resolvedDocPath)
@@ -422,16 +423,7 @@ export class WorkspaceFsService {
     }
 
     if (input.source.kind === 'fileBytes') {
-      if (input.source.bytes.byteLength === 0) {
-        throw new Error('빈 이미지 파일은 삽입할 수 없습니다.')
-      }
-      const safeName = basename(input.source.fileName)
-      if (!isSupportedImageFile(safeName)) {
-        throw new Error(`지원하지 않는 이미지 파일입니다: ${safeName}`)
-      }
-      const rawExt = extname(safeName).toLowerCase()
-      const stem = normalizeImageStem(basename(safeName, extname(safeName)))
-      return this.saveUniqueAssetToDocAssets(docDir, stem, rawExt, input.source.bytes)
+      return this.saveCopiedImageBytes(docDir, input.source.fileName, input.source.bytes)
     }
 
     return this.ingestFromFilePath(root, docDir, input.source.filePath)
@@ -495,8 +487,23 @@ export class WorkspaceFsService {
     }
 
     const bytes = await readFile(sourceReal)
-    const rawExt = extname(candidateBase).toLowerCase()
-    const stem = normalizeImageStem(basename(candidateBase, extname(candidateBase)))
+    return this.saveCopiedImageBytes(docDir, candidateBase, bytes)
+  }
+
+  private async saveCopiedImageBytes(
+    docDir: string,
+    sourceFileName: string,
+    bytes: Uint8Array
+  ): Promise<WorkspaceImageIngestResult> {
+    if (bytes.byteLength === 0) {
+      throw new Error('빈 이미지 파일은 삽입할 수 없습니다.')
+    }
+    const safeName = basename(sourceFileName)
+    if (!isSupportedImageFile(safeName)) {
+      throw new Error(`지원하지 않는 이미지 파일입니다: ${safeName}`)
+    }
+    const rawExt = extname(safeName)
+    const stem = normalizeImageStem(basename(safeName, rawExt))
     return this.saveUniqueAssetToDocAssets(docDir, stem, rawExt, bytes)
   }
 

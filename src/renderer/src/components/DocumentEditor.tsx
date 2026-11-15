@@ -34,13 +34,10 @@ interface DocumentEditorProps {
   scrollRequest?: OutlineScrollRequest | null
   isActive?: boolean
   isShortcutDisabled?: boolean
-  draggingWorkspaceImagePath?: string | null
   onChangeContent: (nextContent: string) => void
   onSave: () => void
   onUpdateViewState: (patch: TabViewPatch) => void
   onActiveHeadingChange?: (update: DocumentOutlineSpyUpdate) => void
-  onClearDraggingWorkspaceImage?: () => void
-  onReportError?: (title: string, error: unknown) => void
 }
 
 const EDITOR_MODE_OPTIONS: ReadonlyArray<{
@@ -66,14 +63,10 @@ export function DocumentEditor({
   scrollRequest = null,
   isActive = true,
   isShortcutDisabled = false,
-  draggingWorkspaceImagePath = null,
   onChangeContent,
   onSave,
   onUpdateViewState,
-  onActiveHeadingChange,
-  onClearDraggingWorkspaceImage,
-  onReportError
-}: DocumentEditorProps) {
+  onActiveHeadingChange}: DocumentEditorProps) {
   const { allowRichModes, effectiveMode } = resolveEffectiveEditorMode(activeDoc, tab.mode)
   const rawRatio = normalizeSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
   const previewRatio = roundSplitRatio(1 - rawRatio)
@@ -178,9 +171,6 @@ export function DocumentEditor({
         documentTitle={documentTitle}
         documentPath={documentPath}
         enableImageInsertion={allowRichModes && Boolean(documentPath)}
-        draggingWorkspaceImagePath={draggingWorkspaceImagePath}
-        onClearDraggingWorkspaceImage={onClearDraggingWorkspaceImage}
-        onReportError={onReportError}
         scrollRequest={
           matchedScrollRequest && (effectiveMode === 'raw' || effectiveMode === 'split')
             ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
@@ -272,9 +262,6 @@ export function DocumentEditor({
           documentTitle={documentTitle}
           documentPath={documentPath}
           enableImageInsertion={allowRichModes && Boolean(documentPath)}
-          draggingWorkspaceImagePath={draggingWorkspaceImagePath}
-          onClearDraggingWorkspaceImage={onClearDraggingWorkspaceImage}
-          onReportError={onReportError}
           mermaidRenderer={mermaidRenderer}
           scrollRequest={
             matchedScrollRequest

@@ -6,8 +6,8 @@ import {
   type WorkspaceImageIngestInput,
   type WorkspaceImageIngestResult
 } from '@shared/assets'
+import { TAB_DRAG_MIME } from '../stores/PaneTabStore'
 
-export const TAB_DRAG_MIME = 'application/x-wiki-tab'
 export const WORKSPACE_IMAGE_DRAG_MIME = 'application/x-wiki-workspace-image'
 
 export type ImageIngestor = (

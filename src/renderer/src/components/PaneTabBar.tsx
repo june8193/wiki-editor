@@ -1,5 +1,5 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
-import { TAB_DRAG_MIME } from '../editor/imageIngestion'
+import { TAB_DRAG_MIME } from '../stores/PaneTabStore'
 import { useDismissable } from '../hooks/useDismissable'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
@@ -23,7 +23,6 @@ export interface PaneInteractionActions {
   onChangeContent: (bufferKey: string, nextContent: string) => void
   onSaveBuffer: (bufferKey: string) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
-  onReportError?: (title: string, error: unknown) => void
 }
 
 interface TabContextMenuState {

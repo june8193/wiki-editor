@@ -26,6 +26,7 @@ import {
   stripHeadingNumbers
 } from './editor/MarkdownTocEngine'
 import { useConfigController } from './hooks/useConfigController'
+import { ImageTransferContext, type ImageTransferContextValue } from './hooks/useEditorImageTransfer'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
 import { useOutlineScrollSpy } from './hooks/useOutlineScrollSpy'
@@ -602,8 +603,7 @@ export function App() {
       onDuplicateTab: duplicateTabToOtherPane,
       onChangeContent: handlePaneChangeContent,
       onSaveBuffer: saveBufferByKey,
-      onUpdateTabViewState: handlePaneUpdateTabViewState,
-      onReportError: handleReportImageError
+      onUpdateTabViewState: handlePaneUpdateTabViewState
     }),
     [
       activateTab,
@@ -611,11 +611,19 @@ export function App() {
       focusPane,
       handlePaneChangeContent,
       handlePaneUpdateTabViewState,
-      handleReportImageError,
       moveTab,
       requestCloseTab,
       saveBufferByKey
     ]
+  )
+
+  const imageTransferContextValue = useMemo<ImageTransferContextValue>(
+    () => ({
+      draggingWorkspaceImagePath,
+      clearDraggingWorkspaceImage: handleClearDraggingWorkspaceImage,
+      reportImageError: handleReportImageError
+    }),
+    [draggingWorkspaceImagePath, handleClearDraggingWorkspaceImage, handleReportImageError]
   )
 
   const isCurrentWorkspaceFavorite =
@@ -712,22 +720,22 @@ export function App() {
           </>
         )}
 
-        <PaneWorkspace
-          layout={layout}
-          buffers={buffers}
-          theme={config.theme}
-          autoSave={config.autoSave}
-          showHeadingNumbers={config.showHeadingNumbers}
-          customCommands={config.customCommands}
-          scrollRequest={outlineScrollRequest}
-          isShortcutDisabled={isEditorShortcutDisabled}
-          draggingWorkspaceImagePath={draggingWorkspaceImagePath}
-          onClearDraggingWorkspaceImage={handleClearDraggingWorkspaceImage}
-          onSetSplitRatio={setSplitRatio}
-          onSplitWithTab={splitWithTab}
-          onActiveHeadingChange={handleActiveHeadingReport}
-          actions={paneActions}
-        />
+        <ImageTransferContext.Provider value={imageTransferContextValue}>
+          <PaneWorkspace
+            layout={layout}
+            buffers={buffers}
+            theme={config.theme}
+            autoSave={config.autoSave}
+            showHeadingNumbers={config.showHeadingNumbers}
+            customCommands={config.customCommands}
+            scrollRequest={outlineScrollRequest}
+            isShortcutDisabled={isEditorShortcutDisabled}
+            onSetSplitRatio={setSplitRatio}
+            onSplitWithTab={splitWithTab}
+            onActiveHeadingChange={handleActiveHeadingReport}
+            actions={paneActions}
+          />
+        </ImageTransferContext.Provider>
 
         {!rightSidebar.isCollapsed ? (
           <>

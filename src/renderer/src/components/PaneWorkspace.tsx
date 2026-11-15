@@ -16,8 +16,6 @@ interface PaneWorkspaceProps {
   customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
-  draggingWorkspaceImagePath?: string | null
-  onClearDraggingWorkspaceImage?: () => void
   onSetSplitRatio: (ratio: number) => void
   onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
@@ -42,8 +40,6 @@ export function PaneWorkspace({
   customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
-  draggingWorkspaceImagePath = null,
-  onClearDraggingWorkspaceImage,
   onSetSplitRatio,
   onSplitWithTab,
   onActiveHeadingChange,
@@ -68,8 +64,6 @@ export function PaneWorkspace({
     isShortcutDisabled,
     buffers,
     draggingTab,
-    draggingWorkspaceImagePath,
-    onClearDraggingWorkspaceImage,
     onDragStartTab: setDraggingTab,
     onDragEndTab: clearDragging,
     onActiveHeadingChange,

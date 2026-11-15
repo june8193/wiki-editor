@@ -19,14 +19,9 @@ import {
   type CustomCommandConfig,
   type ThemeMode
 } from '@shared/config'
-import type { WorkspaceImageIngestInput, WorkspaceImageIngestResult } from '@shared/assets'
 import {
-  extractClipboardImageSources,
   formatRawMarkdownImages,
-  type ImageIngestor,
-  inspectDropTransfer,
-  type PendingImageSource,
-  resolvePendingImageSources
+  type ImageIngestor
 } from '../editor/imageIngestion'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
@@ -41,6 +36,7 @@ import {
 } from '../editor/outlineScrollSpy'
 import { detectSlashQuery, resolveSlashCommandSnippet } from '../editor/SlashCommandEngine'
 import type { CursorPosition } from '../stores/PaneTabStore'
+import { useEditorImageTransfer } from './useEditorImageTransfer'
 import { useEditorOutlineSpy } from './useEditorOutlineSpy'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from './useSlashMenu'
 import { syncElementScrollTop } from './useSyncScrollTop'
@@ -210,7 +206,7 @@ export function useRawCodeMirrorEditor({
   documentTitle,
   documentPath,
   enableImageInsertion = language === 'markdown' && Boolean(documentPath),
-  draggingWorkspaceImagePath = null,
+  draggingWorkspaceImagePath,
   scrollRequest,
   isActive = true,
   editorViewRef,
@@ -246,16 +242,9 @@ export function useRawCodeMirrorEditor({
     enableSlashCommands,
     customCommands,
     documentTitle,
-    documentPath,
-    enableImageInsertion,
-    draggingWorkspaceImagePath,
     onChangeContent,
     onUpdateViewState,
-    onRawScroll,
-    onClearDraggingWorkspaceImage,
-    onReportError,
-    ingestImage,
-    getPathForFile
+    onRawScroll
   })
   runtimeRef.current = {
     content,
@@ -267,125 +256,41 @@ export function useRawCodeMirrorEditor({
     enableSlashCommands,
     customCommands,
     documentTitle,
-    documentPath,
-    enableImageInsertion,
-    draggingWorkspaceImagePath,
     onChangeContent,
     onUpdateViewState,
-    onRawScroll,
+    onRawScroll
+  }
+
+  const {
+    handlePaste: handleImagePaste,
+    handleDragOver: handleImageDragOver,
+    handleDrop: handleImageDrop
+  } = useEditorImageTransfer<EditorView>({
+    documentPath: documentPath ?? null,
+    enableImageInsertion,
+    draggingWorkspaceImagePath,
     onClearDraggingWorkspaceImage,
     onReportError,
     ingestImage,
-    getPathForFile
-  }
-
-  const runImageInsertion = useCallback(
-    (
-      targetDocumentPath: string,
-      sources: PendingImageSource[],
-      range: { from: number; to: number }
-    ): void => {
-      const ingestOverride = runtimeRef.current.ingestImage
-      void (async () => {
-        try {
-          const results = await resolvePendingImageSources(
-            targetDocumentPath,
-            sources,
-            ingestOverride
-          )
-          const activeView = viewRef.current
-          if (
-            !activeView ||
-            runtimeRef.current.documentPath !== targetDocumentPath ||
-            !runtimeRef.current.enableImageInsertion
-          ) {
-            return
-          }
-          const docLen = activeView.state.doc.length
-          const clampedFrom = Math.max(0, Math.min(range.from, docLen))
-          const clampedTo = Math.max(clampedFrom, Math.min(range.to, docLen))
-          const markdownText = formatRawMarkdownImages(results)
-          activeView.dispatch({
-            changes: { from: clampedFrom, to: clampedTo, insert: markdownText },
-            selection: { anchor: clampedFrom + markdownText.length }
-          })
-          activeView.focus()
-        } catch (error) {
-          runtimeRef.current.onReportError?.('이미지 삽입에 실패했습니다.', error)
-        }
-      })()
+    getPathForFile,
+    getTarget: () => viewRef.current,
+    posAtCoords: (view, clientX, clientY) => view.posAtCoords({ x: clientX, y: clientY }),
+    getSelectionRange: (view) => {
+      const sel = view.state.selection.main
+      return { from: sel.from, to: sel.to }
     },
-    []
-  )
-
-  const handleImageDragOver = useCallback((event: DragEvent): boolean => {
-    if (event.defaultPrevented) {
-      return false
-    }
-    const runtime = runtimeRef.current
-    const inspected = inspectDropTransfer(event.dataTransfer, {
-      getPathForFile: runtime.getPathForFile,
-      draggingWorkspaceImagePath: runtime.draggingWorkspaceImagePath
-    })
-    if (inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
-      return false
-    }
-    event.preventDefault()
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect =
-        runtime.enableImageInsertion && runtime.documentPath ? 'copy' : 'none'
-    }
-    return true
-  }, [])
-
-  const handleImageDrop = useCallback(
-    (event: DragEvent, view: EditorView | null): boolean => {
-      if (event.defaultPrevented) {
-        return false
-      }
-      const runtime = runtimeRef.current
-      const inspected = inspectDropTransfer(event.dataTransfer, {
-        getPathForFile: runtime.getPathForFile,
-        draggingWorkspaceImagePath: runtime.draggingWorkspaceImagePath
+    insertImages: (view, results, range) => {
+      const docLen = view.state.doc.length
+      const clampedFrom = Math.max(0, Math.min(range.from, docLen))
+      const clampedTo = Math.max(clampedFrom, Math.min(range.to, docLen))
+      const markdownText = formatRawMarkdownImages(results)
+      view.dispatch({
+        changes: { from: clampedFrom, to: clampedTo, insert: markdownText },
+        selection: { anchor: clampedFrom + markdownText.length }
       })
-      if (inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
-        return false
-      }
-      event.preventDefault()
-      event.stopPropagation()
-      runtime.onClearDraggingWorkspaceImage?.()
-
-      if (!runtime.enableImageInsertion || !runtime.documentPath || inspected.sources.length === 0) {
-        return true
-      }
-
-      const activeView = view ?? viewRef.current
-      if (!activeView) {
-        return true
-      }
-
-      let dropPos: number | null = null
-      if (
-        typeof document.elementFromPoint === 'function' &&
-        (event.clientX > 0 || event.clientY > 0)
-      ) {
-        try {
-          dropPos = activeView.posAtCoords({ x: event.clientX, y: event.clientY })
-        } catch {
-          dropPos = null
-        }
-      }
-      const sel = activeView.state.selection.main
-      const range =
-        dropPos !== null
-          ? { from: dropPos, to: dropPos }
-          : { from: sel.from, to: sel.to }
-
-      runImageInsertion(runtime.documentPath, inspected.sources, range)
-      return true
-    },
-    [runImageInsertion]
-  )
+      view.focus()
+    }
+  })
 
   const {
     controlsRef: slashControlsRef,
@@ -490,22 +395,7 @@ export function useRawCodeMirrorEditor({
         }),
         Prec.high(
           EditorView.domEventHandlers({
-            paste: (event, view) => {
-              const runtime = runtimeRef.current
-              if (!runtime.enableImageInsertion || !runtime.documentPath) {
-                return false
-              }
-              const sources = extractClipboardImageSources(event.clipboardData, {
-                getPathForFile: runtime.getPathForFile
-              })
-              if (sources.length === 0) {
-                return false
-              }
-              event.preventDefault()
-              const sel = view.state.selection.main
-              runImageInsertion(runtime.documentPath, sources, { from: sel.from, to: sel.to })
-              return true
-            },
+            paste: (event, view) => handleImagePaste(event, view),
             dragover: (event) => handleImageDragOver(event),
             drop: (event, view) => handleImageDrop(event, view)
           })
