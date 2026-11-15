@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import {
+  type DocumentBuffer,
+  type DocumentBufferSnapshot,
+  type SharedBufferHubEvent,
+  type SharedBufferStateSnapshot,
+  toErrorMessage
+} from '@shared/documentBuffer'
 import { getWorkspacePathKey, WorkspaceEntry } from '@shared/workspace'
 import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
-import { DocumentBuffer, DocumentBufferStore } from '../stores/DocumentBufferStore'
+import { DocumentBufferStore } from '../stores/DocumentBufferStore'
 import {
   type PaneId,
+  type PaneLayoutState,
   PaneTabStore,
   type PaneTabTransition
 } from '../stores/PaneTabStore'
-import { toErrorMessage } from '../utils/toErrorMessage'
+import { useWikiApi } from './useWikiApi'
 
 export interface DirtyTabCloseRequest {
   paneId: PaneId
@@ -16,19 +24,33 @@ export interface DirtyTabCloseRequest {
   buffer: DocumentBuffer
 }
 
-interface InFlightSaveEntry {
-  currentKey: string
-  promise: Promise<boolean>
+function extractLayoutBufferKeys(layout: PaneLayoutState): string[] {
+  const keys: string[] = []
+  for (const paneId of ['primary', 'secondary'] as const) {
+    const pane = layout.panes[paneId]
+    if (!pane) continue
+    for (const tab of pane.tabs) {
+      keys.push(tab.bufferKey)
+    }
+  }
+  return keys
 }
 
-// Electron contextBridge strips Error subclasses/errno codes, so deleted workspace files match localized/ENOENT messages.
-function isMissingWorkspaceFileError(error: unknown): boolean {
-  const message = toErrorMessage(error, '')
-  return (
-    message.includes('경로를 찾을 수 없습니다') ||
-    message.includes('파일을 찾을 수 없습니다') ||
-    message.includes('ENOENT')
-  )
+function movePendingCount(
+  counts: Map<string, number>,
+  oldKey: string,
+  newKey: string
+): void {
+  const count = counts.get(oldKey)
+  if (count === undefined) return
+  counts.delete(oldKey)
+  counts.set(newKey, (counts.get(newKey) ?? 0) + count)
+}
+
+function moveTrackedKey(set: Set<string>, oldKey: string, newKey: string): void {
+  if (set.delete(oldKey)) {
+    set.add(newKey)
+  }
 }
 
 function logPaneTabTransition(
@@ -101,29 +123,24 @@ function logPaneTabTransition(
 }
 
 interface UseEditorWorkspaceOptions {
-  autoSave: boolean
-  autoSaveDelayMs: number
   isAutoSavePaused: boolean
   isShortcutDisabled?: boolean
-  onSaveConfigRaw: (rawContent: string) => Promise<unknown>
   onWorkspaceSaved?: () => void
   onError: (message: string | null, error?: unknown) => void
   onConfirmCloseDirtyTab: (request: DirtyTabCloseRequest) => void
 }
 
 /**
- * Coordinates the central DocumentBufferStore and 2-pane PaneTabStore with persistence and auto-save.
+ * Coordinates the window's 2-pane PaneTabStore with the central SharedDocumentBufferHub via IPC.
  */
 export function useEditorWorkspace({
-  autoSave,
-  autoSaveDelayMs,
   isAutoSavePaused,
   isShortcutDisabled = isAutoSavePaused,
-  onSaveConfigRaw,
   onWorkspaceSaved,
   onError,
   onConfirmCloseDirtyTab
 }: UseEditorWorkspaceOptions) {
+  const wikiApi = useWikiApi()
   const bufferStoreRef = useRef<DocumentBufferStore | null>(null)
   if (!bufferStoreRef.current) {
     bufferStoreRef.current = new DocumentBufferStore()
@@ -141,97 +158,176 @@ export function useEditorWorkspace({
   const layout = useSyncExternalStore(tabStore.subscribe, tabStore.getSnapshot)
 
   const mountedRef = useRef<boolean>(true)
-  const isAutoSavePausedRef = useRef<boolean>(isAutoSavePaused)
   const isShortcutDisabledRef = useRef<boolean>(isShortcutDisabled)
-  const inFlightSavesRef = useRef<Map<string, InFlightSaveEntry>>(new Map())
-  const autoSaveTimersRef = useRef<Map<string, { version: number; timerId: number }>>(new Map())
-  const lastAutoSaveAttemptVersionRef = useRef<Map<string, number>>(new Map())
+  const hubTabCountsRef = useRef<Record<string, number>>({})
+  const latestHubBuffersRef = useRef<DocumentBufferSnapshot>({})
+  const pendingLocalEditCountsRef = useRef<Map<string, number>>(new Map())
+  const creatingKeysRef = useRef<Set<string>>(new Set())
+  const pendingManualSaveKeysRef = useRef<Set<string>>(new Set())
+  const remappedKeysRef = useRef<Map<string, string>>(new Map())
+  const lastSyncedTabSignatureRef = useRef<string | null>(null)
   const callbacksRef = useRef({
-    onSaveConfigRaw,
     onWorkspaceSaved,
     onError,
     onConfirmCloseDirtyTab
   })
 
-  isAutoSavePausedRef.current = isAutoSavePaused
   isShortcutDisabledRef.current = isShortcutDisabled
   callbacksRef.current = {
-    onSaveConfigRaw,
     onWorkspaceSaved,
     onError,
     onConfirmCloseDirtyTab
   }
 
-  useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-      for (const entry of autoSaveTimersRef.current.values()) {
-        window.clearTimeout(entry.timerId)
-      }
-      autoSaveTimersRef.current.clear()
+  const resolveLatestBufferKey = useCallback((initialKey: string): string => {
+    let cursor = initialKey
+    const seen = new Set<string>()
+    while (remappedKeysRef.current.has(cursor) && !seen.has(cursor)) {
+      seen.add(cursor)
+      cursor = remappedKeysRef.current.get(cursor)!
     }
+    return cursor
   }, [])
 
-  const saveBufferSnapshot = useCallback(
-    (snapshot: DocumentBuffer): Promise<boolean> => {
-      const existing = inFlightSavesRef.current.get(snapshot.key)
-      if (existing) {
-        return existing.promise
-      }
+  const applyHubSnapshot = useCallback(
+    (snapshot: SharedBufferStateSnapshot): void => {
+      hubTabCountsRef.current = { ...snapshot.tabCounts }
+      latestHubBuffersRef.current = snapshot.buffers
 
-      bufferStore.setSaving(snapshot.key, true)
-      callbacksRef.current.onError(null)
+      const currentLocal = bufferStore.getSnapshot()
+      const merged: Record<string, DocumentBuffer> = {}
 
-      const entry: InFlightSaveEntry = {
-        currentKey: snapshot.key,
-        promise: Promise.resolve(false)
-      }
-
-      const run = (async (): Promise<boolean> => {
-        try {
-          if (snapshot.kind === 'config') {
-            await callbacksRef.current.onSaveConfigRaw(snapshot.content)
-          } else {
-            await window.wikiApi.workspace.writeFile(snapshot.path, snapshot.content)
+      for (const [key, hubBuf] of Object.entries(snapshot.buffers)) {
+        const pendingCount = pendingLocalEditCountsRef.current.get(key) ?? 0
+        const localBuf = currentLocal[key]
+        if (pendingCount > 0 && localBuf) {
+          merged[key] = {
+            ...hubBuf,
+            content: localBuf.content,
+            isDirty: localBuf.content !== hubBuf.savedContent,
+            version: Math.max(localBuf.version, hubBuf.version)
           }
-          if (!mountedRef.current) return false
-          bufferStore.markSaved(entry.currentKey, snapshot.content)
-          if (snapshot.kind === 'workspace') {
-            callbacksRef.current.onWorkspaceSaved?.()
-          }
-          return true
-        } catch (error: unknown) {
-          if (mountedRef.current) {
-            callbacksRef.current.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'), error)
-          }
-          return false
-        } finally {
-          if (inFlightSavesRef.current.get(entry.currentKey) === entry) {
-            inFlightSavesRef.current.delete(entry.currentKey)
-          }
-          if (mountedRef.current) {
-            bufferStore.setSaving(entry.currentKey, false)
-          }
+        } else {
+          merged[key] = hubBuf
         }
-      })()
+      }
 
-      entry.promise = run
-      inFlightSavesRef.current.set(snapshot.key, entry)
-      return run
+      for (const creatingKey of creatingKeysRef.current) {
+        if (!merged[creatingKey] && currentLocal[creatingKey]) {
+          merged[creatingKey] = currentLocal[creatingKey]
+        }
+      }
+
+      bufferStore.replaceSnapshot(merged)
     },
     [bufferStore]
   )
 
+  useEffect(() => {
+    mountedRef.current = true
+    const bufferApi = wikiApi.buffer
+
+    const handleHubEvent = (event: SharedBufferHubEvent): void => {
+      if (!mountedRef.current) return
+
+      switch (event.type) {
+        case 'state-changed':
+          applyHubSnapshot(event.snapshot)
+          return
+        case 'paths-remapped':
+          for (const { oldKey, newKey } of event.remappings) {
+            if (oldKey === newKey) continue
+            remappedKeysRef.current.set(oldKey, newKey)
+            movePendingCount(pendingLocalEditCountsRef.current, oldKey, newKey)
+            moveTrackedKey(creatingKeysRef.current, oldKey, newKey)
+            moveTrackedKey(pendingManualSaveKeysRef.current, oldKey, newKey)
+          }
+          tabStore.remapBufferKeys(event.remappings)
+          applyHubSnapshot(event.snapshot)
+          return
+        case 'buffers-closed':
+          for (const closedKey of event.closedKeys) {
+            pendingLocalEditCountsRef.current.delete(closedKey)
+            creatingKeysRef.current.delete(closedKey)
+            pendingManualSaveKeysRef.current.delete(closedKey)
+          }
+          tabStore.closeTabsByBufferKeys(event.closedKeys)
+          applyHubSnapshot(event.snapshot)
+          return
+        case 'workspace-saved':
+          callbacksRef.current.onWorkspaceSaved?.()
+          return
+        case 'save-error': {
+          const openKeys = extractLayoutBufferKeys(tabStore.getSnapshot())
+          const hasTabInWindow = openKeys.includes(event.key)
+          const initiatedByWindow = pendingManualSaveKeysRef.current.has(event.key)
+          if (hasTabInWindow || initiatedByWindow) {
+            callbacksRef.current.onError(event.message, new Error(event.message))
+          }
+          return
+        }
+      }
+    }
+
+    const unsubscribe = bufferApi.onEvent(handleHubEvent)
+
+    void bufferApi.getSnapshot().then(
+      (snapshot) => {
+        if (mountedRef.current) {
+          applyHubSnapshot(snapshot)
+        }
+      },
+      () => undefined
+    )
+
+    return () => {
+      mountedRef.current = false
+      unsubscribe()
+      void bufferApi.setAutoSavePaused(false).catch(() => undefined)
+      void bufferApi.syncWindowTabs([]).catch(() => undefined)
+    }
+  }, [applyHubSnapshot, tabStore, wikiApi])
+
+  useEffect(() => {
+    void wikiApi.buffer.setAutoSavePaused(isAutoSavePaused).catch(() => undefined)
+  }, [isAutoSavePaused, wikiApi])
+
+  useEffect(() => {
+    const keys = extractLayoutBufferKeys(layout)
+    const signature = keys.join('\0')
+    if (lastSyncedTabSignatureRef.current === signature) {
+      return
+    }
+    lastSyncedTabSignatureRef.current = signature
+    void wikiApi.buffer.syncWindowTabs(keys).catch(() => undefined)
+  }, [layout, wikiApi])
+
+  const syncTabsNow = useCallback((): void => {
+    const keys = extractLayoutBufferKeys(tabStore.getSnapshot())
+    lastSyncedTabSignatureRef.current = keys.join('\0')
+    void wikiApi.buffer.syncWindowTabs(keys).catch(() => undefined)
+  }, [tabStore, wikiApi])
+
   const saveBufferByKey = useCallback(
     (bufferKey: string): void => {
       const current = bufferStore.getBuffer(bufferKey)
-      if (!current || !current.isDirty || inFlightSavesRef.current.has(current.key)) {
+      if (!current || !current.isDirty || current.isSaving) {
         return
       }
-      void saveBufferSnapshot({ ...current })
+      callbacksRef.current.onError(null)
+      pendingManualSaveKeysRef.current.add(current.key)
+      void wikiApi.buffer
+        .saveBuffer(current.key)
+        .catch((error: unknown) => {
+          if (mountedRef.current) {
+            callbacksRef.current.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'), error)
+          }
+        })
+        .finally(() => {
+          pendingManualSaveKeysRef.current.delete(current.key)
+        })
     },
-    [bufferStore, saveBufferSnapshot]
+    [bufferStore, wikiApi]
   )
 
   const saveActivePaneDocument = useCallback((): void => {
@@ -242,30 +338,38 @@ export function useEditorWorkspace({
 
   const ensureSavedBuffer = useCallback(
     async (bufferKey: string): Promise<boolean> => {
-      const inFlight = inFlightSavesRef.current.get(bufferKey)
-      if (inFlight) {
-        const ok = await inFlight.promise
-        if (!ok) return false
-        bufferKey = inFlight.currentKey
-      }
-      const latest = bufferStore.getBuffer(bufferKey)
-      if (!latest || !latest.isDirty) {
+      const resolvedKey = resolveLatestBufferKey(bufferKey)
+      const current = latestHubBuffersRef.current[resolvedKey] ?? bufferStore.getBuffer(resolvedKey)
+      if (!current) {
         return true
       }
-      return saveBufferSnapshot({ ...latest })
+      if (!current.isDirty && !current.isSaving) {
+        return true
+      }
+
+      pendingManualSaveKeysRef.current.add(resolvedKey)
+      try {
+        const result = await wikiApi.buffer.saveBuffer(resolvedKey)
+        return result.ok
+      } catch (error: unknown) {
+        if (mountedRef.current) {
+          callbacksRef.current.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'), error)
+        }
+        return false
+      } finally {
+        pendingManualSaveKeysRef.current.delete(resolvedKey)
+      }
     },
-    [bufferStore, saveBufferSnapshot]
+    [bufferStore, resolveLatestBufferKey, wikiApi]
   )
 
   const ensureAllWorkspaceBuffersSaved = useCallback(async (): Promise<boolean> => {
+    const localKeys = new Set(extractLayoutBufferKeys(tabStore.getSnapshot()))
     const targetKeys = new Set<string>()
-    for (const buf of bufferStore.getDirtyBuffers('workspace')) {
-      targetKeys.add(buf.key)
-    }
-    for (const key of inFlightSavesRef.current.keys()) {
-      const buf = bufferStore.getBuffer(key)
-      if (buf?.kind === 'workspace') {
-        targetKeys.add(key)
+    for (const key of localKeys) {
+      const buf = latestHubBuffersRef.current[key] ?? bufferStore.getBuffer(key)
+      if (buf && buf.kind === 'workspace' && (buf.isDirty || buf.isSaving)) {
+        targetKeys.add(buf.key)
       }
     }
 
@@ -274,14 +378,17 @@ export function useEditorWorkspace({
       if (!ok) return false
     }
     return true
-  }, [bufferStore, ensureSavedBuffer])
+  }, [bufferStore, ensureSavedBuffer, tabStore])
 
   const getDirtyWorkspaceSummary = useCallback((): string | null => {
-    const dirty = bufferStore.getDirtyBuffers('workspace')
+    const localKeys = new Set(extractLayoutBufferKeys(tabStore.getSnapshot()))
+    const dirty = bufferStore
+      .getDirtyBuffers('workspace')
+      .filter((buf) => localKeys.has(buf.key))
     if (dirty.length === 0) return null
     if (dirty.length === 1) return dirty[0].name
     return `${dirty[0].name} 외 ${dirty.length - 1}개`
-  }, [bufferStore])
+  }, [bufferStore, tabStore])
 
   // Global fallback Ctrl+S and mode-switch shortcut handler when focus is outside a specific pane editor
   useEffect(() => {
@@ -310,59 +417,6 @@ export function useEditorWorkspace({
     }
   }, [bufferStore, saveActivePaneDocument, tabStore])
 
-  // Per-buffer debounced auto-save for dirty workspace files
-  useEffect(() => {
-    const timers = autoSaveTimersRef.current
-
-    if (!autoSave || isAutoSavePaused) {
-      for (const entry of timers.values()) {
-        window.clearTimeout(entry.timerId)
-      }
-      timers.clear()
-      return
-    }
-
-    for (const [key, entry] of timers.entries()) {
-      const buf = buffers[key]
-      if (
-        !buf ||
-        buf.kind !== 'workspace' ||
-        !buf.isDirty ||
-        buf.isSaving ||
-        buf.version !== entry.version
-      ) {
-        window.clearTimeout(entry.timerId)
-        timers.delete(key)
-      }
-    }
-
-    for (const attemptedKey of lastAutoSaveAttemptVersionRef.current.keys()) {
-      const buf = buffers[attemptedKey]
-      if (!buf || !buf.isDirty) {
-        lastAutoSaveAttemptVersionRef.current.delete(attemptedKey)
-      }
-    }
-
-    for (const buf of Object.values(buffers)) {
-      if (buf.kind !== 'workspace' || !buf.isDirty || buf.isSaving) continue
-      if (lastAutoSaveAttemptVersionRef.current.get(buf.key) === buf.version) continue
-      if (timers.has(buf.key)) continue
-
-      const scheduledVersion = buf.version
-      const timerId = window.setTimeout(() => {
-        timers.delete(buf.key)
-        if (isAutoSavePausedRef.current) return
-        const latest = bufferStore.getBuffer(buf.key)
-        if (!latest || latest.kind !== 'workspace' || !latest.isDirty || latest.isSaving) return
-        if (latest.version !== scheduledVersion) return
-        lastAutoSaveAttemptVersionRef.current.set(latest.key, scheduledVersion)
-        void saveBufferSnapshot({ ...latest })
-      }, autoSaveDelayMs)
-
-      timers.set(buf.key, { version: scheduledVersion, timerId })
-    }
-  }, [autoSave, autoSaveDelayMs, isAutoSavePaused, buffers, bufferStore, saveBufferSnapshot])
-
   const openWorkspaceFile = useCallback(
     async (entry: WorkspaceEntry, targetPaneId?: PaneId): Promise<void> => {
       const key = getWorkspacePathKey(entry.path)
@@ -373,14 +427,11 @@ export function useEditorWorkspace({
 
       callbacksRef.current.onError(null)
       try {
-        const content = await window.wikiApi.workspace.readFile(entry.path)
+        const buf = await wikiApi.buffer.openWorkspaceFile(entry.path, entry.name)
         if (!mountedRef.current) return
-        const buf = bufferStore.openBuffer({
-          kind: 'workspace',
-          path: entry.path,
-          name: entry.name,
-          content
-        })
+        if (!bufferStore.hasBuffer(buf.key)) {
+          bufferStore.replaceSnapshot({ ...bufferStore.getSnapshot(), [buf.key]: buf })
+        }
         tabStore.openTab(buf.key, { paneId: targetPaneId })
       } catch (error: unknown) {
         if (mountedRef.current) {
@@ -388,7 +439,7 @@ export function useEditorWorkspace({
         }
       }
     },
-    [bufferStore, tabStore]
+    [bufferStore, tabStore, wikiApi]
   )
 
   const openConfigDocument = useCallback(
@@ -403,17 +454,11 @@ export function useEditorWorkspace({
 
       callbacksRef.current.onError(null)
       try {
-        const [resolvedPath, raw] = await Promise.all([
-          window.wikiApi.config.getConfigPath(),
-          window.wikiApi.config.readRaw()
-        ])
+        const buf = await wikiApi.buffer.openConfigDocument()
         if (!mountedRef.current) return
-        const buf = bufferStore.openBuffer({
-          kind: 'config',
-          path: resolvedPath,
-          name: 'config.json',
-          content: raw
-        })
+        if (!bufferStore.hasBuffer(buf.key)) {
+          bufferStore.replaceSnapshot({ ...bufferStore.getSnapshot(), [buf.key]: buf })
+        }
         tabStore.openTab(buf.key, { paneId: targetPaneId })
       } catch (error: unknown) {
         if (mountedRef.current) {
@@ -424,23 +469,16 @@ export function useEditorWorkspace({
         }
       }
     },
-    [bufferStore, tabStore]
+    [bufferStore, tabStore, wikiApi]
   )
 
   const refreshCleanConfig = useCallback(async (): Promise<void> => {
-    const configBuffer = bufferStore
-      .getAllBuffers()
-      .find((buffer) => buffer.kind === 'config')
-    if (!configBuffer || configBuffer.isDirty) return
-
     try {
-      const raw = await window.wikiApi.config.readRaw()
-      if (!mountedRef.current) return
-      bufferStore.refreshCleanContent(configBuffer.key, raw)
+      await wikiApi.buffer.refreshCleanConfig()
     } catch {
       // Preserve primary error banners during background config refresh
     }
-  }, [bufferStore])
+  }, [wikiApi])
 
   const openCreatedFile = useCallback(
     (created: WorkspaceEntry): void => {
@@ -450,45 +488,62 @@ export function useEditorWorkspace({
         name: created.name,
         content: ''
       })
+      creatingKeysRef.current.add(buf.key)
       tabStore.openTab(buf.key)
+      void wikiApi.buffer
+        .openWorkspaceFile(created.path, created.name, '')
+        .catch(() => undefined)
+        .finally(() => {
+          creatingKeysRef.current.delete(buf.key)
+        })
     },
-    [bufferStore, tabStore]
+    [bufferStore, tabStore, wikiApi]
   )
 
   const updateBufferContent = useCallback(
     (bufferKey: string, nextContent: string): void => {
-      bufferStore.updateContent(bufferKey, nextContent)
-    },
-    [bufferStore]
-  )
+      const resolvedKey = resolveLatestBufferKey(bufferKey)
+      const currentCount = pendingLocalEditCountsRef.current.get(resolvedKey) ?? 0
+      pendingLocalEditCountsRef.current.set(resolvedKey, currentCount + 1)
+      bufferStore.updateContent(resolvedKey, nextContent)
 
-  const clearAutoSaveTimer = useCallback((key: string): void => {
-    const timer = autoSaveTimersRef.current.get(key)
-    if (timer) {
-      window.clearTimeout(timer.timerId)
-      autoSaveTimersRef.current.delete(key)
-    }
-  }, [])
-
-  const cleanupBufferTracking = useCallback(
-    (keys: Iterable<string>): void => {
-      for (const key of keys) {
-        clearAutoSaveTimer(key)
-        lastAutoSaveAttemptVersionRef.current.delete(key)
-      }
+      void wikiApi.buffer
+        .updateContent(resolvedKey, nextContent)
+        .catch(() => undefined)
+        .finally(() => {
+          const finalKey = resolveLatestBufferKey(resolvedKey)
+          const pending = (pendingLocalEditCountsRef.current.get(finalKey) ?? 1) - 1
+          if (pending > 0) {
+            pendingLocalEditCountsRef.current.set(finalKey, pending)
+            return
+          }
+          pendingLocalEditCountsRef.current.delete(finalKey)
+          if (!mountedRef.current) return
+          const latestHubBuf = latestHubBuffersRef.current[finalKey]
+          if (latestHubBuf) {
+            bufferStore.replaceSnapshot({
+              ...bufferStore.getSnapshot(),
+              [finalKey]: latestHubBuf
+            })
+          }
+        })
     },
-    [clearAutoSaveTimer]
+    [bufferStore, resolveLatestBufferKey, wikiApi]
   )
 
   const forceCloseTab = useCallback(
     (paneId: PaneId, tabId: string): void => {
       const result = tabStore.closeTab(paneId, tabId)
-      if (result?.isLastReferenceForBuffer) {
-        cleanupBufferTracking([result.closedTab.bufferKey])
+      if (
+        result?.isLastReferenceForBuffer &&
+        (hubTabCountsRef.current[result.closedTab.bufferKey] ?? 1) <= 1
+      ) {
+        pendingLocalEditCountsRef.current.delete(result.closedTab.bufferKey)
         bufferStore.removeBuffer(result.closedTab.bufferKey)
       }
+      syncTabsNow()
     },
-    [bufferStore, cleanupBufferTracking, tabStore]
+    [bufferStore, syncTabsNow, tabStore]
   )
 
   const requestCloseTab = useCallback(
@@ -496,7 +551,10 @@ export function useEditorWorkspace({
       const tab = tabStore.getTab(paneId, tabId)
       if (!tab) return
       const buffer = bufferStore.getBuffer(tab.bufferKey)
-      if (buffer?.isDirty && !tabStore.hasOtherTabForBuffer(tab.bufferKey, tab.id)) {
+      const hasOtherTabAcrossWindows =
+        tabStore.hasOtherTabForBuffer(tab.bufferKey, tab.id) ||
+        (hubTabCountsRef.current[tab.bufferKey] ?? 1) > 1
+      if (buffer?.isDirty && !hasOtherTabAcrossWindows) {
         callbacksRef.current.onConfirmCloseDirtyTab({ paneId, tabId, buffer })
         return
       }
@@ -518,100 +576,61 @@ export function useEditorWorkspace({
   )
 
   const clearWorkspaceBuffers = useCallback((): void => {
-    const removedKeys = bufferStore.clearWorkspaceBuffers()
-    cleanupBufferTracking(removedKeys)
-    tabStore.closeTabsByBufferKeys(removedKeys)
-  }, [bufferStore, cleanupBufferTracking, tabStore])
+    const localWorkspaceKeys = extractLayoutBufferKeys(tabStore.getSnapshot()).filter((key) => {
+      const buf = bufferStore.getBuffer(key)
+      return buf?.kind === 'workspace'
+    })
+    if (localWorkspaceKeys.length === 0) return
+
+    for (const key of localWorkspaceKeys) {
+      if ((hubTabCountsRef.current[key] ?? 1) <= 1) {
+        pendingLocalEditCountsRef.current.delete(key)
+        creatingKeysRef.current.delete(key)
+        bufferStore.removeBuffer(key)
+      }
+    }
+    tabStore.closeTabsByBufferKeys(localWorkspaceKeys)
+    syncTabsNow()
+  }, [bufferStore, syncTabsNow, tabStore])
 
   const syncRenamedPath = useCallback(
     (oldPath: string, renamed: WorkspaceEntry): void => {
       const remappings = bufferStore.syncRenamedPath(oldPath, renamed.path)
-      if (remappings.length === 0) return
-
       for (const { oldKey, newKey } of remappings) {
-        clearAutoSaveTimer(oldKey)
-        const attemptedVersion = lastAutoSaveAttemptVersionRef.current.get(oldKey)
-        if (attemptedVersion !== undefined) {
-          lastAutoSaveAttemptVersionRef.current.delete(oldKey)
-          lastAutoSaveAttemptVersionRef.current.set(newKey, attemptedVersion)
-        }
-        const inFlight = inFlightSavesRef.current.get(oldKey)
-        if (inFlight) {
-          inFlightSavesRef.current.delete(oldKey)
-          inFlight.currentKey = newKey
-          inFlightSavesRef.current.set(newKey, inFlight)
+        if (oldKey !== newKey) {
+          remappedKeysRef.current.set(oldKey, newKey)
+          movePendingCount(pendingLocalEditCountsRef.current, oldKey, newKey)
+          moveTrackedKey(creatingKeysRef.current, oldKey, newKey)
+          moveTrackedKey(pendingManualSaveKeysRef.current, oldKey, newKey)
         }
       }
-      tabStore.remapBufferKeys(remappings)
+      if (remappings.length > 0) {
+        tabStore.remapBufferKeys(remappings)
+      }
+      void wikiApi.buffer.syncRenamedPath(oldPath, renamed.path).catch(() => undefined)
     },
-    [bufferStore, clearAutoSaveTimer, tabStore]
+    [bufferStore, tabStore, wikiApi]
   )
 
   const syncDeletedPath = useCallback(
     (deletedPath: string): void => {
       const removedKeys = bufferStore.removeBuffersUnderPath(deletedPath)
-      cleanupBufferTracking(removedKeys)
-      tabStore.closeTabsByBufferKeys(removedKeys)
+      for (const key of removedKeys) {
+        pendingLocalEditCountsRef.current.delete(key)
+        creatingKeysRef.current.delete(key)
+      }
+      if (removedKeys.length > 0) {
+        tabStore.closeTabsByBufferKeys(removedKeys)
+      }
+      void wikiApi.buffer.syncDeletedPath(deletedPath).catch(() => undefined)
     },
-    [bufferStore, cleanupBufferTracking, tabStore]
+    [bufferStore, tabStore, wikiApi]
   )
 
   const reconcileWorkspaceBuffersWithDisk = useCallback(async (): Promise<readonly string[]> => {
-    const openWorkspaceBuffers = bufferStore
-      .getAllBuffers()
-      .filter((buffer) => buffer.kind === 'workspace')
-    if (openWorkspaceBuffers.length === 0) return []
-
-    const conflictNames: string[] = []
-    const missingDirtyNames: string[] = []
-
-    await Promise.all(
-      openWorkspaceBuffers.map(async (buffer) => {
-        const latest = bufferStore.getBuffer(buffer.key)
-        if (!latest || latest.kind !== 'workspace') return
-        if (latest.isSaving || inFlightSavesRef.current.has(latest.key)) return
-
-        try {
-          const diskContent = await window.wikiApi.workspace.readFile(latest.path)
-          if (!mountedRef.current) return
-          const current = bufferStore.getBuffer(latest.key)
-          if (!current || current.kind !== 'workspace') return
-          if (current.isSaving || inFlightSavesRef.current.has(current.key)) return
-
-          if (!current.isDirty) {
-            clearAutoSaveTimer(current.key)
-            bufferStore.refreshCleanContent(current.key, diskContent)
-          } else if (diskContent !== current.savedContent) {
-            conflictNames.push(current.name)
-          }
-        } catch (error: unknown) {
-          if (!mountedRef.current) return
-          const current = bufferStore.getBuffer(latest.key)
-          if (!current || current.kind !== 'workspace') return
-          if (!isMissingWorkspaceFileError(error)) return
-
-          if (!current.isDirty) {
-            syncDeletedPath(current.path)
-          } else {
-            missingDirtyNames.push(current.name)
-          }
-        }
-      })
-    )
-
-    const warnings: string[] = []
-    if (conflictNames.length > 0) {
-      warnings.push(
-        `외부 변경과 미저장 편집 내용이 충돌할 수 있습니다 (${conflictNames.join(', ')}).`
-      )
-    }
-    if (missingDirtyNames.length > 0) {
-      warnings.push(
-        `외부 변경으로 삭제되었으나 미저장 편집 내용이 남아 있습니다 (${missingDirtyNames.join(', ')}).`
-      )
-    }
-    return warnings
-  }, [bufferStore, clearAutoSaveTimer, syncDeletedPath])
+    const result = await wikiApi.buffer.reconcileWorkspaceBuffersWithDisk()
+    return result.warnings
+  }, [wikiApi])
 
   return {
     buffers,

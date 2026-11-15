@@ -1,7 +1,16 @@
 import type { AppConfig } from '@shared/config'
+import type {
+  BufferKeyRemap,
+  DocumentBuffer,
+  ReconcileBuffersResult,
+  SaveBufferResult,
+  SharedBufferHubEvent,
+  SharedBufferStateSnapshot
+} from '@shared/documentBuffer'
 import type { GitBranchList, GitStatus, GitSyncResult } from '@shared/git'
 import {
   type AppMenuCommand,
+  BUFFER_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
@@ -129,6 +138,55 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
     menu: {
       onCommand: (listener) =>
         subscribeChannel<AppMenuCommand>(ipcRenderer, MENU_IPC_CHANNELS.command, listener)
+    },
+    buffer: {
+      getSnapshot: () =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.getSnapshot) as Promise<SharedBufferStateSnapshot>,
+      openWorkspaceFile: (filePath, name, initialContent) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.openWorkspaceFile,
+          filePath,
+          name,
+          initialContent
+        ) as Promise<DocumentBuffer>,
+      openConfigDocument: () =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.openConfigDocument) as Promise<DocumentBuffer>,
+      refreshCleanConfig: (rawContent) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.refreshCleanConfig,
+          rawContent
+        ) as Promise<DocumentBuffer | null>,
+      updateContent: (key, nextContent) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.updateContent,
+          key,
+          nextContent
+        ) as Promise<DocumentBuffer | null>,
+      saveBuffer: (key) =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.saveBuffer, key) as Promise<SaveBufferResult>,
+      syncWindowTabs: (bufferKeys) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.syncWindowTabs,
+          bufferKeys
+        ) as Promise<SharedBufferStateSnapshot>,
+      setAutoSavePaused: (paused) =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.setAutoSavePaused, paused) as Promise<void>,
+      syncRenamedPath: (oldPath, newPath) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.syncRenamedPath,
+          oldPath,
+          newPath
+        ) as Promise<BufferKeyRemap[]>,
+      syncDeletedPath: (targetPath) =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.syncDeletedPath, targetPath) as Promise<string[]>,
+      clearWorkspaceBuffers: () =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.clearWorkspaceBuffers) as Promise<string[]>,
+      reconcileWorkspaceBuffersWithDisk: () =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk
+        ) as Promise<ReconcileBuffersResult>,
+      onEvent: (listener) =>
+        subscribeChannel<SharedBufferHubEvent>(ipcRenderer, BUFFER_IPC_CHANNELS.event, listener)
     },
     log: {
       write: (payload) => ipcRenderer.invoke(LOG_IPC_CHANNELS.write, payload) as Promise<void>

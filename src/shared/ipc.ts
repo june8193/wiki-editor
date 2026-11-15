@@ -1,4 +1,12 @@
 import type { AppConfig } from './config'
+import type {
+  BufferKeyRemap,
+  DocumentBuffer,
+  ReconcileBuffersResult,
+  SaveBufferResult,
+  SharedBufferHubEvent,
+  SharedBufferStateSnapshot
+} from './documentBuffer'
 import type { GitBranchList, GitStatus, GitSyncResult } from './git'
 import type { RendererLogPayload } from './logging'
 import type {
@@ -54,6 +62,22 @@ export const MENU_IPC_CHANNELS = {
   command: 'menu:command'
 } as const
 
+export const BUFFER_IPC_CHANNELS = {
+  getSnapshot: 'buffer:get-snapshot',
+  openWorkspaceFile: 'buffer:open-workspace-file',
+  openConfigDocument: 'buffer:open-config-document',
+  refreshCleanConfig: 'buffer:refresh-clean-config',
+  updateContent: 'buffer:update-content',
+  saveBuffer: 'buffer:save-buffer',
+  syncWindowTabs: 'buffer:sync-window-tabs',
+  setAutoSavePaused: 'buffer:set-auto-save-paused',
+  syncRenamedPath: 'buffer:sync-renamed-path',
+  syncDeletedPath: 'buffer:sync-deleted-path',
+  clearWorkspaceBuffers: 'buffer:clear-workspace-buffers',
+  reconcileWorkspaceBuffersWithDisk: 'buffer:reconcile-workspace-buffers-with-disk',
+  event: 'buffer:event'
+} as const
+
 export const LOG_IPC_CHANNELS = {
   write: 'log:write'
 } as const
@@ -107,6 +131,26 @@ export interface WikiMenuApi {
   onCommand(listener: (command: AppMenuCommand) => void): () => void
 }
 
+export interface WikiBufferApi {
+  getSnapshot(): Promise<SharedBufferStateSnapshot>
+  openWorkspaceFile(
+    filePath: string,
+    name?: string,
+    initialContent?: string
+  ): Promise<DocumentBuffer>
+  openConfigDocument(): Promise<DocumentBuffer>
+  refreshCleanConfig(rawContent?: string): Promise<DocumentBuffer | null>
+  updateContent(key: string, nextContent: string): Promise<DocumentBuffer | null>
+  saveBuffer(key: string): Promise<SaveBufferResult>
+  syncWindowTabs(bufferKeys: string[]): Promise<SharedBufferStateSnapshot>
+  setAutoSavePaused(paused: boolean): Promise<void>
+  syncRenamedPath(oldPath: string, newPath: string): Promise<BufferKeyRemap[]>
+  syncDeletedPath(targetPath: string): Promise<string[]>
+  clearWorkspaceBuffers(): Promise<string[]>
+  reconcileWorkspaceBuffersWithDisk(): Promise<ReconcileBuffersResult>
+  onEvent(listener: (event: SharedBufferHubEvent) => void): () => void
+}
+
 export interface WikiLogApi {
   write(payload: RendererLogPayload): Promise<void>
 }
@@ -116,5 +160,6 @@ export interface WikiApi {
   workspace: WikiWorkspaceApi
   git: WikiGitApi
   menu: WikiMenuApi
+  buffer: WikiBufferApi
   log?: WikiLogApi
 }

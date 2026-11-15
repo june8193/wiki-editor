@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
-import type { AppMenuCommand } from '@shared/ipc'
+import type { AppMenuCommand, WikiApi } from '@shared/ipc'
 import type { GitStatus } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
@@ -28,6 +28,7 @@ import {
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
+import { useWikiApi, WikiApiProvider } from './hooks/useWikiApi'
 import { useWindowWidth } from './hooks/useWindowWidth'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
@@ -79,7 +80,20 @@ interface PendingDialogState {
   onCancel?: () => void
 }
 
-export function App() {
+export interface AppProps {
+  wikiApi?: WikiApi
+}
+
+export function App({ wikiApi }: AppProps = {}) {
+  return (
+    <WikiApiProvider api={wikiApi}>
+      <AppShell />
+    </WikiApiProvider>
+  )
+}
+
+function AppShell() {
+  const wikiApi = useWikiApi()
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
     activeView: 'workspace',
@@ -172,8 +186,7 @@ export function App() {
     updateCustomCommands,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
-    removeRecentWorkspace,
-    saveRawConfig
+    removeRecentWorkspace
   } = useConfigController({
     onError: reportErrorBanner,
     onExternalConfigCommitted: () => void refreshConfigDocRef.current(),
@@ -223,11 +236,8 @@ export function App() {
     syncDeletedPath,
     reconcileWorkspaceBuffersWithDisk
   } = useEditorWorkspace({
-    autoSave: config.autoSave,
-    autoSaveDelayMs: config.autoSaveDelayMs,
     isAutoSavePaused: pendingDialog !== null,
     isShortcutDisabled: isEditorShortcutDisabled,
-    onSaveConfigRaw: saveRawConfig,
     onWorkspaceSaved: () => void refreshGitStatusRef.current(),
     onError: reportErrorBanner,
     onConfirmCloseDirtyTab: handleConfirmCloseDirtyTab
@@ -410,7 +420,7 @@ export function App() {
     hasWorkspaceInteractionRef.current = true
     isStartupRestoreRef.current = false
     reportErrorBanner(null)
-    void window.wikiApi.workspace.selectFolder().then(
+    void wikiApi.workspace.selectFolder().then(
       (selectedPath) => {
         isSelectingFolderRef.current = false
         if (selectedPath && !isDialogOpenRef.current) {
@@ -422,7 +432,7 @@ export function App() {
         reportErrorBanner(toErrorMessage(error, '폴더 선택에 실패했습니다.'), error)
       }
     )
-  }, [handleSwitchWorkspace, reportErrorBanner])
+  }, [handleSwitchWorkspace, reportErrorBanner, wikiApi])
 
   const handleOpenFile = useCallback(
     (entry: WorkspaceEntry): void => {
@@ -443,13 +453,13 @@ export function App() {
   }
 
   useEffect(() => {
-    return window.wikiApi.menu.onCommand((command) => {
+    return wikiApi.menu.onCommand((command) => {
       if (isDialogOpenRef.current) {
         return
       }
       menuHandlersRef.current[command]?.()
     })
-  }, [])
+  }, [wikiApi])
 
   const handleRequestDelete = useCallback(
     (entry: WorkspaceEntry): void => {

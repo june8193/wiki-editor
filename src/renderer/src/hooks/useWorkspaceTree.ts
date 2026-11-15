@@ -10,6 +10,7 @@ import {
 } from '@shared/workspace'
 import { logRendererInfo } from '../logging/rendererLogger'
 import { toErrorMessage } from '../utils/toErrorMessage'
+import { useWikiApi } from './useWikiApi'
 
 export interface WorkspaceTreeState {
   rootEntries: readonly WorkspaceEntry[]
@@ -44,6 +45,7 @@ export function useWorkspaceTree({
   onEntryDeleted,
   onFileCreated
 }: UseWorkspaceTreeOptions) {
+  const wikiApi = useWikiApi()
   const [workspace, setWorkspace] = useState<WorkspaceSummary | null>(null)
   const [rootEntries, setRootEntries] = useState<WorkspaceEntry[]>([])
   const [childrenByDir, setChildrenByDir] = useState<Record<string, WorkspaceEntry[]>>({})
@@ -80,7 +82,7 @@ export function useWorkspaceTree({
     if (!currentWs) return
 
     try {
-      const topEntries = await window.wikiApi.workspace.readDir()
+      const topEntries = await wikiApi.workspace.readDir()
       if (!mountedRef.current || workspaceRef.current?.rootPath !== currentWs.rootPath) return
       setRootEntries(topEntries)
 
@@ -93,7 +95,7 @@ export function useWorkspaceTree({
       const results = await Promise.allSettled(
         expandedList.map(async (dirPath) => ({
           dirPath,
-          entries: await window.wikiApi.workspace.readDir(dirPath)
+          entries: await wikiApi.workspace.readDir(dirPath)
         }))
       )
       if (!mountedRef.current || workspaceRef.current?.rootPath !== currentWs.rootPath) return
@@ -113,11 +115,11 @@ export function useWorkspaceTree({
         )
       }
     }
-  }, [])
+  }, [wikiApi])
 
   useEffect(() => {
     mountedRef.current = true
-    const unsubscribe = window.wikiApi.workspace.onChanged(() => {
+    const unsubscribe = wikiApi.workspace.onChanged(() => {
       if (!mountedRef.current) return
       void refreshTree()
       callbacksRef.current.onWorkspaceChanged?.()
@@ -126,9 +128,9 @@ export function useWorkspaceTree({
     return () => {
       mountedRef.current = false
       unsubscribe()
-      void window.wikiApi.workspace.unwatch().catch(() => undefined)
+      void wikiApi.workspace.unwatch().catch(() => undefined)
     }
-  }, [refreshTree])
+  }, [refreshTree, wikiApi])
 
   const openWorkspace = useCallback(
     async (targetPath: string, options?: OpenWorkspaceOptions): Promise<boolean> => {
@@ -137,7 +139,7 @@ export function useWorkspaceTree({
         callbacksRef.current.onError(null)
       }
       try {
-        const info = await window.wikiApi.workspace.open(targetPath)
+        const info = await wikiApi.workspace.open(targetPath)
         if (!mountedRef.current || seq !== openRequestSeqRef.current) return false
         setWorkspace({ rootPath: info.rootPath, name: info.name })
         setRootEntries(info.entries)
@@ -146,7 +148,7 @@ export function useWorkspaceTree({
         setSelectedTreePath(null)
         logRendererInfo('ui', 'Workspace opened', { rootPath: info.rootPath, name: info.name })
         callbacksRef.current.onWorkspaceOpened?.()
-        await window.wikiApi.workspace.watch().catch(() => undefined)
+        await wikiApi.workspace.watch().catch(() => undefined)
         return true
       } catch (error: unknown) {
         if (!mountedRef.current || seq !== openRequestSeqRef.current) return false
@@ -161,7 +163,7 @@ export function useWorkspaceTree({
         return false
       }
     },
-    []
+    [wikiApi]
   )
 
   const loadDirectoryChildren = useCallback(async (dirPath: string): Promise<void> => {
@@ -169,7 +171,7 @@ export function useWorkspaceTree({
     if (!currentWs) return
     setLoadingDirs((prev) => new Set(prev).add(dirPath))
     try {
-      const entries = await window.wikiApi.workspace.readDir(dirPath)
+      const entries = await wikiApi.workspace.readDir(dirPath)
       if (!mountedRef.current || workspaceRef.current?.rootPath !== currentWs.rootPath) return
       setChildrenByDir((prev) => ({ ...prev, [dirPath]: entries }))
     } catch (error: unknown) {
@@ -237,20 +239,20 @@ export function useWorkspaceTree({
   const refreshDirectory = useCallback(async (dirPath: string): Promise<void> => {
     const currentWs = workspaceRef.current
     if (!currentWs) return
-    const entries = await window.wikiApi.workspace.readDir(dirPath)
+    const entries = await wikiApi.workspace.readDir(dirPath)
     if (!mountedRef.current || workspaceRef.current?.rootPath !== currentWs.rootPath) return
     if (isSameWorkspacePath(dirPath, currentWs.rootPath)) {
       setRootEntries(entries)
     } else {
       setChildrenByDir((prev) => ({ ...prev, [dirPath]: entries }))
     }
-  }, [])
+  }, [wikiApi])
 
   const createEntry = useCallback(
     async (parentDirPath: string, name: string, kind: WorkspaceEntryKind): Promise<void> => {
       callbacksRef.current.onError(null)
       try {
-        const created = await window.wikiApi.workspace.createEntry(parentDirPath, name, kind, '')
+        const created = await wikiApi.workspace.createEntry(parentDirPath, name, kind, '')
         if (!mountedRef.current) return
         await refreshDirectory(parentDirPath)
         setSelectedTreePath(created.path)
@@ -266,7 +268,7 @@ export function useWorkspaceTree({
         }
       }
     },
-    [refreshDirectory]
+    [refreshDirectory, wikiApi]
   )
 
   const renameEntry = useCallback(
@@ -275,7 +277,7 @@ export function useWorkspaceTree({
       if (!currentWs) return
       callbacksRef.current.onError(null)
       try {
-        const renamed = await window.wikiApi.workspace.renameEntry(targetPath, newName)
+        const renamed = await wikiApi.workspace.renameEntry(targetPath, newName)
         if (!mountedRef.current) return
 
         const parentDir = getParentPath(targetPath, currentWs.rootPath)
@@ -310,7 +312,7 @@ export function useWorkspaceTree({
         }
       }
     },
-    [refreshDirectory]
+    [refreshDirectory, wikiApi]
   )
 
   const deleteEntry = useCallback(
@@ -319,7 +321,7 @@ export function useWorkspaceTree({
       if (!currentWs) return
       callbacksRef.current.onError(null)
       try {
-        await window.wikiApi.workspace.deleteEntry(entry.path)
+        await wikiApi.workspace.deleteEntry(entry.path)
         if (!mountedRef.current) return
 
         const parentDir = getParentPath(entry.path, currentWs.rootPath)

@@ -13,6 +13,7 @@ import {
 } from 'electron'
 import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
+import { registerBufferIpc } from './ipc/registerBufferIpc'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerLogIpc } from './ipc/registerLogIpc'
@@ -57,6 +58,7 @@ function showMessageBox(options: MessageBoxOptions): Promise<Electron.MessageBox
 
 const logService = new LogService(join(app.getPath('userData'), 'logs'))
 
+let disposeBufferIpc: (() => void) | undefined
 let disposeConfigIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
@@ -66,6 +68,8 @@ let workspaceService: WorkspaceFsService | undefined
 function disposeMainResources(): void {
   disposeLogIpc?.()
   disposeLogIpc = undefined
+  disposeBufferIpc?.()
+  disposeBufferIpc = undefined
   disposeGitIpc?.()
   disposeGitIpc = undefined
   disposeWorkspaceIpc?.()
@@ -91,7 +95,7 @@ registerProcessLifecycleLogging({
 void app.whenReady().then(async () => {
   const configPath = join(app.getPath('userData'), 'config.json')
   const configService = new ConfigService(configPath, { logService })
-  await configService.get()
+  const initialConfig = await configService.get()
 
   workspaceService = new WorkspaceFsService({
     trashItem: (targetPath) => shell.trashItem(targetPath)
@@ -109,6 +113,15 @@ void app.whenReady().then(async () => {
 
   disposeLogIpc = registerLogIpc(ipcMain, logService)
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)
+  disposeBufferIpc = registerBufferIpc({
+    ipcMain,
+    workspaceService,
+    configService,
+    getTargets,
+    logService,
+    initialAutoSave: initialConfig.autoSave,
+    initialAutoSaveDelayMs: initialConfig.autoSaveDelayMs
+  })
   disposeGitIpc = registerGitIpc({
     ipcMain,
     gitService,

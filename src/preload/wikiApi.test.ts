@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_APP_CONFIG } from '@shared/config'
+import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import {
   type AppMenuCommand,
+  BUFFER_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
@@ -212,5 +214,60 @@ describe('createWikiApi', () => {
 
     ipc.emit(MENU_IPC_CHANNELS.command, 'open-folder')
     expect(commands).toHaveLength(3)
+  })
+
+  it('routes all buffer:* methods through expected IPC channels and unsubscribes buffer:event', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+
+    await api.buffer.getSnapshot()
+    await api.buffer.openWorkspaceFile('C:\\wiki\\note.md', 'note.md', '')
+    await api.buffer.openConfigDocument()
+    await api.buffer.refreshCleanConfig('{"version":1}')
+    await api.buffer.updateContent('c:/wiki/note.md', '# Updated')
+    await api.buffer.saveBuffer('c:/wiki/note.md')
+    await api.buffer.syncWindowTabs(['c:/wiki/note.md'])
+    await api.buffer.setAutoSavePaused(true)
+    await api.buffer.syncRenamedPath('C:\\wiki\\note.md', 'C:\\wiki\\renamed.md')
+    await api.buffer.syncDeletedPath('C:\\wiki\\renamed.md')
+    await api.buffer.clearWorkspaceBuffers()
+    await api.buffer.reconcileWorkspaceBuffersWithDisk()
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: BUFFER_IPC_CHANNELS.getSnapshot, args: [] },
+      {
+        channel: BUFFER_IPC_CHANNELS.openWorkspaceFile,
+        args: ['C:\\wiki\\note.md', 'note.md', '']
+      },
+      { channel: BUFFER_IPC_CHANNELS.openConfigDocument, args: [] },
+      { channel: BUFFER_IPC_CHANNELS.refreshCleanConfig, args: ['{"version":1}'] },
+      { channel: BUFFER_IPC_CHANNELS.updateContent, args: ['c:/wiki/note.md', '# Updated'] },
+      { channel: BUFFER_IPC_CHANNELS.saveBuffer, args: ['c:/wiki/note.md'] },
+      { channel: BUFFER_IPC_CHANNELS.syncWindowTabs, args: [['c:/wiki/note.md']] },
+      { channel: BUFFER_IPC_CHANNELS.setAutoSavePaused, args: [true] },
+      {
+        channel: BUFFER_IPC_CHANNELS.syncRenamedPath,
+        args: ['C:\\wiki\\note.md', 'C:\\wiki\\renamed.md']
+      },
+      { channel: BUFFER_IPC_CHANNELS.syncDeletedPath, args: ['C:\\wiki\\renamed.md'] },
+      { channel: BUFFER_IPC_CHANNELS.clearWorkspaceBuffers, args: [] },
+      { channel: BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk, args: [] }
+    ])
+
+    const received: SharedBufferHubEvent[] = []
+    const unsubscribe = api.buffer.onEvent((event) => {
+      received.push(event)
+    })
+    expect(ipc.listenerCount(BUFFER_IPC_CHANNELS.event)).toBe(1)
+
+    const sampleEvent: SharedBufferHubEvent = {
+      type: 'state-changed',
+      snapshot: { buffers: {}, tabCounts: {} }
+    }
+    ipc.emit(BUFFER_IPC_CHANNELS.event, sampleEvent)
+    expect(received).toEqual([sampleEvent])
+
+    unsubscribe()
+    expect(ipc.listenerCount(BUFFER_IPC_CHANNELS.event)).toBe(0)
   })
 })

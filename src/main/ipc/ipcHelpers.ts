@@ -1,4 +1,9 @@
-import { CONFIG_IPC_CHANNELS, LOG_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import {
+  BUFFER_IPC_CHANNELS,
+  CONFIG_IPC_CHANNELS,
+  LOG_IPC_CHANNELS,
+  WORKSPACE_IPC_CHANNELS
+} from '@shared/ipc'
 import type { LogService } from '../logging/LogService'
 
 export interface IpcMainLike {
@@ -33,6 +38,23 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
   }),
   [CONFIG_IPC_CHANNELS.saveRaw]: ([raw]) => ({
     contentLength: typeof raw === 'string' ? raw.length : 0
+  }),
+  [BUFFER_IPC_CHANNELS.openWorkspaceFile]: ([filePath, name, initialContent]) => ({
+    filePath,
+    name,
+    hasInitialContent: typeof initialContent === 'string',
+    contentLength: typeof initialContent === 'string' ? initialContent.length : 0
+  }),
+  [BUFFER_IPC_CHANNELS.refreshCleanConfig]: ([rawContent]) => ({
+    hasRawContent: typeof rawContent === 'string',
+    contentLength: typeof rawContent === 'string' ? rawContent.length : 0
+  }),
+  [BUFFER_IPC_CHANNELS.updateContent]: ([key, nextContent]) => ({
+    key,
+    contentLength: typeof nextContent === 'string' ? nextContent.length : 0
+  }),
+  [BUFFER_IPC_CHANNELS.syncWindowTabs]: ([bufferKeys]) => ({
+    tabCount: Array.isArray(bufferKeys) ? bufferKeys.length : 0
   })
 }
 
