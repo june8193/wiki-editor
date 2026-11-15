@@ -10,8 +10,10 @@ import {
   WINDOW_BASE_TITLE,
   type ActiveTabDragSession,
   type DetachTabToNewWindowResult,
+  type ScreenLike,
   type TabDragEndResult,
   type TabTransferPayload,
+  type WindowBounds,
   type WindowInitContext
 } from '@shared/window'
 import { ConfigService } from './config/ConfigService'
@@ -19,7 +21,6 @@ import { createFakeIpcMain, type FakeIpcMain } from './ipc/ipcTestHelpers'
 import { createSharedDocumentBufferHub, registerBufferIpc, type BufferWebContentsLike } from './ipc/registerBufferIpc'
 import { registerWindowIpc } from './ipc/registerWindowIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
-import type { ScreenLike, WindowBounds } from './window'
 import { WindowManager, type BrowserWindowLike } from './windowManager'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
 

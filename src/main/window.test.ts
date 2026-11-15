@@ -1,16 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  clampWindowBoundsToWorkArea,
   computeCursorAuxiliaryBounds,
+  computeOffsetAuxiliaryBounds,
   formatWindowTitle,
   isPointInsideWindowBounds,
   isPointOutsideAllWindows
 } from '@shared/window'
-import {
-  clampWindowBoundsToWorkArea,
-  computeOffsetAuxiliaryBounds,
-  createAuxiliaryWindowOptions,
-  createMainWindowOptions
-} from './window'
+import { createAuxiliaryWindowOptions, createMainWindowOptions } from './window'
 
 describe('createMainWindowOptions', () => {
   it('enforces contextIsolation: true, nodeIntegration: false, and sandbox: true with preload path', () => {

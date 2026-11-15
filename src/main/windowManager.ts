@@ -8,26 +8,23 @@ import {
 import {
   canDetachTabFromWindow,
   cloneTabTransferPayloads,
+  computeOffsetAuxiliaryBounds,
   formatWindowTitle,
   WINDOW_ROLE_QUERY_PARAM,
   type ActiveTabDragSession,
   type DetachTabToNewWindowResult,
+  type ScreenLike,
   type TabDragEndInput,
   type TabDragEndResult,
   type TabDragResolution,
   type TabDragStartInput,
   type TabTransferPayload,
+  type WindowBounds,
   type WindowInitContext,
   type WindowRole
 } from '@shared/window'
 import { trackHubWindowWebContents, type BufferWebContentsLike } from './ipc/registerBufferIpc'
-import {
-  computeOffsetAuxiliaryBounds,
-  createAuxiliaryWindowOptions,
-  createMainWindowOptions,
-  type ScreenLike,
-  type WindowBounds
-} from './window'
+import { createAuxiliaryWindowOptions, createMainWindowOptions } from './window'
 
 export interface WindowWebContentsLike extends BufferWebContentsLike {
   on?: (
@@ -326,11 +323,12 @@ export class WindowManager {
       input,
       openWindowBounds: this.getOpenWindowBounds(),
       canDetach,
+      hasBuffer: (key) => this.bufferHub.hasBuffer(key),
       screen: this.screen
     })
 
-    if (!plan.detach || !this.bufferHub.hasBuffer(plan.payload.bufferKey)) {
-      return plan.detach ? { detached: false, outcome: 'cancelled' } : plan.result
+    if (!plan.detach) {
+      return plan.result
     }
 
     const { windowId } = this.createDetachedAuxiliaryWindow(plan.payload, plan.targetBounds)

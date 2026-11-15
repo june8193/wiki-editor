@@ -4,27 +4,9 @@ import {
   AUXILIARY_WINDOW_DEFAULT_WIDTH,
   AUXILIARY_WINDOW_MIN_HEIGHT,
   AUXILIARY_WINDOW_MIN_WIDTH,
-  AUXILIARY_WINDOW_OFFSET_X,
-  AUXILIARY_WINDOW_OFFSET_Y,
-  clampWindowBoundsToWorkArea,
-  computeOffsetAuxiliaryBounds,
-  type ScreenLike,
   WINDOW_BASE_TITLE,
   type WindowBounds
 } from '@shared/window'
-
-export {
-  AUXILIARY_WINDOW_DEFAULT_HEIGHT,
-  AUXILIARY_WINDOW_DEFAULT_WIDTH,
-  AUXILIARY_WINDOW_MIN_HEIGHT,
-  AUXILIARY_WINDOW_MIN_WIDTH,
-  AUXILIARY_WINDOW_OFFSET_X,
-  AUXILIARY_WINDOW_OFFSET_Y,
-  clampWindowBoundsToWorkArea,
-  computeOffsetAuxiliaryBounds,
-  type ScreenLike,
-  type WindowBounds
-}
 
 export const MAIN_WINDOW_DEFAULT_WIDTH = 1280
 export const MAIN_WINDOW_DEFAULT_HEIGHT = 820

@@ -44,12 +44,15 @@ export function clampWindowBoundsToWorkArea(
   }
 }
 
-function computeClampedAuxiliaryBounds(
-  anchor: ScreenPoint,
+/**
+ * Computes auxiliary window bounds anchored at the drop cursor position and clamped to target display workArea.
+ */
+export function computeCursorAuxiliaryBounds(
+  cursorPoint: ScreenPoint,
   screenLike?: ScreenLike
 ): WindowBounds {
-  const x = Math.round(anchor.x)
-  const y = Math.round(anchor.y)
+  const x = Math.round(cursorPoint.x)
+  const y = Math.round(cursorPoint.y)
   const candidate: WindowBounds = {
     x,
     y,
@@ -72,23 +75,13 @@ export function computeOffsetAuxiliaryBounds(
   sourceBounds: WindowBounds,
   screenLike?: ScreenLike
 ): WindowBounds {
-  return computeClampedAuxiliaryBounds(
+  return computeCursorAuxiliaryBounds(
     {
       x: sourceBounds.x + AUXILIARY_WINDOW_OFFSET_X,
       y: sourceBounds.y + AUXILIARY_WINDOW_OFFSET_Y
     },
     screenLike
   )
-}
-
-/**
- * Computes auxiliary window bounds anchored at the drop cursor position and clamped to target display workArea.
- */
-export function computeCursorAuxiliaryBounds(
-  cursorPoint: ScreenPoint,
-  screenLike?: ScreenLike
-): WindowBounds {
-  return computeClampedAuxiliaryBounds(cursorPoint, screenLike)
 }
 
 /**

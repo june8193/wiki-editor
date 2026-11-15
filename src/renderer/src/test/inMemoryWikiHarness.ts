@@ -679,10 +679,11 @@ export function createMultiWindowWikiHarness(
             input,
             openWindowBounds,
             canDetach,
+            hasBuffer: (key) => hub.hasBuffer(key),
             screen
           })
-          if (!plan.detach || !hub.hasBuffer(plan.payload.bufferKey)) {
-            return plan.detach ? { detached: false, outcome: 'cancelled' } : plan.result
+          if (!plan.detach) {
+            return plan.result
           }
           const aux = createWindow({
             role: 'auxiliary',

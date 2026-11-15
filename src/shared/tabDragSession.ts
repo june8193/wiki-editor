@@ -22,6 +22,7 @@ export interface FinishTabDragParams {
   input: TabDragEndInput
   openWindowBounds: readonly WindowBounds[]
   canDetach: boolean
+  hasBuffer: (bufferKey: string) => boolean
   screen?: ScreenLike
 }
 
@@ -139,7 +140,7 @@ export class TabDragCoordinator {
    * Completes a drag session and computes whether a new auxiliary window should be opened.
    */
   finish(params: FinishTabDragParams): FinishTabDragPlan {
-    const { sourceWindowId, input, openWindowBounds, canDetach, screen } = params
+    const { sourceWindowId, input, openWindowBounds, canDetach, hasBuffer, screen } = params
     const session = this.activeSession
     if (!session || session.sourceWindowId !== sourceWindowId || session.dragSessionId !== input.dragSessionId) {
       return { detach: false, result: { detached: false, outcome: 'cancelled' } }
@@ -160,9 +161,14 @@ export class TabDragCoordinator {
       return { detach: false, result: { detached: false, outcome: 'cancelled' } }
     }
 
+    const payload = toTabTransferPayload(input.payload ?? session.payload)
+    if (!hasBuffer(payload.bufferKey)) {
+      return { detach: false, result: { detached: false, outcome: 'cancelled' } }
+    }
+
     return {
       detach: true,
-      payload: toTabTransferPayload(input.payload ?? session.payload),
+      payload,
       targetBounds: computeCursorAuxiliaryBounds(cursorPoint, screen)
     }
   }
