@@ -1,15 +1,16 @@
 import type { RefObject } from 'react'
-import type { LinkCandidate } from '../editor/LinkAutocompleteEngine'
+import type { HeadingLinkCandidate } from '../editor/LinkAutocompleteEngine'
 import { useDismissable } from '../hooks/useDismissable'
 import type { LinkMenuPosition } from '../hooks/useLinkMenu'
 
 export interface LinkAutocompleteMenuProps {
   isOpen: boolean
-  candidates: readonly LinkCandidate[]
+  candidates: readonly HeadingLinkCandidate[]
   selectedIndex: number
   position: LinkMenuPosition
   menuRef: RefObject<HTMLDivElement | null>
-  onSelect: (candidate: LinkCandidate) => void
+  onSelect: (candidate: HeadingLinkCandidate) => void
+  onHoverIndex: (index: number) => void
   onDismiss: () => void
 }
 
@@ -21,11 +22,12 @@ export function LinkAutocompleteMenu({
   position,
   menuRef,
   onSelect,
+  onHoverIndex,
   onDismiss
 }: LinkAutocompleteMenuProps) {
   useDismissable(isOpen, menuRef, onDismiss)
 
-  if (!isOpen) {
+  if (!isOpen || candidates.length === 0) {
     return null
   }
 
@@ -37,34 +39,30 @@ export function LinkAutocompleteMenu({
       aria-label="링크 자동완성"
       style={{ top: position.top, left: position.left }}
     >
-      {candidates.length === 0 ? (
-        <div className="link-autocomplete-empty" role="presentation">
-          일치하는 헤딩이 없습니다
-        </div>
-      ) : (
-        candidates.map((candidate, index) => {
-          const isSelected = index === selectedIndex
-          return (
-            <button
-              key={candidate.id}
-              type="button"
-              role="option"
-              aria-selected={isSelected}
-              className={isSelected ? 'link-autocomplete-item is-selected' : 'link-autocomplete-item'}
-              onMouseDown={(event) => {
-                event.preventDefault()
-                onSelect(candidate)
-              }}
-            >
-              <span className="link-autocomplete-badge">{`H${candidate.heading.level}`}</span>
-              <span className="link-autocomplete-content">
-                <span className="link-autocomplete-title">{candidate.title}</span>
-                <span className="link-autocomplete-slug">{`#${candidate.slug}`}</span>
-              </span>
-            </button>
-          )
-        })
-      )}
+      {candidates.map((candidate, index) => {
+        const isSelected = index === selectedIndex
+        return (
+          <button
+            key={candidate.id}
+            type="button"
+            role="option"
+            aria-selected={isSelected}
+            className={isSelected ? 'link-autocomplete-item is-selected' : 'link-autocomplete-item'}
+            onMouseDown={(event) => {
+              // Prevent moving focus/selection away from the editor before insertion runs.
+              event.preventDefault()
+            }}
+            onMouseEnter={() => onHoverIndex(index)}
+            onClick={() => onSelect(candidate)}
+          >
+            <span className="link-autocomplete-badge">{`H${candidate.heading.level}`}</span>
+            <span className="link-autocomplete-content">
+              <span className="link-autocomplete-title">{candidate.title}</span>
+              <span className="link-autocomplete-slug">{`#${candidate.slug}`}</span>
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 }

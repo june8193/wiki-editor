@@ -688,23 +688,22 @@ export function insertWysiwygSectionLink(
 
   const linkMark = linkMarkType.create({ href: `#${candidate.slug}` })
   const tr = state.tr.setMeta(linkInsertPluginKey, true)
+  let linkEndPos: number
 
   if (match.label.length > 0) {
     tr.delete(match.closeBracketPos, replaceTo)
     tr.delete(match.rangeFrom, match.rangeFrom + 1)
-    const linkEndPos = match.closeBracketPos - 1
+    linkEndPos = match.closeBracketPos - 1
     tr.addMark(match.rangeFrom, linkEndPos, linkMark)
-    tr.setSelection(TextSelection.create(tr.doc, linkEndPos))
-    tr.setStoredMarks([])
   } else {
     const titleText = candidate.title || candidate.slug
     const linkedNode = state.schema.text(titleText, [linkMark])
     tr.replaceWith(match.rangeFrom, replaceTo, linkedNode)
-    const linkEndPos = match.rangeFrom + titleText.length
-    tr.setSelection(TextSelection.create(tr.doc, linkEndPos))
-    tr.setStoredMarks([])
+    linkEndPos = match.rangeFrom + titleText.length
   }
 
+  tr.setSelection(TextSelection.create(tr.doc, linkEndPos))
+  tr.setStoredMarks([])
   editor.view.dispatch(tr)
   editor.view.focus()
   return true
@@ -748,16 +747,11 @@ function findContiguousLinkRange(
   return containsCursor && runStart >= 0 ? { from: runStart, to: runEnd } : null
 }
 
-function wrapRangeWithLinkTrigger(
-  editor: Editor,
-  from: number,
-  to: number,
-  stripLinkMark: boolean
-): boolean {
+function wrapRangeWithLinkTrigger(editor: Editor, from: number, to: number): boolean {
   const { state } = editor
   const { schema } = state
   const tr = state.tr
-  if (stripLinkMark && schema.marks.link) {
+  if (from < to && schema.marks.link) {
     tr.removeMark(from, to, schema.marks.link)
   }
   tr.insert(to, schema.text(']('))
@@ -797,7 +791,7 @@ export function applyWysiwygCtrlK(editor: Editor): boolean {
     if (hasHardBreak) {
       return false
     }
-    return wrapRangeWithLinkTrigger(editor, from, to, true)
+    return wrapRangeWithLinkTrigger(editor, from, to)
   }
 
   const linkMarkType = state.schema.marks.link
@@ -805,7 +799,7 @@ export function applyWysiwygCtrlK(editor: Editor): boolean {
   if (activeLinkMark) {
     const linkRange = findContiguousLinkRange($from, activeLinkMark)
     if (linkRange) {
-      return wrapRangeWithLinkTrigger(editor, linkRange.from, linkRange.to, true)
+      return wrapRangeWithLinkTrigger(editor, linkRange.from, linkRange.to)
     }
   }
 
@@ -814,10 +808,5 @@ export function applyWysiwygCtrlK(editor: Editor): boolean {
     return false
   }
 
-  const tr = state.tr.insert(from, state.schema.text('[]('))
-  tr.setSelection(TextSelection.create(tr.doc, from + 3))
-  tr.setStoredMarks([])
-  editor.view.dispatch(tr)
-  editor.view.focus()
-  return true
+  return wrapRangeWithLinkTrigger(editor, from, from)
 }

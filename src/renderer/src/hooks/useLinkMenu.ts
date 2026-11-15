@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildHeadingLinkCandidates,
   filterAndRankLinkCandidates,
-  type LinkCandidate,
+  type HeadingLinkCandidate,
   type LinkQueryMatch
 } from '../editor/LinkAutocompleteEngine'
 import {
@@ -17,7 +17,7 @@ export type LinkMenuPosition = SlashMenuPosition
 
 export interface LinkMenuState<TMatch extends LinkQueryMatch = LinkQueryMatch> {
   isOpen: boolean
-  candidates: LinkCandidate[]
+  candidates: HeadingLinkCandidate[]
   selectedIndex: number
   match: TMatch | null
   position: LinkMenuPosition
@@ -31,6 +31,12 @@ export interface LinkMenuControls<TMatch extends LinkQueryMatch = LinkQueryMatch
     shellEl: HTMLElement | null,
     overrideContent?: string
   ) => void
+  syncDocMatch: (
+    match: TMatch | null,
+    coordsProvider: CoordsProvider,
+    shellEl: HTMLElement | null,
+    overrideContent?: string
+  ) => boolean
   syncOpenSelection: (
     match: TMatch | null,
     coordsProvider: CoordsProvider,
@@ -44,24 +50,25 @@ export interface LinkMenuControls<TMatch extends LinkQueryMatch = LinkQueryMatch
 
 export interface UseLinkMenuOptions<TMatch extends LinkQueryMatch = LinkQueryMatch> {
   documentContent: string
-  onSelectCandidate: (candidate: LinkCandidate, match: TMatch) => void
+  onSelectCandidate: (candidate: HeadingLinkCandidate, match: TMatch) => void
   onOpenMenu?: () => void
 }
 
-/** Manages link autocomplete popup state, ranking, keyboard selection, and dismissal. */
+const CLOSED_LINK_MENU_STATE: LinkMenuState<never> = {
+  isOpen: false,
+  candidates: [],
+  selectedIndex: 0,
+  match: null,
+  position: { top: 0, left: 0 }
+}
+
+/** Manages link autocomplete popup state, ranking, keyboard/hover selection, and dismissal. */
 export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
   documentContent,
   onSelectCandidate,
   onOpenMenu
 }: UseLinkMenuOptions<TMatch>) {
-  const initialState: LinkMenuState<TMatch> = {
-    isOpen: false,
-    candidates: [],
-    selectedIndex: 0,
-    match: null,
-    position: { top: 0, left: 0 }
-  }
-  const [state, setState] = useState<LinkMenuState<TMatch>>(initialState)
+  const [state, setState] = useState<LinkMenuState<TMatch>>(CLOSED_LINK_MENU_STATE)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const stateRef = useRef<LinkMenuState<TMatch>>(state)
   const documentContentRef = useRef(documentContent)
@@ -73,22 +80,18 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
   onSelectCandidateRef.current = onSelectCandidate
   onOpenMenuRef.current = onOpenMenu
 
+  const commitState = useCallback((next: LinkMenuState<TMatch>) => {
+    stateRef.current = next
+    setState(next)
+  }, [])
+
   const dismiss = useCallback((): boolean => {
-    const wasOpen = stateRef.current.isOpen
-    if (!wasOpen) {
+    if (!stateRef.current.isOpen) {
       return false
     }
-    const closedState: LinkMenuState<TMatch> = {
-      isOpen: false,
-      candidates: [],
-      selectedIndex: 0,
-      match: null,
-      position: { top: 0, left: 0 }
-    }
-    stateRef.current = closedState
-    setState(closedState)
+    commitState(CLOSED_LINK_MENU_STATE)
     return true
-  }, [])
+  }, [commitState])
 
   const updateFromMatch = useCallback(
     (
@@ -105,6 +108,11 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
       const content = overrideContent ?? documentContentRef.current
       const allCandidates = buildHeadingLinkCandidates(content)
       const candidates = filterAndRankLinkCandidates(allCandidates, match.label, match.query)
+      if (candidates.length === 0) {
+        dismiss()
+        return
+      }
+
       const prev = stateRef.current
       const wasOpen = prev.isOpen
       const prevSelectedId = wasOpen ? prev.candidates[prev.selectedIndex]?.id : undefined
@@ -118,38 +126,69 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
       const position =
         coords !== null || !wasOpen ? computeSlashMenuPosition(shellEl, coords) : prev.position
 
-      const nextState: LinkMenuState<TMatch> = {
+      commitState({
         isOpen: true,
         candidates,
         selectedIndex: nextIndex,
         match,
         position
-      }
-      stateRef.current = nextState
-      setState(nextState)
+      })
 
       if (!wasOpen) {
         onOpenMenuRef.current?.()
       }
     },
-    [dismiss]
+    [commitState, dismiss]
   )
 
-  const moveSelection = useCallback((delta: -1 | 1): boolean => {
-    const current = stateRef.current
-    if (!current.isOpen || current.candidates.length === 0) {
-      return false
-    }
-    const len = current.candidates.length
-    const nextIndex = (current.selectedIndex + delta + len) % len
-    const nextState: LinkMenuState<TMatch> = { ...current, selectedIndex: nextIndex }
-    stateRef.current = nextState
-    setState(nextState)
-    return true
-  }, [])
+  const syncDocMatch = useCallback(
+    (
+      match: TMatch | null,
+      coordsProvider: CoordsProvider,
+      shellEl: HTMLElement | null,
+      overrideContent?: string
+    ): boolean => {
+      if (!match) {
+        dismiss()
+        return false
+      }
+      const coords = readSafeCaretCoords(coordsProvider, match.rangeFrom)
+      updateFromMatch(match, coords, shellEl, overrideContent)
+      return true
+    },
+    [dismiss, updateFromMatch]
+  )
+
+  const moveSelection = useCallback(
+    (delta: -1 | 1): boolean => {
+      const current = stateRef.current
+      if (!current.isOpen || current.candidates.length === 0) {
+        return false
+      }
+      const len = current.candidates.length
+      const nextIndex = (current.selectedIndex + delta + len) % len
+      commitState({ ...current, selectedIndex: nextIndex })
+      return true
+    },
+    [commitState]
+  )
+
+  const setSelectedIndex = useCallback(
+    (index: number): void => {
+      const current = stateRef.current
+      if (!current.isOpen || index < 0 || index >= current.candidates.length) {
+        return
+      }
+      if (current.selectedIndex === index) {
+        return
+      }
+      commitState({ ...current, selectedIndex: index })
+    },
+    [commitState]
+  )
 
   const selectCandidate = useCallback(
-    (candidate: LinkCandidate) => {
+    (candidate: HeadingLinkCandidate) => {
       const match = stateRef.current.match
       if (!match) {
         dismiss()
@@ -199,6 +238,7 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
   const controlsRef = useRef<LinkMenuControls<TMatch>>({
     stateRef,
     updateFromMatch,
+    syncDocMatch,
     syncOpenSelection,
     moveSelection,
     applySelected,
@@ -209,23 +249,30 @@ export function useLinkMenu<TMatch extends LinkQueryMatch = LinkQueryMatch>({
     controlsRef.current = {
       stateRef,
       updateFromMatch,
+      syncDocMatch,
       syncOpenSelection,
       moveSelection,
       applySelected,
       dismiss
     }
-  }, [updateFromMatch, syncOpenSelection, moveSelection, applySelected, dismiss])
+  }, [updateFromMatch, syncDocMatch, syncOpenSelection, moveSelection, applySelected, dismiss])
 
-  return {
-    linkControlsRef: controlsRef,
-    linkMenuProps: {
+  const linkMenuProps = useMemo(
+    () => ({
       isOpen: state.isOpen,
       candidates: state.candidates,
       selectedIndex: state.selectedIndex,
       position: state.position,
       menuRef,
       onSelect: selectCandidate,
+      onHoverIndex: setSelectedIndex,
       onDismiss: dismiss
-    }
+    }),
+    [dismiss, selectCandidate, setSelectedIndex, state]
+  )
+
+  return {
+    linkControlsRef: controlsRef,
+    linkMenuProps
   }
 }

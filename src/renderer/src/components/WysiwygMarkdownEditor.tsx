@@ -375,21 +375,13 @@ export function WysiwygMarkdownEditor({
           return
         }
 
-        if (enableLinkAutocompleteRef.current) {
-          const linkMatch = detectProseMirrorLinkQuery(instance.state)
-          if (linkMatch) {
-            slashControlsRef.current.dismiss()
-            const coords = readSafeCaretCoords(instance.view, linkMatch.rangeFrom)
-            linkControlsRef.current.updateFromMatch(
-              linkMatch,
-              coords,
-              shellRef.current,
-              serialized
-            )
-            return
-          }
+        const linkMatch = enableLinkAutocompleteRef.current
+          ? detectProseMirrorLinkQuery(instance.state)
+          : null
+        if (linkControlsRef.current.syncDocMatch(linkMatch, instance.view, shellRef.current, serialized)) {
+          slashControlsRef.current.dismiss()
+          return
         }
-        linkControlsRef.current.dismiss()
 
         const match = detectProseMirrorSlashQuery(instance.state)
         const coords = match ? readSafeCaretCoords(instance.view, match.rangeFrom) : null

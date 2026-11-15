@@ -334,21 +334,14 @@ export function useRawCodeMirrorEditor({
       if (isOffsetInCodeFence(docText, from) || isOffsetInCodeFence(docText, to)) {
         return false
       }
-      if (!empty) {
-        const selected = docText.slice(from, to)
-        if (selected.includes('\n')) {
-          return false
-        }
-        const insert = `[${selected}](`
-        view.dispatch({
-          changes: { from, to, insert },
-          selection: { anchor: from + insert.length }
-        })
-        return true
+      const selected = empty ? '' : docText.slice(from, to)
+      if (selected.includes('\n')) {
+        return false
       }
+      const insert = `[${selected}](`
       view.dispatch({
-        changes: { from, to: from, insert: '[](' },
-        selection: { anchor: from + 3 }
+        changes: { from, to, insert },
+        selection: { anchor: from + insert.length }
       })
       return true
     }
@@ -446,16 +439,13 @@ export function useRawCodeMirrorEditor({
             const docText = update.state.doc.toString()
             const linkMatch =
               runtimeRef.current.enableLinkAutocomplete && sel.empty
-                ? detectLinkQuery(docText, sel.head, { ignoreCodeFences: true })
+                ? detectLinkQuery(docText, sel.head)
                 : null
 
-            if (linkMatch) {
+            if (linkControlsRef.current.syncDocMatch(linkMatch, update.view, shellRef.current, docText)) {
               slashControlsRef.current.dismiss()
-              const coords = readSafeCaretCoords(update.view, linkMatch.rangeFrom)
-              linkControlsRef.current.updateFromMatch(linkMatch, coords, shellRef.current, docText)
               return
             }
-            linkControlsRef.current.dismiss()
 
             if (runtimeRef.current.enableSlashCommands && sel.empty) {
               const slashMatch = detectSlashQuery(docText, sel.head, {
@@ -475,7 +465,7 @@ export function useRawCodeMirrorEditor({
               const docText = update.state.doc.toString()
               const currentMatch =
                 runtimeRef.current.enableLinkAutocomplete && sel.empty
-                  ? detectLinkQuery(docText, sel.head, { ignoreCodeFences: true })
+                  ? detectLinkQuery(docText, sel.head)
                   : null
               linkControlsRef.current.syncOpenSelection(
                 currentMatch,

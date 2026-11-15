@@ -131,6 +131,11 @@ describe('useLinkMenu', () => {
     expect(result.current.linkMenuProps.isOpen).toBe(true)
 
     act(() => {
+      result.current.linkMenuProps.onHoverIndex(2)
+    })
+    expect(result.current.linkMenuProps.selectedIndex).toBe(2)
+
+    act(() => {
       result.current.linkControlsRef.current.syncOpenSelection(
         null,
         { coordsAtPos: () => ({ left: 10, top: 20, bottom: 38 }) },
@@ -140,12 +145,12 @@ describe('useLinkMenu', () => {
     expect(result.current.linkMenuProps.isOpen).toBe(false)
   })
 
-  it('후보가 0개인 경우 applySelected 는 false 를 반환하고 메뉴를 연 상태는 유지한다', () => {
+  it('일치하는 후보가 없으면 메뉴를 닫는다', () => {
     const onSelect = vi.fn()
 
     const { result } = renderHook(() =>
       useLinkMenu({
-        documentContent: '헤딩 없는 문서',
+        documentContent: sampleMarkdown,
         onSelectCandidate: onSelect
       })
     )
@@ -157,26 +162,30 @@ describe('useLinkMenu', () => {
         null
       )
     })
-
     expect(result.current.linkMenuProps.isOpen).toBe(true)
-    expect(result.current.linkMenuProps.candidates).toEqual([])
 
-    let applied = true
     act(() => {
-      applied = result.current.linkControlsRef.current.applySelected()
+      result.current.linkControlsRef.current.updateFromMatch(
+        createMatch('', '없는검색어', 0, 8),
+        { left: 10, top: 20, bottom: 38 },
+        null
+      )
     })
-    expect(applied).toBe(false)
+
+    expect(result.current.linkMenuProps.isOpen).toBe(false)
+    expect(result.current.linkMenuProps.candidates).toEqual([])
+    expect(result.current.linkControlsRef.current.applySelected()).toBe(false)
     expect(onSelect).not.toHaveBeenCalled()
   })
 })
 
 describe('LinkAutocompleteMenu', () => {
-  it('role="listbox" aria-label="링크 자동완성" 로 렌더링하고 클릭 선택과 바깥 클릭 닫기를 처리한다', () => {
+  it('role="listbox" aria-label="링크 자동완성" 로 렌더링하고 호버·클릭 선택과 바깥 클릭 닫기를 처리한다', () => {
     const onSelect = vi.fn()
+    const onHoverIndex = vi.fn()
     const onDismiss = vi.fn()
     const candidates = [
       {
-        kind: 'heading' as const,
         id: 'heading:1:overview',
         heading: {
           line: 1,
@@ -190,6 +199,21 @@ describe('LinkAutocompleteMenu', () => {
         },
         title: '개요',
         slug: '1-개요'
+      },
+      {
+        id: 'heading:3:api',
+        heading: {
+          line: 3,
+          level: 2 as const,
+          depth: 2,
+          number: '1.1.',
+          rawTitle: 'API 가이드',
+          title: 'API 가이드',
+          slug: 'api-가이드',
+          hasExplicitNumber: false
+        },
+        title: 'API 가이드',
+        slug: 'api-가이드'
       }
     ]
 
@@ -203,6 +227,7 @@ describe('LinkAutocompleteMenu', () => {
           position={{ top: 50, left: 60 }}
           menuRef={{ current: null }}
           onSelect={onSelect}
+          onHoverIndex={onHoverIndex}
           onDismiss={onDismiss}
         />
       </div>
@@ -211,19 +236,28 @@ describe('LinkAutocompleteMenu', () => {
     const listbox = screen.getByRole('listbox', { name: '링크 자동완성' })
     expect(listbox).toBeInTheDocument()
 
-    const option = screen.getByRole('option')
-    expect(option).toHaveAttribute('aria-selected', 'true')
-    expect(option).toHaveTextContent('개요')
-    expect(option).toHaveTextContent('#1-개요')
+    const options = screen.getAllByRole('option')
+    expect(options[0]).toHaveAttribute('aria-selected', 'true')
+    expect(options[1]).toHaveAttribute('aria-selected', 'false')
+    expect(options[0]).toHaveTextContent('개요')
+    expect(options[0]).toHaveTextContent('#1-개요')
 
-    fireEvent.mouseDown(option)
-    expect(onSelect).toHaveBeenCalledWith(candidates[0])
+    fireEvent.mouseEnter(options[1])
+    expect(onHoverIndex).toHaveBeenCalledWith(1)
+
+    const mouseDownEvent = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    options[1].dispatchEvent(mouseDownEvent)
+    expect(mouseDownEvent.defaultPrevented).toBe(true)
+    expect(onSelect).not.toHaveBeenCalled()
+
+    fireEvent.click(options[1])
+    expect(onSelect).toHaveBeenCalledWith(candidates[1])
 
     fireEvent.mouseDown(screen.getByRole('button', { name: 'outside' }))
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 
-  it('후보가 비어 있으면 빈 안내 문구를 렌더링한다', () => {
+  it('후보가 비어 있으면 팝업을 렌더링하지 않는다', () => {
     render(
       <LinkAutocompleteMenu
         isOpen
@@ -232,11 +266,11 @@ describe('LinkAutocompleteMenu', () => {
         position={{ top: 0, left: 0 }}
         menuRef={{ current: null }}
         onSelect={vi.fn()}
+        onHoverIndex={vi.fn()}
         onDismiss={vi.fn()}
       />
     )
 
-    expect(screen.getByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
-    expect(screen.getByText('일치하는 헤딩이 없습니다')).toBeInTheDocument()
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
   })
 })

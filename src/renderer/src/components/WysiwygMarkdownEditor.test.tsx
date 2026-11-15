@@ -575,7 +575,10 @@ describe('WysiwygMarkdownEditor link autocomplete & Ctrl+K', () => {
     placeCaretInProseMirror(editorEl, emptyCell)
     await user.keyboard(' [[](')
     const tableListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
-    fireEvent.mouseDown(within(tableListbox).getByRole('option', { name: /개요/ }))
+    const apiOption = within(tableListbox).getByRole('option', { name: /API 가이드/ })
+    fireEvent.mouseEnter(apiOption)
+    expect(apiOption).toHaveAttribute('aria-selected', 'true')
+    await user.click(within(tableListbox).getByRole('option', { name: /개요/ }))
     await waitFor(() => {
       expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('[개요](#11-개요)')
     })

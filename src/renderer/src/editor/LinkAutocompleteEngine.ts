@@ -14,24 +14,17 @@ export interface LinkQueryMatch {
 }
 
 export interface HeadingLinkCandidate {
-  kind: 'heading'
   id: string
   heading: MarkdownHeading
   title: string
   slug: string
 }
 
-export type LinkCandidate = HeadingLinkCandidate
-
 export interface RawSectionLinkEdit {
   from: number
   to: number
   text: string
   cursorOffset: number
-}
-
-export interface DetectLinkQueryOptions {
-  ignoreCodeFences?: boolean
 }
 
 export interface InlineLinkSegment {
@@ -143,7 +136,7 @@ export function detectLinkQueryFromSegments(
 
     for (let i = 0; i < seg.text.length; i += 1) {
       const ch = seg.text[i]
-      const pmPos = seg.from + i
+      const charPos = seg.from + i
 
       if (pendingCloseBracket !== null) {
         const matchedCrossSegment = i === 0 && ch === '(' && inBacktickCount === 0
@@ -205,7 +198,7 @@ export function detectLinkQueryFromSegments(
       if (ch === '[') {
         buffer += '['
         bracketStack.push({
-          pos: pmPos,
+          pos: charPos,
           labelStartBufferOffset: buffer.length,
           precededByBang: pendingUnescapedBang
         })
@@ -222,13 +215,13 @@ export function detectLinkQueryFromSegments(
           if (i + 1 < seg.text.length) {
             if (seg.text[i + 1] === '(') {
               buffer += '('
-              candidate = createPendingCandidate(openBracket, pmPos, buffer, labelEndBufferOffset)
+              candidate = createPendingCandidate(openBracket, charPos, buffer, labelEndBufferOffset)
               i += 1
             }
           } else {
             pendingCloseBracket = {
               openBracket,
-              closeBracketPos: pmPos,
+              closeBracketPos: charPos,
               labelEndBufferOffset
             }
           }
@@ -260,15 +253,11 @@ export function detectLinkQueryFromSegments(
 }
 
 /** Detects a `[label](query` link autocomplete trigger at `cursorOffset` in Raw Markdown. */
-export function detectLinkQuery(
-  text: string,
-  cursorOffset: number,
-  options: DetectLinkQueryOptions = {}
-): LinkQueryMatch | null {
+export function detectLinkQuery(text: string, cursorOffset: number): LinkQueryMatch | null {
   if (cursorOffset < 0 || cursorOffset > text.length) {
     return null
   }
-  if ((options.ignoreCodeFences ?? true) && isOffsetInCodeFence(text, cursorOffset)) {
+  if (isOffsetInCodeFence(text, cursorOffset)) {
     return null
   }
 
@@ -290,7 +279,6 @@ export function detectLinkQuery(
 /** Builds heading link candidates using `parseMarkdownHeadings` to match TOC and Preview slugs. */
 export function buildHeadingLinkCandidates(markdown: string): HeadingLinkCandidate[] {
   return parseMarkdownHeadings(markdown).map((heading) => ({
-    kind: 'heading',
     id: `heading:${heading.line}:${heading.slug}`,
     heading,
     title: heading.title || heading.rawTitle,
@@ -316,6 +304,9 @@ function getFieldMatchTier(field: string, normalizedTerm: string): number {
 }
 
 function getCandidateMatchTier(candidate: HeadingLinkCandidate, normalizedTerm: string): number {
+  if (!normalizedTerm) {
+    return 3
+  }
   const cleanTitle = stripInlineMarkdown(candidate.title)
   return Math.min(
     getFieldMatchTier(cleanTitle, normalizedTerm),
@@ -328,38 +319,30 @@ function getCandidateMatchTier(candidate: HeadingLinkCandidate, normalizedTerm: 
  * when the query is empty while preserving document order for remaining headings.
  */
 export function filterAndRankLinkCandidates(
-  candidates: readonly LinkCandidate[],
+  candidates: readonly HeadingLinkCandidate[],
   label: string,
   query: string
-): LinkCandidate[] {
+): HeadingLinkCandidate[] {
   const rawQuery = query.startsWith('#') ? query.slice(1) : query
   const normalizedQuery = rawQuery.trim().toLowerCase()
   const normalizedLabel = stripInlineMarkdown(label).trim().toLowerCase()
 
-  if (normalizedQuery) {
-    return candidates
-      .map((candidate, index) => ({
-        candidate,
-        index,
-        queryTier: getCandidateMatchTier(candidate, normalizedQuery),
-        labelTier: normalizedLabel ? getCandidateMatchTier(candidate, normalizedLabel) : 3
-      }))
-      .filter((entry) => entry.queryTier < 3)
-      .sort((a, b) => a.queryTier - b.queryTier || a.labelTier - b.labelTier || a.index - b.index)
-      .map((entry) => entry.candidate)
-  }
-
-  if (!normalizedLabel) {
+  if (!normalizedQuery && !normalizedLabel) {
     return [...candidates]
   }
+
+  const primaryTerm = normalizedQuery || normalizedLabel
+  const secondaryTerm = normalizedQuery ? normalizedLabel : ''
 
   return candidates
     .map((candidate, index) => ({
       candidate,
       index,
-      labelTier: getCandidateMatchTier(candidate, normalizedLabel)
+      primaryTier: getCandidateMatchTier(candidate, primaryTerm),
+      secondaryTier: getCandidateMatchTier(candidate, secondaryTerm)
     }))
-    .sort((a, b) => a.labelTier - b.labelTier || a.index - b.index)
+    .filter((entry) => !normalizedQuery || entry.primaryTier < 3)
+    .sort((a, b) => a.primaryTier - b.primaryTier || a.secondaryTier - b.secondaryTier || a.index - b.index)
     .map((entry) => entry.candidate)
 }
 

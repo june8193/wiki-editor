@@ -1579,14 +1579,9 @@ body.is-resizing-sidebar .pane-workspace {
   font-weight: 500;
 }
 
-.link-autocomplete-slug,
-.link-autocomplete-empty {
+.link-autocomplete-slug {
   font-size: 11px;
   color: var(--text-muted);
-}
-
-.link-autocomplete-empty {
-  padding: 8px 10px;
 }
 
 .slash-command-trigger {

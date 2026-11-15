@@ -729,7 +729,11 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
     })
 
     const listbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
-    fireEvent.mouseDown(within(listbox).getByRole('option', { name: /A \| B 표기/ }))
+    const pipeOption = within(listbox).getByRole('option', { name: /A \| B 표기/ })
+    expect(pipeOption).toHaveAttribute('aria-selected', 'false')
+    fireEvent.mouseEnter(pipeOption)
+    expect(pipeOption).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(pipeOption)
     expect(view.state.doc.toString()).toContain('| row | [A \\| B 표기](#a-b-표기) |')
   })
 
@@ -818,6 +822,24 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
     ).not.toBeInTheDocument()
 
     fireEvent.keyDown(editorEl, { key: 'Escape' })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    // Closes when filtered query produces no candidates
+    const emptyFilterStart = view.state.doc.toString().length
+    act(() => {
+      view.dispatch({
+        changes: { from: emptyFilterStart, to: emptyFilterStart, insert: ' [a](' },
+        selection: { anchor: emptyFilterStart + 5 }
+      })
+    })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    act(() => {
+      const endNow = view.state.doc.toString().length
+      view.dispatch({
+        changes: { from: endNow, to: endNow, insert: '없는헤딩' },
+        selection: { anchor: endNow + 4 }
+      })
+    })
     expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
   })
 

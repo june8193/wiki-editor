@@ -4941,7 +4941,7 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
       })
     })
     const rawTableListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
-    fireEvent.mouseDown(within(rawTableListbox).getByRole('option', { name: /A \| B 표기/ }))
+    await user.click(within(rawTableListbox).getByRole('option', { name: /A \| B 표기/ }))
     expect(getRawEditorText(rawEl)).toContain('| target | [A \\| B 표기](#a-b-표기) |')
 
     // 3) Raw 본문 [`심볼`]( 완성
