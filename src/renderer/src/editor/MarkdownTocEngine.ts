@@ -503,21 +503,20 @@ export function decodeSlugSafely(rawSlug: string): string {
 }
 
 /**
- * Finds the heading and its 0-based outline index matching `rawSlug` (decoding percent escapes).
+ * Finds the heading and its 0-based outline index matching an already-decoded `slug`.
  */
 export function findMarkdownHeadingBySlug(
   markdownContent: string,
-  rawSlug: string
+  slug: string
 ): MarkdownHeadingTarget | null {
-  const targetSlug = decodeSlugSafely(rawSlug)
-  if (targetSlug.length === 0) {
+  if (slug.length === 0) {
     return null
   }
 
   const headings = parseMarkdownHeadings(markdownContent)
   for (let index = 0; index < headings.length; index++) {
     const heading = headings[index]
-    if (heading.slug === targetSlug) {
+    if (heading.slug === slug) {
       return { heading, index }
     }
   }

@@ -76,7 +76,7 @@ describe('resolveMarkdownLinkTarget', () => {
 })
 
 describe('findMarkdownHeadingBySlug', () => {
-  it('matches decoded slugs to headings with their line and 0-based index', () => {
+  it('matches decoded slugs to headings with their line and 0-based index without double-decoding', () => {
     const content = ['# 개요', '', '## API 가이드', '', '### 세부 항목'].join('\n')
 
     const match1 = findMarkdownHeadingBySlug(content, 'api-가이드')
@@ -85,10 +85,26 @@ describe('findMarkdownHeadingBySlug', () => {
     expect(match1?.heading.line).toBe(3)
     expect(match1?.heading.slug).toBe('api-가이드')
 
-    const matchEncoded = findMarkdownHeadingBySlug(content, '%EC%84%B8%EB%B6%80-%ED%95%AD%EB%AA%A9')
-    expect(matchEncoded).not.toBeNull()
-    expect(matchEncoded?.index).toBe(2)
-    expect(matchEncoded?.heading.line).toBe(5)
+    const resolved = resolveMarkdownLinkTarget('#%EC%84%B8%EB%B6%80-%ED%95%AD%EB%AA%A9', {
+      workspaceRootPath: '/wiki/notes',
+      activeFilePath: '/wiki/notes/current.md'
+    })
+    expect(resolved).toEqual({ kind: 'same-doc-section', slug: '세부-항목' })
+    const matchDecoded =
+      resolved.kind === 'same-doc-section' ? findMarkdownHeadingBySlug(content, resolved.slug) : null
+    expect(matchDecoded?.index).toBe(2)
+    expect(matchDecoded?.heading.line).toBe(5)
+
+    const doubleEncoded = resolveMarkdownLinkTarget('#api%252d%EA%B0%80%EC%9D%B4%EB%93%9C', {
+      workspaceRootPath: '/wiki/notes',
+      activeFilePath: '/wiki/notes/current.md'
+    })
+    expect(doubleEncoded).toEqual({ kind: 'same-doc-section', slug: 'api%2d가이드' })
+    expect(
+      doubleEncoded.kind === 'same-doc-section'
+        ? findMarkdownHeadingBySlug(content, doubleEncoded.slug)
+        : null
+    ).toBeNull()
 
     expect(findMarkdownHeadingBySlug(content, 'missing-section')).toBeNull()
   })

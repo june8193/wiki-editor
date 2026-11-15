@@ -562,10 +562,10 @@ export function App() {
   )
 
   const scrollToHeadingOrReport = useCallback(
-    (target: HeadingScrollTarget, content: string, rawSlug: string): void => {
-      const match = findMarkdownHeadingBySlug(content, rawSlug)
+    (target: HeadingScrollTarget, content: string, slug: string): void => {
+      const match = findMarkdownHeadingBySlug(content, slug)
       if (!match) {
-        reportErrorBanner(`섹션을 찾을 수 없습니다: #${rawSlug}`)
+        reportErrorBanner(`섹션을 찾을 수 없습니다: #${slug}`)
         return
       }
       dispatchHeadingScroll(target, match.heading, match.index)
