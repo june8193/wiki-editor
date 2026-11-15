@@ -7,7 +7,7 @@ import type {
   ActiveTabDragSession,
   TabDragEndInput,
   TabDragEndResult,
-  TabDragOutcome,
+  TabDragResolution,
   TabDragStartInput
 } from '@shared/window'
 import { createHubBufferApi } from '../test/inMemoryWikiHarness'
@@ -85,7 +85,7 @@ function createDragControllerHarness(windowApi: WikiWindowApi) {
 describe('RendererTabDragController', () => {
   it('handles sync-before-async Escape cancellation without detaching or closing the tab', async () => {
     const startGate = createDeferred<ActiveTabDragSession>()
-    const outcomeUpdates: Array<{ dragSessionId: string; outcome: TabDragOutcome }> = []
+    const outcomeUpdates: Array<{ dragSessionId: string; outcome: TabDragResolution }> = []
     const endInputs: TabDragEndInput[] = []
 
     const windowApi: WikiWindowApi = {
@@ -208,7 +208,7 @@ describe('RendererTabDragController', () => {
   })
 
   it('aborts detach, surfaces error, and preserves dirty tab when buffer sync fails during endDrag', async () => {
-    const outcomeUpdates: Array<{ dragSessionId: string; outcome: TabDragOutcome }> = []
+    const outcomeUpdates: Array<{ dragSessionId: string; outcome: TabDragResolution }> = []
     const endCalls: TabDragEndInput[] = []
     const windowApi: WikiWindowApi = {
       role: 'main',
@@ -267,7 +267,7 @@ describe('RendererTabDragController', () => {
   })
 
   it('completes main drag session on completeInWindowDrop even when dragend never fires and forwards undefined screenPoint faithfully', async () => {
-    const outcomeUpdates: Array<{ dragSessionId: string; outcome: TabDragOutcome }> = []
+    const outcomeUpdates: Array<{ dragSessionId: string; outcome: TabDragResolution }> = []
     const endCalls: TabDragEndInput[] = []
     let counter = 0
 

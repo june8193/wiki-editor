@@ -7,12 +7,8 @@ import {
   AUXILIARY_WINDOW_OFFSET_X,
   AUXILIARY_WINDOW_OFFSET_Y,
   clampWindowBoundsToWorkArea,
-  computeCursorAuxiliaryBounds,
   computeOffsetAuxiliaryBounds,
-  isPointInsideWindowBounds,
-  isPointOutsideAllWindows,
   type ScreenLike,
-  type ScreenPoint,
   WINDOW_BASE_TITLE,
   type WindowBounds
 } from '@shared/window'
@@ -25,12 +21,8 @@ export {
   AUXILIARY_WINDOW_OFFSET_X,
   AUXILIARY_WINDOW_OFFSET_Y,
   clampWindowBoundsToWorkArea,
-  computeCursorAuxiliaryBounds,
   computeOffsetAuxiliaryBounds,
-  isPointInsideWindowBounds,
-  isPointOutsideAllWindows,
   type ScreenLike,
-  type ScreenPoint,
   type WindowBounds
 }
 

@@ -97,17 +97,13 @@ export function PaneWorkspace({
     if (!hasDraggingTab) return
     const handleWindowKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
-      actions.onCancelTabDrag?.()
+      actions.onCancelTabDrag()
     }
     window.addEventListener('keydown', handleWindowKeyDown, true)
     return () => {
       window.removeEventListener('keydown', handleWindowKeyDown, true)
     }
   }, [hasDraggingTab, actions])
-
-  const notifyDropInWindow = (): void => {
-    actions.onDropTabInWindow?.()
-  }
 
   const isSplit = layout.splitMode !== 'single'
   const canDropToSplit = draggingTab !== null && canSplitWithTab(layout)
@@ -152,7 +148,7 @@ export function PaneWorkspace({
             dispatchTabDrop(
               event,
               draggingTab,
-              notifyDropInWindow,
+              actions.onDropTabInWindow,
               (payload) => onSplitWithTab(payload.paneId, payload.tabId, zone.direction),
               { stopPropagation: true }
             )

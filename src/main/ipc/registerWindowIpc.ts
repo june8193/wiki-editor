@@ -1,7 +1,7 @@
 import { WINDOW_IPC_CHANNELS } from '@shared/ipc'
 import type {
   TabDragEndInput,
-  TabDragOutcome,
+  TabDragResolution,
   TabDragStartInput,
   TabTransferPayload
 } from '@shared/window'
@@ -61,7 +61,7 @@ export function registerWindowIpc({
         windowManager.updateTabDragOutcome(
           resolveSenderWebContents(event),
           dragSessionId as string,
-          outcome as TabDragOutcome
+          outcome as TabDragResolution
         )
     ],
     [

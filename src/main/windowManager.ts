@@ -14,7 +14,7 @@ import {
   type DetachTabToNewWindowResult,
   type TabDragEndInput,
   type TabDragEndResult,
-  type TabDragOutcome,
+  type TabDragResolution,
   type TabDragStartInput,
   type TabTransferPayload,
   type WindowInitContext,
@@ -302,7 +302,7 @@ export class WindowManager {
   updateTabDragOutcome(
     sender: unknown,
     dragSessionId: string,
-    outcome: TabDragOutcome
+    outcome: TabDragResolution
   ): ActiveTabDragSession | null {
     const sourceRecord = this.resolveRecordFromSender(sender)
     if (!sourceRecord || sourceRecord.window.isDestroyed()) {

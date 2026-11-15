@@ -13,7 +13,7 @@ import type {
   DetachTabToNewWindowResult,
   TabDragEndInput,
   TabDragEndResult,
-  TabDragOutcome,
+  TabDragResolution,
   TabDragStartInput,
   TabTransferPayload,
   WindowInitContext,
@@ -185,7 +185,7 @@ export interface WikiWindowApi {
   startTabDrag(input: TabDragStartInput): Promise<ActiveTabDragSession>
   updateTabDragOutcome(
     dragSessionId: string,
-    outcome: TabDragOutcome
+    outcome: TabDragResolution
   ): Promise<ActiveTabDragSession | null>
   endTabDrag(input: TabDragEndInput): Promise<TabDragEndResult>
   onTabDragStateChanged(listener: (session: ActiveTabDragSession | null) => void): () => void

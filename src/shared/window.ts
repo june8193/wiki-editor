@@ -193,6 +193,7 @@ export interface DetachTabToNewWindowResult {
 export type PaneId = 'primary' | 'secondary'
 
 export type TabDragOutcome = 'pending' | 'dropped-in-window' | 'cancelled'
+export type TabDragResolution = Exclude<TabDragOutcome, 'pending'>
 
 export interface TabDragStartInput {
   paneId: PaneId
@@ -222,7 +223,7 @@ export type TabDragEndResult =
     }
   | {
       detached: false
-      outcome: Exclude<TabDragOutcome, 'pending'>
+      outcome: TabDragResolution
     }
 
 export const WINDOW_BASE_TITLE = 'Wiki Editor'

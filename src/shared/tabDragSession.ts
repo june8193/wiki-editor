@@ -6,7 +6,7 @@ import {
   type ScreenLike,
   type TabDragEndInput,
   type TabDragEndResult,
-  type TabDragOutcome,
+  type TabDragResolution,
   type TabDragStartInput,
   type TabTransferPayload,
   type WindowBounds
@@ -85,7 +85,7 @@ export class TabDragCoordinator {
    * Transitions a pending active session to a terminal outcome and broadcasts the change.
    */
   private transitionPendingOutcome(
-    targetOutcome: Exclude<TabDragOutcome, 'pending'>
+    targetOutcome: TabDragResolution
   ): ActiveTabDragSession | null {
     const session = this.activeSession
     if (!session) return null
@@ -105,14 +105,11 @@ export class TabDragCoordinator {
   updateOutcome(
     sourceWindowId: number,
     dragSessionId: string,
-    outcome: TabDragOutcome
+    outcome: TabDragResolution
   ): ActiveTabDragSession | null {
     const session = this.activeSession
     if (!session || session.sourceWindowId !== sourceWindowId || session.dragSessionId !== dragSessionId) {
       return null
-    }
-    if (outcome === 'pending') {
-      return cloneSession(session)
     }
     return this.transitionPendingOutcome(outcome)
   }

@@ -5,7 +5,7 @@ import {
   type ActiveTabDragSession,
   type PaneId,
   type ScreenPoint,
-  type TabDragOutcome
+  type TabDragResolution
 } from '@shared/window'
 import type { DraggingTabPayload } from '../components/PaneTabBar'
 import type { PaneTabStore, TabItem } from './PaneTabStore'
@@ -25,7 +25,7 @@ interface ActiveLocalDragState {
   tabId: string
   startPromise: Promise<ActiveTabDragSession | null>
   resolvedSessionId: string | null
-  outcomeOverride: Exclude<TabDragOutcome, 'pending'> | null
+  outcomeOverride: TabDragResolution | null
   pendingOutcomeSync: Promise<unknown> | null
   superseded: boolean
 }
@@ -70,7 +70,7 @@ export class RendererTabDragController {
   start(): () => void {
     this.mounted = true
     const unsubscribeDragState = this.windowApi?.onTabDragStateChanged((session) =>
-      this.handleRemoteDragStateChanged(session)
+      this.handleMainDragStateChanged(session)
     )
 
     return () => {
@@ -141,12 +141,8 @@ export class RendererTabDragController {
     // Complete main session proactively because split/cross-pane drops unmount the source tab before dragend fires
     void (async () => {
       try {
-        const session = await drag.startPromise
-        if (!session || !this.mounted) return
-        if (drag.pendingOutcomeSync) {
-          await drag.pendingOutcomeSync.catch(() => undefined)
-          if (!this.mounted) return
-        }
+        const session = await this.awaitSettledSession(drag)
+        if (!session) return
         await this.windowApi!.endTabDrag({ dragSessionId: session.dragSessionId })
       } catch {
         // In-window layout transition already succeeded; ignore late IPC cleanup failure
@@ -170,14 +166,9 @@ export class RendererTabDragController {
 
     let activeSessionId: string | null = null
     try {
-      const session = await drag.startPromise
-      if (!session || !this.mounted) return
+      const session = await this.awaitSettledSession(drag)
+      if (!session) return
       activeSessionId = session.dragSessionId
-
-      if (drag.pendingOutcomeSync) {
-        await drag.pendingOutcomeSync.catch(() => undefined)
-        if (!this.mounted) return
-      }
 
       if (drag.outcomeOverride !== null) {
         await this.windowApi.endTabDrag({
@@ -211,9 +202,21 @@ export class RendererTabDragController {
     }
   }
 
+  private async awaitSettledSession(
+    drag: ActiveLocalDragState
+  ): Promise<ActiveTabDragSession | null> {
+    const session = await drag.startPromise
+    if (!session || !this.mounted) return null
+    if (drag.pendingOutcomeSync) {
+      await drag.pendingOutcomeSync.catch(() => undefined)
+      if (!this.mounted) return null
+    }
+    return session
+  }
+
   private applyOutcomeOverride(
     drag: ActiveLocalDragState,
-    outcome: Exclude<TabDragOutcome, 'pending'>
+    outcome: TabDragResolution
   ): void {
     drag.outcomeOverride = outcome
     if (drag.resolvedSessionId && this.windowApi) {
@@ -231,7 +234,7 @@ export class RendererTabDragController {
     }
   }
 
-  private handleRemoteDragStateChanged(session: ActiveTabDragSession | null): void {
+  private handleMainDragStateChanged(session: ActiveTabDragSession | null): void {
     const drag = this.activeDrag
     if (!this.mounted || !drag || !session || session.outcome !== 'cancelled') {
       return

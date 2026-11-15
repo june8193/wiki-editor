@@ -74,7 +74,7 @@ export function PaneView({
         handleTabMoveDrop(
           event,
           draggingTab,
-          () => actions.onDropTabInWindow?.(),
+          actions.onDropTabInWindow,
           pane.id,
           actions.onMoveTab,
           { ignoreSamePane: true }

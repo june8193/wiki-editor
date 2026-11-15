@@ -21,10 +21,10 @@ export interface PaneInteractionActions {
   ) => void
   onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
   onDetachTabToNewWindow?: (paneId: PaneId, tabId: string) => void
-  onStartTabDrag?: (paneId: PaneId, tabId: string) => void
-  onDropTabInWindow?: () => void
-  onCancelTabDrag?: () => void
-  onEndTabDrag?: (screenPoint?: ScreenPoint) => void
+  onStartTabDrag: (paneId: PaneId, tabId: string) => void
+  onDropTabInWindow: () => void
+  onCancelTabDrag: () => void
+  onEndTabDrag: (screenPoint?: ScreenPoint) => void
   onChangeContent: (bufferKey: string, nextContent: string) => void
   onSaveBuffer: (bufferKey: string) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
@@ -152,9 +152,6 @@ export function PaneTabBar({
   useDismissable(contextMenu !== null, menuRef, closeMenu)
 
   const otherPaneId: PaneId = paneId === 'primary' ? 'secondary' : 'primary'
-  const notifyDropInWindow = (): void => {
-    actions.onDropTabInWindow?.()
-  }
 
   return (
     <div
@@ -165,7 +162,7 @@ export function PaneTabBar({
         event.preventDefault()
       }}
       onDrop={(event) =>
-        handleTabMoveDrop(event, draggingTab, notifyDropInWindow, paneId, actions.onMoveTab, {
+        handleTabMoveDrop(event, draggingTab, actions.onDropTabInWindow, paneId, actions.onMoveTab, {
           stopPropagation: true
         })
       }
@@ -190,17 +187,24 @@ export function PaneTabBar({
               } catch {
                 // jsdom environments without DataTransfer still track via draggingTab state
               }
-              actions.onStartTabDrag?.(paneId, tab.id)
+              actions.onStartTabDrag(paneId, tab.id)
             }}
-            onDragEnd={(event) => actions.onEndTabDrag?.(extractDragEndScreenPoint(event))}
+            onDragEnd={(event) => actions.onEndTabDrag(extractDragEndScreenPoint(event))}
             onDragOver={(event) => {
               event.preventDefault()
             }}
             onDrop={(event) =>
-              handleTabMoveDrop(event, draggingTab, notifyDropInWindow, paneId, actions.onMoveTab, {
-                targetIndex: index,
-                stopPropagation: true
-              })
+              handleTabMoveDrop(
+                event,
+                draggingTab,
+                actions.onDropTabInWindow,
+                paneId,
+                actions.onMoveTab,
+                {
+                  targetIndex: index,
+                  stopPropagation: true
+                }
+              )
             }
             onMouseDown={(event) => {
               if (event.button === 1) {

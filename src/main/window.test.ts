@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { formatWindowTitle } from '@shared/window'
 import {
-  clampWindowBoundsToWorkArea,
   computeCursorAuxiliaryBounds,
-  computeOffsetAuxiliaryBounds,
-  createAuxiliaryWindowOptions,
-  createMainWindowOptions,
+  formatWindowTitle,
   isPointInsideWindowBounds,
   isPointOutsideAllWindows
+} from '@shared/window'
+import {
+  clampWindowBoundsToWorkArea,
+  computeOffsetAuxiliaryBounds,
+  createAuxiliaryWindowOptions,
+  createMainWindowOptions
 } from './window'
 
 describe('createMainWindowOptions', () => {
