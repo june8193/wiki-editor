@@ -290,7 +290,7 @@ describe('createWikiApi', () => {
 
     expect(auxIpc.lastInvoked).toEqual([
       { channel: WINDOW_IPC_CHANNELS.getInitContext, args: [] },
-      { channel: WINDOW_IPC_CHANNELS.detachTabToNewWindow, args: [{ payload: transferPayload }] },
+      { channel: WINDOW_IPC_CHANNELS.detachTabToNewWindow, args: [transferPayload] },
       { channel: WINDOW_IPC_CHANNELS.closeCurrent, args: [] }
     ])
   })

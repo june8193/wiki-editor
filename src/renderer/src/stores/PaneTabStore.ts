@@ -207,6 +207,16 @@ export function extractLayoutBufferKeys(layout: PaneLayoutState): string[] {
   }
   return keys
 }
+
+export function countLayoutTabs(layout: PaneLayoutState): number {
+  let count = 0
+  for (const paneId of ['primary', 'secondary'] as const) {
+    const pane = layout.panes[paneId]
+    if (!pane) continue
+    count += pane.tabs.length
+  }
+  return count
+}
 /**
  * Manages up to 2 split panes, independent per-pane tab bars, and lightweight inactive tab state.
  */
@@ -273,7 +283,7 @@ export class PaneTabStore {
   }
 
   getTotalTabCount(): number {
-    return this.state.panes.primary.tabs.length + this.state.panes.secondary.tabs.length
+    return countLayoutTabs(this.state)
   }
 
   openTab = (bufferKey: string, options: OpenTabOptions = {}): TabItem =>

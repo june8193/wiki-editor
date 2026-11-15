@@ -19,10 +19,6 @@ export interface WindowInitContext {
   initialTabs: TabTransferPayload[]
 }
 
-export interface DetachTabToNewWindowRequest {
-  payload: TabTransferPayload
-}
-
 export interface DetachTabToNewWindowResult {
   windowId: number
 }

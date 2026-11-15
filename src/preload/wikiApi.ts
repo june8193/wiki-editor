@@ -207,9 +207,10 @@ export function createWikiApi(
       getInitContext: () =>
         ipcRenderer.invoke(WINDOW_IPC_CHANNELS.getInitContext) as Promise<WindowInitContext>,
       detachTabToNewWindow: (payload) =>
-        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+        ipcRenderer.invoke(
+          WINDOW_IPC_CHANNELS.detachTabToNewWindow,
           payload
-        }) as Promise<DetachTabToNewWindowResult>,
+        ) as Promise<DetachTabToNewWindowResult>,
       closeCurrent: () => ipcRenderer.invoke(WINDOW_IPC_CHANNELS.closeCurrent) as Promise<void>
     },
     log: {

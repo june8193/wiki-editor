@@ -3,7 +3,6 @@ import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
   formatWindowTitle,
-  type DetachTabToNewWindowRequest,
   type DetachTabToNewWindowResult,
   type TabTransferPayload,
   type WindowInitContext,
@@ -157,6 +156,9 @@ export class WindowManager {
       if (this.mainWindowId === windowId) {
         this.mainWindowId = null
       }
+      if (!this.disposed) {
+        this.bufferHub.unregisterWindow(windowId)
+      }
     })
 
     return record
@@ -174,7 +176,7 @@ export class WindowManager {
     sourceBounds?: WindowBounds
   ): BrowserWindowLike {
     const firstKey = initialTabs[0]?.bufferKey
-    const firstName = firstKey ? this.bufferHub.getSnapshot().buffers[firstKey]?.name : undefined
+    const firstName = firstKey ? this.bufferHub.getBufferName(firstKey) : undefined
     const bounds = sourceBounds ? computeOffsetAuxiliaryBounds(sourceBounds, this.screen) : undefined
     const options = createAuxiliaryWindowOptions(this.preloadPath, {
       bounds,
@@ -198,14 +200,13 @@ export class WindowManager {
 
   detachTabToNewWindow(
     sender: unknown,
-    request: DetachTabToNewWindowRequest
+    payload: TabTransferPayload
   ): DetachTabToNewWindowResult {
     const sourceRecord = this.resolveRecordFromSender(sender)
     if (!sourceRecord || sourceRecord.window.isDestroyed()) {
       throw new Error('Cannot detach tab from an unknown source window')
     }
 
-    const payload = request?.payload
     if (!payload || typeof payload.bufferKey !== 'string' || !this.bufferHub.hasBuffer(payload.bufferKey)) {
       throw new Error('Cannot detach unknown document buffer')
     }
@@ -304,19 +305,13 @@ export class WindowManager {
     return record?.role === 'main' && !record.window.isDestroyed()
   }
 
-  getMenuTargetWebContents(_targetWindow?: unknown): BufferWebContentsLike | undefined {
+  getMenuTargetWebContents(): BufferWebContentsLike | undefined {
     if (this.mainWindowId === null) return undefined
     const record = this.windowsById.get(this.mainWindowId)
     if (!record || record.window.isDestroyed() || record.window.webContents.isDestroyed()) {
       return undefined
     }
     return record.window.webContents
-  }
-
-  getMainWindow(): BrowserWindowLike | undefined {
-    if (this.mainWindowId === null) return undefined
-    const record = this.windowsById.get(this.mainWindowId)
-    return record && !record.window.isDestroyed() ? record.window : undefined
   }
 
   getWebContentsTargets(): BufferWebContentsLike[] {

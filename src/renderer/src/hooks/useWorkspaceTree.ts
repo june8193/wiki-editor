@@ -26,7 +26,6 @@ export interface OpenWorkspaceOptions {
 }
 
 interface UseWorkspaceTreeOptions {
-  enabled?: boolean
   onError: (message: string | null, error?: unknown) => void
   onWorkspaceOpened?: () => void
   onWorkspaceChanged?: () => void
@@ -39,7 +38,6 @@ interface UseWorkspaceTreeOptions {
  * Manages workspace selection, 1-depth lazy folder loading, CRUD operations, and file watching.
  */
 export function useWorkspaceTree({
-  enabled = true,
   onError,
   onWorkspaceOpened,
   onWorkspaceChanged,
@@ -121,11 +119,6 @@ export function useWorkspaceTree({
 
   useEffect(() => {
     mountedRef.current = true
-    if (!enabled) {
-      return () => {
-        mountedRef.current = false
-      }
-    }
     const unsubscribe = wikiApi.workspace.onChanged(() => {
       if (!mountedRef.current) return
       void refreshTree()
@@ -137,11 +130,10 @@ export function useWorkspaceTree({
       unsubscribe()
       void wikiApi.workspace.unwatch().catch(() => undefined)
     }
-  }, [enabled, refreshTree, wikiApi])
+  }, [refreshTree, wikiApi])
 
   const openWorkspace = useCallback(
     async (targetPath: string, options?: OpenWorkspaceOptions): Promise<boolean> => {
-      if (!enabled) return false
       const seq = ++openRequestSeqRef.current
       if (!options?.silentError) {
         callbacksRef.current.onError(null)
@@ -171,7 +163,7 @@ export function useWorkspaceTree({
         return false
       }
     },
-    [enabled, wikiApi]
+    [wikiApi]
   )
 
   const loadDirectoryChildren = useCallback(async (dirPath: string): Promise<void> => {

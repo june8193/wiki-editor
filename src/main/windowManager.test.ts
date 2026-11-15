@@ -272,7 +272,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     const result = await ipcHarness.invokeFrom<DetachTabToNewWindowResult>(
       mainWin.webContents,
       WINDOW_IPC_CHANNELS.detachTabToNewWindow,
-      { payload }
+      payload
     )
 
     const auxWin = createdWindows[1]
@@ -300,7 +300,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       }
     ])
     expect(windowManager.isMainWebContents(auxWin.webContents)).toBe(false)
-    expect(windowManager.getMenuTargetWebContents(auxWin)).toBe(mainWin.webContents)
+    expect(windowManager.getMenuTargetWebContents()).toBe(mainWin.webContents)
 
     // Source window drops its only tab (including StrictMode cleanup releasePending: true) BEFORE aux syncs:
     // the shared dirty buffer MUST remain preserved for the pending auxiliary window transfer!
@@ -346,12 +346,10 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
 
     await ipcHarness.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [alphaBuf.key])
     await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
-      payload: {
-        bufferKey: alphaBuf.key,
-        mode: 'raw',
-        cursor: { selectionStart: 0, selectionEnd: 0 },
-        scrollTop: 0
-      }
+      bufferKey: alphaBuf.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
     })
     const aux1 = createdWindows[1]
     await ipcHarness.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [alphaBuf.key])
@@ -359,12 +357,10 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     // Single tab on auxiliary -> detach rejected
     await expect(
       ipcHarness.invokeFrom(aux1.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
-        payload: {
-          bufferKey: alphaBuf.key,
-          mode: 'raw',
-          cursor: { selectionStart: 0, selectionEnd: 0 },
-          scrollTop: 0
-        }
+        bufferKey: alphaBuf.key,
+        mode: 'raw',
+        cursor: { selectionStart: 0, selectionEnd: 0 },
+        scrollTop: 0
       })
     ).rejects.toThrow()
 
@@ -377,12 +373,10 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       aux1.webContents,
       WINDOW_IPC_CHANNELS.detachTabToNewWindow,
       {
-        payload: {
-          bufferKey: betaBuf.key,
-          mode: 'preview',
-          cursor: { selectionStart: 1, selectionEnd: 1 },
-          scrollTop: 50
-        }
+        bufferKey: betaBuf.key,
+        mode: 'preview',
+        cursor: { selectionStart: 1, selectionEnd: 1 },
+        scrollTop: 50
       }
     )
     expect(createdWindows[2].webContents.id).toBe(result2.windowId)
@@ -408,12 +402,10 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     )) as DocumentBuffer
     await ipcHarness.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [alphaBuf.key])
     await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
-      payload: {
-        bufferKey: alphaBuf.key,
-        mode: 'raw',
-        cursor: { selectionStart: 0, selectionEnd: 0 },
-        scrollTop: 0
-      }
+      bufferKey: alphaBuf.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
     })
     const auxWin = createdWindows[2]
     await ipcHarness.invokeFrom(auxWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [alphaBuf.key])
@@ -468,5 +460,36 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     // Main calling window:close-current is a no-op (only auxiliary auto-close uses it)
     await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.closeCurrent)
     expect(mainWin.isDestroyed()).toBe(false)
+  })
+
+  it('clears pending transfer ownership on auxiliary close even if no buffer IPC ran yet', async () => {
+    const mainWin = windowManager.createMainWindow() as FakeWindowInstance
+    await ipcHarness.invokeFrom(mainWin.webContents, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+    const alphaBuf = (await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(workspaceDir, 'alpha.md')
+    )) as DocumentBuffer
+    await ipcHarness.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [alphaBuf.key])
+    await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      alphaBuf.key,
+      '# Alpha\nUnsaved transfer'
+    )
+
+    await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: alphaBuf.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const auxWin = createdWindows[1]
+    await ipcHarness.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [])
+    expect(bufferHub.hasBuffer(alphaBuf.key)).toBe(true)
+
+    // Aux closes before sending any buffer:* IPC
+    auxWin.simulateUserClose()
+    expect(bufferHub.hasBuffer(alphaBuf.key)).toBe(false)
   })
 })

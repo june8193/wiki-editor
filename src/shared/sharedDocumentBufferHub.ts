@@ -90,6 +90,10 @@ export class SharedDocumentBufferHub {
     return this.store.getBuffer(pathOrKey) !== undefined
   }
 
+  getBufferName(pathOrKey: string): string | undefined {
+    return this.store.getBuffer(pathOrKey)?.name
+  }
+
   getWindowTabCount(windowId: number): number {
     return this.tabTracker.getWindowTotalTabCount(windowId)
   }

@@ -1,5 +1,5 @@
 import { WINDOW_IPC_CHANNELS } from '@shared/ipc'
-import type { DetachTabToNewWindowRequest } from '@shared/window'
+import type { TabTransferPayload } from '@shared/window'
 import type { LogService } from '../logging/LogService'
 import type { WindowManager } from '../windowManager'
 import {
@@ -30,10 +30,10 @@ export function registerWindowIpc({
     ],
     [
       WINDOW_IPC_CHANNELS.detachTabToNewWindow,
-      (event, request) =>
+      (event, payload) =>
         windowManager.detachTabToNewWindow(
           resolveSenderWebContents(event),
-          request as DetachTabToNewWindowRequest
+          payload as TabTransferPayload
         )
     ],
     [
