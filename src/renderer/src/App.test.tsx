@@ -5214,19 +5214,22 @@ function stubScrollLayout(
     }) as DOMRect
 }
 
+function createHeadingRect(top: number): DOMRect {
+  return {
+    top,
+    bottom: top + 28,
+    left: 0,
+    right: 500,
+    width: 500,
+    height: 28,
+    x: 0,
+    y: top,
+    toJSON: () => ({})
+  } as DOMRect
+}
+
 function stubHeadingTop(el: HTMLElement, getTop: () => number): void {
-  el.getBoundingClientRect = () =>
-    ({
-      top: getTop(),
-      bottom: getTop() + 28,
-      left: 0,
-      right: 500,
-      width: 500,
-      height: 28,
-      x: 0,
-      y: getTop(),
-      toJSON: () => ({})
-    }) as DOMRect
+  el.getBoundingClientRect = () => createHeadingRect(getTop())
 }
 
 function stubPreviewSpyLayout(
@@ -5586,18 +5589,7 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
           if (/^H[1-6]$/.test(this.tagName) && scrollContainer.contains(this)) {
             const text = this.textContent?.trim() ?? ''
             const offset = headingOffsets.get(text) ?? 0
-            const top = 100 + offset - currentScrollTop
-            return {
-              top,
-              bottom: top + 28,
-              left: 0,
-              right: 500,
-              width: 500,
-              height: 28,
-              x: 0,
-              y: top,
-              toJSON: () => ({})
-            } as DOMRect
+            return createHeadingRect(100 + offset - currentScrollTop)
           }
           return originalRect.call(this)
         })

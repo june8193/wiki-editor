@@ -668,16 +668,16 @@ describe('WysiwygMarkdownEditor', () => {
     }
   })
 
-  it('targets matching ATX heading on click-to-scroll even when empty, blockquote, or Setext headings precede it', async () => {
+  it('targets matching ATX heading on click-to-scroll even when empty, blockquote, Setext, or image-alt headings precede it', async () => {
     const markdown = [
-      '# Alpha',
+      'Setext Heading',
+      '===',
+      '',
+      '# ![Logo](https://example.com/logo.png) Alpha',
       '',
       '# ',
       '',
       '> # Quoted Heading',
-      '',
-      'Setext Heading',
-      '===',
       '',
       '## Beta'
     ].join('\n')
@@ -699,13 +699,32 @@ describe('WysiwygMarkdownEditor', () => {
     const scrollIntoViewMock = vi.fn()
     betaHeading!.scrollIntoView = scrollIntoViewMock
 
+    const alphaHeading = Array.from(scrollContainer.querySelectorAll('h1')).find((el) =>
+      el.textContent?.includes('Alpha')
+    )
+    expect(alphaHeading).toBeTruthy()
+    const alphaScrollMock = vi.fn()
+    alphaHeading!.scrollIntoView = alphaScrollMock
+
+    // Index 0 in parsed outline is `# ![Logo](...) Alpha` (inline img alt must match title)
+    rerender(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        isActive
+        scrollRequest={{ index: 0, nonce: 1 }}
+        onChangeContent={vi.fn()}
+      />
+    )
+    expect(alphaScrollMock).toHaveBeenCalledWith({ block: 'start' })
+
     // Index 1 in parsed outline is `## Beta` (empty `# `, blockquote, and Setext headings are omitted)
     rerender(
       <WysiwygMarkdownEditor
         content={markdown}
         scrollTop={0}
         isActive
-        scrollRequest={{ index: 1, nonce: 1 }}
+        scrollRequest={{ index: 1, nonce: 2 }}
         onChangeContent={vi.fn()}
       />
     )

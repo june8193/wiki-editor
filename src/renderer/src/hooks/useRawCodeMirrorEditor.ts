@@ -474,7 +474,6 @@ export function useRawCodeMirrorEditor({
     isReady: language === 'markdown',
     isActive,
     scrollRequest,
-    isScrollRequestReady: true,
     onScrollRequest: (req) => {
       const view = viewRef.current
       if (!view) return false

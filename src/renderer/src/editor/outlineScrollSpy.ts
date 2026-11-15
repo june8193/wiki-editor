@@ -1,5 +1,9 @@
 import type { EditorMode, PaneId } from '../stores/PaneTabStore'
-import { type MarkdownHeading, stripHeadingNumberPrefix } from './MarkdownTocEngine'
+import {
+  type MarkdownHeading,
+  stripHeadingNumberPrefix,
+  stripInlineMarkdown
+} from './MarkdownTocEngine'
 
 export const OUTLINE_SPY_TOP_THRESHOLD_PX = 24
 export const OUTLINE_SPY_BOTTOM_EPSILON_PX = 2
@@ -122,6 +126,9 @@ function collectVisibleHeadingText(node: Node): string {
   ) {
     return ''
   }
+  if (element.tagName === 'IMG') {
+    return element.getAttribute('alt') ?? ''
+  }
   let text = ''
   for (const child of Array.from(element.childNodes)) {
     text += collectVisibleHeadingText(child)
@@ -130,7 +137,8 @@ function collectVisibleHeadingText(node: Node): string {
 }
 
 function normalizeHeadingTitleText(text: string): string {
-  return stripHeadingNumberPrefix(text).replace(/\s+/g, ' ').trim()
+  const withoutNumber = stripHeadingNumberPrefix(text)
+  return (stripInlineMarkdown(withoutNumber) || withoutNumber).replace(/\s+/g, ' ').trim()
 }
 
 function matchHeadingsBySlugId(

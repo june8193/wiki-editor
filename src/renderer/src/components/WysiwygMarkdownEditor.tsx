@@ -401,10 +401,16 @@ export function WysiwygMarkdownEditor({
       const candidates: Array<{ pos: number; level: number; text: string; hasMedia: boolean }> = []
       editor.state.doc.descendants((node, pos) => {
         if (node.type.name === 'heading') {
+          let text = ''
           let hasMedia = false
           node.descendants((child) => {
+            if (child.isText) {
+              text += child.text ?? ''
+              return false
+            }
             if (child.type.name === 'image') {
               hasMedia = true
+              text += typeof child.attrs.alt === 'string' ? child.attrs.alt : ''
               return false
             }
             return true
@@ -412,7 +418,7 @@ export function WysiwygMarkdownEditor({
           candidates.push({
             pos,
             level: Number(node.attrs.level ?? 1),
-            text: node.textContent,
+            text,
             hasMedia
           })
           return false

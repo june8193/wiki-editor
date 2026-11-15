@@ -354,5 +354,31 @@ describe('outlineScrollSpy', () => {
     // Scrolled at Empty heading (Alpha already passed, Beta not reached) — stays on Alpha (0)
     scrollTop = 220
     expect(measureActiveHeadingIndexInContainer(container, headings)).toBe(0)
+
+    // Inline <img alt="..."> preserves alt text alignment even when Setext headings are also present
+    const imageHeadings = parseMarkdownHeadings(['# ![Logo](logo.png) Brand', '', '## Details'].join('\n'))
+    const imgContainer = document.createElement('div')
+    const hImgSetext = document.createElement('h1')
+    hImgSetext.textContent = 'Setext Banner'
+    const hBrand = document.createElement('h1')
+    const img = document.createElement('img')
+    img.setAttribute('alt', 'Logo')
+    hBrand.append(img, document.createTextNode(' Brand'))
+    const hDetails = document.createElement('h2')
+    hDetails.textContent = 'Details'
+    imgContainer.append(hImgSetext, hBrand, hDetails)
+
+    Object.defineProperties(imgContainer, {
+      scrollTop: { get: () => scrollTop, configurable: true },
+      scrollHeight: { value: 1200, configurable: true },
+      clientHeight: { value: 400, configurable: true }
+    })
+    imgContainer.getBoundingClientRect = () => stubRect(100, 400)
+    hImgSetext.getBoundingClientRect = () => stubRect(100 + 40 - scrollTop, 28)
+    hBrand.getBoundingClientRect = () => stubRect(100 + 220 - scrollTop, 28)
+    hDetails.getBoundingClientRect = () => stubRect(100 + 480 - scrollTop, 28)
+
+    scrollTop = 220
+    expect(measureActiveHeadingIndexInContainer(imgContainer, imageHeadings)).toBe(0)
   })
 })

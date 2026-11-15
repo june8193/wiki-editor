@@ -13,7 +13,6 @@ export interface UseEditorOutlineSpyOptions<TReq extends { nonce: number } = { n
   isReady: boolean
   isActive?: boolean
   scrollRequest?: TReq | null
-  isScrollRequestReady?: boolean
   onScrollRequest?: (req: TReq, headings: readonly MarkdownHeading[]) => boolean | void
   onScrollTopChange?: (scrollTop: number) => void
   measure: (headings: readonly MarkdownHeading[]) => number | null
@@ -37,7 +36,6 @@ export function useEditorOutlineSpy<TReq extends { nonce: number } = { nonce: nu
   isReady,
   isActive = true,
   scrollRequest,
-  isScrollRequestReady,
   onScrollRequest,
   onScrollTopChange,
   measure,
@@ -82,7 +80,7 @@ export function useEditorOutlineSpy<TReq extends { nonce: number } = { nonce: nu
     reportActiveHeading(false)
   }, [hasCallback, isActive, isReady, reportActiveHeading])
 
-  useOneShotScroll(scrollRequest, isScrollRequestReady ?? isReady, (req) => {
+  useOneShotScroll(scrollRequest, isReady, (req) => {
     resetScrollIntent()
     return onScrollRequestRef.current?.(req, parsedHeadingsRef.current) ?? true
   })
