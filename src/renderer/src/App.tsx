@@ -33,7 +33,7 @@ import { useGitController } from './hooks/useGitController'
 import { useWindowWidth } from './hooks/useWindowWidth'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
-import { type EditorMode, getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
+import { getPaneActiveTab, type PaneId, type TabItem, type TabViewPatch } from './stores/PaneTabStore'
 import {
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
@@ -52,6 +52,11 @@ interface LeftSidebarState {
 interface RightSidebarState {
   isCollapsed: boolean
   width: number
+}
+
+interface HeadingScrollTarget {
+  paneId: PaneId
+  tab: Pick<TabItem, 'id' | 'mode'>
 }
 
 function selectLeftSidebarView(
@@ -491,18 +496,12 @@ export function App() {
   )
 
   const dispatchHeadingScroll = useCallback(
-    (
-      paneId: PaneId,
-      tabId: string,
-      mode: EditorMode,
-      heading: MarkdownHeading,
-      index: number
-    ): void => {
+    (target: HeadingScrollTarget, heading: MarkdownHeading, index: number): void => {
       scrollNonceRef.current += 1
       setOutlineScrollRequest({
-        paneId,
-        tabId,
-        mode,
+        paneId: target.paneId,
+        tabId: target.tab.id,
+        mode: target.tab.mode,
         line: heading.line,
         slug: heading.slug,
         index,
@@ -515,7 +514,7 @@ export function App() {
   const handleSelectOutlineHeading = useCallback(
     (heading: MarkdownHeading, index: number): void => {
       if (!activeTab || !isActiveMarkdown) return
-      dispatchHeadingScroll(activePane.id, activeTab.id, activeTab.mode, heading, index)
+      dispatchHeadingScroll({ paneId: activePane.id, tab: activeTab }, heading, index)
     },
     [activePane.id, activeTab, dispatchHeadingScroll, isActiveMarkdown]
   )
@@ -562,22 +561,17 @@ export function App() {
     [updateTabViewState]
   )
 
-  const scrollToHeadingInPane = useCallback(
-    (
-      paneId: PaneId,
-      tabId: string,
-      mode: EditorMode,
-      content: string,
-      rawSlug: string
-    ): boolean => {
+  const scrollToHeadingOrReport = useCallback(
+    (target: HeadingScrollTarget, content: string, rawSlug: string): void => {
       const match = findMarkdownHeadingBySlug(content, rawSlug)
       if (!match) {
-        return false
+        reportErrorBanner(`섹션을 찾을 수 없습니다: #${rawSlug}`)
+        return
       }
-      dispatchHeadingScroll(paneId, tabId, mode, match.heading, match.index)
-      return true
+      dispatchHeadingScroll(target, match.heading, match.index)
+      reportErrorBanner(null)
     },
-    [dispatchHeadingScroll]
+    [dispatchHeadingScroll, reportErrorBanner]
   )
 
   const handleNavigateMarkdownLink = useCallback(
@@ -605,11 +599,7 @@ export function App() {
       }
 
       if (resolved.kind === 'same-doc-section') {
-        if (!scrollToHeadingInPane(paneId, sourceTab.id, sourceTab.mode, sourceBuffer.content, resolved.slug)) {
-          reportErrorBanner(`섹션을 찾을 수 없습니다: #${resolved.slug}`)
-          return
-        }
-        reportErrorBanner(null)
+        scrollToHeadingOrReport({ paneId, tab: sourceTab }, sourceBuffer.content, resolved.slug)
         return
       }
 
@@ -626,17 +616,7 @@ export function App() {
           return
         }
         if (resolved.slug !== null) {
-          if (
-            !scrollToHeadingInPane(
-              paneId,
-              opened.tab.id,
-              opened.tab.mode,
-              opened.buffer.content,
-              resolved.slug
-            )
-          ) {
-            reportErrorBanner(`섹션을 찾을 수 없습니다: #${resolved.slug}`)
-          }
+          scrollToHeadingOrReport({ paneId, tab: opened.tab }, opened.buffer.content, resolved.slug)
         }
       })()
     },
@@ -645,7 +625,7 @@ export function App() {
       layout.panes,
       openWorkspaceFileByPath,
       reportErrorBanner,
-      scrollToHeadingInPane,
+      scrollToHeadingOrReport,
       workspace?.rootPath
     ]
   )
