@@ -212,7 +212,6 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     disposeFns = [
       registerBufferIpc({
         ipcMain: ipcHarness.ipcMain,
-        workspaceService,
         configService,
         hub: bufferHub,
         getTargets: () => windowManager.getWebContentsTargets()

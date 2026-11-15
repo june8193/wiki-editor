@@ -595,6 +595,21 @@ export class RendererBufferSyncClient {
     return currentKey
   }
 
+  private needsHubContentSync(key: string): boolean {
+    const localBuf = this.bufferStore.getBuffer(key)
+    const hubBuf = this.latestHubBuffers[key]
+    return Boolean(
+      localBuf && (this.unsyncedLocalKeys.has(key) || !hubBuf || localBuf.content !== hubBuf.content)
+    )
+  }
+
+  private async pushLocalContentToHub(key: string): Promise<void> {
+    const localBuf = this.bufferStore.getBuffer(key)
+    if (!localBuf) return
+    await this.bufferApi.updateContent(key, localBuf.content)
+    this.unsyncedLocalKeys.delete(key)
+  }
+
   private async runSaveBufferRequest(key: string): Promise<boolean> {
     const initialKey = this.resolveLatestKey(key)
     this.pendingManualSaveKeys.add(initialKey)
@@ -602,14 +617,8 @@ export class RendererBufferSyncClient {
       const currentKey = this.hasPendingUpdatesForKey(initialKey)
         ? await this.flushPendingUpdatesForKey(initialKey)
         : initialKey
-      const localBuf = this.bufferStore.getBuffer(currentKey)
-      const hubBuf = this.latestHubBuffers[currentKey]
-      if (
-        localBuf &&
-        (this.unsyncedLocalKeys.has(currentKey) || !hubBuf || localBuf.content !== hubBuf.content)
-      ) {
-        await this.bufferApi.updateContent(currentKey, localBuf.content)
-        this.unsyncedLocalKeys.delete(currentKey)
+      if (this.needsHubContentSync(currentKey)) {
+        await this.pushLocalContentToHub(currentKey)
       }
       const result = await this.bufferApi.saveBuffer(currentKey)
       return result.ok
@@ -732,8 +741,15 @@ export class RendererBufferSyncClient {
     }
 
     try {
-      await this.flushPendingUpdatesForKey(initialTab.bufferKey)
+      const currentKey = this.hasPendingUpdatesForKey(initialTab.bufferKey)
+        ? await this.flushPendingUpdatesForKey(initialTab.bufferKey)
+        : this.resolveLatestKey(initialTab.bufferKey)
       if (!this.mounted) return
+
+      if (this.needsHubContentSync(currentKey)) {
+        await this.pushLocalContentToHub(currentKey)
+        if (!this.mounted) return
+      }
 
       const latestTab = this.tabStore.getTab(paneId, tabId)
       if (!latestTab) return

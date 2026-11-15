@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
-import type { WikiBufferApi } from '@shared/ipc'
+import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import { createHubBufferApi } from '../test/inMemoryWikiHarness'
 import { PaneTabStore } from './PaneTabStore'
@@ -17,7 +17,11 @@ function createDeferred<T = void>() {
   return { promise, resolve, reject }
 }
 
-function attachWindowClient(hub: SharedDocumentBufferHub, windowId: number) {
+function attachWindowClient(
+  hub: SharedDocumentBufferHub,
+  windowId: number,
+  windowApi?: WikiWindowApi
+) {
   const listeners = new Set<(event: SharedBufferHubEvent) => void>()
   const unsubscribeHub = hub.subscribe((event) => {
     for (const listener of listeners) {
@@ -32,6 +36,7 @@ function attachWindowClient(hub: SharedDocumentBufferHub, windowId: number) {
     bufferStore,
     tabStore,
     bufferApi,
+    windowApi,
     onError,
     onConfirmCloseDirtyTab: vi.fn()
   })
@@ -46,7 +51,7 @@ function attachWindowClient(hub: SharedDocumentBufferHub, windowId: number) {
   }
 }
 
-function createHubClientHarness(windowId = 1) {
+function createHubClientHarness(windowId = 1, windowApi?: WikiWindowApi) {
   const files = new Map<string, string>([['C:/wiki/shared.md', '# Shared']])
   const hub = new SharedDocumentBufferHub({
     initialAutoSaveConfig: { autoSave: false },
@@ -60,7 +65,7 @@ function createHubClientHarness(windowId = 1) {
       saveConfigRaw: async () => ({})
     }
   })
-  return { hub, files, ...attachWindowClient(hub, windowId) }
+  return { hub, files, ...attachWindowClient(hub, windowId, windowApi) }
 }
 
 describe('RendererBufferSyncClient race guards', () => {
@@ -218,6 +223,66 @@ describe('RendererBufferSyncClient race guards', () => {
       bufferApi.updateContent = origUpdate
       expect(await client.saveAndCloseTab('primary', tab.id)).toBe(true)
       expect(files.get('C:/wiki/shared.md')).toBe('# Unsynced edit')
+    } finally {
+      stop()
+      hub.dispose()
+    }
+  })
+
+  it('re-pushes unsynced local edits after an earlier updateContent failure before detaching a tab', async () => {
+    const detachTabCalls: unknown[] = []
+    let hubRef!: SharedDocumentBufferHub
+    const windowApi: WikiWindowApi = {
+      role: 'main',
+      getInitContext: async () => ({ role: 'main', initialTabs: [] }),
+      detachTabToNewWindow: async (payload) => {
+        detachTabCalls.push(payload)
+        hubRef.registerPendingTransfer(2, payload.bufferKey)
+        return { windowId: 2 }
+      },
+      closeCurrent: async () => undefined
+    }
+    const { hub, bufferApi, bufferStore, tabStore, client, onError } = createHubClientHarness(
+      1,
+      windowApi
+    )
+    hubRef = hub
+    const stop = client.start()
+
+    try {
+      await client.openWorkspaceFile({
+        name: 'shared.md',
+        path: 'C:/wiki/shared.md',
+        relativePath: 'shared.md',
+        kind: 'file'
+      })
+      hub.syncWindowTabs(1, ['c:/wiki/shared.md'])
+
+      const origUpdate = bufferApi.updateContent.bind(bufferApi)
+      bufferApi.updateContent = async () => {
+        throw new Error('IPC update failed')
+      }
+
+      client.updateBufferContent('c:/wiki/shared.md', '# Unsynced detach edit')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(onError).toHaveBeenCalled()
+      expect(hub.getSnapshot().buffers['c:/wiki/shared.md']?.content).toBe('# Shared')
+
+      const tab = tabStore.getSnapshot().panes.primary.tabs[0]
+
+      // While updateContent continues failing, detach must abort and preserve the source tab
+      await client.detachTabToNewWindow('primary', tab.id)
+      expect(detachTabCalls).toHaveLength(0)
+      expect(tabStore.getBufferKeys()).toEqual(['c:/wiki/shared.md'])
+
+      // Once IPC recovers, detach flushes the unsynced local edit to the hub before detaching
+      bufferApi.updateContent = origUpdate
+      await client.detachTabToNewWindow('primary', tab.id)
+      expect(detachTabCalls).toHaveLength(1)
+      expect(hub.getSnapshot().buffers['c:/wiki/shared.md']?.content).toBe('# Unsynced detach edit')
+      expect(hub.getSnapshot().buffers['c:/wiki/shared.md']?.isDirty).toBe(true)
+      expect(bufferStore.hasBuffer('c:/wiki/shared.md')).toBe(false)
+      expect(tabStore.getBufferKeys()).toEqual([])
     } finally {
       stop()
       hub.dispose()

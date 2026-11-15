@@ -1035,6 +1035,46 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
       expect(within(auxRendered.container).queryByTestId('dirty-indicator')).toBeNull()
     })
     expect(harness.getFilesSnapshot().get('C:/wiki/docs/guide.md')).toContain('Edited unsaved body')
+
+    // Insert TOC via Outline panel inside auxiliary
+    await user.click(within(outlinePanel).getByRole('button', { name: '본문에 목차(/toc) 삽입' }))
+    await waitFor(() => {
+      expect(getRawEditorText(auxRawAgain)).toContain('<!-- toc -->')
+    })
+
+    // Trigger Slash Command menu inside auxiliary Raw editor
+    const rawEnd = getRawEditorText(auxRawAgain).length
+    setRawEditorSelection(auxRawAgain, rawEnd, rawEnd)
+    auxRawAgain.focus()
+    await user.keyboard('{Enter}/ta')
+    const slashMenu = await within(auxRendered.container).findByRole('listbox', {
+      name: '슬래시 명령어 자동완성'
+    })
+    await user.click(within(slashMenu).getByRole('option', { name: /\/table/ }))
+    await waitFor(() => {
+      expect(getRawEditorText(auxRawAgain)).toContain('| 열 1 | 열 2 | 열 3 |')
+    })
+
+    // Failed save surfaces Error Banner inside auxiliary
+    const origAuxSave = auxWin.api.buffer.saveBuffer.bind(auxWin.api.buffer)
+    auxWin.api.buffer.saveBuffer = async () => {
+      throw new Error('Disk write denied')
+    }
+    fireEvent.keyDown(auxRawAgain, { key: 's', ctrlKey: true })
+    const alertBanner = await within(auxRendered.container).findByRole('alert')
+    expect(alertBanner).toHaveTextContent('Disk write denied')
+    auxWin.api.buffer.saveBuffer = origAuxSave
+
+    // Closing the sole dirty document tab prompts ConfirmDialog and saves before closing auxiliary
+    await user.click(within(auxRendered.container).getByRole('button', { name: 'guide.md 탭 닫기' }))
+    const confirmDialog = await within(auxRendered.container).findByRole('alertdialog')
+    expect(confirmDialog).toHaveTextContent('저장하지 않은 변경 사항')
+    await user.click(within(confirmDialog).getByRole('button', { name: '저장 후 닫기' }))
+    await waitFor(() => {
+      expect(auxWin.isClosed()).toBe(true)
+    })
+    expect(harness.getFilesSnapshot().get('C:/wiki/docs/guide.md')).toContain('<!-- toc -->')
+    expect(harness.getFilesSnapshot().get('C:/wiki/docs/guide.md')).toContain('| 열 1 | 열 2 | 열 3 |')
   })
 
   it('enforces single-tab disablement on auxiliary windows, allows detaching when 2+ tabs exist, and auto-closes at 0 tabs', async () => {

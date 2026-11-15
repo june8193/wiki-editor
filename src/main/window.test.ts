@@ -97,6 +97,16 @@ describe('computeOffsetAuxiliaryBounds and clampWindowBoundsToWorkArea', () => {
       height: 760
     })
 
+    // Straddling source window whose (+40, +40) offset point (-10, 140) is on left display even while center (+590) is on right display
+    expect(
+      computeOffsetAuxiliaryBounds({ x: -50, y: 100, width: 1280, height: 820 }, fakeScreen)
+    ).toEqual({
+      x: -960,
+      y: 140,
+      width: 960,
+      height: 760
+    })
+
     // Smaller display workArea than default 960x760 -> shrinks to fit workArea
     expect(
       clampWindowBoundsToWorkArea(

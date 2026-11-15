@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand } from '@shared/ipc'
 import type { GitStatus } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
+import { useConfigController } from '../hooks/useConfigController'
+import { useEditorOutlineAndSidebar } from '../hooks/useEditorOutlineAndSidebar'
+import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useGitController } from '../hooks/useGitController'
 import { useWikiApi } from '../hooks/useWikiApi'
-import { useWindowEditorShell } from '../hooks/useWindowEditorShell'
+import { useWindowAlerts } from '../hooks/useWindowAlerts'
 import { useWindowWidth } from '../hooks/useWindowWidth'
 import { useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import {
@@ -51,6 +55,7 @@ function getGitChangedCount(workspaceRootPath: string | null, status: GitStatus 
  */
 export function MainAppShell() {
   const wikiApi = useWikiApi()
+  const alerts = useWindowAlerts()
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
     activeView: 'workspace',
@@ -58,9 +63,43 @@ export function MainAppShell() {
     width: LEFT_SIDEBAR_DEFAULT_WIDTH
   })
 
-  const shell = useWindowEditorShell({
+  const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
+  const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
+  const onInitialConfigLoadedRef = useRef<(loadedConfig: AppConfig) => void>(() => undefined)
+
+  const {
+    config,
+    configPath,
+    toggleTheme,
+    toggleAutoSave,
+    toggleShowHeadingNumbers,
+    updateCustomCommands,
+    toggleFavoriteWorkspace,
+    removeFavoriteWorkspace,
+    removeRecentWorkspace
+  } = useConfigController({
+    onError: alerts.reportErrorBanner,
+    onExternalConfigCommitted: () => void refreshConfigDocRef.current(),
+    onInitialConfigLoaded: (loadedConfig) => onInitialConfigLoadedRef.current(loadedConfig)
+  })
+
+  const isEditorShortcutDisabled = alerts.pendingDialog !== null || isSettingsOpen
+  const editor = useEditorWorkspace({
+    isAutoSavePaused: alerts.pendingDialog !== null,
+    isShortcutDisabled: isEditorShortcutDisabled,
+    onWorkspaceSaved: () => void refreshGitStatusRef.current(),
+    onError: alerts.reportErrorBanner,
+    onConfirmCloseDirtyTab: alerts.handleConfirmCloseDirtyTab
+  })
+
+  refreshConfigDocRef.current = editor.refreshCleanConfig
+  alerts.bindTabCloseActions(editor.saveAndCloseTab, editor.forceCloseTab)
+
+  const frame = useEditorOutlineAndSidebar({
     initialRightCollapsed: false,
-    isExtraShortcutDisabled: isSettingsOpen
+    buffers: editor.buffers,
+    layout: editor.layout,
+    editorActions: editor
   })
 
   const windowWidth = useWindowWidth()
@@ -88,9 +127,9 @@ export function MainAppShell() {
   const isStartupRestoreRef = useRef<boolean>(false)
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(
-    shell.reconcileWorkspaceBuffersWithDisk
+    editor.reconcileWorkspaceBuffersWithDisk
   )
-  reconcileBuffersRef.current = shell.reconcileWorkspaceBuffersWithDisk
+  reconcileBuffersRef.current = editor.reconcileWorkspaceBuffersWithDisk
 
   const menuHandlersRef = useRef<Record<AppMenuCommand, () => void>>({
     'open-folder': () => undefined,
@@ -111,9 +150,9 @@ export function MainAppShell() {
     renameEntry,
     deleteEntry
   } = useWorkspaceTree({
-    onError: shell.reportErrorBanner,
+    onError: alerts.reportErrorBanner,
     onWorkspaceOpened: () => {
-      shell.clearWorkspaceBuffers()
+      editor.clearWorkspaceBuffers()
       if (isStartupRestoreRef.current) {
         isStartupRestoreRef.current = false
         if (!hasUserSelectedSidebarViewRef.current) {
@@ -130,17 +169,17 @@ export function MainAppShell() {
     onWorkspaceChanged: () => {
       void reconcileBuffersRef.current().then((warnings) => {
         if (warnings.length > 0) {
-          shell.reportErrorBanner(warnings.join(' '))
+          alerts.reportErrorBanner(warnings.join(' '))
         }
       })
-      void shell.onWorkspaceSavedRef.current()
+      void refreshGitStatusRef.current()
     },
-    onFileCreated: shell.openCreatedFile,
-    onEntryRenamed: shell.syncRenamedPath,
-    onEntryDeleted: shell.syncDeletedPath
+    onFileCreated: editor.openCreatedFile,
+    onEntryRenamed: editor.syncRenamedPath,
+    onEntryDeleted: editor.syncDeletedPath
   })
 
-  shell.onInitialConfigLoadedRef.current = (loadedConfig) => {
+  onInitialConfigLoadedRef.current = (loadedConfig) => {
     if (
       hasWorkspaceInteractionRef.current ||
       isSelectingFolderRef.current ||
@@ -156,7 +195,7 @@ export function MainAppShell() {
     isStartupRestoreRef.current = true
     void openWorkspace(lastWorkspacePath, {
       silentError: true,
-      onSilentError: () => shell.removeRecentWorkspace(lastWorkspacePath)
+      onSilentError: () => removeRecentWorkspace(lastWorkspacePath)
     }).finally(() => {
       isStartupRestoreRef.current = false
     })
@@ -168,7 +207,8 @@ export function MainAppShell() {
     }
   }, [])
 
-  const { ensureAllWorkspaceBuffersSaved, getDirtyWorkspaceSummary, setPendingDialog } = shell
+  const { ensureAllWorkspaceBuffersSaved, getDirtyWorkspaceSummary } = editor
+  const { setPendingDialog, reportErrorBanner, isDialogOpenRef } = alerts
   const promptUnsavedWorkspaceChanges = useCallback(
     (options: {
       message: (dirtySummary: string) => string
@@ -232,7 +272,7 @@ export function MainAppShell() {
     confirmBeforeWorkspaceMutation: confirmDirtyBuffersBeforeGitMutation,
     onWorkspaceMutated: handleGitWorkspaceMutated
   })
-  shell.onWorkspaceSavedRef.current = git.refreshStatus
+  refreshGitStatusRef.current = git.refreshStatus
 
   const guardUnsavedWorkspaceChanges = useCallback(
     (proceed: () => Promise<unknown>): void => {
@@ -259,7 +299,6 @@ export function MainAppShell() {
     [guardUnsavedWorkspaceChanges, openWorkspace]
   )
 
-  const { reportErrorBanner, isDialogOpenRef, openWorkspaceFile, openConfigDocument } = shell
   const handleSelectFolder = useCallback((): void => {
     if (isDialogOpenRef.current || isSelectingFolderRef.current) {
       return
@@ -283,6 +322,7 @@ export function MainAppShell() {
     )
   }, [handleSwitchWorkspace, isDialogOpenRef, reportErrorBanner, wikiApi])
 
+  const { openWorkspaceFile, openConfigDocument } = editor
   const handleOpenFile = useCallback(
     (entry: WorkspaceEntry): void => {
       void openWorkspaceFile(entry)
@@ -297,7 +337,7 @@ export function MainAppShell() {
 
   menuHandlersRef.current = {
     'open-folder': handleSelectFolder,
-    'toggle-theme': shell.toggleTheme,
+    'toggle-theme': toggleTheme,
     'toggle-settings': () => setIsSettingsOpen((open) => !open)
   }
 
@@ -326,7 +366,7 @@ export function MainAppShell() {
   )
 
   const isCurrentWorkspaceFavorite =
-    workspace !== null && isFavoriteWorkspacePath(shell.config.favoriteWorkspaces, workspace.rootPath)
+    workspace !== null && isFavoriteWorkspacePath(config.favoriteWorkspaces, workspace.rootPath)
   const gitChangedCount = getGitChangedCount(workspace?.rootPath ?? null, git.status)
 
   const leftChrome = (
@@ -349,23 +389,23 @@ export function MainAppShell() {
               <WorkspaceView
                 workspace={workspace}
                 isFavorite={isCurrentWorkspaceFavorite}
-                favoriteWorkspaces={shell.config.favoriteWorkspaces}
-                recentWorkspaces={shell.config.recentWorkspaces}
+                favoriteWorkspaces={config.favoriteWorkspaces}
+                recentWorkspaces={config.recentWorkspaces}
                 onOpenFolder={handleSelectFolder}
                 onSwitchWorkspace={handleSwitchWorkspace}
                 onToggleFavorite={() => {
                   if (workspace) {
-                    shell.toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
+                    toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
                   }
                 }}
-                onRemoveFavorite={shell.removeFavoriteWorkspace}
+                onRemoveFavorite={removeFavoriteWorkspace}
               />
             )}
             {leftSidebar.activeView === 'explorer' && (
               <FolderTreeSidebar
                 workspace={workspace}
                 tree={treeState}
-                activeFilePath={shell.activeFilePath}
+                activeFilePath={frame.activeFilePath}
                 onSelectPath={setSelectedTreePath}
                 onToggleDirectory={toggleDirectory}
                 onEnsureExpanded={ensureExpanded}
@@ -414,17 +454,17 @@ export function MainAppShell() {
 
   const overlay = isSettingsOpen ? (
     <SettingsPanel
-      theme={shell.config.theme}
-      autoSave={shell.config.autoSave}
-      showHeadingNumbers={shell.config.showHeadingNumbers}
-      configPath={shell.configPath}
-      customCommands={shell.config.customCommands}
-      previewTitle={shell.activeBuffer ? deriveDocumentTitle(shell.activeBuffer.name) : undefined}
-      isDismissDisabled={shell.pendingDialog !== null}
-      onToggleTheme={shell.toggleTheme}
-      onToggleAutoSave={shell.toggleAutoSave}
-      onToggleShowHeadingNumbers={shell.toggleShowHeadingNumbers}
-      onSaveCustomCommands={shell.updateCustomCommands}
+      theme={config.theme}
+      autoSave={config.autoSave}
+      showHeadingNumbers={config.showHeadingNumbers}
+      configPath={configPath}
+      customCommands={config.customCommands}
+      previewTitle={frame.activeBuffer ? deriveDocumentTitle(frame.activeBuffer.name) : undefined}
+      isDismissDisabled={alerts.pendingDialog !== null}
+      onToggleTheme={toggleTheme}
+      onToggleAutoSave={toggleAutoSave}
+      onToggleShowHeadingNumbers={toggleShowHeadingNumbers}
+      onSaveCustomCommands={updateCustomCommands}
       onOpenConfigEditor={handleOpenConfigEditor}
       onClose={() => setIsSettingsOpen(false)}
     />
@@ -432,8 +472,26 @@ export function MainAppShell() {
 
   return (
     <EditorWindowFrame
-      shell={shell}
-      canDetachToNewWindow
+      theme={config.theme}
+      autoSave={config.autoSave}
+      showHeadingNumbers={config.showHeadingNumbers}
+      customCommands={config.customCommands}
+      errorMessage={alerts.errorMessage}
+      pendingDialog={alerts.pendingDialog}
+      onDismissDialog={() => alerts.setPendingDialog(null)}
+      onToggleHeadingNumbers={toggleShowHeadingNumbers}
+      workspaceProps={{
+        layout: editor.layout,
+        buffers: editor.buffers,
+        scrollRequest: frame.outlineScrollRequest,
+        isShortcutDisabled: isEditorShortcutDisabled,
+        canDetachToNewWindow: true,
+        onSetSplitRatio: editor.setSplitRatio,
+        onSplitWithTab: editor.splitWithTab,
+        actions: frame.paneActions
+      }}
+      outlinePanelProps={frame.outlinePanelProps}
+      rightSidebar={frame.rightSidebar}
       leftChrome={leftChrome}
       overlay={overlay}
     />

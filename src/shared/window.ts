@@ -1,5 +1,11 @@
 export type WindowRole = 'main' | 'auxiliary'
 
+export const WINDOW_ROLE_QUERY_PARAM = 'windowRole'
+
+export function resolveWindowRole(rawRole?: string | null): WindowRole {
+  return rawRole === 'auxiliary' ? 'auxiliary' : 'main'
+}
+
 export type EditorMode = 'raw' | 'preview' | 'wysiwyg'
 
 export interface CursorPosition {
@@ -20,6 +26,7 @@ export interface WindowInitContext {
 }
 
 export interface DetachTabToNewWindowResult {
+  /** Hub/IPC window identifier (webContents.id) assigned to the detached auxiliary window. */
   windowId: number
 }
 

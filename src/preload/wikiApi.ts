@@ -19,10 +19,12 @@ import {
   WINDOW_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS
 } from '@shared/ipc'
-import type {
-  DetachTabToNewWindowResult,
-  WindowInitContext,
-  WindowRole
+import {
+  resolveWindowRole,
+  WINDOW_ROLE_QUERY_PARAM,
+  type DetachTabToNewWindowResult,
+  type WindowInitContext,
+  type WindowRole
 } from '@shared/window'
 import type {
   WorkspaceChangeEvent,
@@ -52,7 +54,7 @@ function subscribeChannel<T>(
 
 function resolveWindowRoleFromSearch(search: string | undefined): WindowRole {
   if (!search) return 'main'
-  return new URLSearchParams(search).get('windowRole') === 'auxiliary' ? 'auxiliary' : 'main'
+  return resolveWindowRole(new URLSearchParams(search).get(WINDOW_ROLE_QUERY_PARAM))
 }
 
 /**

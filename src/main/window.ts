@@ -91,11 +91,11 @@ export function computeOffsetAuxiliaryBounds(
     return candidate
   }
 
-  const centerPoint = {
-    x: Math.round(sourceBounds.x + sourceBounds.width / 2),
-    y: Math.round(sourceBounds.y + sourceBounds.height / 2)
+  const offsetPoint = {
+    x: Math.round(candidate.x),
+    y: Math.round(candidate.y)
   }
-  const { workArea } = screenLike.getDisplayNearestPoint(centerPoint)
+  const { workArea } = screenLike.getDisplayNearestPoint(offsetPoint)
   return clampWindowBoundsToWorkArea(candidate, workArea)
 }
 

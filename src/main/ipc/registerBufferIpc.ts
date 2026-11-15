@@ -24,11 +24,13 @@ export interface CreateSharedDocumentBufferHubDependencies {
   initialAutoSaveConfig?: AutoSaveConfig
 }
 
-export interface RegisterBufferIpcDependencies extends CreateSharedDocumentBufferHubDependencies {
+export type RegisterBufferIpcDependencies = {
   ipcMain: IpcMainLike
+  configService: ConfigService
   getTargets: () => BufferWebContentsLike[]
-  hub?: SharedDocumentBufferHub
-}
+  logService?: LogService
+  initialAutoSaveConfig?: AutoSaveConfig
+} & ({ hub: SharedDocumentBufferHub } | { workspaceService: WorkspaceFsService })
 
 /**
  * Creates the main-process SharedDocumentBufferHub backed by workspace and config storage.
@@ -58,27 +60,21 @@ export function createSharedDocumentBufferHub({
  * Registers main-process IPC handlers for shared document buffers and broadcasts hub updates
  * to all active renderer BrowserWindow targets.
  */
-export function registerBufferIpc({
-  ipcMain,
-  workspaceService,
-  configService,
-  getTargets,
-  logService,
-  initialAutoSaveConfig,
-  hub: providedHub
-}: RegisterBufferIpcDependencies): () => void {
+export function registerBufferIpc(deps: RegisterBufferIpcDependencies): () => void {
+  const { ipcMain, configService, getTargets, logService, initialAutoSaveConfig } = deps
   let disposed = false
   let fallbackWindowId = 1
   const trackedSenders = new WeakMap<object, number>()
 
   const hub =
-    providedHub ??
-    createSharedDocumentBufferHub({
-      workspaceService,
-      configService,
-      logService,
-      initialAutoSaveConfig
-    })
+    'hub' in deps
+      ? deps.hub
+      : createSharedDocumentBufferHub({
+          workspaceService: deps.workspaceService,
+          configService,
+          logService,
+          initialAutoSaveConfig
+        })
 
   const resolveWindowId = (event: unknown): number | undefined => {
     const sender = resolveSenderWebContents<BufferWebContentsLike>(event)

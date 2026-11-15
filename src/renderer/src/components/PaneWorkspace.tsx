@@ -6,7 +6,7 @@ import type { OutlineScrollRequest } from './DocumentEditor'
 import { dispatchTabDrop, DraggingTabPayload, PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
 
-interface PaneWorkspaceProps {
+export interface PaneWorkspaceProps {
   layout: PaneLayoutState
   buffers: DocumentBufferSnapshot
   theme: ThemeMode

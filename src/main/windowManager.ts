@@ -3,6 +3,7 @@ import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
   formatWindowTitle,
+  WINDOW_ROLE_QUERY_PARAM,
   type DetachTabToNewWindowResult,
   type TabTransferPayload,
   type WindowInitContext,
@@ -40,7 +41,7 @@ export interface WindowManagerDependencies {
 }
 
 interface WindowRecord {
-  windowId: number
+  webContentsId: number
   role: WindowRole
   window: BrowserWindowLike
   initialTabs: TabTransferPayload[]
@@ -49,7 +50,8 @@ interface WindowRecord {
   closing: boolean
 }
 
-function resolveWindowIdForBrowserWindow(win: BrowserWindowLike): number {
+// SharedDocumentBufferHub keys windows by IPC sender/WebContents ID (distinct from BrowserWindow.id).
+function resolveWebContentsId(win: BrowserWindowLike): number {
   return typeof win.webContents.id === 'number' ? win.webContents.id : win.id
 }
 
@@ -71,9 +73,9 @@ export class WindowManager {
   private readonly createBrowserWindow: (options: BrowserWindowConstructorOptions) => BrowserWindowLike
   private readonly screen?: ScreenLike
 
-  private readonly windowsById = new Map<number, WindowRecord>()
+  private readonly windowsByWebContentsId = new Map<number, WindowRecord>()
   private readonly recordsByWebContents = new WeakMap<object, WindowRecord>()
-  private mainWindowId: number | null = null
+  private mainWebContentsId: number | null = null
   private readonly unsubscribeHub: () => void
   private disposed = false
 
@@ -101,7 +103,7 @@ export class WindowManager {
     if (this.rendererUrl) {
       const url = new URL(this.rendererUrl)
       if (role === 'auxiliary') {
-        url.searchParams.set('windowRole', 'auxiliary')
+        url.searchParams.set(WINDOW_ROLE_QUERY_PARAM, role)
       }
       void win.loadURL(url.toString())
       return
@@ -109,7 +111,7 @@ export class WindowManager {
 
     void win.loadFile(
       this.rendererFilePath,
-      role === 'auxiliary' ? { query: { windowRole: 'auxiliary' } } : undefined
+      role === 'auxiliary' ? { query: { [WINDOW_ROLE_QUERY_PARAM]: role } } : undefined
     )
   }
 
@@ -118,14 +120,14 @@ export class WindowManager {
     role: WindowRole,
     initialTabs: TabTransferPayload[]
   ): WindowRecord {
-    const windowId = resolveWindowIdForBrowserWindow(win)
+    const webContentsId = resolveWebContentsId(win)
     const clonedTabs = initialTabs.map((tab) => ({
       ...tab,
       cursor: { ...tab.cursor }
     }))
 
     const record: WindowRecord = {
-      windowId,
+      webContentsId,
       role,
       window: win,
       initialTabs: clonedTabs,
@@ -134,14 +136,14 @@ export class WindowManager {
       closing: false
     }
 
-    this.windowsById.set(windowId, record)
+    this.windowsByWebContentsId.set(webContentsId, record)
     this.recordsByWebContents.set(win.webContents, record)
     if (role === 'main') {
-      this.mainWindowId = windowId
+      this.mainWebContentsId = webContentsId
     } else {
       win.removeMenu()
       for (const tab of clonedTabs) {
-        this.bufferHub.registerPendingTransfer(windowId, tab.bufferKey)
+        this.bufferHub.registerPendingTransfer(webContentsId, tab.bufferKey)
       }
     }
 
@@ -152,12 +154,12 @@ export class WindowManager {
     })
 
     win.once('closed', () => {
-      this.windowsById.delete(windowId)
-      if (this.mainWindowId === windowId) {
-        this.mainWindowId = null
+      this.windowsByWebContentsId.delete(webContentsId)
+      if (this.mainWebContentsId === webContentsId) {
+        this.mainWebContentsId = null
       }
       if (!this.disposed) {
-        this.bufferHub.unregisterWindow(windowId)
+        this.bufferHub.unregisterWindow(webContentsId)
       }
     })
 
@@ -195,7 +197,7 @@ export class WindowManager {
     if (direct) return direct
 
     const numericId = getNumericSenderId(sender)
-    return numericId !== undefined ? this.windowsById.get(numericId) : undefined
+    return numericId !== undefined ? this.windowsByWebContentsId.get(numericId) : undefined
   }
 
   detachTabToNewWindow(
@@ -213,14 +215,14 @@ export class WindowManager {
 
     if (
       sourceRecord.role === 'auxiliary' &&
-      this.bufferHub.getWindowTabCount(sourceRecord.windowId) <= 1
+      this.bufferHub.getWindowTabCount(sourceRecord.webContentsId) <= 1
     ) {
       throw new Error('Cannot detach the last tab from an auxiliary window')
     }
 
     const auxWindow = this.createAuxiliaryWindow([payload], sourceRecord.window.getBounds())
     return {
-      windowId: resolveWindowIdForBrowserWindow(auxWindow)
+      windowId: resolveWebContentsId(auxWindow)
     }
   }
 
@@ -255,7 +257,7 @@ export class WindowManager {
 
     if (event.type === 'paths-remapped') {
       const remappings = new Map(event.remappings.map((item) => [item.oldKey, item.newKey]))
-      for (const record of this.windowsById.values()) {
+      for (const record of this.windowsByWebContentsId.values()) {
         if (record.role !== 'auxiliary') continue
         for (const tab of record.initialTabs) {
           const nextKey = remappings.get(tab.bufferKey)
@@ -269,7 +271,7 @@ export class WindowManager {
 
     if (event.type === 'buffers-closed') {
       const closedKeys = new Set(event.closedKeys)
-      for (const record of this.windowsById.values()) {
+      for (const record of this.windowsByWebContentsId.values()) {
         if (record.role !== 'auxiliary') continue
         record.initialTabs = record.initialTabs.filter((tab) => !closedKeys.has(tab.bufferKey))
       }
@@ -283,12 +285,12 @@ export class WindowManager {
   }
 
   private reconcileAuxiliaryAutoClose(): void {
-    for (const record of [...this.windowsById.values()]) {
+    for (const record of [...this.windowsByWebContentsId.values()]) {
       if (record.role !== 'auxiliary' || record.closing || record.window.isDestroyed()) {
         continue
       }
 
-      const tabCount = this.bufferHub.getWindowTabCount(record.windowId)
+      const tabCount = this.bufferHub.getWindowTabCount(record.webContentsId)
       if (tabCount > 0) {
         record.hasSyncedNonEmptyTabs = true
         continue
@@ -306,8 +308,8 @@ export class WindowManager {
   }
 
   getMenuTargetWebContents(): BufferWebContentsLike | undefined {
-    if (this.mainWindowId === null) return undefined
-    const record = this.windowsById.get(this.mainWindowId)
+    if (this.mainWebContentsId === null) return undefined
+    const record = this.windowsByWebContentsId.get(this.mainWebContentsId)
     if (!record || record.window.isDestroyed() || record.window.webContents.isDestroyed()) {
       return undefined
     }
@@ -316,7 +318,7 @@ export class WindowManager {
 
   getWebContentsTargets(): BufferWebContentsLike[] {
     const targets: BufferWebContentsLike[] = []
-    for (const record of this.windowsById.values()) {
+    for (const record of this.windowsByWebContentsId.values()) {
       if (!record.window.isDestroyed() && !record.window.webContents.isDestroyed()) {
         targets.push(record.window.webContents)
       }
@@ -327,7 +329,7 @@ export class WindowManager {
   dispose(): void {
     this.disposed = true
     this.unsubscribeHub()
-    this.windowsById.clear()
-    this.mainWindowId = null
+    this.windowsByWebContentsId.clear()
+    this.mainWebContentsId = null
   }
 }

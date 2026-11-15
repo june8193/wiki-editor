@@ -1,15 +1,34 @@
 import type { ReactNode } from 'react'
 import { ListTree } from 'lucide-react'
-import type { WindowEditorShellState } from '../hooks/useWindowEditorShell'
+import type { CustomCommandConfig, ThemeMode } from '@shared/config'
+import type { PendingDialogState } from '../hooks/useWindowAlerts'
 import { RIGHT_SIDEBAR_WIDTH_BOUNDS } from '../utils/sidebarWidth'
 import { ConfirmDialog } from './ConfirmDialog'
-import { DocumentOutlinePanel } from './DocumentOutlinePanel'
-import { PaneWorkspace } from './PaneWorkspace'
+import { DocumentOutlinePanel, type DocumentOutlinePanelProps } from './DocumentOutlinePanel'
+import { PaneWorkspace, type PaneWorkspaceProps } from './PaneWorkspace'
 import { SidebarResizer } from './SidebarResizer'
 
 export interface EditorWindowFrameProps {
-  shell: WindowEditorShellState
-  canDetachToNewWindow: boolean
+  theme: ThemeMode
+  autoSave: boolean
+  showHeadingNumbers: boolean
+  customCommands: readonly CustomCommandConfig[]
+  errorMessage: string | null
+  pendingDialog: PendingDialogState | null
+  onDismissDialog: () => void
+  onToggleHeadingNumbers: () => void
+  workspaceProps: Omit<PaneWorkspaceProps, 'theme' | 'autoSave' | 'showHeadingNumbers' | 'customCommands'>
+  outlinePanelProps: Omit<
+    DocumentOutlinePanelProps,
+    'showHeadingNumbers' | 'onToggleHeadingNumbers' | 'onCollapse'
+  >
+  rightSidebar: {
+    isCollapsed: boolean
+    width: number
+    onCollapse: () => void
+    onExpand: () => void
+    onResize: (nextWidth: number) => void
+  }
   leftChrome?: ReactNode
   overlay?: ReactNode
 }
@@ -19,16 +38,25 @@ export interface EditorWindowFrameProps {
  * workspace, right document outline sidebar, optional overlays, and confirmation dialogs.
  */
 export function EditorWindowFrame({
-  shell,
-  canDetachToNewWindow,
+  theme,
+  autoSave,
+  showHeadingNumbers,
+  customCommands,
+  errorMessage,
+  pendingDialog,
+  onDismissDialog,
+  onToggleHeadingNumbers,
+  workspaceProps,
+  outlinePanelProps,
+  rightSidebar,
   leftChrome,
   overlay
 }: EditorWindowFrameProps) {
   return (
-    <div className="app-shell" data-theme={shell.config.theme}>
-      {shell.errorMessage && (
+    <div className="app-shell" data-theme={theme}>
+      {errorMessage && (
         <div className="error-banner" role="alert">
-          {shell.errorMessage}
+          {errorMessage}
         </div>
       )}
 
@@ -36,45 +64,32 @@ export function EditorWindowFrame({
         {leftChrome}
 
         <PaneWorkspace
-          layout={shell.layout}
-          buffers={shell.buffers}
-          theme={shell.config.theme}
-          autoSave={shell.config.autoSave}
-          showHeadingNumbers={shell.config.showHeadingNumbers}
-          customCommands={shell.config.customCommands}
-          scrollRequest={shell.outlineScrollRequest}
-          isShortcutDisabled={shell.isEditorShortcutDisabled}
-          canDetachToNewWindow={canDetachToNewWindow}
-          onSetSplitRatio={shell.setSplitRatio}
-          onSplitWithTab={shell.splitWithTab}
-          actions={shell.paneActions}
+          {...workspaceProps}
+          theme={theme}
+          autoSave={autoSave}
+          showHeadingNumbers={showHeadingNumbers}
+          customCommands={customCommands}
         />
 
-        {!shell.rightSidebar.isCollapsed ? (
+        {!rightSidebar.isCollapsed ? (
           <>
             <SidebarResizer
               edge="left"
-              width={shell.rightSidebar.width}
+              width={rightSidebar.width}
               bounds={RIGHT_SIDEBAR_WIDTH_BOUNDS}
               ariaLabel="우측 사이드바 너비 조절"
-              onResize={shell.handleResizeRightSidebar}
+              onResize={rightSidebar.onResize}
             />
             <aside
               className="right-sidebar"
               aria-label="우측 사이드바"
-              style={{ width: `${shell.rightSidebar.width}px` }}
+              style={{ width: `${rightSidebar.width}px` }}
             >
               <DocumentOutlinePanel
-                documentName={shell.activeBuffer?.name ?? null}
-                content={shell.activeBuffer?.content ?? ''}
-                isMarkdownDocument={shell.isActiveMarkdown}
-                showHeadingNumbers={shell.config.showHeadingNumbers}
-                onToggleHeadingNumbers={shell.toggleShowHeadingNumbers}
-                onSelectHeading={shell.handleSelectOutlineHeading}
-                onInsertToc={shell.handleOutlineInsertToc}
-                onApplyHeadingNumbers={shell.handleOutlineApplyHeadingNumbers}
-                onStripHeadingNumbers={shell.handleOutlineStripHeadingNumbers}
-                onCollapse={shell.handleCollapseRightSidebar}
+                {...outlinePanelProps}
+                showHeadingNumbers={showHeadingNumbers}
+                onToggleHeadingNumbers={onToggleHeadingNumbers}
+                onCollapse={rightSidebar.onCollapse}
               />
             </aside>
           </>
@@ -84,7 +99,7 @@ export function EditorWindowFrame({
             className="right-sidebar-expand-tab"
             aria-label="문서 목차 펼치기"
             title="문서 목차 펼치기"
-            onClick={shell.handleExpandRightSidebar}
+            onClick={rightSidebar.onExpand}
           >
             <ListTree size={18} strokeWidth={1.75} aria-hidden="true" />
           </button>
@@ -93,21 +108,19 @@ export function EditorWindowFrame({
 
       {overlay}
 
-      {shell.pendingDialog && (
+      {pendingDialog && (
         <ConfirmDialog
-          title={shell.pendingDialog.title}
-          message={shell.pendingDialog.message}
-          confirmLabel={shell.pendingDialog.confirmLabel}
-          secondaryLabel={shell.pendingDialog.secondaryLabel}
-          onConfirm={() => void shell.pendingDialog!.onConfirm()}
+          title={pendingDialog.title}
+          message={pendingDialog.message}
+          confirmLabel={pendingDialog.confirmLabel}
+          secondaryLabel={pendingDialog.secondaryLabel}
+          onConfirm={() => void pendingDialog.onConfirm()}
           onSecondary={
-            shell.pendingDialog.onSecondary
-              ? () => void shell.pendingDialog!.onSecondary!()
-              : undefined
+            pendingDialog.onSecondary ? () => void pendingDialog.onSecondary!() : undefined
           }
           onCancel={() => {
-            shell.pendingDialog?.onCancel?.()
-            shell.setPendingDialog(null)
+            pendingDialog.onCancel?.()
+            onDismissDialog()
           }}
         />
       )}

@@ -118,7 +118,6 @@ void app.whenReady().then(async () => {
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)
   disposeBufferIpc = registerBufferIpc({
     ipcMain,
-    workspaceService,
     configService,
     hub: bufferHub,
     getTargets,
