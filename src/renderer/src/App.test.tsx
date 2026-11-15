@@ -27,6 +27,7 @@ import {
   WorkspaceEntry,
   WorkspaceEntryKind
 } from '@shared/workspace'
+import type { DiagramPngRasterAdapter, DiagramSvgRasterRequest } from './editor/mermaidExport'
 import { defaultMermaidRenderer } from './editor/mermaidRenderer'
 import { App } from './App'
 import themeCss from './styles/theme.css?raw'
@@ -41,7 +42,7 @@ const mermaidMockState = vi.hoisted(() => {
       throw new Error('Syntax error in Mermaid graph')
     }
     return {
-      svg: `<svg data-mermaid-theme="${activeTheme}" data-code="${text.trim()}"><g><text>DiagramOK</text></g></svg>`
+      svg: `<svg viewBox="0 0 240 120" width="100%" style="max-width: 240px;" data-mermaid-theme="${activeTheme}" data-code="${text.trim()}"><g><text>DiagramOK</text></g></svg>`
     }
   })
   return {
@@ -471,6 +472,7 @@ function createInMemoryWikiApi(
     },
     diagram: {
       copyText: vi.fn(async () => {}),
+      copyImage: vi.fn(async () => {}),
       ...fsOptions.diagram
     },
     ...(fsOptions.log ? { log: fsOptions.log } : {})
@@ -2901,6 +2903,264 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         vi.advanceTimersByTime(1500)
       })
       expect(wysiwygValidCopyBtn).not.toHaveTextContent('복사됨')
+      vi.useRealTimers()
+
+      // Return to Raw: lossless roundtrip and clean buffer without dirty flag
+      await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+      expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(docContent)
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+      cleanup()
+    }
+  })
+
+  it('supports Mermaid 2x theme-backed PNG clipboard copy across Preview, Split (live edit/error/recovery), and WYSIWYG modes with sanitized failure alerts', async () => {
+    const user = userEvent.setup()
+    const validSource = 'graph TD\n  SECRET_APP_IMG --> ServiceB'
+    const brokenSource = 'graph TD\n  SYNTAX_ERROR'
+    const docContent = [
+      '# Mermaid Image E2E',
+      '',
+      '```mermaid',
+      validSource,
+      '```',
+      '',
+      '```mermaid',
+      brokenSource,
+      '```',
+      '',
+      '```mermaid',
+      '   ',
+      '```'
+    ].join('\n')
+
+    const logEntries: RendererLogPayload[] = []
+    let shouldFailCopyImage = false
+    const copiedPngPayloads: Uint8Array[] = []
+    const copyImage = vi.fn(async (bytes: Uint8Array) => {
+      copiedPngPayloads.push(bytes)
+      if (shouldFailCopyImage) {
+        throw new Error('App PNG clipboard failed')
+      }
+    })
+
+    const rasterRequests: DiagramSvgRasterRequest[] = []
+    const rasterAdapter: DiagramPngRasterAdapter = vi.fn(async (request) => {
+      rasterRequests.push(request)
+      return new Uint8Array([137, 80, 78, 71, request.theme === 'dark' ? 2 : 1])
+    })
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\mermaid-image-copy',
+        workspaces: {
+          'C:\\wiki\\mermaid-image-copy': {
+            'diagram-export.md': docContent
+          }
+        },
+        diagram: { copyImage },
+        log: {
+          write: vi.fn(async (payload: RendererLogPayload) => {
+            logEntries.push(payload)
+          })
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { rootEl, cleanup } = mountThemeStylesAndRoot()
+    try {
+      render(<App mermaidRasterAdapter={rasterAdapter} />, { container: rootEl })
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      await user.click(await screen.findByText('diagram-export.md'))
+
+      const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+
+      // 1. Preview mode: 이미지 복사 first in toolbar, light #ffffff 2x copy, broken/blank disabled
+      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      await waitFor(() => {
+        expect(screen.getAllByTestId('mermaid-diagram')).toHaveLength(3)
+        expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
+      })
+
+      const previewBlocks = screen.getAllByTestId('mermaid-diagram')
+      const previewValidToolbar = within(previewBlocks[0]).getByRole('toolbar', {
+        name: 'Mermaid 다이어그램 작업'
+      })
+      expect(
+        within(previewValidToolbar)
+          .getAllByRole('button')
+          .map((button) => button.getAttribute('aria-label'))
+      ).toEqual(['이미지 복사', '코드 복사'])
+
+      const previewValidImageBtn = within(previewValidToolbar).getByRole('button', {
+        name: '이미지 복사'
+      })
+      const previewBrokenImageBtn = within(previewBlocks[1]).getByRole('button', {
+        name: '이미지 복사'
+      })
+      const previewBrokenCodeBtn = within(previewBlocks[1]).getByRole('button', {
+        name: '코드 복사'
+      })
+      const previewBlankImageBtn = within(previewBlocks[2]).getByRole('button', {
+        name: '이미지 복사'
+      })
+      expect(previewValidImageBtn).toBeEnabled()
+      expect(previewBrokenImageBtn).toBeDisabled()
+      expect(previewBrokenCodeBtn).toBeEnabled()
+      expect(previewBlankImageBtn).toBeDisabled()
+
+      await user.hover(previewBlocks[0])
+      await user.click(previewValidImageBtn)
+      expect(rasterRequests).toHaveLength(1)
+      expect(rasterRequests[0]).toMatchObject({
+        logicalWidth: 272,
+        logicalHeight: 152,
+        scale: 2,
+        pixelWidth: 544,
+        pixelHeight: 304,
+        theme: 'light'
+      })
+      expect(rasterRequests[0].normalizedSvg).toContain('fill="#ffffff"')
+      expect(rasterRequests[0].normalizedSvg).not.toContain('max-width')
+      expect(copiedPngPayloads[0]).toEqual(new Uint8Array([137, 80, 78, 71, 1]))
+      expect(previewValidImageBtn).toHaveTextContent('복사됨')
+
+      // Toggle dark theme in Preview -> exports #161b22 dark background PNG
+      await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
+      await waitFor(() => {
+        expect(previewBlocks[0]).toHaveAttribute('data-mermaid-theme', 'dark')
+        expect(previewValidImageBtn).toBeEnabled()
+      })
+      await user.hover(previewBlocks[0])
+      await user.click(previewValidImageBtn)
+      expect(rasterRequests).toHaveLength(2)
+      expect(rasterRequests[1]).toMatchObject({
+        pixelWidth: 544,
+        pixelHeight: 304,
+        scale: 2,
+        theme: 'dark'
+      })
+      expect(rasterRequests[1].normalizedSvg).toContain('fill="#161b22"')
+      expect(copiedPngPayloads[1]).toEqual(new Uint8Array([137, 80, 78, 71, 2]))
+
+      // Restore light theme for subsequent checks
+      await triggerMenuCommand(emitMenuCommand, 'toggle-theme')
+      await waitFor(() => {
+        expect(previewBlocks[0]).toHaveAttribute('data-mermaid-theme', 'default')
+        expect(previewValidImageBtn).toBeEnabled()
+      })
+
+      // 2. Split mode: image copy works, live edit to SYNTAX_ERROR disables 이미지 복사 while keeping 코드 복사 enabled, and recovery re-enables
+      await user.click(within(modeGroup).getByRole('button', { name: 'Split' }))
+      const splitPreview = await screen.findByTestId('split-markdown-preview')
+      await waitFor(() => {
+        expect(within(splitPreview).getAllByTestId('mermaid-diagram')).toHaveLength(3)
+        expect(
+          within(within(splitPreview).getAllByTestId('mermaid-diagram')[0]).getByRole('button', {
+            name: '이미지 복사'
+          })
+        ).toBeEnabled()
+      })
+
+      const splitBlocks = within(splitPreview).getAllByTestId('mermaid-diagram')
+      const splitImageBtn = within(splitBlocks[0]).getByRole('button', { name: '이미지 복사' })
+      const splitCodeBtn = within(splitBlocks[0]).getByRole('button', { name: '코드 복사' })
+      await user.hover(splitBlocks[0])
+      await user.click(splitImageBtn)
+      expect(copyImage).toHaveBeenCalledTimes(3)
+
+      const splitRawEditor = document.querySelector('.editor-split-region.is-raw') as HTMLElement
+      const brokenLiveDoc = docContent.replace(validSource, 'graph TD\n  SYNTAX_ERROR_LIVE')
+      setRawEditorText(splitRawEditor, brokenLiveDoc)
+
+      // Immediately during debounce wait and after syntax error banner appears, 이미지 복사 is disabled while 코드 복사 remains active
+      expect(splitImageBtn).toBeDisabled()
+      expect(splitCodeBtn).toBeEnabled()
+      await waitFor(() => {
+        expect(within(splitBlocks[0]).getByText('Mermaid 문법 오류')).toBeInTheDocument()
+      })
+      expect(splitImageBtn).toBeDisabled()
+      expect(splitCodeBtn).toBeEnabled()
+
+      // Recover original valid source -> re-enables 이미지 복사 cleanly without leaving dirty state
+      setRawEditorText(splitRawEditor, docContent)
+      await waitFor(() => {
+        expect(within(splitBlocks[0]).queryByText('Mermaid 문법 오류')).not.toBeInTheDocument()
+        expect(splitImageBtn).toBeEnabled()
+      })
+
+      // 3. WYSIWYG mode: inline 이미지 복사 before 코드 복사, scoped failure alert, sanitized log, and 1500ms feedback timer
+      await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+      await waitFor(() => {
+        expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
+        expect(
+          within(screen.getAllByTestId('wysiwyg-mermaid-block')[0]).getByRole('button', {
+            name: '이미지 복사'
+          })
+        ).toBeEnabled()
+      })
+
+      const wysiwygBlocks = screen.getAllByTestId('wysiwyg-mermaid-block')
+      const wysiwygValidToolbar = within(wysiwygBlocks[0]).getByRole('toolbar', {
+        name: 'Mermaid 다이어그램 작업'
+      })
+      expect(
+        within(wysiwygValidToolbar)
+          .getAllByRole('button')
+          .map((button) => button.getAttribute('aria-label'))
+      ).toEqual(['이미지 복사', '코드 복사'])
+      expect(
+        within(wysiwygBlocks[1]).getByRole('button', { name: '이미지 복사' })
+      ).toBeDisabled()
+      expect(
+        within(wysiwygBlocks[2]).getByRole('button', { name: '이미지 복사' })
+      ).toBeDisabled()
+
+      const wysiwygValidImageBtn = within(wysiwygValidToolbar).getByRole('button', {
+        name: '이미지 복사'
+      })
+
+      shouldFailCopyImage = true
+      await user.click(wysiwygValidImageBtn)
+      const wysiwygActionAlert = wysiwygBlocks[0].querySelector('.mermaid-action-error')
+      expect(wysiwygActionAlert).toHaveAttribute('role', 'alert')
+      expect(wysiwygActionAlert).toHaveTextContent('App PNG clipboard failed')
+      expect(wysiwygBlocks[1].querySelector('.mermaid-action-error')).toBeNull()
+      expect(wysiwygBlocks[2].querySelector('.mermaid-action-error')).toBeNull()
+
+      const imageFailureLogs = logEntries.filter(
+        (entry) => entry.message === 'Mermaid image copy failed'
+      )
+      expect(imageFailureLogs).toHaveLength(1)
+      expect(imageFailureLogs[0]).toMatchObject({
+        level: 'error',
+        category: 'ui',
+        data: {
+          theme: 'light',
+          codeLength: validSource.length,
+          byteLength: 5
+        }
+      })
+      expect(typeof (imageFailureLogs[0].data as { svgLength?: unknown }).svgLength).toBe('number')
+      expect(JSON.stringify(imageFailureLogs[0])).not.toContain('SECRET_APP_IMG')
+      expect(JSON.stringify(imageFailureLogs[0])).not.toContain('<svg')
+      expect(JSON.stringify(imageFailureLogs[0])).not.toContain('137')
+
+      shouldFailCopyImage = false
+      vi.useFakeTimers()
+      await act(async () => {
+        fireEvent.click(wysiwygValidImageBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(wysiwygBlocks[0].querySelector('.mermaid-action-error')).toBeNull()
+      expect(wysiwygValidImageBtn).toHaveTextContent('복사됨')
+      act(() => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(wysiwygValidImageBtn).not.toHaveTextContent('복사됨')
       vi.useRealTimers()
 
       // Return to Raw: lossless roundtrip and clean buffer without dirty flag

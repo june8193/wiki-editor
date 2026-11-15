@@ -1,19 +1,22 @@
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
-import {
-  defaultMermaidRenderer,
-  mapThemeToMermaidTheme,
-  type MermaidRenderer,
-  type MermaidTheme
-} from '../editor/mermaidRenderer'
+import type { DiagramPngRasterAdapter } from '../editor/mermaidExport'
+import { defaultMermaidRenderer, type MermaidRenderer } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
-import { logRendererWarn } from '../logging/rendererLogger'
+import {
+  DEFAULT_MERMAID_DEBOUNCE_MS,
+  type MermaidRenderState,
+  useMermaidRenderState
+} from '../hooks/useMermaidRenderState'
 import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
+import { MermaidExportContext } from './MermaidExportContext'
 
 interface MermaidDiagramProps {
   code: string
   theme: ThemeMode
   renderer?: MermaidRenderer
+  rasterAdapter?: DiagramPngRasterAdapter
+  renderState?: MermaidRenderState
   debounceMs?: number
   className?: string
   sourceLine?: string
@@ -21,160 +24,43 @@ interface MermaidDiagramProps {
   showActionBar?: boolean
 }
 
-interface ValidDiagramSnapshot {
-  code: string
-  mermaidTheme: MermaidTheme
-  svg: string
-}
-
-interface AsyncRenderState {
-  lastValid: ValidDiagramSnapshot | null
-  error: string | null
-}
-
-const DEFAULT_DEBOUNCE_MS = 250
-
-function logMermaidRenderFailure(theme: ThemeMode, codeLength: number, errorMessage: string): void {
-  logRendererWarn('ui', 'Mermaid diagram rendering failed', {
-    data: {
-      theme,
-      codeLength,
-      errorMessage
-    },
-    error: {
-      name: 'MermaidRenderError',
-      message: errorMessage
-    }
-  })
-}
-
-/**
- * Re-renders the retained valid diagram in the active theme when the current source has syntax errors.
- */
-async function syncLastValidTheme(
-  previousValid: ValidDiagramSnapshot | null,
-  theme: ThemeMode,
-  mermaidTheme: MermaidTheme,
-  renderer: MermaidRenderer
-): Promise<ValidDiagramSnapshot | null> {
-  if (!previousValid || previousValid.mermaidTheme === mermaidTheme) {
-    return previousValid
-  }
-
-  const cachedValidSvg = renderer.getCachedSvg(previousValid.code, theme)
-  if (cachedValidSvg !== null) {
-    return { code: previousValid.code, mermaidTheme, svg: cachedValidSvg }
-  }
-
-  const syncResult = await renderer.render(previousValid.code, theme)
-  if (syncResult.ok) {
-    return { code: previousValid.code, mermaidTheme, svg: syncResult.svg }
-  }
-  return previousValid
-}
-
 /**
  * Renders a Mermaid diagram block with debounced live updates, theme synchronization,
- * and last-valid SVG retention paired with a compact inline alert on syntax errors.
+ * last-valid SVG retention, and optional floating action controls.
  */
 export function MermaidDiagram({
   code,
   theme,
   renderer = defaultMermaidRenderer,
-  debounceMs = DEFAULT_DEBOUNCE_MS,
+  rasterAdapter,
+  renderState,
+  debounceMs = DEFAULT_MERMAID_DEBOUNCE_MS,
   className,
   sourceLine,
   sourceEndLine,
   showActionBar = true
 }: MermaidDiagramProps) {
-  const mermaidTheme = mapThemeToMermaidTheme(theme)
-  const cachedSvg = renderer.getCachedSvg(code, theme)
-
-  const [asyncState, setAsyncState] = useState<AsyncRenderState>(() => ({
-    lastValid: cachedSvg !== null ? { code, mermaidTheme, svg: cachedSvg } : null,
-    error: null
-  }))
+  const contextRasterAdapter = useContext(MermaidExportContext)
+  const effectiveRasterAdapter = rasterAdapter ?? contextRasterAdapter
   const [isHovered, setIsHovered] = useState(false)
-  const { canCopyCode, isCopyingCode, isCopiedCode, errorMessage, handleCopyCode } =
-    useMermaidDiagramActions({ code })
-  const lastValidRef = useRef<ValidDiagramSnapshot | null>(asyncState.lastValid)
-  const mountedThemeRef = useRef<ThemeMode | null>(null)
 
-  useEffect(() => {
-    lastValidRef.current = asyncState.lastValid
-  }, [asyncState.lastValid])
+  const internalRenderState = useMermaidRenderState({
+    code,
+    theme,
+    renderer,
+    debounceMs,
+    enabled: renderState === undefined
+  })
+  const activeRenderState = renderState ?? internalRenderState
+  const { mermaidTheme, displaySvg, confirmedSvg, displayError } = activeRenderState
 
-  useEffect(() => {
-    const previousTheme = mountedThemeRef.current
-    const isInitialOrThemeSwitch = previousTheme === null || previousTheme !== theme
-    mountedThemeRef.current = theme
+  const actions = useMermaidDiagramActions({
+    code,
+    theme,
+    confirmedSvg: showActionBar ? confirmedSvg : null,
+    rasterAdapter: effectiveRasterAdapter
+  })
 
-    if (cachedSvg !== null) {
-      setAsyncState((prev) =>
-        prev.lastValid?.code === code &&
-        prev.lastValid.mermaidTheme === mermaidTheme &&
-        prev.lastValid.svg === cachedSvg &&
-        prev.error === null
-          ? prev
-          : { lastValid: { code, mermaidTheme, svg: cachedSvg }, error: null }
-      )
-      return
-    }
-
-    let cancelled = false
-    let settled = false
-    const executeRender = async (): Promise<void> => {
-      const result = await renderer.render(code, theme)
-      if (cancelled) return
-      if (result.ok) {
-        settled = true
-        setAsyncState({
-          lastValid: { code, mermaidTheme, svg: result.svg },
-          error: null
-        })
-        return
-      }
-
-      logMermaidRenderFailure(theme, code.length, result.errorMessage)
-      const nextLastValid = await syncLastValidTheme(
-        lastValidRef.current,
-        theme,
-        mermaidTheme,
-        renderer
-      )
-      if (cancelled) return
-      settled = true
-      setAsyncState({
-        lastValid: nextLastValid,
-        error: result.errorMessage
-      })
-    }
-
-    const timerId =
-      isInitialOrThemeSwitch || debounceMs <= 0
-        ? undefined
-        : window.setTimeout(() => {
-            void executeRender()
-          }, debounceMs)
-
-    if (timerId === undefined) {
-      void executeRender()
-    }
-
-    return () => {
-      cancelled = true
-      // Restore previous theme if interrupted (e.g. StrictMode remount) so the next effect still runs immediately
-      if (!settled) {
-        mountedThemeRef.current = previousTheme
-      }
-      if (timerId !== undefined) {
-        window.clearTimeout(timerId)
-      }
-    }
-  }, [cachedSvg, code, debounceMs, mermaidTheme, renderer, theme])
-
-  const displaySvg = cachedSvg ?? asyncState.lastValid?.svg ?? null
-  const displayError = cachedSvg !== null ? null : asyncState.error
   const showFallbackErrorBox = displayError !== null && displaySvg === null
 
   return (
@@ -219,15 +105,8 @@ export function MermaidDiagram({
       )}
       {showActionBar && (
         <>
-          <MermaidActionBar
-            variant="floating"
-            isVisible={isHovered}
-            canCopyCode={canCopyCode}
-            isCopyingCode={isCopyingCode}
-            isCopiedCode={isCopiedCode}
-            onCopyCode={handleCopyCode}
-          />
-          <MermaidActionErrorAlert message={errorMessage} />
+          <MermaidActionBar variant="floating" isVisible={isHovered} actions={actions} />
+          <MermaidActionErrorAlert message={actions.errorMessage} />
         </>
       )}
     </div>

@@ -178,7 +178,10 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Bad mermaid syntax')
     expect(screen.getByRole('alert')).toHaveTextContent('invalid diagram')
     // Raw HTML <svg onload> outside fenced mermaid block must still be stripped by rehype-sanitize
-    expect(container.querySelector('circle')).toBeNull()
+    const nonActionCircles = Array.from(container.querySelectorAll('circle')).filter(
+      (element) => !element.closest('.mermaid-action-bar')
+    )
+    expect(nonActionCircles).toHaveLength(0)
 
     rerender(
       <MarkdownPreview

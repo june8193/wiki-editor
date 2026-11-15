@@ -3,8 +3,10 @@ import type { ThemeMode } from '@shared/config'
 import { NodeViewContent, type NodeViewProps, NodeViewWrapper } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
+import { useMermaidRenderState } from '../hooks/useMermaidRenderState'
 import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
 import { MermaidDiagram } from './MermaidDiagram'
+import { MermaidExportContext } from './MermaidExportContext'
 
 export interface WysiwygMermaidContextValue {
   theme: ThemeMode
@@ -17,12 +19,27 @@ export const WysiwygMermaidContext = createContext<WysiwygMermaidContextValue>({
 
 export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
   const { theme, mermaidRenderer } = useContext(WysiwygMermaidContext)
+  const rasterAdapter = useContext(MermaidExportContext)
   const [showSource, setShowSource] = useState(false)
   const language = typeof node.attrs.language === 'string' ? node.attrs.language : ''
-  const { canCopyCode, isCopyingCode, isCopiedCode, errorMessage, handleCopyCode } =
-    useMermaidDiagramActions({ code: language === 'mermaid' ? node.textContent : '' })
+  const isMermaid = language === 'mermaid'
+  const code = isMermaid ? node.textContent : ''
 
-  if (language !== 'mermaid') {
+  const renderState = useMermaidRenderState({
+    code,
+    theme,
+    renderer: mermaidRenderer,
+    enabled: isMermaid
+  })
+
+  const actions = useMermaidDiagramActions({
+    code,
+    theme,
+    confirmedSvg: renderState.confirmedSvg,
+    rasterAdapter
+  })
+
+  if (!isMermaid) {
     return (
       <NodeViewWrapper as="pre" className="wysiwyg-code-block">
         <NodeViewContent<'code'> as="code" className={language ? `language-${language}` : undefined} />
@@ -43,13 +60,7 @@ export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
       >
         <span className="mermaid-node-badge">Mermaid</span>
         <div className="mermaid-node-header-actions">
-          <MermaidActionBar
-            variant="inline"
-            canCopyCode={canCopyCode}
-            isCopyingCode={isCopyingCode}
-            isCopiedCode={isCopiedCode}
-            onCopyCode={handleCopyCode}
-          />
+          <MermaidActionBar variant="inline" actions={actions} />
           <button
             type="button"
             className="toolbar-btn"
@@ -75,14 +86,15 @@ export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
         onMouseDown={(event) => event.stopPropagation()}
       >
         <MermaidDiagram
-          code={node.textContent}
+          code={code}
           theme={theme}
           renderer={mermaidRenderer}
+          renderState={renderState}
           showActionBar={false}
         />
       </div>
 
-      <MermaidActionErrorAlert message={errorMessage} />
+      <MermaidActionErrorAlert message={actions.errorMessage} />
     </NodeViewWrapper>
   )
 }

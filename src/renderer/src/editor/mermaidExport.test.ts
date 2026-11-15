@@ -1,0 +1,205 @@
+import { describe, expect, it, vi } from 'vitest'
+import {
+  defaultCanvasPngRasterAdapter,
+  type DiagramSvgRasterRequest,
+  normalizeMermaidSvg,
+  rasterizeMermaidSvgToPng
+} from './mermaidExport'
+
+describe('mermaidExport', () => {
+  it('normalizes Mermaid SVG with 16px padded viewBox, explicit dimensions, stripped max-width, bottom theme background rect, and valid XML foreignObject serialization', () => {
+    const rawSvg = [
+      '<svg id="mermaid-1" width="100%" viewBox="10 20 200 100" style="max-width: 200px; font-family: sans-serif;">',
+      '<style>#mermaid-1 .edge > path { stroke: #333; }</style>',
+      '<g><foreignObject width="100" height="30"><div xmlns="http://www.w3.org/1999/xhtml"><span class="nodeLabel">A &amp; B<br>C</span></div></foreignObject></g>',
+      '</svg>'
+    ].join('')
+
+    const lightResult = normalizeMermaidSvg(rawSvg, 'light')
+    expect(lightResult.width).toBe(232)
+    expect(lightResult.height).toBe(132)
+
+    const lightDoc = new DOMParser().parseFromString(lightResult.svg, 'image/svg+xml')
+    expect(lightDoc.querySelector('parsererror')).toBeNull()
+
+    const lightSvg = lightDoc.documentElement
+    expect(lightSvg.tagName).toBe('svg')
+    expect(lightSvg.getAttribute('xmlns')).toBe('http://www.w3.org/2000/svg')
+    expect(lightSvg.getAttribute('viewBox')).toBe('-6 4 232 132')
+    expect(lightSvg.getAttribute('width')).toBe('232')
+    expect(lightSvg.getAttribute('height')).toBe('132')
+    expect(lightSvg.getAttribute('style') ?? '').not.toContain('max-width')
+    expect(lightSvg.getAttribute('style')).toContain('font-family: sans-serif')
+
+    const lightFirstChild = lightSvg.firstElementChild
+    expect(lightFirstChild?.tagName).toBe('rect')
+    expect(lightFirstChild?.getAttribute('x')).toBe('-6')
+    expect(lightFirstChild?.getAttribute('y')).toBe('4')
+    expect(lightFirstChild?.getAttribute('width')).toBe('232')
+    expect(lightFirstChild?.getAttribute('height')).toBe('132')
+    expect(lightFirstChild?.getAttribute('fill')).toBe('#ffffff')
+
+    const foreignObject = lightSvg.querySelector('foreignObject')
+    expect(foreignObject).not.toBeNull()
+    const htmlChild = foreignObject?.firstElementChild
+    expect(htmlChild?.namespaceURI).toBe('http://www.w3.org/1999/xhtml')
+    expect(lightResult.svg).toContain('<br />')
+
+    // Dark theme uses #161b22 surface color and strips style completely when max-width was the only style
+    const darkInput =
+      '<svg width="150" height="80px" style="max-width: 150px;"><g><rect width="150" height="80"/></g></svg>'
+    const darkResult = normalizeMermaidSvg(darkInput, 'dark')
+    expect(darkResult.width).toBe(182)
+    expect(darkResult.height).toBe(112)
+
+    const darkDoc = new DOMParser().parseFromString(darkResult.svg, 'image/svg+xml')
+    expect(darkDoc.querySelector('parsererror')).toBeNull()
+    const darkSvg = darkDoc.documentElement
+    expect(darkSvg.getAttribute('viewBox')).toBe('-16 -16 182 112')
+    expect(darkSvg.getAttribute('width')).toBe('182')
+    expect(darkSvg.getAttribute('height')).toBe('112')
+    expect(darkSvg.hasAttribute('style')).toBe(false)
+    expect(darkSvg.firstElementChild?.tagName).toBe('rect')
+    expect(darkSvg.firstElementChild?.getAttribute('fill')).toBe('#161b22')
+
+    // Rejects SVG without explicit viewBox or positive numeric dimensions
+    expect(() => normalizeMermaidSvg('<svg width="100%" height="100%"><g/></svg>', 'light')).toThrow()
+    expect(() => normalizeMermaidSvg('<div>not svg</div>', 'light')).toThrow()
+  })
+
+  it('rasterizes normalized SVG to 2x PNG via offline data URI and clamps oversized diagrams within 8192px / 67,108,864px limits preserving aspect ratio', async () => {
+    const requests: DiagramSvgRasterRequest[] = []
+    const expectedPng = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    const rasterAdapter = vi.fn(async (request: DiagramSvgRasterRequest) => {
+      requests.push(request)
+      return expectedPng
+    })
+
+    // 1. Standard 200x100 SVG -> padded 232x132 -> 2x raster 464x264
+    const standardSvg = '<svg viewBox="0 0 200 100"><rect width="200" height="100"/></svg>'
+    const bytes = await rasterizeMermaidSvgToPng(standardSvg, 'dark', { rasterAdapter })
+    expect(bytes).toBe(expectedPng)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].svgDataUri.startsWith('data:image/svg+xml;charset=utf-8,')).toBe(true)
+    expect(decodeURIComponent(requests[0].svgDataUri.slice('data:image/svg+xml;charset=utf-8,'.length))).toBe(
+      requests[0].normalizedSvg
+    )
+    expect(requests[0]).toMatchObject({
+      logicalWidth: 232,
+      logicalHeight: 132,
+      pixelWidth: 464,
+      pixelHeight: 264,
+      scale: 2,
+      theme: 'dark'
+    })
+
+    // 2. Extremely wide diagram (padded 10000 x 2000) -> clamped to max side 8192 keeping 5:1 aspect ratio
+    const wideSvg = '<svg viewBox="0 0 9968 1968"><rect width="9968" height="1968"/></svg>'
+    await rasterizeMermaidSvgToPng(wideSvg, 'light', { rasterAdapter })
+    expect(requests[1].pixelWidth).toBe(8192)
+    expect(requests[1].pixelHeight).toBe(1638)
+    expect(requests[1].scale).toBeCloseTo(0.8192, 4)
+    expect(requests[1].pixelWidth * requests[1].pixelHeight).toBeLessThanOrEqual(67_108_864)
+
+    // 3. Oversized square diagram (padded 5000 x 5000 -> 2x would exceed 8192px and 67,108,864px) -> clamped to 8192 x 8192
+    const squareSvg = '<svg viewBox="0 0 4968 4968"><rect width="4968" height="4968"/></svg>'
+    await rasterizeMermaidSvgToPng(squareSvg, 'light', { rasterAdapter })
+    expect(requests[2].pixelWidth).toBe(8192)
+    expect(requests[2].pixelHeight).toBe(8192)
+    expect(requests[2].pixelWidth * requests[2].pixelHeight).toBe(67_108_864)
+    expect(requests[2].scale).toBeCloseTo(1.6384, 4)
+  })
+
+  it('decodes SVG data URI into an offscreen canvas and extracts PNG bytes via defaultCanvasPngRasterAdapter', async () => {
+    const OriginalImage = globalThis.Image
+    const origCreateElement = document.createElement.bind(document)
+    let shouldDecodeFail = false
+    let emittedBlob: Blob | null = new Blob([new Uint8Array([137, 80, 78, 71])], {
+      type: 'image/png'
+    })
+
+    class FakeImage {
+      onload: (() => void) | null = null
+      onerror: (() => void) | null = null
+      decoding = ''
+      private _src = ''
+      set src(value: string) {
+        this._src = value
+        queueMicrotask(() => {
+          if (shouldDecodeFail) {
+            this.onerror?.()
+          } else {
+            this.onload?.()
+          }
+        })
+      }
+      get src(): string {
+        return this._src
+      }
+    }
+
+    const drawImage = vi.fn()
+    const clearRect = vi.fn()
+    const createElementSpy = vi.spyOn(document, 'createElement').mockImplementation(((tagName: string) => {
+      if (tagName.toLowerCase() === 'canvas') {
+        return {
+          width: 0,
+          height: 0,
+          getContext: () => ({ clearRect, drawImage }),
+          toBlob: (cb: (blob: Blob | null) => void) => cb(emittedBlob)
+        } as unknown as HTMLCanvasElement
+      }
+      return origCreateElement(tagName)
+    }) as typeof document.createElement)
+
+    globalThis.Image = FakeImage as unknown as typeof Image
+
+    try {
+      const pngBytes = await defaultCanvasPngRasterAdapter({
+        svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
+        normalizedSvg: '<svg></svg>',
+        logicalWidth: 100,
+        logicalHeight: 50,
+        pixelWidth: 200,
+        pixelHeight: 100,
+        scale: 2,
+        theme: 'light'
+      })
+      expect(Array.from(pngBytes)).toEqual([137, 80, 78, 71])
+      expect(clearRect).toHaveBeenCalledWith(0, 0, 200, 100)
+      expect(drawImage).toHaveBeenCalledWith(expect.any(FakeImage), 0, 0, 200, 100)
+
+      shouldDecodeFail = true
+      await expect(
+        defaultCanvasPngRasterAdapter({
+          svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
+          normalizedSvg: '<svg></svg>',
+          logicalWidth: 100,
+          logicalHeight: 50,
+          pixelWidth: 200,
+          pixelHeight: 100,
+          scale: 2,
+          theme: 'light'
+        })
+      ).rejects.toThrow()
+
+      shouldDecodeFail = false
+      emittedBlob = null
+      await expect(
+        defaultCanvasPngRasterAdapter({
+          svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
+          normalizedSvg: '<svg></svg>',
+          logicalWidth: 100,
+          logicalHeight: 50,
+          pixelWidth: 200,
+          pixelHeight: 100,
+          scale: 2,
+          theme: 'light'
+        })
+      ).rejects.toThrow()
+    } finally {
+      createElementSpy.mockRestore()
+      globalThis.Image = OriginalImage
+    }
+  })
+})

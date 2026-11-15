@@ -275,4 +275,62 @@ describe('registerIpcHandlers logging wrapper', () => {
 
     dispose()
   })
+
+  it('logs diagram:copy-image metadata with byteLength only and redacts raw PNG bytes', async () => {
+    const ipcMain = createFakeIpcMain()
+    const secretPngBytes = new Uint8Array([137, 80, 78, 71, 222, 173, 190, 239])
+    const dispose = registerIpcHandlers(
+      ipcMain,
+      [
+        [
+          DIAGRAM_IPC_CHANNELS.copyImage,
+          async (_event, pngBytes) => {
+            if (!(pngBytes instanceof Uint8Array)) {
+              throw new TypeError('Invalid clipboard image bytes')
+            }
+          }
+        ]
+      ],
+      { logService }
+    )
+
+    await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.copyImage, secretPngBytes)
+    await expect(ipcMain.invoke(DIAGRAM_IPC_CHANNELS.copyImage, 'not-bytes')).rejects.toThrow(
+      'Invalid clipboard image bytes'
+    )
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(2)
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('222')
+    expect(serialized).not.toContain('173')
+    expect(serialized).not.toContain('190')
+    expect(serialized).not.toContain('239')
+    expect(serialized).not.toContain('not-bytes')
+
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.copyImage,
+        success: true,
+        byteLength: secretPngBytes.byteLength
+      }
+    })
+    expect(entries[1]).toMatchObject({
+      level: 'error',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.copyImage,
+        success: false,
+        byteLength: 0
+      },
+      error: {
+        name: 'TypeError',
+        message: 'Invalid clipboard image bytes'
+      }
+    })
+
+    dispose()
+  })
 })

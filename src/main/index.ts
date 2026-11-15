@@ -4,11 +4,13 @@ import {
   app,
   type BaseWindow,
   BrowserWindow,
+  ClipboardItem,
   clipboard,
   dialog,
   ipcMain,
   Menu,
   type MessageBoxOptions,
+  nativeImage,
   shell
 } from 'electron'
 import { ConfigService } from './config/ConfigService'
@@ -116,6 +118,13 @@ void app.whenReady().then(async () => {
   disposeDiagramIpc = registerDiagramIpc({
     ipcMain,
     writeClipboardText: (text) => clipboard.writeText(text),
+    createImageFromBuffer: (buffer) => nativeImage.createFromBuffer(buffer),
+    writeClipboardImage: (image) =>
+      clipboard.write([
+        new ClipboardItem({
+          'image/png': new Blob([new Uint8Array(image.toPNG())], { type: 'image/png' })
+        })
+      ]),
     logService
   })
   disposeGitIpc = registerGitIpc({

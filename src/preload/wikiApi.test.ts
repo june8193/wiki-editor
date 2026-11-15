@@ -206,15 +206,18 @@ describe('createWikiApi', () => {
     expect(ipc.lastInvoked).toEqual([{ channel: LOG_IPC_CHANNELS.write, args: [payload] }])
   })
 
-  it('routes diagram.copyText through diagram:copy-text IPC channel with exact source string', async () => {
+  it('routes diagram.copyText and diagram.copyImage through expected IPC channels with exact payloads', async () => {
     const ipc = createFakeIpcRenderer()
     const api = createWikiApi(ipc)
     const diagramSource = 'flowchart LR\n  A --> B'
+    const pngBytes = new Uint8Array([137, 80, 78, 71])
 
     await api.diagram.copyText(diagramSource)
+    await api.diagram.copyImage(pngBytes)
 
     expect(ipc.lastInvoked).toEqual([
-      { channel: DIAGRAM_IPC_CHANNELS.copyText, args: [diagramSource] }
+      { channel: DIAGRAM_IPC_CHANNELS.copyText, args: [diagramSource] },
+      { channel: DIAGRAM_IPC_CHANNELS.copyImage, args: [pngBytes] }
     ])
   })
 

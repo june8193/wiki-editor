@@ -153,7 +153,9 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
       write: (payload) => ipcRenderer.invoke(LOG_IPC_CHANNELS.write, payload) as Promise<void>
     },
     diagram: {
-      copyText: (text) => ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyText, text) as Promise<void>
+      copyText: (text) => ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyText, text) as Promise<void>,
+      copyImage: (pngBytes) =>
+        ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyImage, pngBytes) as Promise<void>
     }
   }
 }

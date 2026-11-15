@@ -1,12 +1,10 @@
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, Image as ImageIcon } from 'lucide-react'
+import type { MermaidActionId, MermaidDiagramActionsState } from '../hooks/useMermaidDiagramActions'
 
 export interface MermaidActionBarProps {
   variant: 'floating' | 'inline'
   isVisible?: boolean
-  canCopyCode: boolean
-  isCopyingCode: boolean
-  isCopiedCode: boolean
-  onCopyCode: () => void | Promise<void>
+  actions: MermaidDiagramActionsState
 }
 
 export interface MermaidActionErrorAlertProps {
@@ -17,19 +15,36 @@ export interface MermaidActionErrorAlertProps {
  * Shared toolbar for Mermaid blocks rendered either as a floating overlay in
  * Preview/Split modes or inline inside the WYSIWYG block header.
  */
-export function MermaidActionBar({
-  variant,
-  isVisible = false,
-  canCopyCode,
-  isCopyingCode,
-  isCopiedCode,
-  onCopyCode
-}: MermaidActionBarProps) {
+export function MermaidActionBar({ variant, isVisible = false, actions }: MermaidActionBarProps) {
   const shouldBeVisible =
-    variant === 'floating' && Boolean(isVisible || isCopyingCode || isCopiedCode)
+    variant === 'floating' &&
+    Boolean(isVisible || actions.activeAction !== null || actions.completedAction !== null)
 
   const variantClass = variant === 'floating' ? 'is-floating' : 'is-inline'
   const visibleClass = shouldBeVisible ? ' is-visible' : ''
+
+  const actionItems: Array<{
+    id: MermaidActionId
+    label: string
+    Icon: typeof ImageIcon
+    canExecute: boolean
+    onTrigger: () => Promise<void>
+  }> = [
+    {
+      id: 'copy-image',
+      label: '이미지 복사',
+      Icon: ImageIcon,
+      canExecute: actions.canCopyImage,
+      onTrigger: actions.handleCopyImage
+    },
+    {
+      id: 'copy-code',
+      label: '코드 복사',
+      Icon: Copy,
+      canExecute: actions.canCopyCode,
+      onTrigger: actions.handleCopyCode
+    }
+  ]
 
   return (
     <div
@@ -37,26 +52,33 @@ export function MermaidActionBar({
       aria-label="Mermaid 다이어그램 작업"
       className={`mermaid-action-bar ${variantClass}${visibleClass}`}
     >
-      <button
-        type="button"
-        className={`mermaid-action-btn${isCopiedCode ? ' is-copied' : ''}`}
-        aria-label="코드 복사"
-        title={isCopiedCode ? '복사됨' : '코드 복사'}
-        disabled={!canCopyCode}
-        aria-busy={isCopyingCode || undefined}
-        onClick={() => {
-          void onCopyCode()
-        }}
-      >
-        {isCopiedCode ? (
-          <>
-            <Check size={14} strokeWidth={2} aria-hidden="true" />
-            <span className="mermaid-action-feedback">복사됨</span>
-          </>
-        ) : (
-          <Copy size={14} strokeWidth={1.75} aria-hidden="true" />
-        )}
-      </button>
+      {actionItems.map(({ id, label, Icon, canExecute, onTrigger }) => {
+        const isBusy = actions.activeAction === id
+        const isCompleted = actions.completedAction === id
+        return (
+          <button
+            key={id}
+            type="button"
+            className={`mermaid-action-btn${isCompleted ? ' is-copied' : ''}`}
+            aria-label={label}
+            title={isCompleted ? '복사됨' : label}
+            disabled={!canExecute}
+            aria-busy={isBusy || undefined}
+            onClick={() => {
+              void onTrigger()
+            }}
+          >
+            {isCompleted ? (
+              <>
+                <Check size={14} strokeWidth={2} aria-hidden="true" />
+                <span className="mermaid-action-feedback">복사됨</span>
+              </>
+            ) : (
+              <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
+            )}
+          </button>
+        )
+      })}
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { types } from 'node:util'
 import type { GitDiffRequest } from '@shared/git'
 import {
   CONFIG_IPC_CHANNELS,
@@ -52,6 +53,9 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
   },
   [DIAGRAM_IPC_CHANNELS.copyText]: ([text]) => ({
     textLength: typeof text === 'string' ? text.length : 0
+  }),
+  [DIAGRAM_IPC_CHANNELS.copyImage]: ([pngBytes]) => ({
+    byteLength: types.isUint8Array(pngBytes) ? pngBytes.byteLength : 0
   })
 }
 

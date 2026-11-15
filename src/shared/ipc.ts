@@ -71,7 +71,8 @@ export const LOG_IPC_CHANNELS = {
 } as const
 
 export const DIAGRAM_IPC_CHANNELS = {
-  copyText: 'diagram:copy-text'
+  copyText: 'diagram:copy-text',
+  copyImage: 'diagram:copy-image'
 } as const
 
 export interface WikiConfigApi {
@@ -132,6 +133,7 @@ export interface WikiLogApi {
 
 export interface WikiDiagramApi {
   copyText(text: string): Promise<void>
+  copyImage(pngBytes: Uint8Array): Promise<void>
 }
 
 export interface WikiApi {

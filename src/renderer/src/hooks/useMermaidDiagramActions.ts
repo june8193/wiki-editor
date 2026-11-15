@@ -1,41 +1,64 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ThemeMode } from '@shared/config'
+import {
+  type DiagramPngRasterAdapter,
+  rasterizeMermaidSvgToPng
+} from '../editor/mermaidExport'
 import { logRendererError } from '../logging/rendererLogger'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
 export const MERMAID_ACTION_FEEDBACK_DURATION_MS = 1500
 
+export type MermaidActionId = 'copy-image' | 'copy-code'
+
 export interface UseMermaidDiagramActionsOptions {
   code: string
+  theme: ThemeMode
+  confirmedSvg: string | null
+  rasterAdapter?: DiagramPngRasterAdapter
 }
 
 export interface MermaidDiagramActionsState {
+  canCopyImage: boolean
   canCopyCode: boolean
-  isCopyingCode: boolean
-  isCopiedCode: boolean
+  activeAction: MermaidActionId | null
+  completedAction: MermaidActionId | null
   errorMessage: string | null
+  handleCopyImage: () => Promise<void>
   handleCopyCode: () => Promise<void>
 }
 
-const COPY_FAILED_FALLBACK_MESSAGE = 'Mermaid 코드 복사에 실패했습니다.'
+interface ActionFailureLogContext {
+  event: string
+  fallbackMessage: string
+  buildData: () => Record<string, unknown>
+}
+
+const COPY_CODE_FAILED_FALLBACK_MESSAGE = 'Mermaid 코드 복사에 실패했습니다.'
+const COPY_IMAGE_FAILED_FALLBACK_MESSAGE = 'Mermaid 이미지 복사에 실패했습니다.'
 
 /**
- * Manages clipboard copy execution, single-run concurrency, 1500ms completion
- * feedback, and sanitized inline error state for a single Mermaid block.
+ * Coordinates Mermaid block toolbar actions (`copy-image`, `copy-code`),
+ * shared busy locking, timed feedback badges, cancellation on code/theme change
+ * or unmount, and sanitized failure reporting.
  */
 export function useMermaidDiagramActions({
-  code
+  code,
+  theme,
+  confirmedSvg,
+  rasterAdapter
 }: UseMermaidDiagramActionsOptions): MermaidDiagramActionsState {
-  const [isCopyingCode, setIsCopyingCode] = useState(false)
-  const [isCopiedCode, setIsCopiedCode] = useState(false)
+  const [activeAction, setActiveAction] = useState<MermaidActionId | null>(null)
+  const [completedAction, setCompletedAction] = useState<MermaidActionId | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-
   const isMountedRef = useRef(true)
   const isBusyRef = useRef(false)
   const feedbackTimerRef = useRef<number | null>(null)
   const executionTokenRef = useRef(0)
-  const previousCodeRef = useRef(code)
+  const previousContextRef = useRef({ code, theme })
 
   const canCopyCode = code.trim().length > 0
+  const canCopyImage = canCopyCode && confirmedSvg !== null
 
   const clearFeedbackTimer = useCallback(() => {
     if (feedbackTimerRef.current !== null) {
@@ -54,74 +77,137 @@ export function useMermaidDiagramActions({
   }, [clearFeedbackTimer])
 
   useEffect(() => {
-    if (previousCodeRef.current === code) {
+    if (previousContextRef.current.code === code && previousContextRef.current.theme === theme) {
       return
     }
-    previousCodeRef.current = code
+    previousContextRef.current = { code, theme }
     executionTokenRef.current += 1
     clearFeedbackTimer()
     isBusyRef.current = false
-    setIsCopyingCode(false)
-    setIsCopiedCode(false)
+    setActiveAction(null)
+    setCompletedAction(null)
     setErrorMessage(null)
-  }, [clearFeedbackTimer, code])
+  }, [clearFeedbackTimer, code, theme])
 
-  const handleCopyCode = useCallback(async () => {
-    if (isBusyRef.current || !canCopyCode) {
-      return
-    }
-
-    const token = ++executionTokenRef.current
-    clearFeedbackTimer()
-    isBusyRef.current = true
-    setIsCopyingCode(true)
-    setIsCopiedCode(false)
-    setErrorMessage(null)
-
-    try {
-      const copyText = window.wikiApi?.diagram?.copyText
-      if (typeof copyText !== 'function') {
-        throw new Error('클립보드 복사 API를 사용할 수 없습니다.')
-      }
-
-      await copyText(code)
-      if (!isMountedRef.current || executionTokenRef.current !== token) {
+  const executeAction = useCallback(
+    async (
+      actionId: MermaidActionId,
+      canExecute: boolean,
+      run: (token: number) => Promise<void>,
+      failureContext: ActionFailureLogContext
+    ) => {
+      if (isBusyRef.current || !canExecute) {
         return
       }
 
-      setIsCopiedCode(true)
-      feedbackTimerRef.current = window.setTimeout(() => {
-        feedbackTimerRef.current = null
+      const token = ++executionTokenRef.current
+      clearFeedbackTimer()
+      isBusyRef.current = true
+      setActiveAction(actionId)
+      setCompletedAction(null)
+      setErrorMessage(null)
+
+      try {
+        await run(token)
         if (!isMountedRef.current || executionTokenRef.current !== token) {
           return
         }
-        setIsCopiedCode(false)
-      }, MERMAID_ACTION_FEEDBACK_DURATION_MS)
-    } catch (error) {
-      logRendererError('ui', 'Mermaid code copy failed', {
-        data: { codeLength: code.length },
-        error
-      })
-      if (!isMountedRef.current || executionTokenRef.current !== token) {
-        return
-      }
-      const message = toErrorMessage(error, COPY_FAILED_FALLBACK_MESSAGE)
-      setErrorMessage(message.trim().length > 0 ? message : COPY_FAILED_FALLBACK_MESSAGE)
-    } finally {
-      if (executionTokenRef.current === token) {
-        isBusyRef.current = false
-        if (isMountedRef.current) {
-          setIsCopyingCode(false)
+
+        setCompletedAction(actionId)
+        feedbackTimerRef.current = window.setTimeout(() => {
+          feedbackTimerRef.current = null
+          if (!isMountedRef.current || executionTokenRef.current !== token) {
+            return
+          }
+          setCompletedAction(null)
+        }, MERMAID_ACTION_FEEDBACK_DURATION_MS)
+      } catch (error) {
+        logRendererError('ui', failureContext.event, {
+          data: failureContext.buildData(),
+          error
+        })
+        if (!isMountedRef.current || executionTokenRef.current !== token) {
+          return
+        }
+        const message = toErrorMessage(error, failureContext.fallbackMessage)
+        setErrorMessage(message.trim().length > 0 ? message : failureContext.fallbackMessage)
+      } finally {
+        if (executionTokenRef.current === token) {
+          isBusyRef.current = false
+          if (isMountedRef.current) {
+            setActiveAction(null)
+          }
         }
       }
-    }
-  }, [canCopyCode, clearFeedbackTimer, code])
+    },
+    [clearFeedbackTimer]
+  )
+
+  const handleCopyImage = useCallback(async () => {
+    let pngByteLength: number | undefined
+    await executeAction(
+      'copy-image',
+      canCopyImage,
+      async (token) => {
+        if (confirmedSvg === null) {
+          throw new Error(COPY_IMAGE_FAILED_FALLBACK_MESSAGE)
+        }
+        const copyImage = window.wikiApi?.diagram?.copyImage
+        if (typeof copyImage !== 'function') {
+          throw new Error('이미지 클립보드 복사 API를 사용할 수 없습니다.')
+        }
+
+        const pngBytes = await rasterizeMermaidSvgToPng(confirmedSvg, theme, { rasterAdapter })
+        if (!isMountedRef.current || executionTokenRef.current !== token) {
+          return
+        }
+        if (pngBytes.byteLength === 0) {
+          throw new Error('렌더링된 PNG 이미지가 비어 있습니다.')
+        }
+
+        pngByteLength = pngBytes.byteLength
+        await copyImage(pngBytes)
+      },
+      {
+        event: 'Mermaid image copy failed',
+        fallbackMessage: COPY_IMAGE_FAILED_FALLBACK_MESSAGE,
+        buildData: () => ({
+          theme,
+          codeLength: code.length,
+          svgLength: confirmedSvg?.length ?? 0,
+          ...(pngByteLength !== undefined ? { byteLength: pngByteLength } : {})
+        })
+      }
+    )
+  }, [canCopyImage, code.length, confirmedSvg, executeAction, rasterAdapter, theme])
+
+  const handleCopyCode = useCallback(async () => {
+    await executeAction(
+      'copy-code',
+      canCopyCode,
+      async () => {
+        const copyText = window.wikiApi?.diagram?.copyText
+        if (typeof copyText !== 'function') {
+          throw new Error('클립보드 복사 API를 사용할 수 없습니다.')
+        }
+
+        await copyText(code)
+      },
+      {
+        event: 'Mermaid code copy failed',
+        fallbackMessage: COPY_CODE_FAILED_FALLBACK_MESSAGE,
+        buildData: () => ({ codeLength: code.length })
+      }
+    )
+  }, [canCopyCode, code, executeAction])
 
   return {
+    canCopyImage,
     canCopyCode,
-    isCopyingCode,
-    isCopiedCode,
+    activeAction,
+    completedAction,
     errorMessage,
+    handleCopyImage,
     handleCopyCode
   }
 }
