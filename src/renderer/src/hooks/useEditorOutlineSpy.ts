@@ -76,6 +76,8 @@ export function useEditorOutlineSpy<TReq extends { nonce: number } = { nonce: nu
 
   const hasCallback = Boolean(onActiveHeadingChange)
   useEffect(() => {
+    // Re-measure on readiness/content updates and whenever Split Mode Pane focus switches (`isActive`).
+    void isActive
     if (!isReady || !hasCallback) return
     reportActiveHeading(false)
   }, [hasCallback, isActive, isReady, reportActiveHeading])

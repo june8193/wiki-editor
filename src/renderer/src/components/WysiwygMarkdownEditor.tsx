@@ -17,6 +17,7 @@ import {
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
   detectProseMirrorSlashQuery,
+  extractWysiwygHeadingCandidates,
   headingNumberingPluginKey,
   insertWysiwygMarkdownWithCursor,
   prepareMarkdownForTiptap,
@@ -398,34 +399,7 @@ export function WysiwygMarkdownEditor({
     onScrollRequest: (req, headings) => {
       if (!editor) return false
 
-      const candidates: Array<{ pos: number; level: number; text: string; hasMedia: boolean }> = []
-      editor.state.doc.descendants((node, pos) => {
-        if (node.type.name === 'heading') {
-          let text = ''
-          let hasMedia = false
-          node.descendants((child) => {
-            if (child.isText) {
-              text += child.text ?? ''
-              return false
-            }
-            if (child.type.name === 'image') {
-              hasMedia = true
-              text += typeof child.attrs.alt === 'string' ? child.attrs.alt : ''
-              return false
-            }
-            return true
-          })
-          candidates.push({
-            pos,
-            level: Number(node.attrs.level ?? 1),
-            text,
-            hasMedia
-          })
-          return false
-        }
-        return node.type.name !== 'codeBlock' && node.type.name !== 'blockquote'
-      })
-
+      const candidates = extractWysiwygHeadingCandidates(editor.state.doc)
       const matchedHeadings = resolveMatchingOutlineCandidates(candidates, headings)
       const targetPos = matchedHeadings[req.index]?.pos
       if (targetPos === undefined) return true

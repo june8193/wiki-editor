@@ -212,10 +212,6 @@ function resolveMatchingHeadingElements(
   headings: readonly MarkdownHeading[]
 ): HTMLElement[] {
   const allHeadings = Array.from(container.querySelectorAll<HTMLElement>(HEADING_SELECTOR))
-  if (allHeadings.length === headings.length) {
-    return allHeadings
-  }
-
   const matchedById = matchHeadingsBySlugId(allHeadings, headings)
   if (matchedById) {
     return matchedById
