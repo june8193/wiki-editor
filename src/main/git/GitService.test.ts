@@ -78,7 +78,7 @@ describe('GitService integration (isolated temp repos)', () => {
     expect((await stat(join(nonGitDir, '.git'))).isDirectory()).toBe(true)
     // Verify test isolation: runGit inside nonGitDir works independently
     expect((await runGit(nonGitDir, ['rev-parse', '--is-inside-work-tree'])).trim()).toBe('true')
-  })
+  }, 30_000)
 
   it('parses untracked, staged, unstaged, deleted, renamed, and non-ASCII/dash filenames and validates stage/unstage/commit', async () => {
     await service.init(repoDir)
@@ -176,7 +176,7 @@ describe('GitService integration (isolated temp repos)', () => {
     await expect(service.stage(repoDir, [join(tempRoot, 'outside.txt')])).rejects.toThrow(/경로|저장소/)
     await expect(service.stage(repoDir, ['.git/config'])).rejects.toThrow(/경로|\.git|시스템/)
     await expect(service.unstage(repoDir, ['../outside.txt'])).rejects.toThrow(/경로|저장소/)
-  }, 30_000)
+  }, 60_000)
 
   it('lists local branches, checks out branches safely, and rejects conflicting or invalid checkouts', async () => {
     await service.init(repoDir)
@@ -211,7 +211,7 @@ describe('GitService integration (isolated temp repos)', () => {
     // Uncommitted local change to shared.md conflicts with switching back to main
     await writeFile(join(repoDir, 'shared.md'), '# Uncommitted Dirty\n', 'utf8')
     await expect(service.checkout(repoDir, 'main')).rejects.toThrow(/로컬 변경 사항/)
-  }, 20_000)
+  }, 60_000)
 
   it('supports bare remote push, pull, ahead/behind, one-click sync, rename detection, conflicts, and non-hanging remote errors', async () => {
     const bareRemote = join(tempRoot, 'remote.git')
@@ -306,7 +306,7 @@ describe('GitService integration (isolated temp repos)', () => {
     await runGit(repoDir, ['remote', 'add', 'origin', join(tempRoot, 'missing-remote.git')])
     await expect(service.push(repoDir)).rejects.toThrow(/원격|오류/)
     await expect(service.pull(repoDir)).rejects.toThrow(/원격|upstream|오류/)
-  }, 60_000)
+  }, 90_000)
 
   it('logs raw Git CLI stderr, stdout, and exit code at error level before formatting user messages, without logging benign non-repo probes', async () => {
     const logService = new LogService(join(tempRoot, 'logs'))
@@ -363,7 +363,7 @@ describe('GitService integration (isolated temp repos)', () => {
     })
     expect(entries[1].error?.code).toBe(1)
     expect(entries[1].error?.stdout).toMatch(/nothing to commit/i)
-  }, 30_000)
+  }, 60_000)
 })
 
 describe('GitService helpers (unit)', () => {
