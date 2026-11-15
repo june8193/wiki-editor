@@ -4,13 +4,13 @@ import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
 import {
+  allowWikiTabDragOver,
   handleTabMoveDrop,
-  isExternalTabDragEvent,
-  isPaneTabTriggerTarget,
-  PaneInteractionActions,
-  PaneTabBar,
-  type TabDragUiState
-} from './PaneTabBar'
+  type PaneInteractionActions,
+  type TabDragUiState,
+  type TabDropMoveOptions
+} from '../stores/tabDragDrop'
+import { isPaneTabTriggerTarget, PaneTabBar } from './PaneTabBar'
 
 interface PaneViewProps {
   pane: PaneState
@@ -58,6 +58,11 @@ export function PaneView({
     }
   }
 
+  const paneDropOptions: TabDropMoveOptions = {
+    canAcceptExternal: pane.tabs.length === 0,
+    ignoreSamePane: true
+  }
+
   return (
     <section
       className={`workspace-pane${isActivePane ? ' is-active-pane' : ''}`}
@@ -66,20 +71,8 @@ export function PaneView({
       style={paneStyle}
       onMouseDown={handlePaneFocusEvent}
       onFocusCapture={handlePaneFocusEvent}
-      onDragOver={(event) => {
-        const acceptsLocal = Boolean(dragState.draggingTab && dragState.draggingTab.paneId !== pane.id)
-        const acceptsExternalEmpty =
-          pane.tabs.length === 0 && isExternalTabDragEvent(event, dragState)
-        if (acceptsLocal || acceptsExternalEmpty) {
-          event.preventDefault()
-        }
-      }}
-      onDrop={(event) =>
-        handleTabMoveDrop(event, dragState, pane.id, actions, {
-          canAcceptExternal: pane.tabs.length === 0,
-          ignoreSamePane: true
-        })
-      }
+      onDragOver={(event) => allowWikiTabDragOver(event, dragState, pane.id, paneDropOptions)}
+      onDrop={(event) => handleTabMoveDrop(event, dragState, pane.id, actions, paneDropOptions)}
     >
       {pane.tabs.length > 0 && (
         <PaneTabBar

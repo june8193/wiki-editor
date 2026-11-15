@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
 import { canDetachTabFromWindow } from '@shared/window'
-import type { PaneInteractionActions } from '../components/PaneTabBar'
+import type { PaneInteractionActions } from '../stores/tabDragDrop'
 import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
 import {
@@ -156,7 +156,7 @@ export function useEditorWorkspace({
   const layout = useSyncExternalStore(tabStore.subscribe, tabStore.getSnapshot)
   const dragState = useSyncExternalStore(
     tabDragController.subscribe,
-    tabDragController.getUiState
+    tabDragController.getSnapshot
   )
   const activeTab = getPaneActiveTab(layout.panes[layout.activePaneId])
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined

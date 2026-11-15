@@ -116,9 +116,9 @@ describe('RendererTabDragController', () => {
       const tabId = tabStore.getSnapshot().panes.primary.tabs[0].id
 
       controller.startDrag('primary', tabId)
-      expect(controller.getSnapshot()).toEqual({ paneId: 'primary', tabId })
+      expect(controller.getSnapshot().draggingTab).toEqual({ paneId: 'primary', tabId })
       controller.cancelDrag()
-      expect(controller.getSnapshot()).toBeNull()
+      expect(controller.getSnapshot().draggingTab).toBeNull()
 
       startGate.resolve({
         dragSessionId: 'drag-async-1',
@@ -310,7 +310,7 @@ describe('RendererTabDragController', () => {
 
       controller.startDrag('primary', tabId)
       controller.completeInWindowDrop()
-      expect(controller.getSnapshot()).toBeNull()
+      expect(controller.getSnapshot().draggingTab).toBeNull()
       await new Promise((resolve) => setTimeout(resolve, 10))
 
       expect(outcomeUpdates).toEqual([{ dragSessionId: 'drag-1', outcome: 'dropped-in-window' }])
@@ -394,7 +394,7 @@ describe('RendererTabDragController', () => {
         },
         outcome: 'pending'
       })
-      expect(controller.getUiState().externalDragSession).toBeNull()
+      expect(controller.getSnapshot().externalDragSession).toBeNull()
 
       // Remote dropped-in-window closes source tab, clears draggingTab, invokes endTabDrag, and ignores late endDrag
       emitDragState({
@@ -411,7 +411,7 @@ describe('RendererTabDragController', () => {
         },
         outcome: 'dropped-in-window'
       })
-      expect(controller.getSnapshot()).toBeNull()
+      expect(controller.getSnapshot().draggingTab).toBeNull()
       expect(tabStore.getBufferKeys()).toEqual([])
       await Promise.resolve()
       expect(endCalls).toEqual([{ dragSessionId: 'drag-target-own' }])
@@ -434,10 +434,10 @@ describe('RendererTabDragController', () => {
         outcome: 'pending'
       }
       emitDragState(externalSession)
-      expect(controller.getUiState().externalDragSession).toEqual(externalSession)
+      expect(controller.getSnapshot().externalDragSession).toEqual(externalSession)
 
       emitDragState({ ...externalSession, outcome: 'cancelled' })
-      expect(controller.getUiState().externalDragSession).toBeNull()
+      expect(controller.getSnapshot().externalDragSession).toBeNull()
 
       // Accepted external drop inserts buffer and tab (splitting even in 1-tab single mode)
       await syncClient.openWorkspaceFile({
@@ -471,7 +471,7 @@ describe('RendererTabDragController', () => {
         externalSession.dragSessionId
       )
       expect(accepted).toBe(true)
-      expect(controller.getUiState().externalDragSession).toBeNull()
+      expect(controller.getSnapshot().externalDragSession).toBeNull()
       expect(tabStore.getSnapshot().splitMode).toBe('vertical')
       expect(tabStore.getSnapshot().panes.secondary.tabs[0]).toMatchObject({
         bufferKey: 'c:/wiki/external.md',
@@ -484,8 +484,43 @@ describe('RendererTabDragController', () => {
       emitDragState(externalSession)
       acceptResult = { accepted: false, reason: 'drag-not-pending' }
       expect(await controller.acceptExternalDrop({ kind: 'pane', paneId: 'primary' })).toBe(false)
-      expect(controller.getUiState().externalDragSession).toBeNull()
+      expect(controller.getSnapshot().externalDragSession).toBeNull()
       expect(hub.getSnapshot().revision).toBeGreaterThanOrEqual(0)
+
+      // Late cross-window dropped-in-window broadcast after endDrag returned 'cancelled' still closes source tab once without duplicate endTabDrag
+      const raceSession: ActiveTabDragSession = {
+        dragSessionId: 'drag-race-local',
+        sourceWindowId: 1,
+        paneId: 'primary',
+        tabId: tabStore.getSnapshot().panes.primary.tabs[0].id,
+        payload: {
+          bufferKey: 'c:/wiki/note.md',
+          mode: 'raw',
+          cursor: { selectionStart: 0, selectionEnd: 0 },
+          scrollTop: 0
+        },
+        outcome: 'pending'
+      }
+      targetWindowApi.startTabDrag = async () => raceSession
+      targetWindowApi.endTabDrag = async (input) => {
+        endCalls.push(input)
+        return { detached: false, outcome: 'cancelled' }
+      }
+      const endCountBeforeRace = endCalls.length
+
+      controller.startDrag('primary', raceSession.tabId)
+      await controller.endDrag({ x: 300, y: 300 })
+      expect(tabStore.getSnapshot().panes.primary.tabs.some((tab) => tab.id === raceSession.tabId)).toBe(
+        true
+      )
+      expect(endCalls).toHaveLength(endCountBeforeRace + 1)
+
+      emitDragState({ ...raceSession, targetWindowId: 2, outcome: 'dropped-in-window' })
+      await Promise.resolve()
+      expect(tabStore.getSnapshot().panes.primary.tabs.some((tab) => tab.id === raceSession.tabId)).toBe(
+        false
+      )
+      expect(endCalls).toHaveLength(endCountBeforeRace + 1)
     } finally {
       cleanup()
     }

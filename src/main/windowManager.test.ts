@@ -24,6 +24,7 @@ import { registerWindowIpc } from './ipc/registerWindowIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { WindowManager, type BrowserWindowLike } from './windowManager'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
+import { TabDragCoordinator } from '@shared/tabDragSession'
 
 interface FakeWindowInstance extends BrowserWindowLike {
   options: BrowserWindowConstructorOptions
@@ -1101,5 +1102,109 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     } finally {
       disposeScoped()
     }
+  })
+
+  it('reclaims a recently ended pending drag session when endTabDrag beats acceptTabDragDrop, while blocking reclaimed drops after Escape or expiry', async () => {
+    await writeFile(join(workspaceDir, 'alpha.md'), '# Alpha disk', 'utf-8')
+    await writeFile(join(workspaceDir, 'beta.md'), '# Beta disk', 'utf-8')
+
+    let nowMs = 1_000
+    const coordinator = new TabDragCoordinator({ now: () => nowMs, crossWindowReclaimGraceMs: 500 })
+    const betaPayload: TabTransferPayload = {
+      bufferKey: 'c:/wiki/beta.md',
+      mode: 'wysiwyg',
+      cursor: { selectionStart: 1, selectionEnd: 4 },
+      scrollTop: 55
+    }
+    const betaBuffer: DocumentBuffer = {
+      key: 'c:/wiki/beta.md',
+      path: 'C:/wiki/beta.md',
+      name: 'beta.md',
+      kind: 'workspace',
+      content: '# Beta dirty',
+      savedContent: '# Beta disk',
+      isDirty: true,
+      version: 2,
+      isSaving: false
+    }
+    const reservedTransfers: Array<{ windowId: number; bufferKey: string }> = []
+    const emitted: Array<ActiveTabDragSession | null> = []
+    coordinator.onStateChanged((session) => emitted.push(session))
+
+    const bufferHubPort = {
+      getBuffer: (key: string) => (key === betaBuffer.key ? betaBuffer : undefined),
+      registerPendingTransfer: (windowId: number, bufferKey: string) => {
+        reservedTransfers.push({ windowId, bufferKey })
+      }
+    }
+
+    // 1. Cross-process race: source 1-tab auxiliary finishes endTabDrag BEFORE target acceptTabDragDrop arrives
+    const drag1 = coordinator.start(2, { paneId: 'primary', tabId: 'tab-beta', payload: betaPayload })
+    const updatedPayload: TabTransferPayload = { ...betaPayload, scrollTop: 120 }
+    const finishPlan = coordinator.finish({
+      sourceWindowId: 2,
+      input: { dragSessionId: drag1.dragSessionId, screenPoint: { x: 250, y: 250 }, payload: updatedPayload },
+      openWindowBounds: [{ x: 0, y: 0, width: 1200, height: 800 }],
+      canDetach: false,
+      hasBuffer: () => true
+    })
+    expect(finishPlan).toEqual({ detach: false, result: { detached: false, outcome: 'cancelled' } })
+
+    nowMs += 50
+    const reclaimed = coordinator.acceptCrossWindowDrop({
+      targetWindowId: 1,
+      bufferHub: bufferHubPort
+    })
+    expect(reclaimed).toEqual({
+      accepted: true,
+      dragSessionId: drag1.dragSessionId,
+      sourceWindowId: 2,
+      targetWindowId: 1,
+      payload: updatedPayload,
+      buffer: betaBuffer
+    })
+    expect(reservedTransfers).toEqual([{ windowId: 1, bufferKey: betaBuffer.key }])
+    expect(emitted[emitted.length - 1]).toEqual({
+      ...drag1,
+      payload: updatedPayload,
+      targetWindowId: 1,
+      outcome: 'dropped-in-window'
+    })
+
+    // Consumed reclaimed session cannot be accepted a second time
+    expect(coordinator.acceptCrossWindowDrop({ targetWindowId: 3, bufferHub: bufferHubPort })).toEqual({
+      accepted: false,
+      reason: 'no-active-drag'
+    })
+
+    // 2. Escape cancellation before finish must NOT become reclaimable
+    const dragEsc = coordinator.start(2, { paneId: 'primary', tabId: 'tab-beta', payload: betaPayload })
+    coordinator.handleBeforeInput({ type: 'keyDown', key: 'Escape' })
+    coordinator.finish({
+      sourceWindowId: 2,
+      input: { dragSessionId: dragEsc.dragSessionId, screenPoint: { x: 250, y: 250 } },
+      openWindowBounds: [{ x: 0, y: 0, width: 1200, height: 800 }],
+      canDetach: false,
+      hasBuffer: () => true
+    })
+    expect(coordinator.acceptCrossWindowDrop({ targetWindowId: 1, bufferHub: bufferHubPort })).toEqual({
+      accepted: false,
+      reason: 'no-active-drag'
+    })
+
+    // 3. Reclaim grace expires cleanly after TTL
+    const dragExpired = coordinator.start(2, { paneId: 'primary', tabId: 'tab-beta', payload: betaPayload })
+    coordinator.finish({
+      sourceWindowId: 2,
+      input: { dragSessionId: dragExpired.dragSessionId, screenPoint: { x: 250, y: 250 } },
+      openWindowBounds: [{ x: 0, y: 0, width: 1200, height: 800 }],
+      canDetach: true,
+      hasBuffer: () => true
+    })
+    nowMs += 501
+    expect(coordinator.acceptCrossWindowDrop({ targetWindowId: 1, bufferHub: bufferHubPort })).toEqual({
+      accepted: false,
+      reason: 'no-active-drag'
+    })
   })
 })

@@ -1814,5 +1814,42 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
       expect(aux2Workspace).toHaveAttribute('data-split-mode', 'single')
       expect(within(aux2Rendered.container).getAllByRole('tab')).toHaveLength(1)
     })
+
+    // 4. Cross-process IPC ordering race: source dragend/endTabDrag wins before target acceptTabDragDrop reaches main
+    let releaseDelayedAccept!: () => void
+    const delayedAcceptGate = new Promise<void>((resolve) => {
+      releaseDelayedAccept = resolve
+    })
+    let markSourceEndSettled!: () => void
+    const sourceEndSettled = new Promise<void>((resolve) => {
+      markSourceEndSettled = resolve
+    })
+    const origAccept = mainWin.api.window!.acceptTabDragDrop.bind(mainWin.api.window)
+    mainWin.api.window!.acceptTabDragDrop = async (input) => {
+      await delayedAcceptGate
+      return origAccept(input)
+    }
+    const origAuxEnd = aux2.api.window!.endTabDrag.bind(aux2.api.window)
+    aux2.api.window!.endTabDrag = async (input) => {
+      const result = await origAuxEnd(input)
+      markSourceEndSettled()
+      return result
+    }
+
+    const aux2ThreeTab = within(aux2Rendered.container).getByRole('tab', { name: /three\.md/ })
+    const dtRace = createCrossWindowDataTransfer()
+    fireEvent.dragStart(aux2ThreeTab, { dataTransfer: dtRace })
+    fireEvent.drop(within(mainRendered.container).getByRole('tablist', { name: '주 탭 목록' }), {
+      dataTransfer: dtRace
+    })
+    // Source dragend resolves endTabDrag BEFORE target acceptTabDragDrop IPC arrives
+    dispatchDragEndAtScreenPoint(aux2ThreeTab, 300, 300)
+    await sourceEndSettled
+    releaseDelayedAccept()
+
+    await waitFor(() => {
+      expect(within(mainRendered.container).getByRole('tab', { name: /three\.md/ })).toBeInTheDocument()
+      expect(aux2.isClosed()).toBe(true)
+    })
   })
 })

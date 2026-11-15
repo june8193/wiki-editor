@@ -58,14 +58,33 @@ export function isEscapeBeforeInput(input: BeforeInputKeyEventLike): boolean {
   return input.key === 'Escape' && input.type !== 'keyUp'
 }
 
+export interface TabDragCoordinatorOptions {
+  now?: () => number
+  crossWindowReclaimGraceMs?: number
+}
+
+const DEFAULT_CROSS_WINDOW_RECLAIM_GRACE_MS = 500
+
 /**
  * Coordinates the single active tab drag session across windows and evaluates
  * drop/cancel outcomes identically in both main-process WindowManager and test harnesses.
  */
 export class TabDragCoordinator {
+  private readonly now: () => number
+  private readonly crossWindowReclaimGraceMs: number
   private activeSession: ActiveTabDragSession | null = null
+  private reclaimableEndedSession: {
+    session: ActiveTabDragSession
+    expiresAt: number
+  } | null = null
   private sessionCounter = 0
   private readonly listeners = new Set<(session: ActiveTabDragSession | null) => void>()
+
+  constructor(options: TabDragCoordinatorOptions = {}) {
+    this.now = options.now ?? (() => Date.now())
+    this.crossWindowReclaimGraceMs =
+      options.crossWindowReclaimGraceMs ?? DEFAULT_CROSS_WINDOW_RECLAIM_GRACE_MS
+  }
 
   /**
    * Subscribes to active drag session state transitions (`session` or `null`).
@@ -81,6 +100,7 @@ export class TabDragCoordinator {
    * Begins a new drag session owned by `sourceWindowId`, replacing any stale prior session.
    */
   start(sourceWindowId: number, input: TabDragStartInput): ActiveTabDragSession {
+    this.reclaimableEndedSession = null
     this.sessionCounter += 1
     this.activeSession = {
       dragSessionId: `drag-${this.sessionCounter}`,
@@ -93,6 +113,16 @@ export class TabDragCoordinator {
     const snapshot = cloneSession(this.activeSession)
     this.emit(snapshot)
     return cloneSession(snapshot)
+  }
+
+  private getValidReclaimableSession(): ActiveTabDragSession | null {
+    const entry = this.reclaimableEndedSession
+    if (!entry) return null
+    if (this.now() > entry.expiresAt) {
+      this.reclaimableEndedSession = null
+      return null
+    }
+    return entry.session
   }
 
   /**
@@ -138,7 +168,8 @@ export class TabDragCoordinator {
    * the authoritative shared `DocumentBuffer` and transferred tab state.
    */
   acceptCrossWindowDrop(params: AcceptCrossWindowDropParams): AcceptTabDragDropResult {
-    const session = this.activeSession
+    const active = this.activeSession
+    const session = active ?? this.getValidReclaimableSession()
     if (!session) {
       return { accepted: false, reason: 'no-active-drag' }
     }
@@ -162,7 +193,14 @@ export class TabDragCoordinator {
     params.bufferHub.registerPendingTransfer(params.targetWindowId, buffer.key)
     const payload = toTabTransferPayload({ ...session.payload, bufferKey: buffer.key })
     session.payload = toTabTransferPayload(payload)
-    this.transitionPendingOutcome('dropped-in-window', params.targetWindowId)
+    this.reclaimableEndedSession = null
+    if (active) {
+      this.transitionPendingOutcome('dropped-in-window', params.targetWindowId)
+    } else {
+      session.outcome = 'dropped-in-window'
+      session.targetWindowId = params.targetWindowId
+      this.emit(cloneSession(session))
+    }
 
     return {
       accepted: true,
@@ -178,13 +216,14 @@ export class TabDragCoordinator {
    * Remaps the active drag session's bufferKey when a shared document path is renamed mid-drag.
    */
   remapPayloadKeys(remappings: readonly BufferKeyRemap[]): void {
-    const session = this.activeSession
-    if (!session || remappings.length === 0) return
+    if (remappings.length === 0) return
     const keyMap = new Map(remappings.map((item) => [item.oldKey, item.newKey]))
-    const nextKey = keyMap.get(session.payload.bufferKey)
-    if (!nextKey || nextKey === session.payload.bufferKey) return
-    session.payload.bufferKey = nextKey
-    this.emit(cloneSession(session))
+    if (this.activeSession && remapSessionBufferKey(this.activeSession, keyMap)) {
+      this.emit(cloneSession(this.activeSession))
+    }
+    if (this.reclaimableEndedSession) {
+      remapSessionBufferKey(this.reclaimableEndedSession.session, keyMap)
+    }
   }
 
   /**
@@ -194,6 +233,7 @@ export class TabDragCoordinator {
     if (!isEscapeBeforeInput(input)) {
       return null
     }
+    this.reclaimableEndedSession = null
     return this.transitionPendingOutcome('cancelled')
   }
 
@@ -201,6 +241,9 @@ export class TabDragCoordinator {
    * Clears the active session if its owning window closed before `endTabDrag` ran.
    */
   clearForWindow(windowId: number): void {
+    if (this.reclaimableEndedSession?.session.sourceWindowId === windowId) {
+      this.reclaimableEndedSession = null
+    }
     if (this.activeSession?.sourceWindowId !== windowId) {
       return
     }
@@ -222,22 +265,32 @@ export class TabDragCoordinator {
     this.emit(null)
 
     if (session.outcome !== 'pending') {
+      this.reclaimableEndedSession = null
       return { detach: false, result: { detached: false, outcome: session.outcome } }
-    }
-    if (!canDetach) {
-      return { detach: false, result: { detached: false, outcome: 'cancelled' } }
-    }
-
-    const cursorPoint = screen?.getCursorScreenPoint?.() ?? input.screenPoint
-    if (!cursorPoint || !isPointOutsideAllWindows(cursorPoint, openWindowBounds)) {
-      return { detach: false, result: { detached: false, outcome: 'cancelled' } }
     }
 
     const payload = toTabTransferPayload(input.payload ?? session.payload)
-    if (!hasBuffer(payload.bufferKey)) {
+    const bufferExists = hasBuffer(payload.bufferKey)
+    const cursorPoint = screen?.getCursorScreenPoint?.() ?? input.screenPoint
+    const shouldDetach =
+      canDetach &&
+      bufferExists &&
+      cursorPoint !== undefined &&
+      isPointOutsideAllWindows(cursorPoint, openWindowBounds)
+
+    if (!shouldDetach || !cursorPoint) {
+      // Cross-process Chromium can deliver source dragend before target drop's acceptTabDragDrop IPC;
+      // keep unescaped, non-detached pending drags reclaimable within a short grace window.
+      this.reclaimableEndedSession = bufferExists
+        ? {
+            session: cloneSession({ ...session, payload }),
+            expiresAt: this.now() + this.crossWindowReclaimGraceMs
+          }
+        : null
       return { detach: false, result: { detached: false, outcome: 'cancelled' } }
     }
 
+    this.reclaimableEndedSession = null
     return {
       detach: true,
       payload,
@@ -250,6 +303,7 @@ export class TabDragCoordinator {
    */
   dispose(): void {
     this.activeSession = null
+    this.reclaimableEndedSession = null
     this.listeners.clear()
   }
 
@@ -258,6 +312,16 @@ export class TabDragCoordinator {
       listener(snapshot ? cloneSession(snapshot) : null)
     }
   }
+}
+
+function remapSessionBufferKey(
+  session: ActiveTabDragSession,
+  keyMap: ReadonlyMap<string, string>
+): boolean {
+  const nextKey = keyMap.get(session.payload.bufferKey)
+  if (!nextKey || nextKey === session.payload.bufferKey) return false
+  session.payload.bufferKey = nextKey
+  return true
 }
 
 function cloneSession(session: ActiveTabDragSession): ActiveTabDragSession {

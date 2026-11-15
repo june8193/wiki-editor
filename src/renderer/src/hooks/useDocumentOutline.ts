@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { OutlineScrollRequest } from '../components/DocumentEditor'
 import type { DocumentOutlinePanelProps } from '../components/DocumentOutlinePanel'
-import type { PaneInteractionActions } from '../components/PaneTabBar'
+import type { PaneInteractionActions } from '../stores/tabDragDrop'
 import { isMarkdownDocument } from '../editor/editorModes'
 import {
   applyHeadingNumbers,

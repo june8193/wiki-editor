@@ -759,10 +759,16 @@ export class RendererBufferSyncClient {
     return !this.pendingCreateFlushes.has(resolvedKey) && resolvedKey in this.latestHubBuffers
   }
 
-  hasPendingTransferSync = (paneId: PaneId, tabId: string): boolean => {
+  completeTransferredOutTab = async (paneId: PaneId, tabId: string): Promise<void> => {
     const tab = this.tabStore.getTab(paneId, tabId)
-    if (!tab) return false
-    return this.needsAsyncHubSync(this.resolveLatestKey(tab.bufferKey))
+    if (!tab) return
+    const resolvedKey = this.resolveLatestKey(tab.bufferKey)
+    if (this.needsAsyncHubSync(resolvedKey)) {
+      await this.syncBufferKeyToHub(resolvedKey).catch(() => null)
+    }
+    if (this.mounted) {
+      this.forceCloseTab(paneId, tabId)
+    }
   }
 
   private reconcileIncomingBuffer(buffer: DocumentBuffer): string {
