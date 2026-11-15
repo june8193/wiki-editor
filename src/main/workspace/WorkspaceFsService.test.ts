@@ -200,6 +200,32 @@ describe('WorkspaceFsService', () => {
     expect(events.length).toBe(countAfterStop)
   })
 
+  it('coalesces rapid changes across distinct files into a null relativePath broadcast', async () => {
+    await mkdir(join(workspaceDir, 'assets'), { recursive: true })
+    const coalescedService = new WorkspaceFsService({ watchDebounceMs: 250 })
+    try {
+      await coalescedService.openWorkspace(workspaceDir)
+      const events: Array<{ relativePath: string | null }> = []
+      await coalescedService.watch((event) => {
+        events.push({ relativePath: event.relativePath })
+      })
+
+      await Promise.all([
+        writeFile(join(workspaceDir, 'first.md'), '# First', 'utf8'),
+        writeFile(join(workspaceDir, 'assets', 'second.png'), 'PNG', 'utf8')
+      ])
+
+      await vi.waitFor(
+        () => {
+          expect(events.some((event) => event.relativePath === null)).toBe(true)
+        },
+        { timeout: 3000 }
+      )
+    } finally {
+      await coalescedService.dispose()
+    }
+  })
+
   it('ingests clipboard images lazily into <docDir>/assets with local timestamps and -1/-2 collision suffixes', async () => {
     const docDir = join(workspaceDir, 'docs')
     const docPath = join(docDir, 'guide (1).md')

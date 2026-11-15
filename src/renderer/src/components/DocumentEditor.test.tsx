@@ -19,6 +19,7 @@ function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
     isDirty: false,
     version: 1,
     isSaving: false,
+    contentKind: 'text',
     ...overrides
   }
 }
@@ -899,6 +900,7 @@ describe('DocumentEditor local markdown image rendering across modes', () => {
     const doc = {
       key: 'file:/vault/docs/guide.md',
       kind: 'workspace' as const,
+      contentKind: 'text' as const,
       name: 'guide.md',
       path: '/vault/docs/guide.md',
       content: markdown,
@@ -1086,5 +1088,104 @@ describe('DocumentEditor local markdown image rendering across modes', () => {
     } finally {
       ;(window as unknown as { wikiApi?: unknown }).wikiApi = prevWikiApi
     }
+  })
+
+  it('renders a read-only centered wiki-asset image preview with disabled modes/save and recovers on cache bust', async () => {
+    const onSave = vi.fn()
+    const onUpdateViewState = vi.fn()
+    const onChangeContent = vi.fn()
+    const imageDoc = createDoc({
+      key: 'c:/wiki/assets/architecture.png',
+      kind: 'workspace',
+      contentKind: 'image',
+      path: 'C:/wiki/assets/architecture.png',
+      name: 'architecture.png',
+      content: '',
+      savedContent: '',
+      isDirty: false,
+      version: 1
+    })
+    const imageTab: TabItem = {
+      ...createTab('split'),
+      bufferKey: imageDoc.key
+    }
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={imageDoc}
+        tab={imageTab}
+        theme="light"
+        autoSave={true}
+        onChangeContent={onChangeContent}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    // Header shows read-only status and disables both all editor mode buttons and save button
+    expect(screen.getByText('C:/wiki/assets/architecture.png')).toBeInTheDocument()
+    expect(screen.getByText('읽기 전용')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled()
+    for (const label of ['Raw', '위지윅', 'Preview', 'Split']) {
+      const btn = screen.getByRole('button', { name: label })
+      expect(btn).toBeDisabled()
+      expect(btn).toHaveAttribute('aria-pressed', 'false')
+    }
+
+    // No text editor surfaces are mounted
+    expect(screen.queryByTestId('markdown-preview')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('split-markdown-preview')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('wysiwyg-editor')).not.toBeInTheDocument()
+    expect(document.querySelector('.cm-editor')).not.toBeInTheDocument()
+
+    // Image preview renders with wiki-asset URL and supports keyboard shortcut suppression
+    const previewContainer = screen.getByTestId('image-preview')
+    const img = within(previewContainer).getByRole('img', { name: 'architecture.png' })
+    expect(img).toHaveAttribute('src', buildWikiAssetUrl('C:/wiki/assets/architecture.png'))
+    expect(img).toHaveAttribute('draggable', 'false')
+
+    const saveEvent = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true })
+    previewContainer.dispatchEvent(saveEvent)
+    expect(saveEvent.defaultPrevented).toBe(true)
+
+    for (const key of ['1', '2', '3', '4']) {
+      const modeEvent = new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, cancelable: true })
+      previewContainer.dispatchEvent(modeEvent)
+      expect(modeEvent.defaultPrevented).toBe(true)
+    }
+    const cycleEvent = new KeyboardEvent('keydown', {
+      key: 'M',
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true
+    })
+    previewContainer.dispatchEvent(cycleEvent)
+    expect(cycleEvent.defaultPrevented).toBe(true)
+
+    expect(onSave).not.toHaveBeenCalled()
+    expect(onUpdateViewState).not.toHaveBeenCalled()
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Error state shows accessible fallback without crashing
+    fireEvent.error(img)
+    expect(screen.getByText('이미지를 불러올 수 없습니다.')).toBeInTheDocument()
+    expect(within(previewContainer).queryByRole('img')).not.toBeInTheDocument()
+
+    // Incrementing buffer version updates src cacheKey and recovers from prior load failure
+    rerender(
+      <DocumentEditor
+        document={{ ...imageDoc, version: 2 }}
+        tab={imageTab}
+        theme="light"
+        autoSave={true}
+        onChangeContent={onChangeContent}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+    const refreshedImg = within(screen.getByTestId('image-preview')).getByRole('img', { name: 'architecture.png' })
+    expect(refreshedImg).toHaveAttribute('src', buildWikiAssetUrl('C:/wiki/assets/architecture.png', 2))
+    expect(screen.queryByText('이미지를 불러올 수 없습니다.')).not.toBeInTheDocument()
   })
 })

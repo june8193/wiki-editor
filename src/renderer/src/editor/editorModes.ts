@@ -22,12 +22,25 @@ const DIGIT_SHORTCUT_MODES: Readonly<Record<string, EditorMode>> = {
   '4': 'split'
 }
 
+export type EditorModeDocumentRef = Pick<DocumentBuffer, 'kind' | 'name'> & {
+  contentKind?: DocumentBuffer['contentKind']
+}
+
+/**
+ * Returns true when a buffer holds read-only binary image metadata rather than editable text.
+ */
+export function isImageDocument(
+  doc: { contentKind?: DocumentBuffer['contentKind'] } | null | undefined
+): boolean {
+  return doc?.contentKind === 'image'
+}
+
 /**
  * Determines whether rich Markdown modes (WYSIWYG / Preview / Split) are enabled for a buffer.
- * Extensionless files default to Markdown, while `.json`, `.txt`, and `config` stay Raw-only.
+ * Extensionless files default to Markdown, while `.json`, `.txt`, `config`, and images are not Markdown.
  */
-export function isMarkdownDocument(doc: Pick<DocumentBuffer, 'kind' | 'name'>): boolean {
-  if (doc.kind === 'config') {
+export function isMarkdownDocument(doc: EditorModeDocumentRef): boolean {
+  if (doc.kind === 'config' || isImageDocument(doc)) {
     return false
   }
   const lastDot = doc.name.lastIndexOf('.')
@@ -42,7 +55,7 @@ export function isMarkdownDocument(doc: Pick<DocumentBuffer, 'kind' | 'name'>): 
  * Resolves whether rich Markdown modes are enabled alongside the effective editor mode for a buffer.
  */
 export function resolveEffectiveEditorMode(
-  doc: Pick<DocumentBuffer, 'kind' | 'name'> | null | undefined,
+  doc: EditorModeDocumentRef | null | undefined,
   requestedMode: EditorMode
 ): { allowRichModes: boolean; effectiveMode: EditorMode } {
   const allowRichModes = doc ? isMarkdownDocument(doc) : false
@@ -101,14 +114,30 @@ export function resolveModeShortcut(
 }
 
 /**
+ * Returns true when the keyboard event matches `Ctrl/Cmd+S` (save shortcut).
+ */
+export function isSaveShortcut(event: ModeShortcutEvent): boolean {
+  return (
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    event.key.toLowerCase() === 's'
+  )
+}
+
+/**
  * Resolves global/editor application shortcuts (`Ctrl/Cmd+S` save or mode-switch keys).
  */
 export function resolveEditorShortcut(
   event: ModeShortcutEvent,
   currentMode: EditorMode,
-  allowRichModes: boolean
+  allowRichModes: boolean,
+  isReadOnly = false
 ): EditorShortcutAction | null {
-  if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 's') {
+  if (isReadOnly) {
+    return null
+  }
+  if (isSaveShortcut(event)) {
     return { type: 'save' }
   }
   const mode = resolveModeShortcut(event, currentMode, allowRichModes)

@@ -64,6 +64,7 @@ export async function handleWikiAssetRequest(
 
     const headers = {
       'Content-Type': resolvedMimeType,
+      'Cache-Control': 'no-store',
       'Content-Security-Policy': WIKI_ASSET_CSP,
       'X-Content-Type-Options': 'nosniff'
     }

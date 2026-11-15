@@ -47,6 +47,11 @@ describe('shared assets helpers', () => {
     expect(parseWikiAssetUrl('wiki-asset://local/asset')).toBeNull()
     expect(parseWikiAssetUrl('wiki-asset://local/asset?path=')).toBeNull()
     expect(parseWikiAssetUrl('not a valid url')).toBeNull()
+
+    const cachedUrl = buildWikiAssetUrl(windowsPath, 3)
+    expect(cachedUrl).toBe(`${windowsUrl}&v=3`)
+    expect(parseWikiAssetUrl(cachedUrl)).toBe(windowsPath)
+    expect(buildWikiAssetUrl(windowsPath, '')).toBe(windowsUrl)
   })
 
   it('resolves relative markdown image references against active document paths on POSIX and Windows', () => {

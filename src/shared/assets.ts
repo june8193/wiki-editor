@@ -117,8 +117,12 @@ export function formatMarkdownImage(
   return `![${safeAlt}](${image.markdownPath})`
 }
 
-export function buildWikiAssetUrl(filePath: string): string {
-  return `${WIKI_ASSET_SCHEME}://${WIKI_ASSET_HOST}${WIKI_ASSET_PATHNAME}?path=${encodeURIComponent(filePath)}`
+export function buildWikiAssetUrl(filePath: string, cacheKey?: string | number): string {
+  const baseUrl = `${WIKI_ASSET_SCHEME}://${WIKI_ASSET_HOST}${WIKI_ASSET_PATHNAME}?path=${encodeURIComponent(filePath)}`
+  if (cacheKey === undefined || cacheKey === '') {
+    return baseUrl
+  }
+  return `${baseUrl}&v=${encodeURIComponent(String(cacheKey))}`
 }
 
 export function parseWikiAssetUrl(rawUrl: string): string | null {

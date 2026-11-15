@@ -6632,3 +6632,358 @@ describe('Split editor mode and bidirectional scroll sync', () => {
     })
   })
 })
+
+describe('Read-only image preview tabs', () => {
+  it('opens supported image files from the folder tree as read-only preview tabs without UTF-8 reads or writes', async () => {
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: true, autoSaveDelayMs: 40 },
+      {
+        selectedFolder: 'C:/wiki/img-preview',
+        workspaces: {
+          'C:/wiki/img-preview': {
+            'docs/guide.md': '# Guide\n\nBody',
+            'assets/diagram.png': '<binary-png>',
+            'assets/photo.jpg': '<binary-jpg>',
+            'assets/frame.jpeg': '<binary-jpeg>',
+            'assets/anim.gif': '<binary-gif>',
+            'assets/hero.webp': '<binary-webp>',
+            'assets/vector.svg': '<svg></svg>',
+            'assets/icon.bmp': '<binary-bmp>',
+            'assets/modern.AVIF': '<binary-avif>'
+          }
+        }
+      }
+    )
+    const readFileSpy = vi.spyOn(api.workspace, 'readFile')
+    const writeFileSpy = vi.spyOn(api.workspace, 'writeFile')
+    window.wikiApi = api
+
+    const { rootEl, cleanup } = mountThemeStylesAndRoot()
+    try {
+      const user = userEvent.setup()
+      render(<App />, { container: rootEl })
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+      const explorer = screen.getByLabelText('워크스페이스 탐색기')
+      const docsTreeItem = await within(explorer).findByRole('treeitem', { name: 'docs' })
+      await user.click(within(docsTreeItem).getByText('docs'))
+      await user.click(await within(explorer).findByText('guide.md'))
+      expect(readFileSpy).toHaveBeenCalledTimes(1)
+      expect(readFileSpy).toHaveBeenCalledWith('C:/wiki/img-preview/docs/guide.md')
+
+      // Expand assets and click diagram.png -> opens read-only image preview WITHOUT readFile
+      const assetsTreeItem = await within(explorer).findByRole('treeitem', { name: 'assets' })
+      await user.click(within(assetsTreeItem).getByText('assets'))
+      await user.click(await within(explorer).findByText('diagram.png'))
+
+      const previewContainer = await screen.findByTestId('image-preview')
+      const img = within(previewContainer).getByRole('img', { name: 'diagram.png' })
+      expect(img).toHaveAttribute('src', buildWikiAssetUrl('C:/wiki/img-preview/assets/diagram.png'))
+      expect(readFileSpy).toHaveBeenCalledTimes(1)
+
+      // Centered & responsive layout CSS applied via themeCss
+      const containerStyle = getComputedStyle(previewContainer)
+      const imgStyle = getComputedStyle(img)
+      expect(containerStyle.display).toBe('flex')
+      expect(containerStyle.alignItems).toBe('center')
+      expect(containerStyle.justifyContent).toBe('center')
+      expect(imgStyle.maxWidth).toBe('100%')
+      expect(imgStyle.maxHeight).toBe('100%')
+
+      // Header displays read-only status and disables modes & Save
+      expect(screen.getByText('읽기 전용')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '저장' })).toBeDisabled()
+      for (const label of ['Raw', '위지윅', 'Preview', 'Split']) {
+        expect(screen.getByRole('button', { name: label })).toBeDisabled()
+      }
+      expect(screen.queryByTestId('document-editor')).not.toBeInTheDocument()
+
+      // Document Outline treats active image tab as non-markdown
+      const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+      expect(within(rightSidebar).getByText('마크다운 문서에서만 목차를 지원합니다.')).toBeInTheDocument()
+
+      // Global shortcuts (Ctrl+S, Ctrl+1..4, Ctrl+Shift+M) and auto-save timer never write binary image files
+      fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+      fireEvent.keyDown(window, { key: '2', ctrlKey: true })
+      fireEvent.keyDown(window, { key: '4', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'M', ctrlKey: true, shiftKey: true })
+      await new Promise((resolve) => setTimeout(resolve, 90))
+      expect(writeFileSpy).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+
+      // Context menu "열기" on case-insensitive .AVIF opens image preview without readFile
+      fireEvent.contextMenu(await within(explorer).findByText('modern.AVIF'))
+      const menu = await screen.findByRole('menu')
+      await user.click(within(menu).getByRole('menuitem', { name: '열기' }))
+      const avifImg = within(await screen.findByTestId('image-preview')).getByRole('img', {
+        name: 'modern.AVIF'
+      })
+      expect(avifImg).toHaveAttribute('src', buildWikiAssetUrl('C:/wiki/img-preview/assets/modern.AVIF'))
+
+      // All remaining supported extensions open via click without readFile
+      for (const filename of ['photo.jpg', 'frame.jpeg', 'anim.gif', 'hero.webp', 'vector.svg', 'icon.bmp']) {
+        await user.click(await within(explorer).findByText(filename))
+        const extImg = within(await screen.findByTestId('image-preview')).getByRole('img', { name: filename })
+        expect(extImg).toHaveAttribute(
+          'src',
+          buildWikiAssetUrl(`C:/wiki/img-preview/assets/${filename}`)
+        )
+      }
+      expect(readFileSpy).toHaveBeenCalledTimes(1)
+
+      // Closing image tab skips unsaved-changes confirmation dialog
+      await user.click(screen.getByRole('button', { name: 'diagram.png 탭 닫기' }))
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('tab', { name: /diagram\.png/i })).not.toBeInTheDocument()
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('supports tab switching, moving, duplicating across panes, and horizontal/vertical split views alongside markdown tabs', async () => {
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/split-img',
+        workspaces: {
+          'C:/wiki/split-img': {
+            'docs/spec.md': '# Spec\n\nDetails',
+            'assets/mockup.png': '<binary-png>'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const user = userEvent.setup()
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(within(await within(explorer).findByRole('treeitem', { name: 'docs' })).getByText('docs'))
+    await user.click(await within(explorer).findByText('spec.md'))
+    await user.click(within(await within(explorer).findByRole('treeitem', { name: 'assets' })).getByText('assets'))
+    await user.click(await within(explorer).findByText('mockup.png'))
+
+    const workspaceEl = screen.getByTestId('pane-workspace')
+    const primaryPane = screen.getByTestId('pane-primary')
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'single')
+    expect(within(primaryPane).getByTestId('image-preview')).toBeInTheDocument()
+
+    // Tab switching between markdown and image tabs
+    await user.click(within(primaryPane).getByRole('tab', { name: /spec\.md/i }))
+    expect(within(primaryPane).getByTestId('document-editor')).toBeInTheDocument()
+    expect(within(primaryPane).queryByTestId('image-preview')).not.toBeInTheDocument()
+
+    await user.click(within(primaryPane).getByRole('tab', { name: /mockup\.png/i }))
+    expect(within(primaryPane).getByTestId('image-preview')).toBeInTheDocument()
+
+    // Move image tab into horizontal split view next to markdown tab
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /mockup\.png/i }))
+    const tabMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+    await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'horizontal')
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    expect(within(primaryPane).getByTestId('document-editor')).toBeInTheDocument()
+    expect(within(secondaryPane).getByTestId('image-preview')).toBeInTheDocument()
+    expect(within(secondaryPane).getByText('읽기 전용')).toBeInTheDocument()
+    expect(within(secondaryPane).getByRole('button', { name: '저장' })).toBeDisabled()
+
+    // Edit & save markdown in primary while image remains open & read-only in secondary
+    const primaryEditor = within(primaryPane).getByTestId('document-editor')
+    appendRawEditorText(primaryEditor, '\nUpdated')
+    fireEvent.keyDown(primaryEditor, { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(getFilesSnapshot().get('C:/wiki/split-img/docs/spec.md')).toContain('Updated')
+    })
+
+    // Switch split orientation to vertical via split drop zone
+    fireEvent.dragStart(within(secondaryPane).getByRole('tab', { name: /mockup\.png/i }))
+    fireEvent.drop(await screen.findByTestId('split-drop-zone-vertical'))
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'vertical')
+    expect(within(secondaryPane).getByTestId('image-preview')).toBeInTheDocument()
+
+    // Duplicate image tab into primary pane so both panes display the image preview simultaneously
+    fireEvent.contextMenu(within(secondaryPane).getByRole('tab', { name: /mockup\.png/i }))
+    const dupMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+    await user.click(within(dupMenu).getByRole('menuitem', { name: '분할 영역에 복제 열기' }))
+
+    expect(within(primaryPane).getByTestId('image-preview')).toBeInTheDocument()
+    expect(within(secondaryPane).getByTestId('image-preview')).toBeInTheDocument()
+
+    // Closing secondary image tab auto-collapses split back to single while keeping primary image open
+    await user.click(within(secondaryPane).getByRole('button', { name: 'mockup.png 탭 닫기' }))
+    expect(workspaceEl).toHaveAttribute('data-split-mode', 'single')
+    expect(within(primaryPane).getByTestId('image-preview')).toBeInTheDocument()
+  })
+
+  it('synchronizes open image tabs across file/folder renames, deletions, external watch events, and git mutations', async () => {
+    const repoRoot = 'C:/wiki/sync-img'
+    const baseGitStatus = {
+      ...createEmptyGitStatus(true, repoRoot),
+      branch: 'main'
+    }
+    const { api, emitMenuCommand, emitWorkspaceChange } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: repoRoot,
+        workspaces: {
+          [repoRoot]: {
+            'docs/other.md': '# Other',
+            'assets/logo.png': '<png-v1>',
+            'assets/delete-me.png': '<png-del>',
+            'media/pic2.png': '<png-media>'
+          }
+        },
+        git: {
+          status: vi.fn(async () => baseGitStatus),
+          pull: vi.fn(async () => baseGitStatus)
+        }
+      }
+    )
+    const readFileSpy = vi.spyOn(api.workspace, 'readFile')
+    window.wikiApi = api
+
+    const user = userEvent.setup()
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    const assetsTreeItem = await within(explorer).findByRole('treeitem', { name: 'assets' })
+    await user.click(within(assetsTreeItem).getByText('assets'))
+    const mediaTreeItem = await within(explorer).findByRole('treeitem', { name: 'media' })
+    await user.click(within(mediaTreeItem).getByText('media'))
+
+    await user.click(await within(explorer).findByText('pic2.png'))
+    await user.click(await within(explorer).findByText('delete-me.png'))
+    await user.click(await within(explorer).findByText('logo.png'))
+
+    expect(
+      within(screen.getByTestId('image-preview')).getByRole('img', { name: 'logo.png' })
+    ).toHaveAttribute('src', buildWikiAssetUrl(`${repoRoot}/assets/logo.png`))
+
+    // 1. Renaming open image file updates tab title, header meta, and wiki-asset URL immediately
+    const logoItem = within(explorer).getByRole('treeitem', { name: 'logo.png' })
+    logoItem.focus()
+    fireEvent.keyDown(logoItem, { key: 'F2' })
+    const fileRenameInput = await within(explorer).findByLabelText('새 이름 입력')
+    await user.clear(fileRenameInput)
+    await user.type(fileRenameInput, 'brand.png{Enter}')
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /brand\.png/i })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByText('brand.png', { selector: '.editor-doc-title' })).toBeInTheDocument()
+      expect(screen.getByText(`${repoRoot}/assets/brand.png`)).toBeInTheDocument()
+      expect(
+        within(screen.getByTestId('image-preview')).getByRole('img', { name: 'brand.png' })
+      ).toHaveAttribute('src', buildWikiAssetUrl(`${repoRoot}/assets/brand.png`))
+    })
+
+    // 2. Renaming parent folder updates path & wiki-asset URL of open image tab
+    const renamedAssetsItem = within(explorer).getByRole('treeitem', { name: 'assets' })
+    renamedAssetsItem.focus()
+    fireEvent.keyDown(renamedAssetsItem, { key: 'F2' })
+    const folderRenameInput = await within(explorer).findByLabelText('새 이름 입력')
+    await user.clear(folderRenameInput)
+    await user.type(folderRenameInput, 'images{Enter}')
+
+    await waitFor(() => {
+      expect(screen.getByText(`${repoRoot}/images/brand.png`)).toBeInTheDocument()
+      expect(
+        within(screen.getByTestId('image-preview')).getByRole('img', { name: 'brand.png' })
+      ).toHaveAttribute('src', buildWikiAssetUrl(`${repoRoot}/images/brand.png`))
+    })
+
+    // 3. Deleting an image file via FolderTree closes its tab cleanly
+    fireEvent.contextMenu(await within(explorer).findByText('delete-me.png'))
+    const deleteMenu = await screen.findByRole('menu')
+    await user.click(within(deleteMenu).getByRole('menuitem', { name: /삭제/i }))
+    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /삭제 확인/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('tab', { name: /delete-me\.png/i })).not.toBeInTheDocument()
+    })
+
+    // Switch back to brand.png
+    await user.click(screen.getByRole('tab', { name: /brand\.png/i }))
+
+    // 4. Unrelated workspace change event leaves existing image URL cache stable
+    act(() => {
+      emitWorkspaceChange({
+        rootPath: repoRoot,
+        eventType: 'change',
+        relativePath: 'docs/other.md'
+      })
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(
+      within(screen.getByTestId('image-preview')).getByRole('img', { name: 'brand.png' })
+    ).toHaveAttribute('src', buildWikiAssetUrl(`${repoRoot}/images/brand.png`))
+
+    // 5. External modification of the open image (direct path & coalesced null) busts preview URL cache without readFile
+    act(() => {
+      emitWorkspaceChange({
+        rootPath: repoRoot,
+        eventType: 'change',
+        relativePath: 'images/brand.png'
+      })
+    })
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId('image-preview')).getByRole('img', { name: 'brand.png' })
+      ).toHaveAttribute('src', buildWikiAssetUrl(`${repoRoot}/images/brand.png`, 2))
+    })
+
+    act(() => {
+      emitWorkspaceChange({
+        rootPath: repoRoot,
+        eventType: 'change',
+        relativePath: null
+      })
+    })
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId('image-preview')).getByRole('img', { name: 'brand.png' })
+      ).toHaveAttribute('src', buildWikiAssetUrl(`${repoRoot}/images/brand.png`, 3))
+    })
+
+    // 6. Git workspace mutation refreshes open image cache without readFile
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId('image-preview')).getByRole('img', { name: 'brand.png' })
+      ).toHaveAttribute('src', buildWikiAssetUrl(`${repoRoot}/images/brand.png`, 4))
+    })
+
+    // 7. External parent folder deletion & external image deletion auto-close affected image tabs cleanly without alerts or readFile
+    await api.workspace.deleteEntry(`${repoRoot}/media`)
+    act(() => {
+      emitWorkspaceChange({
+        rootPath: repoRoot,
+        eventType: 'rename',
+        relativePath: 'media'
+      })
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole('tab', { name: /pic2\.png/i })).not.toBeInTheDocument()
+    })
+
+    await api.workspace.deleteEntry(`${repoRoot}/images/brand.png`)
+    act(() => {
+      emitWorkspaceChange({
+        rootPath: repoRoot,
+        eventType: 'rename',
+        relativePath: 'images/brand.png'
+      })
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole('tab', { name: /brand\.png/i })).not.toBeInTheDocument()
+    })
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(readFileSpy).not.toHaveBeenCalled()
+  })
+})

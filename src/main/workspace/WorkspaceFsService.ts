@@ -314,6 +314,7 @@ export class WorkspaceFsService {
     this.watchListeners.add(listener)
 
     if (!this.watcher) {
+      let hasPendingEvent = false
       let pendingRelativePath: string | null = null
       let pendingEventType = 'change'
 
@@ -322,8 +323,19 @@ export class WorkspaceFsService {
         if (normalizedRel && hasBlockedPathSegment(normalizedRel, IGNORED_ENTRY_NAMES)) {
           return
         }
-        pendingEventType = eventType
-        pendingRelativePath = normalizedRel
+        if (!hasPendingEvent) {
+          hasPendingEvent = true
+          pendingRelativePath = normalizedRel
+          pendingEventType = eventType
+        } else {
+          if (pendingEventType !== 'rename' && eventType === 'rename') {
+            pendingEventType = 'rename'
+          }
+          if (pendingRelativePath !== normalizedRel) {
+            // Multiple distinct paths changed inside the debounce window -> fall back to full reconcile
+            pendingRelativePath = null
+          }
+        }
         if (this.watchTimer) {
           clearTimeout(this.watchTimer)
         }
@@ -334,6 +346,9 @@ export class WorkspaceFsService {
             eventType: pendingEventType,
             relativePath: pendingRelativePath
           }
+          hasPendingEvent = false
+          pendingRelativePath = null
+          pendingEventType = 'change'
           for (const activeListener of this.watchListeners) {
             activeListener(payload)
           }

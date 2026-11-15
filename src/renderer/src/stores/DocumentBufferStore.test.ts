@@ -132,4 +132,61 @@ describe('DocumentBufferStore', () => {
     expect(store.getDirtyBuffers('workspace')).toEqual([])
     expect(store.getDirtyBuffers('config')).toHaveLength(1)
   })
+
+  it('keeps read-only image buffers immutable, excludes them from dirty checks, and bumps cache version on refreshImageAsset', () => {
+    const store = new DocumentBufferStore()
+
+    const imageBuf = store.openBuffer({
+      kind: 'workspace',
+      contentKind: 'image',
+      path: 'C:\\wiki\\assets\\diagram.png',
+      name: 'diagram.png'
+    })
+
+    expect(imageBuf).toMatchObject({
+      key: 'c:/wiki/assets/diagram.png',
+      kind: 'workspace',
+      contentKind: 'image',
+      path: 'C:\\wiki\\assets\\diagram.png',
+      name: 'diagram.png',
+      content: '',
+      savedContent: '',
+      isDirty: false,
+      isSaving: false,
+      version: 1
+    })
+
+    // Text mutations and save state updates are ignored on image buffers
+    store.updateContent(imageBuf.key, 'corrupted text')
+    store.markSaved(imageBuf.key, 'corrupted text')
+    store.setSaving(imageBuf.key, true)
+    store.refreshCleanContent(imageBuf.key, 'corrupted text')
+
+    const unchanged = store.getBuffer(imageBuf.key)!
+    expect(unchanged.content).toBe('')
+    expect(unchanged.savedContent).toBe('')
+    expect(unchanged.isDirty).toBe(false)
+    expect(unchanged.isSaving).toBe(false)
+    expect(unchanged.version).toBe(1)
+    expect(store.getDirtyBuffers()).toEqual([])
+
+    // Refreshing external image bumps version for cache busting without dirtying
+    store.refreshImageAsset(imageBuf.key)
+    const refreshed = store.getBuffer(imageBuf.key)!
+    expect(refreshed.version).toBe(2)
+    expect(refreshed.isDirty).toBe(false)
+
+    // Parent folder rename and deletion keep image buffer synchronized
+    const remapped = store.syncRenamedPath('C:/wiki/assets', 'C:/wiki/media')
+    expect(remapped).toEqual([
+      { oldKey: 'c:/wiki/assets/diagram.png', newKey: 'c:/wiki/media/diagram.png' }
+    ])
+    const renamed = store.getBuffer('c:/wiki/media/diagram.png')!
+    expect(renamed.contentKind).toBe('image')
+    expect(renamed.path).toBe('C:/wiki/media/diagram.png')
+    expect(renamed.name).toBe('diagram.png')
+
+    expect(store.removeBuffersUnderPath('C:\\wiki\\media')).toEqual(['c:/wiki/media/diagram.png'])
+    expect(store.getBuffer('c:/wiki/media/diagram.png')).toBeUndefined()
+  })
 })

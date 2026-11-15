@@ -1,6 +1,11 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
-import { getRawEditorLanguage, resolveEditorShortcut, resolveEffectiveEditorMode } from '../editor/editorModes'
+import {
+  getRawEditorLanguage,
+  isImageDocument,
+  resolveEditorShortcut,
+  resolveEffectiveEditorMode
+} from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import type {
   DocumentOutlineSpyUpdate,
@@ -18,6 +23,7 @@ import {
   normalizeSplitRatio,
   roundSplitRatio
 } from '../stores/PaneTabStore'
+import { ImagePreview } from './ImagePreview'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 import { SplitSplitter } from './SplitSplitter'
@@ -67,6 +73,7 @@ export function DocumentEditor({
   onSave,
   onUpdateViewState,
   onActiveHeadingChange}: DocumentEditorProps) {
+  const isImage = isImageDocument(activeDoc)
   const { allowRichModes, effectiveMode } = resolveEffectiveEditorMode(activeDoc, tab.mode)
   const rawRatio = normalizeSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
   const previewRatio = roundSplitRatio(1 - rawRatio)
@@ -119,12 +126,12 @@ export function DocumentEditor({
 
   const handleModeSelect = useCallback(
     (nextMode: EditorMode): void => {
-      if (!allowRichModes && nextMode !== 'raw') return
+      if (isImage || (!allowRichModes && nextMode !== 'raw')) return
       if (nextMode !== tab.mode) {
         onUpdateViewState({ mode: nextMode })
       }
     },
-    [allowRichModes, onUpdateViewState, tab.mode]
+    [allowRichModes, isImage, onUpdateViewState, tab.mode]
   )
 
   const handleScrollTopChange = useCallback(
@@ -136,6 +143,14 @@ export function DocumentEditor({
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (isShortcutDisabled) return
+
+    if (isImage) {
+      if (resolveEditorShortcut(event, 'raw', true) !== null) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+      return
+    }
 
     const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes)
     if (!shortcut) return
@@ -149,16 +164,18 @@ export function DocumentEditor({
     }
   }
 
-  const saveStatusText = activeDoc.isSaving
-    ? '저장 중...'
-    : activeDoc.isDirty
-      ? activeDoc.kind === 'workspace' && autoSave
-        ? '자동 저장 대기'
-        : '미저장'
-      : '저장됨'
+  const saveStatusText = isImage
+    ? '읽기 전용'
+    : activeDoc.isSaving
+      ? '저장 중...'
+      : activeDoc.isDirty
+        ? activeDoc.kind === 'workspace' && autoSave
+          ? '자동 저장 대기'
+          : '미저장'
+        : '저장됨'
 
   const rawEditorElement =
-    effectiveMode === 'raw' || effectiveMode === 'split' ? (
+    !isImage && (effectiveMode === 'raw' || effectiveMode === 'split') ? (
       <RawMarkdownEditor
         content={activeDoc.content}
         language={rawLanguage}
@@ -214,8 +231,8 @@ export function DocumentEditor({
 
         <div className="editor-mode-switcher" role="group" aria-label="에디터 모드 전환">
           {EDITOR_MODE_OPTIONS.map((option) => {
-            const isDisabled = option.requiresMarkdown && !allowRichModes
-            const isActive = effectiveMode === option.mode
+            const isDisabled = isImage || (option.requiresMarkdown && !allowRichModes)
+            const isActive = !isImage && effectiveMode === option.mode
             return (
               <button
                 key={option.mode}
@@ -224,9 +241,11 @@ export function DocumentEditor({
                 aria-pressed={isActive}
                 disabled={isDisabled}
                 title={
-                  isDisabled
-                    ? '마크다운 파일에서만 사용할 수 있습니다.'
-                    : `${option.label} 모드 (${option.shortcutHint}, 순환 Ctrl+Shift+M)`
+                  isImage
+                    ? '이미지 파일은 읽기 전용 미리보기로 표시됩니다.'
+                    : isDisabled
+                      ? '마크다운 파일에서만 사용할 수 있습니다.'
+                      : `${option.label} 모드 (${option.shortcutHint}, 순환 Ctrl+Shift+M)`
                 }
                 onClick={() => handleModeSelect(option.mode)}
               >
@@ -242,15 +261,23 @@ export function DocumentEditor({
             type="button"
             className="btn btn-primary btn-sm"
             onClick={onSave}
-            disabled={!activeDoc.isDirty || activeDoc.isSaving}
-            title="저장 (Ctrl+S)"
+            disabled={isImage || !activeDoc.isDirty || activeDoc.isSaving}
+            title={isImage ? '이미지 파일은 읽기 전용입니다.' : '저장 (Ctrl+S)'}
           >
             저장
           </button>
         </div>
       </div>
 
-      {effectiveMode === 'raw' && rawEditorElement}
+      {isImage ? (
+        <ImagePreview
+          path={activeDoc.path}
+          name={activeDoc.name}
+          cacheKey={activeDoc.version > 1 ? activeDoc.version : undefined}
+        />
+      ) : (
+        <>
+          {effectiveMode === 'raw' && rawEditorElement}
 
       {effectiveMode === 'wysiwyg' && (
         <WysiwygMarkdownEditor
@@ -322,6 +349,8 @@ export function DocumentEditor({
             />
           </div>
         </div>
+      )}
+        </>
       )}
     </section>
   )

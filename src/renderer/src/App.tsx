@@ -3,7 +3,7 @@ import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand } from '@shared/ipc'
 import type { GitStatus } from '@shared/git'
-import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
+import { isFavoriteWorkspacePath, WorkspaceChangeEvent, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
 import { DocumentOutlinePanel } from './components/DocumentOutlinePanel'
@@ -142,7 +142,9 @@ export function App() {
   const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null)
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
-  const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(async () => [])
+  const reconcileBuffersRef = useRef<(changeEvent?: WorkspaceChangeEvent) => Promise<readonly string[]>>(
+    async () => []
+  )
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const isDialogOpenRef = useRef<boolean>(false)
   isDialogOpenRef.current = pendingDialog !== null
@@ -268,8 +270,8 @@ export function App() {
           : prev
       )
     },
-    onWorkspaceChanged: () => {
-      void reconcileBuffersRef.current().then((warnings) => {
+    onWorkspaceChanged: (event) => {
+      void reconcileBuffersRef.current(event).then((warnings) => {
         if (warnings.length > 0) {
           reportErrorBanner(warnings.join(' '))
         }

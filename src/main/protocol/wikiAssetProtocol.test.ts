@@ -72,10 +72,18 @@ describe('wikiAssetProtocol', () => {
     const pngRes = await handleWikiAssetRequest(new Request(pngUrl), service)
     expect(pngRes.status).toBe(200)
     expect(pngRes.headers.get('Content-Type')).toBe('image/png')
+    expect(pngRes.headers.get('Cache-Control')).toBe('no-store')
     expect(pngRes.headers.get('Content-Security-Policy')).toBe(
       "default-src 'none'; style-src 'unsafe-inline'"
     )
     expect(Buffer.from(await pngRes.arrayBuffer())).toEqual(PNG_BYTES)
+
+    const cacheBustedUrl = `${pngUrl}&v=2`
+    const bustedRes = await handleWikiAssetRequest(new Request(cacheBustedUrl), service)
+    expect(bustedRes.status).toBe(200)
+    expect(bustedRes.headers.get('Content-Type')).toBe('image/png')
+    expect(bustedRes.headers.get('Cache-Control')).toBe('no-store')
+    expect(Buffer.from(await bustedRes.arrayBuffer())).toEqual(PNG_BYTES)
 
     const upperRes = await handleWikiAssetRequest(
       new Request(buildWikiAssetUrl(path.join(workspaceDir, 'assets', 'UPPER.PNG'))),
