@@ -1,6 +1,8 @@
 import { AnyExtension, createNodeFromContent, Editor, Extension, Node as TiptapNode } from '@tiptap/core'
+import Code from '@tiptap/extension-code'
 import CodeBlock from '@tiptap/extension-code-block'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
+import Link from '@tiptap/extension-link'
 import { TableKit } from '@tiptap/extension-table'
 import { Markdown } from '@tiptap/markdown'
 import { Fragment, type Mark, type Schema, Slice } from '@tiptap/pm/model'
@@ -23,6 +25,12 @@ import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 import { MermaidCodeBlockNodeView } from '../components/MermaidCodeBlockNodeView'
+import {
+  detectLinkQueryFromSegments,
+  type HeadingLinkCandidate,
+  type InlineLinkSegment,
+  type InlineLinkSegmentMatch
+} from './LinkAutocompleteEngine'
 import { isSafeMarkdownUrl, MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 import {
   detectSlashQuery,
@@ -59,6 +67,7 @@ export interface WysiwygExtensionOptions {
 
 export const headingNumberingPluginKey = new PluginKey<boolean>('headingNumbering')
 export const slashInsertPluginKey = new PluginKey<boolean>('wysiwygSlashInsert')
+export const linkInsertPluginKey = new PluginKey<boolean>('wysiwygLinkInsert')
 
 const HeadingNumberingExtension = Extension.create<{ showHeadingNumbers: boolean }>({
   name: 'headingNumbering',
@@ -378,15 +387,26 @@ export function deleteTableRowPreservingHeader(editor: Editor): boolean {
  * Returns the standard TipTap v3 extension stack for GFM WYSIWYG editing, Mermaid NodeView,
  * dynamic heading numbering decorations, and roundtrip serialization.
  */
+const CustomCode = Code.extend({
+  excludes: 'bold italic strike underline'
+})
+
+const CustomLink = Link.extend({
+  inclusive: false
+})
+
 export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): AnyExtension[] {
   return [
     StarterKit.configure({
+      code: false,
       codeBlock: false,
-      link: {
-        openOnClick: false,
-        protocols: [],
-        isAllowedUri: (url) => isSafeMarkdownUrl(url)
-      }
+      link: false
+    }),
+    CustomCode,
+    CustomLink.configure({
+      openOnClick: false,
+      protocols: [],
+      isAllowedUri: (url) => isSafeMarkdownUrl(url)
     }),
     MermaidAwareCodeBlock,
     TocMarker,
@@ -591,6 +611,212 @@ export function insertWysiwygMarkdownWithCursor(
   }
   tr.setMeta(slashInsertPluginKey, true)
 
+  editor.view.dispatch(tr)
+  editor.view.focus()
+  return true
+}
+
+export type ProseMirrorLinkQueryMatch = InlineLinkSegmentMatch
+
+function isCodeOnlyBlockParent(node: EditorState['selection']['$from']['parent']): boolean {
+  return !node.isTextblock || Boolean(node.type.spec.code) || node.type.name === 'mermaidBlock'
+}
+
+/**
+ * ProseMirror 현재 텍스트블록 커서 앞에서 `[텍스트](쿼리` 인라인 링크 트리거를 감지한다.
+ */
+export function detectProseMirrorLinkQuery(state: EditorState): ProseMirrorLinkQueryMatch | null {
+  const { $from, empty } = state.selection
+  if (!empty || isCodeOnlyBlockParent($from.parent)) {
+    return null
+  }
+
+  const activeMarks = state.storedMarks ?? $from.marks()
+  if (activeMarks.some((mark) => mark.type.name === 'code' || mark.type.name === 'link')) {
+    return null
+  }
+
+  const segments: InlineLinkSegment[] = []
+  const parentStart = $from.start()
+  let offset = 0
+
+  for (let i = 0; i < $from.parent.childCount && offset < $from.parentOffset; i += 1) {
+    const child = $from.parent.child(i)
+    const segFrom = parentStart + offset
+    if (child.isText) {
+      const sliceLen = Math.min(child.nodeSize, $from.parentOffset - offset)
+      const isLinkMark = child.marks.some((mark) => mark.type.name === 'link')
+      const isCodeMark = child.marks.some((mark) => mark.type.name === 'code')
+      segments.push({
+        text: (child.text ?? '').slice(0, sliceLen),
+        from: segFrom,
+        isCodeMark,
+        isBoundaryBreak: isLinkMark
+      })
+    } else {
+      segments.push({
+        text: '',
+        from: segFrom,
+        isBoundaryBreak: true
+      })
+    }
+    offset += child.nodeSize
+  }
+
+  return detectLinkQueryFromSegments(segments, $from.pos)
+}
+
+/**
+ * 감지된 `[라벨](쿼리` 구간을 섹션 `link` 마크로 치환하고 인접 `)`와 마크 번짐을 정리한다.
+ */
+export function insertWysiwygSectionLink(
+  editor: Editor,
+  candidate: HeadingLinkCandidate,
+  match: ProseMirrorLinkQueryMatch
+): boolean {
+  const linkMarkType = editor.state.schema.marks.link
+  if (!linkMarkType) {
+    return false
+  }
+
+  const { state } = editor
+  const $to = state.doc.resolve(match.rangeTo)
+  const hasTrailingCloseParen =
+    $to.parentOffset < $to.parent.content.size &&
+    state.doc.textBetween(match.rangeTo, match.rangeTo + 1, '') === ')'
+  const replaceTo = hasTrailingCloseParen ? match.rangeTo + 1 : match.rangeTo
+
+  const linkMark = linkMarkType.create({ href: `#${candidate.slug}` })
+  const tr = state.tr.setMeta(linkInsertPluginKey, true)
+
+  if (match.label.length > 0) {
+    tr.delete(match.closeBracketPos, replaceTo)
+    tr.delete(match.rangeFrom, match.rangeFrom + 1)
+    const linkEndPos = match.closeBracketPos - 1
+    tr.addMark(match.rangeFrom, linkEndPos, linkMark)
+    tr.setSelection(TextSelection.create(tr.doc, linkEndPos))
+    tr.setStoredMarks([])
+  } else {
+    const titleText = candidate.title || candidate.slug
+    const linkedNode = state.schema.text(titleText, [linkMark])
+    tr.replaceWith(match.rangeFrom, replaceTo, linkedNode)
+    const linkEndPos = match.rangeFrom + titleText.length
+    tr.setSelection(TextSelection.create(tr.doc, linkEndPos))
+    tr.setStoredMarks([])
+  }
+
+  editor.view.dispatch(tr)
+  editor.view.focus()
+  return true
+}
+
+function findContiguousLinkRange(
+  $from: EditorState['selection']['$from'],
+  activeLinkMark: Mark
+): { from: number; to: number } | null {
+  let pos = $from.start()
+  let runStart = -1
+  let runEnd = -1
+  let containsCursor = false
+
+  for (let i = 0; i < $from.parent.childCount; i += 1) {
+    const child = $from.parent.child(i)
+    const childStart = pos
+    const childEnd = pos + child.nodeSize
+    const hasSameLink = child.isText && child.marks.some((mark) => mark.eq(activeLinkMark))
+
+    if (hasSameLink) {
+      if (runStart === -1) {
+        runStart = childStart
+      }
+      runEnd = childEnd
+      if ($from.pos >= childStart && $from.pos <= childEnd) {
+        containsCursor = true
+      }
+    } else {
+      if (containsCursor) {
+        return { from: runStart, to: runEnd }
+      }
+      runStart = -1
+      runEnd = -1
+      containsCursor = false
+    }
+
+    pos = childEnd
+  }
+
+  return containsCursor && runStart >= 0 ? { from: runStart, to: runEnd } : null
+}
+
+function wrapRangeWithLinkTrigger(
+  editor: Editor,
+  from: number,
+  to: number,
+  stripLinkMark: boolean
+): boolean {
+  const { state } = editor
+  const { schema } = state
+  const tr = state.tr
+  if (stripLinkMark && schema.marks.link) {
+    tr.removeMark(from, to, schema.marks.link)
+  }
+  tr.insert(to, schema.text(']('))
+  tr.insert(from, schema.text('['))
+  tr.setSelection(TextSelection.create(tr.doc, to + 3))
+  tr.setStoredMarks([])
+  editor.view.dispatch(tr)
+  editor.view.focus()
+  return true
+}
+
+/**
+ * 위지윅 편집기에서 `Ctrl+K`/`Meta+K` 단축키로 선택 감싸기·`[]()` 시작 또는 기존 링크 해제를 수행한다.
+ */
+export function applyWysiwygCtrlK(editor: Editor): boolean {
+  if (!editor.isEditable) {
+    return false
+  }
+  const { state } = editor
+  const { from, to, empty, $from, $to } = state.selection
+  if (isCodeOnlyBlockParent($from.parent) || isCodeOnlyBlockParent($to.parent)) {
+    return false
+  }
+
+  if (!empty) {
+    if (!$from.sameParent($to)) {
+      return false
+    }
+    let hasHardBreak = false
+    state.doc.nodesBetween(from, to, (node) => {
+      if (node.type.name === 'hardBreak') {
+        hasHardBreak = true
+        return false
+      }
+      return true
+    })
+    if (hasHardBreak) {
+      return false
+    }
+    return wrapRangeWithLinkTrigger(editor, from, to, true)
+  }
+
+  const linkMarkType = state.schema.marks.link
+  const activeLinkMark = linkMarkType ? $from.marks().find((mark) => mark.type === linkMarkType) : undefined
+  if (activeLinkMark) {
+    const linkRange = findContiguousLinkRange($from, activeLinkMark)
+    if (linkRange) {
+      return wrapRangeWithLinkTrigger(editor, linkRange.from, linkRange.to, true)
+    }
+  }
+
+  const activeMarks = state.storedMarks ?? $from.marks()
+  if (activeMarks.some((mark) => mark.type.name === 'code')) {
+    return false
+  }
+
+  const tr = state.tr.insert(from, state.schema.text('[]('))
+  tr.setSelection(TextSelection.create(tr.doc, from + 3))
+  tr.setStoredMarks([])
   editor.view.dispatch(tr)
   editor.view.focus()
   return true

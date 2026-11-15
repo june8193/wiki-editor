@@ -514,3 +514,134 @@ describe('WysiwygMarkdownEditor', () => {
     expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
   })
 })
+
+describe('WysiwygMarkdownEditor link autocomplete & Ctrl+K', () => {
+  it('opens link autocomplete on [label](, prioritizes matching headings, preserves [`symbol`] code mark, escapes link mark on subsequent typing, and works inside table cells', async () => {
+    const user = userEvent.setup()
+    const onChangeContent = vi.fn()
+    const md = [
+      '# 1.1. 개요',
+      '',
+      '## API 가이드',
+      '',
+      '### `parseMarkdownHeadings`',
+      '',
+      '| 항목 | 링크 |',
+      '| --- | --- |',
+      '| cell | empty |',
+      '',
+      '본문 '
+    ].join('\n')
+
+    render(
+      <WysiwygMarkdownEditor
+        content={md}
+        scrollTop={0}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const lastParagraph = Array.from(editorEl.querySelectorAll('p')).find((p) =>
+      p.textContent?.includes('본문')
+    )!
+    editorEl.focus()
+    placeCaretInProseMirror(editorEl, lastParagraph)
+
+    await user.keyboard('[[API](')
+    const listbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(listbox).getAllByRole('option')[0]).toHaveTextContent('API 가이드')
+
+    fireEvent.keyDown(editorEl, { key: 'Enter' })
+    await waitFor(() => {
+      expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+    })
+
+    await user.keyboard(' 계속')
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('[API](#api-가이드) 계속')
+
+    await user.keyboard(' [[`parseMarkdownHeadings`](')
+    const codeListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(codeListbox).getAllByRole('option')[0]).toHaveTextContent('parseMarkdownHeadings')
+    fireEvent.keyDown(editorEl, { key: 'Tab' })
+    await user.keyboard(' 다음')
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain(
+      '[`parseMarkdownHeadings`](#parsemarkdownheadings) 다음'
+    )
+
+    const emptyCell = Array.from(editorEl.querySelectorAll('td p')).find((p) =>
+      p.textContent?.includes('empty')
+    )!
+    placeCaretInProseMirror(editorEl, emptyCell)
+    await user.keyboard(' [[](')
+    const tableListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    fireEvent.mouseDown(within(tableListbox).getByRole('option', { name: /개요/ }))
+    await waitFor(() => {
+      expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('[개요](#11-개요)')
+    })
+  })
+
+  it('closes on space/external URL/Escape, stays mutually exclusive with slash menu, and supports Ctrl+K selection, empty cursor, and existing link unwrap', async () => {
+    const user = userEvent.setup()
+    const onChangeContent = vi.fn()
+    const md = '# 개요\n\n선택 텍스트 [기존](#개요) 끝'
+
+    const { rerender } = render(
+      <WysiwygMarkdownEditor
+        content={md}
+        scrollTop={0}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const targetP = Array.from(editorEl.querySelectorAll('p')).find((p) =>
+      p.textContent?.includes('끝')
+    )!
+    editorEl.focus()
+    placeCaretInProseMirror(editorEl, targetP)
+
+    await user.keyboard(' /')
+    expect(await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })).toBeInTheDocument()
+
+    fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })
+    ).not.toBeInTheDocument()
+
+    await user.keyboard('https:')
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    const existingLink = editorEl.querySelector('a')!
+    const textNode = existingLink.firstChild!
+    const range = document.createRange()
+    range.setStart(textNode, 1)
+    range.setEnd(textNode, 1)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    editorEl.focus()
+    document.dispatchEvent(new Event('selectionchange'))
+
+    fireEvent.keyDown(editorEl, { key: 'k', metaKey: true })
+    const unwrapListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(unwrapListbox).getAllByRole('option')[0]).toHaveTextContent('개요')
+    expect(editorEl.textContent).toContain('[기존](')
+
+    fireEvent.keyDown(editorEl, { key: 'Escape' })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    rerender(
+      <WysiwygMarkdownEditor
+        content={md}
+        scrollTop={0}
+        isShortcutDisabled
+        onChangeContent={onChangeContent}
+      />
+    )
+    placeCaretInProseMirror(editorEl, targetP)
+    fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+  })
+})

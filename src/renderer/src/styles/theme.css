@@ -1512,7 +1512,8 @@ body.is-resizing-sidebar .pane-workspace {
   display: block;
 }
 
-.slash-command-menu {
+.slash-command-menu,
+.link-autocomplete-menu {
   position: absolute;
   z-index: 40;
   min-width: 240px;
@@ -1529,7 +1530,8 @@ body.is-resizing-sidebar .pane-workspace {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
 }
 
-.slash-command-item {
+.slash-command-item,
+.link-autocomplete-item {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -1545,8 +1547,46 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .slash-command-item:hover,
-.slash-command-item.is-selected {
+.slash-command-item.is-selected,
+.link-autocomplete-item:hover,
+.link-autocomplete-item.is-selected {
   background-color: var(--accent-soft, rgba(59, 130, 246, 0.16));
+}
+
+.link-autocomplete-badge {
+  flex: 0 0 auto;
+  min-width: 24px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background-color: var(--bg-subtle, rgba(128, 128, 128, 0.14));
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.link-autocomplete-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.link-autocomplete-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.link-autocomplete-slug,
+.link-autocomplete-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.link-autocomplete-empty {
+  padding: 8px 10px;
 }
 
 .slash-command-trigger {

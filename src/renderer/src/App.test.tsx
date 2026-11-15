@@ -4876,3 +4876,218 @@ describe('Settings Panel centered modal', () => {
     expect(getRawEditorText(configEditor)).toContain('"theme": "light"')
   })
 })
+
+describe('Link autocomplete menu & Ctrl+K integration', () => {
+  it('supports Raw and WYSIWYG body/table section links, priority matching, [`symbol`] code mark, pipe escaping, and matches TOC/Preview slugs', async () => {
+    const user = userEvent.setup()
+    const initialMd = [
+      '# 1.1. 개요',
+      '',
+      '## `buildTree`',
+      '',
+      '## A | B 표기',
+      '',
+      '| 함수 | 설명 |',
+      '| --- | --- |',
+      '| target |  |',
+      '',
+      '본문 '
+    ].join('\n')
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki',
+        workspaces: {
+          'C:/wiki': {
+            'api.md': initialMd
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('api.md'))
+
+    const rawEl = await screen.findByTestId('document-editor')
+    const rawView = getRawEditorView(rawEl)
+
+    // 1) Raw 요약 테이블 셀 내 [함수명]( 우선순위 추천 + 완성
+    const cellInsertAt = rawView.state.doc.toString().indexOf('| target |  |') + '| target | '.length
+    act(() => {
+      rawView.dispatch({
+        changes: { from: cellInsertAt, to: cellInsertAt, insert: '[buildTree](' },
+        selection: { anchor: cellInsertAt + '[buildTree]('.length }
+      })
+    })
+
+    const rawListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(rawListbox).getAllByRole('option')[0]).toHaveTextContent('buildTree')
+    fireEvent.keyDown(rawEl, { key: 'Enter' })
+
+    expect(getRawEditorText(rawEl)).toContain('| target | [buildTree](#buildtree) |')
+
+    // 2) Raw 테이블 셀 내 []( 자동 채움 + | -> \| 이스케이프
+    const afterTableText = getRawEditorText(rawEl)
+    const pipeTargetAt = afterTableText.indexOf('[buildTree](#buildtree)')
+    act(() => {
+      rawView.dispatch({
+        changes: { from: pipeTargetAt, to: pipeTargetAt + '[buildTree](#buildtree)'.length, insert: '[](' },
+        selection: { anchor: pipeTargetAt + 3 }
+      })
+    })
+    const rawTableListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    fireEvent.mouseDown(within(rawTableListbox).getByRole('option', { name: /A \| B 표기/ }))
+    expect(getRawEditorText(rawEl)).toContain('| target | [A \\| B 표기](#a-b-표기) |')
+
+    // 3) Raw 본문 [`심볼`]( 완성
+    const bodyEnd = getRawEditorText(rawEl).length
+    act(() => {
+      rawView.dispatch({
+        changes: { from: bodyEnd, to: bodyEnd, insert: '[`buildTree`](' },
+        selection: { anchor: bodyEnd + '[`buildTree`]('.length }
+      })
+    })
+    await screen.findByRole('listbox', { name: '링크 자동완성' })
+    fireEvent.keyDown(rawEl, { key: 'Tab' })
+    expect(getRawEditorText(rawEl)).toContain('본문 [`buildTree`](#buildtree)')
+
+    // 4) 위지윅 모드로 전환하여 본문/테이블 []( 자동 채움 및 후속 입력 링크 마크 이탈 확인
+    await user.click(screen.getByRole('button', { name: '위지윅' }))
+    const wysiwygEl = await screen.findByTestId('document-editor')
+    const tableCellP = wysiwygEl.querySelectorAll('td p')[1]
+    wysiwygEl.focus()
+    const range = document.createRange()
+    range.selectNodeContents(tableCellP)
+    range.collapse(false)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    await user.keyboard(' [[](')
+    const wysiwygListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(wysiwygListbox).getAllByRole('option')[0]).toHaveTextContent('개요')
+    fireEvent.keyDown(wysiwygEl, { key: 'Enter' })
+
+    await user.keyboard(' 이후')
+    expect(wysiwygEl.querySelector('td a[href="#11-개요"]')).toHaveTextContent('개요')
+
+    // 5) Preview 헤딩 id / 문서 목차와 동일한 슬러그 일치 검증
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+    await waitFor(() => {
+      expect(document.getElementById('11-개요')).not.toBeNull()
+      expect(document.getElementById('buildtree')).not.toBeNull()
+      expect(document.getElementById('a-b-표기')).not.toBeNull()
+    })
+    const tocRegion = screen.getByRole('complementary', { name: '우측 사이드바' })
+    expect(within(tocRegion).getByRole('button', { name: /개요/ })).toBeInTheDocument()
+  })
+
+  it('handles Ctrl+K wrapping/unwrapping, mutual exclusion with slash menu, modal/dialog blocking, and config.json exclusion', async () => {
+    const user = userEvent.setup()
+    const md = '# 개요\n\n단일선택 대상\n\n[기존](#개요) 끝'
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:/wiki',
+        workspaces: {
+          'C:/wiki': {
+            'guide.md': md,
+            'notes.txt': 'plain text'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('guide.md'))
+
+    const rawEl = await screen.findByTestId('document-editor')
+    const selStart = md.indexOf('단일선택')
+    setRawEditorSelection(rawEl, selStart, selStart + '단일선택'.length)
+    fireEvent.keyDown(rawEl, { key: 'k', ctrlKey: true })
+
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    expect(getRawEditorText(rawEl)).toContain('[단일선택](')
+
+    // 슬래시 명령어 메뉴와 동시 열림 방지
+    fireEvent.keyDown(rawEl, { key: 'Escape' })
+    const rawView = getRawEditorView(rawEl)
+    const endNow = getRawEditorText(rawEl).length
+    act(() => {
+      rawView.dispatch({
+        changes: { from: endNow, to: endNow, insert: '\n/' },
+        selection: { anchor: endNow + 2 }
+      })
+    })
+    expect(await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })).toBeInTheDocument()
+
+    fireEvent.keyDown(rawEl, { key: 'k', ctrlKey: true })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })
+    ).not.toBeInTheDocument()
+    fireEvent.keyDown(rawEl, { key: 'Escape' })
+
+    // 위지윅에서 기존 링크 내부 커서 Ctrl+K -> 언랩 및 메뉴 오픈
+    await user.click(screen.getByRole('button', { name: '위지윅' }))
+    const wysiwygEl = await screen.findByTestId('document-editor')
+    const existingAnchor = wysiwygEl.querySelector('a[href="#개요"]')!
+    wysiwygEl.focus()
+    const range = document.createRange()
+    range.setStart(existingAnchor.firstChild!, 1)
+    range.setEnd(existingAnchor.firstChild!, 1)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    fireEvent.keyDown(wysiwygEl, { key: 'k', ctrlKey: true })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    expect(wysiwygEl.textContent).toContain('[기존](')
+    fireEvent.keyDown(wysiwygEl, { key: 'Escape' })
+
+    // 전역 설정 패널 모달 열림 중 Ctrl+K 무효
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    const settingsDialog = await screen.findByRole('dialog', { name: '전역 설정 패널' })
+    fireEvent.keyDown(wysiwygEl, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    // config.json 직접 열기 -> 비마크다운 문서에서는 링크 자동완성/Ctrl+K 비활성
+    await user.click(within(settingsDialog).getByRole('button', { name: /설정 파일 직접 열기/i }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+    })
+    const configEditor = await screen.findByTestId('document-editor')
+    fireEvent.keyDown(configEditor, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    // .txt 비마크다운 문서에서도 [텍스트]( 및 Ctrl+K 비활성
+    await user.click(await within(explorer).findByText('notes.txt'))
+    const txtEditor = await screen.findByTestId('document-editor')
+    const txtView = getRawEditorView(txtEditor)
+    act(() => {
+      txtView.dispatch({ changes: { from: 10, to: 10, insert: ' [a](' }, selection: { anchor: 15 } })
+    })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+    fireEvent.keyDown(txtEditor, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    // 마크다운 문서(guide.md) 탭 복귀 후 dirty 탭 닫기 확인 다이얼로그 열림 중 Ctrl+K 무효
+    await user.click(screen.getByRole('tab', { name: /guide\.md/ }))
+    const activeMdEditor = await screen.findByTestId('document-editor')
+    await user.click(screen.getByRole('button', { name: 'guide.md 탭 닫기' }))
+    const confirmDialog = await screen.findByRole('alertdialog')
+    expect(confirmDialog).toBeInTheDocument()
+    fireEvent.keyDown(activeMdEditor, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+  })
+})

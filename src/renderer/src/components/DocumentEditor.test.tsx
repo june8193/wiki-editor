@@ -265,3 +265,108 @@ describe('DocumentEditor 3-mode switcher & roundtrip', () => {
     expect(screen.getByTestId('document-editor').textContent).toContain('flowchart LR')
   })
 })
+
+describe('DocumentEditor link autocomplete & Ctrl+K gating', () => {
+  it('blocks Ctrl+K when isShortcutDisabled is true in Raw and WYSIWYG modes, and disables link autocomplete for non-markdown docs', async () => {
+    const user = userEvent.setup()
+    const mdDoc = createDoc({ content: '# 개요\n\n본문 텍스트' })
+    const rawEndTab = {
+      ...createTab('raw'),
+      cursor: { selectionStart: mdDoc.content.length, selectionEnd: mdDoc.content.length }
+    }
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={mdDoc}
+        tab={rawEndTab}
+        theme="light"
+        autoSave={false}
+        showHeadingNumbers={false}
+        isShortcutDisabled={false}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'k', ctrlKey: true })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'Escape' })
+
+    rerender(
+      <DocumentEditor
+        document={mdDoc}
+        tab={rawEndTab}
+        theme="light"
+        autoSave={false}
+        showHeadingNumbers={false}
+        isShortcutDisabled
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    rerender(
+      <DocumentEditor
+        document={mdDoc}
+        tab={createTab('wysiwyg')}
+        theme="light"
+        autoSave={false}
+        showHeadingNumbers={false}
+        isShortcutDisabled={false}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'k', ctrlKey: true })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'Escape' })
+
+    rerender(
+      <DocumentEditor
+        document={mdDoc}
+        tab={createTab('wysiwyg')}
+        theme="light"
+        autoSave={false}
+        showHeadingNumbers={false}
+        isShortcutDisabled
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    const txtDoc = createDoc({
+      key: 'c:/wiki/notes.txt',
+      path: 'C:/wiki/notes.txt',
+      name: 'notes.txt',
+      content: 'plain text '
+    })
+    rerender(
+      <DocumentEditor
+        document={txtDoc}
+        tab={{ ...createTab('raw'), bufferKey: txtDoc.key }}
+        theme="light"
+        autoSave={false}
+        showHeadingNumbers={false}
+        isShortcutDisabled={false}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    editorEl.focus()
+    await user.keyboard('[[링크](')
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+    fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+  })
+})

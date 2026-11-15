@@ -176,6 +176,8 @@ export function DocumentEditor({
           scrollTop={tab.scrollTop}
           showTableToolbar={allowRichModes}
           enableSlashCommands={allowRichModes}
+          enableLinkAutocomplete={allowRichModes}
+          isShortcutDisabled={isShortcutDisabled}
           customCommands={customCommands}
           documentTitle={documentTitle}
           scrollRequest={
@@ -194,6 +196,8 @@ export function DocumentEditor({
           scrollTop={tab.scrollTop}
           theme={theme}
           showHeadingNumbers={showHeadingNumbers}
+          enableLinkAutocomplete={allowRichModes}
+          isShortcutDisabled={isShortcutDisabled}
           customCommands={customCommands}
           documentTitle={documentTitle}
           mermaidRenderer={mermaidRenderer}

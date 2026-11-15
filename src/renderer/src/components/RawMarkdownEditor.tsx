@@ -2,6 +2,7 @@ import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
 import type { CursorPosition } from '../stores/PaneTabStore'
+import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
 import { SlashCommandMenu } from './SlashCommandMenu'
 
 interface RawMarkdownEditorProps {
@@ -12,6 +13,8 @@ interface RawMarkdownEditorProps {
   scrollTop: number
   showTableToolbar?: boolean
   enableSlashCommands?: boolean
+  enableLinkAutocomplete?: boolean
+  isShortcutDisabled?: boolean
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
   scrollRequest?: RawScrollRequest | null
@@ -44,13 +47,15 @@ export function RawMarkdownEditor({
   scrollTop,
   showTableToolbar = false,
   enableSlashCommands = language === 'markdown',
+  enableLinkAutocomplete = language === 'markdown',
+  isShortcutDisabled = false,
   customCommands,
   documentTitle,
   scrollRequest,
   onChangeContent,
   onUpdateViewState
 }: RawMarkdownEditorProps) {
-  const { shellRef, hostRef, inTable, runTableAction, insertToc, slashMenuProps } =
+  const { shellRef, hostRef, inTable, runTableAction, insertToc, slashMenuProps, linkMenuProps } =
     useRawCodeMirrorEditor({
       content,
       language,
@@ -59,6 +64,8 @@ export function RawMarkdownEditor({
       scrollTop,
       showTableToolbar,
       enableSlashCommands,
+      enableLinkAutocomplete,
+      isShortcutDisabled,
       customCommands,
       documentTitle,
       scrollRequest,
@@ -94,6 +101,7 @@ export function RawMarkdownEditor({
       )}
       <div ref={hostRef} className="codemirror-host" />
       {enableSlashCommands ? <SlashCommandMenu {...slashMenuProps} /> : null}
+      {enableLinkAutocomplete ? <LinkAutocompleteMenu {...linkMenuProps} /> : null}
     </div>
   )
 }

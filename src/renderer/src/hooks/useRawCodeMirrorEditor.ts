@@ -22,18 +22,26 @@ import {
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
 import {
+  buildRawSectionLinkEdit,
+  detectLinkQuery,
+  type LinkQueryMatch
+} from '../editor/LinkAutocompleteEngine'
+import {
   detectDocumentLineEnding,
   insertOrUpdateTocBlock,
+  isOffsetInCodeFence,
   tryReplaceSlashTocAtLine
 } from '../editor/MarkdownTocEngine'
 import { detectSlashQuery, resolveSlashCommandSnippet } from '../editor/SlashCommandEngine'
 import type { CursorPosition } from '../stores/PaneTabStore'
+import { useLinkMenu } from './useLinkMenu'
 import { useOneShotScroll } from './useOneShotScroll'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from './useSlashMenu'
 import { syncElementScrollTop } from './useSyncScrollTop'
 
 const externalSyncAnnotation = Annotation.define<boolean>()
 const slashInsertAnnotation = Annotation.define<boolean>()
+const linkInsertAnnotation = Annotation.define<boolean>()
 
 function applyRawTocCommand(view: EditorView, requireSlashTocLine: boolean): boolean {
   const sel = view.state.selection.main
@@ -76,6 +84,8 @@ export interface UseRawCodeMirrorEditorOptions {
   scrollTop: number
   showTableToolbar: boolean
   enableSlashCommands?: boolean
+  enableLinkAutocomplete?: boolean
+  isShortcutDisabled?: boolean
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
   scrollRequest?: RawScrollRequest | null
@@ -182,6 +192,8 @@ export function useRawCodeMirrorEditor({
   scrollTop,
   showTableToolbar,
   enableSlashCommands = language === 'markdown',
+  enableLinkAutocomplete = language === 'markdown',
+  isShortcutDisabled = false,
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
   scrollRequest,
@@ -204,6 +216,8 @@ export function useRawCodeMirrorEditor({
     scrollTop,
     showTableToolbar,
     enableSlashCommands,
+    enableLinkAutocomplete,
+    isShortcutDisabled,
     customCommands,
     documentTitle,
     onChangeContent,
@@ -217,6 +231,8 @@ export function useRawCodeMirrorEditor({
     scrollTop,
     showTableToolbar,
     enableSlashCommands,
+    enableLinkAutocomplete,
+    isShortcutDisabled,
     customCommands,
     documentTitle,
     onChangeContent,
@@ -263,6 +279,26 @@ export function useRawCodeMirrorEditor({
     return true
   })
 
+  const { linkControlsRef, linkMenuProps } = useLinkMenu({
+    documentContent: content,
+    onOpenMenu: dismissSlashMenu,
+    onSelectCandidate: (candidate, match: LinkQueryMatch) => {
+      const view = viewRef.current
+      if (!view || !runtimeRef.current.enableLinkAutocomplete) {
+        return
+      }
+      const docText = view.state.doc.toString()
+      const edit = buildRawSectionLinkEdit(docText, match, candidate)
+      view.dispatch({
+        changes: { from: edit.from, to: edit.to, insert: edit.text },
+        selection: { anchor: edit.cursorOffset },
+        annotations: linkInsertAnnotation.of(true)
+      })
+      view.focus()
+    }
+  })
+  const dismissLinkMenu = linkMenuProps.onDismiss
+
   const lineEndingRef = useRef<'\r\n' | '\n'>(detectDocumentLineEnding(content))
   const lastCursorPropRef = useRef<CursorPosition>(cursor)
   const prevCompartmentsRef = useRef({ language, theme, showTableToolbar })
@@ -289,6 +325,34 @@ export function useRawCodeMirrorEditor({
       return applyRawTocCommand(view, true)
     }
 
+    const handleRawCtrlK = (view: EditorView): boolean => {
+      if (!runtimeRef.current.enableLinkAutocomplete || runtimeRef.current.isShortcutDisabled) {
+        return false
+      }
+      const { from, to, empty } = view.state.selection.main
+      const docText = view.state.doc.toString()
+      if (isOffsetInCodeFence(docText, from) || isOffsetInCodeFence(docText, to)) {
+        return false
+      }
+      if (!empty) {
+        const selected = docText.slice(from, to)
+        if (selected.includes('\n')) {
+          return false
+        }
+        const insert = `[${selected}](`
+        view.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: from + insert.length }
+        })
+        return true
+      }
+      view.dispatch({
+        changes: { from, to: from, insert: '[](' },
+        selection: { anchor: from + 3 }
+      })
+      return true
+    }
+
     const state = EditorState.create({
       doc: normalizedInitial,
       selection: initialSelection,
@@ -306,11 +370,37 @@ export function useRawCodeMirrorEditor({
         compartments.tableKeymap.of(initial.showTableToolbar ? rawTableKeymap : []),
         Prec.highest(
           keymap.of([
-            { key: 'ArrowDown', run: () => slashControlsRef.current.moveSelection(1) },
-            { key: 'ArrowUp', run: () => slashControlsRef.current.moveSelection(-1) },
-            { key: 'Enter', run: () => slashControlsRef.current.applySelected() },
-            { key: 'Tab', run: () => slashControlsRef.current.applySelected() },
-            { key: 'Escape', run: () => slashControlsRef.current.dismiss() }
+            {
+              key: 'ArrowDown',
+              run: () =>
+                linkControlsRef.current.moveSelection(1) ||
+                slashControlsRef.current.moveSelection(1)
+            },
+            {
+              key: 'ArrowUp',
+              run: () =>
+                linkControlsRef.current.moveSelection(-1) ||
+                slashControlsRef.current.moveSelection(-1)
+            },
+            {
+              key: 'Enter',
+              run: () =>
+                linkControlsRef.current.applySelected() ||
+                slashControlsRef.current.applySelected()
+            },
+            {
+              key: 'Tab',
+              run: () =>
+                linkControlsRef.current.applySelected() ||
+                slashControlsRef.current.applySelected()
+            },
+            {
+              key: 'Escape',
+              run: () =>
+                linkControlsRef.current.dismiss() || slashControlsRef.current.dismiss()
+            },
+            { key: 'Ctrl-k', run: handleRawCtrlK },
+            { key: 'Meta-k', run: handleRawCtrlK }
           ])
         ),
         keymap.of([
@@ -345,24 +435,55 @@ export function useRawCodeMirrorEditor({
             }
           }
 
-          const isSlashInsert = update.transactions.some((tr) => tr.annotation(slashInsertAnnotation))
-          if (isSlashInsert) {
+          const isProgrammaticInsert = update.transactions.some(
+            (tr) => tr.annotation(slashInsertAnnotation) || tr.annotation(linkInsertAnnotation)
+          )
+          if (isProgrammaticInsert) {
             return
           }
           if (update.docChanged) {
             const sel = update.state.selection.main
+            const docText = update.state.doc.toString()
+            const linkMatch =
+              runtimeRef.current.enableLinkAutocomplete && sel.empty
+                ? detectLinkQuery(docText, sel.head, { ignoreCodeFences: true })
+                : null
+
+            if (linkMatch) {
+              slashControlsRef.current.dismiss()
+              const coords = readSafeCaretCoords(update.view, linkMatch.rangeFrom)
+              linkControlsRef.current.updateFromMatch(linkMatch, coords, shellRef.current, docText)
+              return
+            }
+            linkControlsRef.current.dismiss()
+
             if (runtimeRef.current.enableSlashCommands && sel.empty) {
-              const match = detectSlashQuery(update.state.doc.toString(), sel.head, {
+              const slashMatch = detectSlashQuery(docText, sel.head, {
                 ignoreCodeFences: true
               })
-              const coords = match ? readSafeCaretCoords(update.view, match.rangeFrom) : null
-              slashControlsRef.current.updateFromMatch(match, coords, shellRef.current)
+              const coords = slashMatch
+                ? readSafeCaretCoords(update.view, slashMatch.rangeFrom)
+                : null
+              slashControlsRef.current.updateFromMatch(slashMatch, coords, shellRef.current)
             } else {
               slashControlsRef.current.dismiss()
             }
           } else if (update.selectionSet) {
             const sel = update.state.selection.main
             slashControlsRef.current.dismissIfSelectionOutside(sel.from, sel.to, sel.empty)
+            if (linkControlsRef.current.stateRef.current.isOpen) {
+              const docText = update.state.doc.toString()
+              const currentMatch =
+                runtimeRef.current.enableLinkAutocomplete && sel.empty
+                  ? detectLinkQuery(docText, sel.head, { ignoreCodeFences: true })
+                  : null
+              linkControlsRef.current.syncOpenSelection(
+                currentMatch,
+                update.view,
+                shellRef.current,
+                docText
+              )
+            }
           }
         })
       ]
@@ -399,6 +520,9 @@ export function useRawCodeMirrorEditor({
     if (!enableSlashCommands) {
       dismissSlashMenu()
     }
+    if (!enableLinkAutocomplete) {
+      dismissLinkMenu()
+    }
     if (prev.theme !== theme) {
       effects.push(compartments.theme.reconfigure(createEditorThemeExtension(theme)))
     }
@@ -412,7 +536,15 @@ export function useRawCodeMirrorEditor({
     if (effects.length === 0) return
     prevCompartmentsRef.current = { language, theme, showTableToolbar }
     view.dispatch({ effects, annotations: externalSyncAnnotation.of(true) })
-  }, [dismissSlashMenu, enableSlashCommands, language, theme, showTableToolbar])
+  }, [
+    dismissLinkMenu,
+    dismissSlashMenu,
+    enableLinkAutocomplete,
+    enableSlashCommands,
+    language,
+    theme,
+    showTableToolbar
+  ])
 
   useLayoutEffect(() => {
     const view = viewRef.current
@@ -443,6 +575,7 @@ export function useRawCodeMirrorEditor({
       })
       if (docChanged) {
         dismissSlashMenu()
+        dismissLinkMenu()
       }
       lastCursorPropRef.current = cursor
       syncSelectionAttrs(view)
@@ -451,7 +584,7 @@ export function useRawCodeMirrorEditor({
     if (showTableToolbar && (docChanged || cursorPropChanged)) {
       setInTable(isViewCursorInRawTable(view))
     }
-  }, [content, cursor, dismissSlashMenu, showTableToolbar])
+  }, [content, cursor, dismissLinkMenu, dismissSlashMenu, showTableToolbar])
 
   useLayoutEffect(() => {
     const view = viewRef.current
@@ -494,6 +627,7 @@ export function useRawCodeMirrorEditor({
     inTable,
     runTableAction,
     insertToc,
-    slashMenuProps
+    slashMenuProps,
+    linkMenuProps
   }
 }

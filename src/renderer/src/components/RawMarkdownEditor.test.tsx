@@ -1,5 +1,5 @@
 import { EditorView } from '@codemirror/view'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { CustomCommandConfig } from '@shared/config'
@@ -628,5 +628,302 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     await user.keyboard('/fun')
 
     expect(screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })).not.toBeInTheDocument()
+  })
+})
+
+describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
+  it('opens link autocomplete on [label](, prioritizes matching headings, consumes trailing ), and inserts section link via keyboard/click', async () => {
+    const md = [
+      '# 1.1. 개요',
+      '',
+      '## API 가이드',
+      '',
+      '### `parseMarkdownHeadings`',
+      '',
+      '참고 '
+    ].join('\n')
+
+    const onChangeContent = vi.fn()
+    render(
+      <RawMarkdownEditor
+        content={md}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: md.length, selectionEnd: md.length }}
+        scrollTop={0}
+        onChangeContent={onChangeContent}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const view = EditorView.findFromDOM(editorEl)!
+    const insertStart = md.length
+
+    view.dispatch({
+      changes: { from: insertStart, to: insertStart, insert: '[API]()' },
+      selection: { anchor: insertStart + '[API]('.length }
+    })
+
+    const listbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    const options = within(listbox).getAllByRole('option')
+    expect(options[0]).toHaveTextContent('API 가이드')
+    expect(options[0]).toHaveAttribute('aria-selected', 'true')
+
+    fireEvent.keyDown(editorEl, { key: 'ArrowDown' })
+    expect(options[1]).toHaveAttribute('aria-selected', 'true')
+
+    fireEvent.keyDown(editorEl, { key: 'ArrowUp' })
+    expect(options[0]).toHaveAttribute('aria-selected', 'true')
+
+    fireEvent.keyDown(editorEl, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+    })
+    expect(view.state.doc.toString()).toContain('참고 [API](#api-가이드)')
+    expect(view.state.doc.toString()).not.toContain('))')
+
+    const codeStart = view.state.doc.toString().length
+    view.dispatch({
+      changes: { from: codeStart, to: codeStart, insert: ' [`parseMarkdownHeadings`](' },
+      selection: { anchor: codeStart + ' [`parseMarkdownHeadings`]('.length }
+    })
+    const codeListbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(codeListbox).getAllByRole('option')[0]).toHaveTextContent('parseMarkdownHeadings')
+    fireEvent.keyDown(editorEl, { key: 'Tab' })
+    expect(view.state.doc.toString()).toContain(
+      '[`parseMarkdownHeadings`](#parsemarkdownheadings)'
+    )
+  })
+
+  it('auto-fills []( with stripped heading title and escapes | in table cells', async () => {
+    const md = [
+      '# 1.1. 개요',
+      '',
+      '## A | B 표기',
+      '',
+      '| 항목 | 링크 |',
+      '| --- | --- |',
+      '| row |  |'
+    ].join('\n')
+
+    const insertPos = md.length - ' |'.length
+    render(
+      <RawMarkdownEditor
+        content={md}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: insertPos, selectionEnd: insertPos }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const view = EditorView.findFromDOM(editorEl)!
+    view.dispatch({
+      changes: { from: insertPos, to: insertPos, insert: '[](' },
+      selection: { anchor: insertPos + 3 }
+    })
+
+    const listbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    fireEvent.mouseDown(within(listbox).getByRole('option', { name: /A \| B 표기/ }))
+    expect(view.state.doc.toString()).toContain('| row | [A \\| B 표기](#a-b-표기) |')
+  })
+
+  it('closes on space, ), external URL scheme, Escape, selection outside, and stays mutually exclusive with slash menu', async () => {
+    const md = '# 개요\n\n본문 '
+    render(
+      <RawMarkdownEditor
+        content={md}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: md.length, selectionEnd: md.length }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const view = EditorView.findFromDOM(editorEl)!
+
+    const basePos = md.length
+    act(() => {
+      view.dispatch({
+        changes: { from: basePos, to: basePos, insert: '[링크](' },
+        selection: { anchor: basePos + 5 }
+      })
+    })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+
+    act(() => {
+      view.dispatch({
+        changes: { from: basePos + 5, to: basePos + 5, insert: 'https:' },
+        selection: { anchor: basePos + 11 }
+      })
+    })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    act(() => {
+      const endNow = view.state.doc.toString().length
+      view.dispatch({
+        changes: { from: endNow, to: endNow, insert: ' [공백](' },
+        selection: { anchor: endNow + 6 }
+      })
+    })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    act(() => {
+      const endNow = view.state.doc.toString().length
+      view.dispatch({
+        changes: { from: endNow, to: endNow, insert: ' ' },
+        selection: { anchor: endNow + 1 }
+      })
+    })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    const parenStart = view.state.doc.toString().length
+    act(() => {
+      view.dispatch({
+        changes: { from: parenStart, to: parenStart, insert: '[닫기](' },
+        selection: { anchor: parenStart + 5 }
+      })
+    })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    act(() => {
+      view.dispatch({ selection: { anchor: 0 } })
+    })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    const lineStart = view.state.doc.toString().length
+    act(() => {
+      view.dispatch({
+        changes: { from: lineStart, to: lineStart, insert: '\n/' },
+        selection: { anchor: lineStart + 2 }
+      })
+    })
+    expect(await screen.findByRole('listbox', { name: '슬래시 명령어 자동완성' })).toBeInTheDocument()
+
+    act(() => {
+      view.dispatch({
+        changes: { from: lineStart + 1, to: lineStart + 2, insert: '[링크](' },
+        selection: { anchor: lineStart + 6 }
+      })
+    })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('listbox', { name: '슬래시 명령어 자동완성' })
+    ).not.toBeInTheDocument()
+
+    fireEvent.keyDown(editorEl, { key: 'Escape' })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+  })
+
+  it('supports Ctrl+K / Meta+K for empty cursor and single-line selection while blocking multi-line, code fences, json, and disabled shortcuts', async () => {
+    const md = '# 개요\n\n단일 선택 대상\n\n첫줄\n둘줄\n\n```md\ncode\n```'
+    const { rerender } = render(
+      <RawMarkdownEditor
+        content={md}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const view = EditorView.findFromDOM(editorEl)!
+
+    const targetStart = md.indexOf('선택')
+    act(() => {
+      view.dispatch({ selection: { anchor: targetStart, head: targetStart + 2 } })
+    })
+    fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    expect(view.state.doc.toString()).toContain('단일 [선택]( 대상')
+
+    fireEvent.keyDown(editorEl, { key: 'Escape' })
+    const emptyPos = view.state.doc.toString().indexOf('대상') + 2
+    act(() => {
+      view.dispatch({ selection: { anchor: emptyPos } })
+    })
+    fireEvent.keyDown(editorEl, { key: 'k', metaKey: true })
+    expect(await screen.findByRole('listbox', { name: '링크 자동완성' })).toBeInTheDocument()
+    expect(view.state.doc.toString()).toContain('대상[](')
+
+    fireEvent.keyDown(editorEl, { key: 'Escape' })
+    const docNow = view.state.doc.toString()
+    const multiFrom = docNow.indexOf('첫줄')
+    const multiTo = docNow.indexOf('둘줄') + 2
+    act(() => {
+      view.dispatch({ selection: { anchor: multiFrom, head: multiTo } })
+    })
+    fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    const fencePos = docNow.indexOf('code')
+    act(() => {
+      view.dispatch({ selection: { anchor: fencePos } })
+    })
+    fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    rerender(
+      <RawMarkdownEditor
+        content={docNow}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        isShortcutDisabled
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    act(() => {
+      view.dispatch({ selection: { anchor: docNow.indexOf('단일') } })
+    })
+    fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    rerender(
+      <RawMarkdownEditor
+        content='{"a": 1}'
+        language="json"
+        theme="light"
+        cursor={{ selectionStart: 8, selectionEnd: 8 }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    act(() => {
+      view.dispatch({
+        changes: { from: 8, to: 8, insert: '[a](' },
+        selection: { anchor: 12 }
+      })
+    })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+    fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
+
+    rerender(
+      <RawMarkdownEditor
+        content="# 개요\n\n본문"
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 7, selectionEnd: 7 }}
+        scrollTop={0}
+        enableLinkAutocomplete={false}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    fireEvent.keyDown(editorEl, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('listbox', { name: '링크 자동완성' })).not.toBeInTheDocument()
   })
 })

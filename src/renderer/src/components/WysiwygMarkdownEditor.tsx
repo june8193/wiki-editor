@@ -10,19 +10,26 @@ import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
   addTableRowBeforeSafely,
+  applyWysiwygCtrlK,
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
+  detectProseMirrorLinkQuery,
   detectProseMirrorSlashQuery,
   headingNumberingPluginKey,
   insertWysiwygMarkdownWithCursor,
+  insertWysiwygSectionLink,
+  linkInsertPluginKey,
   prepareMarkdownForTiptap,
+  type ProseMirrorLinkQueryMatch,
   sanitizeHtmlWithRehype,
   slashInsertPluginKey
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
+import { useLinkMenu } from '../hooks/useLinkMenu'
 import { useOneShotScroll } from '../hooks/useOneShotScroll'
 import { readSafeCaretCoords, type SlashMenuRange, useSlashMenu } from '../hooks/useSlashMenu'
 import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
+import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
 import { SlashCommandMenu } from './SlashCommandMenu'
 
@@ -36,6 +43,8 @@ interface WysiwygMarkdownEditorProps {
   scrollTop: number
   theme?: ThemeMode
   showHeadingNumbers?: boolean
+  enableLinkAutocomplete?: boolean
+  isShortcutDisabled?: boolean
   mermaidRenderer?: MermaidRenderer
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
@@ -211,6 +220,8 @@ export function WysiwygMarkdownEditor({
   scrollTop,
   theme = 'light',
   showHeadingNumbers = false,
+  enableLinkAutocomplete = true,
+  isShortcutDisabled = false,
   mermaidRenderer,
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
@@ -231,6 +242,10 @@ export function WysiwygMarkdownEditor({
   onChangeContentRef.current = onChangeContent
   const documentTitleRef = useRef(documentTitle)
   documentTitleRef.current = documentTitle
+  const enableLinkAutocompleteRef = useRef(enableLinkAutocomplete)
+  enableLinkAutocompleteRef.current = enableLinkAutocomplete
+  const isShortcutDisabledRef = useRef(isShortcutDisabled)
+  isShortcutDisabledRef.current = isShortcutDisabled
   const insertTocRef = useRef<() => void>(() => undefined)
   const editorRef = useRef<Editor | null>(null)
 
@@ -248,6 +263,19 @@ export function WysiwygMarkdownEditor({
       title: documentTitleRef.current
     })
   })
+
+  const { linkControlsRef, linkMenuProps } = useLinkMenu<ProseMirrorLinkQueryMatch>({
+    documentContent: content,
+    onOpenMenu: dismissSlashMenu,
+    onSelectCandidate: (candidate, match) => {
+      const instance = editorRef.current
+      if (!instance || !enableLinkAutocompleteRef.current) {
+        return
+      }
+      insertWysiwygSectionLink(instance, candidate, match)
+    }
+  })
+  const dismissLinkMenu = linkMenuProps.onDismiss
 
   const [cellMenuPos, setCellMenuPos] = useState<{ x: number; y: number } | null>(null)
   const closeCellMenu = useCallback(() => setCellMenuPos(null), [])
@@ -267,25 +295,50 @@ export function WysiwygMarkdownEditor({
         },
         transformPastedHTML: sanitizeHtmlWithRehype,
         handleKeyDown: (view, event) => {
+          const isCtrlOrMetaK =
+            (event.ctrlKey || event.metaKey) &&
+            !event.shiftKey &&
+            !event.altKey &&
+            event.key.toLowerCase() === 'k'
+          if (isCtrlOrMetaK) {
+            if (!enableLinkAutocompleteRef.current || isShortcutDisabledRef.current) {
+              return false
+            }
+            const instance = editorRef.current
+            if (instance && applyWysiwygCtrlK(instance)) {
+              event.preventDefault()
+              return true
+            }
+            return false
+          }
+
           const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
-          if (slashControlsRef.current.stateRef.current.isOpen) {
-            if (event.key === 'ArrowDown' && !hasModifier) {
+          const activeControls = linkControlsRef.current.stateRef.current.isOpen
+            ? linkControlsRef.current
+            : slashControlsRef.current.stateRef.current.isOpen
+              ? slashControlsRef.current
+              : null
+
+          if (activeControls) {
+            if (event.key === 'ArrowDown' && !hasModifier && activeControls.moveSelection(1)) {
               event.preventDefault()
-              return slashControlsRef.current.moveSelection(1)
+              return true
             }
-            if (event.key === 'ArrowUp' && !hasModifier) {
+            if (event.key === 'ArrowUp' && !hasModifier && activeControls.moveSelection(-1)) {
               event.preventDefault()
-              return slashControlsRef.current.moveSelection(-1)
+              return true
             }
-            if ((event.key === 'Enter' || event.key === 'Tab') && !hasModifier) {
-              if (slashControlsRef.current.applySelected()) {
-                event.preventDefault()
-                return true
-              }
+            if (
+              (event.key === 'Enter' || event.key === 'Tab') &&
+              !hasModifier &&
+              activeControls.applySelected()
+            ) {
+              event.preventDefault()
+              return true
             }
             if (event.key === 'Escape') {
               event.preventDefault()
-              return slashControlsRef.current.dismiss()
+              return activeControls.dismiss()
             }
           }
 
@@ -313,10 +366,31 @@ export function WysiwygMarkdownEditor({
         lastEmittedMarkdownRef.current = serialized
         onChangeContentRef.current(serialized)
 
-        if (transaction.getMeta(slashInsertPluginKey)) {
+        if (
+          transaction.getMeta(slashInsertPluginKey) ||
+          transaction.getMeta(linkInsertPluginKey)
+        ) {
           slashControlsRef.current.dismiss()
+          linkControlsRef.current.dismiss()
           return
         }
+
+        if (enableLinkAutocompleteRef.current) {
+          const linkMatch = detectProseMirrorLinkQuery(instance.state)
+          if (linkMatch) {
+            slashControlsRef.current.dismiss()
+            const coords = readSafeCaretCoords(instance.view, linkMatch.rangeFrom)
+            linkControlsRef.current.updateFromMatch(
+              linkMatch,
+              coords,
+              shellRef.current,
+              serialized
+            )
+            return
+          }
+        }
+        linkControlsRef.current.dismiss()
+
         const match = detectProseMirrorSlashQuery(instance.state)
         const coords = match ? readSafeCaretCoords(instance.view, match.rangeFrom) : null
         slashControlsRef.current.updateFromMatch(match, coords, shellRef.current)
@@ -327,6 +401,17 @@ export function WysiwygMarkdownEditor({
         }
         const { from, to, empty } = instance.state.selection
         slashControlsRef.current.dismissIfSelectionOutside(from, to, empty)
+        if (linkControlsRef.current.stateRef.current.isOpen) {
+          const currentMatch = enableLinkAutocompleteRef.current
+            ? detectProseMirrorLinkQuery(instance.state)
+            : null
+          linkControlsRef.current.syncOpenSelection(
+            currentMatch,
+            instance.view,
+            shellRef.current,
+            instance.getMarkdown()
+          )
+        }
       }
     },
     []
@@ -345,12 +430,19 @@ export function WysiwygMarkdownEditor({
         hasLocalEditRef.current = markLocalEdit
         lastEmittedMarkdownRef.current = markdown
         dismissSlashMenu()
+        dismissLinkMenu()
       } finally {
         isProgrammaticSyncRef.current = false
       }
     },
-    [dismissSlashMenu, editor]
+    [dismissLinkMenu, dismissSlashMenu, editor]
   )
+
+  useEffect(() => {
+    if (!enableLinkAutocomplete) {
+      dismissLinkMenu()
+    }
+  }, [dismissLinkMenu, enableLinkAutocomplete])
 
   const handleInsertToc = useCallback((): void => {
     if (!editor) return
@@ -541,6 +633,7 @@ export function WysiwygMarkdownEditor({
       )}
 
       <SlashCommandMenu {...slashMenuProps} />
+      {enableLinkAutocomplete ? <LinkAutocompleteMenu {...linkMenuProps} /> : null}
     </div>
   )
 }
