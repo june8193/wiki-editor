@@ -2744,11 +2744,13 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
 
       scrollIntoViewMock.mockClear()
       await user.click(within(items[2]).getByRole('button'))
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
 
       // Toggle showHeadingNumbers off via Outline button -> hides numbers without dirtying buffer or re-scrolling
       await user.click(within(outline).getByRole('button', { name: '헤딩 번호 표시' }))
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
       expect(screen.getByRole('heading', { level: 2, name: 'Setup' }).textContent).toBe('Setup')
       expect(within(outline).queryByText('1.1.')).not.toBeInTheDocument()
       expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
@@ -2759,11 +2761,13 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       scrollIntoViewMock.mockClear()
       const currentItems = within(within(outline).getByRole('list')).getAllByRole('listitem')
       await user.click(within(currentItems[1]).getByRole('button'))
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
 
       // Open SettingsPanel, verify checkbox reflects false, toggle back true without re-scrolling and verify persistence across restart
       await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
       const settingsPanel = screen.getByLabelText('전역 설정 패널')
       const headingToggleCheckbox = within(settingsPanel).getByRole('checkbox', {
         name: /헤딩 자동 넘버링 표시/i
@@ -2971,7 +2975,9 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
       const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
       await user.click(within(outline).getByRole('button', { name: /Target Heading/i }))
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
 
       scrollIntoViewMock.mockClear()
       await user.click(screen.getByRole('tab', { name: 'beta.md' }))
@@ -2979,7 +2985,9 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
 
       await user.click(within(outline).getByRole('button', { name: /Target Heading/i }))
-      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(2)
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
 
       scrollIntoViewMock.mockClear()
       fireEvent.keyDown(window, { key: '1', ctrlKey: true })
@@ -5170,6 +5178,351 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
       )
     } finally {
       cleanup()
+    }
+  })
+})
+
+function stubScrollLayout(
+  el: HTMLElement,
+  getGeometry: () => { scrollTop: number; scrollHeight: number; clientHeight: number; top: number }
+): void {
+  Object.defineProperty(el, 'scrollTop', {
+    configurable: true,
+    get: () => getGeometry().scrollTop,
+    set: () => undefined
+  })
+  Object.defineProperty(el, 'scrollHeight', {
+    configurable: true,
+    get: () => getGeometry().scrollHeight
+  })
+  Object.defineProperty(el, 'clientHeight', {
+    configurable: true,
+    get: () => getGeometry().clientHeight
+  })
+  el.getBoundingClientRect = () =>
+    ({
+      top: getGeometry().top,
+      bottom: getGeometry().top + getGeometry().clientHeight,
+      left: 0,
+      right: 600,
+      width: 600,
+      height: getGeometry().clientHeight,
+      x: 0,
+      y: getGeometry().top,
+      toJSON: () => ({})
+    }) as DOMRect
+}
+
+function stubHeadingTop(el: HTMLElement, getTop: () => number): void {
+  el.getBoundingClientRect = () =>
+    ({
+      top: getTop(),
+      bottom: getTop() + 28,
+      left: 0,
+      right: 500,
+      width: 500,
+      height: 28,
+      x: 0,
+      y: getTop(),
+      toJSON: () => ({})
+    }) as DOMRect
+}
+
+function stubPreviewSpyLayout(
+  preview: HTMLElement,
+  docOffsets: number[],
+  getScrollTop: () => number,
+  {
+    scrollHeight = 1000,
+    clientHeight = 400,
+    top = 100
+  }: { scrollHeight?: number; clientHeight?: number; top?: number } = {}
+): HTMLElement[] {
+  stubScrollLayout(preview, () => ({
+    scrollTop: getScrollTop(),
+    scrollHeight,
+    clientHeight,
+    top
+  }))
+  const headings = Array.from(preview.querySelectorAll('h1, h2, h3, h4, h5, h6')) as HTMLElement[]
+  expect(headings).toHaveLength(docOffsets.length)
+  headings.forEach((el, idx) => {
+    stubHeadingTop(el, () => top + docOffsets[idx] - getScrollTop())
+  })
+  return headings
+}
+
+function mockPrototypeScrollIntoView(): {
+  mock: ReturnType<typeof vi.fn>
+  restore: () => void
+} {
+  const mock = vi.fn()
+  const origDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    writable: true,
+    value: mock
+  })
+  return {
+    mock,
+    restore: () => {
+      if (origDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origDescriptor)
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+      }
+    }
+  }
+}
+
+describe('Document Outline active heading scroll spy in Preview mode', () => {
+  it('tracks Preview scroll position in Document Outline with aria-current="location", auto-scroll, and no redundant updates within the same section', async () => {
+    const user = userEvent.setup()
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const docContent = [
+        'Intro preface before first heading.',
+        '',
+        '# Overview',
+        'Section 1 body',
+        '',
+        '## Architecture',
+        'Section 2 body',
+        '',
+        '### Details',
+        'Section 3 body',
+        '',
+        '## Summary',
+        'Short ending'
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\outline-spy',
+          workspaces: {
+            'C:\\wiki\\outline-spy': {
+              'guide.md': docContent,
+              'plain.md': 'Just text without any headings',
+              'notes.json': '{"ok":true}'
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('guide.md'))
+
+      await user.click(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: 'Preview'
+        })
+      )
+
+      const preview = screen.getByLabelText('마크다운 미리보기')
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+
+      // Stub layout: container top = 100, clientHeight = 400, scrollHeight = 1000
+      let currentScrollTop = 0
+      const docOffsets = [160, 340, 560, 880] // distance from document top (before scrollTop subtraction)
+      stubPreviewSpyLayout(preview, docOffsets, () => currentScrollTop)
+
+      // 1. Preface before first heading -> no outline item active
+      fireEvent.scroll(preview)
+      for (const btn of outlineButtons()) {
+        expect(btn).not.toHaveAttribute('aria-current')
+      }
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      // 2. Scroll to Overview (heading 0 at relativeTop = 100+160-150-100 = 10 <= 24)
+      currentScrollTop = 150
+      fireEvent.scroll(preview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[0]).toHaveClass('is-active')
+      expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ block: 'nearest' })
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(outlineButtons()[0])
+
+      // 3. Scroll within Overview section (heading 0 stays active) -> no redundant auto-scroll
+      scrollIntoViewMock.mockClear()
+      currentScrollTop = 210
+      fireEvent.scroll(preview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      // 4. Scroll to Architecture (heading 1 at relativeTop = 340 - 330 = 10 <= 24)
+      currentScrollTop = 330
+      fireEvent.scroll(preview)
+      expect(outlineButtons()[0]).not.toHaveAttribute('aria-current')
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(outlineButtons()[1])
+
+      // 5. Scroll to container bottom (scrollTop = 600, Summary still below baseline at 280) -> Summary active
+      currentScrollTop = 600
+      fireEvent.scroll(preview)
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+
+      // 6. Opening non-markdown file or markdown without headings clears active heading
+      await user.click(within(explorer).getByText('notes.json'))
+      expect(within(outline).queryByRole('list')).not.toBeInTheDocument()
+      await user.click(within(explorer).getByText('plain.md'))
+      expect(within(outline).queryByRole('list')).not.toBeInTheDocument()
+    } finally {
+      restore()
+    }
+  })
+
+  it('protects clicked outline heading until user scroll, clears pin on tab/mode switch, and ignores inactive split-pane Preview scroll', async () => {
+    const user = userEvent.setup()
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const guideDoc = [
+        'Intro preface before first heading.',
+        '',
+        '# Overview',
+        'Section 1 body',
+        '',
+        '## Architecture',
+        'Section 2 body',
+        '',
+        '### Details',
+        'Section 3 body',
+        '',
+        '## Summary',
+        'Short ending'
+      ].join('\n')
+      const sideDoc = ['# Side Alpha', 'Alpha body', '', '## Side Beta', 'Beta body'].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\outline-pin',
+          workspaces: {
+            'C:\\wiki\\outline-pin': {
+              'guide.md': guideDoc,
+              'side.md': sideDoc
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('side.md'))
+      await user.click(await within(explorer).findByText('guide.md'))
+
+      await user.click(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: 'Preview'
+        })
+      )
+
+      const primaryPane = screen.getByTestId('pane-primary')
+      let primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+
+      let currentScrollTop = 150
+      const docOffsets = [160, 340, 560, 880]
+      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+
+      // 1. Clicking short bottom heading ("Summary") pins it immediately and resists programmatic scroll overwrites
+      await user.click(outlineButtons()[3])
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[3]).toHaveClass('is-active')
+      expect(outlineButtons()[0]).not.toHaveAttribute('aria-current')
+
+      // Programmatic scroll fires while stopped before bottom (Architecture at top=10 <= 24, Summary still below baseline)
+      currentScrollTop = 330
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
+
+      // 2. Actual wheel scroll releases protection and lets scroll spy resume
+      scrollIntoViewMock.mockClear()
+      fireEvent.wheel(primaryPreview)
+      currentScrollTop = 335
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[3]).not.toHaveAttribute('aria-current')
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' })
+      expect(scrollIntoViewMock.mock.instances).toContain(outlineButtons()[1])
+
+      // 3. Keyboard scroll (PageUp) also releases protection
+      await user.click(outlineButtons()[3])
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      fireEvent.keyDown(primaryPreview, { key: 'PageUp' })
+      currentScrollTop = 150
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[3]).not.toHaveAttribute('aria-current')
+
+      // 4. Switching tabs clears click protection
+      await user.click(outlineButtons()[3])
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      await user.click(within(primaryPane).getByRole('tab', { name: /side\.md/i }))
+      await user.click(within(primaryPane).getByRole('tab', { name: /guide\.md/i }))
+      primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      expect(outlineButtons()[3]).not.toHaveAttribute('aria-current')
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+
+      // 5. Switching mode (Ctrl+1 -> Ctrl+3) clears click protection
+      await user.click(outlineButtons()[3])
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      fireEvent.keyDown(window, { key: '1', ctrlKey: true })
+      fireEvent.keyDown(window, { key: '3', ctrlKey: true })
+      primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      expect(outlineButtons()[3]).not.toHaveAttribute('aria-current')
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+
+      // 6. Scrolling an inactive split pane's Preview does not overwrite active pane's outline highlight
+      fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /side\.md/i }))
+      const tabMenu = await screen.findByRole('menu', { name: '탭 작업 메뉴' })
+      await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+      const secondaryPane = screen.getByTestId('pane-secondary')
+      await user.click(
+        within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+          'button',
+          { name: 'Preview' }
+        )
+      )
+
+      // Keep primaryPane focused on guide.md at Overview (index 0)
+      await user.click(within(primaryPane).getByRole('tab', { name: /guide\.md/i }))
+      primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
+      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+
+      // Scroll inactive secondaryPreview to Side Beta (index 1) without activating secondaryPane
+      const secondaryPreview = within(secondaryPane).getByLabelText('마크다운 미리보기')
+      const secondaryScrollTop = 450
+      stubPreviewSpyLayout(secondaryPreview, [60, 460], () => secondaryScrollTop)
+      fireEvent.wheel(secondaryPreview)
+      fireEvent.scroll(secondaryPreview)
+
+      expect(outlineButtons()).toHaveLength(4)
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
+    } finally {
+      restore()
     }
   })
 })

@@ -2,7 +2,11 @@ import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
-import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
+import {
+  DocumentEditor,
+  type OutlineActiveHeadingReport,
+  type OutlineScrollRequest
+} from './DocumentEditor'
 import {
   DraggingTabPayload,
   handleTabMoveDrop,
@@ -26,6 +30,7 @@ interface PaneViewProps {
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
   onDragEndTab: () => void
+  onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
   actions: PaneInteractionActions
 }
 
@@ -44,6 +49,7 @@ export function PaneView({
   draggingTab,
   onDragStartTab,
   onDragEndTab,
+  onActiveHeadingChange,
   actions
 }: PaneViewProps) {
   const activeTab = getPaneActiveTab(pane)
@@ -108,6 +114,18 @@ export function PaneView({
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}
+          onActiveHeadingChange={
+            onActiveHeadingChange
+              ? (mode, headingIndex, isUserScroll) =>
+                  onActiveHeadingChange({
+                    paneId: pane.id,
+                    tabId: activeTab.id,
+                    mode,
+                    headingIndex,
+                    isUserScroll
+                  })
+              : undefined
+          }
         />
       ) : (
         <section className="workspace-placeholder">

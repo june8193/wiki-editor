@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react'
+import { memo, useEffect, useMemo, useRef } from 'react'
 import { PanelRightClose } from 'lucide-react'
 import {
   formatOutlineHeadingTitle,
@@ -10,6 +10,7 @@ export interface DocumentOutlinePanelProps {
   documentName: string | null
   content: string
   isMarkdownDocument: boolean
+  activeHeadingIndex?: number | null
   showHeadingNumbers: boolean
   onToggleHeadingNumbers: () => void
   onSelectHeading: (heading: MarkdownHeading, index: number) => void
@@ -21,13 +22,14 @@ export interface DocumentOutlinePanelProps {
 
 /**
  * Right sidebar panel displaying the live document heading outline,
- * dynamic numbering toggle, sidebar collapse trigger, click-to-scroll triggers,
- * and explicit TOC/numbering actions.
+ * active heading indicator and auto-scroll, dynamic numbering toggle,
+ * sidebar collapse trigger, click-to-scroll triggers, and explicit TOC/numbering actions.
  */
 export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   documentName,
   content,
   isMarkdownDocument,
+  activeHeadingIndex = null,
   showHeadingNumbers,
   onToggleHeadingNumbers,
   onSelectHeading,
@@ -36,11 +38,35 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   onStripHeadingNumbers,
   onCollapse
 }: DocumentOutlinePanelProps) {
+  const itemButtonRefs = useRef<Map<number, HTMLButtonElement>>(new Map())
+  const prevScrollTargetKeyRef = useRef<string | null>(null)
 
   const headings = useMemo(() => {
     if (!documentName || !isMarkdownDocument) return []
     return parseMarkdownHeadings(content)
   }, [content, documentName, isMarkdownDocument])
+
+  const validActiveIndex =
+    documentName &&
+    isMarkdownDocument &&
+    activeHeadingIndex !== null &&
+    activeHeadingIndex >= 0 &&
+    activeHeadingIndex < headings.length
+      ? activeHeadingIndex
+      : null
+
+  const scrollTargetKey = validActiveIndex !== null ? `${documentName}:${validActiveIndex}` : null
+
+  useEffect(() => {
+    if (scrollTargetKey === prevScrollTargetKeyRef.current) return
+    prevScrollTargetKeyRef.current = scrollTargetKey
+    if (validActiveIndex === null) return
+
+    const targetButton = itemButtonRefs.current.get(validActiveIndex)
+    if (targetButton && typeof targetButton.scrollIntoView === 'function') {
+      targetButton.scrollIntoView({ block: 'nearest' })
+    }
+  }, [scrollTargetKey, validActiveIndex])
 
   const renderBodyContent = () => {
     if (!documentName) {
@@ -55,27 +81,38 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
 
     return (
       <ul className="outline-list" role="list">
-        {headings.map((heading, index) => (
-          <li
-            key={`${heading.line}-${heading.slug}`}
-            className="outline-item"
-            style={{ paddingLeft: `${heading.depth * 12}px` }}
-          >
-            <button
-              type="button"
-              className="outline-item-btn"
-              title={`L${heading.line}: ${heading.title}`}
-              onClick={() => onSelectHeading(heading, index)}
+        {headings.map((heading, index) => {
+          const isActive = validActiveIndex === index
+          return (
+            <li
+              key={`${heading.line}-${heading.slug}`}
+              className="outline-item"
+              style={{ paddingLeft: `${heading.depth * 12}px` }}
             >
-              {showHeadingNumbers && (
-                <span className="outline-item-number">{heading.number}</span>
-              )}
-              <span className="outline-item-title">
-                {formatOutlineHeadingTitle(heading, showHeadingNumbers)}
-              </span>
-            </button>
-          </li>
-        ))}
+              <button
+                ref={(el) => {
+                  if (el) {
+                    itemButtonRefs.current.set(index, el)
+                  } else {
+                    itemButtonRefs.current.delete(index)
+                  }
+                }}
+                type="button"
+                className={`outline-item-btn${isActive ? ' is-active' : ''}`}
+                aria-current={isActive ? 'location' : undefined}
+                title={`L${heading.line}: ${heading.title}`}
+                onClick={() => onSelectHeading(heading, index)}
+              >
+                {showHeadingNumbers && (
+                  <span className="outline-item-number">{heading.number}</span>
+                )}
+                <span className="outline-item-title">
+                  {formatOutlineHeadingTitle(heading, showHeadingNumbers)}
+                </span>
+              </button>
+            </li>
+          )
+        })}
       </ul>
     )
   }

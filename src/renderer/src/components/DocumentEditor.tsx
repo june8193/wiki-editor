@@ -19,6 +19,14 @@ export interface OutlineScrollRequest {
   nonce: number
 }
 
+export interface OutlineActiveHeadingReport {
+  paneId: PaneId
+  tabId: string
+  mode: EditorMode
+  headingIndex: number | null
+  isUserScroll: boolean
+}
+
 interface DocumentEditorProps {
   document: DocumentBuffer
   tab: TabItem
@@ -32,6 +40,7 @@ interface DocumentEditorProps {
   onChangeContent: (nextContent: string) => void
   onSave: () => void
   onUpdateViewState: (patch: TabViewPatch) => void
+  onActiveHeadingChange?: (mode: EditorMode, headingIndex: number | null, isUserScroll: boolean) => void
 }
 
 const EDITOR_MODE_OPTIONS: ReadonlyArray<{
@@ -57,7 +66,8 @@ export function DocumentEditor({
   isShortcutDisabled = false,
   onChangeContent,
   onSave,
-  onUpdateViewState
+  onUpdateViewState,
+  onActiveHeadingChange
 }: DocumentEditorProps) {
   const allowRichModes = isMarkdownDocument(activeDoc)
   const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
@@ -224,6 +234,12 @@ export function DocumentEditor({
               : null
           }
           onScrollTopChange={handleScrollTopChange}
+          onActiveHeadingChange={
+            onActiveHeadingChange
+              ? (headingIndex, isUserScroll) =>
+                  onActiveHeadingChange('preview', headingIndex, isUserScroll)
+              : undefined
+          }
         />
       )}
     </section>

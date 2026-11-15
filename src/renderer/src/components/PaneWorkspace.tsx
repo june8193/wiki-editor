@@ -2,7 +2,7 @@ import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { canSplitWithTab, PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
-import type { OutlineScrollRequest } from './DocumentEditor'
+import type { OutlineActiveHeadingReport, OutlineScrollRequest } from './DocumentEditor'
 import { dispatchTabDrop, DraggingTabPayload, PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
 
@@ -17,6 +17,7 @@ interface PaneWorkspaceProps {
   isShortcutDisabled?: boolean
   onSetSplitRatio: (ratio: number) => void
   onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
+  onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
   actions: PaneInteractionActions
 }
 
@@ -42,6 +43,7 @@ export function PaneWorkspace({
   isShortcutDisabled = false,
   onSetSplitRatio,
   onSplitWithTab,
+  onActiveHeadingChange,
   actions
 }: PaneWorkspaceProps) {
   const [draggingTab, setDraggingTab] = useState<DraggingTabPayload | null>(null)
@@ -108,6 +110,7 @@ export function PaneWorkspace({
     draggingTab,
     onDragStartTab: setDraggingTab,
     onDragEndTab: clearDragging,
+    onActiveHeadingChange,
     actions
   }
 

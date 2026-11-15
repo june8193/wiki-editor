@@ -1,7 +1,9 @@
-import { useCallback, useMemo, useRef } from 'react'
+import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
+import { parseMarkdownHeadings } from '../editor/MarkdownTocEngine'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
+import { isScrollNavigationKey, measureActiveHeadingIndexInContainer } from '../editor/outlineScrollSpy'
 import { useOneShotScroll } from '../hooks/useOneShotScroll'
 import { useSyncScrollTop } from '../hooks/useSyncScrollTop'
 
@@ -19,6 +21,7 @@ interface MarkdownPreviewProps {
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: PreviewScrollRequest | null
   onScrollTopChange?: (scrollTop: number) => void
+  onActiveHeadingChange?: (headingIndex: number | null, isUserScroll: boolean) => void
 }
 
 function scrollHeadingIntoView(target: Element): void {
@@ -34,9 +37,25 @@ export function MarkdownPreview({
   showHeadingNumbers = false,
   mermaidRenderer,
   scrollRequest,
-  onScrollTopChange
+  onScrollTopChange,
+  onActiveHeadingChange
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const userScrollIntentRef = useRef(false)
+  const onActiveHeadingChangeRef = useRef(onActiveHeadingChange)
+  onActiveHeadingChangeRef.current = onActiveHeadingChange
+
+  const parsedHeadings = useMemo(() => parseMarkdownHeadings(content), [content])
+
+  const reportActiveHeading = useCallback(
+    (container: HTMLDivElement, isUserScroll: boolean): void => {
+      const callback = onActiveHeadingChangeRef.current
+      if (!callback) return
+      const nextIndex = measureActiveHeadingIndexInContainer(container, parsedHeadings)
+      callback(nextIndex, isUserScroll)
+    },
+    [parsedHeadings]
+  )
 
   const scrollToHeading = useCallback((slug?: string, index?: number): void => {
     const container = containerRef.current
@@ -57,6 +76,7 @@ export function MarkdownPreview({
 
   const handleAnchorNavigate = useCallback(
     (slug: string): void => {
+      userScrollIntentRef.current = true
       scrollToHeading(slug)
     },
     [scrollToHeading]
@@ -76,8 +96,25 @@ export function MarkdownPreview({
   useSyncScrollTop(containerRef, scrollTop)
 
   useOneShotScroll(scrollRequest, true, (req) => {
+    userScrollIntentRef.current = false
     scrollToHeading(req.slug, req.index)
   })
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    reportActiveHeading(container, false)
+  }, [reportActiveHeading])
+
+  const markUserScrollIntent = (): void => {
+    userScrollIntentRef.current = true
+  }
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (isScrollNavigationKey(event)) {
+      markUserScrollIntent()
+    }
+  }
 
   return (
     <div
@@ -86,7 +123,17 @@ export function MarkdownPreview({
       data-testid="document-editor"
       aria-label="마크다운 미리보기"
       tabIndex={0}
-      onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
+      onWheel={markUserScrollIntent}
+      onTouchStart={markUserScrollIntent}
+      onPointerDown={markUserScrollIntent}
+      onMouseDown={markUserScrollIntent}
+      onKeyDown={handleKeyDown}
+      onScroll={(event) => {
+        onScrollTopChange?.(event.currentTarget.scrollTop)
+        const isUserScroll = userScrollIntentRef.current
+        userScrollIntentRef.current = false
+        reportActiveHeading(event.currentTarget, isUserScroll)
+      }}
     >
       {content.trim().length === 0 ? (
         <p className="markdown-preview-empty">미리 볼 내용이 없습니다.</p>

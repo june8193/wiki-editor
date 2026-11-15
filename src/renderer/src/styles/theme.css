@@ -1406,6 +1406,17 @@ body.is-resizing-sidebar .pane-workspace {
   background-color: var(--bg-elevated);
 }
 
+.outline-item-btn.is-active {
+  background-color: var(--bg-elevated);
+  color: var(--accent-color);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 0 var(--accent-color);
+}
+
+.outline-item-btn.is-active:hover {
+  background-color: var(--bg-elevated);
+}
+
 .outline-item-number {
   color: var(--accent-color);
   font-weight: 600;
