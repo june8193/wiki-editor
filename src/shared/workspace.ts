@@ -183,3 +183,10 @@ export function recordRecentWorkspace(
   const filtered = recents.filter((item) => !isSameWorkspacePath(item, normalized))
   return [normalized, ...filtered].slice(0, limit)
 }
+
+export function removeRecentWorkspace(
+  recents: readonly string[],
+  workspacePath: string
+): string[] {
+  return recents.filter((item) => !isSameWorkspacePath(item, workspacePath))
+}

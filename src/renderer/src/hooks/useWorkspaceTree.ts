@@ -19,6 +19,11 @@ export interface WorkspaceTreeState {
   selectedPath: string | null
 }
 
+export interface OpenWorkspaceOptions {
+  silentError?: boolean
+  onSilentError?: () => void
+}
+
 interface UseWorkspaceTreeOptions {
   onError: (message: string | null, error?: unknown) => void
   onWorkspaceOpened?: () => void
@@ -49,6 +54,7 @@ export function useWorkspaceTree({
   const mountedRef = useRef<boolean>(true)
   const workspaceRef = useRef<WorkspaceSummary | null>(null)
   const expandedDirsRef = useRef<Set<string>>(expandedDirs)
+  const openRequestSeqRef = useRef<number>(0)
   const callbacksRef = useRef({
     onError,
     onWorkspaceOpened,
@@ -124,28 +130,39 @@ export function useWorkspaceTree({
     }
   }, [refreshTree])
 
-  const openWorkspace = useCallback(async (targetPath: string): Promise<void> => {
-    callbacksRef.current.onError(null)
-    try {
-      const info = await window.wikiApi.workspace.open(targetPath)
-      if (!mountedRef.current) return
-      setWorkspace({ rootPath: info.rootPath, name: info.name })
-      setRootEntries(info.entries)
-      setChildrenByDir({})
-      setExpandedDirs(new Set())
-      setSelectedTreePath(null)
-      logRendererInfo('ui', 'Workspace opened', { rootPath: info.rootPath, name: info.name })
-      callbacksRef.current.onWorkspaceOpened?.()
-      await window.wikiApi.workspace.watch().catch(() => undefined)
-    } catch (error: unknown) {
-      if (mountedRef.current) {
-        callbacksRef.current.onError(
-          toErrorMessage(error, '워크스페이스를 열지 못했습니다.'),
-          error
-        )
+  const openWorkspace = useCallback(
+    async (targetPath: string, options?: OpenWorkspaceOptions): Promise<boolean> => {
+      const seq = ++openRequestSeqRef.current
+      if (!options?.silentError) {
+        callbacksRef.current.onError(null)
       }
-    }
-  }, [])
+      try {
+        const info = await window.wikiApi.workspace.open(targetPath)
+        if (!mountedRef.current || seq !== openRequestSeqRef.current) return false
+        setWorkspace({ rootPath: info.rootPath, name: info.name })
+        setRootEntries(info.entries)
+        setChildrenByDir({})
+        setExpandedDirs(new Set())
+        setSelectedTreePath(null)
+        logRendererInfo('ui', 'Workspace opened', { rootPath: info.rootPath, name: info.name })
+        callbacksRef.current.onWorkspaceOpened?.()
+        await window.wikiApi.workspace.watch().catch(() => undefined)
+        return true
+      } catch (error: unknown) {
+        if (!mountedRef.current || seq !== openRequestSeqRef.current) return false
+        if (options?.silentError) {
+          options.onSilentError?.()
+        } else {
+          callbacksRef.current.onError(
+            toErrorMessage(error, '워크스페이스를 열지 못했습니다.'),
+            error
+          )
+        }
+        return false
+      }
+    },
+    []
+  )
 
   const loadDirectoryChildren = useCallback(async (dirPath: string): Promise<void> => {
     const currentWs = workspaceRef.current

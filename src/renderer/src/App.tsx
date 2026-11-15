@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand } from '@shared/ipc'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
@@ -61,6 +62,8 @@ export function App() {
   const isDialogOpenRef = useRef<boolean>(false)
   isDialogOpenRef.current = pendingDialog !== null
   const isSelectingFolderRef = useRef<boolean>(false)
+  const hasWorkspaceInteractionRef = useRef<boolean>(false)
+  const handleInitialConfigLoadedRef = useRef<(loadedConfig: AppConfig) => void>(() => undefined)
   const tabCloseActionsRef = useRef<{
     saveAndCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => Promise<boolean>
     forceCloseTab: (paneId: DirtyTabCloseRequest['paneId'], tabId: string) => void
@@ -83,10 +86,12 @@ export function App() {
     updateCustomCommands,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
+    removeRecentWorkspace,
     saveRawConfig
   } = useConfigController({
     onError: reportErrorBanner,
-    onExternalConfigCommitted: () => void refreshConfigDocRef.current()
+    onExternalConfigCommitted: () => void refreshConfigDocRef.current(),
+    onInitialConfigLoaded: (loadedConfig) => handleInitialConfigLoadedRef.current(loadedConfig)
   })
 
   const handleConfirmCloseDirtyTab = useCallback((request: DirtyTabCloseRequest): void => {
@@ -173,6 +178,25 @@ export function App() {
     onEntryDeleted: syncDeletedPath
   })
 
+  handleInitialConfigLoadedRef.current = (loadedConfig) => {
+    if (
+      hasWorkspaceInteractionRef.current ||
+      isSelectingFolderRef.current ||
+      workspace !== null
+    ) {
+      return
+    }
+    const lastWorkspacePath = loadedConfig.recentWorkspaces[0]
+    if (!lastWorkspacePath) {
+      return
+    }
+    hasWorkspaceInteractionRef.current = true
+    void openWorkspace(lastWorkspacePath, {
+      silentError: true,
+      onSilentError: () => removeRecentWorkspace(lastWorkspacePath)
+    })
+  }
+
   useEffect(() => {
     return registerRendererGlobalErrorLogging()
   }, [])
@@ -249,7 +273,7 @@ export function App() {
   refreshGitStatusRef.current = git.refreshStatus
 
   const guardUnsavedWorkspaceChanges = useCallback(
-    (proceed: () => Promise<void>): void => {
+    (proceed: () => Promise<unknown>): void => {
       void promptUnsavedWorkspaceChanges({
         message: (dirtySummary) =>
           `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. 어떻게 할까요?`,
@@ -266,6 +290,7 @@ export function App() {
 
   const handleSwitchWorkspace = useCallback(
     (targetPath: string): void => {
+      hasWorkspaceInteractionRef.current = true
       guardUnsavedWorkspaceChanges(() => openWorkspace(targetPath))
     },
     [guardUnsavedWorkspaceChanges, openWorkspace]
@@ -277,6 +302,7 @@ export function App() {
     }
 
     isSelectingFolderRef.current = true
+    hasWorkspaceInteractionRef.current = true
     reportErrorBanner(null)
     void window.wikiApi.workspace.selectFolder().then(
       (selectedPath) => {

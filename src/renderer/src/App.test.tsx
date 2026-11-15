@@ -1074,7 +1074,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     const { api } = createInMemoryWikiApi(
       {
         favoriteWorkspaces: favoriteAlpha,
-        recentWorkspaces: ['C:/wiki/gamma']
+        recentWorkspaces: ['C:/wiki/deleted-ws', 'C:/wiki/gamma']
       },
       {
         workspaces: {
@@ -1147,7 +1147,8 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
       await user.click(within(workspaceList).getByRole('button', { name: itemPattern }))
     }
 
-    // Open favorite workspace directly from initial unopened state
+    // Switch to favorite workspace after startup restore finishes
+    expect(await within(sidebar).findByText('recent.md')).toBeInTheDocument()
     await selectFromWorkspaceSwitcher(/★\s*alpha/i)
 
     expect(await within(sidebar).findByText('alpha.md')).toBeInTheDocument()
@@ -3629,5 +3630,63 @@ describe('Renderer error logging & UI breadcrumbs', () => {
       { message: 'Tab switched', paneId: 'primary' },
       { message: 'Tab switched', paneId: 'secondary' }
     ])
+  })
+
+  it('automatically opens the last opened workspace (recentWorkspaces[0]) on startup', async () => {
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/gamma', 'C:/wiki/alpha']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
+          'C:\\wiki\\gamma': { 'gamma.md': '# Gamma' }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    expect(await within(sidebar).findByText('gamma.md')).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
+      'gamma ▾'
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('starts silently in empty workspace state and removes invalid path from recentWorkspaces when startup workspace open fails', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/missing', 'C:/wiki/gamma']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\gamma': { 'gamma.md': '# Gamma' }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    const sidebar = screen.getByLabelText('워크스페이스 탐색기')
+    expect(await within(sidebar).findByText('열린 워크스페이스 없음')).toBeInTheDocument()
+    await waitFor(async () => {
+      const cfg = await api.config.get()
+      expect(cfg.recentWorkspaces).toEqual(['C:/wiki/gamma'])
+    })
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i })).toHaveTextContent(
+      '워크스페이스 선택 ▾'
+    )
+
+    await user.click(within(sidebar).getByRole('button', { name: /워크스페이스 전환/i }))
+    const switcherMenu = await within(sidebar).findByRole('region', { name: /워크스페이스 목록/i })
+    expect(within(switcherMenu).getByRole('button', { name: /gamma/i })).toBeInTheDocument()
+    expect(within(switcherMenu).queryByRole('button', { name: /missing/i })).not.toBeInTheDocument()
   })
 })
