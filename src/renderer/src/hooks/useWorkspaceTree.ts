@@ -167,17 +167,13 @@ export function useWorkspaceTree({
       try {
         const info = await window.wikiApi.workspace.open(targetPath)
         if (!mountedRef.current || seq !== openRequestSeqRef.current) return false
-        const mdSeq = ++markdownFilesSeqRef.current
         const initialMarkdownFiles = await window.wikiApi.workspace
           .listMarkdownFiles()
           .catch(() => [] as WorkspaceEntry[])
-        if (
-          !mountedRef.current ||
-          seq !== openRequestSeqRef.current ||
-          mdSeq !== markdownFilesSeqRef.current
-        ) {
+        if (!mountedRef.current || seq !== openRequestSeqRef.current) {
           return false
         }
+        markdownFilesSeqRef.current += 1
         setWorkspace({ rootPath: info.rootPath, name: info.name })
         setRootEntries(info.entries)
         setChildrenByDir({})

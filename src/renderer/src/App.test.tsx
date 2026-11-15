@@ -5278,4 +5278,91 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
       expect(within(refreshedMenu).getByRole('option', { name: /watched-doc\.md/ })).toBeInTheDocument()
     })
   })
+
+  it('completes workspace switching even when a concurrent workspace:changed refresh arrives while initial markdown files are loading', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, emitWorkspaceChange } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:/wiki-a',
+        workspaces: {
+          'C:/wiki-a': {
+            'alpha.md': '# Alpha\n\n'
+          },
+          'C:/wiki-b': {
+            'beta.md': '# Beta\n\n',
+            'nested/target.md': '# Target'
+          }
+        }
+      }
+    )
+
+    const baseListMarkdownFiles = api.workspace.listMarkdownFiles.bind(api.workspace)
+    let resolveDelayedList!: (entries: WorkspaceEntry[]) => void
+    const delayedListPromise = new Promise<WorkspaceEntry[]>((resolve) => {
+      resolveDelayedList = resolve
+    })
+    let listCallCount = 0
+    vi.spyOn(api.workspace, 'listMarkdownFiles').mockImplementation(async () => {
+      listCallCount += 1
+      if (listCallCount === 2) {
+        return await delayedListPromise
+      }
+      if (listCallCount === 3) {
+        return [
+          {
+            name: 'alpha.md',
+            path: 'C:/wiki-a/alpha.md',
+            relativePath: 'alpha.md',
+            kind: 'file'
+          }
+        ]
+      }
+      return await baseListMarkdownFiles()
+    })
+    vi.spyOn(api.workspace, 'selectFolder')
+      .mockResolvedValueOnce('C:/wiki-a')
+      .mockResolvedValueOnce('C:/wiki-b')
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('alpha.md'))
+    await screen.findByTestId('document-editor')
+
+    act(() => {
+      emitMenuCommand('open-folder')
+    })
+    await waitFor(() => {
+      expect(listCallCount).toBe(2)
+    })
+
+    // Fire a stale workspace:changed event from C:/wiki-a while openWorkspace is awaiting listMarkdownFiles()
+    act(() => {
+      emitWorkspaceChange({
+        rootPath: 'C:/wiki-a',
+        eventType: 'rename',
+        relativePath: 'alpha.md'
+      })
+    })
+    await waitFor(() => {
+      expect(listCallCount).toBe(3)
+    })
+
+    const wikiBEntries = await baseListMarkdownFiles()
+    await act(async () => {
+      resolveDelayedList(wikiBEntries)
+    })
+
+    expect(await within(explorer).findByText('beta.md')).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /alpha\.md/ })).not.toBeInTheDocument()
+    await user.click(within(explorer).getByText('beta.md'))
+    const rawEl = await screen.findByTestId('document-editor')
+    appendRawEditorText(rawEl, '[](')
+
+    const listbox = await screen.findByRole('listbox', { name: '링크 자동완성' })
+    expect(within(listbox).queryAllByText('alpha.md')).toHaveLength(0)
+    expect(within(listbox).getByText('nested/target.md')).toBeInTheDocument()
+  })
 })
