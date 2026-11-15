@@ -16,13 +16,16 @@ import {
   deleteTableRowPreservingHeader,
   detectProseMirrorLinkQuery,
   extractWysiwygHeadingCandidates,
+  insertWysiwygImages,
   insertWysiwygLink,
   linkInsertPluginKey,
   prepareMarkdownForTiptap,
   type ProseMirrorLinkQueryMatch,
-  sanitizeHtmlWithRehype
+  sanitizeHtmlWithRehype,
+  syncWysiwygImageDisplaySources
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
+import { useEditorImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
 import { useLinkMenu } from '../hooks/useLinkMenu'
 import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
@@ -43,6 +46,8 @@ interface WysiwygMarkdownEditorProps {
   mermaidRenderer?: MermaidRenderer
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   activeFilePath?: string | null
+  documentPath?: string
+  enableImageInsertion?: boolean
   scrollRequest?: WysiwygScrollRequest | null
   isActive?: boolean
   onChangeContent: (nextContent: string) => void
@@ -223,6 +228,8 @@ export function WysiwygMarkdownEditor({
   mermaidRenderer,
   workspaceMarkdownFiles,
   activeFilePath,
+  documentPath,
+  enableImageInsertion = Boolean(documentPath),
   scrollRequest,
   isActive = true,
   onChangeContent,
@@ -242,6 +249,8 @@ export function WysiwygMarkdownEditor({
   enableLinkAutocompleteRef.current = enableLinkAutocomplete
   const isShortcutDisabledRef = useRef(isShortcutDisabled)
   isShortcutDisabledRef.current = isShortcutDisabled
+  const documentPathRef = useRef(documentPath)
+  documentPathRef.current = documentPath
   const editorRef = useRef<Editor | null>(null)
 
   const { linkControlsRef, linkMenuProps } = useLinkMenu<ProseMirrorLinkQueryMatch>({
@@ -256,6 +265,32 @@ export function WysiwygMarkdownEditor({
       insertWysiwygLink(instance, candidate, match)
     }
   })
+
+  const {
+    handlePaste: handleImagePaste,
+    handleDragOver: handleImageDragOver,
+    handleDrop: handleImageDrop
+  } = useEditorImageTransfer<Editor['view']>({
+    documentPath: documentPath ?? null,
+    enableImageInsertion,
+    suppressNativeTabDrop: true,
+    getTarget: () => {
+      const instance = editorRef.current
+      return instance && !instance.isDestroyed ? instance.view : null
+    },
+    posAtCoords: (view, clientX, clientY) =>
+      view.posAtCoords({ left: clientX, top: clientY })?.pos ?? null,
+    getSelectionRange: (view) => ({
+      from: view.state.selection.from,
+      to: view.state.selection.to
+    }),
+    insertImages: (_view, results, range) => {
+      const instance = editorRef.current
+      if (instance && !instance.isDestroyed) {
+        insertWysiwygImages(instance, results, range)
+      }
+    }
+  })
   const dismissLinkMenu = linkMenuProps.onDismiss
 
   const [cellMenuPos, setCellMenuPos] = useState<{ x: number; y: number } | null>(null)
@@ -265,7 +300,9 @@ export function WysiwygMarkdownEditor({
   const editor = useEditor(
     {
       immediatelyRender: true,
-      extensions: createWysiwygExtensions(),
+      extensions: createWysiwygExtensions({
+        getDocumentPath: () => documentPathRef.current
+      }),
       content: prepareMarkdownForTiptap(content),
       contentType: 'markdown',
       editorProps: {
@@ -275,6 +312,11 @@ export function WysiwygMarkdownEditor({
           'aria-label': '위지윅 문서 에디터'
         },
         transformPastedHTML: sanitizeHtmlWithRehype,
+        handlePaste: (view, event) => handleImagePaste(event, view),
+        handleDOMEvents: {
+          dragover: (_view, event) => handleImageDragOver(event),
+          drop: (view, event) => handleImageDrop(event, view)
+        },
         handleKeyDown: (_view, event) => {
           const isCtrlOrMetaK =
             (event.ctrlKey || event.metaKey) &&
@@ -292,7 +334,6 @@ export function WysiwygMarkdownEditor({
             }
             return false
           }
-
           const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
           if (linkControlsRef.current.stateRef.current.isOpen) {
             const activeControls = linkControlsRef.current
@@ -357,6 +398,11 @@ export function WysiwygMarkdownEditor({
     []
   )
   editorRef.current = editor
+
+  useEffect(() => {
+    documentPathRef.current = documentPath
+    syncWysiwygImageDisplaySources(editor, documentPath)
+  }, [documentPath, editor])
 
   const syncEditorContent = useCallback(
     (markdown: string): void => {
@@ -463,6 +509,12 @@ export function WysiwygMarkdownEditor({
       <div
         ref={scrollContainerRef}
         className="wysiwyg-scroll-container"
+        onDragOver={(event) => {
+          handleImageDragOver(event.nativeEvent)
+        }}
+        onDrop={(event) => {
+          handleImageDrop(event.nativeEvent, editor.view)
+        }}
         onContextMenu={(event) => {
           const target = event.target as HTMLElement | null
           const cellEl = target?.closest('td, th')

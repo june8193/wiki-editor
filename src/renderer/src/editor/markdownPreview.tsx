@@ -17,6 +17,7 @@ import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
 import { unified } from 'unified'
 import { MermaidDiagram } from '../components/MermaidDiagram'
+import { resolveImageDisplaySrc } from '@shared/assets'
 import { MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 import { createHeadingSlugTracker, decodeSlugSafely } from './MarkdownTocEngine'
 import type { MermaidRenderer } from './mermaidRenderer'
@@ -24,6 +25,7 @@ import { isLinkNavigationClick } from './editorModes'
 
 export interface MarkdownPreviewRenderOptions {
   theme?: ThemeMode
+  documentPath?: string
   mermaidRenderer?: MermaidRenderer
   documentTitle?: string
   onAnchorNavigate?: (slug: string) => void
@@ -32,6 +34,7 @@ export interface MarkdownPreviewRenderOptions {
 
 interface PreviewRenderContextValue {
   theme: ThemeMode
+  documentPath?: string
   mermaidRenderer?: MermaidRenderer
   documentTitle?: string
   onAnchorNavigate?: (slug: string) => void
@@ -48,6 +51,9 @@ const PreviewRenderContext = createContext<PreviewRenderContextValue>({ theme: '
 function extractHastText(node: HastElement | HastRootContent): string {
   if (node.type === 'text') {
     return node.value
+  }
+  if (node.type === 'element' && node.tagName === 'img') {
+    return typeof node.properties?.alt === 'string' ? node.properties.alt : ''
   }
   if ('children' in node && Array.isArray(node.children)) {
     return node.children.map(extractHastText).join('')
@@ -216,6 +222,18 @@ function PreviewTable(props: ComponentPropsWithoutRef<'table'> & SourceLineDataP
   )
 }
 
+function PreviewImage({ src, ...props }: ComponentPropsWithoutRef<'img'>): ReactNode {
+  const { documentPath } = useContext(PreviewRenderContext)
+  if (typeof src !== 'string') {
+    return <img {...props} />
+  }
+  const resolvedSrc = resolveImageDisplaySrc(src, documentPath)
+  if (!resolvedSrc) {
+    return <img {...props} />
+  }
+  return <img {...props} src={resolvedSrc} />
+}
+
 function buildPreviewProcessor() {
   return unified()
     .use(remarkParse)
@@ -231,6 +249,7 @@ function buildPreviewProcessor() {
       jsxs,
       components: {
         a: SafeLink,
+        img: PreviewImage,
         input: PreviewCheckbox,
         pre: PreviewPre,
         table: PreviewTable
@@ -251,6 +270,7 @@ export function renderMarkdownToReact(
   const file = previewProcessor.processSync(markdown)
   const contextValue: PreviewRenderContextValue = {
     theme: options.theme ?? 'light',
+    documentPath: options.documentPath,
     mermaidRenderer: options.mermaidRenderer,
     documentTitle: options.documentTitle,
     onAnchorNavigate: options.onAnchorNavigate,

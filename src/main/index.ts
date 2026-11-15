@@ -1,8 +1,14 @@
 import { writeFile } from 'node:fs/promises'
 import { release as getOsRelease } from 'node:os'
 import { join } from 'node:path'
+import { WIKI_ASSET_SCHEME } from '@shared/assets'
+import {
+  handleWikiAssetRequest,
+  WIKI_ASSET_PRIVILEGED_SCHEME
+} from './protocol/wikiAssetProtocol'
 import {
   app,
+  protocol,
   type BaseWindow,
   BrowserWindow,
   ClipboardItem,
@@ -32,6 +38,7 @@ import { WorkspaceFsService } from './workspace/WorkspaceFsService'
 import {
   createMainWindowOptions,
   createWindowCloseCoordinator,
+  hardenWindowNavigation,
   registerWindowNavigationGuard
 } from './window'
 
@@ -41,6 +48,7 @@ function createMainWindow(): BrowserWindow {
   const preloadPath = join(__dirname, '../preload/index.js')
   const mainWindow = new BrowserWindow(createMainWindowOptions(preloadPath))
   registerWindowNavigationGuard(mainWindow.webContents)
+  hardenWindowNavigation(mainWindow.webContents)
   windowCloseCoordinator.guardWindow(mainWindow)
 
   mainWindow.once('ready-to-show', () => {
@@ -71,6 +79,8 @@ function showMessageBox(options: MessageBoxOptions): Promise<Electron.MessageBox
 
 const logService = new LogService(join(app.getPath('userData'), 'logs'))
 
+protocol.registerSchemesAsPrivileged([WIKI_ASSET_PRIVILEGED_SCHEME])
+
 let disposeConfigIpc: (() => void) | undefined
 let disposeDiagramIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
@@ -78,10 +88,13 @@ let disposeGitIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
 let disposeClipboardIpc: (() => void) | undefined
 let disposeWindowIpc: (() => void) | undefined
+let disposeWikiAssetProtocol: (() => void) | undefined
 let workspaceService: WorkspaceFsService | undefined
 
 function disposeMainResources(): void {
   windowCloseCoordinator.dispose()
+  disposeWikiAssetProtocol?.()
+  disposeWikiAssetProtocol = undefined
   disposeWindowIpc?.()
   disposeWindowIpc = undefined
   disposeClipboardIpc?.()
@@ -117,9 +130,16 @@ void app.whenReady().then(async () => {
   const configService = new ConfigService(configPath, { logService })
   await configService.get()
 
-  workspaceService = new WorkspaceFsService({
+  const activeWorkspaceService = new WorkspaceFsService({
     trashItem: (targetPath) => shell.trashItem(targetPath)
   })
+  workspaceService = activeWorkspaceService
+  protocol.handle(WIKI_ASSET_SCHEME, (request) =>
+    handleWikiAssetRequest(request, activeWorkspaceService)
+  )
+  disposeWikiAssetProtocol = () => {
+    protocol.unhandle(WIKI_ASSET_SCHEME)
+  }
   const gitService = new GitService({ logService })
 
   const getTargets = () => BrowserWindow.getAllWindows().map((win) => win.webContents)

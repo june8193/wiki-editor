@@ -1,3 +1,4 @@
+import type { WorkspaceImageIngestInput } from '@shared/assets'
 import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import type { WorkspaceEntryKind } from '@shared/workspace'
 import { ConfigService } from '../config/ConfigService'
@@ -76,6 +77,10 @@ export function registerWorkspaceIpc({
     [
       WORKSPACE_IPC_CHANNELS.deleteEntry,
       (_event, targetPath) => workspaceService.deleteEntry(targetPath as string)
+    ],
+    [
+      WORKSPACE_IPC_CHANNELS.ingestImage,
+      (_event, input) => workspaceService.ingestImage(input as WorkspaceImageIngestInput)
     ],
     [
       WORKSPACE_IPC_CHANNELS.watch,

@@ -95,3 +95,28 @@ describe('MarkdownTocEngine', () => {
     expect(formatOutlineHeadingTitle(headings[1], false)).toBe('9. Explicit Prefix')
   })
 })
+
+describe('MarkdownTocEngine inline image alt with parentheses', () => {
+  it('preserves alt text cleanly when heading contains inline image URLs with parentheses or linked images', () => {
+    const markdown = [
+      '# ![Logo](./assets/logo%20(1).png) Alpha',
+      '## ![Icon](<./assets/icon (2).svg>) Beta',
+      '### [![Badge](./assets/badge.png)](https://example.com) Gamma',
+      '#### [![Shield](./assets/shield (1).png)](https://example.com/a_(b)) Delta'
+    ].join('\n')
+
+    const headings = parseMarkdownHeadings(markdown)
+    expect(headings.map((item) => item.title)).toEqual([
+      'Logo Alpha',
+      'Icon Beta',
+      'Badge Gamma',
+      'Shield Delta'
+    ])
+    expect(headings.map((item) => item.slug)).toEqual([
+      'logo-alpha',
+      'icon-beta',
+      'badge-gamma',
+      'shield-delta'
+    ])
+  })
+})

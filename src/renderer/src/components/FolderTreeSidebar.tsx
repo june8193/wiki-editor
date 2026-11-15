@@ -9,12 +9,14 @@ import {
   useRef,
   useState
 } from 'react'
+import { isSupportedImageFile } from '@shared/assets'
 import {
   isSameWorkspacePath,
   WorkspaceEntry,
   WorkspaceEntryKind,
   WorkspaceSummary
 } from '@shared/workspace'
+import { WORKSPACE_IMAGE_DRAG_MIME } from '../utils/dragMimeTypes'
 import { useDismissable } from '../hooks/useDismissable'
 import type { WorkspaceTreeState } from '../hooks/useWorkspaceTree'
 
@@ -97,6 +99,8 @@ interface FolderTreeSidebarProps {
   onRenameEntry: (targetPath: string, newName: string) => Promise<void>
   onRequestDelete: (entry: WorkspaceEntry) => void
   onCopyEntryPath: (entry: WorkspaceEntry, mode: EntryPathCopyMode) => void
+  onDragStartWorkspaceImage?: (filePath: string) => void
+  onDragEndWorkspaceImage?: () => void
 }
 
 export function FolderTreeSidebar({
@@ -112,7 +116,9 @@ export function FolderTreeSidebar({
   onCreateEntry,
   onRenameEntry,
   onRequestDelete,
-  onCopyEntryPath
+  onCopyEntryPath,
+  onDragStartWorkspaceImage,
+  onDragEndWorkspaceImage
 }: FolderTreeSidebarProps) {
   const [inlineCreate, setInlineCreate] = useState<InlineCreateState | null>(null)
   const [createValue, setCreateValue] = useState('')
@@ -261,6 +267,7 @@ export function FolderTreeSidebar({
       const isActiveFile =
         !isDir && activeFilePath !== null && isSameWorkspacePath(activeFilePath, entry.path)
       const isRenaming = renamingEntry?.path === entry.path
+      const isDraggableImage = !isDir && !isRenaming && isSupportedImageFile(entry.path)
       const childEntries = tree.childrenByDir[entry.path] ?? []
       const showCreateInside = inlineCreate?.parentDirPath === entry.path
 
@@ -273,6 +280,24 @@ export function FolderTreeSidebar({
           aria-selected={isSelected}
           tabIndex={0}
           className="tree-item-wrapper"
+          draggable={isDraggableImage}
+          onDragStart={(event) => {
+            if (!isDraggableImage) {
+              return
+            }
+            event.stopPropagation()
+            if (event.dataTransfer) {
+              event.dataTransfer.effectAllowed = 'copy'
+              event.dataTransfer.setData(WORKSPACE_IMAGE_DRAG_MIME, entry.path)
+            }
+            onDragStartWorkspaceImage?.(entry.path)
+          }}
+          onDragEnd={() => {
+            if (!isDraggableImage) {
+              return
+            }
+            onDragEndWorkspaceImage?.()
+          }}
           onKeyDown={(event) => handleTreeItemKeyDown(event, entry)}
           onContextMenu={(event) => handleRowContextMenu(event, entry)}
         >

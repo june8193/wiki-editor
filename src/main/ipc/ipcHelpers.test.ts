@@ -369,7 +369,7 @@ describe('registerIpcHandlers logging wrapper', () => {
 
     const entries = await logService.readEntries()
     expect(entries).toHaveLength(2)
-    const serialized = JSON.stringify(entries)
+    const serialized = JSON.stringify(entries.map(({ timestamp: _ts, ...rest }) => rest))
     expect(serialized).not.toContain('SECRET_SVG_NODE')
     expect(serialized).not.toContain('SECRET_SUGGESTED_PNG')
     expect(serialized).not.toContain('SECRET_SUGGESTED_SVG')
@@ -397,6 +397,77 @@ describe('registerIpcHandlers logging wrapper', () => {
         format: 'svg',
         textLength: secretSvgMarkup.length,
         canceled: true
+      }
+    })
+
+    dispose()
+  })
+
+  it('redacts raw bytes for workspace:ingest-image while logging summary metadata', async () => {
+    const ipcMain = createFakeIpcMain()
+    const dispose = registerIpcHandlers(
+      ipcMain,
+      [
+        [
+          WORKSPACE_IPC_CHANNELS.ingestImage,
+          async () => ({
+            markdownPath: './assets/pic.png',
+            altText: 'pic',
+            savedPath: 'C:\\wiki\\assets\\pic.png'
+          })
+        ]
+      ],
+      { logService }
+    )
+
+    const secretClipboardBytes = new Uint8Array([137, 80, 78, 71, 211, 222])
+    const secretFileBytes = new Uint8Array([241, 242, 243, 244])
+    await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.ingestImage, {
+      documentPath: 'C:\\wiki\\note.md',
+      source: {
+        kind: 'clipboard',
+        bytes: secretClipboardBytes,
+        mimeType: 'image/png'
+      }
+    })
+    await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.ingestImage, {
+      documentPath: 'C:\\wiki\\note.md',
+      source: {
+        kind: 'fileBytes',
+        fileName: 'pic.png',
+        bytes: secretFileBytes
+      }
+    })
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(2)
+    const serialized = JSON.stringify(entries.map(({ timestamp: _ts, ...rest }) => rest))
+    expect(serialized).not.toContain('211')
+    expect(serialized).not.toContain('241')
+    expect(serialized).not.toContain('"bytes"')
+
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: WORKSPACE_IPC_CHANNELS.ingestImage,
+        success: true,
+        documentPath: 'C:\\wiki\\note.md',
+        sourceKind: 'clipboard',
+        mimeType: 'image/png',
+        byteLength: 6
+      }
+    })
+    expect(entries[1]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: WORKSPACE_IPC_CHANNELS.ingestImage,
+        success: true,
+        documentPath: 'C:\\wiki\\note.md',
+        sourceKind: 'fileBytes',
+        fileName: 'pic.png',
+        byteLength: 4
       }
     })
 

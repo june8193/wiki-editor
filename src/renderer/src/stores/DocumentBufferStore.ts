@@ -6,10 +6,12 @@ import {
 } from '@shared/workspace'
 
 export type DocumentKind = 'workspace' | 'config'
+export type DocumentContentKind = 'text' | 'image'
 
 export interface DocumentBuffer {
   key: string
   kind: DocumentKind
+  contentKind: DocumentContentKind
   path: string
   name: string
   content: string
@@ -19,12 +21,20 @@ export interface DocumentBuffer {
   isSaving: boolean
 }
 
-export interface OpenBufferInput {
-  kind: DocumentKind
-  path: string
-  name?: string
-  content: string
-}
+export type OpenBufferInput =
+  | {
+      kind: DocumentKind
+      contentKind?: 'text'
+      path: string
+      name?: string
+      content: string
+    }
+  | {
+      kind: 'workspace'
+      contentKind: 'image'
+      path: string
+      name?: string
+    }
 
 export interface BufferKeyRemap {
   oldKey: string
@@ -113,13 +123,17 @@ export class DocumentBufferStore {
       return existing
     }
 
+    const contentKind: DocumentContentKind = input.contentKind === 'image' ? 'image' : 'text'
+    const initialContent = input.contentKind === 'image' ? '' : input.content
+
     const created: DocumentBuffer = {
       key,
       kind: input.kind,
+      contentKind,
       path: input.path,
       name: input.name?.trim() || getWorkspaceDisplayName(input.path),
-      content: input.content,
-      savedContent: input.content,
+      content: initialContent,
+      savedContent: initialContent,
       isDirty: false,
       version: 1,
       isSaving: false
@@ -128,57 +142,74 @@ export class DocumentBufferStore {
     return created
   }
 
-  updateContent(pathOrKey: string, nextContent: string): void {
+  private updateMutableTextBuffer(
+    pathOrKey: string,
+    transform: (current: DocumentBuffer) => DocumentBuffer | null
+  ): void {
     const key = this.resolveKey(pathOrKey)
     const current = this.buffers[key]
-    if (!current || current.content === nextContent) return
-
-    const updated: DocumentBuffer = {
-      ...current,
-      content: nextContent,
-      isDirty: nextContent !== current.savedContent,
-      version: current.version + 1
-    }
+    if (!current || current.contentKind === 'image') return
+    const updated = transform(current)
+    if (!updated) return
     this.commit({ ...this.buffers, [key]: updated })
   }
 
-  markSaved(pathOrKey: string, savedContent: string): void {
-    const key = this.resolveKey(pathOrKey)
-    const current = this.buffers[key]
-    if (!current) return
+  updateContent(pathOrKey: string, nextContent: string): void {
+    this.updateMutableTextBuffer(pathOrKey, (current) => {
+      if (current.content === nextContent) return null
+      return {
+        ...current,
+        content: nextContent,
+        isDirty: nextContent !== current.savedContent,
+        version: current.version + 1
+      }
+    })
+  }
 
-    const updated: DocumentBuffer = {
+  markSaved(pathOrKey: string, savedContent: string): void {
+    this.updateMutableTextBuffer(pathOrKey, (current) => ({
       ...current,
       savedContent,
       isDirty: current.content !== savedContent,
       version: current.version + 1
-    }
-    this.commit({ ...this.buffers, [key]: updated })
+    }))
   }
 
   setSaving(pathOrKey: string, isSaving: boolean): void {
-    const key = this.resolveKey(pathOrKey)
-    const current = this.buffers[key]
-    if (!current || current.isSaving === isSaving) return
-
-    const updated: DocumentBuffer = {
-      ...current,
-      isSaving
-    }
-    this.commit({ ...this.buffers, [key]: updated })
+    this.updateMutableTextBuffer(pathOrKey, (current) => {
+      if (current.isSaving === isSaving) return null
+      return {
+        ...current,
+        isSaving
+      }
+    })
   }
 
   refreshCleanContent(pathOrKey: string, freshContent: string): void {
+    this.updateMutableTextBuffer(pathOrKey, (current) => {
+      if (current.isDirty) return null
+      if (current.content === freshContent && current.savedContent === freshContent) return null
+      return {
+        ...current,
+        content: freshContent,
+        savedContent: freshContent,
+        isDirty: false,
+        version: current.version + 1
+      }
+    })
+  }
+
+  /**
+   * Increments the buffer revision of a read-only image buffer so its wiki-asset preview URL
+   * busts Chromium's image cache after external disk updates.
+   */
+  refreshImageAsset(pathOrKey: string): void {
     const key = this.resolveKey(pathOrKey)
     const current = this.buffers[key]
-    if (!current || current.isDirty) return
-    if (current.content === freshContent && current.savedContent === freshContent) return
+    if (!current || current.contentKind !== 'image') return
 
     const updated: DocumentBuffer = {
       ...current,
-      content: freshContent,
-      savedContent: freshContent,
-      isDirty: false,
       version: current.version + 1
     }
     this.commit({ ...this.buffers, [key]: updated })

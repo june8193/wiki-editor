@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   cycleEditorMode,
   getRawEditorLanguage,
+  isImageDocument,
   isLinkNavigationClick,
   isMarkdownDocument,
+  isSaveShortcut,
   resolveEditorShortcut,
   resolveEffectiveEditorMode,
   resolveModeShortcut
@@ -176,5 +178,37 @@ describe('editorModes helpers', () => {
         })
       ).toBe(false)
     }
+  })
+
+  it('disables markdown modes, save shortcut, and mode shortcuts for read-only image buffers', () => {
+    const imageDoc = { kind: 'workspace' as const, contentKind: 'image' as const, name: 'diagram.png' }
+    const textDoc = { kind: 'workspace' as const, contentKind: 'text' as const, name: 'guide.md' }
+
+    expect(isImageDocument(imageDoc)).toBe(true)
+    expect(isImageDocument(textDoc)).toBe(false)
+    expect(isMarkdownDocument(imageDoc)).toBe(false)
+    expect(resolveEffectiveEditorMode(imageDoc, 'split')).toEqual({
+      allowRichModes: false,
+      effectiveMode: 'raw'
+    })
+
+    expect(
+      isSaveShortcut({ key: 's', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false })
+    ).toBe(true)
+    expect(
+      resolveEditorShortcut({ key: 's', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false, true)
+    ).toEqual({ type: 'suppressed' })
+    expect(
+      resolveEditorShortcut({ key: '1', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false, true)
+    ).toEqual({ type: 'suppressed' })
+    expect(
+      resolveEditorShortcut({ key: '2', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false, true)
+    ).toEqual({ type: 'suppressed' })
+    expect(
+      resolveEditorShortcut({ key: 'M', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, 'raw', false, true)
+    ).toEqual({ type: 'suppressed' })
+    expect(
+      resolveEditorShortcut({ key: 'k', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', false, true)
+    ).toBeNull()
   })
 })

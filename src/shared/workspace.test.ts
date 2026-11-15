@@ -3,12 +3,14 @@ import {
   addFavoriteWorkspace,
   formatAbsoluteEntryPath,
   formatRelativeEntryPath,
+  getParentDirectory,
   getParentPath,
   getWorkspaceDisplayName,
   isFavoriteWorkspacePath,
   isMarkdownFileName,
   isNestedOrSamePath,
   isSameWorkspacePath,
+  isWorkspaceChangeAffectingPath,
   joinWorkspacePath,
   matchPathSeparators,
   normalizeWorkspacePath,
@@ -227,5 +229,49 @@ describe('shared workspace path and favorites helpers', () => {
     ]) {
       expect(invalidCase).toEqual({ ok: false, reason: 'invalid' })
     }
+  })
+
+  it('resolves parent directory and matches workspace change events against target paths', () => {
+    expect(getParentDirectory('C:/wiki/assets/logo.png')).toBe('C:\\wiki\\assets')
+    expect(getParentDirectory('C:/logo.png')).toBe('C:\\')
+    expect(getParentDirectory('/wiki/assets/logo.png')).toBe('/wiki/assets')
+    expect(getParentDirectory('/logo.png')).toBe('/')
+
+    const target = 'C:/wiki/assets/logo.png'
+    expect(isWorkspaceChangeAffectingPath(target)).toBe(true)
+    expect(
+      isWorkspaceChangeAffectingPath(target, { rootPath: 'C:/wiki', eventType: 'change', relativePath: null })
+    ).toBe(true)
+    expect(
+      isWorkspaceChangeAffectingPath(target, { rootPath: 'C:/wiki', eventType: 'change', relativePath: '.' })
+    ).toBe(true)
+    expect(
+      isWorkspaceChangeAffectingPath(target, {
+        rootPath: 'C:\\Wiki\\',
+        eventType: 'change',
+        relativePath: 'Assets/logo.png'
+      })
+    ).toBe(true)
+    expect(
+      isWorkspaceChangeAffectingPath(target, {
+        rootPath: 'C:/wiki',
+        eventType: 'rename',
+        relativePath: 'assets'
+      })
+    ).toBe(true)
+    expect(
+      isWorkspaceChangeAffectingPath(target, {
+        rootPath: 'C:/wiki',
+        eventType: 'change',
+        relativePath: 'docs/other.md'
+      })
+    ).toBe(false)
+    expect(
+      isWorkspaceChangeAffectingPath(target, {
+        rootPath: 'C:/wiki',
+        eventType: 'change',
+        relativePath: 'assets-other/logo.png'
+      })
+    ).toBe(false)
   })
 })

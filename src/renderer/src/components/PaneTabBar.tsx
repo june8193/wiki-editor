@@ -1,4 +1,5 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
+import { TAB_DRAG_MIME } from '../utils/dragMimeTypes'
 import { useDismissable } from '../hooks/useDismissable'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { GitDiffViewMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
@@ -37,8 +38,6 @@ interface TabContextMenuState {
   x: number
   y: number
 }
-
-const TAB_DRAG_MIME = 'application/x-wiki-tab'
 
 export function parseDraggingTabPayload(
   event: DragEvent,

@@ -73,6 +73,25 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
       return { format, textLength: req.data.length }
     }
     return format === 'svg' ? { format, textLength: 0 } : { format, byteLength: 0 }
+  },
+  [WORKSPACE_IPC_CHANNELS.ingestImage]: ([input]) => {
+    const payload =
+      input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
+    const source =
+      payload.source && typeof payload.source === 'object'
+        ? (payload.source as Record<string, unknown>)
+        : {}
+    const bytes = source.bytes
+    const byteLength =
+      bytes instanceof Uint8Array || ArrayBuffer.isView(bytes) ? bytes.byteLength : undefined
+    return {
+      documentPath: payload.documentPath,
+      sourceKind: source.kind,
+      ...(typeof source.mimeType === 'string' ? { mimeType: source.mimeType } : {}),
+      ...(typeof source.fileName === 'string' ? { fileName: source.fileName } : {}),
+      ...(typeof source.filePath === 'string' ? { filePath: source.filePath } : {}),
+      ...(byteLength !== undefined ? { byteLength } : {})
+    }
   }
 }
 

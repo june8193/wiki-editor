@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
-import { getWorkspaceDisplayName, getWorkspacePathKey, WorkspaceEntry } from '@shared/workspace'
-import { resolveEditorShortcut, resolveEffectiveEditorMode } from '../editor/editorModes'
+import { isSupportedImageFile } from '@shared/assets'
+import {
+  getParentDirectory,
+  getWorkspaceDisplayName,
+  getWorkspacePathKey,
+  isSameWorkspacePath,
+  isWorkspaceChangeAffectingPath,
+  WorkspaceChangeEvent,
+  WorkspaceEntry
+} from '@shared/workspace'
+import {
+  isImageDocument,
+  resolveEditorShortcut,
+  resolveEffectiveEditorMode
+} from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
 import { DocumentBuffer, DocumentBufferStore, type DocumentKind } from '../stores/DocumentBufferStore'
 import {
@@ -40,8 +53,53 @@ function isMissingWorkspaceFileError(error: unknown): boolean {
   return (
     message.includes('경로를 찾을 수 없습니다') ||
     message.includes('파일을 찾을 수 없습니다') ||
+    message.includes('폴더를 찾을 수 없습니다') ||
     message.includes('ENOENT')
   )
+}
+
+function isWritableWorkspaceTextBuffer(
+  buffer: DocumentBuffer | undefined
+): buffer is DocumentBuffer {
+  return Boolean(buffer && buffer.kind === 'workspace' && !isImageDocument(buffer))
+}
+
+function isAutoSavableBuffer(buffer: DocumentBuffer | undefined): buffer is DocumentBuffer {
+  return isWritableWorkspaceTextBuffer(buffer) && buffer.isDirty && !buffer.isSaving
+}
+
+type ImageParentDirReadResult =
+  | { status: 'ok'; entries: readonly WorkspaceEntry[] }
+  | { status: 'missing' }
+  | { status: 'error' }
+
+async function readImageParentDirectories(
+  imageBuffers: readonly DocumentBuffer[]
+): Promise<Map<string, ImageParentDirReadResult>> {
+  const parentDirByKey = new Map<string, string>()
+  for (const buffer of imageBuffers) {
+    const parentDir = getParentDirectory(buffer.path)
+    const parentKey = getWorkspacePathKey(parentDir)
+    if (!parentDirByKey.has(parentKey)) {
+      parentDirByKey.set(parentKey, parentDir)
+    }
+  }
+
+  const results = new Map<string, ImageParentDirReadResult>()
+  await Promise.all(
+    [...parentDirByKey.entries()].map(async ([parentKey, parentDir]) => {
+      try {
+        const entries = await window.wikiApi.workspace.readDir(parentDir)
+        results.set(parentKey, { status: 'ok', entries })
+      } catch (error: unknown) {
+        results.set(
+          parentKey,
+          isMissingWorkspaceFileError(error) ? { status: 'missing' } : { status: 'error' }
+        )
+      }
+    })
+  )
+  return results
 }
 
 function logPaneTabTransition(
@@ -192,6 +250,9 @@ export function useEditorWorkspace({
 
   const saveBufferSnapshot = useCallback(
     (snapshot: DocumentBuffer, options?: { clearError?: boolean }): Promise<boolean> => {
+      if (isImageDocument(snapshot)) {
+        return Promise.resolve(true)
+      }
       const existing = inFlightSavesRef.current.get(snapshot.key)
       if (existing) {
         return existing.promise
@@ -245,7 +306,12 @@ export function useEditorWorkspace({
   const saveBufferByKey = useCallback(
     (bufferKey: string): void => {
       const current = bufferStore.getBuffer(bufferKey)
-      if (!current || !current.isDirty || inFlightSavesRef.current.has(current.key)) {
+      if (
+        !current ||
+        isImageDocument(current) ||
+        !current.isDirty ||
+        inFlightSavesRef.current.has(current.key)
+      ) {
         return
       }
       void saveBufferSnapshot({ ...current })
@@ -268,7 +334,7 @@ export function useEditorWorkspace({
         bufferKey = inFlight.currentKey
       }
       const latest = bufferStore.getBuffer(bufferKey)
-      if (!latest || !latest.isDirty) {
+      if (!latest || isImageDocument(latest) || !latest.isDirty) {
         return true
       }
       return saveBufferSnapshot({ ...latest }, options)
@@ -336,18 +402,19 @@ export function useEditorWorkspace({
       const activeTab = tabStore.getActiveTab()
       if (!activeTab || activeTab.kind === 'diff') return
       const activeBuffer = bufferStore.getBuffer(activeTab.bufferKey)
+      const isImage = isImageDocument(activeBuffer)
       const { allowRichModes, effectiveMode } = resolveEffectiveEditorMode(
         activeBuffer,
         activeTab.mode
       )
 
-      const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes)
+      const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes, isImage)
       if (!shortcut) return
 
       event.preventDefault()
       if (shortcut.type === 'save') {
         saveActivePaneDocument()
-      } else if (shortcut.mode !== activeTab.mode) {
+      } else if (shortcut.type === 'mode' && shortcut.mode !== activeTab.mode) {
         tabStore.updateTabViewState(tabStore.getSnapshot().activePaneId, activeTab.id, {
           mode: shortcut.mode
         })
@@ -373,13 +440,7 @@ export function useEditorWorkspace({
 
     for (const [key, entry] of timers.entries()) {
       const buf = buffers[key]
-      if (
-        !buf ||
-        buf.kind !== 'workspace' ||
-        !buf.isDirty ||
-        buf.isSaving ||
-        buf.version !== entry.version
-      ) {
+      if (!isAutoSavableBuffer(buf) || buf.version !== entry.version) {
         window.clearTimeout(entry.timerId)
         timers.delete(key)
       }
@@ -387,13 +448,13 @@ export function useEditorWorkspace({
 
     for (const attemptedKey of lastAutoSaveAttemptVersionRef.current.keys()) {
       const buf = buffers[attemptedKey]
-      if (!buf || !buf.isDirty) {
+      if (!isWritableWorkspaceTextBuffer(buf) || !buf.isDirty) {
         lastAutoSaveAttemptVersionRef.current.delete(attemptedKey)
       }
     }
 
     for (const buf of Object.values(buffers)) {
-      if (buf.kind !== 'workspace' || !buf.isDirty || buf.isSaving) continue
+      if (!isAutoSavableBuffer(buf)) continue
       if (lastAutoSaveAttemptVersionRef.current.get(buf.key) === buf.version) continue
       if (timers.has(buf.key)) continue
 
@@ -402,7 +463,9 @@ export function useEditorWorkspace({
         timers.delete(buf.key)
         if (isAutoSavePausedRef.current) return
         const latest = bufferStore.getBuffer(buf.key)
-        if (!latest || latest.kind !== 'workspace' || !latest.isDirty || latest.isSaving) return
+        if (!isAutoSavableBuffer(latest)) {
+          return
+        }
         if (latest.version !== scheduledVersion) return
         lastAutoSaveAttemptVersionRef.current.set(latest.key, scheduledVersion)
         void saveBufferSnapshot({ ...latest })
@@ -411,6 +474,24 @@ export function useEditorWorkspace({
       timers.set(buf.key, { version: scheduledVersion, timerId })
     }
   }, [autoSave, autoSaveDelayMs, isAutoSavePaused, buffers, bufferStore, saveBufferSnapshot])
+
+  const openImageWorkspaceTab = useCallback(
+    (
+      filePath: string,
+      targetPaneId?: PaneId,
+      explicitName?: string
+    ): OpenedWorkspaceDocument => {
+      const buf = bufferStore.openBuffer({
+        kind: 'workspace',
+        contentKind: 'image',
+        path: filePath,
+        name: explicitName ?? getWorkspaceDisplayName(filePath)
+      })
+      const tab = tabStore.openTab(buf.key, { paneId: targetPaneId })
+      return { buffer: buf, tab }
+    },
+    [bufferStore, tabStore]
+  )
 
   const openWorkspaceFile = useCallback(
     async (
@@ -426,6 +507,9 @@ export function useEditorWorkspace({
       }
 
       callbacksRef.current.onError(null)
+      if (isSupportedImageFile(filePath)) {
+        return openImageWorkspaceTab(filePath, targetPaneId, explicitName)
+      }
       try {
         const content = await window.wikiApi.workspace.readFile(filePath)
         if (!mountedRef.current) return null
@@ -444,7 +528,7 @@ export function useEditorWorkspace({
         return null
       }
     },
-    [bufferStore, tabStore]
+    [bufferStore, openImageWorkspaceTab, tabStore]
   )
 
   const openConfigDocument = useCallback(
@@ -500,6 +584,10 @@ export function useEditorWorkspace({
 
   const openCreatedFile = useCallback(
     (created: WorkspaceEntry): void => {
+      if (isSupportedImageFile(created.path)) {
+        openImageWorkspaceTab(created.path, undefined, created.name)
+        return
+      }
       const buf = bufferStore.openBuffer({
         kind: 'workspace',
         path: created.path,
@@ -508,7 +596,7 @@ export function useEditorWorkspace({
       })
       tabStore.openTab(buf.key)
     },
-    [bufferStore, tabStore]
+    [bufferStore, openImageWorkspaceTab, tabStore]
   )
 
   const updateBufferContent = useCallback(
@@ -621,62 +709,96 @@ export function useEditorWorkspace({
     [bufferStore, cleanupBufferTracking, tabStore]
   )
 
-  const reconcileWorkspaceBuffersWithDisk = useCallback(async (): Promise<readonly string[]> => {
-    const openWorkspaceBuffers = bufferStore
-      .getAllBuffers()
-      .filter((buffer) => buffer.kind === 'workspace')
-    if (openWorkspaceBuffers.length === 0) return []
+  const reconcileWorkspaceBuffersWithDisk = useCallback(
+    async (changeEvent?: WorkspaceChangeEvent): Promise<readonly string[]> => {
+      const openWorkspaceBuffers = bufferStore
+        .getAllBuffers()
+        .filter((buffer) => buffer.kind === 'workspace')
+      if (openWorkspaceBuffers.length === 0) return []
 
-    const conflictNames: string[] = []
-    const missingDirtyNames: string[] = []
+      const textBuffers = openWorkspaceBuffers.filter((buffer) => !isImageDocument(buffer))
+      const imageBuffers = openWorkspaceBuffers.filter((buffer) => isImageDocument(buffer))
 
-    await Promise.all(
-      openWorkspaceBuffers.map(async (buffer) => {
-        const latest = bufferStore.getBuffer(buffer.key)
-        if (!latest || latest.kind !== 'workspace') return
-        if (latest.isSaving || inFlightSavesRef.current.has(latest.key)) return
+      const conflictNames: string[] = []
+      const missingDirtyNames: string[] = []
 
-        try {
-          const diskContent = await window.wikiApi.workspace.readFile(latest.path)
-          if (!mountedRef.current) return
-          const current = bufferStore.getBuffer(latest.key)
-          if (!current || current.kind !== 'workspace') return
-          if (current.isSaving || inFlightSavesRef.current.has(current.key)) return
+      const reconcileTextTask = Promise.all(
+        textBuffers.map(async (buffer) => {
+          const latest = bufferStore.getBuffer(buffer.key)
+          if (!isWritableWorkspaceTextBuffer(latest)) return
+          if (latest.isSaving || inFlightSavesRef.current.has(latest.key)) return
 
-          if (!current.isDirty) {
-            clearAutoSaveTimer(current.key)
-            bufferStore.refreshCleanContent(current.key, diskContent)
-          } else if (diskContent !== current.savedContent) {
-            conflictNames.push(current.name)
+          try {
+            const diskContent = await window.wikiApi.workspace.readFile(latest.path)
+            if (!mountedRef.current) return
+            const current = bufferStore.getBuffer(latest.key)
+            if (!isWritableWorkspaceTextBuffer(current)) return
+            if (current.isSaving || inFlightSavesRef.current.has(current.key)) return
+
+            if (!current.isDirty) {
+              clearAutoSaveTimer(current.key)
+              bufferStore.refreshCleanContent(current.key, diskContent)
+            } else if (diskContent !== current.savedContent) {
+              conflictNames.push(current.name)
+            }
+          } catch (error: unknown) {
+            if (!mountedRef.current) return
+            const current = bufferStore.getBuffer(latest.key)
+            if (!isWritableWorkspaceTextBuffer(current)) return
+            if (!isMissingWorkspaceFileError(error)) return
+
+            if (!current.isDirty) {
+              syncDeletedPath(current.path)
+            } else {
+              missingDirtyNames.push(current.name)
+            }
           }
-        } catch (error: unknown) {
-          if (!mountedRef.current) return
-          const current = bufferStore.getBuffer(latest.key)
-          if (!current || current.kind !== 'workspace') return
-          if (!isMissingWorkspaceFileError(error)) return
-
-          if (!current.isDirty) {
-            syncDeletedPath(current.path)
-          } else {
-            missingDirtyNames.push(current.name)
-          }
-        }
-      })
-    )
-
-    const warnings: string[] = []
-    if (conflictNames.length > 0) {
-      warnings.push(
-        `외부 변경과 미저장 편집 내용이 충돌할 수 있습니다 (${conflictNames.join(', ')}).`
+        })
       )
-    }
-    if (missingDirtyNames.length > 0) {
-      warnings.push(
-        `외부 변경으로 삭제되었으나 미저장 편집 내용이 남아 있습니다 (${missingDirtyNames.join(', ')}).`
-      )
-    }
-    return warnings
-  }, [bufferStore, clearAutoSaveTimer, syncDeletedPath])
+
+      const reconcileImageTask =
+        imageBuffers.length === 0
+          ? Promise.resolve()
+          : readImageParentDirectories(imageBuffers).then((dirResults) => {
+              if (!mountedRef.current) return
+              for (const buffer of imageBuffers) {
+                const current = bufferStore.getBuffer(buffer.key)
+                if (!current || current.kind !== 'workspace' || !isImageDocument(current)) continue
+                const parentKey = getWorkspacePathKey(getParentDirectory(current.path))
+                const dirResult = dirResults.get(parentKey)
+                if (!dirResult || dirResult.status === 'error') continue
+                if (dirResult.status === 'missing') {
+                  syncDeletedPath(current.path)
+                  continue
+                }
+                const exists = dirResult.entries.some(
+                  (entry) => entry.kind === 'file' && isSameWorkspacePath(entry.path, current.path)
+                )
+                if (!exists) {
+                  syncDeletedPath(current.path)
+                } else if (isWorkspaceChangeAffectingPath(current.path, changeEvent)) {
+                  bufferStore.refreshImageAsset(current.key)
+                }
+              }
+            })
+
+      await Promise.all([reconcileTextTask, reconcileImageTask])
+
+      const warnings: string[] = []
+      if (conflictNames.length > 0) {
+        warnings.push(
+          `외부 변경과 미저장 편집 내용이 충돌할 수 있습니다 (${conflictNames.join(', ')}).`
+        )
+      }
+      if (missingDirtyNames.length > 0) {
+        warnings.push(
+          `외부 변경으로 삭제되었으나 미저장 편집 내용이 남아 있습니다 (${missingDirtyNames.join(', ')}).`
+        )
+      }
+      return warnings
+    },
+    [bufferStore, clearAutoSaveTimer, syncDeletedPath]
+  )
 
   return {
     buffers,

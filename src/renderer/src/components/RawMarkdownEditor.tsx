@@ -18,6 +18,8 @@ interface RawMarkdownEditorProps {
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   activeFilePath?: string | null
+  documentPath?: string
+  enableImageInsertion?: boolean
   scrollRequest?: RawScrollRequest | null
   isActive?: boolean
   editorViewRef?: { current: EditorView | null }
@@ -25,8 +27,7 @@ interface RawMarkdownEditorProps {
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onLinkNavigate?: (href: string) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
-  onRawScroll?: () => void
-}
+  onRawScroll?: () => void}
 
 const RAW_TABLE_BUTTONS: ReadonlyArray<{
   action: RawTableAction
@@ -56,6 +57,8 @@ export function RawMarkdownEditor({
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   activeFilePath,
+  documentPath,
+  enableImageInsertion = language === 'markdown' && Boolean(documentPath),
   scrollRequest,
   isActive = true,
   editorViewRef,
@@ -65,7 +68,7 @@ export function RawMarkdownEditor({
   onActiveHeadingChange,
   onRawScroll
 }: RawMarkdownEditorProps) {
-  const { shellRef, hostRef, inTable, runTableAction, linkMenuProps } =
+  const { shellRef, hostRef, inTable, runTableAction, linkMenuProps, shellDragProps } =
     useRawCodeMirrorEditor({
       content,
       language,
@@ -77,6 +80,8 @@ export function RawMarkdownEditor({
       isShortcutDisabled,
       workspaceMarkdownFiles,
       activeFilePath,
+      documentPath,
+      enableImageInsertion,
       scrollRequest,
       isActive,
       editorViewRef,
@@ -88,7 +93,7 @@ export function RawMarkdownEditor({
     })
 
   return (
-    <div ref={shellRef} className="raw-editor-shell">
+    <div ref={shellRef} className="raw-editor-shell" {...shellDragProps}>
       {showTableToolbar && (
         <div className="editor-toolbar" role="toolbar" aria-label="Raw 표 편집 툴바">
           {RAW_TABLE_BUTTONS.map((btn) => (

@@ -16,6 +16,7 @@ import {
 import { tags } from '@lezer/highlight'
 import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
+import { formatRawMarkdownImages } from '../editor/imageIngestion'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
 import {
@@ -31,6 +32,7 @@ import {
   measureActiveHeadingIndexInRawEditor
 } from '../editor/outlineScrollSpy'
 import type { CursorPosition } from '../stores/PaneTabStore'
+import { useEditorImageTransfer } from './useEditorImageTransfer'
 import { useEditorOutlineSpy } from './useEditorOutlineSpy'
 import { useLinkMenu } from './useLinkMenu'
 import { syncElementScrollTop } from './useSyncScrollTop'
@@ -54,6 +56,8 @@ export interface UseRawCodeMirrorEditorOptions {
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   activeFilePath?: string | null
+  documentPath?: string
+  enableImageInsertion?: boolean
   scrollRequest?: RawScrollRequest | null
   isActive?: boolean
   editorViewRef?: { current: EditorView | null }
@@ -61,8 +65,7 @@ export interface UseRawCodeMirrorEditorOptions {
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onLinkNavigate?: (href: string) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
-  onRawScroll?: () => void
-}
+  onRawScroll?: () => void}
 
 const markdownHighlightStyle = HighlightStyle.define([
   { tag: [tags.heading, tags.heading1, tags.heading2, tags.heading3], color: 'var(--cm-heading)', fontWeight: '700' },
@@ -200,6 +203,8 @@ export function useRawCodeMirrorEditor({
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   activeFilePath,
+  documentPath,
+  enableImageInsertion = language === 'markdown' && Boolean(documentPath),
   scrollRequest,
   isActive = true,
   editorViewRef,
@@ -266,6 +271,32 @@ export function useRawCodeMirrorEditor({
         changes: { from: edit.from, to: edit.to, insert: edit.text },
         selection: { anchor: edit.cursorOffset },
         annotations: linkInsertAnnotation.of(true)
+      })
+      view.focus()
+    }
+  })
+
+  const {
+    handlePaste: handleImagePaste,
+    handleDragOver: handleImageDragOver,
+    handleDrop: handleImageDrop
+  } = useEditorImageTransfer<EditorView>({
+    documentPath: documentPath ?? null,
+    enableImageInsertion,
+    getTarget: () => viewRef.current,
+    posAtCoords: (view, clientX, clientY) => view.posAtCoords({ x: clientX, y: clientY }),
+    getSelectionRange: (view) => {
+      const sel = view.state.selection.main
+      return { from: sel.from, to: sel.to }
+    },
+    insertImages: (view, results, range) => {
+      const docLen = view.state.doc.length
+      const clampedFrom = Math.max(0, Math.min(range.from, docLen))
+      const clampedTo = Math.max(clampedFrom, Math.min(range.to, docLen))
+      const markdownText = formatRawMarkdownImages(results)
+      view.dispatch({
+        changes: { from: clampedFrom, to: clampedTo, insert: markdownText },
+        selection: { anchor: clampedFrom + markdownText.length }
       })
       view.focus()
     }
@@ -385,6 +416,13 @@ export function useRawCodeMirrorEditor({
           'aria-label': '문서 에디터',
           spellcheck: 'false'
         }),
+        Prec.high(
+          EditorView.domEventHandlers({
+            paste: (event, view) => handleImagePaste(event, view),
+            dragover: (event) => handleImageDragOver(event),
+            drop: (event, view) => handleImageDrop(event, view)
+          })
+        ),
         EditorView.updateListener.of((update) => {
           syncSelectionAttrs(update.view)
           if (update.transactions.some((tr) => tr.annotation(externalSyncAnnotation))) {
@@ -597,6 +635,14 @@ export function useRawCodeMirrorEditor({
     hostRef,
     inTable,
     runTableAction,
-    linkMenuProps
+    linkMenuProps,
+    shellDragProps: {
+      onDragOver: (event: { nativeEvent: DragEvent }) => {
+        handleImageDragOver(event.nativeEvent)
+      },
+      onDrop: (event: { nativeEvent: DragEvent }) => {
+        handleImageDrop(event.nativeEvent, viewRef.current)
+      }
+    }
   }
 }

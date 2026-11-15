@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { WikiApi } from '@shared/ipc'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
+import { buildWikiAssetUrl } from '@shared/assets'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { DocumentEditor } from './DocumentEditor'
 import type { DocumentBuffer } from '../stores/DocumentBufferStore'
@@ -21,6 +22,7 @@ function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
     isDirty: false,
     version: 1,
     isSaving: false,
+    contentKind: 'text',
     ...overrides
   }
 }
@@ -1139,5 +1141,309 @@ describe('DocumentEditor Mermaid export title propagation', () => {
     } finally {
       canvasStub.restore()
     }
+  })
+})
+
+describe('DocumentEditor local markdown image rendering across modes', () => {
+  it('renders workspace relative images with wiki-asset URLs in WYSIWYG, Preview, and Split without mutating markdown', async () => {
+    const markdown = [
+      '# Images',
+      '',
+      '![local](./assets/pic.png)',
+      '',
+      '![ext](https://example.com/banner.png)'
+    ].join('\n')
+
+    const doc = {
+      key: 'file:/vault/docs/guide.md',
+      kind: 'workspace' as const,
+      contentKind: 'text' as const,
+      name: 'guide.md',
+      path: '/vault/docs/guide.md',
+      content: markdown,
+      savedContent: markdown,
+      isDirty: false,
+      isSaving: false,
+      version: 1
+    }
+    const baseTab = {
+      id: 'tab-1',
+      kind: 'document' as const,
+      bufferKey: doc.key,
+      mode: 'wysiwyg' as const,
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0,
+      splitPreviewRatio: 0.5
+    }
+    const onChangeContent = vi.fn()
+    const onSave = vi.fn()
+    const onUpdateViewState = vi.fn()
+
+    const expectedWikiUrl = buildWikiAssetUrl('/vault/docs/assets/pic.png')
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={doc}
+        tab={baseTab}
+        theme="light"
+        autoSave={false}
+        onChangeContent={onChangeContent}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'local' })).toHaveAttribute('src', expectedWikiUrl)
+    })
+    expect(screen.getByRole('img', { name: 'local' })).toHaveAttribute(
+      'data-markdown-src',
+      './assets/pic.png'
+    )
+    expect(screen.getByRole('img', { name: 'ext' })).toHaveAttribute(
+      'src',
+      'https://example.com/banner.png'
+    )
+
+    rerender(
+      <DocumentEditor
+        document={doc}
+        tab={{ ...baseTab, mode: 'preview' }}
+        theme="light"
+        autoSave={false}
+        onChangeContent={onChangeContent}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    expect(screen.getByRole('img', { name: 'local' })).toHaveAttribute('src', expectedWikiUrl)
+    expect(screen.getByRole('img', { name: 'ext' })).toHaveAttribute(
+      'src',
+      'https://example.com/banner.png'
+    )
+
+    rerender(
+      <DocumentEditor
+        document={doc}
+        tab={{ ...baseTab, mode: 'split' }}
+        theme="light"
+        autoSave={false}
+        onChangeContent={onChangeContent}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    const splitPreview = screen.getByTestId('split-markdown-preview')
+    expect(within(splitPreview).getByRole('img', { name: 'local' })).toHaveAttribute(
+      'src',
+      expectedWikiUrl
+    )
+    expect(screen.getByTestId('document-editor').textContent).toContain('./assets/pic.png')
+    expect(screen.getByTestId('document-editor').textContent).not.toContain('wiki-asset:')
+    expect(onChangeContent).not.toHaveBeenCalled()
+  })
+
+  it('inserts images from Split left Raw editor and renders preview without wiki-asset leak while disabling non-markdown ingestion', async () => {
+    const ingestImage = vi.fn(async () => ({
+      markdownPath: './assets/doc-20260402-090507.png',
+      altText: 'doc-20260402-090507',
+      savedPath: 'C:/wiki/assets/doc-20260402-090507.png'
+    }))
+    const prevWikiApi = (window as unknown as { wikiApi?: unknown }).wikiApi
+    ;(window as unknown as { wikiApi?: unknown }).wikiApi = {
+      workspace: {
+        ingestImage,
+        getPathForFile: () => ''
+      }
+    }
+
+    try {
+      let doc = createDoc({ content: '# Heading\n\n' })
+      const onChangeContent = vi.fn((next: string) => {
+        doc = { ...doc, content: next }
+      })
+
+      const { rerender } = render(
+        <DocumentEditor
+          document={doc}
+          tab={{ ...createTab('split'), cursor: { selectionStart: 11, selectionEnd: 11 } }}
+          theme="light"
+          autoSave={false}
+          onChangeContent={onChangeContent}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      const clipFile = new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' })
+      fireEvent.paste(screen.getByTestId('document-editor'), {
+        clipboardData: {
+          types: ['Files'],
+          files: [clipFile],
+          items: [],
+          getData: () => ''
+        }
+      })
+
+      await waitFor(() => {
+        expect(ingestImage).toHaveBeenCalledTimes(1)
+      })
+
+      rerender(
+        <DocumentEditor
+          document={doc}
+          tab={{
+            ...createTab('split'),
+            cursor: { selectionStart: doc.content.length, selectionEnd: doc.content.length }
+          }}
+          theme="light"
+          autoSave={false}
+          onChangeContent={onChangeContent}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      const splitPreview = screen.getByTestId('split-markdown-preview')
+      expect(within(splitPreview).getByRole('img', { name: 'doc-20260402-090507' })).toHaveAttribute(
+        'src',
+        buildWikiAssetUrl('C:/wiki/assets/doc-20260402-090507.png')
+      )
+      expect(doc.content).toContain('![doc-20260402-090507](./assets/doc-20260402-090507.png)')
+      expect(doc.content).not.toContain('wiki-asset:')
+
+      // Non-markdown config buffer disables ingestion on paste while blocking drop navigation
+      const configDoc = createDoc({
+        key: 'config:app',
+        kind: 'config',
+        path: 'C:/appdata/config.json',
+        name: 'config.json',
+        content: '{"theme":"light"}',
+        savedContent: '{"theme":"light"}'
+      })
+      rerender(
+        <DocumentEditor
+          document={configDoc}
+          tab={{ ...createTab('raw'), bufferKey: 'config:app' }}
+          theme="light"
+          autoSave={false}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+      fireEvent.paste(screen.getByTestId('document-editor'), {
+        clipboardData: {
+          types: ['Files'],
+          files: [clipFile],
+          items: [],
+          getData: () => ''
+        }
+      })
+      expect(ingestImage).toHaveBeenCalledTimes(1)
+    } finally {
+      ;(window as unknown as { wikiApi?: unknown }).wikiApi = prevWikiApi
+    }
+  })
+
+  it('renders a read-only centered wiki-asset image preview with disabled modes/save and recovers on cache bust', async () => {
+    const onSave = vi.fn()
+    const onUpdateViewState = vi.fn()
+    const onChangeContent = vi.fn()
+    const imageDoc = createDoc({
+      key: 'c:/wiki/assets/architecture.png',
+      kind: 'workspace',
+      contentKind: 'image',
+      path: 'C:/wiki/assets/architecture.png',
+      name: 'architecture.png',
+      content: '',
+      savedContent: '',
+      isDirty: false,
+      version: 1
+    })
+    const imageTab: DocumentTabItem = {
+      ...createTab('split'),
+      bufferKey: imageDoc.key
+    }
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={imageDoc}
+        tab={imageTab}
+        theme="light"
+        autoSave={true}
+        onChangeContent={onChangeContent}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    // Header shows read-only status and disables both all editor mode buttons and save button
+    expect(screen.getByText('C:/wiki/assets/architecture.png')).toBeInTheDocument()
+    expect(screen.getByText('읽기 전용')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled()
+    for (const label of ['Raw', '위지윅', 'Preview', 'Split']) {
+      const btn = screen.getByRole('button', { name: label })
+      expect(btn).toBeDisabled()
+      expect(btn).toHaveAttribute('aria-pressed', 'false')
+    }
+
+    // No text editor surfaces are mounted
+    expect(screen.queryByTestId('markdown-preview')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('split-markdown-preview')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('wysiwyg-editor')).not.toBeInTheDocument()
+    expect(document.querySelector('.cm-editor')).not.toBeInTheDocument()
+
+    // Image preview renders with wiki-asset URL and supports keyboard shortcut suppression
+    const previewContainer = screen.getByTestId('image-preview')
+    const img = within(previewContainer).getByRole('img', { name: 'architecture.png' })
+    expect(img).toHaveAttribute('src', buildWikiAssetUrl('C:/wiki/assets/architecture.png'))
+    expect(img).toHaveAttribute('draggable', 'false')
+
+    const saveEvent = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true })
+    previewContainer.dispatchEvent(saveEvent)
+    expect(saveEvent.defaultPrevented).toBe(true)
+
+    for (const key of ['1', '2', '3', '4']) {
+      const modeEvent = new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, cancelable: true })
+      previewContainer.dispatchEvent(modeEvent)
+      expect(modeEvent.defaultPrevented).toBe(true)
+    }
+    const cycleEvent = new KeyboardEvent('keydown', {
+      key: 'M',
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true
+    })
+    previewContainer.dispatchEvent(cycleEvent)
+    expect(cycleEvent.defaultPrevented).toBe(true)
+
+    expect(onSave).not.toHaveBeenCalled()
+    expect(onUpdateViewState).not.toHaveBeenCalled()
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Error state shows accessible fallback without crashing
+    fireEvent.error(img)
+    expect(screen.getByText('이미지를 불러올 수 없습니다.')).toBeInTheDocument()
+    expect(within(previewContainer).queryByRole('img')).not.toBeInTheDocument()
+
+    // Incrementing buffer version updates src cacheKey and recovers from prior load failure
+    rerender(
+      <DocumentEditor
+        document={{ ...imageDoc, version: 2 }}
+        tab={imageTab}
+        theme="light"
+        autoSave={true}
+        onChangeContent={onChangeContent}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+    const refreshedImg = within(screen.getByTestId('image-preview')).getByRole('img', { name: 'architecture.png' })
+    expect(refreshedImg).toHaveAttribute('src', buildWikiAssetUrl('C:/wiki/assets/architecture.png', 2))
+    expect(screen.queryByText('이미지를 불러올 수 없습니다.')).not.toBeInTheDocument()
   })
 })

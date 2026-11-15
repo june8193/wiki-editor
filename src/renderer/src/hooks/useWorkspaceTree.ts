@@ -6,6 +6,7 @@ import {
   isSameWorkspacePath,
   remapPathPrefix,
   toWorkspaceRelativePath,
+  WorkspaceChangeEvent,
   WorkspaceEntry,
   WorkspaceEntryKind,
   WorkspaceSummary
@@ -29,7 +30,7 @@ export interface OpenWorkspaceOptions {
 interface UseWorkspaceTreeOptions {
   onError: (message: string | null, error?: unknown) => void
   onWorkspaceOpened?: () => void
-  onWorkspaceChanged?: () => void
+  onWorkspaceChanged?: (event: WorkspaceChangeEvent) => void
   onEntryRenamed?: (oldPath: string, renamed: WorkspaceEntry) => void
   onEntryDeleted?: (deletedPath: string) => void
   onFileCreated?: (created: WorkspaceEntry) => void
@@ -146,10 +147,10 @@ export function useWorkspaceTree({
 
   useEffect(() => {
     mountedRef.current = true
-    const unsubscribe = window.wikiApi.workspace.onChanged(() => {
+    const unsubscribe = window.wikiApi.workspace.onChanged((event) => {
       if (!mountedRef.current) return
       void refreshTree()
-      callbacksRef.current.onWorkspaceChanged?.()
+      callbacksRef.current.onWorkspaceChanged?.(event)
     })
 
     return () => {

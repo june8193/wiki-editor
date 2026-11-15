@@ -191,4 +191,45 @@ describe('registerWorkspaceIpc', () => {
 
     dispose()
   })
+
+  it('routes workspace:ingest-image to WorkspaceFsService.ingestImage and redacts binary bytes from logs', async () => {
+    const logService = new LogService(join(tempDir, 'logs'))
+    const configService = new ConfigService(configPath)
+    const ipcMain = createFakeIpcMain()
+    const dispose = registerWorkspaceIpc({
+      ipcMain,
+      workspaceService,
+      configService,
+      selectDirectory: async () => workspaceDir,
+      getTargets: () => [],
+      logService
+    })
+
+    await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+    const docPath = join(workspaceDir, 'guide.md')
+    await writeFile(docPath, '# Guide\n', 'utf8')
+
+    const secretBytes = new Uint8Array([137, 80, 78, 71, 201, 202, 203])
+    const result = await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.ingestImage, {
+      documentPath: docPath,
+      source: {
+        kind: 'fileBytes',
+        fileName: 'dropped chart.png',
+        bytes: secretBytes
+      }
+    })
+
+    expect(result).toEqual({
+      markdownPath: './assets/dropped%20chart.png',
+      altText: 'dropped chart',
+      savedPath: join(workspaceDir, 'assets', 'dropped chart.png')
+    })
+
+    const entries = await logService.readEntries()
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('201')
+    expect(serialized).not.toContain('"bytes"')
+
+    dispose()
+  })
 })

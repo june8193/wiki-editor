@@ -153,10 +153,93 @@ export function stripHeadingNumberPrefix(text: string): string {
   return hasHeadingNumberPrefix(text) ? text.replace(LEADING_HEADING_NUMBER_RE, '') : text
 }
 
+function nextMarkdownCursor(text: string, index: number): number {
+  return text[index] === '\\' && index + 1 < text.length ? index + 2 : index + 1
+}
+
+function findClosingDestinationParen(text: string, openParenIndex: number): number {
+  let cursor = openParenIndex + 1
+  while (cursor < text.length && text[cursor] === ' ') {
+    cursor += 1
+  }
+
+  if (text[cursor] === '<') {
+    cursor += 1
+    while (cursor < text.length) {
+      if (text[cursor] === '>') {
+        cursor += 1
+        break
+      }
+      cursor = nextMarkdownCursor(text, cursor)
+    }
+  }
+
+  let parenDepth = 1
+  while (cursor < text.length) {
+    const ch = text[cursor]
+    if (ch === '(') {
+      parenDepth += 1
+    } else if (ch === ')') {
+      parenDepth -= 1
+      if (parenDepth === 0) {
+        return cursor
+      }
+    }
+    cursor = nextMarkdownCursor(text, cursor)
+  }
+  return -1
+}
+
+function findClosingLabelBracket(text: string, labelStart: number): number {
+  let depth = 1
+  let cursor = labelStart
+
+  while (cursor < text.length) {
+    const ch = text[cursor]
+    if (ch === '[') {
+      depth += 1
+    } else if (ch === ']') {
+      depth -= 1
+      if (depth === 0) {
+        return cursor
+      }
+    }
+    cursor = nextMarkdownCursor(text, cursor)
+  }
+
+  return -1
+}
+
+function stripInlineLinksAndImages(text: string): string {
+  let result = ''
+  let i = 0
+
+  while (i < text.length) {
+    const isImage = text[i] === '!' && text[i + 1] === '['
+    const isLink = !isImage && text[i] === '['
+    if (isImage || isLink) {
+      const labelStart = i + (isImage ? 2 : 1)
+      const closeBracket = findClosingLabelBracket(text, labelStart)
+      const hasValidLabel = isImage ? closeBracket >= labelStart : closeBracket > labelStart
+      if (hasValidLabel && text[closeBracket + 1] === '(') {
+        const closeParen = findClosingDestinationParen(text, closeBracket + 1)
+        if (closeParen !== -1) {
+          result += stripInlineLinksAndImages(text.slice(labelStart, closeBracket))
+          i = closeParen + 1
+          continue
+        }
+      }
+    }
+
+    result += text[i]
+    i += 1
+  }
+
+  return result
+}
+
 export function stripInlineMarkdown(text: string): string {
-  return text
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+  return stripInlineLinksAndImages(text)
     .replace(/\[([^\]]+)\]\[[^\]]*\]/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/(\*\*|__|~~)(?=\S)(.+?)(?<=\S)\1/g, '$2')

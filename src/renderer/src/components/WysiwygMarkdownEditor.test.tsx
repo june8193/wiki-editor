@@ -5,6 +5,8 @@ import type { RendererLogPayload } from '@shared/logging'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
+import { buildWikiAssetUrl } from '@shared/assets'
+import { ImageTransferContext } from '../hooks/useEditorImageTransfer'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
@@ -1300,5 +1302,204 @@ describe('WysiwygMarkdownEditor link autocomplete & Ctrl+K', () => {
 
     expect(fireEvent.click(externalAnchor, { ctrlKey: true })).toBe(false)
     expect(onLinkNavigate).toHaveBeenNthCalledWith(4, 'https://example.com')
+  })
+})
+
+describe('WysiwygMarkdownEditor local image rendering and path sync', () => {
+  it('renders local relative images with wiki-asset URLs, updates live DOM on documentPath change, and roundtrips without wiki-asset leak', async () => {
+    const onChangeContent = vi.fn()
+    const markdown = [
+      '![local](./assets/pic.png)',
+      '',
+      '![parent](../shared/diagram.svg)',
+      '',
+      '![external](https://example.com/banner.png)'
+    ].join('\n')
+
+    const { container, rerender } = render(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        documentPath="C:\\vault\\docs\\guide\\intro.md"
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'local' })).toHaveAttribute(
+        'src',
+        buildWikiAssetUrl('C:\\vault\\docs\\guide\\assets\\pic.png')
+      )
+    })
+
+    const localImg = screen.getByRole('img', { name: 'local' })
+    expect(localImg).toHaveAttribute('data-markdown-src', './assets/pic.png')
+    expect(screen.getByRole('img', { name: 'parent' })).toHaveAttribute(
+      'src',
+      buildWikiAssetUrl('C:\\vault\\docs\\shared\\diagram.svg')
+    )
+    expect(screen.getByRole('img', { name: 'external' })).toHaveAttribute(
+      'src',
+      'https://example.com/banner.png'
+    )
+
+    // Rename / path update while mounted refreshes image URLs without modifying markdown content
+    rerender(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        documentPath="C:\\vault\\notes\\renamed.md"
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'local' })).toHaveAttribute(
+        'src',
+        buildWikiAssetUrl('C:\\vault\\notes\\assets\\pic.png')
+      )
+    })
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Ensure no width/height attributes are injected and no raw wiki-asset leaks in DOM data-markdown-src
+    expect(localImg.hasAttribute('width')).toBe(false)
+    expect(localImg.hasAttribute('height')).toBe(false)
+    const renderedImgs = container.querySelectorAll('img:not(.ProseMirror-separator)')
+    expect(renderedImgs).toHaveLength(3)
+  })
+
+  it('pastes clipboard image bitmaps, ignores bitmap+text pastes, inserts ordered multi-file drops, and reports ingestion errors', async () => {
+    const onChangeContent = vi.fn()
+    const onReportError = vi.fn()
+    const ingestImage = vi.fn(async (input) => {
+      if (input.source.kind === 'clipboard') {
+        return {
+          markdownPath: './assets/guide-20260402-090507.png',
+          altText: 'guide-20260402-090507',
+          savedPath: 'C:\\vault\\docs\\assets\\guide-20260402-090507.png'
+        }
+      }
+      if (input.source.kind === 'filePath') {
+        return {
+          markdownPath: './assets/first%20%281%29.png',
+          altText: 'first (1)',
+          savedPath: input.source.filePath
+        }
+      }
+      return {
+        markdownPath: `./assets/${encodeURIComponent(input.source.fileName)}`,
+        altText: input.source.fileName.replace(/\.[^.]+$/, ''),
+        savedPath: `C:\\vault\\docs\\assets\\${input.source.fileName}`
+      }
+    })
+    const getPathForFile = vi.fn((file: File) =>
+      file.name === 'first (1).png' ? 'C:\\external\\first (1).png' : ''
+    )
+
+    render(
+      <ImageTransferContext.Provider
+        value={{
+          reportImageError: onReportError,
+          ingestImage,
+          getPathForFile
+        }}
+      >
+        <WysiwygMarkdownEditor
+          content={'# Guide\n\n'}
+          scrollTop={0}
+          documentPath="C:\\vault\\docs\\guide.md"
+          onChangeContent={onChangeContent}
+        />
+      </ImageTransferContext.Provider>
+    )
+
+    const editorEl = screen.getByRole('textbox', { name: '위지윅 문서 에디터' })
+
+    // 1. Clipboard paste with empty text/plain and image/png item
+    const clipFile = new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' })
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        types: ['Files'],
+        files: [clipFile],
+        items: [],
+        getData: () => ''
+      }
+    })
+
+    await waitFor(() => {
+      expect(ingestImage).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'guide-20260402-090507' })).toHaveAttribute(
+        'src',
+        buildWikiAssetUrl('C:\\vault\\docs\\assets\\guide-20260402-090507.png')
+      )
+    })
+
+    // 2. Paste containing text/plain + image bitmap stays normal paste (does NOT invoke ingestImage)
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        types: ['text/plain', 'Files'],
+        files: [clipFile],
+        items: [],
+        getData: (type: string) => (type === 'text/plain' ? 'cellA\tcellB' : '')
+      }
+    })
+    expect(ingestImage).toHaveBeenCalledTimes(1)
+
+    // 3. Multi-file drop preserves exact order (filePath + fileBytes fallback)
+    const firstFile = new File([new Uint8Array([4, 5])], 'first (1).png', { type: 'image/png' })
+    const secondFile = new File([new Uint8Array([6, 7])], 'second.webp', { type: 'image/webp' })
+    fireEvent.drop(editorEl, {
+      dataTransfer: {
+        types: ['Files'],
+        files: [firstFile, secondFile],
+        getData: () => ''
+      }
+    })
+
+    await waitFor(() => {
+      expect(ingestImage).toHaveBeenCalledTimes(3)
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'first (1)' })).toBeInTheDocument()
+      expect(screen.getByRole('img', { name: 'second' })).toBeInTheDocument()
+    })
+    const latestMarkdown = onChangeContent.mock.calls.at(-1)?.[0] as string
+    expect(latestMarkdown).not.toContain('wiki-asset:')
+    expect(latestMarkdown.indexOf('./assets/first%20%281%29.png')).toBeLessThan(
+      latestMarkdown.indexOf('./assets/second.webp')
+    )
+
+    // 4. Tab drag is ignored (defaultPrevented stays false) while unsupported file drop blocks navigation without ingesting
+    const tabDragEvent = new Event('dragover', { bubbles: true, cancelable: true }) as unknown as DragEvent
+    Object.defineProperty(tabDragEvent, 'dataTransfer', {
+      value: { types: ['application/x-wiki-tab'], files: [], getData: () => 'tab-1' }
+    })
+    editorEl.dispatchEvent(tabDragEvent)
+    expect(tabDragEvent.defaultPrevented).toBe(false)
+
+    const txtFile = new File([new Uint8Array([9])], 'notes.txt', { type: 'text/plain' })
+    const nonImageDrop = new Event('drop', { bubbles: true, cancelable: true }) as unknown as DragEvent
+    Object.defineProperty(nonImageDrop, 'dataTransfer', {
+      value: { types: ['Files'], files: [txtFile], getData: () => '' }
+    })
+    editorEl.dispatchEvent(nonImageDrop)
+    expect(nonImageDrop.defaultPrevented).toBe(true)
+    expect(ingestImage).toHaveBeenCalledTimes(3)
+
+    // 5. Ingestion error surfaces via onReportError
+    ingestImage.mockRejectedValueOnce(new Error('disk full'))
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        types: ['Files'],
+        files: [clipFile],
+        items: [],
+        getData: () => ''
+      }
+    })
+    await waitFor(() => {
+      expect(onReportError).toHaveBeenCalledWith('이미지 삽입에 실패했습니다.', expect.any(Error))
+    })
   })
 })

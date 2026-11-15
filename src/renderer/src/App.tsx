@@ -8,6 +8,7 @@ import {
   formatRelativeEntryPath,
   isFavoriteWorkspacePath,
   resolveRepoFileInWorkspace,
+  WorkspaceChangeEvent,
   WorkspaceEntry
 } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
@@ -23,6 +24,10 @@ import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
 import type { OutlineContextTarget } from './editor/outlineScrollSpy'
 import { useConfigController } from './hooks/useConfigController'
+import {
+  ImageTransferContext,
+  useWorkspaceImageTransfer
+} from './hooks/useEditorImageTransfer'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
 import { useGitDiffTabs } from './hooks/useGitDiffTabs'
@@ -171,7 +176,9 @@ export function App() {
   const handleAppCloseRequestedRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
-  const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(async () => [])
+  const reconcileBuffersRef = useRef<(changeEvent?: WorkspaceChangeEvent) => Promise<readonly string[]>>(
+    async () => []
+  )
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const isDialogOpenRef = useRef<boolean>(false)
   isDialogOpenRef.current = pendingDialog !== null
@@ -302,8 +309,8 @@ export function App() {
           : prev
       )
     },
-    onWorkspaceChanged: () => {
-      void reconcileBuffersRef.current().then((warnings) => {
+    onWorkspaceChanged: (event) => {
+      void reconcileBuffersRef.current(event).then((warnings) => {
         if (warnings.length > 0) {
           reportErrorBanner(warnings.join(' '))
         }
@@ -656,6 +663,20 @@ export function App() {
     reportErrorBanner
   })
 
+  const handleReportImageError = useCallback(
+    (title: string, error: unknown): void => {
+      const detail = toErrorMessage(error, '')
+      reportErrorBanner(detail ? `${title}: ${detail}` : title, error)
+    },
+    [reportErrorBanner]
+  )
+
+  const {
+    setDraggingWorkspaceImagePath,
+    clearDraggingWorkspaceImage,
+    imageTransferContextValue
+  } = useWorkspaceImageTransfer(handleReportImageError)
+
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       onFocusPane: focusPane,
@@ -743,6 +764,8 @@ export function App() {
                   onRenameEntry={renameEntry}
                   onRequestDelete={handleRequestDelete}
                   onCopyEntryPath={handleCopyEntryPath}
+                  onDragStartWorkspaceImage={setDraggingWorkspaceImagePath}
+                  onDragEndWorkspaceImage={clearDraggingWorkspaceImage}
                 />
               )}
 
@@ -787,20 +810,22 @@ export function App() {
           </>
         )}
 
-        <PaneWorkspace
-          layout={layout}
-          buffers={buffers}
-          diffsByKey={diffsByKey}
-          theme={config.theme}
-          autoSave={config.autoSave}
-          scrollRequest={outlineScrollRequest}
-          isShortcutDisabled={isEditorShortcutDisabled}
-          workspaceMarkdownFiles={markdownFiles}
-          onSetSplitRatio={setSplitRatio}
-          onSplitWithTab={splitWithTab}
-          onActiveHeadingChange={handleActiveHeadingReport}
-          actions={paneActions}
-        />
+        <ImageTransferContext.Provider value={imageTransferContextValue}>
+          <PaneWorkspace
+            layout={layout}
+            buffers={buffers}
+            diffsByKey={diffsByKey}
+            theme={config.theme}
+            autoSave={config.autoSave}
+            scrollRequest={outlineScrollRequest}
+            isShortcutDisabled={isEditorShortcutDisabled}
+            workspaceMarkdownFiles={markdownFiles}
+            onSetSplitRatio={setSplitRatio}
+            onSplitWithTab={splitWithTab}
+            onActiveHeadingChange={handleActiveHeadingReport}
+            actions={paneActions}
+          />
+        </ImageTransferContext.Provider>
 
         {!rightSidebar.isCollapsed ? (
           <>

@@ -1,10 +1,13 @@
-import { AnyExtension, Editor } from '@tiptap/core'
+import { AnyExtension, Editor, InputRule, mergeAttributes } from '@tiptap/core'
 import Code from '@tiptap/extension-code'
 import CodeBlock from '@tiptap/extension-code-block'
+import Image, { type ImageOptions } from '@tiptap/extension-image'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import Link from '@tiptap/extension-link'
 import { TableKit } from '@tiptap/extension-table'
 import { Markdown } from '@tiptap/markdown'
+import { resolveImageDisplaySrc, type WorkspaceImageIngestResult } from '@shared/assets'
+import { isSafeImageUri } from '@shared/urlSecurity'
 import type { Mark, Schema } from '@tiptap/pm/model'
 import {
   type EditorState,
@@ -30,7 +33,7 @@ import {
   type InlineLinkSegment,
   type InlineLinkSegmentMatch
 } from './LinkAutocompleteEngine'
-import { isSafeMarkdownUrl, MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
+import { isSafeMarkdownUrl, WYSIWYG_SANITIZE_SCHEMA } from './markdownSecurity'
 
 interface MdastPositionNode {
   type?: string
@@ -41,6 +44,10 @@ interface MdastPositionNode {
     start?: { offset?: number }
     end?: { offset?: number }
   }
+}
+
+export interface WysiwygExtensionOptions {
+  getDocumentPath?: () => string | undefined
 }
 
 export const linkInsertPluginKey = new PluginKey<boolean>('wysiwygLinkInsert')
@@ -54,7 +61,7 @@ const MermaidAwareCodeBlock = CodeBlock.extend({
 const markdownAstParser = unified().use(remarkParse).use(remarkGfm)
 const htmlSanitizer = unified()
   .use(rehypeParse, { fragment: true })
-  .use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA)
+  .use(rehypeSanitize, WYSIWYG_SANITIZE_SCHEMA)
   .use(rehypeStringify)
 
 /**
@@ -114,17 +121,19 @@ export function prepareMarkdownForTiptap(markdown: string): string {
         })
         return
       }
-      if (
-        (node.type === 'image' || node.type === 'definition') &&
-        typeof node.url === 'string' &&
-        !isSafeMarkdownUrl(node.url)
-      ) {
-        patches.push({
-          start,
-          end,
-          replacement: ''
-        })
-        return
+      if ((node.type === 'image' || node.type === 'definition') && typeof node.url === 'string') {
+        const isSafeTarget =
+          node.type === 'image'
+            ? isSafeImageUri(node.url)
+            : isSafeMarkdownUrl(node.url)
+        if (!isSafeTarget) {
+          patches.push({
+            start,
+            end,
+            replacement: ''
+          })
+          return
+        }
       }
     }
     if (node.children) {
@@ -217,7 +226,172 @@ const CustomLink = Link.extend({
   inclusive: false
 })
 
-export function createWysiwygExtensions(): AnyExtension[] {
+const IMAGE_MARKDOWN_SRC_ATTR = 'data-markdown-src'
+
+interface WikiAssetImageOptions extends ImageOptions {
+  getDocumentPath?: () => string | undefined
+}
+
+function formatMarkdownImageDestination(src: string): string {
+  if (/[\s<>]/.test(src)) {
+    return `<${src.replace(/[<>]/g, encodeURIComponent)}>`
+  }
+  let balance = 0
+  for (const ch of src) {
+    if (ch === '(') {
+      balance += 1
+    } else if (ch === ')') {
+      balance -= 1
+      if (balance < 0) {
+        return `<${src}>`
+      }
+    }
+  }
+  return balance === 0 ? src : `<${src}>`
+}
+
+function extractSafeImageSrc(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed && isSafeImageUri(trimmed) ? trimmed : null
+}
+
+function parseSafeImageAttrs(
+  dom: unknown,
+  attrName: typeof IMAGE_MARKDOWN_SRC_ATTR | 'src'
+): { src: string; alt: string | null; title: string | null } | false {
+  if (!(dom instanceof HTMLElement)) {
+    return false
+  }
+  const rawSrc = extractSafeImageSrc(dom.getAttribute(attrName))
+  if (!rawSrc) {
+    return false
+  }
+  return {
+    src: rawSrc,
+    alt: dom.getAttribute('alt') ?? null,
+    title: dom.getAttribute('title') ?? null
+  }
+}
+
+export function syncWysiwygImageDisplaySources(
+  editor: Editor | null,
+  documentPath?: string
+): void {
+  if (!editor || editor.isDestroyed) {
+    return
+  }
+  for (const img of editor.view.dom.querySelectorAll(`img[${IMAGE_MARKDOWN_SRC_ATTR}]`)) {
+    const rawSrc = img.getAttribute(IMAGE_MARKDOWN_SRC_ATTR) ?? ''
+    const nextSrc = resolveImageDisplaySrc(rawSrc, documentPath)
+    if (nextSrc && img.getAttribute('src') !== nextSrc) {
+      img.setAttribute('src', nextSrc)
+    }
+  }
+}
+
+const WikiAssetImage = Image.extend<WikiAssetImageOptions>({
+  addOptions() {
+    return {
+      ...this.parent?.(),
+      inline: true,
+      allowBase64: false,
+      resize: false,
+      HTMLAttributes: {},
+      getDocumentPath: undefined
+    }
+  },
+
+  parseHTML() {
+    return [
+      {
+        tag: `img[${IMAGE_MARKDOWN_SRC_ATTR}]`,
+        getAttrs: (dom) => parseSafeImageAttrs(dom, IMAGE_MARKDOWN_SRC_ATTR)
+      },
+      {
+        tag: `img[src]:not([${IMAGE_MARKDOWN_SRC_ATTR}]):not([src^="data:"])`,
+        getAttrs: (dom) => parseSafeImageAttrs(dom, 'src')
+      }
+    ]
+  },
+
+  renderHTML({ node, HTMLAttributes }) {
+    const rawSrc = extractSafeImageSrc(node.attrs.src)
+    const displaySrc = rawSrc ? resolveImageDisplaySrc(rawSrc, this.options.getDocumentPath?.()) : ''
+    const merged = mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)
+    delete merged.src
+    delete merged[IMAGE_MARKDOWN_SRC_ATTR]
+    if (displaySrc) {
+      merged.src = displaySrc
+    }
+    if (rawSrc) {
+      merged[IMAGE_MARKDOWN_SRC_ATTR] = rawSrc
+    }
+    return ['img', merged]
+  },
+
+  parseMarkdown: (token, helpers) => {
+    const href = extractSafeImageSrc(token.href)
+    if (!href) {
+      return []
+    }
+    return helpers.createNode('image', {
+      src: href,
+      alt: token.text || '',
+      title: token.title || null
+    })
+  },
+
+  renderMarkdown: (node) => {
+    const src = extractSafeImageSrc(node.attrs?.src)
+    if (!src) {
+      return ''
+    }
+    const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt : ''
+    const title = typeof node.attrs?.title === 'string' ? node.attrs.title : ''
+    const destination = formatMarkdownImageDestination(src)
+    return title
+      ? `![${alt}](${destination} "${title.replace(/"/g, '\\"')}")`
+      : `![${alt}](${destination})`
+  },
+
+  addCommands() {
+    const parentCommands = this.parent?.()
+    return {
+      ...parentCommands,
+      setImage:
+        (options) =>
+        (commandProps) => {
+          const safeSrc = extractSafeImageSrc(options.src)
+          if (!safeSrc) {
+            return false
+          }
+          return parentCommands?.setImage?.({ ...options, src: safeSrc })(commandProps) ?? false
+        }
+    }
+  },
+
+  addInputRules() {
+    const parentRules = this.parent?.() ?? []
+    return parentRules.map(
+      (rule) =>
+        new InputRule({
+          find: rule.find,
+          undoable: rule.undoable,
+          handler: (props) => {
+            if (!extractSafeImageSrc(props.match[3])) {
+              return null
+            }
+            return rule.handler(props)
+          }
+        })
+    )
+  }
+})
+
+export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): AnyExtension[] {
   return [
     StarterKit.configure({
       code: false,
@@ -231,6 +405,9 @@ export function createWysiwygExtensions(): AnyExtension[] {
       isAllowedUri: (url) => isSafeMarkdownUrl(url)
     }),
     MermaidAwareCodeBlock,
+    WikiAssetImage.configure({
+      getDocumentPath: options.getDocumentPath
+    }),
     Markdown.configure({
       markedOptions: {
         gfm: true,
@@ -487,4 +664,37 @@ export function extractWysiwygHeadingCandidates(
     return node.type.name !== 'codeBlock' && node.type.name !== 'blockquote'
   })
   return candidates
+}
+
+/**
+ * Inserts ingested images at the given range (or current selection), placing multi-image
+ * batches into ordered paragraphs while preserving clean relative Markdown URLs.
+ */
+export function insertWysiwygImages(
+  editor: Editor,
+  images: readonly WorkspaceImageIngestResult[],
+  range?: { from: number; to: number }
+): boolean {
+  if (editor.isDestroyed || images.length === 0) {
+    return false
+  }
+
+  const docSize = editor.state.doc.content.size
+  const rawFrom = range?.from ?? editor.state.selection.from
+  const rawTo = range?.to ?? editor.state.selection.to
+  const from = Math.max(0, Math.min(rawFrom, docSize))
+  const to = Math.max(from, Math.min(rawTo, docSize))
+
+  const content =
+    images.length === 1
+      ? {
+          type: 'image',
+          attrs: { src: images[0].markdownPath, alt: images[0].altText }
+        }
+      : images.map((image) => ({
+          type: 'paragraph',
+          content: [{ type: 'image', attrs: { src: image.markdownPath, alt: image.altText } }]
+        }))
+
+  return editor.chain().focus().insertContentAt({ from, to }, content).run()
 }
