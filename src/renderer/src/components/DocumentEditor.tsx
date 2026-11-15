@@ -4,17 +4,10 @@ import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from 
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
-import {
-  DEFAULT_SPLIT_RATIO,
-  EditorMode,
-  PaneId,
-  TabItem,
-  TabViewPatch,
-  clampSplitRatio
-} from '../stores/PaneTabStore'
+import { DEFAULT_SPLIT_RATIO, EditorMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
-import { SplitSplitter, roundSplitRatio } from './SplitSplitter'
+import { SplitSplitter, normalizeSplitRatio, roundSplitRatio } from './SplitSplitter'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 export interface OutlineScrollRequest {
@@ -70,7 +63,7 @@ export function DocumentEditor({
 }: DocumentEditorProps) {
   const allowRichModes = isMarkdownDocument(activeDoc)
   const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
-  const rawRatio = roundSplitRatio(clampSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO))
+  const rawRatio = normalizeSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
   const previewRatio = roundSplitRatio(1 - rawRatio)
   const rawLanguage = getRawEditorLanguage(activeDoc)
   const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined

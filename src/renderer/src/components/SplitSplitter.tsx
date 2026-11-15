@@ -16,6 +16,13 @@ export function roundSplitRatio(ratio: number): number {
   return Math.round(ratio * 10000) / 10000
 }
 
+/**
+ * Clamps and rounds a split ratio to the allowed `[0.15, 0.85]` interval.
+ */
+export function normalizeSplitRatio(ratio: number): number {
+  return roundSplitRatio(clampSplitRatio(ratio))
+}
+
 interface SplitSplitterProps {
   containerRef: RefObject<HTMLElement | null>
   direction: SplitDirection
@@ -36,12 +43,12 @@ export function SplitSplitter({
   onChangeRatio,
   allowReset = false
 }: SplitSplitterProps) {
-  const [isResizing, setIsResizing] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
   const onChangeRatioRef = useRef(onChangeRatio)
   onChangeRatioRef.current = onChangeRatio
 
   useEffect(() => {
-    if (!isResizing) return
+    if (!isDragging) return
 
     const handleMouseMove = (event: MouseEvent): void => {
       const container = containerRef.current
@@ -56,11 +63,11 @@ export function SplitSplitter({
             ? (event.clientY - rect.top) / rect.height
             : null
       if (rawRatio === null) return
-      onChangeRatioRef.current(roundSplitRatio(clampSplitRatio(rawRatio)))
+      onChangeRatioRef.current(normalizeSplitRatio(rawRatio))
     }
 
     const handleDragEnd = (): void => {
-      setIsResizing(false)
+      setIsDragging(false)
     }
 
     window.addEventListener('mousemove', handleMouseMove)
@@ -71,7 +78,7 @@ export function SplitSplitter({
       window.removeEventListener('mouseup', handleDragEnd)
       window.removeEventListener('blur', handleDragEnd)
     }
-  }, [containerRef, direction, isResizing])
+  }, [containerRef, direction, isDragging])
 
   const isHorizontal = direction === 'horizontal'
   const decKey = isHorizontal ? 'ArrowLeft' : 'ArrowUp'
@@ -82,7 +89,7 @@ export function SplitSplitter({
     event.preventDefault()
     event.stopPropagation()
     const delta = event.key === decKey ? -SPLITTER_KEYBOARD_STEP : SPLITTER_KEYBOARD_STEP
-    onChangeRatio(roundSplitRatio(clampSplitRatio(ratio + delta)))
+    onChangeRatio(normalizeSplitRatio(ratio + delta))
   }
 
   return (
@@ -94,10 +101,10 @@ export function SplitSplitter({
       aria-valuemin={Math.round(MIN_SPLIT_RATIO * 100)}
       aria-valuemax={Math.round(MAX_SPLIT_RATIO * 100)}
       aria-valuenow={Math.round(ratio * 100)}
-      className={`split-divider is-${direction}${isResizing ? ' is-dragging' : ''}`}
+      className={`split-divider is-${direction}${isDragging ? ' is-dragging' : ''}`}
       onMouseDown={(event) => {
         event.preventDefault()
-        setIsResizing(true)
+        setIsDragging(true)
       }}
       onDoubleClick={allowReset ? () => onChangeRatio(DEFAULT_SPLIT_RATIO) : undefined}
       onKeyDown={handleKeyDown}

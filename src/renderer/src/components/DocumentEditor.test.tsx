@@ -421,17 +421,17 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(container.querySelector('.cm-line span')).not.toBeNull()
     expect(screen.getByRole('toolbar', { name: 'Raw 표 편집 툴바' })).toBeInTheDocument()
 
-    // Right: Preview pane with unique testId, heading numbers, and initial Mermaid SVG
-    const previewPane = screen.getByTestId('split-markdown-preview')
-    expect(previewPane).toHaveAttribute('aria-label', '마크다운 미리보기')
-    expect(within(previewPane).getByRole('heading', { level: 1 }).textContent).toContain('1. Arch')
+    // Right: Preview region with unique testId, heading numbers, and initial Mermaid SVG
+    const previewRegion = screen.getByTestId('split-markdown-preview')
+    expect(previewRegion).toHaveAttribute('aria-label', '마크다운 미리보기')
+    expect(within(previewRegion).getByRole('heading', { level: 1 }).textContent).toContain('1. Arch')
     await waitFor(() => {
-      expect(within(previewPane).getByTestId('mermaid-svg').textContent).toContain('A --> B')
+      expect(within(previewRegion).getByTestId('mermaid-svg').textContent).toContain('A --> B')
     })
 
     // Scrolling the right preview in Ticket 01 must not clobber Raw tab.scrollTop
     onUpdateViewState.mockClear()
-    fireEvent.scroll(previewPane, { target: { scrollTop: 300 } })
+    fireEvent.scroll(previewRegion, { target: { scrollTop: 300 } })
     expect(onUpdateViewState).not.toHaveBeenCalledWith(expect.objectContaining({ scrollTop: 300 }))
 
     // Editing markdown & Mermaid source on the left updates right Preview + debounced Mermaid SVG
@@ -465,11 +465,11 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       cursor: { selectionStart: updatedContent.length, selectionEnd: updatedContent.length }
     })
 
-    expect(within(previewPane).getByRole('heading', { level: 1 }).textContent).toContain(
+    expect(within(previewRegion).getByRole('heading', { level: 1 }).textContent).toContain(
       '1. Arch Updated'
     )
     await waitFor(() => {
-      expect(within(previewPane).getByTestId('mermaid-svg').textContent).toContain('A --> C')
+      expect(within(previewRegion).getByTestId('mermaid-svg').textContent).toContain('A --> C')
     })
 
     // Typing '/' at end of Raw editor opens Slash command menu in Split mode
