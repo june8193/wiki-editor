@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GitBranchList, GitStatus } from '@shared/git'
 import { logRendererError, logRendererWarn } from '../logging/rendererLogger'
 import { toErrorMessage } from '../utils/toErrorMessage'
+import { useGitGraphLog } from './useGitGraphLog'
 
 interface UseGitControllerOptions {
   workspaceRootPath: string | null
@@ -41,6 +42,20 @@ export function useGitController({
     )
   }, [])
 
+  const {
+    graphState,
+    resetGraph,
+    refreshGraph,
+    changeLogScope,
+    loadMoreCommits,
+    toggleCommitDetail
+  } = useGitGraphLog({
+    isCurrentRequest,
+    getWorkspaceRootPath: () => activeWorkspaceRef.current,
+    getWorkspaceEpoch: () => workspaceEpochRef.current,
+    isMounted: () => mountedRef.current
+  })
+
   useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -53,7 +68,7 @@ export function useGitController({
       rootPath: string,
       epoch: number,
       nextStatus: GitStatus,
-      fetchBranches: boolean
+      fetchRepoMetadata: boolean
     ): Promise<void> => {
       if (!isCurrentRequest(rootPath, epoch)) {
         return
@@ -63,21 +78,26 @@ export function useGitController({
 
       if (!nextStatus.isRepo) {
         setBranchList(null)
+        resetGraph(false)
         return
       }
-      if (!fetchBranches) return
+      if (!fetchRepoMetadata) return
 
-      try {
-        const nextBranches = await window.wikiApi.git.branches(rootPath)
-        if (!isCurrentRequest(rootPath, epoch) || requestSeqRef.current !== applySeq) {
-          return
-        }
-        setBranchList(nextBranches)
-      } catch {
-        // Branch lookup failures are non-fatal if status succeeded cleanly
-      }
+      const branchesTask = window.wikiApi.git
+        .branches(rootPath)
+        .then((nextBranches) => {
+          if (!isCurrentRequest(rootPath, epoch) || requestSeqRef.current !== applySeq) {
+            return
+          }
+          setBranchList(nextBranches)
+        })
+        .catch(() => {
+          // Branch lookup failures are non-fatal if status succeeded cleanly
+        })
+
+      await Promise.all([branchesTask, refreshGraph(rootPath, epoch)])
     },
-    [isCurrentRequest]
+    [isCurrentRequest, refreshGraph, resetGraph]
   )
 
   const refreshStatus = useCallback(async (): Promise<void> => {
@@ -86,6 +106,7 @@ export function useGitController({
       setStatus(null)
       setBranchList(null)
       setErrorMessage(null)
+      resetGraph(false)
       return
     }
     // Active mutations fetch fresh Git state when done; skip concurrent FS watch refreshes while locked
@@ -116,7 +137,7 @@ export function useGitController({
         error
       })
     }
-  }, [applyWorkspaceGitState, isCurrentRequest])
+  }, [applyWorkspaceGitState, isCurrentRequest, resetGraph])
 
   useEffect(() => {
     workspaceEpochRef.current += 1
@@ -125,18 +146,19 @@ export function useGitController({
     setStatus(null)
     setBranchList(null)
     setPendingAction(null)
+    resetGraph(true)
 
     if (workspaceRootPath) {
       void refreshStatus()
     }
-  }, [refreshStatus, workspaceRootPath])
+  }, [refreshStatus, resetGraph, workspaceRootPath])
 
   const runGitAction = useCallback(
     async (
       actionLabel: string,
       options: {
         affectsWorkspaceFiles?: boolean
-        fetchBranches?: boolean
+        fetchRepoMetadata?: boolean
         fallbackError: string
         run: (rootPath: string) => Promise<GitStatus>
       }
@@ -162,7 +184,7 @@ export function useGitController({
         }
 
         const nextStatus = await options.run(rootPath)
-        await applyWorkspaceGitState(rootPath, epoch, nextStatus, options.fetchBranches ?? false)
+        await applyWorkspaceGitState(rootPath, epoch, nextStatus, options.fetchRepoMetadata ?? false)
 
         if (
           options.affectsWorkspaceFiles &&
@@ -211,7 +233,7 @@ export function useGitController({
 
   const initRepo = useCallback(async (): Promise<void> => {
     await runGitAction('Git 초기화', {
-      fetchBranches: true,
+      fetchRepoMetadata: true,
       fallbackError: 'Git 저장소를 초기화하지 못했습니다.',
       run: (rootPath) => window.wikiApi.git.init(rootPath)
     })
@@ -255,7 +277,7 @@ export function useGitController({
   const commit = useCallback(
     async (message: string): Promise<boolean> => {
       return runGitAction('Commit', {
-        fetchBranches: true,
+        fetchRepoMetadata: true,
         fallbackError: '커밋에 실패했습니다.',
         run: (rootPath) => window.wikiApi.git.commit(rootPath, message)
       })
@@ -267,7 +289,7 @@ export function useGitController({
     async (branchName: string): Promise<void> => {
       await runGitAction('브랜치 전환', {
         affectsWorkspaceFiles: true,
-        fetchBranches: true,
+        fetchRepoMetadata: true,
         fallbackError: '브랜치를 전환하지 못했습니다.',
         run: (rootPath) => window.wikiApi.git.checkout(rootPath, branchName)
       })
@@ -278,7 +300,7 @@ export function useGitController({
   const pull = useCallback(async (): Promise<void> => {
     await runGitAction('Pull', {
       affectsWorkspaceFiles: true,
-      fetchBranches: true,
+      fetchRepoMetadata: true,
       fallbackError: 'Pull에 실패했습니다.',
       run: (rootPath) => window.wikiApi.git.pull(rootPath)
     })
@@ -286,7 +308,7 @@ export function useGitController({
 
   const push = useCallback(async (): Promise<void> => {
     await runGitAction('Push', {
-      fetchBranches: true,
+      fetchRepoMetadata: true,
       fallbackError: 'Push에 실패했습니다.',
       run: (rootPath) => window.wikiApi.git.push(rootPath)
     })
@@ -295,7 +317,7 @@ export function useGitController({
   const sync = useCallback(async (): Promise<void> => {
     await runGitAction('Sync', {
       affectsWorkspaceFiles: true,
-      fetchBranches: true,
+      fetchRepoMetadata: true,
       fallbackError: 'Sync에 실패했습니다.',
       run: async (rootPath) => (await window.wikiApi.git.sync(rootPath)).status
     })
@@ -308,10 +330,14 @@ export function useGitController({
   return {
     status,
     branchList,
+    graphState,
     pendingAction,
     errorMessage,
     dismissError,
     refreshStatus,
+    changeLogScope,
+    loadMoreCommits,
+    toggleCommitDetail,
     initRepo,
     stageFile,
     stageAll,

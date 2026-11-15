@@ -3,7 +3,9 @@ import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
+import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 import { DocumentEditor } from './DocumentEditor'
+import { type GitDiffContentState, GitDiffViewer } from './GitDiffViewer'
 import {
   DraggingTabPayload,
   handleTabMoveDrop,
@@ -24,6 +26,7 @@ interface PaneViewProps {
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
+  diffsByKey: Record<string, GitDiffContentState>
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
   onDragEndTab: () => void
@@ -43,6 +46,7 @@ export function PaneView({
   scrollRequest = null,
   isShortcutDisabled = false,
   buffers,
+  diffsByKey,
   draggingTab,
   onDragStartTab,
   onDragEndTab,
@@ -50,7 +54,12 @@ export function PaneView({
   actions
 }: PaneViewProps) {
   const activeTab = getPaneActiveTab(pane)
-  const activeBuffer = activeTab ? (buffers[activeTab.bufferKey] ?? null) : null
+  const activeBuffer =
+    activeTab?.kind === 'document' ? (buffers[activeTab.bufferKey] ?? null) : null
+  const activeDiffState =
+    activeTab?.kind === 'diff'
+      ? (diffsByKey[formatGitDiffTabKey(activeTab.diff.request)] ?? { status: 'loading' as const })
+      : null
   const activeScrollRequest =
     activeTab && scrollRequest && scrollRequest.paneId === pane.id && scrollRequest.tabId === activeTab.id
       ? scrollRequest
@@ -97,7 +106,17 @@ export function PaneView({
         />
       )}
 
-      {activeTab && activeBuffer ? (
+      {activeTab?.kind === 'diff' && activeDiffState ? (
+        <GitDiffViewer
+          request={activeTab.diff.request}
+          viewMode={activeTab.diff.viewMode}
+          state={activeDiffState}
+          onChangeViewMode={(nextMode) =>
+            actions.onChangeDiffViewMode(pane.id, activeTab.id, nextMode)
+          }
+          onOpenFile={actions.onOpenDiffTargetFile}
+        />
+      ) : activeTab?.kind === 'document' && activeBuffer ? (
         <DocumentEditor
           key={activeTab.id}
           document={activeBuffer}

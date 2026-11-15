@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand } from '@shared/ipc'
-import type { GitStatus } from '@shared/git'
+import { getGitChangedCount, type GitDiffRequest } from '@shared/git'
 import {
   formatAbsoluteEntryPath,
   formatRelativeEntryPath,
   isFavoriteWorkspacePath,
+  resolveRepoFileInWorkspace,
   WorkspaceEntry
 } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
@@ -32,11 +33,20 @@ import {
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
+import { useGitDiffTabs } from './hooks/useGitDiffTabs'
 import { useOutlineScrollSpy } from './hooks/useOutlineScrollSpy'
 import { useWindowWidth } from './hooks/useWindowWidth'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
 import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
+import { getGitFileBaseName } from './utils/gitFilePresentation'
+import {
+  createDefaultGitPanelSplitState,
+  toggleGitChangesCollapsed,
+  toggleGitGraphCollapsed,
+  updateChangesHeightRatio,
+  type GitPanelSplitState
+} from './utils/gitPanelSplit'
 import {
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
@@ -65,13 +75,6 @@ function selectLeftSidebarView(
     return { ...prev, isCollapsed: true }
   }
   return { ...prev, activeView: view, isCollapsed: false }
-}
-
-function getGitChangedCount(workspaceRootPath: string | null, status: GitStatus | null): number {
-  if (!workspaceRootPath || !status || !status.isRepo) {
-    return 0
-  }
-  return status.staged.length + status.unstaged.length + status.untracked.length
 }
 
 async function writeTextToClipboard(text: string): Promise<void> {
@@ -107,6 +110,9 @@ export function App() {
     isCollapsed: false,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
   })
+  const [gitPanelSplit, setGitPanelSplit] = useState<GitPanelSplitState>(
+    createDefaultGitPanelSplitState
+  )
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const windowWidth = useWindowWidth()
@@ -141,6 +147,18 @@ export function App() {
     setRightSidebar((prev) =>
       prev.width === clampedWidth ? prev : { ...prev, width: clampedWidth }
     )
+  }, [])
+
+  const handleToggleGitChangesCollapsed = useCallback((): void => {
+    setGitPanelSplit(toggleGitChangesCollapsed)
+  }, [])
+
+  const handleToggleGitGraphCollapsed = useCallback((): void => {
+    setGitPanelSplit(toggleGitGraphCollapsed)
+  }, [])
+
+  const handleResizeGitChangesRatio = useCallback((nextRatio: number): void => {
+    setGitPanelSplit((prev) => updateChangesHeightRatio(prev, nextRatio))
   }, [])
 
   const reportErrorBanner = useCallback((message: string | null, error?: unknown): void => {
@@ -233,6 +251,8 @@ export function App() {
     splitWithTab,
     duplicateTabToOtherPane,
     updateTabViewState,
+    openDiffTab,
+    updateDiffTabViewMode,
     clearWorkspaceBuffers,
     syncRenamedPath,
     syncDeletedPath,
@@ -391,6 +411,38 @@ export function App() {
   })
   refreshGitStatusRef.current = git.refreshStatus
 
+  const { diffsByKey, refreshDiffRequest } = useGitDiffTabs({
+    workspaceRootPath: workspace?.rootPath ?? null,
+    gitStatus: git.status,
+    layout
+  })
+
+  const handleOpenFileDiff = useCallback(
+    (request: GitDiffRequest): void => {
+      openDiffTab(request)
+      refreshDiffRequest(request)
+    },
+    [openDiffTab, refreshDiffRequest]
+  )
+
+  const handleOpenDiffTargetFile = useCallback(
+    (repoRelativePath: string): void => {
+      const target = resolveRepoFileInWorkspace(
+        git.status?.repoRoot,
+        workspace?.rootPath,
+        repoRelativePath
+      )
+      if (!target) return
+      void openWorkspaceFile({
+        name: getGitFileBaseName(repoRelativePath),
+        path: target.path,
+        relativePath: target.relativePath,
+        kind: 'file'
+      })
+    },
+    [git.status?.repoRoot, openWorkspaceFile, workspace?.rootPath]
+  )
+
   const guardUnsavedWorkspaceChanges = useCallback(
     (proceed: () => Promise<unknown>): void => {
       void promptUnsavedWorkspaceChanges({
@@ -498,12 +550,12 @@ export function App() {
 
   const activePane = layout.panes[layout.activePaneId]
   const activeTab = getPaneActiveTab(activePane)
-  const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
+  const activeBuffer = activeTab?.kind === 'document' ? buffers[activeTab.bufferKey] : undefined
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
   const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
   const activeBufferContent = activeBuffer?.content ?? ''
-  const activeTabId = activeTab?.id ?? null
-  const activeTabMode = activeTab?.mode ?? null
+  const activeTabId = activeTab?.kind === 'document' ? activeTab.id : null
+  const activeTabMode = activeTab?.kind === 'document' ? activeTab.mode : null
 
   const activeOutlineContext = useMemo<OutlineContextTarget | null>(
     () =>
@@ -535,15 +587,20 @@ export function App() {
     [activeBuffer, isActiveMarkdown, updateBufferContent]
   )
 
+  const activeRawCursorStart =
+    activeTab?.kind === 'document' && (activeTab.mode === 'raw' || activeTab.mode === 'split')
+      ? activeTab.cursor.selectionStart
+      : null
+
   const handleOutlineInsertToc = useCallback((): void => {
     applyActiveMarkdownTransform((content) => {
       const cursorLine =
-        activeTab?.mode === 'raw' || activeTab?.mode === 'split'
-          ? resolveRawCursorLine(content, activeTab.cursor.selectionStart)
+        activeRawCursorStart !== null
+          ? resolveRawCursorLine(content, activeRawCursorStart)
           : findFirstNonFencedSlashTocLine(content)
       return insertOrUpdateTocBlock(content, cursorLine)
     })
-  }, [activeTab?.cursor.selectionStart, activeTab?.mode, applyActiveMarkdownTransform])
+  }, [activeRawCursorStart, applyActiveMarkdownTransform])
 
   const handleOutlineApplyHeadingNumbers = useCallback((): void => {
     applyActiveMarkdownTransform(applyHeadingNumbers)
@@ -580,23 +637,27 @@ export function App() {
       onDuplicateTab: duplicateTabToOtherPane,
       onChangeContent: handlePaneChangeContent,
       onSaveBuffer: saveBufferByKey,
-      onUpdateTabViewState: handlePaneUpdateTabViewState
+      onUpdateTabViewState: handlePaneUpdateTabViewState,
+      onChangeDiffViewMode: updateDiffTabViewMode,
+      onOpenDiffTargetFile: handleOpenDiffTargetFile
     }),
     [
       activateTab,
       duplicateTabToOtherPane,
       focusPane,
+      handleOpenDiffTargetFile,
       handlePaneChangeContent,
       handlePaneUpdateTabViewState,
       moveTab,
       requestCloseTab,
-      saveBufferByKey
+      saveBufferByKey,
+      updateDiffTabViewMode
     ]
   )
 
   const isCurrentWorkspaceFavorite =
     workspace !== null && isFavoriteWorkspacePath(config.favoriteWorkspaces, workspace.rootPath)
-  const gitChangedCount = getGitChangedCount(workspace?.rootPath ?? null, git.status)
+  const gitChangedCount = workspace?.rootPath ? getGitChangedCount(git.status) : 0
 
   return (
     <div className="app-shell" data-theme={config.theme}>
@@ -660,10 +721,15 @@ export function App() {
                   workspaceRootPath={workspace?.rootPath ?? null}
                   status={git.status}
                   branchList={git.branchList}
+                  graphState={git.graphState}
                   pendingAction={git.pendingAction}
                   errorMessage={git.errorMessage}
+                  splitState={gitPanelSplit}
                   onDismissError={git.dismissError}
                   onRefresh={() => void git.refreshStatus()}
+                  onChangeLogScope={(nextScope) => void git.changeLogScope(nextScope)}
+                  onLoadMoreCommits={() => void git.loadMoreCommits()}
+                  onToggleCommitDetail={(commitHash) => void git.toggleCommitDetail(commitHash)}
                   onInitRepo={() => void git.initRepo()}
                   onStageFile={(path) => void git.stageFile(path)}
                   onStageAll={() => void git.stageAll()}
@@ -674,6 +740,10 @@ export function App() {
                   onPull={() => void git.pull()}
                   onPush={() => void git.push()}
                   onSync={() => void git.sync()}
+                  onOpenFileDiff={handleOpenFileDiff}
+                  onToggleChangesCollapsed={handleToggleGitChangesCollapsed}
+                  onToggleGraphCollapsed={handleToggleGitGraphCollapsed}
+                  onResizeChangesRatio={handleResizeGitChangesRatio}
                 />
               )}
             </aside>
@@ -690,6 +760,7 @@ export function App() {
         <PaneWorkspace
           layout={layout}
           buffers={buffers}
+          diffsByKey={diffsByKey}
           theme={config.theme}
           autoSave={config.autoSave}
           showHeadingNumbers={config.showHeadingNumbers}
@@ -717,7 +788,11 @@ export function App() {
               style={{ width: `${rightSidebar.width}px` }}
             >
               <DocumentOutlinePanel
-                documentName={activeBuffer?.name ?? null}
+                documentName={
+                  activeTab?.kind === 'diff'
+                    ? getGitFileBaseName(activeTab.diff.request.path)
+                    : (activeBuffer?.name ?? null)
+                }
                 documentKey={activeBuffer?.key ?? null}
                 content={activeBufferContent}
                 isMarkdownDocument={isActiveMarkdown}

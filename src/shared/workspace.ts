@@ -224,3 +224,55 @@ export function removeRecentWorkspace(
 ): string[] {
   return recents.filter((item) => !isSameWorkspacePath(item, workspacePath))
 }
+
+/**
+ * Converts path separators in `fragment` to match `referencePath`'s separator style.
+ */
+export function matchPathSeparators(fragment: string, referencePath: string): string {
+  const usePosixSep = referencePath.includes('/') && !referencePath.includes('\\')
+  return usePosixSep ? fragment.replace(/\\/g, '/') : fragment.replace(/\//g, '\\')
+}
+
+/**
+ * Joins a workspace or repository root with a relative path using the root's separator style.
+ */
+export function joinWorkspacePath(baseRoot: string, relativePath: string): string {
+  const cleanRoot = baseRoot.replace(/[\\/]+$/, '')
+  const sep = baseRoot.includes('/') && !baseRoot.includes('\\') ? '/' : '\\'
+  const cleanRel = relativePath.replace(/^[\\/]+/, '')
+  return cleanRel ? `${cleanRoot}${sep}${matchPathSeparators(cleanRel, baseRoot)}` : cleanRoot
+}
+
+/**
+ * Resolves a repository-relative target file path within an optional workspace root.
+ * Returns `null` when the resolved file lies outside the open workspace.
+ */
+export function resolveRepoFileInWorkspace(
+  repoRoot: string | null | undefined,
+  workspaceRoot: string | null | undefined,
+  repoRelativePath: string
+): { path: string; relativePath: string } | null {
+  const baseRoot = repoRoot ?? workspaceRoot
+  if (!baseRoot) return null
+
+  const fullPath = joinWorkspacePath(baseRoot, repoRelativePath)
+  let relativePath = repoRelativePath
+
+  if (workspaceRoot) {
+    const normFull = normalizeWorkspacePath(fullPath)
+    const normWorkspace = normalizeWorkspacePath(workspaceRoot)
+    const keyFull = getWorkspacePathKey(normFull)
+    const keyWorkspace = getWorkspacePathKey(normWorkspace)
+    if (!isNestedOrSamePath(keyFull, keyWorkspace)) {
+      return null
+    }
+    if (keyFull.length > keyWorkspace.length) {
+      relativePath = normFull
+        .slice(normWorkspace.length)
+        .replace(/^[\\/]+/, '')
+        .replace(/\\/g, '/')
+    }
+  }
+
+  return { path: fullPath, relativePath }
+}

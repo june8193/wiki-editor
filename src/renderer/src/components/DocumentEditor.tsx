@@ -12,11 +12,11 @@ import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
 import {
   DEFAULT_SPLIT_RATIO,
+  DocumentTabItem,
   EditorMode,
-  TabItem,
-  TabViewPatch,
   normalizeSplitRatio,
-  roundSplitRatio
+  roundSplitRatio,
+  TabViewPatch
 } from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
@@ -25,7 +25,7 @@ import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 interface DocumentEditorProps {
   document: DocumentBuffer
-  tab: TabItem
+  tab: DocumentTabItem
   theme: ThemeMode
   autoSave: boolean
   showHeadingNumbers?: boolean

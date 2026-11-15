@@ -16,7 +16,9 @@ describe('PaneTabStore', () => {
     const t2 = store.openTab('c:/wiki/b.md')
     const t3 = store.openTab('c:/wiki/c.md')
 
-    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.bufferKey)).toEqual([
+    expect(
+      store.getSnapshot().panes.primary.tabs.map((t) => (t.kind === 'document' ? t.bufferKey : ''))
+    ).toEqual([
       'c:/wiki/a.md',
       'c:/wiki/b.md',
       'c:/wiki/c.md'
@@ -51,7 +53,7 @@ describe('PaneTabStore', () => {
     expect(store.getSnapshot().splitMode).toBe('horizontal')
     expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(1)
     expect(s1!.id).not.toBe(p1.id)
-    expect(s1!.bufferKey).toBe('c:/wiki/shared.md')
+    expect(s1).toMatchObject({ kind: 'document', bufferKey: 'c:/wiki/shared.md' })
 
     // Closing one reference leaves isLastReferenceForBuffer = false because primary still holds shared.md
     expect(store.hasOtherTabForBuffer('c:/wiki/shared.md', s1!.id)).toBe(true)
@@ -108,15 +110,19 @@ describe('PaneTabStore', () => {
 
     // Rename updates bufferKey in both panes without losing per-tab view state
     store.remapBufferKeys([{ oldKey: 'c:/wiki/doc.md', newKey: 'c:/wiki/renamed.md' }])
-    expect(store.getSnapshot().panes.primary.tabs[0].bufferKey).toBe('c:/wiki/renamed.md')
-    expect(store.getSnapshot().panes.secondary.tabs[0].bufferKey).toBe('c:/wiki/renamed.md')
-    expect(store.getSnapshot().panes.secondary.tabs[0].mode).toBe('preview')
+    expect(store.getSnapshot().panes.primary.tabs[0]).toMatchObject({ bufferKey: 'c:/wiki/renamed.md' })
+    expect(store.getSnapshot().panes.secondary.tabs[0]).toMatchObject({
+      bufferKey: 'c:/wiki/renamed.md',
+      mode: 'preview'
+    })
 
     // Open unique file in secondary then collapse to single -> merges unique tab into primary
     const extraTab = store.openTab('c:/wiki/extra.md', { paneId: 'secondary' })
     store.setSplitMode('single')
     expect(store.getSnapshot().splitMode).toBe('single')
-    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.bufferKey)).toEqual([
+    expect(
+      store.getSnapshot().panes.primary.tabs.map((t) => (t.kind === 'document' ? t.bufferKey : ''))
+    ).toEqual([
       'c:/wiki/renamed.md',
       'c:/wiki/extra.md'
     ])
@@ -154,7 +160,7 @@ describe('PaneTabStore', () => {
     store.setSplitMode('single')
     expect(store.getSnapshot().splitMode).toBe('single')
     expect(store.getSnapshot().panes.primary.activeTabId).toBe(sharedPrimary.id)
-    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.bufferKey)).not.toHaveLength(0)
+    expect(store.getSnapshot().panes.primary.tabs).not.toHaveLength(0)
   })
 
   it('blocks moving the sole primary tab to secondary in single mode, but promotes secondary when emptying primary in split mode', () => {
@@ -320,11 +326,76 @@ describe('PaneTabStore', () => {
     expect(singlePaneStore.getSnapshot().panes.secondary.tabs).toHaveLength(0)
   })
 
+  it('opens, replaces in active pane, duplicates, moves, toggles view mode, and closes diff tabs cleanly', () => {
+    const store = new PaneTabStore()
+    const docTab = store.openTab('c:/wiki/readme.md')
+
+    const diffTab1 = store.openDiffTab({ kind: 'unstaged', path: 'docs/a.md', status: 'M' })
+    expect(diffTab1.kind).toBe('diff')
+    expect(diffTab1.diff).toEqual({
+      request: { kind: 'unstaged', path: 'docs/a.md', status: 'M' },
+      viewMode: 'side-by-side'
+    })
+    expect(store.getSnapshot().panes.primary.tabs).toHaveLength(2)
+    expect(store.getSnapshot().panes.primary.activeTabId).toBe(diffTab1.id)
+
+    store.updateDiffTabViewMode('primary', diffTab1.id, 'inline')
+    expect(store.getTab('primary', diffTab1.id)).toMatchObject({
+      kind: 'diff',
+      diff: { viewMode: 'inline' }
+    })
+
+    // Opening another diff in same active pane replaces the diff tab instead of adding a third tab
+    const diffTabReplaced = store.openDiffTab({ kind: 'staged', path: 'docs/b.md', status: 'A' })
+    expect(diffTabReplaced.id).toBe(diffTab1.id)
+    expect(store.getSnapshot().panes.primary.tabs).toHaveLength(2)
+    expect(diffTabReplaced.diff).toEqual({
+      request: { kind: 'staged', path: 'docs/b.md', status: 'A' },
+      viewMode: 'side-by-side'
+    })
+
+    // Moving diff tab to secondary keeps secondary diff tab isolated when primary opens a new diff tab
+    store.moveTab('primary', 'secondary', diffTabReplaced.id)
+    expect(store.getSnapshot().splitMode).toBe('horizontal')
+    expect(store.getSnapshot().panes.secondary.tabs.map((t) => t.id)).toEqual([diffTabReplaced.id])
+
+    store.focusPane('primary')
+    const primaryDiff = store.openDiffTab({ kind: 'unstaged', path: 'docs/c.md', status: 'M' })
+    expect(primaryDiff.id).not.toBe(diffTabReplaced.id)
+    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id, primaryDiff.id])
+    expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(1)
+    expect(store.getSnapshot().panes.secondary.tabs[0]).toMatchObject({
+      kind: 'diff',
+      diff: { request: { kind: 'staged', path: 'docs/b.md', status: 'A' } }
+    })
+
+    // Duplicating a diff tab preserves diff metadata and viewMode
+    store.updateDiffTabViewMode('primary', primaryDiff.id, 'inline')
+    const dupDiff = store.duplicateTabToOtherPane('primary', primaryDiff.id)
+    expect(dupDiff).not.toBeNull()
+    expect(dupDiff!.kind).toBe('diff')
+    expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(2)
+
+    // closeAllDiffTabs closes all diff tabs while preserving document tabs
+    store.closeAllDiffTabs()
+    expect(store.getSnapshot().splitMode).toBe('single')
+    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id])
+    expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(0)
+  })
+
   it('supports split editor mode and per-tab clamped splitPreviewRatio preserved across mode changes without spurious transitions', () => {
     const transitions: PaneTabTransition[] = []
     const store = new PaneTabStore({
       onTransition: (transition) => transitions.push(transition)
     })
+
+    const getDocTab = (paneId: 'primary' | 'secondary', tabId: string) => {
+      const tab = store.getTab(paneId, tabId)
+      if (tab?.kind !== 'document') {
+        throw new Error(`Expected document tab ${tabId} in ${paneId}`)
+      }
+      return tab
+    }
 
     const tabA = store.openTab('c:/wiki/a.md')
     const tabB = store.openTab('c:/wiki/b.md')
@@ -333,23 +404,23 @@ describe('PaneTabStore', () => {
 
     // Switch tabA to split mode -> emits editor-mode-changed:raw->split
     store.updateTabViewState('primary', tabA.id, { mode: 'split' })
-    expect(store.getTab('primary', tabA.id)?.mode).toBe('split')
+    expect(getDocTab('primary', tabA.id).mode).toBe('split')
 
     // Adjust splitPreviewRatio within and outside [0.15, 0.85] -> clamped, no transition emitted
     const countBeforeRatio = transitions.length
     store.updateTabViewState('primary', tabA.id, { splitPreviewRatio: 0.05 })
-    expect(store.getTab('primary', tabA.id)?.splitPreviewRatio).toBe(0.15)
+    expect(getDocTab('primary', tabA.id).splitPreviewRatio).toBe(0.15)
     store.updateTabViewState('primary', tabA.id, { splitPreviewRatio: 0.95 })
-    expect(store.getTab('primary', tabA.id)?.splitPreviewRatio).toBe(0.85)
+    expect(getDocTab('primary', tabA.id).splitPreviewRatio).toBe(0.85)
     store.updateTabViewState('primary', tabA.id, { splitPreviewRatio: 0.35 })
-    expect(store.getTab('primary', tabA.id)?.splitPreviewRatio).toBe(0.35)
+    expect(getDocTab('primary', tabA.id).splitPreviewRatio).toBe(0.35)
     expect(transitions).toHaveLength(countBeforeRatio)
 
     // Switching mode away and back preserves tabA's splitPreviewRatio while tabB remains 0.5
     store.updateTabViewState('primary', tabA.id, { mode: 'raw' })
     store.updateTabViewState('primary', tabA.id, { mode: 'split' })
-    expect(store.getTab('primary', tabA.id)?.splitPreviewRatio).toBe(0.35)
-    expect(store.getTab('primary', tabB.id)?.splitPreviewRatio).toBe(0.5)
+    expect(getDocTab('primary', tabA.id).splitPreviewRatio).toBe(0.35)
+    expect(getDocTab('primary', tabB.id).splitPreviewRatio).toBe(0.5)
 
     expect(
       transitions

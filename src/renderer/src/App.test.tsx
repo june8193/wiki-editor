@@ -8,7 +8,13 @@ import {
   DEFAULT_APP_CONFIG,
   validateConfigRaw
 } from '@shared/config'
-import { createEmptyGitStatus, type GitFileStatusCode } from '@shared/git'
+import {
+  createEmptyGitStatus,
+  type GitDiffRequest,
+  type GitFileStatusCode,
+  type GitGraphCommit,
+  type GitLogResult
+} from '@shared/git'
 import type { AppMenuCommand, WikiApi, WikiClipboardApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import {
@@ -433,6 +439,27 @@ function createInMemoryWikiApi(
         pulled: true,
         pushed: true,
         summary: '동기화 완료'
+      }),
+      log: async () => ({ commits: [], hasMore: false }),
+      commitDetail: async (_workspacePath, commitHash) => ({
+        hash: commitHash,
+        shortHash: commitHash.slice(0, 7),
+        parents: [],
+        subject: '',
+        body: '',
+        authorName: '',
+        authorEmail: '',
+        committedAt: '',
+        files: []
+      }),
+      diff: async (_workspacePath, request) => ({
+        path: request.path,
+        ...(request.origPath ? { origPath: request.origPath } : {}),
+        status: request.status,
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        rawPatch: ''
       }),
       ...fsOptions.git
     },
@@ -3578,6 +3605,603 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       /삭제되었으나 미저장 편집 내용이 남아 있습니다 \(keep-dirty\.md\)/
     )
   })
+
+  it('supports fixed common branch/sync controls while Changes is collapsed, Changes/Graph accordion transitions, section resizer keyboard/double-click, and session-only preservation across view switches', async () => {
+    const user = userEvent.setup()
+    let currentBranch = 'main'
+    const buildStatus = () => ({
+      ...createEmptyGitStatus(true, 'C:/wiki/split-git'),
+      branch: currentBranch,
+      hasUpstream: true,
+      staged: [{ path: 'staged.md', status: 'A' as const }],
+      unstaged: [{ path: 'changed.md', status: 'M' as const }],
+      untracked: [{ path: 'draft.md', status: '?' as const }]
+    })
+
+    const checkoutSpy = vi.fn(async (_ws: string, branchName: string) => {
+      currentBranch = branchName
+      return buildStatus()
+    })
+    const syncSpy = vi.fn(async () => ({
+      status: buildStatus(),
+      pulled: true,
+      pushed: true,
+      summary: '동기화 완료'
+    }))
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/split-git',
+        workspaces: {
+          'C:/wiki/split-git': {
+            'changed.md': '# Changed'
+          }
+        },
+        git: {
+          status: vi.fn(async () => buildStatus()),
+          branches: vi.fn(async () => ({
+            current: currentBranch,
+            isDetached: false,
+            branches: [
+              { name: 'main', current: currentBranch === 'main', upstream: 'origin/main' },
+              { name: 'docs-v2', current: currentBranch === 'docs-v2', upstream: null }
+            ]
+          })),
+          checkout: checkoutSpy,
+          sync: syncSpy
+        }
+      }
+    )
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    const view = render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(within(gitRegion).queryByRole('button', { name: /Git.*main/i })).not.toBeInTheDocument()
+
+    const changesToggle = within(gitRegion).getByRole('button', { name: /Changes/i })
+    const graphToggle = within(gitRegion).getByRole('button', { name: /Graph/i })
+    expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(changesToggle).toHaveTextContent('3')
+    expect(graphToggle).toHaveAttribute('aria-expanded', 'true')
+
+    const resizer = within(gitRegion).getByRole('separator', { name: 'Git 섹션 높이 조절' })
+    expect(resizer).toHaveAttribute('aria-orientation', 'horizontal')
+    expect(resizer).toHaveAttribute('aria-valuemin', '20')
+    expect(resizer).toHaveAttribute('aria-valuemax', '80')
+    expect(resizer).toHaveAttribute('aria-valuenow', '50')
+
+    // Collapse Changes -> separator hides, Graph fills height, branch switch & Sync in fixed common area still work
+    await user.click(changesToggle)
+    expect(changesToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      within(gitRegion).queryByRole('separator', { name: 'Git 섹션 높이 조절' })
+    ).not.toBeInTheDocument()
+    expect(within(gitRegion).queryByLabelText('커밋 메시지')).not.toBeInTheDocument()
+    expect(within(gitRegion).getByRole('region', { name: 'Graph' })).toHaveStyle({
+      flex: '1 1 0%'
+    })
+
+    await user.selectOptions(within(gitRegion).getByLabelText('브랜치 선택'), 'docs-v2')
+    await user.click(within(gitRegion).getByRole('button', { name: '브랜치 전환' }))
+    await waitFor(() => {
+      expect(checkoutSpy).toHaveBeenCalledWith('C:/wiki/split-git', 'docs-v2')
+      expect(within(gitRegion).getByLabelText('현재 브랜치 docs-v2')).toBeInTheDocument()
+    })
+
+    await user.click(within(gitRegion).getByRole('button', { name: 'Sync' }))
+    await waitFor(() => {
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+    })
+
+    // Collapse Graph too -> both sections collapsed
+    await user.click(graphToggle)
+    expect(graphToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      within(gitRegion).queryByRole('separator', { name: 'Git 섹션 높이 조절' })
+    ).not.toBeInTheDocument()
+
+    // Re-expand both -> resizer returns
+    await user.click(changesToggle)
+    await user.click(graphToggle)
+    const activeResizer = within(gitRegion).getByRole('separator', { name: 'Git 섹션 높이 조절' })
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '50')
+
+    // Keyboard resize & clamping [20, 80] + double-click restore 50%
+    fireEvent.keyDown(activeResizer, { key: 'ArrowDown' })
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '55')
+    for (let i = 0; i < 10; i += 1) {
+      fireEvent.keyDown(activeResizer, { key: 'ArrowDown' })
+    }
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '80')
+    for (let i = 0; i < 15; i += 1) {
+      fireEvent.keyDown(activeResizer, { key: 'ArrowUp' })
+    }
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '20')
+
+    fireEvent.doubleClick(activeResizer)
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '50')
+
+    fireEvent.keyDown(activeResizer, { key: 'ArrowDown' })
+    fireEvent.keyDown(activeResizer, { key: 'ArrowDown' })
+    expect(activeResizer).toHaveAttribute('aria-valuenow', '60')
+
+    // Collapse Graph, switch away to Explorer and back to Git -> collapsed state & 60% ratio preserved
+    await user.click(graphToggle)
+    await clickActivityBarButton(user, '탐색기')
+    await clickActivityBarButton(user, 'Git')
+
+    const reopenedGit = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const reopenedGraphToggle = within(reopenedGit).getByRole('button', { name: /Graph/i })
+    expect(reopenedGraphToggle).toHaveAttribute('aria-expanded', 'false')
+    await user.click(reopenedGraphToggle)
+    expect(
+      within(reopenedGit).getByRole('separator', { name: 'Git 섹션 높이 조절' })
+    ).toHaveAttribute('aria-valuenow', '60')
+
+    // Session-only: config.json untouched, remount resets to expanded 50%
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+    view.unmount()
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const remountedGit = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(within(remountedGit).getByRole('button', { name: /Changes/i })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(remountedGit).getByRole('button', { name: /Graph/i })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(
+      within(remountedGit).getByRole('separator', { name: 'Git 섹션 높이 조절' })
+    ).toHaveAttribute('aria-valuenow', '50')
+  })
+
+  it('shows unborn commit history empty message in Graph section when repository has no commits', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/unborn-repo',
+        workspaces: {
+          'C:/wiki/unborn-repo': {
+            'README.md': '# Hello'
+          }
+        },
+        git: {
+          status: vi.fn(async () => ({
+            ...createEmptyGitStatus(true, 'C:/wiki/unborn-repo'),
+            branch: 'main',
+            isUnborn: true
+          })),
+          branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
+          log: vi.fn(async () => ({ commits: [], hasMore: false }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const graphRegion = screen.getByRole('region', { name: 'Graph' })
+    expect(within(graphRegion).getByText('아직 커밋된 내역이 없습니다.')).toBeInTheDocument()
+  })
+
+  it('renders Graph commit lanes and badges, filters 전체/현재 브랜치 without collapsing, paginates with 더 보기, and refreshes on commit and workspace changes', async () => {
+    const user = userEvent.setup()
+
+    const makeCommit = (
+      hash: string,
+      parents: string[],
+      subject: string,
+      authorName: string,
+      refs: GitGraphCommit['refs'] = []
+    ): GitGraphCommit => ({
+      hash,
+      shortHash: hash.slice(0, 7),
+      parents,
+      subject,
+      authorName,
+      committedAt: '2026-11-15T06:30:00Z',
+      refs
+    })
+
+    const allCommits: GitGraphCommit[] = [
+      makeCommit(
+        'aaaa111111111111111111111111111111111111',
+        ['bbbb222222222222222222222222222222222222', 'cccc333333333333333333333333333333333333'],
+        'Merge feature-x',
+        'Alice',
+        [
+          { name: 'HEAD', kind: 'head', isCurrentHead: true },
+          { name: 'main', kind: 'local-branch', isCurrentHead: true },
+          { name: 'origin/main', kind: 'remote-branch' },
+          { name: 'v1.0.0', kind: 'tag' }
+        ]
+      ),
+      makeCommit(
+        'cccc333333333333333333333333333333333333',
+        ['bbbb222222222222222222222222222222222222'],
+        'Side branch work',
+        'Bob',
+        [{ name: 'feature-x', kind: 'local-branch' }]
+      )
+    ]
+
+    const currentPage1: GitGraphCommit[] = [
+      makeCommit(
+        'aaaa111111111111111111111111111111111111',
+        ['bbbb222222222222222222222222222222222222'],
+        'Merge feature-x',
+        'Alice',
+        [
+          { name: 'HEAD', kind: 'head', isCurrentHead: true },
+          { name: 'main', kind: 'local-branch', isCurrentHead: true }
+        ]
+      )
+    ]
+
+    const currentPage2: GitGraphCommit[] = [
+      makeCommit(
+        'bbbb222222222222222222222222222222222222',
+        [],
+        'Older mainline commit',
+        'Carol'
+      )
+    ]
+
+    const committedHead = makeCommit(
+      'dddd444444444444444444444444444444444444',
+      ['aaaa111111111111111111111111111111111111'],
+      'Add sidebar graph test',
+      'Alice',
+      [
+        { name: 'HEAD', kind: 'head', isCurrentHead: true },
+        { name: 'main', kind: 'local-branch', isCurrentHead: true }
+      ]
+    )
+
+    const externalCommit = makeCommit(
+      'eeee555555555555555555555555555555555555',
+      ['dddd444444444444444444444444444444444444'],
+      'External CLI commit',
+      'Dana',
+      [
+        { name: 'HEAD', kind: 'head', isCurrentHead: true },
+        { name: 'main', kind: 'local-branch', isCurrentHead: true }
+      ]
+    )
+
+    let hasCommitted = false
+    let hasExternalCommit = false
+    let delayNextAllScope = false
+    let resolveDelayedAll!: (result: GitLogResult) => void
+
+    const logSpy = vi.fn(
+      (_ws: string, options?: { scope?: 'all' | 'current'; limit?: number; skip?: number }) => {
+        if (options?.scope === 'current') {
+          if (hasExternalCommit) {
+            return Promise.resolve({ commits: [externalCommit, committedHead], hasMore: false })
+          }
+          if (hasCommitted) {
+            return Promise.resolve({ commits: [committedHead, ...currentPage1], hasMore: false })
+          }
+          if ((options.skip ?? 0) > 0) {
+            return Promise.resolve({ commits: currentPage2, hasMore: false })
+          }
+          return Promise.resolve({ commits: currentPage1, hasMore: true })
+        }
+
+        if (delayNextAllScope) {
+          delayNextAllScope = false
+          return new Promise<GitLogResult>((resolve) => {
+            resolveDelayedAll = resolve
+          })
+        }
+
+        return Promise.resolve({ commits: allCommits, hasMore: false })
+      }
+    )
+
+    const { api, emitMenuCommand, emitWorkspaceChange } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/graph-app',
+        workspaces: {
+          'C:/wiki/graph-app': {
+            'notes.md': '# Notes'
+          }
+        },
+        git: {
+          status: vi.fn(async () => ({
+            ...createEmptyGitStatus(true, 'C:/wiki/graph-app'),
+            branch: 'main',
+            staged: hasCommitted ? [] : [{ path: 'notes.md', status: 'M' as GitFileStatusCode }]
+          })),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [
+              { name: 'main', current: true, upstream: 'origin/main' },
+              { name: 'feature-x', current: false, upstream: null }
+            ]
+          })),
+          commit: vi.fn(async () => {
+            hasCommitted = true
+            return {
+              ...createEmptyGitStatus(true, 'C:/wiki/graph-app'),
+              branch: 'main'
+            }
+          }),
+          log: logSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const graphRegion = within(gitRegion).getByRole('region', { name: 'Graph' })
+    const graphAccordionBtn = within(graphRegion).getByRole('button', { name: /Graph/i })
+
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('Merge feature-x')).toBeInTheDocument()
+    })
+    expect(within(graphRegion).getByText('Side branch work')).toBeInTheDocument()
+    expect(within(graphRegion).getByText('HEAD')).toHaveClass('is-head')
+    expect(within(graphRegion).getByText('main')).toHaveClass('is-local-branch')
+    expect(within(graphRegion).getByText('origin/main')).toHaveClass('is-remote-branch')
+    expect(within(graphRegion).getByText('v1.0.0')).toHaveClass('is-tag')
+    expect(graphRegion.querySelectorAll('svg.git-graph-svg').length).toBe(2)
+
+    const items = within(within(graphRegion).getByRole('list', { name: '커밋 그래프' })).getAllByRole(
+      'listitem'
+    )
+    expect(items[0].getAttribute('title')).toMatch(
+      /^aaaa111 · Alice · \d{4}-\d{2}-\d{2} \d{2}:\d{2} · Merge feature-x$/
+    )
+
+    // Switch to 현재 브랜치 without toggling Graph accordion collapse
+    const allBtn = within(graphRegion).getByRole('button', { name: '전체' })
+    const currentBtn = within(graphRegion).getByRole('button', { name: '현재 브랜치' })
+    expect(allBtn).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(currentBtn)
+    await waitFor(() => {
+      expect(within(graphRegion).queryByText('Side branch work')).not.toBeInTheDocument()
+    })
+    expect(graphAccordionBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(currentBtn).toHaveAttribute('aria-pressed', 'true')
+
+    // Click 더 보기 to paginate current branch commits
+    await user.click(within(graphRegion).getByRole('button', { name: '더 보기' }))
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('Older mainline commit')).toBeInTheDocument()
+    })
+    expect(logSpy).toHaveBeenCalledWith('C:/wiki/graph-app', {
+      scope: 'current',
+      limit: 100,
+      skip: 1
+    })
+
+    // Trigger delayed 전체 request, then immediately toggle back to 현재 브랜치 -> stale response ignored
+    delayNextAllScope = true
+    await user.click(allBtn)
+    await user.click(currentBtn)
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('Merge feature-x')).toBeInTheDocument()
+    })
+    await act(async () => {
+      resolveDelayedAll({
+        commits: [makeCommit('stale99999999999999999999999999999999999', [], 'Stale commit', 'Ghost')],
+        hasMore: false
+      })
+    })
+    expect(within(graphRegion).queryByText('Stale commit')).not.toBeInTheDocument()
+
+    // Commit refreshes Graph to latest page 1
+    await user.type(within(gitRegion).getByLabelText('커밋 메시지'), 'Add sidebar graph test')
+    await user.click(within(gitRegion).getByRole('button', { name: 'Commit' }))
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('Add sidebar graph test')).toBeInTheDocument()
+    })
+
+    // Workspace change event also refreshes Graph automatically
+    hasExternalCommit = true
+    await act(async () => {
+      emitWorkspaceChange({
+        rootPath: 'C:/wiki/graph-app',
+        eventType: 'change',
+        relativePath: 'notes.md'
+      })
+    })
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('External CLI commit')).toBeInTheDocument()
+    })
+  })
+
+  it('expands inline commit detail with files, switches/collapses commits, copies full hash, and clears on scope switch', async () => {
+    const user = userEvent.setup()
+    const firstHash = '1111111111111111111111111111111111111111'
+    const emptyHash = '2222222222222222222222222222222222222222'
+
+    const commitDetailSpy = vi.fn(async (_rootPath: string, commitHash: string) => {
+      if (commitHash === firstHash) {
+        return {
+          hash: firstHash,
+          shortHash: '1111111',
+          parents: [emptyHash],
+          subject: 'feat: graph detail commit',
+          body: 'Detailed body line 1\nDetailed body line 2',
+          authorName: 'Alice',
+          authorEmail: 'alice@example.com',
+          committedAt: '2026-11-15T10:00:00+09:00',
+          files: [
+            { status: 'A' as GitFileStatusCode, path: 'docs/added.md' },
+            { status: 'M' as GitFileStatusCode, path: 'notes.md' },
+            { status: 'R' as GitFileStatusCode, origPath: 'old.md', path: 'renamed.md' }
+          ]
+        }
+      }
+
+      return {
+        hash: emptyHash,
+        shortHash: '2222222',
+        parents: [],
+        subject: 'chore: empty root commit',
+        body: '',
+        authorName: 'Bob',
+        authorEmail: 'bob@example.com',
+        committedAt: '2026-11-14T10:00:00+09:00',
+        files: []
+      }
+    })
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/graph-detail-app',
+        workspaces: {
+          'C:/wiki/graph-detail-app': {
+            'notes.md': '# Notes'
+          }
+        },
+        git: {
+          status: vi.fn(async () => ({
+            ...createEmptyGitStatus(true, 'C:/wiki/graph-detail-app'),
+            branch: 'main'
+          })),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [{ name: 'main', current: true, upstream: null }]
+          })),
+          log: vi.fn(async (_rootPath: string, options?: { scope?: 'all' | 'current' }) => ({
+            commits:
+              options?.scope === 'current'
+                ? [
+                    {
+                      hash: emptyHash,
+                      shortHash: '2222222',
+                      parents: [],
+                      subject: 'chore: empty root commit',
+                      authorName: 'Bob',
+                      committedAt: '2026-11-14T10:00:00+09:00',
+                      refs: [{ name: 'HEAD', kind: 'head' as const }]
+                    }
+                  ]
+                : [
+                    {
+                      hash: firstHash,
+                      shortHash: '1111111',
+                      parents: [emptyHash],
+                      subject: 'feat: graph detail commit',
+                      authorName: 'Alice',
+                      committedAt: '2026-11-15T10:00:00+09:00',
+                      refs: [{ name: 'main', kind: 'local-branch' as const }]
+                    },
+                    {
+                      hash: emptyHash,
+                      shortHash: '2222222',
+                      parents: [],
+                      subject: 'chore: empty root commit',
+                      authorName: 'Bob',
+                      committedAt: '2026-11-14T10:00:00+09:00',
+                      refs: [{ name: 'HEAD', kind: 'head' as const }]
+                    }
+                  ],
+            hasMore: false
+          })),
+          commitDetail: commitDetailSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const graphRegion = within(gitRegion).getByRole('region', { name: 'Graph' })
+
+    const firstRowBtn = await within(graphRegion).findByRole('button', {
+      name: /feat: graph detail commit/
+    })
+    expect(firstRowBtn).toHaveAttribute('aria-expanded', 'false')
+
+    // Click commit row -> expands inline detail directly inside the same commit item
+    await user.click(firstRowBtn)
+    expect(commitDetailSpy).toHaveBeenCalledWith('C:/wiki/graph-detail-app', firstHash)
+
+    const firstDetailRegion = await within(graphRegion).findByRole('region', {
+      name: '1111111 커밋 상세'
+    })
+    expect(firstRowBtn).toHaveAttribute('aria-expanded', 'true')
+    const firstListItem = firstRowBtn.closest('li')
+    expect(firstListItem).not.toBeNull()
+    expect(firstListItem?.contains(firstDetailRegion)).toBe(true)
+
+    expect(firstDetailRegion).toHaveTextContent('Detailed body line 1')
+    expect(firstDetailRegion).toHaveTextContent('Detailed body line 2')
+    expect(firstDetailRegion).toHaveTextContent('alice@example.com')
+    expect(firstDetailRegion).toHaveTextContent('docs/added.md')
+    expect(firstDetailRegion).toHaveTextContent('notes.md')
+    expect(firstDetailRegion).toHaveTextContent('old.md → renamed.md')
+
+    // Copy full commit hash
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    try {
+      await user.click(within(firstDetailRegion).getByRole('button', { name: '해시 복사' }))
+      expect(writeTextSpy).toHaveBeenCalledWith(firstHash)
+    } finally {
+      writeTextSpy.mockRestore()
+    }
+
+    // Click another commit -> replaces inline detail and collapses previous row
+    const secondRowBtn = within(graphRegion).getByRole('button', {
+      name: /chore: empty root commit/
+    })
+    await user.click(secondRowBtn)
+    expect(commitDetailSpy).toHaveBeenCalledWith('C:/wiki/graph-detail-app', emptyHash)
+
+    const emptyDetailRegion = await within(graphRegion).findByRole('region', {
+      name: '2222222 커밋 상세'
+    })
+    expect(firstRowBtn).toHaveAttribute('aria-expanded', 'false')
+    expect(secondRowBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(emptyDetailRegion).toHaveTextContent('변경된 파일이 없습니다.')
+    expect(within(graphRegion).queryByRole('region', { name: '1111111 커밋 상세' })).toBeNull()
+
+    // Scope toggle clears expanded detail cleanly
+    await user.click(within(graphRegion).getByRole('button', { name: '현재 브랜치' }))
+    await waitFor(() => {
+      expect(within(graphRegion).queryByRole('region', { name: '2222222 커밋 상세' })).toBeNull()
+    })
+
+    // Re-expand and click same commit row again to collapse
+    const currentRowBtn = await within(graphRegion).findByRole('button', {
+      name: /chore: empty root commit/
+    })
+    await user.click(currentRowBtn)
+    await within(graphRegion).findByRole('region', { name: '2222222 커밋 상세' })
+    await user.click(currentRowBtn)
+    expect(currentRowBtn).toHaveAttribute('aria-expanded', 'false')
+    expect(within(graphRegion).queryByRole('region', { name: '2222222 커밋 상세' })).toBeNull()
+  })
 })
 
 describe('Renderer error logging & UI breadcrumbs', () => {
@@ -4905,6 +5529,526 @@ describe('Settings Panel centered modal', () => {
   })
 })
 
+describe('Git Diff viewer tab and Changes section integration', () => {
+  it('opens read-only diff tabs on Changes clicks, toggles inline/side-by-side, ignores +/- buttons, and opens editable files', async () => {
+    const user = userEvent.setup()
+    let revision = 1
+    const diffSpy = vi.fn(async (_workspacePath: string, request: GitDiffRequest) => ({
+      path: request.path,
+      ...(request.origPath ? { origPath: request.origPath } : {}),
+      status: request.status,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: request.path !== 'deleted.md',
+      rawPatch:
+        request.path === 'deleted.md'
+          ? ['diff --git a/deleted.md b/deleted.md', '@@ -1 +0,0 @@', '-gone'].join('\n')
+          : [
+              `diff --git a/${request.path} b/${request.path}`,
+              `--- a/${request.path}`,
+              `+++ b/${request.path}`,
+              '@@ -1 +1 @@',
+              `-old ${request.path} r${revision}`,
+              `+new ${request.path} r${revision}`
+            ].join('\n')
+    }))
+    const stageSpy = vi.fn(async (workspacePath: string) => ({
+      ...createEmptyGitStatus(true, workspacePath),
+      branch: 'main',
+      staged: [{ path: 'guide.md', status: 'M' as const }],
+      unstaged: [{ path: 'deleted.md', status: 'D' as const }]
+    }))
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {
+        version: 1,
+        theme: 'light',
+        autoSave: false,
+        autoSaveDelayMs: 1000,
+        showHeadingNumbers: true,
+        recentWorkspaces: [],
+        favoriteWorkspaces: [],
+        customCommands: []
+      },
+      {
+        workspaces: {
+          'C:/wiki/diff-app': {
+            'guide.md': '# Guide\n## Sub\nUpdated body',
+            'notes.md': '# Notes'
+          }
+        },
+        selectedFolder: 'C:/wiki/diff-app',
+        git: {
+          status: async (workspacePath) => ({
+            ...createEmptyGitStatus(true, workspacePath),
+            branch: 'main',
+            staged: [{ path: 'guide.md', status: 'M' }],
+            unstaged: [{ path: 'deleted.md', status: 'D' }],
+            untracked: [{ path: 'notes.md', status: '?' }]
+          }),
+          stage: stageSpy,
+          diff: diffSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await user.click(screen.getByRole('button', { name: 'Git' }))
+
+    const gitPanel = await screen.findByLabelText('Git 소스 제어')
+
+    // 1. Clicking + Stage button must NOT open a diff tab
+    await user.click(await within(gitPanel).findByRole('button', { name: 'notes.md Stage' }))
+    expect(stageSpy).toHaveBeenCalledWith('C:/wiki/diff-app', ['notes.md'])
+    expect(screen.queryByRole('tab')).toBeNull()
+
+    // 2. Clicking staged file opens Diff tab defaulting to side-by-side
+    const stagedList = within(gitPanel).getByText('스테이지됨 (1)').closest('.git-section') as HTMLElement
+    await user.click(within(stagedList).getByText('guide.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(1)
+    expect(within(primaryPane).getByRole('tab', { name: /guide\.md/ })).toBeInTheDocument()
+    expect(within(primaryPane).getByText('Staged')).toBeInTheDocument()
+    expect(within(primaryPane).getByTestId('diff-side-by-side')).toBeInTheDocument()
+    expect(within(primaryPane).getByText('old guide.md r1')).toBeInTheDocument()
+
+    // Switch to inline view
+    await user.click(within(primaryPane).getByRole('button', { name: '인라인' }))
+    expect(within(primaryPane).getByTestId('diff-inline')).toBeInTheDocument()
+
+    // 3. Clicking another file in Changes reuses the existing Diff tab in primary pane
+    const changesList = within(gitPanel).getByText('변경 사항 (1)').closest('.git-section') as HTMLElement
+    await user.click(within(changesList).getByText('deleted.md'))
+
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('Working Tree')).toBeInTheDocument()
+    })
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(1)
+    expect(within(primaryPane).getByRole('tab', { name: /deleted\.md/ })).toBeInTheDocument()
+    expect(within(primaryPane).getByRole('button', { name: '파일 열기' })).toBeDisabled()
+
+    // 4. Switch back to guide.md and click 파일 열기 to open editable workspace tab
+    revision = 2
+    await user.click(within(stagedList).getByText('guide.md'))
+    const openFileBtn = await within(primaryPane).findByRole('button', { name: '파일 열기' })
+    await waitFor(() => expect(openFileBtn).toBeEnabled())
+    await user.click(openFileBtn)
+
+    await waitFor(() => {
+      expect(within(primaryPane).getAllByRole('tab')).toHaveLength(2)
+    })
+    const docEditor = await within(primaryPane).findByTestId('document-editor')
+    expect(getRawEditorText(docEditor)).toContain('Updated body')
+  })
+
+  it('preserves split diff tabs, excludes diffs from autoSave/dirty/shortcuts/outline, refreshes on Git changes, and clears on workspace switch', async () => {
+    const user = userEvent.setup()
+    let patchCounter = 1
+    let currentStaged: Array<{ path: string; status: 'M' | 'A' }> = [{ path: 'doc.md', status: 'M' }]
+    let currentUnstaged: Array<{ path: string; status: 'M' | 'D' }> = [{ path: 'other.md', status: 'M' }]
+    const writeFileSpy = vi.fn(async () => {})
+    const diffSpy = vi.fn(async (_workspacePath: string, request: GitDiffRequest) => ({
+      path: request.path,
+      status: request.status,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: true,
+      rawPatch:
+        currentStaged.length === 0 && request.kind === 'staged'
+          ? ''
+          : [
+              `diff --git a/${request.path} b/${request.path}`,
+              `--- a/${request.path}`,
+              `+++ b/${request.path}`,
+              '@@ -1 +1 @@',
+              `-before v${patchCounter}`,
+              `+after v${patchCounter}`
+            ].join('\n')
+    }))
+
+    const folders = {
+      selected: 'C:/wiki/diff-one'
+    }
+    const { api, emitMenuCommand, emitWorkspaceChange } = createInMemoryWikiApi(
+      {
+        version: 1,
+        theme: 'light',
+        autoSave: true,
+        autoSaveDelayMs: 60,
+        showHeadingNumbers: true,
+        recentWorkspaces: [],
+        favoriteWorkspaces: [],
+        customCommands: []
+      },
+      {
+        workspaces: {
+          'C:/wiki/diff-one': {
+            'doc.md': '# Heading\nbody',
+            'other.md': '# Other'
+          },
+          'C:/wiki/diff-two': {
+            'two.md': '# Two'
+          }
+        },
+        git: {
+          status: async (workspacePath) => ({
+            ...createEmptyGitStatus(true, workspacePath),
+            branch: 'main',
+            staged: currentStaged,
+            unstaged: currentUnstaged
+          }),
+          stage: async (workspacePath) => {
+            patchCounter += 1
+            return {
+              ...createEmptyGitStatus(true, workspacePath),
+              branch: 'main',
+              staged: currentStaged,
+              unstaged: currentUnstaged
+            }
+          },
+          commit: async (workspacePath) => {
+            currentStaged = []
+            patchCounter += 1
+            return {
+              ...createEmptyGitStatus(true, workspacePath),
+              branch: 'main',
+              staged: [],
+              unstaged: currentUnstaged
+            }
+          },
+          diff: diffSpy
+        }
+      }
+    )
+    api.workspace.selectFolder = async () => folders.selected
+    api.workspace.writeFile = writeFileSpy
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    // Open a regular document tab and config.json first so secondary pane move is enabled
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('doc.md'))
+    await screen.findByTestId('document-editor')
+
+    await user.click(screen.getByRole('button', { name: 'Git' }))
+    const gitPanel = await screen.findByLabelText('Git 소스 제어')
+
+    // Open Staged diff for doc.md in primary pane -> move it to secondary pane
+    const stagedList = within(gitPanel).getByText('스테이지됨 (1)').closest('.git-section') as HTMLElement
+    await user.click(within(stagedList).getByText('doc.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    await within(primaryPane).findByText('after v1')
+
+    // Document Outline must exclude active Diff tab even when target is .md
+    const outlinePanel = screen.getByLabelText('문서 목차 (Outline)')
+    expect(within(outlinePanel).getByText('마크다운 문서에서만 목차를 지원합니다.')).toBeInTheDocument()
+
+    // Ctrl+S and Ctrl+Shift+M must NOT save or change editor mode on Diff tab
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 'M', ctrlKey: true, shiftKey: true })
+    expect(writeFileSpy).not.toHaveBeenCalled()
+
+    // Move Diff tab to secondary pane via tab context menu
+    const diffTabInPrimary = within(primaryPane).getByRole('tab', { name: /Diff\s*doc\.md/ })
+    fireEvent.contextMenu(diffTabInPrimary)
+    await user.click(await screen.findByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*doc\.md/ })).toBeInTheDocument()
+
+    // Focus primary pane and open another Diff tab -> secondary Diff tab stays preserved
+    fireEvent.mouseDown(primaryPane)
+    const changesList = within(gitPanel).getByText('변경 사항 (1)').closest('.git-section') as HTMLElement
+    await user.click(within(changesList).getByText('other.md'))
+    await within(primaryPane).findByText('after v1')
+    expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*doc\.md/ })).toBeInTheDocument()
+
+    // Wait longer than autoSaveDelayMs (60ms) -> Diff tab never triggers writeFile
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(writeFileSpy).not.toHaveBeenCalled()
+
+    // Saving a regular document tab refreshes Git status -> open Diff tab auto-refreshes (after v2)
+    await user.click(within(primaryPane).getByRole('tab', { name: 'doc.md' }))
+    const docEditor = await within(primaryPane).findByTestId('document-editor')
+    patchCounter = 2
+    appendRawEditorText(docEditor, ' updated')
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(writeFileSpy).toHaveBeenCalled()
+    })
+    await user.click(within(primaryPane).getByRole('tab', { name: /Diff\s*other\.md/ }))
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('after v2')).toBeInTheDocument()
+    })
+
+    // Stage action refreshes Git status -> open Diff tab auto-refreshes (after v3)
+    await user.click(within(gitPanel).getByRole('button', { name: 'other.md Stage' }))
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('after v3')).toBeInTheDocument()
+    })
+
+    // Commit -> triggers Git refresh -> open Diff tabs auto-refresh (staged doc.md empties, unstaged other.md gets v4)
+    await user.type(within(gitPanel).getByLabelText('커밋 메시지'), 'commit staged')
+    await user.click(within(gitPanel).getByRole('button', { name: 'Commit' }))
+
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('after v4')).toBeInTheDocument()
+      expect(within(secondaryPane).getByText('표시할 텍스트 변경 사항이 없습니다.')).toBeInTheDocument()
+    })
+
+    // External FS change event triggers Git refresh -> open unstaged Diff tab refreshes automatically
+    patchCounter = 5
+    act(() => {
+      emitWorkspaceChange({ rootPath: 'C:/wiki/diff-one', eventType: 'change', relativePath: 'other.md' })
+    })
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('after v5')).toBeInTheDocument()
+    })
+
+    // Closing Diff tab never shows unsaved alertdialog
+    await user.click(within(primaryPane).getByRole('button', { name: 'other.md 탭 닫기' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+
+    // Switching workspace closes remaining Diff tab automatically
+    folders.selected = 'C:/wiki/diff-two'
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await waitFor(() => {
+      expect(screen.queryByRole('tab', { name: /Diff\s*doc\.md/ })).not.toBeInTheDocument()
+    })
+  })
+})
+
+describe('Git Graph commit file diff integration', () => {
+  it('opens read-only commit Diff tabs from Graph commit files, reuses active pane tabs while preserving split pane, toggles diff view mode, and gates 파일 열기 by workspace existence', async () => {
+    const user = userEvent.setup()
+    const commitHash = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'
+    const shortHash = 'a1b2c3d'
+    const buildDiffResponse = (
+      request: GitDiffRequest,
+      rawPatch: string,
+      existsInWorkspace = true
+    ) => ({
+      path: request.path,
+      ...(request.origPath ? { origPath: request.origPath } : {}),
+      status: request.status,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace,
+      rawPatch
+    })
+
+    const diffSpy = vi.fn(async (_workspacePath: string, request: GitDiffRequest) => {
+      if (request.kind === 'commit' && request.path === 'docs/removed-old.md') {
+        return buildDiffResponse(
+          request,
+          [
+            'diff --git a/docs/removed-old.md b/docs/removed-old.md',
+            '--- a/docs/removed-old.md',
+            '+++ /dev/null',
+            '@@ -1 +0,0 @@',
+            '-removed historical line'
+          ].join('\n'),
+          false
+        )
+      }
+      if (request.kind === 'commit' && request.path === 'docs/renamed.md') {
+        return buildDiffResponse(
+          request,
+          [
+            'diff --git a/docs/legacy.md b/docs/renamed.md',
+            'similarity index 90%',
+            'rename from docs/legacy.md',
+            'rename to docs/renamed.md',
+            '@@ -1 +1 @@',
+            '-legacy title',
+            '+renamed title'
+          ].join('\n')
+        )
+      }
+      const prefix = request.kind === 'commit' ? 'commit' : 'working'
+      return buildDiffResponse(
+        request,
+        [
+          `diff --git a/${request.path} b/${request.path}`,
+          `--- a/${request.path}`,
+          `+++ b/${request.path}`,
+          '@@ -1 +1 @@',
+          `-${prefix} before`,
+          `+${prefix} after`
+        ].join('\n')
+      )
+    })
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {
+        version: 1,
+        theme: 'light',
+        autoSave: false,
+        autoSaveDelayMs: 1000,
+        showHeadingNumbers: true,
+        recentWorkspaces: [],
+        favoriteWorkspaces: [],
+        customCommands: []
+      },
+      {
+        workspaces: {
+          'C:/wiki/graph-diff-app': {
+            'docs/guide.md': '# Guide Current\nLatest workspace text',
+            'docs/renamed.md': '# Renamed Current',
+            'notes.md': '# Notes'
+          }
+        },
+        selectedFolder: 'C:/wiki/graph-diff-app',
+        git: {
+          status: async (workspacePath) => ({
+            ...createEmptyGitStatus(true, workspacePath),
+            branch: 'main',
+            unstaged: [{ path: 'notes.md', status: 'M' }]
+          }),
+          log: async () => ({
+            commits: [
+              {
+                hash: commitHash,
+                shortHash,
+                parents: [],
+                subject: 'feat: commit with changed files',
+                authorName: 'Alice',
+                committedAt: '2026-11-15T10:00:00+09:00',
+                refs: [{ name: 'main', kind: 'local-branch' }]
+              }
+            ],
+            hasMore: false
+          }),
+          commitDetail: async () => ({
+            hash: commitHash,
+            shortHash,
+            parents: [],
+            subject: 'feat: commit with changed files',
+            body: 'Commit body context',
+            authorName: 'Alice',
+            authorEmail: 'alice@example.com',
+            committedAt: '2026-11-15T10:00:00+09:00',
+            files: [
+              { status: 'M', path: 'docs/guide.md' },
+              { status: 'D', path: 'docs/removed-old.md' },
+              { status: 'R', origPath: 'docs/legacy.md', path: 'docs/renamed.md' }
+            ]
+          }),
+          diff: diffSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    // Open a regular document tab first so moving a Diff tab to secondary pane is enabled
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('notes.md'))
+    await screen.findByTestId('document-editor')
+
+    await user.click(screen.getByRole('button', { name: 'Git' }))
+
+    const gitPanel = await screen.findByLabelText('Git 소스 제어')
+    const graphRegion = within(gitPanel).getByRole('region', { name: 'Graph' })
+
+    // 1. Expand commit in Graph section and click an existing changed file
+    await user.click(within(graphRegion).getByRole('button', { name: /feat: commit with changed files/ }))
+    const detailRegion = await within(graphRegion).findByRole('region', {
+      name: `${shortHash} 커밋 상세`
+    })
+
+    await user.click(within(detailRegion).getByRole('button', { name: /docs\/guide\.md/ }))
+    expect(diffSpy).toHaveBeenCalledWith('C:/wiki/graph-diff-app', {
+      kind: 'commit',
+      commitHash,
+      shortHash,
+      path: 'docs/guide.md',
+      status: 'M'
+    })
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    const guideCommitTab = await within(primaryPane).findByRole('tab', {
+      name: /Diff\s*guide\.md \(a1b2c3d\)/
+    })
+    expect(guideCommitTab).toHaveAttribute('title', 'docs/guide.md · Commit a1b2c3d')
+    expect(within(primaryPane).getByText(`Commit ${shortHash}`)).toBeInTheDocument()
+    expect(within(primaryPane).getByTestId('diff-side-by-side')).toBeInTheDocument()
+    expect(within(primaryPane).getByText('commit after')).toBeInTheDocument()
+
+    // Toggle Side-by-Side -> Inline on commit Diff tab
+    await user.click(within(primaryPane).getByRole('button', { name: '인라인' }))
+    expect(within(primaryPane).getByTestId('diff-inline')).toBeInTheDocument()
+
+    const openFileBtn = within(primaryPane).getByRole('button', { name: '파일 열기' })
+    expect(openFileBtn).toBeEnabled()
+
+    // 2. Click historically deleted file in the same commit -> replaces active Diff tab and disables 파일 열기
+    await user.click(within(detailRegion).getByRole('button', { name: /docs\/removed-old\.md/ }))
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('removed historical line')).toBeInTheDocument()
+    })
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(2)
+    expect(
+      within(primaryPane).getByRole('tab', { name: /Diff\s*removed-old\.md \(a1b2c3d\)/ })
+    ).toBeInTheDocument()
+    expect(within(primaryPane).getByRole('button', { name: '파일 열기' })).toBeDisabled()
+
+    // 3. Click renamed commit file -> passes origPath and replaces active Diff tab
+    await user.click(
+      within(detailRegion).getByRole('button', { name: /docs\/legacy\.md → docs\/renamed\.md/ })
+    )
+    expect(diffSpy).toHaveBeenLastCalledWith('C:/wiki/graph-diff-app', {
+      kind: 'commit',
+      commitHash,
+      shortHash,
+      path: 'docs/renamed.md',
+      origPath: 'docs/legacy.md',
+      status: 'R'
+    })
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('renamed title')).toBeInTheDocument()
+    })
+
+    // 4. Open Working Tree Diff tab from Changes -> replaces commit Diff tab in active pane
+    const changesList = within(gitPanel).getByText('변경 사항 (1)').closest('.git-section') as HTMLElement
+    await user.click(within(changesList).getByText('notes.md'))
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('working after')).toBeInTheDocument()
+    })
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(2)
+
+    // Move Working Tree Diff tab to secondary pane, focus primary pane, and open commit Diff tab in primary
+    const workingTab = within(primaryPane).getByRole('tab', { name: /Diff\s*notes\.md/ })
+    fireEvent.contextMenu(workingTab)
+    await user.click(await screen.findByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*notes\.md/ })).toBeInTheDocument()
+
+    fireEvent.mouseDown(primaryPane)
+    await user.click(within(detailRegion).getByRole('button', { name: /docs\/guide\.md/ }))
+    await within(primaryPane).findByText('commit after')
+    expect(
+      within(primaryPane).getByRole('tab', { name: /Diff\s*guide\.md \(a1b2c3d\)/ })
+    ).toBeInTheDocument()
+    expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*notes\.md/ })).toBeInTheDocument()
+
+    // 5. Click 파일 열기 from commit Diff tab -> opens editable workspace document, close Diff tab cleanly
+    await user.click(within(primaryPane).getByRole('button', { name: '파일 열기' }))
+    const docEditor = await within(primaryPane).findByTestId('document-editor')
+    expect(getRawEditorText(docEditor)).toContain('Latest workspace text')
+
+    await user.click(within(primaryPane).getByRole('button', { name: 'guide.md (a1b2c3d) 탭 닫기' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+})
+
 function mountThemeStylesAndRoot(): { rootEl: HTMLDivElement; cleanup: () => void } {
   const styleEl = document.createElement('style')
   styleEl.setAttribute('data-test-theme', 'true')
@@ -5175,9 +6319,20 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
       await clickActivityBarButton(user, 'Git')
       const gitPanel = screen.getByRole('region', { name: 'Git 소스 제어' })
       const gitHeader = within(gitPanel).getByText('Git').closest('.git-header') as HTMLElement
-      assertSidebarPanelIsolation(gitPanel, gitHeader, gitPanel.lastElementChild as HTMLElement)
-      for (const btn of within(gitPanel).getAllByRole('button')) {
+      for (const btn of within(gitHeader).getAllByRole('button')) {
         expect(btn).not.toHaveAttribute('aria-expanded')
+      }
+      const gitCommonArea = gitPanel.querySelector('.git-common-area') as HTMLElement
+      expect(getComputedStyle(gitCommonArea).flexShrink).toBe('0')
+      const gitSplitContainer = gitPanel.querySelector('.git-split-container') as HTMLElement
+      expect(isZeroCssLength(getComputedStyle(gitSplitContainer).minHeight)).toBe(true)
+      expect(getComputedStyle(gitSplitContainer).overflow).toBe('hidden')
+      const accordionBodies = Array.from(
+        gitPanel.querySelectorAll('.git-accordion-body')
+      ) as HTMLElement[]
+      expect(accordionBodies).toHaveLength(2)
+      for (const accordionBody of accordionBodies) {
+        assertSidebarPanelIsolation(gitPanel, gitHeader, accordionBody)
       }
 
       const branchSelect = within(gitPanel).getByLabelText('브랜치 선택') as HTMLSelectElement

@@ -1,5 +1,13 @@
 import type { AppConfig } from '@shared/config'
-import type { GitBranchList, GitStatus, GitSyncResult } from '@shared/git'
+import type {
+  GitBranchList,
+  GitCommitDetail,
+  GitDiffRequest,
+  GitFileDiff,
+  GitLogResult,
+  GitStatus,
+  GitSyncResult
+} from '@shared/git'
 import {
   type AppMenuCommand,
   CLIPBOARD_IPC_CHANNELS,
@@ -125,7 +133,17 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
       push: (workspacePath) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.push, workspacePath) as Promise<GitStatus>,
       sync: (workspacePath) =>
-        ipcRenderer.invoke(GIT_IPC_CHANNELS.sync, workspacePath) as Promise<GitSyncResult>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.sync, workspacePath) as Promise<GitSyncResult>,
+      log: (workspacePath, options) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.log, workspacePath, options) as Promise<GitLogResult>,
+      commitDetail: (workspacePath, commitHash) =>
+        ipcRenderer.invoke(
+          GIT_IPC_CHANNELS.commitDetail,
+          workspacePath,
+          commitHash
+        ) as Promise<GitCommitDetail>,
+      diff: (workspacePath, request: GitDiffRequest) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.diff, workspacePath, request) as Promise<GitFileDiff>
     },
     menu: {
       onCommand: (listener) =>

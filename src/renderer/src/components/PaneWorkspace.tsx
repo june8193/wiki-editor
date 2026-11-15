@@ -3,6 +3,7 @@ import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { canSplitWithTab, PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
+import type { GitDiffContentState } from './GitDiffViewer'
 import { dispatchTabDrop, DraggingTabPayload, PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
 import { SplitSplitter } from './SplitSplitter'
@@ -10,6 +11,7 @@ import { SplitSplitter } from './SplitSplitter'
 interface PaneWorkspaceProps {
   layout: PaneLayoutState
   buffers: DocumentBufferSnapshot
+  diffsByKey: Record<string, GitDiffContentState>
   theme: ThemeMode
   autoSave: boolean
   showHeadingNumbers?: boolean
@@ -34,6 +36,7 @@ const SPLIT_DROP_ZONES: ReadonlyArray<{
 export function PaneWorkspace({
   layout,
   buffers,
+  diffsByKey,
   theme,
   autoSave,
   showHeadingNumbers = true,
@@ -63,6 +66,7 @@ export function PaneWorkspace({
     scrollRequest,
     isShortcutDisabled,
     buffers,
+    diffsByKey,
     draggingTab,
     onDragStartTab: setDraggingTab,
     onDragEndTab: clearDragging,

@@ -1,23 +1,45 @@
+import type { GitDiffRequest } from '@shared/git'
+import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 import type { BufferKeyRemap } from './DocumentBufferStore'
 
 export type PaneId = 'primary' | 'secondary'
 export type SplitMode = 'single' | 'horizontal' | 'vertical'
 export type SplitDirection = Exclude<SplitMode, 'single'>
 export type EditorMode = 'raw' | 'preview' | 'wysiwyg' | 'split'
+export type GitDiffViewMode = 'side-by-side' | 'inline'
 
 export interface CursorPosition {
   selectionStart: number
   selectionEnd: number
 }
 
-export interface TabItem {
+export interface DiffTabState {
+  request: GitDiffRequest
+  viewMode: GitDiffViewMode
+}
+
+export interface DocumentTabItem {
   id: string
+  kind: 'document'
   bufferKey: string
   mode: EditorMode
   cursor: CursorPosition
   scrollTop: number
   /** Left Raw region width fraction in Split mode (0.15..0.85, default 0.5); named splitPreviewRatio per spec contract. */
   splitPreviewRatio: number
+}
+
+export interface DiffTabItem {
+  id: string
+  kind: 'diff'
+  diff: DiffTabState
+}
+
+export type TabItem = DocumentTabItem | DiffTabItem
+
+export interface OpenDiffTabOptions {
+  paneId?: PaneId
+  viewMode?: GitDiffViewMode
 }
 
 export interface PaneState {
@@ -36,6 +58,7 @@ export interface PaneLayoutState {
 export interface OpenTabOptions {
   paneId?: PaneId
   mode?: EditorMode
+  splitPreviewRatio?: number
 }
 
 export interface TabViewPatch {
@@ -194,13 +217,19 @@ export function getPaneActiveTab(pane: PaneState): TabItem | null {
   return pane.tabs.find((tab) => tab.id === pane.activeTabId) ?? null
 }
 
+function getTabIdentityKey(tab: TabItem): string {
+  return tab.kind === 'document' ? tab.bufferKey : formatGitDiffTabKey(tab.diff.request)
+}
+
 function hasBufferReferenceInPanes(
   panes: Record<PaneId, PaneState>,
   bufferKey: string,
   excludeTabId?: string
 ): boolean {
   return [panes.primary, panes.secondary].some((pane) =>
-    pane.tabs.some((tab) => tab.bufferKey === bufferKey && tab.id !== excludeTabId)
+    pane.tabs.some(
+      (tab) => tab.kind === 'document' && tab.bufferKey === bufferKey && tab.id !== excludeTabId
+    )
   )
 }
 
@@ -276,36 +305,30 @@ export class PaneTabStore {
     return hasBufferReferenceInPanes(this.state.panes, bufferKey, excludeTabId)
   }
 
-  openTab = (bufferKey: string, options: OpenTabOptions = {}): TabItem =>
+  openTab = (bufferKey: string, options: OpenTabOptions = {}): DocumentTabItem =>
     this.openOrFocusTab(bufferKey, options)
 
-  private openOrFocusTab(
-    bufferKey: string,
-    options: OpenTabOptions = {},
-    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string }
-  ): TabItem {
-    const targetPaneId = options.paneId ?? this.state.activePaneId
+  private resolveTargetPaneContext(paneIdOption?: PaneId): {
+    targetPaneId: PaneId
+    targetPane: PaneState
+    nextSplitMode: SplitMode
+  } {
+    const targetPaneId = paneIdOption ?? this.state.activePaneId
     const targetPane = this.state.panes[targetPaneId]
     const nextSplitMode =
       targetPaneId === 'secondary' && this.state.splitMode === 'single'
         ? 'horizontal'
         : this.state.splitMode
+    return { targetPaneId, targetPane, nextSplitMode }
+  }
 
-    const existing = targetPane.tabs.find((tab) => tab.bufferKey === bufferKey)
-    if (existing) {
-      this.commitTabActivation(targetPaneId, existing.id, nextSplitMode)
-      return existing
-    }
-
-    const created: TabItem = {
-      id: this.nextTabId(),
-      bufferKey,
-      mode: options.mode ?? 'raw',
-      cursor: { selectionStart: 0, selectionEnd: 0 },
-      scrollTop: 0,
-      splitPreviewRatio: DEFAULT_SPLIT_RATIO
-    }
-
+  private appendNewTabInPane<T extends TabItem>(
+    targetPaneId: PaneId,
+    targetPane: PaneState,
+    nextSplitMode: SplitMode,
+    created: T,
+    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string }
+  ): T {
     this.commit(
       {
         ...this.state,
@@ -333,6 +356,98 @@ export class PaneTabStore {
       ]
     )
     return created
+  }
+
+  openDiffTab = (
+    request: GitDiffRequest,
+    options: OpenDiffTabOptions = {},
+    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string }
+  ): DiffTabItem => {
+    const { targetPaneId, targetPane, nextSplitMode } = this.resolveTargetPaneContext(
+      options.paneId
+    )
+    const nextDiffKey = formatGitDiffTabKey(request)
+
+    const existing = duplicateFrom
+      ? targetPane.tabs.find(
+          (tab): tab is DiffTabItem =>
+            tab.kind === 'diff' && formatGitDiffTabKey(tab.diff.request) === nextDiffKey
+        )
+      : targetPane.tabs.find((tab): tab is DiffTabItem => tab.kind === 'diff')
+
+    if (existing) {
+      const isSameTarget = formatGitDiffTabKey(existing.diff.request) === nextDiffKey
+      const nextViewMode =
+        options.viewMode ?? (isSameTarget ? existing.diff.viewMode : 'side-by-side')
+      const updatedTab: DiffTabItem = {
+        ...existing,
+        diff: { request, viewMode: nextViewMode }
+      }
+      const nextTabs = targetPane.tabs.map((tab) => (tab.id === existing.id ? updatedTab : tab))
+      const tabChanged =
+        this.state.activePaneId !== targetPaneId ||
+        targetPane.activeTabId !== existing.id ||
+        !isSameTarget ||
+        existing.diff.viewMode !== nextViewMode
+
+      if (tabChanged || this.state.splitMode !== nextSplitMode) {
+        this.commit(
+          {
+            ...this.state,
+            splitMode: nextSplitMode,
+            activePaneId: targetPaneId,
+            panes: {
+              ...this.state.panes,
+              [targetPaneId]: {
+                ...targetPane,
+                tabs: nextTabs,
+                activeTabId: existing.id
+              }
+            }
+          },
+          [{ type: 'tab-switched', paneId: targetPaneId, tab: updatedTab }]
+        )
+      }
+      return updatedTab
+    }
+
+    const created: DiffTabItem = {
+      id: this.nextTabId(),
+      kind: 'diff',
+      diff: { request, viewMode: options.viewMode ?? 'side-by-side' }
+    }
+
+    return this.appendNewTabInPane(targetPaneId, targetPane, nextSplitMode, created, duplicateFrom)
+  }
+
+  private openOrFocusTab(
+    bufferKey: string,
+    options: OpenTabOptions = {},
+    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string }
+  ): DocumentTabItem {
+    const { targetPaneId, targetPane, nextSplitMode } = this.resolveTargetPaneContext(
+      options.paneId
+    )
+
+    const existing = targetPane.tabs.find(
+      (tab): tab is DocumentTabItem => tab.kind === 'document' && tab.bufferKey === bufferKey
+    )
+    if (existing) {
+      this.commitTabActivation(targetPaneId, existing.id, nextSplitMode)
+      return existing
+    }
+
+    const created: DocumentTabItem = {
+      id: this.nextTabId(),
+      kind: 'document',
+      bufferKey,
+      mode: options.mode ?? 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0,
+      splitPreviewRatio: normalizeSplitRatio(options.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
+    }
+
+    return this.appendNewTabInPane(targetPaneId, targetPane, nextSplitMode, created, duplicateFrom)
   }
 
   activateTab = (paneId: PaneId, tabId: string): void => {
@@ -365,7 +480,9 @@ export class PaneTabStore {
       hadSecondaryTabs,
       paneId === 'primary'
     )
-    const isLastReferenceForBuffer = !hasBufferReferenceInPanes(reconciled.panes, removed.bufferKey)
+    const isLastReferenceForBuffer =
+      removed.kind === 'document' &&
+      !hasBufferReferenceInPanes(reconciled.panes, removed.bufferKey)
 
     this.commit(
       {
@@ -394,15 +511,16 @@ export class PaneTabStore {
 
     const primary = this.state.panes.primary
     const secondary = this.state.panes.secondary
-    const existingKeys = new Set(primary.tabs.map((tab) => tab.bufferKey))
+    const existingKeys = new Set(primary.tabs.map(getTabIdentityKey))
     const mergedTabs = [
       ...primary.tabs,
-      ...secondary.tabs.filter((tab) => !existingKeys.has(tab.bufferKey))
+      ...secondary.tabs.filter((tab) => !existingKeys.has(getTabIdentityKey(tab)))
     ]
     const activeSecondaryTab =
       this.state.activePaneId === 'secondary' ? getPaneActiveTab(secondary) : null
     const preservedSecondaryFocus = activeSecondaryTab
-      ? mergedTabs.find((tab) => tab.bufferKey === activeSecondaryTab.bufferKey)?.id ?? null
+      ? mergedTabs.find((tab) => getTabIdentityKey(tab) === getTabIdentityKey(activeSecondaryTab))
+          ?.id ?? null
       : null
     const nextPrimaryActive =
       preservedSecondaryFocus ??
@@ -481,7 +599,10 @@ export class PaneTabStore {
     if (!removed) return
 
     const targetPane = this.state.panes[targetPaneId]
-    const existingInTarget = targetPane.tabs.find((tab) => tab.bufferKey === removed.bufferKey)
+    const targetIdentity = getTabIdentityKey(removed)
+    const existingInTarget = targetPane.tabs.find(
+      (tab) => getTabIdentityKey(tab) === targetIdentity
+    )
 
     const nextTargetPane: PaneState = existingInTarget
       ? {
@@ -607,60 +728,33 @@ export class PaneTabStore {
     const sourceTab = this.getTab(sourcePaneId, tabId)
     if (!sourceTab) return null
     const targetPaneId: PaneId = sourcePaneId === 'primary' ? 'secondary' : 'primary'
+    if (sourceTab.kind === 'diff') {
+      return this.openDiffTab(
+        sourceTab.diff.request,
+        { paneId: targetPaneId, viewMode: sourceTab.diff.viewMode },
+        { sourcePaneId, sourceTabId: tabId }
+      )
+    }
     return this.openOrFocusTab(
       sourceTab.bufferKey,
-      { paneId: targetPaneId, mode: sourceTab.mode },
+      {
+        paneId: targetPaneId,
+        mode: sourceTab.mode,
+        splitPreviewRatio: sourceTab.splitPreviewRatio
+      },
       { sourcePaneId, sourceTabId: tabId }
     )
   }
 
-  updateTabViewState = (paneId: PaneId, tabId: string, patch: TabViewPatch): void => {
+  private replaceTabInPane(
+    paneId: PaneId,
+    index: number,
+    updatedTab: TabItem,
+    transitions: PaneTabTransition[] = []
+  ): void {
     const pane = this.state.panes[paneId]
-    const index = pane.tabs.findIndex((tab) => tab.id === tabId)
-    if (index === -1) return
-
-    const current = pane.tabs[index]
-    const nextMode = patch.mode ?? current.mode
-    const nextCursor = patch.cursor ?? current.cursor
-    const nextScrollTop = patch.scrollTop ?? current.scrollTop
-    const nextSplitPreviewRatio =
-      patch.splitPreviewRatio !== undefined
-        ? clampSplitRatio(patch.splitPreviewRatio)
-        : current.splitPreviewRatio
-
-    if (
-      nextMode === current.mode &&
-      nextCursor.selectionStart === current.cursor.selectionStart &&
-      nextCursor.selectionEnd === current.cursor.selectionEnd &&
-      nextScrollTop === current.scrollTop &&
-      nextSplitPreviewRatio === current.splitPreviewRatio
-    ) {
-      return
-    }
-
-    const updatedTab: TabItem = {
-      ...current,
-      mode: nextMode,
-      cursor: { ...nextCursor },
-      scrollTop: nextScrollTop,
-      splitPreviewRatio: nextSplitPreviewRatio
-    }
     const nextTabs = [...pane.tabs]
     nextTabs[index] = updatedTab
-
-    const transitions: PaneTabTransition[] =
-      nextMode !== current.mode
-        ? [
-            {
-              type: 'editor-mode-changed',
-              paneId,
-              tab: updatedTab,
-              from: current.mode,
-              to: nextMode
-            }
-          ]
-        : []
-
     this.commit(
       {
         ...this.state,
@@ -676,6 +770,73 @@ export class PaneTabStore {
     )
   }
 
+  updateDiffTabViewMode = (
+    paneId: PaneId,
+    tabId: string,
+    viewMode: GitDiffViewMode
+  ): void => {
+    const pane = this.state.panes[paneId]
+    const index = pane.tabs.findIndex((tab) => tab.id === tabId)
+    if (index === -1) return
+    const current = pane.tabs[index]
+    if (current.kind !== 'diff' || current.diff.viewMode === viewMode) return
+
+    this.replaceTabInPane(paneId, index, {
+      ...current,
+      diff: { ...current.diff, viewMode }
+    })
+  }
+
+  updateTabViewState = (paneId: PaneId, tabId: string, patch: TabViewPatch): void => {
+    const pane = this.state.panes[paneId]
+    const index = pane.tabs.findIndex((tab) => tab.id === tabId)
+    if (index === -1) return
+
+    const current = pane.tabs[index]
+    if (current.kind !== 'document') return
+
+    const nextMode = patch.mode ?? current.mode
+    const nextCursor = patch.cursor ?? current.cursor
+    const nextScrollTop = patch.scrollTop ?? current.scrollTop
+    const nextSplitPreviewRatio =
+      patch.splitPreviewRatio !== undefined
+        ? normalizeSplitRatio(patch.splitPreviewRatio)
+        : current.splitPreviewRatio
+
+    if (
+      nextMode === current.mode &&
+      nextCursor.selectionStart === current.cursor.selectionStart &&
+      nextCursor.selectionEnd === current.cursor.selectionEnd &&
+      nextScrollTop === current.scrollTop &&
+      nextSplitPreviewRatio === current.splitPreviewRatio
+    ) {
+      return
+    }
+
+    const updatedTab: DocumentTabItem = {
+      ...current,
+      mode: nextMode,
+      cursor: { ...nextCursor },
+      scrollTop: nextScrollTop,
+      splitPreviewRatio: nextSplitPreviewRatio
+    }
+
+    const transitions: PaneTabTransition[] =
+      nextMode !== current.mode
+        ? [
+            {
+              type: 'editor-mode-changed',
+              paneId,
+              tab: updatedTab,
+              from: current.mode,
+              to: nextMode
+            }
+          ]
+        : []
+
+    this.replaceTabInPane(paneId, index, updatedTab, transitions)
+  }
+
   remapBufferKeys(remappings: readonly BufferKeyRemap[]): void {
     if (remappings.length === 0) return
     const map = new Map(remappings.map((item) => [item.oldKey, item.newKey]))
@@ -684,6 +845,7 @@ export class PaneTabStore {
     const remapPane = (pane: PaneState): PaneState => {
       let paneChanged = false
       const nextTabs = pane.tabs.map((tab) => {
+        if (tab.kind !== 'document') return tab
         const nextKey = map.get(tab.bufferKey)
         if (!nextKey || nextKey === tab.bufferKey) return tab
         paneChanged = true
@@ -710,10 +872,18 @@ export class PaneTabStore {
   closeTabsByBufferKeys(keys: readonly string[]): void {
     if (keys.length === 0) return
     const keySet = new Set(keys)
+    this.removeTabsWhere((tab) => tab.kind === 'document' && keySet.has(tab.bufferKey))
+  }
+
+  closeAllDiffTabs = (): void => {
+    this.removeTabsWhere((tab) => tab.kind === 'diff')
+  }
+
+  private removeTabsWhere(shouldRemove: (tab: TabItem) => boolean): void {
     const hadSecondaryTabs = this.state.panes.secondary.tabs.length > 0
 
     const filterPane = (pane: PaneState): { nextPane: PaneState; changed: boolean } => {
-      const nextTabs = pane.tabs.filter((tab) => !keySet.has(tab.bufferKey))
+      const nextTabs = pane.tabs.filter((tab) => !shouldRemove(tab))
       if (nextTabs.length === pane.tabs.length) {
         return { nextPane: pane, changed: false }
       }

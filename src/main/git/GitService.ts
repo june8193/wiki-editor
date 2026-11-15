@@ -4,8 +4,14 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
   createEmptyGitStatus,
+  DEFAULT_GIT_LOG_LIMIT,
   type GitBranchInfo,
   type GitBranchList,
+  type GitCommitDetail,
+  type GitDiffRequest,
+  type GitFileDiff,
+  type GitLogOptions,
+  type GitLogResult,
   type GitStatus,
   type GitSyncResult
 } from '@shared/git'
@@ -22,6 +28,13 @@ import {
   formatGitError,
   GitFormattedError
 } from './gitErrors'
+import {
+  assertValidCommitHash,
+  GIT_COMMIT_DETAIL_FORMAT,
+  parseCommitDetailOutput
+} from './gitCommitDetail'
+import { computeGitDiff } from './gitDiff'
+import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
 import { parsePorcelainV2Z } from './gitPorcelain'
 
 export { formatGitError, parsePorcelainV2Z }
@@ -271,6 +284,133 @@ export class GitService {
     }
   }
 
+  async log(workspacePath: string, options: GitLogOptions = {}): Promise<GitLogResult> {
+    const scope = options.scope ?? 'all'
+    if (scope !== 'all' && scope !== 'current') {
+      throw new Error('유효한 Git 로그 조회 범위가 아닙니다.')
+    }
+    const limit = options.limit ?? DEFAULT_GIT_LOG_LIMIT
+    if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
+      throw new Error('유효한 커밋 조회 개수(limit)가 아닙니다.')
+    }
+    const skip = options.skip ?? 0
+    if (typeof skip !== 'number' || !Number.isInteger(skip) || skip < 0) {
+      throw new Error('유효한 커밋 건너뛰기(skip) 값이 아닙니다.')
+    }
+
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const headHash = await this.resolveRevisionHash(repoRoot, 'HEAD')
+    if (scope === 'current' && !headHash) {
+      return { commits: [], hasMore: false }
+    }
+
+    try {
+      const [headRefName, forEachRefRaw] = await Promise.all([
+        headHash ? this.resolveSymbolicHeadRef(repoRoot) : Promise.resolve(null),
+        this.execGit(repoRoot, [
+          'for-each-ref',
+          '--format=%(objectname)%09%(*objectname)%09%(refname)%09%(refname:short)%09%(symref)',
+          'refs/heads',
+          'refs/remotes',
+          'refs/tags'
+        ])
+      ])
+
+      const refsByHash = parseForEachRefOutput(forEachRefRaw, headRefName)
+      if (scope === 'all' && !headHash && refsByHash.size === 0) {
+        return { commits: [], hasMore: false }
+      }
+
+      const revArgs =
+        scope === 'current'
+          ? (await this.resolveRevisionHash(repoRoot, '@{upstream}')) !== null
+            ? ['HEAD', '@{upstream}']
+            : ['HEAD']
+          : [
+              ...(headHash ? ['HEAD'] : []),
+              '--branches',
+              '--exclude=refs/remotes/*/HEAD',
+              '--remotes',
+              '--tags'
+            ]
+
+      const raw = await this.execGit(repoRoot, [
+        'log',
+        '--topo-order',
+        '-z',
+        `--max-count=${limit + 1}`,
+        `--skip=${skip}`,
+        '--format=%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%cI',
+        ...revArgs
+      ])
+
+      const parsed = parseGitLogOutput(raw, refsByHash, headHash)
+      const hasMore = parsed.length > limit
+      return {
+        commits: hasMore ? parsed.slice(0, limit) : parsed,
+        hasMore
+      }
+    } catch (error) {
+      throw await this.formatAndLogGitError('log', error)
+    }
+  }
+
+  async commitDetail(workspacePath: string, commitHash: string): Promise<GitCommitDetail> {
+    const validatedHash = assertValidCommitHash(commitHash)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    try {
+      const raw = await this.execGit(repoRoot, [
+        '-c',
+        'core.quotePath=false',
+        'show',
+        '--first-parent',
+        '-m',
+        '--root',
+        '-M',
+        '--name-status',
+        '-z',
+        GIT_COMMIT_DETAIL_FORMAT,
+        `${validatedHash}^{commit}`
+      ])
+      return parseCommitDetailOutput(raw)
+    } catch (error) {
+      throw await this.formatAndLogGitError('commitDetail', error)
+    }
+  }
+
+  async diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff> {
+    if (
+      !request ||
+      (request.kind !== 'staged' && request.kind !== 'unstaged' && request.kind !== 'commit')
+    ) {
+      throw new Error('유효하지 않은 Diff 요청 형식입니다.')
+    }
+
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const workspaceRealRoot = await realpath(resolve(workspacePath))
+    const rawPaths = request.origPath ? [request.path, request.origPath] : [request.path]
+    const [safePath, safeOrigPath] = await this.validateRepoRelativePaths(repoRoot, rawPaths)
+
+    try {
+      const hasHeadCommit = request.kind === 'staged' ? await this.hasHeadCommit(repoRoot) : true
+      return await computeGitDiff({
+        repoRoot,
+        workspaceRealRoot,
+        request,
+        safePath,
+        safeOrigPath,
+        hasHeadCommit,
+        execOptions: {
+          env: this.createGitChildEnv(),
+          timeoutMs: this.localTimeoutMs,
+          onFailureMeta: this.recordFailedExecMeta
+        }
+      })
+    } catch (error) {
+      throw await this.formatAndLogGitError('diff', error)
+    }
+  }
+
   private async execUnstageTargets(repoRoot: string, targets: readonly string[]): Promise<void> {
     const hasHead = await this.hasHeadCommit(repoRoot)
     try {
@@ -422,11 +562,26 @@ export class GitService {
   }
 
   private async hasHeadCommit(repoRoot: string): Promise<boolean> {
+    return (await this.resolveRevisionHash(repoRoot, 'HEAD')) !== null
+  }
+
+  private async resolveRevisionHash(repoRoot: string, rev: string): Promise<string | null> {
     try {
-      await this.execGit(repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD'])
-      return true
+      const hash = (await this.execGit(repoRoot, ['rev-parse', '--verify', '--quiet', rev])).trim()
+      return hash || null
     } catch {
-      return false
+      return null
+    }
+  }
+
+  private async resolveSymbolicHeadRef(repoRoot: string): Promise<string | null> {
+    try {
+      const refName = (
+        await this.execGit(repoRoot, ['symbolic-ref', '--quiet', 'HEAD'])
+      ).trim()
+      return refName || null
+    } catch {
+      return null
     }
   }
 
@@ -488,11 +643,7 @@ export class GitService {
     return formatGitError(error)
   }
 
-  private async execGit(
-    cwd: string,
-    args: readonly string[],
-    timeoutMs = this.localTimeoutMs
-  ): Promise<string> {
+  private createGitChildEnv(): NodeJS.ProcessEnv {
     const childEnv: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.env,
@@ -503,6 +654,21 @@ export class GitService {
       LANGUAGE: 'C'
     }
     delete childEnv.LC_ALL
+    return childEnv
+  }
+
+  private recordFailedExecMeta = (error: unknown, cwd: string, args: string[]): void => {
+    if (typeof error === 'object' && error !== null) {
+      this.failedExecMeta.set(error, { cwd, args })
+    }
+  }
+
+  private async execGit(
+    cwd: string,
+    args: readonly string[],
+    timeoutMs = this.localTimeoutMs
+  ): Promise<string> {
+    const childEnv = this.createGitChildEnv()
 
     try {
       const { stdout } = await execFileAsync('git', [...args], {
@@ -515,9 +681,7 @@ export class GitService {
       })
       return stdout
     } catch (error) {
-      if (typeof error === 'object' && error !== null) {
-        this.failedExecMeta.set(error, { cwd, args: [...args] })
-      }
+      this.recordFailedExecMeta(error, cwd, [...args])
       throw error
     }
   }

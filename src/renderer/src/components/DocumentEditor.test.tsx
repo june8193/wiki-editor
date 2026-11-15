@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { DocumentEditor } from './DocumentEditor'
 import type { DocumentBuffer } from '../stores/DocumentBufferStore'
-import type { EditorMode, TabItem } from '../stores/PaneTabStore'
+import type { DocumentTabItem, EditorMode } from '../stores/PaneTabStore'
 
 function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
   return {
@@ -22,9 +22,10 @@ function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
   }
 }
 
-function createTab(mode: EditorMode = 'raw', splitPreviewRatio = 0.5): TabItem {
+function createTab(mode: EditorMode = 'raw', splitPreviewRatio = 0.5): DocumentTabItem {
   return {
     id: 'tab-1',
+    kind: 'document',
     bufferKey: 'c:/wiki/doc.md',
     mode,
     cursor: { selectionStart: 0, selectionEnd: 0 },
@@ -379,7 +380,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
 
   it('renders Raw editor (toolbar, slash menu, syntax highlighting) and live Preview (markdown + debounced Mermaid) side by side in Split mode', async () => {
     const user = userEvent.setup()
-    let latestTab: TabItem = {
+    let latestTab: DocumentTabItem = {
       ...createTab('split'),
       cursor: { selectionStart: 0, selectionEnd: 0 },
       scrollTop: 120
@@ -395,7 +396,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       render: vi.fn(async (_id, text) => ({ svg: `<svg><text>${text.trim()}</text></svg>` }))
     }
     const mermaidRenderer = createMermaidRenderer(driver)
-    const onUpdateViewState = vi.fn((patch: Partial<TabItem>) => {
+    const onUpdateViewState = vi.fn((patch: Partial<DocumentTabItem>) => {
       latestTab = { ...latestTab, ...patch }
     })
 
@@ -448,7 +449,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(onUpdateViewState).not.toHaveBeenCalledWith(expect.objectContaining({ scrollTop: 300 }))
 
     // Editing markdown & Mermaid source on the left updates right Preview + debounced Mermaid SVG
-    const renderSplit = (nextDoc: DocumentBuffer, nextTab: TabItem): void => {
+    const renderSplit = (nextDoc: DocumentBuffer, nextTab: DocumentTabItem): void => {
       const handleContent = (nextContent: string): void => {
         doc = { ...doc, content: nextContent, isDirty: nextContent !== doc.savedContent }
         renderSplit(doc, latestTab)
@@ -494,7 +495,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
   it('resizes split regions via splitter mouse drag, ArrowLeft/ArrowRight keys (0.15~0.85 clamp), and double-click reset to 0.5', () => {
     let tab = createTab('split', 0.5)
     const doc = createDoc({ content: '# Left\n\nRight', savedContent: '# Left\n\nRight' })
-    const onUpdateViewState = vi.fn((patch: Partial<TabItem>) => {
+    const onUpdateViewState = vi.fn((patch: Partial<DocumentTabItem>) => {
       tab = { ...tab, ...patch }
     })
 
@@ -684,7 +685,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(docLines).toHaveLength(60)
 
     let latestTab = createTab('split', 0.5)
-    const onUpdateViewState = vi.fn((patch: Partial<TabItem>) => {
+    const onUpdateViewState = vi.fn((patch: Partial<DocumentTabItem>) => {
       latestTab = { ...latestTab, ...patch }
     })
     const doc = createDoc({ content: fullContent, savedContent: fullContent })
