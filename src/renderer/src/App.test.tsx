@@ -3885,27 +3885,21 @@ describe('Activity bar and left sidebar view switching', () => {
     const user = userEvent.setup()
     let staged: Array<{ path: string; status: 'M' }> = []
     let unstaged: Array<{ path: string; status: 'M' }> = [{ path: 'notes.md', status: 'M' }]
-    const gitStatusSpy = vi.fn(async () => ({
+    const buildStatus = () => ({
       ...createEmptyGitStatus(true, 'C:/wiki/preserve'),
       branch: 'main',
       hasUpstream: true,
       staged,
       unstaged,
       untracked: []
-    }))
+    })
+    const gitStatusSpy = vi.fn(async () => buildStatus())
     const gitStageSpy = vi.fn(async (_ws: string, paths: string[]) => {
       for (const p of paths) {
         unstaged = unstaged.filter((item) => item.path !== p)
         staged = [...staged, { path: p, status: 'M' }]
       }
-      return {
-        ...createEmptyGitStatus(true, 'C:/wiki/preserve'),
-        branch: 'main',
-        hasUpstream: true,
-        staged,
-        unstaged,
-        untracked: []
-      }
+      return buildStatus()
     })
 
     const { api, emitMenuCommand, readDirCalls } = createInMemoryWikiApi(
