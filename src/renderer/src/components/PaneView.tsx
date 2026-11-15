@@ -1,16 +1,15 @@
 import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
-import type { ActiveTabDragSession } from '@shared/window'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
 import {
-  DraggingTabPayload,
   handleTabMoveDrop,
   isExternalTabDragEvent,
   isPaneTabTriggerTarget,
   PaneInteractionActions,
-  PaneTabBar
+  PaneTabBar,
+  type TabDragUiState
 } from './PaneTabBar'
 
 interface PaneViewProps {
@@ -25,8 +24,7 @@ interface PaneViewProps {
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
-  draggingTab: DraggingTabPayload | null
-  externalDragSession?: ActiveTabDragSession | null
+  dragState: TabDragUiState
   actions: PaneInteractionActions
 }
 
@@ -42,8 +40,7 @@ export function PaneView({
   scrollRequest = null,
   isShortcutDisabled = false,
   buffers,
-  draggingTab,
-  externalDragSession = null,
+  dragState,
   actions
 }: PaneViewProps) {
   const activeTab = getPaneActiveTab(pane)
@@ -70,10 +67,9 @@ export function PaneView({
       onMouseDown={handlePaneFocusEvent}
       onFocusCapture={handlePaneFocusEvent}
       onDragOver={(event) => {
-        const acceptsLocal = Boolean(draggingTab && draggingTab.paneId !== pane.id)
+        const acceptsLocal = Boolean(dragState.draggingTab && dragState.draggingTab.paneId !== pane.id)
         const acceptsExternalEmpty =
-          pane.tabs.length === 0 &&
-          isExternalTabDragEvent(event, draggingTab, externalDragSession)
+          pane.tabs.length === 0 && isExternalTabDragEvent(event, dragState)
         if (acceptsLocal || acceptsExternalEmpty) {
           event.preventDefault()
         }
@@ -81,12 +77,11 @@ export function PaneView({
       onDrop={(event) =>
         handleTabMoveDrop(
           event,
-          draggingTab,
+          dragState,
           actions.onDropTabInWindow,
           pane.id,
           actions.onMoveTab,
           {
-            externalDragSession,
             canAcceptExternal: pane.tabs.length === 0,
             onDropExternalTab: actions.onDropExternalTab,
             ignoreSamePane: true
@@ -101,8 +96,7 @@ export function PaneView({
           activeTabId={pane.activeTabId}
           canMoveToSplit={canMoveToSplit}
           buffers={buffers}
-          draggingTab={draggingTab}
-          externalDragSession={externalDragSession}
+          dragState={dragState}
           actions={actions}
         />
       )}

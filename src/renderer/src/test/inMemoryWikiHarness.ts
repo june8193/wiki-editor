@@ -679,10 +679,7 @@ export function createMultiWindowWikiHarness(
           return dragCoordinator.acceptCrossWindowDrop({
             targetWindowId: windowId,
             dragSessionId: input?.dragSessionId,
-            getBuffer: (key) => hub.getBuffer(key),
-            onReserveTransfer: (targetId, bufferKey) => {
-              hub.registerPendingTransfer(targetId, bufferKey)
-            }
+            bufferHub: hub
           })
         },
         async endTabDrag(input) {

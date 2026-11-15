@@ -322,10 +322,7 @@ export class WindowManager {
     return this.dragCoordinator.acceptCrossWindowDrop({
       targetWindowId: targetRecord.webContentsId,
       dragSessionId: input?.dragSessionId,
-      getBuffer: (key) => this.bufferHub.getBuffer(key),
-      onReserveTransfer: (targetId, bufferKey) => {
-        this.bufferHub.registerPendingTransfer(targetId, bufferKey)
-      }
+      bufferHub: this.bufferHub
     })
   }
 

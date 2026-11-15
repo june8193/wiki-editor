@@ -154,13 +154,9 @@ export function useEditorWorkspace({
 
   const buffers = useSyncExternalStore(bufferStore.subscribe, bufferStore.getSnapshot)
   const layout = useSyncExternalStore(tabStore.subscribe, tabStore.getSnapshot)
-  const draggingTab = useSyncExternalStore(
+  const dragState = useSyncExternalStore(
     tabDragController.subscribe,
-    tabDragController.getSnapshot
-  )
-  const externalDragSession = useSyncExternalStore(
-    tabDragController.subscribe,
-    tabDragController.getExternalDragSnapshot
+    tabDragController.getUiState
   )
   const activeTab = getPaneActiveTab(layout.panes[layout.activePaneId])
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
@@ -245,8 +241,7 @@ export function useEditorWorkspace({
     activeBuffer,
     activeFilePath,
     totalTabCount,
-    draggingTab,
-    externalDragSession,
+    dragState,
     paneActions,
     openWorkspaceFile: syncClient.openWorkspaceFile,
     openConfigDocument: syncClient.openConfigDocument,

@@ -393,17 +393,12 @@ export class RendererBufferSyncClient {
       if (closedDuringOpen.has(buf.key) || closedDuringOpen.has(targetKey)) {
         return
       }
-      const latestBuf = this.latestHubBuffers[targetKey]
-      if (targetKey !== buf.key && !latestBuf) {
+      if (targetKey !== buf.key && !this.latestHubBuffers[targetKey]) {
         return
       }
       this.remappedKeys.delete(buf.key)
       this.remappedKeys.delete(targetKey)
-      const targetBuf =
-        latestBuf && (targetKey !== buf.key || latestBuf.version > buf.version) ? latestBuf : buf
-      if (!this.pendingLocalEditCounts.has(targetKey) && !this.unsyncedLocalKeys.has(targetKey)) {
-        this.bufferStore.upsertBuffer(targetBuf)
-      }
+      this.reconcileIncomingBuffer(buf)
       this.tabStore.openTab(targetKey, { paneId: targetPaneId })
       this.syncCurrentLayoutTabs()
     } catch (error: unknown) {
@@ -770,11 +765,7 @@ export class RendererBufferSyncClient {
     return this.needsAsyncHubSync(this.resolveLatestKey(tab.bufferKey))
   }
 
-  acceptTransferredTab = (
-    buffer: DocumentBuffer,
-    payload: TabTransferPayload,
-    target?: TransferredTabDropTarget
-  ): TabItem | null => {
+  private reconcileIncomingBuffer(buffer: DocumentBuffer): string {
     const targetKey = this.resolveLatestKey(buffer.key)
     const latestBuf = this.latestHubBuffers[targetKey]
     const targetBuf =
@@ -785,6 +776,15 @@ export class RendererBufferSyncClient {
       this.bufferStore.upsertBuffer(targetBuf)
       this.latestHubBuffers = { ...this.latestHubBuffers, [targetBuf.key]: targetBuf }
     }
+    return targetKey
+  }
+
+  acceptTransferredTab = (
+    buffer: DocumentBuffer,
+    payload: TabTransferPayload,
+    target?: TransferredTabDropTarget
+  ): TabItem | null => {
+    const targetKey = this.reconcileIncomingBuffer(buffer)
     const accepted = this.tabStore.acceptTransferredTab(
       { ...payload, bufferKey: targetKey },
       target

@@ -1,4 +1,11 @@
-import { DragEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
+import {
+  DragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState
+} from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { ActiveTabDragSession } from '@shared/window'
@@ -11,11 +18,11 @@ import {
 } from '../stores/PaneTabStore'
 import type { OutlineScrollRequest } from './DocumentEditor'
 import {
+  allowWikiTabDragOver,
   dispatchTabDrop,
-  DraggingTabPayload,
   isExternalTabDragEvent,
-  isWikiTabDragActive,
-  PaneInteractionActions
+  PaneInteractionActions,
+  type TabDragUiState
 } from './PaneTabBar'
 import { PaneView } from './PaneView'
 
@@ -28,8 +35,7 @@ export interface PaneWorkspaceProps {
   customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
-  draggingTab: DraggingTabPayload | null
-  externalDragSession?: ActiveTabDragSession | null
+  dragState: TabDragUiState
   onSetSplitRatio: (ratio: number) => void
   onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
   actions: PaneInteractionActions
@@ -55,8 +61,7 @@ export function PaneWorkspace({
   customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
-  draggingTab,
-  externalDragSession = null,
+  dragState,
   onSetSplitRatio,
   onSplitWithTab,
   actions
@@ -65,7 +70,7 @@ export function PaneWorkspace({
   const [isExternalDragOver, setIsExternalDragOver] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const externalDragDepthRef = useRef(0)
-  const prevExternalSessionRef = useRef<ActiveTabDragSession | null>(externalDragSession)
+  const prevExternalSessionRef = useRef<ActiveTabDragSession | null>(dragState.externalDragSession)
 
   useEffect(() => {
     if (!isResizing) return
@@ -109,7 +114,7 @@ export function PaneWorkspace({
     }
   }
 
-  const hasDraggingTab = draggingTab !== null
+  const hasDraggingTab = dragState.draggingTab !== null
 
   useEffect(() => {
     if (!hasDraggingTab) return
@@ -123,33 +128,30 @@ export function PaneWorkspace({
     }
   }, [hasDraggingTab, actions])
 
-  useEffect(() => {
-    const prevSession = prevExternalSessionRef.current
-    prevExternalSessionRef.current = externalDragSession
-    if (draggingTab !== null || (prevSession !== null && externalDragSession === null)) {
-      externalDragDepthRef.current = 0
-      setIsExternalDragOver(false)
-    }
-  }, [draggingTab, externalDragSession])
-
-  const resetExternalDragHover = (): void => {
+  const resetExternalDragHover = useCallback((): void => {
     externalDragDepthRef.current = 0
     setIsExternalDragOver(false)
-  }
+  }, [])
 
-  const handleWorkspaceDragEnter = (event: DragEvent<HTMLDivElement>): void => {
-    if (!isExternalTabDragEvent(event, draggingTab, externalDragSession)) return
-    externalDragDepthRef.current += 1
-    if (!isExternalDragOver) {
-      setIsExternalDragOver(true)
+  useEffect(() => {
+    const prevSession = prevExternalSessionRef.current
+    prevExternalSessionRef.current = dragState.externalDragSession
+    if (
+      dragState.draggingTab !== null ||
+      (prevSession !== null && dragState.externalDragSession === null)
+    ) {
+      resetExternalDragHover()
     }
-  }
+  }, [dragState, resetExternalDragHover])
 
-  const handleWorkspaceDragOver = (event: DragEvent<HTMLDivElement>): void => {
-    if (!isExternalTabDragEvent(event, draggingTab, externalDragSession)) return
-    if (externalDragDepthRef.current === 0) {
-      externalDragDepthRef.current = 1
-    }
+  const activateExternalDragHover = (
+    event: DragEvent<HTMLDivElement>,
+    incrementDepth: boolean
+  ): void => {
+    if (!isExternalTabDragEvent(event, dragState)) return
+    externalDragDepthRef.current = incrementDepth
+      ? externalDragDepthRef.current + 1
+      : Math.max(1, externalDragDepthRef.current)
     if (!isExternalDragOver) {
       setIsExternalDragOver(true)
     }
@@ -172,9 +174,9 @@ export function PaneWorkspace({
   }
 
   const isSplit = layout.splitMode !== 'single'
-  const canDropLocalToSplit = draggingTab !== null && canSplitWithTab(layout)
+  const canDropLocalToSplit = dragState.draggingTab !== null && canSplitWithTab(layout)
   const canDropExternalToSplit =
-    draggingTab === null && isExternalDragOver && canAcceptIncomingSplitDrop(layout)
+    dragState.draggingTab === null && isExternalDragOver && canAcceptIncomingSplitDrop(layout)
   const visibleDropZones =
     canDropLocalToSplit || canDropExternalToSplit
       ? SPLIT_DROP_ZONES.filter((zone) => zone.direction !== layout.splitMode)
@@ -188,8 +190,7 @@ export function PaneWorkspace({
     scrollRequest,
     isShortcutDisabled,
     buffers,
-    draggingTab,
-    externalDragSession,
+    dragState,
     actions
   }
 
@@ -199,8 +200,8 @@ export function PaneWorkspace({
       className={`pane-workspace is-${layout.splitMode}`}
       data-testid="pane-workspace"
       data-split-mode={layout.splitMode}
-      onDragEnter={handleWorkspaceDragEnter}
-      onDragOver={handleWorkspaceDragOver}
+      onDragEnter={(event) => activateExternalDragHover(event, true)}
+      onDragOver={(event) => activateExternalDragHover(event, false)}
       onDragLeave={handleWorkspaceDragLeave}
       onDropCapture={resetExternalDragHover}
     >
@@ -217,19 +218,14 @@ export function PaneWorkspace({
           className={`split-drop-zone is-${zone.direction}`}
           data-testid={zone.testId}
           aria-label={zone.label}
-          onDragOver={(event) => {
-            if (isWikiTabDragActive(event, draggingTab, externalDragSession)) {
-              event.preventDefault()
-            }
-          }}
+          onDragOver={(event) => allowWikiTabDragOver(event, dragState)}
           onDrop={(event) =>
             dispatchTabDrop(
               event,
-              draggingTab,
+              dragState,
               actions.onDropTabInWindow,
               (payload) => onSplitWithTab(payload.paneId, payload.tabId, zone.direction),
               {
-                externalDragSession,
                 onExternalDrop: actions.onDropExternalTab
                   ? (dragSessionId) =>
                       actions.onDropExternalTab?.(

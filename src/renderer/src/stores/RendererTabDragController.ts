@@ -9,7 +9,11 @@ import {
   type TabDragResolution,
   type TabTransferPayload
 } from '@shared/window'
-import type { DraggingTabPayload } from '../components/PaneTabBar'
+import {
+  EMPTY_TAB_DRAG_STATE,
+  type DraggingTabPayload,
+  type TabDragUiState
+} from '../components/PaneTabBar'
 import type { PaneTabStore, TabItem, TransferredTabDropTarget } from './PaneTabStore'
 
 export interface TabDragBufferBridge {
@@ -69,8 +73,7 @@ export class RendererTabDragController {
   private readonly onError: (message: string | null, error?: unknown) => void
 
   private readonly listeners = new Set<() => void>()
-  private draggingTab: DraggingTabPayload | null = null
-  private externalDragSession: ActiveTabDragSession | null = null
+  private uiState: TabDragUiState = EMPTY_TAB_DRAG_STATE
   private activeDrag: ActiveLocalDragState | null = null
   private mounted = false
 
@@ -88,9 +91,9 @@ export class RendererTabDragController {
     }
   }
 
-  getSnapshot = (): DraggingTabPayload | null => this.draggingTab
+  getSnapshot = (): DraggingTabPayload | null => this.uiState.draggingTab
 
-  getExternalDragSnapshot = (): ActiveTabDragSession | null => this.externalDragSession
+  getUiState = (): TabDragUiState => this.uiState
 
   start(): () => void {
     this.mounted = true
@@ -212,13 +215,8 @@ export class RendererTabDragController {
         screenPoint,
         ...(latestTab ? { payload: toTabTransferPayload(latestTab) } : {})
       })
-      if (
-        this.mounted &&
-        !drag.closed &&
-        (result.detached || result.outcome === 'dropped-in-window')
-      ) {
-        drag.closed = true
-        this.bufferSync.forceCloseTab(drag.paneId, drag.tabId)
+      if (this.mounted && (result.detached || result.outcome === 'dropped-in-window')) {
+        this.closeLocalTabOnce(drag)
       }
     } catch (error: unknown) {
       if (activeSessionId) {
@@ -321,10 +319,7 @@ export class RendererTabDragController {
       await this.bufferSync.syncTabBufferForTransfer(drag.paneId, drag.tabId).catch(() => null)
     }
     if (!this.mounted) return
-    if (!drag.closed) {
-      drag.closed = true
-      this.bufferSync.forceCloseTab(drag.paneId, drag.tabId)
-    }
+    this.closeLocalTabOnce(drag)
     await this.windowApi?.endTabDrag({ dragSessionId }).catch(() => undefined)
   }
 
@@ -364,23 +359,31 @@ export class RendererTabDragController {
     }
   }
 
+  private closeLocalTabOnce(drag: ActiveLocalDragState): void {
+    if (drag.closed) {
+      return
+    }
+    drag.closed = true
+    this.bufferSync.forceCloseTab(drag.paneId, drag.tabId)
+  }
+
   private setDraggingTab(next: DraggingTabPayload | null): void {
-    const prev = this.draggingTab
+    const prev = this.uiState.draggingTab
     if (
       (prev === null && next === null) ||
       (prev !== null && next !== null && prev.paneId === next.paneId && prev.tabId === next.tabId)
     ) {
       return
     }
-    this.draggingTab = next
+    this.uiState = { ...this.uiState, draggingTab: next }
     this.notifyListeners()
   }
 
   private setExternalDragSession(next: ActiveTabDragSession | null): void {
-    if (isSameDragSession(this.externalDragSession, next)) {
+    if (isSameDragSession(this.uiState.externalDragSession, next)) {
       return
     }
-    this.externalDragSession = next
+    this.uiState = { ...this.uiState, externalDragSession: next }
     this.notifyListeners()
   }
 

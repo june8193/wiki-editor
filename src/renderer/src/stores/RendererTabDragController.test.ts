@@ -394,7 +394,7 @@ describe('RendererTabDragController', () => {
         },
         outcome: 'pending'
       })
-      expect(controller.getExternalDragSnapshot()).toBeNull()
+      expect(controller.getUiState().externalDragSession).toBeNull()
 
       // Remote dropped-in-window closes source tab, clears draggingTab, invokes endTabDrag, and ignores late endDrag
       emitDragState({
@@ -434,10 +434,10 @@ describe('RendererTabDragController', () => {
         outcome: 'pending'
       }
       emitDragState(externalSession)
-      expect(controller.getExternalDragSnapshot()).toEqual(externalSession)
+      expect(controller.getUiState().externalDragSession).toEqual(externalSession)
 
       emitDragState({ ...externalSession, outcome: 'cancelled' })
-      expect(controller.getExternalDragSnapshot()).toBeNull()
+      expect(controller.getUiState().externalDragSession).toBeNull()
 
       // Accepted external drop inserts buffer and tab (splitting even in 1-tab single mode)
       await syncClient.openWorkspaceFile({
@@ -471,7 +471,7 @@ describe('RendererTabDragController', () => {
         externalSession.dragSessionId
       )
       expect(accepted).toBe(true)
-      expect(controller.getExternalDragSnapshot()).toBeNull()
+      expect(controller.getUiState().externalDragSession).toBeNull()
       expect(tabStore.getSnapshot().splitMode).toBe('vertical')
       expect(tabStore.getSnapshot().panes.secondary.tabs[0]).toMatchObject({
         bufferKey: 'c:/wiki/external.md',
@@ -484,7 +484,7 @@ describe('RendererTabDragController', () => {
       emitDragState(externalSession)
       acceptResult = { accepted: false, reason: 'drag-not-pending' }
       expect(await controller.acceptExternalDrop({ kind: 'pane', paneId: 'primary' })).toBe(false)
-      expect(controller.getExternalDragSnapshot()).toBeNull()
+      expect(controller.getUiState().externalDragSession).toBeNull()
       expect(hub.getSnapshot().revision).toBeGreaterThanOrEqual(0)
     } finally {
       cleanup()

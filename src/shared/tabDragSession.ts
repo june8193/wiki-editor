@@ -14,11 +14,15 @@ import {
   type WindowBounds
 } from '@shared/window'
 
+export interface TabDragBufferHubPort {
+  getBuffer(bufferKey: string): DocumentBuffer | undefined
+  registerPendingTransfer(windowId: number, bufferKey: string): void
+}
+
 export interface AcceptCrossWindowDropParams {
   targetWindowId: number
   dragSessionId?: string
-  getBuffer: (bufferKey: string) => DocumentBuffer | undefined
-  onReserveTransfer: (targetWindowId: number, bufferKey: string) => void
+  bufferHub: TabDragBufferHubPort
 }
 
 export interface BeforeInputKeyEventLike {
@@ -148,14 +152,14 @@ export class TabDragCoordinator {
       return { accepted: false, reason: 'same-window' }
     }
 
-    const buffer = params.getBuffer(session.payload.bufferKey)
+    const buffer = params.bufferHub.getBuffer(session.payload.bufferKey)
     if (!buffer) {
       return { accepted: false, reason: 'unknown-buffer' }
     }
 
     // Reserve pending transfer ownership BEFORE broadcasting 'dropped-in-window' so an
     // eager source window tab close cannot prune the last buffer reference in flight.
-    params.onReserveTransfer(params.targetWindowId, buffer.key)
+    params.bufferHub.registerPendingTransfer(params.targetWindowId, buffer.key)
     const payload = toTabTransferPayload({ ...session.payload, bufferKey: buffer.key })
     session.payload = toTabTransferPayload(payload)
     this.transitionPendingOutcome('dropped-in-window', params.targetWindowId)
