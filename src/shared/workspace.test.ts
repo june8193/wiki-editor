@@ -10,6 +10,7 @@ import {
   recordRecentWorkspace,
   remapPathPrefix,
   removeFavoriteWorkspace,
+  removeRecentWorkspace,
   toggleFavoriteWorkspace
 } from './workspace'
 
@@ -61,6 +62,20 @@ describe('shared workspace path and favorites helpers', () => {
     // Adding w4 evicts oldest (w2)
     recents = recordRecentWorkspace(recents, 'C:\\w4', 3)
     expect(recents).toEqual(['C:\\w4', 'c:\\w1', 'C:\\w3'])
+  })
+
+  it('removes recent workspaces using normalized path comparison while preserving remaining order', () => {
+    const recents = ['C:\\Docs\\Alpha', 'C:\\Docs\\Beta', '/tmp/gamma']
+
+    expect(removeRecentWorkspace(recents, 'c:/docs/alpha/')).toEqual([
+      'C:\\Docs\\Beta',
+      '/tmp/gamma'
+    ])
+    expect(removeRecentWorkspace(recents, '/tmp/gamma/')).toEqual([
+      'C:\\Docs\\Alpha',
+      'C:\\Docs\\Beta'
+    ])
+    expect(removeRecentWorkspace(recents, 'C:\\Docs\\Missing')).toEqual(recents)
   })
 
   it('resolves parent paths, nested checks, and prefix remapping safely', () => {

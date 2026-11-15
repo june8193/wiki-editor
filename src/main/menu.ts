@@ -92,48 +92,17 @@ export function createApplicationMenuTemplate({
       ]
     },
     {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' }
-      ]
-    },
-    {
-      label: 'View',
-      submenu: [
-        {
-          label: '테마 전환',
-          click: (_menuItem, window) => sendCommand('toggle-theme', window)
-        },
-        { type: 'separator' },
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' }
-      ]
-    },
-    {
       label: 'Settings',
       submenu: [
         {
           label: '설정 패널',
           click: (_menuItem, window) => sendCommand('toggle-settings', window)
+        },
+        {
+          label: '테마 전환',
+          click: (_menuItem, window) => sendCommand('toggle-theme', window)
         }
       ]
-    },
-    {
-      label: 'Window',
-      submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'close' }]
     },
     {
       label: 'Help',

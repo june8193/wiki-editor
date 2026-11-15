@@ -1093,7 +1093,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     const { api } = createInMemoryWikiApi(
       {
         favoriteWorkspaces: favoriteAlpha,
-        recentWorkspaces: ['C:/wiki/gamma']
+        recentWorkspaces: ['C:/wiki/deleted-ws', 'C:/wiki/gamma']
       },
       {
         selectedFolder: 'C:\\wiki\\alpha',
@@ -1109,8 +1109,13 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     render(<App />)
     await screen.findByText('열린 워크스페이스 없음')
+    await waitFor(async () => {
+      const cfg = await api.config.get()
+      expect(cfg.recentWorkspaces).toEqual(['C:/wiki/gamma'])
+    })
 
     expect(screen.queryByRole('banner')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
     const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
     expect(within(workspaceView).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
@@ -1122,6 +1127,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     ).not.toBeInTheDocument()
     expect(within(workspaceView).getByRole('button', { name: /★\s*alpha/i })).toBeInTheDocument()
     expect(within(workspaceView).getByRole('button', { name: /gamma/i })).toBeInTheDocument()
+    expect(within(workspaceView).queryByRole('button', { name: /deleted-ws/i })).not.toBeInTheDocument()
 
     // Clicking '폴더 열기...' triggers the same folder selection handler as File > Open Folder
     await user.click(within(workspaceView).getByRole('button', { name: '폴더 열기...' }))
@@ -1184,13 +1190,18 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     render(<App />)
 
+    // Startup restore opens recent-ws automatically into Explorer View; switch to Workspace View to verify switcher flows
+    const initialExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(initialExplorer).findByText('recent.md')).toBeInTheDocument()
+    await clickActivityBarButton(user, '워크스페이스')
+
     // Switch failure keeps Workspace View active and displays error banner
-    const initialWorkspaceView = await screen.findByRole('region', { name: '워크스페이스 뷰' })
+    const initialWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
     await user.click(within(initialWorkspaceView).getByRole('button', { name: /broken-ws/i }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Workspace open failed')
     expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
 
-    // Open favorite workspace directly from initial unopened state -> switches to Explorer
+    // Open favorite workspace from Workspace View -> switches to Explorer
     await user.click(within(initialWorkspaceView).getByRole('button', { name: /★\s*alpha/i }))
     const explorer = await screen.findByLabelText('워크스페이스 탐색기')
     expect(await within(explorer).findByText('alpha.md')).toBeInTheDocument()
@@ -1305,11 +1316,12 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
   it('does not overwrite user-selected activity bar view when async config resolves or workspace opens from another view', async () => {
     const user = userEvent.setup()
     const { api, emitMenuCommand } = createInMemoryWikiApi(
-      {},
+      { recentWorkspaces: ['C:/wiki/alpha'] },
       {
-        selectedFolder: 'C:\\wiki\\alpha',
+        selectedFolder: 'C:\\wiki\\beta',
         workspaces: {
-          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' }
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
+          'C:\\wiki\\beta': { 'beta.md': '# Beta' }
         }
       }
     )
@@ -1321,6 +1333,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
         resolveConfigGet = () => resolve(resolved)
       })
     }
+    const openSpy = vi.spyOn(api.workspace, 'open')
     window.wikiApi = api
 
     render(<App />)
@@ -1334,9 +1347,12 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     await clickActivityBarButton(user, 'Git')
     expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
 
-    // Resolving config.get() must NOT reset activeView back to Workspace View
+    // Resolving config.get() triggers startup restore, which must NOT overwrite the user's Git view selection
     await act(async () => {
       resolveConfigGet(undefined as never)
+    })
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith('C:/wiki/alpha')
     })
     expect(within(activityBar).getByRole('button', { name: 'Git' })).toHaveAttribute(
       'aria-pressed',
@@ -1344,7 +1360,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     )
     expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
 
-    // Opening a folder while user is in Git view preserves Git view instead of forcing Explorer
+    // Opening another folder while user is in Git view preserves Git view instead of forcing Explorer
     await triggerMenuCommand(emitMenuCommand, 'open-folder')
     expect(within(activityBar).getByRole('button', { name: 'Git' })).toHaveAttribute(
       'aria-pressed',
@@ -3846,6 +3862,65 @@ describe('Renderer error logging & UI breadcrumbs', () => {
       { message: 'Tab switched', paneId: 'primary' },
       { message: 'Tab switched', paneId: 'secondary' }
     ])
+  })
+
+  it('automatically opens the last opened workspace (recentWorkspaces[0]) on startup', async () => {
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/gamma', 'C:/wiki/alpha']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
+          'C:\\wiki\\gamma': { 'gamma.md': '# Gamma' }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('gamma.md')).toBeInTheDocument()
+    expect(within(explorer).getByText('gamma')).toHaveAttribute('title', 'C:/wiki/gamma')
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    expect(within(activityBar).getByRole('button', { name: '탐색기' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('starts silently in empty workspace state and removes invalid path from recentWorkspaces when startup workspace open fails', async () => {
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/missing', 'C:/wiki/gamma']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\gamma': { 'gamma.md': '# Gamma' }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    const workspaceView = await screen.findByRole('region', { name: '워크스페이스 뷰' })
+    expect(within(workspaceView).getByText('열린 워크스페이스 없음')).toBeInTheDocument()
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    expect(within(activityBar).getByRole('button', { name: '워크스페이스' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    await waitFor(async () => {
+      const cfg = await api.config.get()
+      expect(cfg.recentWorkspaces).toEqual(['C:/wiki/gamma'])
+    })
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: /gamma/i })).toBeInTheDocument()
+    expect(within(workspaceView).queryByRole('button', { name: /missing/i })).not.toBeInTheDocument()
   })
 })
 

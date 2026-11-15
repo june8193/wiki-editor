@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppConfig, type CustomCommandConfig, DEFAULT_APP_CONFIG, ThemeMode } from '@shared/config'
+import { removeRecentWorkspace as removeRecentWorkspaceFromList } from '@shared/workspace'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
 interface UseConfigControllerOptions {
   onError: (message: string | null, error?: unknown) => void
   onExternalConfigCommitted?: () => void
+  onInitialConfigLoaded?: (config: AppConfig) => void
 }
 
 /**
@@ -12,7 +14,8 @@ interface UseConfigControllerOptions {
  */
 export function useConfigController({
   onError,
-  onExternalConfigCommitted
+  onExternalConfigCommitted,
+  onInitialConfigLoaded
 }: UseConfigControllerOptions) {
   const [config, setConfig] = useState<AppConfig>(DEFAULT_APP_CONFIG)
   const [configPath, setConfigPath] = useState<string>('')
@@ -26,9 +29,11 @@ export function useConfigController({
   const mountedRef = useRef<boolean>(true)
   const onErrorRef = useRef(onError)
   const onExternalRef = useRef(onExternalConfigCommitted)
+  const onInitialLoadedRef = useRef(onInitialConfigLoaded)
 
   onErrorRef.current = onError
   onExternalRef.current = onExternalConfigCommitted
+  onInitialLoadedRef.current = onInitialConfigLoaded
 
   const applyUiConfig = useCallback((nextConfig: AppConfig): void => {
     latestConfigRef.current = nextConfig
@@ -74,6 +79,7 @@ export function useConfigController({
           loadedConfig,
           inFlightUpdatesRef.current === 0 && !hasMutationCommitRef.current
         )
+        onInitialLoadedRef.current?.(loadedConfig)
       })
       .catch((error: unknown) => {
         if (!mountedRef.current) return
@@ -191,6 +197,21 @@ export function useConfigController({
     [runConfigMutation]
   )
 
+  const removeRecentWorkspace = useCallback(
+    (workspacePath: string): void => {
+      const nextRecents = removeRecentWorkspaceFromList(
+        latestConfigRef.current.recentWorkspaces,
+        workspacePath
+      )
+      void runConfigMutation(
+        (prev) => ({ ...prev, recentWorkspaces: nextRecents }),
+        () => window.wikiApi.config.update({ recentWorkspaces: nextRecents }),
+        '최근 워크스페이스 목록 갱신에 실패했습니다.'
+      )
+    },
+    [runConfigMutation]
+  )
+
   const saveRawConfig = useCallback(
     async (rawContent: string): Promise<AppConfig> => {
       isSavingRawRef.current = true
@@ -217,6 +238,7 @@ export function useConfigController({
     updateCustomCommands,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
+    removeRecentWorkspace,
     saveRawConfig
   }
 }

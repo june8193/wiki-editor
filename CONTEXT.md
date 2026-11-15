@@ -7,7 +7,7 @@
 ### 앱 셸 및 레이아웃 (App Shell & Layout)
 
 **애플리케이션 메뉴 바 (Application Menu Bar)**:
-창 최상단 프레임에 위치하는 OS/Electron 네이티브 메뉴(`File`, `Edit`, `View`, `Settings`, `Window`)로, `File > 폴더 열기...`, `View > 테마 전환`, `Settings > 설정 패널` 등 전역 앱 명령을 제공합니다.
+창 최상단 프레임에 위치하는 OS/Electron 네이티브 메뉴(`File`, `Settings`, `Help`)로, `File > 폴더 열기...`, `Settings > 설정 패널`, `Settings > 테마 전환`, `Help > Copy Bug Report` 등 전역 앱 명령을 제공합니다.
 _Avoid_: 시스템 툴바, 파일 메뉴, 상단 네이티브 바
 
 **액티비티 바 (Activity Bar)**:
