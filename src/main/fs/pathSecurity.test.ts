@@ -7,22 +7,24 @@ const posixEnotdirPaths = vi.hoisted(() => new Set<string>())
 
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
-  const makeEnotdir = (target: string) =>
-    Object.assign(new Error(`ENOTDIR: not a directory, '${target}'`), { code: 'ENOTDIR' })
+  const withEnotdirCheck =
+    <TArgs extends [Parameters<typeof actual.realpath>[0], ...unknown[]], TReturn>(
+      fn: (...args: TArgs) => Promise<TReturn>
+    ) =>
+    async (...args: TArgs): Promise<TReturn> => {
+      const target = String(args[0])
+      if (posixEnotdirPaths.has(resolve(target))) {
+        throw Object.assign(new Error(`ENOTDIR: not a directory, '${target}'`), {
+          code: 'ENOTDIR'
+        })
+      }
+      return fn(...args)
+    }
+
   return {
     ...actual,
-    realpath: async (target: Parameters<typeof actual.realpath>[0]) => {
-      if (posixEnotdirPaths.has(resolve(String(target)))) {
-        throw makeEnotdir(String(target))
-      }
-      return actual.realpath(target)
-    },
-    lstat: async (target: Parameters<typeof actual.lstat>[0]) => {
-      if (posixEnotdirPaths.has(resolve(String(target)))) {
-        throw makeEnotdir(String(target))
-      }
-      return actual.lstat(target)
-    }
+    realpath: withEnotdirCheck(actual.realpath),
+    lstat: withEnotdirCheck(actual.lstat)
   }
 })
 

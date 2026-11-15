@@ -106,11 +106,7 @@ function GitFileSection({
         <ul className="git-file-list" role="list">
           {files.map((file) => (
             <li key={`${itemActionTitle}:${file.status}:${file.path}`} className="git-file-item">
-              <GitFileTriggerButton
-                file={file}
-                pathClassName="git-file-path"
-                onClick={() => onSelectFile(file)}
-              />
+              <GitFileTriggerButton file={file} onClick={() => onSelectFile(file)} />
               <button
                 type="button"
                 className="git-file-action-btn"

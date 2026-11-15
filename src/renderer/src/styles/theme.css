@@ -2462,13 +2462,6 @@ body.is-resizing-git-sections * {
   font-size: 11px;
 }
 
-.git-commit-detail-file-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-primary);
-}
-
 .tab-diff-badge {
   font-size: 10px;
   font-weight: 600;

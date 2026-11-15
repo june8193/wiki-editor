@@ -5800,32 +5800,38 @@ describe('Git Graph commit file diff integration', () => {
     const user = userEvent.setup()
     const commitHash = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'
     const shortHash = 'a1b2c3d'
+    const buildDiffResponse = (
+      request: GitDiffRequest,
+      rawPatch: string,
+      existsInWorkspace = true
+    ) => ({
+      path: request.path,
+      ...(request.origPath ? { origPath: request.origPath } : {}),
+      status: request.status,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace,
+      rawPatch
+    })
+
     const diffSpy = vi.fn(async (_workspacePath: string, request: GitDiffRequest) => {
       if (request.kind === 'commit' && request.path === 'docs/removed-old.md') {
-        return {
-          path: request.path,
-          status: request.status,
-          isBinary: false,
-          isTruncated: false,
-          existsInWorkspace: false,
-          rawPatch: [
+        return buildDiffResponse(
+          request,
+          [
             'diff --git a/docs/removed-old.md b/docs/removed-old.md',
             '--- a/docs/removed-old.md',
             '+++ /dev/null',
             '@@ -1 +0,0 @@',
             '-removed historical line'
-          ].join('\n')
-        }
+          ].join('\n'),
+          false
+        )
       }
       if (request.kind === 'commit' && request.path === 'docs/renamed.md') {
-        return {
-          path: request.path,
-          origPath: request.origPath,
-          status: request.status,
-          isBinary: false,
-          isTruncated: false,
-          existsInWorkspace: true,
-          rawPatch: [
+        return buildDiffResponse(
+          request,
+          [
             'diff --git a/docs/legacy.md b/docs/renamed.md',
             'similarity index 90%',
             'rename from docs/legacy.md',
@@ -5834,40 +5840,20 @@ describe('Git Graph commit file diff integration', () => {
             '-legacy title',
             '+renamed title'
           ].join('\n')
-        }
+        )
       }
-      if (request.kind === 'commit') {
-        return {
-          path: request.path,
-          status: request.status,
-          isBinary: false,
-          isTruncated: false,
-          existsInWorkspace: true,
-          rawPatch: [
-            `diff --git a/${request.path} b/${request.path}`,
-            `--- a/${request.path}`,
-            `+++ b/${request.path}`,
-            '@@ -1 +1 @@',
-            '-commit before',
-            '+commit after'
-          ].join('\n')
-        }
-      }
-      return {
-        path: request.path,
-        status: request.status,
-        isBinary: false,
-        isTruncated: false,
-        existsInWorkspace: true,
-        rawPatch: [
+      const prefix = request.kind === 'commit' ? 'commit' : 'working'
+      return buildDiffResponse(
+        request,
+        [
           `diff --git a/${request.path} b/${request.path}`,
           `--- a/${request.path}`,
           `+++ b/${request.path}`,
           '@@ -1 +1 @@',
-          '-working before',
-          '+working after'
+          `-${prefix} before`,
+          `+${prefix} after`
         ].join('\n')
-      }
+      )
     })
 
     const { api, emitMenuCommand } = createInMemoryWikiApi(

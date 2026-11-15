@@ -243,7 +243,6 @@ function GitCommitDetailFiles({
           >
             <GitFileTriggerButton
               file={file}
-              pathClassName="git-commit-detail-file-path"
               onClick={() =>
                 onOpenFileDiff(
                   toGitDiffRequest(
