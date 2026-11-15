@@ -478,7 +478,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(screen.getByRole('listbox', { name: '슬래시 명령어 자동완성' })).toBeInTheDocument()
   })
 
-  it('resizes split panes via divider mouse drag, ArrowLeft/ArrowRight keys (0.15~0.85 clamp), and double-click reset to 0.5', () => {
+  it('resizes split panes via splitter mouse drag, ArrowLeft/ArrowRight keys (0.15~0.85 clamp), and double-click reset to 0.5', () => {
     let tab = createTab('split', 0.5)
     const doc = createDoc({ content: '# Left\n\nRight', savedContent: '# Left\n\nRight' })
     const onUpdateViewState = vi.fn((patch: Partial<TabItem>) => {

@@ -3698,7 +3698,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
     expect(within(switcherMenu).queryByRole('button', { name: /missing/i })).not.toBeInTheDocument()
   })
 
-  it('integrates Split mode live preview/Mermaid, per-tab clamped divider ratio, 2-pane workspace independence, non-markdown lock, Outline TOC cursor insertion, and split breadcrumbs', async () => {
+  it('integrates Split mode live preview/Mermaid, per-tab clamped splitter ratio, 2-pane workspace independence, non-markdown lock, Outline TOC cursor insertion, and split breadcrumbs', async () => {
     const user = userEvent.setup()
     const entries: RendererLogPayload[] = []
     const alphaInitial = [
@@ -3776,8 +3776,8 @@ describe('Renderer error logging & UI breadcrumbs', () => {
       expect(within(alphaPreview).getByTestId('mermaid-svg')).toBeInTheDocument()
     })
 
-    // Adjust internal split divider via drag + double-click + ArrowRight, and persist per tab across tab & mode switches
-    const alphaDivider = within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
+    // Adjust internal split splitter via drag + double-click + ArrowRight, and persist per tab across tab & mode switches
+    const alphaSplitter = within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
     const alphaContainer = within(primaryPane).getByTestId('editor-split-container')
     vi.spyOn(alphaContainer, 'getBoundingClientRect').mockReturnValue({
       x: 0,
@@ -3790,18 +3790,18 @@ describe('Renderer error logging & UI breadcrumbs', () => {
       height: 600,
       toJSON: () => ({})
     })
-    fireEvent.mouseDown(alphaDivider)
+    fireEvent.mouseDown(alphaSplitter)
     fireEvent.mouseMove(window, { clientX: 600 })
     fireEvent.mouseUp(window)
-    expect(alphaDivider).toHaveAttribute('aria-valuenow', '60')
+    expect(alphaSplitter).toHaveAttribute('aria-valuenow', '60')
 
-    fireEvent.doubleClick(alphaDivider)
-    expect(alphaDivider).toHaveAttribute('aria-valuenow', '50')
+    fireEvent.doubleClick(alphaSplitter)
+    expect(alphaSplitter).toHaveAttribute('aria-valuenow', '50')
 
-    fireEvent.keyDown(alphaDivider, { key: 'ArrowRight' })
-    fireEvent.keyDown(alphaDivider, { key: 'ArrowRight' })
-    fireEvent.keyDown(alphaDivider, { key: 'ArrowRight' })
-    expect(alphaDivider).toHaveAttribute('aria-valuenow', '65')
+    fireEvent.keyDown(alphaSplitter, { key: 'ArrowRight' })
+    fireEvent.keyDown(alphaSplitter, { key: 'ArrowRight' })
+    fireEvent.keyDown(alphaSplitter, { key: 'ArrowRight' })
+    expect(alphaSplitter).toHaveAttribute('aria-valuenow', '65')
 
     // Switch to beta.md -> back to alpha.md -> toggle Raw -> Split: ratio 65 stays preserved for alpha.md
     await user.click(within(explorer).getByText('beta.md'))
@@ -3843,15 +3843,15 @@ describe('Renderer error logging & UI breadcrumbs', () => {
         { name: 'Split' }
       )
     )
-    const secondaryDivider = within(secondaryPane).getByRole('separator', {
+    const secondarySplitter = within(secondaryPane).getByRole('separator', {
       name: '에디터 분할 크기 조절'
     })
-    expect(secondaryDivider).toHaveAttribute('aria-valuenow', '50')
-    fireEvent.keyDown(secondaryDivider, { key: 'ArrowLeft' })
-    fireEvent.keyDown(secondaryDivider, { key: 'ArrowLeft' })
-    expect(secondaryDivider).toHaveAttribute('aria-valuenow', '40')
+    expect(secondarySplitter).toHaveAttribute('aria-valuenow', '50')
+    fireEvent.keyDown(secondarySplitter, { key: 'ArrowLeft' })
+    fireEvent.keyDown(secondarySplitter, { key: 'ArrowLeft' })
+    expect(secondarySplitter).toHaveAttribute('aria-valuenow', '40')
 
-    // Primary editor divider & workspace divider remain completely independent
+    // Primary editor splitter & workspace splitter remain completely independent
     expect(
       within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
     ).toHaveAttribute('aria-valuenow', '65')

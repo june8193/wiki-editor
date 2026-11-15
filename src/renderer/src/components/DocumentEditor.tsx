@@ -1,4 +1,4 @@
-import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { KeyboardEvent as ReactKeyboardEvent, useCallback, useRef } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
@@ -14,6 +14,7 @@ import {
 } from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
+import { SplitSplitter, roundSplitRatio } from './SplitSplitter'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 export interface OutlineScrollRequest {
@@ -39,12 +40,6 @@ interface DocumentEditorProps {
   onChangeContent: (nextContent: string) => void
   onSave: () => void
   onUpdateViewState: (patch: TabViewPatch) => void
-}
-
-const SPLIT_KEYBOARD_STEP = 0.05
-
-function roundSplitRatio(ratio: number): number {
-  return Math.round(ratio * 10000) / 10000
 }
 
 const EDITOR_MODE_OPTIONS: ReadonlyArray<{
@@ -75,58 +70,20 @@ export function DocumentEditor({
 }: DocumentEditorProps) {
   const allowRichModes = isMarkdownDocument(activeDoc)
   const effectiveMode: EditorMode = allowRichModes ? tab.mode : 'raw'
-  const splitRatio = roundSplitRatio(clampSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO))
-  const previewRatio = roundSplitRatio(1 - splitRatio)
+  const rawPaneRatio = roundSplitRatio(clampSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO))
+  const previewPaneRatio = roundSplitRatio(1 - rawPaneRatio)
   const rawLanguage = getRawEditorLanguage(activeDoc)
   const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
   const matchedScrollRequest =
     scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
-
-  const [isResizingSplit, setIsResizingSplit] = useState(false)
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
-  const onUpdateViewStateRef = useRef(onUpdateViewState)
-  onUpdateViewStateRef.current = onUpdateViewState
 
-  useEffect(() => {
-    if (effectiveMode !== 'split') {
-      setIsResizingSplit(false)
-    }
-  }, [effectiveMode])
-
-  useEffect(() => {
-    if (!isResizingSplit) return
-
-    const handleMouseMove = (event: MouseEvent): void => {
-      const container = splitContainerRef.current
-      if (!container) return
-      const rect = container.getBoundingClientRect()
-      if (rect.width <= 0) return
-      const nextRatio = roundSplitRatio(clampSplitRatio((event.clientX - rect.left) / rect.width))
-      onUpdateViewStateRef.current({ splitPreviewRatio: nextRatio })
-    }
-
-    const handleDragEnd = (): void => {
-      setIsResizingSplit(false)
-    }
-
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleDragEnd)
-    window.addEventListener('blur', handleDragEnd)
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleDragEnd)
-      window.removeEventListener('blur', handleDragEnd)
-    }
-  }, [isResizingSplit])
-
-  const handleSplitDividerKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-    event.preventDefault()
-    event.stopPropagation()
-    const delta = event.key === 'ArrowLeft' ? -SPLIT_KEYBOARD_STEP : SPLIT_KEYBOARD_STEP
-    const nextRatio = roundSplitRatio(clampSplitRatio(splitRatio + delta))
-    onUpdateViewState({ splitPreviewRatio: nextRatio })
-  }
+  const handleSplitRatioChange = useCallback(
+    (nextRatio: number): void => {
+      onUpdateViewState({ splitPreviewRatio: nextRatio })
+    },
+    [onUpdateViewState]
+  )
 
   const handleModeSelect = useCallback(
     (nextMode: EditorMode): void => {
@@ -297,28 +254,18 @@ export function DocumentEditor({
           className="editor-split-container"
           data-testid="editor-split-container"
         >
-          <div className="editor-split-pane is-raw" style={{ flex: `${splitRatio} 1 0%` }}>
+          <div className="editor-split-pane is-raw" style={{ flex: `${rawPaneRatio} 1 0%` }}>
             {rawEditorElement}
           </div>
-          <div
-            role="separator"
-            tabIndex={0}
-            aria-label="에디터 분할 크기 조절"
-            aria-orientation="vertical"
-            aria-valuemin={15}
-            aria-valuemax={85}
-            aria-valuenow={Math.round(splitRatio * 100)}
-            className={`split-divider is-horizontal${isResizingSplit ? ' is-dragging' : ''}`}
-            onMouseDown={(event) => {
-              event.preventDefault()
-              setIsResizingSplit(true)
-            }}
-            onDoubleClick={() => {
-              onUpdateViewState({ splitPreviewRatio: DEFAULT_SPLIT_RATIO })
-            }}
-            onKeyDown={handleSplitDividerKeyDown}
+          <SplitSplitter
+            containerRef={splitContainerRef}
+            direction="horizontal"
+            ratio={rawPaneRatio}
+            ariaLabel="에디터 분할 크기 조절"
+            onChangeRatio={handleSplitRatioChange}
+            onResetRatio={handleSplitRatioChange}
           />
-          <div className="editor-split-pane is-preview" style={{ flex: `${previewRatio} 1 0%` }}>
+          <div className="editor-split-pane is-preview" style={{ flex: `${previewPaneRatio} 1 0%` }}>
             <MarkdownPreview
               content={activeDoc.content}
               scrollTop={0}

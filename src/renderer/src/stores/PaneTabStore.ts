@@ -16,6 +16,7 @@ export interface TabItem {
   mode: EditorMode
   cursor: CursorPosition
   scrollTop: number
+  /** Left Raw pane width fraction in Split mode (0.15..0.85, default 0.5); named splitPreviewRatio per spec contract. */
   splitPreviewRatio: number
 }
 
