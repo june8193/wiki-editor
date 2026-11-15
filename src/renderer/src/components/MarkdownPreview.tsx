@@ -1,11 +1,9 @@
 import { useCallback, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
-import type { DiagramPngRasterAdapter } from '../editor/mermaidExport'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
-import { MermaidExportProvider } from './MermaidExportContext'
 
 export interface PreviewScrollRequest {
   slug?: string
@@ -19,7 +17,6 @@ interface MarkdownPreviewProps {
   theme?: ThemeMode
   showHeadingNumbers?: boolean
   mermaidRenderer?: MermaidRenderer
-  mermaidRasterAdapter?: DiagramPngRasterAdapter
   scrollRequest?: PreviewScrollRequest | null
   isActive?: boolean
   scrollContainerRef?: { current: HTMLDivElement | null }
@@ -40,7 +37,6 @@ export function MarkdownPreview({
   theme = 'light',
   showHeadingNumbers = false,
   mermaidRenderer,
-  mermaidRasterAdapter,
   scrollRequest,
   isActive = true,
   scrollContainerRef,
@@ -113,7 +109,7 @@ export function MarkdownPreview({
       {content.trim().length === 0 ? (
         <p className="markdown-preview-empty">미리 볼 내용이 없습니다.</p>
       ) : (
-        <MermaidExportProvider rasterAdapter={mermaidRasterAdapter}>{rendered}</MermaidExportProvider>
+        rendered
       )}
     </div>
   )

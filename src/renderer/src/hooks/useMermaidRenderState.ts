@@ -15,7 +15,6 @@ export interface UseMermaidRenderStateOptions {
   theme: ThemeMode
   renderer?: MermaidRenderer
   debounceMs?: number
-  enabled?: boolean
 }
 
 export interface MermaidRenderState {
@@ -81,11 +80,10 @@ export function useMermaidRenderState({
   code,
   theme,
   renderer = defaultMermaidRenderer,
-  debounceMs = DEFAULT_MERMAID_DEBOUNCE_MS,
-  enabled = true
+  debounceMs = DEFAULT_MERMAID_DEBOUNCE_MS
 }: UseMermaidRenderStateOptions): MermaidRenderState {
   const mermaidTheme = mapThemeToMermaidTheme(theme)
-  const cachedSvg = enabled ? renderer.getCachedSvg(code, theme) : null
+  const cachedSvg = renderer.getCachedSvg(code, theme)
 
   const [asyncState, setAsyncState] = useState<AsyncRenderState>(() => ({
     lastValid: cachedSvg !== null ? { code, mermaidTheme, renderer, svg: cachedSvg } : null,
@@ -99,10 +97,6 @@ export function useMermaidRenderState({
   }, [asyncState.lastValid])
 
   useEffect(() => {
-    if (!enabled) {
-      return
-    }
-
     const previousTheme = mountedThemeRef.current
     const isInitialOrThemeSwitch = previousTheme === null || previousTheme !== theme
     mountedThemeRef.current = theme
@@ -170,16 +164,7 @@ export function useMermaidRenderState({
         window.clearTimeout(timerId)
       }
     }
-  }, [cachedSvg, code, debounceMs, enabled, mermaidTheme, renderer, theme])
-
-  if (!enabled) {
-    return {
-      mermaidTheme,
-      displaySvg: null,
-      confirmedSvg: null,
-      displayError: null
-    }
-  }
+  }, [cachedSvg, code, debounceMs, mermaidTheme, renderer, theme])
 
   const displaySvg = cachedSvg ?? asyncState.lastValid?.svg ?? null
   const displayError = cachedSvg !== null ? null : asyncState.error

@@ -2948,7 +2948,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     const rasterRequests: DiagramSvgRasterRequest[] = []
     const rasterAdapter: DiagramPngRasterAdapter = vi.fn(async (request) => {
       rasterRequests.push(request)
-      return new Uint8Array([137, 80, 78, 71, request.theme === 'dark' ? 2 : 1])
+      const isDark = decodeURIComponent(request.svgDataUri).includes('#161b22')
+      return new Uint8Array([137, 80, 78, 71, isDark ? 2 : 1])
     })
 
     const { api, emitMenuCommand } = createInMemoryWikiApi(
@@ -3016,15 +3017,16 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       await user.click(previewValidImageBtn)
       expect(rasterRequests).toHaveLength(1)
       expect(rasterRequests[0]).toMatchObject({
-        logicalWidth: 272,
-        logicalHeight: 152,
-        scale: 2,
         pixelWidth: 544,
-        pixelHeight: 304,
-        theme: 'light'
+        pixelHeight: 304
       })
-      expect(rasterRequests[0].normalizedSvg).toContain('fill="#ffffff"')
-      expect(rasterRequests[0].normalizedSvg).not.toContain('max-width')
+      const decodedAppLightSvg = decodeURIComponent(
+        rasterRequests[0].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
+      )
+      expect(decodedAppLightSvg).toContain('width="272"')
+      expect(decodedAppLightSvg).toContain('height="152"')
+      expect(decodedAppLightSvg).toContain('fill="#ffffff"')
+      expect(decodedAppLightSvg).not.toContain('max-width')
       expect(copiedPngPayloads[0]).toEqual(new Uint8Array([137, 80, 78, 71, 1]))
       expect(previewValidImageBtn).toHaveTextContent('복사됨')
 
@@ -3039,11 +3041,12 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(rasterRequests).toHaveLength(2)
       expect(rasterRequests[1]).toMatchObject({
         pixelWidth: 544,
-        pixelHeight: 304,
-        scale: 2,
-        theme: 'dark'
+        pixelHeight: 304
       })
-      expect(rasterRequests[1].normalizedSvg).toContain('fill="#161b22"')
+      const decodedAppDarkSvg = decodeURIComponent(
+        rasterRequests[1].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
+      )
+      expect(decodedAppDarkSvg).toContain('fill="#161b22"')
       expect(copiedPngPayloads[1]).toEqual(new Uint8Array([137, 80, 78, 71, 2]))
 
       // Restore light theme for subsequent checks

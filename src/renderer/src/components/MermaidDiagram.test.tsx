@@ -847,16 +847,14 @@ describe('MermaidDiagram', () => {
 
     expect(rasterRequests).toHaveLength(1)
     expect(rasterRequests[0]).toMatchObject({
-      logicalWidth: 132,
-      logicalHeight: 82,
-      scale: 2,
       pixelWidth: 264,
-      pixelHeight: 164,
-      theme: 'light'
+      pixelHeight: 164
     })
     const decodedLightSvg = decodeURIComponent(
       rasterRequests[0].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
     )
+    expect(decodedLightSvg).toContain('width="132"')
+    expect(decodedLightSvg).toContain('height="82"')
     expect(decodedLightSvg).toContain('fill="#ffffff"')
     expect(decodedLightSvg).not.toContain('max-width')
     expect(copiedImages).toHaveLength(1)

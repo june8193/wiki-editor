@@ -973,14 +973,15 @@ describe('WysiwygMarkdownEditor', () => {
     })
     expect(rasterRequests).toHaveLength(1)
     expect(rasterRequests[0]).toMatchObject({
-      logicalWidth: 152,
-      logicalHeight: 92,
-      scale: 2,
       pixelWidth: 304,
-      pixelHeight: 184,
-      theme: 'light'
+      pixelHeight: 184
     })
-    expect(rasterRequests[0].normalizedSvg).toContain('fill="#ffffff"')
+    const decodedWysiwygLightSvg = decodeURIComponent(
+      rasterRequests[0].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
+    )
+    expect(decodedWysiwygLightSvg).toContain('width="152"')
+    expect(decodedWysiwygLightSvg).toContain('height="92"')
+    expect(decodedWysiwygLightSvg).toContain('fill="#ffffff"')
     expect(copyImage).toHaveBeenCalledWith(pngBytes)
     expect(validImageBtn).toHaveTextContent('복사됨')
 
@@ -1030,7 +1031,10 @@ describe('WysiwygMarkdownEditor', () => {
       fireEvent.click(validImageBtn)
       await vi.advanceTimersByTimeAsync(0)
     })
-    expect(rasterRequests[2].normalizedSvg).toContain('fill="#161b22"')
+    const decodedWysiwygDarkSvg = decodeURIComponent(
+      rasterRequests[2].svgDataUri.replace('data:image/svg+xml;charset=utf-8,', '')
+    )
+    expect(decodedWysiwygDarkSvg).toContain('fill="#161b22"')
     expect(within(validBlock).queryByRole('alert')).not.toBeInTheDocument()
     expect(validImageBtn).toHaveTextContent('복사됨')
 

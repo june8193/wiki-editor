@@ -157,7 +157,7 @@ export function useMermaidDiagramActions({
           throw new Error('이미지 클립보드 복사 API를 사용할 수 없습니다.')
         }
 
-        const pngBytes = await rasterizeMermaidSvgToPng(confirmedSvg, theme, { rasterAdapter })
+        const pngBytes = await rasterizeMermaidSvgToPng(confirmedSvg, theme, rasterAdapter)
         if (!isMountedRef.current || executionTokenRef.current !== token) {
           return
         }

@@ -1,7 +1,6 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { getRawEditorLanguage, resolveEditorShortcut, resolveEffectiveEditorMode } from '../editor/editorModes'
-import type { DiagramPngRasterAdapter } from '../editor/mermaidExport'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import type {
   DocumentOutlineSpyUpdate,
@@ -20,7 +19,6 @@ import {
   TabViewPatch
 } from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
-import { MermaidExportProvider } from './MermaidExportContext'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 import { SplitSplitter } from './SplitSplitter'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
@@ -33,7 +31,6 @@ interface DocumentEditorProps {
   showHeadingNumbers?: boolean
   customCommands?: readonly CustomCommandConfig[]
   mermaidRenderer?: MermaidRenderer
-  mermaidRasterAdapter?: DiagramPngRasterAdapter
   scrollRequest?: OutlineScrollRequest | null
   isActive?: boolean
   isShortcutDisabled?: boolean
@@ -63,7 +60,6 @@ export function DocumentEditor({
   showHeadingNumbers = true,
   customCommands,
   mermaidRenderer,
-  mermaidRasterAdapter,
   scrollRequest = null,
   isActive = true,
   isShortcutDisabled = false,
@@ -191,12 +187,11 @@ export function DocumentEditor({
     ) : null
 
   return (
-    <MermaidExportProvider rasterAdapter={mermaidRasterAdapter}>
-      <section
-        className="editor-pane"
-        aria-label="문서 편집 영역"
-        onKeyDown={handleKeyDown}
-      >
+    <section
+      className="editor-pane"
+      aria-label="문서 편집 영역"
+      onKeyDown={handleKeyDown}
+    >
       <div className="editor-header">
         <div className="editor-doc-meta">
           <span className="editor-doc-title">{activeDoc.name}</span>
@@ -321,7 +316,6 @@ export function DocumentEditor({
           </div>
         </div>
       )}
-      </section>
-    </MermaidExportProvider>
+    </section>
   )
 }

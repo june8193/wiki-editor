@@ -75,39 +75,36 @@ describe('mermaidExport', () => {
       return expectedPng
     })
 
-    // 1. Standard 200x100 SVG -> padded 232x132 -> 2x raster 464x264
+    // 1. Standard 200x100 SVG -> padded 232x132 -> 2x raster 464x264 with dark #161b22 surface
     const standardSvg = '<svg viewBox="0 0 200 100"><rect width="200" height="100"/></svg>'
-    const bytes = await rasterizeMermaidSvgToPng(standardSvg, 'dark', { rasterAdapter })
+    const bytes = await rasterizeMermaidSvgToPng(standardSvg, 'dark', rasterAdapter)
     expect(bytes).toBe(expectedPng)
     expect(requests).toHaveLength(1)
     expect(requests[0].svgDataUri.startsWith('data:image/svg+xml;charset=utf-8,')).toBe(true)
-    expect(decodeURIComponent(requests[0].svgDataUri.slice('data:image/svg+xml;charset=utf-8,'.length))).toBe(
-      requests[0].normalizedSvg
+    const decodedStandardSvg = decodeURIComponent(
+      requests[0].svgDataUri.slice('data:image/svg+xml;charset=utf-8,'.length)
     )
+    expect(decodedStandardSvg).toContain('width="232"')
+    expect(decodedStandardSvg).toContain('height="132"')
+    expect(decodedStandardSvg).toContain('fill="#161b22"')
     expect(requests[0]).toMatchObject({
-      logicalWidth: 232,
-      logicalHeight: 132,
       pixelWidth: 464,
-      pixelHeight: 264,
-      scale: 2,
-      theme: 'dark'
+      pixelHeight: 264
     })
 
     // 2. Extremely wide diagram (padded 10000 x 2000) -> clamped to max side 8192 keeping 5:1 aspect ratio
     const wideSvg = '<svg viewBox="0 0 9968 1968"><rect width="9968" height="1968"/></svg>'
-    await rasterizeMermaidSvgToPng(wideSvg, 'light', { rasterAdapter })
+    await rasterizeMermaidSvgToPng(wideSvg, 'light', rasterAdapter)
     expect(requests[1].pixelWidth).toBe(8192)
     expect(requests[1].pixelHeight).toBe(1638)
-    expect(requests[1].scale).toBeCloseTo(0.8192, 4)
     expect(requests[1].pixelWidth * requests[1].pixelHeight).toBeLessThanOrEqual(67_108_864)
 
     // 3. Oversized square diagram (padded 5000 x 5000 -> 2x would exceed 8192px and 67,108,864px) -> clamped to 8192 x 8192
     const squareSvg = '<svg viewBox="0 0 4968 4968"><rect width="4968" height="4968"/></svg>'
-    await rasterizeMermaidSvgToPng(squareSvg, 'light', { rasterAdapter })
+    await rasterizeMermaidSvgToPng(squareSvg, 'light', rasterAdapter)
     expect(requests[2].pixelWidth).toBe(8192)
     expect(requests[2].pixelHeight).toBe(8192)
     expect(requests[2].pixelWidth * requests[2].pixelHeight).toBe(67_108_864)
-    expect(requests[2].scale).toBeCloseTo(1.6384, 4)
   })
 
   it('decodes SVG data URI into an offscreen canvas and extracts PNG bytes via defaultCanvasPngRasterAdapter', async () => {
@@ -157,13 +154,8 @@ describe('mermaidExport', () => {
     try {
       const pngBytes = await defaultCanvasPngRasterAdapter({
         svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
-        normalizedSvg: '<svg></svg>',
-        logicalWidth: 100,
-        logicalHeight: 50,
         pixelWidth: 200,
-        pixelHeight: 100,
-        scale: 2,
-        theme: 'light'
+        pixelHeight: 100
       })
       expect(Array.from(pngBytes)).toEqual([137, 80, 78, 71])
       expect(clearRect).toHaveBeenCalledWith(0, 0, 200, 100)
@@ -173,13 +165,8 @@ describe('mermaidExport', () => {
       await expect(
         defaultCanvasPngRasterAdapter({
           svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
-          normalizedSvg: '<svg></svg>',
-          logicalWidth: 100,
-          logicalHeight: 50,
           pixelWidth: 200,
-          pixelHeight: 100,
-          scale: 2,
-          theme: 'light'
+          pixelHeight: 100
         })
       ).rejects.toThrow()
 
@@ -188,13 +175,8 @@ describe('mermaidExport', () => {
       await expect(
         defaultCanvasPngRasterAdapter({
           svgDataUri: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C/svg%3E',
-          normalizedSvg: '<svg></svg>',
-          logicalWidth: 100,
-          logicalHeight: 50,
           pixelWidth: 200,
-          pixelHeight: 100,
-          scale: 2,
-          theme: 'light'
+          pixelHeight: 100
         })
       ).rejects.toThrow()
     } finally {

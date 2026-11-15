@@ -18,21 +18,11 @@ export interface NormalizedMermaidSvg {
 
 export interface DiagramSvgRasterRequest {
   svgDataUri: string
-  normalizedSvg: string
-  logicalWidth: number
-  logicalHeight: number
   pixelWidth: number
   pixelHeight: number
-  scale: number
-  theme: ThemeMode
 }
 
 export type DiagramPngRasterAdapter = (request: DiagramSvgRasterRequest) => Promise<Uint8Array>
-
-export interface RasterizeMermaidSvgOptions {
-  scale?: number
-  rasterAdapter?: DiagramPngRasterAdapter
-}
 
 interface SvgBounds {
   minX: number
@@ -178,17 +168,14 @@ export function normalizeMermaidSvg(svgMarkup: string, theme: ThemeMode): Normal
 
 function computeRasterDimensions(
   logicalWidth: number,
-  logicalHeight: number,
-  targetScale: number
-): { pixelWidth: number; pixelHeight: number; scale: number } {
-  const safeTargetScale =
-    Number.isFinite(targetScale) && targetScale > 0 ? targetScale : DEFAULT_PNG_EXPORT_SCALE
+  logicalHeight: number
+): { pixelWidth: number; pixelHeight: number } {
   const maxScaleByDimension = Math.min(
     MAX_PNG_DIMENSION_PX / logicalWidth,
     MAX_PNG_DIMENSION_PX / logicalHeight
   )
   const maxScaleByArea = Math.sqrt(MAX_PNG_AREA_PX / (logicalWidth * logicalHeight))
-  const effectiveScale = Math.min(safeTargetScale, maxScaleByDimension, maxScaleByArea)
+  const effectiveScale = Math.min(DEFAULT_PNG_EXPORT_SCALE, maxScaleByDimension, maxScaleByArea)
 
   let pixelWidth = Math.max(1, Math.round(logicalWidth * effectiveScale))
   let pixelHeight = Math.max(1, Math.round(logicalHeight * effectiveScale))
@@ -204,8 +191,7 @@ function computeRasterDimensions(
 
   return {
     pixelWidth,
-    pixelHeight,
-    scale: effectiveScale
+    pixelHeight
   }
 }
 
@@ -293,25 +279,15 @@ export const defaultCanvasPngRasterAdapter: DiagramPngRasterAdapter = async ({
 export async function rasterizeMermaidSvgToPng(
   svgMarkup: string,
   theme: ThemeMode,
-  options: RasterizeMermaidSvgOptions = {}
+  rasterAdapter: DiagramPngRasterAdapter = defaultCanvasPngRasterAdapter
 ): Promise<Uint8Array> {
   const normalized = normalizeMermaidSvg(svgMarkup, theme)
-  const { pixelWidth, pixelHeight, scale } = computeRasterDimensions(
-    normalized.width,
-    normalized.height,
-    options.scale ?? DEFAULT_PNG_EXPORT_SCALE
-  )
+  const { pixelWidth, pixelHeight } = computeRasterDimensions(normalized.width, normalized.height)
   const svgDataUri = encodeSvgDataUri(normalized.svg)
-  const rasterAdapter = options.rasterAdapter ?? defaultCanvasPngRasterAdapter
 
   return await rasterAdapter({
     svgDataUri,
-    normalizedSvg: normalized.svg,
-    logicalWidth: normalized.width,
-    logicalHeight: normalized.height,
     pixelWidth,
-    pixelHeight,
-    scale,
-    theme
+    pixelHeight
   })
 }

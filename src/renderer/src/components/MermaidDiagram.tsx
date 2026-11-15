@@ -1,66 +1,41 @@
-import { useContext, useState } from 'react'
+import { type ReactNode, useContext, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
 import type { DiagramPngRasterAdapter } from '../editor/mermaidExport'
-import { defaultMermaidRenderer, type MermaidRenderer } from '../editor/mermaidRenderer'
+import { defaultMermaidRenderer, type MermaidRenderer, type MermaidTheme } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
-import {
-  DEFAULT_MERMAID_DEBOUNCE_MS,
-  type MermaidRenderState,
-  useMermaidRenderState
-} from '../hooks/useMermaidRenderState'
+import { DEFAULT_MERMAID_DEBOUNCE_MS, useMermaidRenderState } from '../hooks/useMermaidRenderState'
 import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
 import { MermaidExportContext } from './MermaidExportContext'
 
-interface MermaidDiagramProps {
+export interface MermaidDiagramViewProps {
   code: string
-  theme: ThemeMode
-  renderer?: MermaidRenderer
-  rasterAdapter?: DiagramPngRasterAdapter
-  renderState?: MermaidRenderState
-  debounceMs?: number
+  mermaidTheme: MermaidTheme
+  displaySvg: string | null
+  displayError: string | null
   className?: string
   sourceLine?: string
   sourceEndLine?: string
-  showActionBar?: boolean
+  onMouseEnter?: () => void
+  onMouseLeave?: () => void
+  children?: ReactNode
 }
 
 /**
- * Renders a Mermaid diagram block with debounced live updates, theme synchronization,
- * last-valid SVG retention, and optional floating action controls.
+ * Pure presentational view for a Mermaid diagram block shared between Preview/Split
+ * and WYSIWYG NodeView wrappers.
  */
-export function MermaidDiagram({
+export function MermaidDiagramView({
   code,
-  theme,
-  renderer = defaultMermaidRenderer,
-  rasterAdapter,
-  renderState,
-  debounceMs = DEFAULT_MERMAID_DEBOUNCE_MS,
+  mermaidTheme,
+  displaySvg,
+  displayError,
   className,
   sourceLine,
   sourceEndLine,
-  showActionBar = true
-}: MermaidDiagramProps) {
-  const contextRasterAdapter = useContext(MermaidExportContext)
-  const effectiveRasterAdapter = rasterAdapter ?? contextRasterAdapter
-  const [isHovered, setIsHovered] = useState(false)
-
-  const internalRenderState = useMermaidRenderState({
-    code,
-    theme,
-    renderer,
-    debounceMs,
-    enabled: renderState === undefined
-  })
-  const activeRenderState = renderState ?? internalRenderState
-  const { mermaidTheme, displaySvg, confirmedSvg, displayError } = activeRenderState
-
-  const actions = useMermaidDiagramActions({
-    code,
-    theme,
-    confirmedSvg: showActionBar ? confirmedSvg : null,
-    rasterAdapter: effectiveRasterAdapter
-  })
-
+  onMouseEnter,
+  onMouseLeave,
+  children
+}: MermaidDiagramViewProps) {
   const showFallbackErrorBox = displayError !== null && displaySvg === null
 
   return (
@@ -70,8 +45,8 @@ export function MermaidDiagram({
       data-mermaid-theme={mermaidTheme}
       data-source-line={sourceLine}
       data-source-end-line={sourceEndLine}
-      onMouseEnter={showActionBar ? () => setIsHovered(true) : undefined}
-      onMouseLeave={showActionBar ? () => setIsHovered(false) : undefined}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       {showFallbackErrorBox ? (
         <div className="mermaid-error-box" role="alert">
@@ -103,12 +78,68 @@ export function MermaidDiagram({
           )}
         </>
       )}
-      {showActionBar && (
-        <>
-          <MermaidActionBar variant="floating" isVisible={isHovered} actions={actions} />
-          <MermaidActionErrorAlert message={actions.errorMessage} />
-        </>
-      )}
+      {children}
     </div>
+  )
+}
+
+interface MermaidDiagramProps {
+  code: string
+  theme: ThemeMode
+  renderer?: MermaidRenderer
+  rasterAdapter?: DiagramPngRasterAdapter
+  debounceMs?: number
+  className?: string
+  sourceLine?: string
+  sourceEndLine?: string
+}
+
+/**
+ * Renders a Mermaid diagram block with debounced live updates, theme synchronization,
+ * last-valid SVG retention, and floating action controls.
+ */
+export function MermaidDiagram({
+  code,
+  theme,
+  renderer = defaultMermaidRenderer,
+  rasterAdapter,
+  debounceMs = DEFAULT_MERMAID_DEBOUNCE_MS,
+  className,
+  sourceLine,
+  sourceEndLine
+}: MermaidDiagramProps) {
+  const contextRasterAdapter = useContext(MermaidExportContext)
+  const effectiveRasterAdapter = rasterAdapter ?? contextRasterAdapter
+  const [isHovered, setIsHovered] = useState(false)
+
+  const { mermaidTheme, displaySvg, confirmedSvg, displayError } = useMermaidRenderState({
+    code,
+    theme,
+    renderer,
+    debounceMs
+  })
+
+  const actions = useMermaidDiagramActions({
+    code,
+    theme,
+    confirmedSvg,
+    rasterAdapter: effectiveRasterAdapter
+  })
+
+  return (
+    <MermaidDiagramView
+      code={code}
+      mermaidTheme={mermaidTheme}
+      displaySvg={displaySvg}
+      displayError={displayError}
+      className={className}
+      sourceLine={sourceLine}
+      sourceEndLine={sourceEndLine}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <MermaidActionBar variant="floating" isVisible={isHovered} actions={actions} />
+      <MermaidActionErrorAlert message={actions.errorMessage} />
+    </MermaidDiagramView>
   )
 }

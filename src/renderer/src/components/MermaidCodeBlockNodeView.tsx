@@ -5,7 +5,7 @@ import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { useMermaidRenderState } from '../hooks/useMermaidRenderState'
 import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
-import { MermaidDiagram } from './MermaidDiagram'
+import { MermaidDiagramView } from './MermaidDiagram'
 import { MermaidExportContext } from './MermaidExportContext'
 
 export interface WysiwygMermaidContextValue {
@@ -17,35 +17,23 @@ export const WysiwygMermaidContext = createContext<WysiwygMermaidContextValue>({
   theme: 'light'
 })
 
-export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
+function WysiwygMermaidBlock({ code }: { code: string }) {
   const { theme, mermaidRenderer } = useContext(WysiwygMermaidContext)
   const rasterAdapter = useContext(MermaidExportContext)
   const [showSource, setShowSource] = useState(false)
-  const language = typeof node.attrs.language === 'string' ? node.attrs.language : ''
-  const isMermaid = language === 'mermaid'
-  const code = isMermaid ? node.textContent : ''
 
-  const renderState = useMermaidRenderState({
+  const { mermaidTheme, displaySvg, confirmedSvg, displayError } = useMermaidRenderState({
     code,
     theme,
-    renderer: mermaidRenderer,
-    enabled: isMermaid
+    renderer: mermaidRenderer
   })
 
   const actions = useMermaidDiagramActions({
     code,
     theme,
-    confirmedSvg: renderState.confirmedSvg,
+    confirmedSvg,
     rasterAdapter
   })
-
-  if (!isMermaid) {
-    return (
-      <NodeViewWrapper as="pre" className="wysiwyg-code-block">
-        <NodeViewContent<'code'> as="code" className={language ? `language-${language}` : undefined} />
-      </NodeViewWrapper>
-    )
-  }
 
   return (
     <NodeViewWrapper
@@ -85,16 +73,28 @@ export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
         contentEditable={false}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <MermaidDiagram
+        <MermaidDiagramView
           code={code}
-          theme={theme}
-          renderer={mermaidRenderer}
-          renderState={renderState}
-          showActionBar={false}
+          mermaidTheme={mermaidTheme}
+          displaySvg={displaySvg}
+          displayError={displayError}
         />
       </div>
 
       <MermaidActionErrorAlert message={actions.errorMessage} />
     </NodeViewWrapper>
   )
+}
+
+export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
+  const language = typeof node.attrs.language === 'string' ? node.attrs.language : ''
+  if (language !== 'mermaid') {
+    return (
+      <NodeViewWrapper as="pre" className="wysiwyg-code-block">
+        <NodeViewContent<'code'> as="code" className={language ? `language-${language}` : undefined} />
+      </NodeViewWrapper>
+    )
+  }
+
+  return <WysiwygMermaidBlock code={node.textContent} />
 }
