@@ -503,42 +503,64 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     expect(bufferHub.hasBuffer(alphaBuf.key)).toBe(false)
   })
 
+  function setupScopedDragHarness(
+    screen: ScreenLike,
+    mainBounds = { x: 100, y: 120, width: 1280, height: 820 }
+  ) {
+    const factory = createFakeBrowserWindowFactory(mainBounds)
+    const manager = new WindowManager({
+      preloadPath: 'C:\\app\\out\\preload\\index.js',
+      rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
+      bufferHub,
+      createWindow: factory.createWindow,
+      screen
+    })
+    const scopedIpc = createFakeIpcMain()
+    const disposers = [
+      registerBufferIpc({
+        ipcMain: scopedIpc,
+        configService,
+        hub: bufferHub,
+        getTargets: () => manager.getWebContentsTargets()
+      }),
+      registerWorkspaceIpc({
+        ipcMain: scopedIpc,
+        workspaceService,
+        configService,
+        selectDirectory: async () => workspaceDir,
+        getTargets: () => manager.getWebContentsTargets(),
+        isMainWindowSender: (sender) => manager.isMainWebContents(sender)
+      }),
+      registerWindowIpc({
+        ipcMain: scopedIpc,
+        windowManager: manager
+      })
+    ]
+    return {
+      factory,
+      manager,
+      scopedIpc,
+      dispose: () => {
+        for (const dispose of disposers.reverse()) {
+          dispose()
+        }
+        manager.dispose()
+      }
+    }
+  }
+
   it('detaches dirty 1-tab from main into clamped cursor auxiliary window on outside dragend and ignores drops inside any open window bounds', async () => {
-    const wideFactory = createFakeBrowserWindowFactory({ x: 100, y: 120, width: 1280, height: 820 })
-    const wideScreen: ScreenLike = {
+    const {
+      factory: wideFactory,
+      manager: wideManager,
+      scopedIpc: wideIpc,
+      dispose: disposeScoped
+    } = setupScopedDragHarness({
       getDisplayNearestPoint: ({ x }) =>
         x < 0
           ? { workArea: { x: -1920, y: 0, width: 1920, height: 1040 } }
           : { workArea: { x: 0, y: 0, width: 2560, height: 1440 } }
-    }
-    const wideManager = new WindowManager({
-      preloadPath: 'C:\\app\\out\\preload\\index.js',
-      rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
-      bufferHub,
-      createWindow: wideFactory.createWindow,
-      screen: wideScreen
     })
-    const wideIpc = createFakeIpcMain()
-    const disposeWideIpc = [
-      registerBufferIpc({
-        ipcMain: wideIpc,
-        configService,
-        hub: bufferHub,
-        getTargets: () => wideManager.getWebContentsTargets()
-      }),
-      registerWorkspaceIpc({
-        ipcMain: wideIpc,
-        workspaceService,
-        configService,
-        selectDirectory: async () => workspaceDir,
-        getTargets: () => wideManager.getWebContentsTargets(),
-        isMainWindowSender: (sender) => wideManager.isMainWebContents(sender)
-      }),
-      registerWindowIpc({
-        ipcMain: wideIpc,
-        windowManager: wideManager
-      })
-    ]
 
     try {
       const mainWin = wideManager.createMainWindow() as FakeWindowInstance
@@ -607,11 +629,10 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
         WINDOW_IPC_CHANNELS.endTabDrag,
         { dragSessionId: outsideSession.dragSessionId, screenPoint: { x: 1800, y: 800 }, payload }
       )
-      expect(outsideEnd.detached).toBe(true)
       expect(wideFactory.createdWindows).toHaveLength(2)
 
       const aux1 = wideFactory.createdWindows[1]
-      expect(outsideEnd.windowId).toBe(aux1.webContents.id)
+      expect(outsideEnd).toEqual({ detached: true, windowId: aux1.webContents.id })
       expect(aux1.removedMenu).toBe(true)
       // (1800, 800) with 960x760 inside 2560x1440 workArea -> maxX=1600, maxY=680
       expect(aux1.getBounds()).toEqual({ x: 1600, y: 680, width: 960, height: 760 })
@@ -666,49 +687,23 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       expect(overAuxEnd).toEqual({ detached: false, outcome: 'cancelled' })
       expect(wideFactory.createdWindows).toHaveLength(2)
     } finally {
-      for (const dispose of disposeWideIpc.reverse()) {
-        dispose()
-      }
-      wideManager.dispose()
+      disposeScoped()
     }
   })
 
   it('cancels drag via before-input-event Escape or dropped-in-window outcome, uses screen cursor point, and enforces auxiliary single-tab drag guard', async () => {
     let screenCursor = { x: 1500, y: 200 }
-    const cursorFactory = createFakeBrowserWindowFactory({ x: 100, y: 120, width: 1280, height: 820 })
-    const cursorManager = new WindowManager({
-      preloadPath: 'C:\\app\\out\\preload\\index.js',
-      rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
-      bufferHub,
-      createWindow: cursorFactory.createWindow,
-      screen: {
-        getDisplayNearestPoint: () => ({
-          workArea: { x: 0, y: 0, width: 2560, height: 1440 }
-        }),
-        getCursorScreenPoint: () => ({ ...screenCursor })
-      }
+    const {
+      factory: cursorFactory,
+      manager: cursorManager,
+      scopedIpc: cursorIpc,
+      dispose: disposeScoped
+    } = setupScopedDragHarness({
+      getDisplayNearestPoint: () => ({
+        workArea: { x: 0, y: 0, width: 2560, height: 1440 }
+      }),
+      getCursorScreenPoint: () => ({ ...screenCursor })
     })
-    const cursorIpc = createFakeIpcMain()
-    const disposeCursorIpc = [
-      registerBufferIpc({
-        ipcMain: cursorIpc,
-        configService,
-        hub: bufferHub,
-        getTargets: () => cursorManager.getWebContentsTargets()
-      }),
-      registerWorkspaceIpc({
-        ipcMain: cursorIpc,
-        workspaceService,
-        configService,
-        selectDirectory: async () => workspaceDir,
-        getTargets: () => cursorManager.getWebContentsTargets(),
-        isMainWindowSender: (sender) => cursorManager.isMainWebContents(sender)
-      }),
-      registerWindowIpc({
-        ipcMain: cursorIpc,
-        windowManager: cursorManager
-      })
-    ]
 
     try {
       const mainWin = cursorManager.createMainWindow() as FakeWindowInstance
@@ -760,7 +755,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       expect(escEnd).toEqual({ detached: false, outcome: 'cancelled' })
       expect(cursorFactory.createdWindows).toHaveLength(1)
 
-      // In-window drop transition prevents detach even if dragend arrives with outside coordinates
+      // In-window drop transition prevents detach and is not overwritten by a subsequent Escape event
       const inWinSession = await cursorIpc.invokeFrom<ActiveTabDragSession>(
         mainWin.webContents,
         WINDOW_IPC_CHANNELS.startTabDrag,
@@ -772,6 +767,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
         inWinSession.dragSessionId,
         'dropped-in-window'
       )
+      mainWin.emitBeforeInput({ type: 'keyDown', key: 'Escape' })
       const inWinEnd = await cursorIpc.invokeFrom<TabDragEndResult>(
         mainWin.webContents,
         WINDOW_IPC_CHANNELS.endTabDrag,
@@ -780,7 +776,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       expect(inWinEnd).toEqual({ detached: false, outcome: 'dropped-in-window' })
       expect(cursorFactory.createdWindows).toHaveLength(1)
 
-      // Successful drag-out uses authoritative screen.getCursorScreenPoint() even if renderer sent stale (0,0)
+      // Successful drag-out uses authoritative screen.getCursorScreenPoint() even if renderer sent stale (200,200)
       const validSession = await cursorIpc.invokeFrom<ActiveTabDragSession>(
         mainWin.webContents,
         WINDOW_IPC_CHANNELS.startTabDrag,
@@ -848,14 +844,12 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       })
       aux1.simulateUserClose()
       expect(aux1.getBeforeInputListenerCount()).toBe(0)
-      expect(
-        mainWin.sentMessages[mainWin.sentMessages.length - 1]
-      ).toEqual({ channel: WINDOW_IPC_CHANNELS.dragStateChanged, payload: null })
+      expect(mainWin.sentMessages[mainWin.sentMessages.length - 1]).toEqual({
+        channel: WINDOW_IPC_CHANNELS.dragStateChanged,
+        payload: null
+      })
     } finally {
-      for (const dispose of disposeCursorIpc.reverse()) {
-        dispose()
-      }
-      cursorManager.dispose()
+      disposeScoped()
     }
   })
 })

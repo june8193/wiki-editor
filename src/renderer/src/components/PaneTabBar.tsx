@@ -24,7 +24,7 @@ export interface PaneInteractionActions {
   onStartTabDrag?: (paneId: PaneId, tabId: string) => void
   onDropTabInWindow?: () => void
   onCancelTabDrag?: () => void
-  onEndTabDrag?: (screenPoint: ScreenPoint) => void
+  onEndTabDrag?: (screenPoint?: ScreenPoint) => void
   onChangeContent: (bufferKey: string, nextContent: string) => void
   onSaveBuffer: (bufferKey: string) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
@@ -106,6 +106,12 @@ export function handleTabMoveDrop(
   )
 }
 
+function extractDragEndScreenPoint(event: DragEvent): ScreenPoint | undefined {
+  return Number.isFinite(event.screenX) && Number.isFinite(event.screenY)
+    ? { x: event.screenX, y: event.screenY }
+    : undefined
+}
+
 interface PaneTabBarProps {
   paneId: PaneId
   tabs: readonly TabItem[]
@@ -113,12 +119,16 @@ interface PaneTabBarProps {
   canMoveToSplit: boolean
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
-  onDragStartTab: (payload: DraggingTabPayload) => void
-  onDropInWindow: () => void
-  onDragEndTab: (event: DragEvent) => void
   actions: Pick<
     PaneInteractionActions,
-    'onActivateTab' | 'onCloseTab' | 'onMoveTab' | 'onDuplicateTab' | 'onDetachTabToNewWindow'
+    | 'onActivateTab'
+    | 'onCloseTab'
+    | 'onMoveTab'
+    | 'onDuplicateTab'
+    | 'onDetachTabToNewWindow'
+    | 'onStartTabDrag'
+    | 'onDropTabInWindow'
+    | 'onEndTabDrag'
   >
 }
 
@@ -133,9 +143,6 @@ export function PaneTabBar({
   canMoveToSplit,
   buffers,
   draggingTab,
-  onDragStartTab,
-  onDropInWindow,
-  onDragEndTab,
   actions
 }: PaneTabBarProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
@@ -145,6 +152,9 @@ export function PaneTabBar({
   useDismissable(contextMenu !== null, menuRef, closeMenu)
 
   const otherPaneId: PaneId = paneId === 'primary' ? 'secondary' : 'primary'
+  const notifyDropInWindow = (): void => {
+    actions.onDropTabInWindow?.()
+  }
 
   return (
     <div
@@ -155,7 +165,7 @@ export function PaneTabBar({
         event.preventDefault()
       }}
       onDrop={(event) =>
-        handleTabMoveDrop(event, draggingTab, onDropInWindow, paneId, actions.onMoveTab, {
+        handleTabMoveDrop(event, draggingTab, notifyDropInWindow, paneId, actions.onMoveTab, {
           stopPropagation: true
         })
       }
@@ -180,14 +190,14 @@ export function PaneTabBar({
               } catch {
                 // jsdom environments without DataTransfer still track via draggingTab state
               }
-              onDragStartTab(payload)
+              actions.onStartTabDrag?.(paneId, tab.id)
             }}
-            onDragEnd={onDragEndTab}
+            onDragEnd={(event) => actions.onEndTabDrag?.(extractDragEndScreenPoint(event))}
             onDragOver={(event) => {
               event.preventDefault()
             }}
             onDrop={(event) =>
-              handleTabMoveDrop(event, draggingTab, onDropInWindow, paneId, actions.onMoveTab, {
+              handleTabMoveDrop(event, draggingTab, notifyDropInWindow, paneId, actions.onMoveTab, {
                 targetIndex: index,
                 stopPropagation: true
               })

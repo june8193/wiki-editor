@@ -4,7 +4,6 @@ import {
   toTabTransferPayload,
   type ActiveTabDragSession,
   type ScreenLike,
-  type ScreenPoint,
   type TabDragEndInput,
   type TabDragEndResult,
   type TabDragOutcome,
@@ -26,11 +25,16 @@ export interface FinishTabDragParams {
   screen?: ScreenLike
 }
 
-export interface FinishTabDragPlan {
-  result: TabDragEndResult
-  detachPayload?: TabTransferPayload
-  targetBounds?: WindowBounds
-}
+export type FinishTabDragPlan =
+  | {
+      detach: true
+      payload: TabTransferPayload
+      targetBounds: WindowBounds
+    }
+  | {
+      detach: false
+      result: Extract<TabDragEndResult, { detached: false }>
+    }
 
 /**
  * Returns true when an Electron `before-input-event` payload represents an Escape press
@@ -60,13 +64,6 @@ export class TabDragCoordinator {
   }
 
   /**
-   * Returns a cloned snapshot of the currently active drag session, if any.
-   */
-  getActiveSession(): ActiveTabDragSession | null {
-    return this.activeSession ? cloneSession(this.activeSession) : null
-  }
-
-  /**
    * Begins a new drag session owned by `sourceWindowId`, replacing any stale prior session.
    */
   start(sourceWindowId: number, input: TabDragStartInput): ActiveTabDragSession {
@@ -81,12 +78,29 @@ export class TabDragCoordinator {
     }
     const snapshot = cloneSession(this.activeSession)
     this.emit(snapshot)
-    return snapshot
+    return cloneSession(snapshot)
+  }
+
+  /**
+   * Transitions a pending active session to a terminal outcome and broadcasts the change.
+   */
+  private transitionPendingOutcome(
+    targetOutcome: Exclude<TabDragOutcome, 'pending'>
+  ): ActiveTabDragSession | null {
+    const session = this.activeSession
+    if (!session) return null
+    if (session.outcome !== 'pending') {
+      return cloneSession(session)
+    }
+    session.outcome = targetOutcome
+    const snapshot = cloneSession(session)
+    this.emit(snapshot)
+    return cloneSession(snapshot)
   }
 
   /**
    * Updates the active session outcome when owned by `sourceWindowId` and matching `dragSessionId`.
-   * Cancellation is sticky so an Escape cancel is never overwritten by a late in-window drop signal.
+   * Only `'pending'` sessions can transition, preventing late events from overwriting prior outcomes.
    */
   updateOutcome(
     sourceWindowId: number,
@@ -97,29 +111,20 @@ export class TabDragCoordinator {
     if (!session || session.sourceWindowId !== sourceWindowId || session.dragSessionId !== dragSessionId) {
       return null
     }
-    if (session.outcome === 'cancelled' || session.outcome === outcome) {
+    if (outcome === 'pending') {
       return cloneSession(session)
     }
-    session.outcome = outcome
-    const snapshot = cloneSession(session)
-    this.emit(snapshot)
-    return snapshot
+    return this.transitionPendingOutcome(outcome)
   }
 
   /**
-   * Cancels the active drag session when Escape is observed on any focused app window.
+   * Cancels the active pending drag session when Escape is observed on any focused app window.
    */
   handleBeforeInput(input: BeforeInputKeyEventLike): ActiveTabDragSession | null {
-    if (!isEscapeBeforeInput(input) || !this.activeSession) {
+    if (!isEscapeBeforeInput(input)) {
       return null
     }
-    if (this.activeSession.outcome === 'cancelled') {
-      return cloneSession(this.activeSession)
-    }
-    this.activeSession.outcome = 'cancelled'
-    const snapshot = cloneSession(this.activeSession)
-    this.emit(snapshot)
-    return snapshot
+    return this.transitionPendingOutcome('cancelled')
   }
 
   /**
@@ -140,30 +145,28 @@ export class TabDragCoordinator {
     const { sourceWindowId, input, openWindowBounds, canDetach, screen } = params
     const session = this.activeSession
     if (!session || session.sourceWindowId !== sourceWindowId || session.dragSessionId !== input.dragSessionId) {
-      return { result: { detached: false, outcome: 'cancelled' } }
+      return { detach: false, result: { detached: false, outcome: 'cancelled' } }
     }
 
     this.activeSession = null
     this.emit(null)
 
     if (session.outcome !== 'pending') {
-      return { result: { detached: false, outcome: session.outcome } }
+      return { detach: false, result: { detached: false, outcome: session.outcome } }
     }
     if (!canDetach) {
-      return { result: { detached: false, outcome: 'cancelled' } }
+      return { detach: false, result: { detached: false, outcome: 'cancelled' } }
     }
 
-    const cursorPoint: ScreenPoint = screen?.getCursorScreenPoint?.() ?? input.screenPoint
-    if (!isPointOutsideAllWindows(cursorPoint, openWindowBounds)) {
-      return { result: { detached: false, outcome: 'cancelled' } }
+    const cursorPoint = screen?.getCursorScreenPoint?.() ?? input.screenPoint
+    if (!cursorPoint || !isPointOutsideAllWindows(cursorPoint, openWindowBounds)) {
+      return { detach: false, result: { detached: false, outcome: 'cancelled' } }
     }
 
-    const detachPayload = toTabTransferPayload(input.payload ?? session.payload)
-    const targetBounds = computeCursorAuxiliaryBounds(cursorPoint, screen)
     return {
-      result: { detached: true, outcome: 'pending' },
-      detachPayload,
-      targetBounds
+      detach: true,
+      payload: toTabTransferPayload(input.payload ?? session.payload),
+      targetBounds: computeCursorAuxiliaryBounds(cursorPoint, screen)
     }
   }
 
@@ -175,10 +178,9 @@ export class TabDragCoordinator {
     this.listeners.clear()
   }
 
-  private emit(session: ActiveTabDragSession | null): void {
-    const payload = session ? cloneSession(session) : null
+  private emit(snapshot: ActiveTabDragSession | null): void {
     for (const listener of this.listeners) {
-      listener(payload)
+      listener(snapshot ? cloneSession(snapshot) : null)
     }
   }
 }

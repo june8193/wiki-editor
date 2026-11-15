@@ -329,12 +329,12 @@ export class WindowManager {
       screen: this.screen
     })
 
-    if (!plan.detachPayload || !this.bufferHub.hasBuffer(plan.detachPayload.bufferKey)) {
-      return plan.result.detached ? { detached: false, outcome: 'cancelled' } : plan.result
+    if (!plan.detach || !this.bufferHub.hasBuffer(plan.payload.bufferKey)) {
+      return plan.detach ? { detached: false, outcome: 'cancelled' } : plan.result
     }
 
-    const { windowId } = this.createDetachedAuxiliaryWindow(plan.detachPayload, plan.targetBounds)
-    return { ...plan.result, windowId }
+    const { windowId } = this.createDetachedAuxiliaryWindow(plan.payload, plan.targetBounds)
+    return { detached: true, windowId }
   }
 
   getWindowInitContext(sender: unknown): WindowInitContext {

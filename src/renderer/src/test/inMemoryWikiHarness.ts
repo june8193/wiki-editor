@@ -681,15 +681,15 @@ export function createMultiWindowWikiHarness(
             canDetach,
             screen
           })
-          if (!plan.detachPayload || !hub.hasBuffer(plan.detachPayload.bufferKey)) {
-            return plan.result.detached ? { detached: false, outcome: 'cancelled' } : plan.result
+          if (!plan.detach || !hub.hasBuffer(plan.payload.bufferKey)) {
+            return plan.detach ? { detached: false, outcome: 'cancelled' } : plan.result
           }
           const aux = createWindow({
             role: 'auxiliary',
-            initialTabs: [plan.detachPayload],
+            initialTabs: [plan.payload],
             bounds: plan.targetBounds
           })
-          return { ...plan.result, windowId: aux.windowId }
+          return { detached: true, windowId: aux.windowId }
         },
         onTabDragStateChanged(listener) {
           dragListeners.add(listener)

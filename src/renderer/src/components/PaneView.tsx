@@ -1,4 +1,4 @@
-import { CSSProperties, DragEvent, SyntheticEvent } from 'react'
+import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
@@ -24,9 +24,6 @@ interface PaneViewProps {
   isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
-  onDragStartTab: (payload: DraggingTabPayload) => void
-  onDropInWindow: () => void
-  onDragEndTab: (event: DragEvent) => void
   actions: PaneInteractionActions
 }
 
@@ -43,9 +40,6 @@ export function PaneView({
   isShortcutDisabled = false,
   buffers,
   draggingTab,
-  onDragStartTab,
-  onDropInWindow,
-  onDragEndTab,
   actions
 }: PaneViewProps) {
   const activeTab = getPaneActiveTab(pane)
@@ -77,9 +71,14 @@ export function PaneView({
         }
       }}
       onDrop={(event) =>
-        handleTabMoveDrop(event, draggingTab, onDropInWindow, pane.id, actions.onMoveTab, {
-          ignoreSamePane: true
-        })
+        handleTabMoveDrop(
+          event,
+          draggingTab,
+          () => actions.onDropTabInWindow?.(),
+          pane.id,
+          actions.onMoveTab,
+          { ignoreSamePane: true }
+        )
       }
     >
       {pane.tabs.length > 0 && (
@@ -90,9 +89,6 @@ export function PaneView({
           canMoveToSplit={canMoveToSplit}
           buffers={buffers}
           draggingTab={draggingTab}
-          onDragStartTab={onDragStartTab}
-          onDropInWindow={onDropInWindow}
-          onDragEndTab={onDragEndTab}
           actions={actions}
         />
       )}

@@ -211,15 +211,19 @@ export interface ActiveTabDragSession {
 
 export interface TabDragEndInput {
   dragSessionId: string
-  screenPoint: ScreenPoint
+  screenPoint?: ScreenPoint
   payload?: TabTransferPayload
 }
 
-export interface TabDragEndResult {
-  detached: boolean
-  outcome: TabDragOutcome
-  windowId?: number
-}
+export type TabDragEndResult =
+  | {
+      detached: true
+      windowId: number
+    }
+  | {
+      detached: false
+      outcome: Exclude<TabDragOutcome, 'pending'>
+    }
 
 export const WINDOW_BASE_TITLE = 'Wiki Editor'
 

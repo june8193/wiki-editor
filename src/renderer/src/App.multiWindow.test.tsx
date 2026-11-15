@@ -1,6 +1,7 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ActiveTabDragSession } from '@shared/window'
 import { addFavoriteWorkspace } from '@shared/workspace'
 import { App } from './App'
 import {
@@ -1366,7 +1367,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     })
   })
 
-  it('cancels active tab drag and hides split drop zones on Escape (DOM keydown and main before-input-event), blocking outside detach', async () => {
+  it('cancels or completes active tab drag on Escape, missing coordinates, and split drop without spurious detach or cancel transitions', async () => {
     const user = userEvent.setup()
     const harness = createMultiWindowWikiHarness(
       { autoSave: false, theme: 'light' },
@@ -1434,5 +1435,47 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(harness.getAuxiliaryWindows()).toHaveLength(0)
     expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(2)
+
+    // 3. Missing dragend coordinates (non-MouseEvent jsdom dragEnd) on offset window does not coerce to (0, 0)
+    fireEvent.dragStart(bTab)
+    fireEvent.dragEnd(bTab)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(harness.getAuxiliaryWindows()).toHaveLength(0)
+    expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(2)
+
+    // 4. Split drop unmounts source tab without dragend: session finishes cleanly and late Escape emits no cancel
+    if (!mainWin.api.window) {
+      throw new Error('Expected main window API to be defined')
+    }
+    const dragEvents: Array<ActiveTabDragSession | null> = []
+    const unsubDrag = mainWin.api.window.onTabDragStateChanged((session) => {
+      dragEvents.push(session)
+    })
+    try {
+      fireEvent.dragStart(bTab)
+      const splitVerticalZone = within(mainRendered.container).getByTestId('split-drop-zone-vertical')
+      await waitFor(() => {
+        expect(dragEvents.at(-1)?.outcome).toBe('pending')
+      })
+
+      fireEvent.drop(splitVerticalZone)
+      await waitFor(() => {
+        expect(within(mainRendered.container).getByTestId('pane-secondary')).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(dragEvents.some((event) => event?.outcome === 'dropped-in-window')).toBe(true)
+        expect(dragEvents.at(-1)).toBeNull()
+      })
+
+      const eventCountBeforeLateEsc = dragEvents.length
+      await act(async () => {
+        mainWin.emitBeforeInput({ type: 'keyDown', key: 'Escape' })
+      })
+      expect(dragEvents).toHaveLength(eventCountBeforeLateEsc)
+      expect(dragEvents.some((event) => event?.outcome === 'cancelled')).toBe(false)
+      expect(harness.getAuxiliaryWindows()).toHaveLength(0)
+    } finally {
+      unsubDrag()
+    }
   })
 })

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
 import { canDetachTabFromWindow } from '@shared/window'
 import type { PaneInteractionActions } from '../components/PaneTabBar'
@@ -15,6 +15,7 @@ import {
   type DirtyTabClosePrompt,
   RendererBufferSyncClient
 } from '../stores/RendererBufferSyncClient'
+import { RendererTabDragController } from '../stores/RendererTabDragController'
 import { useWikiApi } from './useWikiApi'
 
 export type DirtyTabCloseRequest = DirtyTabClosePrompt
@@ -107,7 +108,6 @@ export function useEditorWorkspace({
   onConfirmCloseDirtyTab
 }: UseEditorWorkspaceOptions) {
   const wikiApi = useWikiApi()
-  const [dragCancelNonce, setDragCancelNonce] = useState(0)
   const isShortcutDisabledRef = useRef<boolean>(isShortcutDisabled)
   const callbacksRef = useRef({
     onWorkspaceSaved,
@@ -126,6 +126,7 @@ export function useEditorWorkspace({
     bufferStore: DocumentBufferStore
     tabStore: PaneTabStore
     syncClient: RendererBufferSyncClient
+    tabDragController: RendererTabDragController
   } | null>(null)
   if (!storesRef.current) {
     const bufferStore = new DocumentBufferStore()
@@ -139,15 +140,27 @@ export function useEditorWorkspace({
       windowApi: wikiApi.window,
       onWorkspaceSaved: () => callbacksRef.current.onWorkspaceSaved?.(),
       onError: (message, error) => callbacksRef.current.onError(message, error),
-      onConfirmCloseDirtyTab: (request) => callbacksRef.current.onConfirmCloseDirtyTab(request),
-      onRemoteTabDragCancelled: () => setDragCancelNonce((prev) => prev + 1)
+      onConfirmCloseDirtyTab: (request) => callbacksRef.current.onConfirmCloseDirtyTab(request)
     })
-    storesRef.current = { bufferStore, tabStore, syncClient }
+    const tabDragController = new RendererTabDragController({
+      tabStore,
+      windowApi: wikiApi.window,
+      getWindowId: syncClient.getWindowId,
+      isBufferReadyForImmediateDrag: syncClient.isBufferReadyForImmediateDrag,
+      syncTabBufferForTransfer: syncClient.syncTabBufferForTransfer,
+      closeDetachedTab: syncClient.forceCloseTab,
+      onError: (message, error) => callbacksRef.current.onError(message, error)
+    })
+    storesRef.current = { bufferStore, tabStore, syncClient, tabDragController }
   }
-  const { bufferStore, tabStore, syncClient } = storesRef.current
+  const { bufferStore, tabStore, syncClient, tabDragController } = storesRef.current
 
   const buffers = useSyncExternalStore(bufferStore.subscribe, bufferStore.getSnapshot)
   const layout = useSyncExternalStore(tabStore.subscribe, tabStore.getSnapshot)
+  const draggingTab = useSyncExternalStore(
+    tabDragController.subscribe,
+    tabDragController.getSnapshot
+  )
   const activeTab = getPaneActiveTab(layout.panes[layout.activePaneId])
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
@@ -167,18 +180,25 @@ export function useEditorWorkspace({
               void syncClient.detachTabToNewWindow(paneId, tabId)
           }
         : {}),
-      onStartTabDrag: syncClient.startTabDrag,
-      onDropTabInWindow: syncClient.markTabDragDroppedInWindow,
-      onCancelTabDrag: syncClient.cancelTabDrag,
-      onEndTabDrag: (screenPoint) => void syncClient.endTabDrag(screenPoint),
+      onStartTabDrag: tabDragController.startDrag,
+      onDropTabInWindow: tabDragController.completeInWindowDrop,
+      onCancelTabDrag: tabDragController.cancelDrag,
+      onEndTabDrag: (screenPoint) => void tabDragController.endDrag(screenPoint),
       onChangeContent: syncClient.updateBufferContent,
       onSaveBuffer: syncClient.saveBufferByKey,
       onUpdateTabViewState: tabStore.updateTabViewState
     }),
-    [canDetachToNewWindow, syncClient, tabStore]
+    [canDetachToNewWindow, syncClient, tabDragController, tabStore]
   )
 
-  useEffect(() => syncClient.start(), [syncClient])
+  useEffect(() => {
+    const stopSync = syncClient.start()
+    const stopDrag = tabDragController.start()
+    return () => {
+      stopDrag()
+      stopSync()
+    }
+  }, [syncClient, tabDragController])
 
   useEffect(() => {
     void wikiApi.buffer.setAutoSavePaused(isAutoSavePaused).catch(() => undefined)
@@ -222,7 +242,7 @@ export function useEditorWorkspace({
     activeBuffer,
     activeFilePath,
     totalTabCount,
-    dragCancelNonce,
+    draggingTab,
     paneActions,
     openWorkspaceFile: syncClient.openWorkspaceFile,
     openConfigDocument: syncClient.openConfigDocument,

@@ -22,8 +22,7 @@ export type WindowFramePaneWorkspaceProps = Omit<PaneWorkspaceProps, 'scrollRequ
 
 export function buildPaneWorkspaceProps(
   config: Pick<AppConfig, 'theme' | 'autoSave' | 'showHeadingNumbers' | 'customCommands'>,
-  editor: Pick<WindowFramePaneWorkspaceProps, 'layout' | 'buffers'> & {
-    dragCancelNonce?: WindowFramePaneWorkspaceProps['dragCancelNonce']
+  editor: Pick<WindowFramePaneWorkspaceProps, 'layout' | 'buffers' | 'draggingTab'> & {
     paneActions: WindowFramePaneWorkspaceProps['actions']
     setSplitRatio: WindowFramePaneWorkspaceProps['onSetSplitRatio']
     splitWithTab: WindowFramePaneWorkspaceProps['onSplitWithTab']
@@ -38,7 +37,7 @@ export function buildPaneWorkspaceProps(
     showHeadingNumbers: config.showHeadingNumbers,
     customCommands: config.customCommands,
     isShortcutDisabled,
-    dragCancelNonce: editor.dragCancelNonce,
+    draggingTab: editor.draggingTab,
     onSetSplitRatio: editor.setSplitRatio,
     onSplitWithTab: editor.splitWithTab,
     actions: editor.paneActions
