@@ -65,20 +65,13 @@ describe('createBugReportCopiedMessageBoxOptions', () => {
 })
 
 describe('createApplicationMenuTemplate', () => {
-  it('defines File, Edit, View, Settings, Window, and Help menus with expected items, roles, and accelerator', () => {
+  it('defines File, Settings, and Help menus with expected items, roles, and accelerator', () => {
     const template = createApplicationMenuTemplate({
       getTargetWebContents: () => undefined,
       onShowVersion: () => {}
     })
 
-    expect(template.map((item) => item.label)).toEqual([
-      'File',
-      'Edit',
-      'View',
-      'Settings',
-      'Window',
-      'Help'
-    ])
+    expect(template.map((item) => item.label)).toEqual(['File', 'Settings', 'Help'])
 
     const fileMenu = getSubmenu(template, 'File')
     expect(fileMenu.map((item) => item.label ?? item.role ?? item.type)).toEqual([
@@ -88,37 +81,11 @@ describe('createApplicationMenuTemplate', () => {
     ])
     expect(fileMenu[0].accelerator).toBe('CmdOrCtrl+O')
 
-    const editMenu = getSubmenu(template, 'Edit')
-    expect(editMenu.map((item) => item.role ?? item.type)).toEqual([
-      'undo',
-      'redo',
-      'separator',
-      'cut',
-      'copy',
-      'paste',
-      'selectAll'
-    ])
-
-    const viewMenu = getSubmenu(template, 'View')
-    expect(viewMenu.map((item) => item.label ?? item.role ?? item.type)).toEqual([
-      '테마 전환',
-      'separator',
-      'reload',
-      'forceReload',
-      'toggleDevTools',
-      'separator',
-      'resetZoom',
-      'zoomIn',
-      'zoomOut',
-      'separator',
-      'togglefullscreen'
-    ])
-
     const settingsMenu = getSubmenu(template, 'Settings')
-    expect(settingsMenu.map((item) => item.label)).toEqual(['설정 패널'])
-
-    const windowMenu = getSubmenu(template, 'Window')
-    expect(windowMenu.map((item) => item.role)).toEqual(['minimize', 'zoom', 'close'])
+    expect(settingsMenu.map((item) => item.label ?? item.role ?? item.type)).toEqual([
+      '설정 패널',
+      '테마 전환'
+    ])
 
     const helpMenu = getSubmenu(template, 'Help')
     expect(helpMenu.map((item) => item.label)).toEqual([
@@ -169,7 +136,7 @@ describe('createApplicationMenuTemplate', () => {
     const template = createApplicationMenuTemplate({ getTargetWebContents })
 
     const openFolderItem = getSubmenu(template, 'File')[0]
-    const toggleThemeItem = getSubmenu(template, 'View')[0]
+    const toggleThemeItem = getSubmenu(template, 'Settings')[1]
     const toggleSettingsItem = getSubmenu(template, 'Settings')[0]
 
     const fakeWindow = { id: 1 } as unknown as BaseWindow
@@ -205,7 +172,11 @@ describe('createApplicationMenuTemplate', () => {
       getTargetWebContents: () => undefined
     })
     expect(() =>
-      getSubmenu(emptyTemplate, 'View')[0].click?.(undefined as never, undefined, undefined as never)
+      getSubmenu(emptyTemplate, 'Settings')[1].click?.(
+        undefined as never,
+        undefined,
+        undefined as never
+      )
     ).not.toThrow()
   })
 })
