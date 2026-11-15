@@ -13,11 +13,37 @@ export interface CursorPosition {
   selectionEnd: number
 }
 
-export interface TabTransferPayload {
-  bufferKey: string
+export interface TabViewState {
   mode: EditorMode
   cursor: CursorPosition
   scrollTop: number
+}
+
+export interface TabTransferPayload extends TabViewState {
+  bufferKey: string
+}
+
+export function extractTabViewState(source: TabViewState): TabViewState {
+  return {
+    mode: source.mode,
+    cursor: { ...source.cursor },
+    scrollTop: source.scrollTop
+  }
+}
+
+export function toTabTransferPayload(
+  source: { bufferKey: string } & TabViewState
+): TabTransferPayload {
+  return {
+    bufferKey: source.bufferKey,
+    ...extractTabViewState(source)
+  }
+}
+
+export function cloneTabTransferPayloads(
+  tabs: readonly TabTransferPayload[]
+): TabTransferPayload[] {
+  return tabs.map(toTabTransferPayload)
 }
 
 export interface WindowInitContext {

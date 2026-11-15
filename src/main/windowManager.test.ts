@@ -382,17 +382,8 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     expect(createdWindows[2].options.title).toBe('beta.md - Wiki Editor')
   })
 
-  it('auto-closes auxiliary window once synced tabs drop to zero and preserves empty auxiliary without tabs', async () => {
-    windowManager.createMainWindow()
-
-    // Empty auxiliary created directly never had tabs -> stays open even after syncWindowTabs([])
-    const emptyAux = windowManager.createAuxiliaryWindow([]) as FakeWindowInstance
-    expect(emptyAux.options.title).toBe(WINDOW_BASE_TITLE)
-    await ipcHarness.invokeFrom(emptyAux.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [])
-    expect(emptyAux.isDestroyed()).toBe(false)
-
-    // Detach tab into auxiliary -> sync [alpha] -> sync [] -> auto-closes
-    const mainWin = createdWindows[0]
+  it('keeps booting auxiliary window open before initial tab hydration and auto-closes once synced tabs drop to zero', async () => {
+    const mainWin = windowManager.createMainWindow() as FakeWindowInstance
     await ipcHarness.invokeFrom(mainWin.webContents, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
     const alphaBuf = (await ipcHarness.invokeFrom(
       mainWin.webContents,
@@ -406,7 +397,13 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       cursor: { selectionStart: 0, selectionEnd: 0 },
       scrollTop: 0
     })
-    const auxWin = createdWindows[2]
+    const auxWin = createdWindows[1]
+
+    // Pre-hydration mount sends syncWindowTabs([]) before getInitContext resolves -> must stay open
+    await ipcHarness.invokeFrom(auxWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [])
+    expect(auxWin.isDestroyed()).toBe(false)
+
+    // Hydrates [alpha] then closes last tab -> auto-closes
     await ipcHarness.invokeFrom(auxWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [alphaBuf.key])
     expect(auxWin.isDestroyed()).toBe(false)
 
@@ -416,7 +413,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     expect(mainWin.isDestroyed()).toBe(false)
   })
 
-  it('passes windowRole=auxiliary query string when using rendererUrl in dev mode', () => {
+  it('passes windowRole=auxiliary query string and fallback base title when buffer name is absent', () => {
     const devFactory = createFakeBrowserWindowFactory()
     const devWinMgr = new WindowManager({
       preloadPath: 'C:\\app\\out\\preload\\index.js',
@@ -427,8 +424,16 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     })
 
     const mainWin = devWinMgr.createMainWindow() as FakeWindowInstance
-    const auxWin = devWinMgr.createAuxiliaryWindow([]) as FakeWindowInstance
+    const auxWin = devWinMgr.createAuxiliaryWindow([
+      {
+        bufferKey: 'c:/wiki/unloaded.md',
+        mode: 'raw',
+        cursor: { selectionStart: 0, selectionEnd: 0 },
+        scrollTop: 0
+      }
+    ]) as FakeWindowInstance
 
+    expect(auxWin.options.title).toBe(WINDOW_BASE_TITLE)
     expect(mainWin.loadedUrls).toEqual(['http://localhost:5173/app?foo=bar'])
     expect(auxWin.loadedUrls).toEqual(['http://localhost:5173/app?foo=bar&windowRole=auxiliary'])
     devWinMgr.dispose()
@@ -436,7 +441,14 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
 
   it('keeps workspace watch owned solely by main window across auxiliary mount/unmount and broadcasts to all', async () => {
     const mainWin = windowManager.createMainWindow() as FakeWindowInstance
-    const auxWin = windowManager.createAuxiliaryWindow([]) as FakeWindowInstance
+    const auxWin = windowManager.createAuxiliaryWindow([
+      {
+        bufferKey: 'c:/wiki/alpha.md',
+        mode: 'raw',
+        cursor: { selectionStart: 0, selectionEnd: 0 },
+        scrollTop: 0
+      }
+    ]) as FakeWindowInstance
 
     await ipcHarness.invokeFrom(auxWin.webContents, WORKSPACE_IPC_CHANNELS.watch)
     await ipcHarness.invokeFrom(mainWin.webContents, WORKSPACE_IPC_CHANNELS.open, workspaceDir)

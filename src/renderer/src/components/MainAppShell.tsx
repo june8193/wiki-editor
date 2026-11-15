@@ -5,11 +5,11 @@ import type { GitStatus } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { useConfigController } from '../hooks/useConfigController'
-import { useEditorOutlineAndSidebar } from '../hooks/useEditorOutlineAndSidebar'
+import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
+import { useErrorBanner } from '../hooks/useErrorBanner'
 import { useGitController } from '../hooks/useGitController'
 import { useWikiApi } from '../hooks/useWikiApi'
-import { useWindowAlerts } from '../hooks/useWindowAlerts'
 import { useWindowWidth } from '../hooks/useWindowWidth'
 import { useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import {
@@ -50,12 +50,19 @@ function getGitChangedCount(workspaceRootPath: string | null, status: GitStatus 
 }
 
 /**
- * Primary workspace window shell owning folder watching, left sidebar views, Git integration,
- * application menu shortcuts, and global settings alongside the shared editor workspace.
+ * Main window shell owning workspace opening and watching, activity bar, left sidebar views,
+ * Git panel integration, application menu bar commands, and settings panel alongside the pane workspace.
  */
 export function MainAppShell() {
   const wikiApi = useWikiApi()
-  const alerts = useWindowAlerts()
+  const { errorMessage, reportErrorBanner } = useErrorBanner()
+  const {
+    pendingDialog,
+    setPendingDialog,
+    dismissDialog,
+    isDialogOpenRef,
+    confirmCloseDirtyTab
+  } = useConfirmDialog()
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
     activeView: 'workspace',
@@ -78,29 +85,21 @@ export function MainAppShell() {
     removeFavoriteWorkspace,
     removeRecentWorkspace
   } = useConfigController({
-    onError: alerts.reportErrorBanner,
+    onError: reportErrorBanner,
     onExternalConfigCommitted: () => void refreshConfigDocRef.current(),
     onInitialConfigLoaded: (loadedConfig) => onInitialConfigLoadedRef.current(loadedConfig)
   })
 
-  const isEditorShortcutDisabled = alerts.pendingDialog !== null || isSettingsOpen
+  const isEditorShortcutDisabled = pendingDialog !== null || isSettingsOpen
   const editor = useEditorWorkspace({
-    isAutoSavePaused: alerts.pendingDialog !== null,
+    isAutoSavePaused: pendingDialog !== null,
     isShortcutDisabled: isEditorShortcutDisabled,
     onWorkspaceSaved: () => void refreshGitStatusRef.current(),
-    onError: alerts.reportErrorBanner,
-    onConfirmCloseDirtyTab: alerts.handleConfirmCloseDirtyTab
+    onError: reportErrorBanner,
+    onConfirmCloseDirtyTab: confirmCloseDirtyTab
   })
 
   refreshConfigDocRef.current = editor.refreshCleanConfig
-  alerts.bindTabCloseActions(editor.saveAndCloseTab, editor.forceCloseTab)
-
-  const frame = useEditorOutlineAndSidebar({
-    initialRightCollapsed: false,
-    buffers: editor.buffers,
-    layout: editor.layout,
-    editorActions: editor
-  })
 
   const windowWidth = useWindowWidth()
   const leftSidebarBounds = getLeftSidebarWidthBounds(windowWidth)
@@ -150,7 +149,7 @@ export function MainAppShell() {
     renameEntry,
     deleteEntry
   } = useWorkspaceTree({
-    onError: alerts.reportErrorBanner,
+    onError: reportErrorBanner,
     onWorkspaceOpened: () => {
       editor.clearWorkspaceBuffers()
       if (isStartupRestoreRef.current) {
@@ -169,7 +168,7 @@ export function MainAppShell() {
     onWorkspaceChanged: () => {
       void reconcileBuffersRef.current().then((warnings) => {
         if (warnings.length > 0) {
-          alerts.reportErrorBanner(warnings.join(' '))
+          reportErrorBanner(warnings.join(' '))
         }
       })
       void refreshGitStatusRef.current()
@@ -208,7 +207,6 @@ export function MainAppShell() {
   }, [])
 
   const { ensureAllWorkspaceBuffersSaved, getDirtyWorkspaceSummary } = editor
-  const { setPendingDialog, reportErrorBanner, isDialogOpenRef } = alerts
   const promptUnsavedWorkspaceChanges = useCallback(
     (options: {
       message: (dirtySummary: string) => string
@@ -405,7 +403,7 @@ export function MainAppShell() {
               <FolderTreeSidebar
                 workspace={workspace}
                 tree={treeState}
-                activeFilePath={frame.activeFilePath}
+                activeFilePath={editor.activeFilePath}
                 onSelectPath={setSelectedTreePath}
                 onToggleDirectory={toggleDirectory}
                 onEnsureExpanded={ensureExpanded}
@@ -459,8 +457,8 @@ export function MainAppShell() {
       showHeadingNumbers={config.showHeadingNumbers}
       configPath={configPath}
       customCommands={config.customCommands}
-      previewTitle={frame.activeBuffer ? deriveDocumentTitle(frame.activeBuffer.name) : undefined}
-      isDismissDisabled={alerts.pendingDialog !== null}
+      previewTitle={editor.activeBuffer ? deriveDocumentTitle(editor.activeBuffer.name) : undefined}
+      isDismissDisabled={pendingDialog !== null}
       onToggleTheme={toggleTheme}
       onToggleAutoSave={toggleAutoSave}
       onToggleShowHeadingNumbers={toggleShowHeadingNumbers}
@@ -472,26 +470,22 @@ export function MainAppShell() {
 
   return (
     <EditorWindowFrame
-      theme={config.theme}
-      autoSave={config.autoSave}
-      showHeadingNumbers={config.showHeadingNumbers}
-      customCommands={config.customCommands}
-      errorMessage={alerts.errorMessage}
-      pendingDialog={alerts.pendingDialog}
-      onDismissDialog={() => alerts.setPendingDialog(null)}
+      errorMessage={errorMessage}
+      pendingDialog={pendingDialog}
+      onDismissDialog={dismissDialog}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
-      workspaceProps={{
+      paneWorkspaceProps={{
         layout: editor.layout,
         buffers: editor.buffers,
-        scrollRequest: frame.outlineScrollRequest,
+        theme: config.theme,
+        autoSave: config.autoSave,
+        showHeadingNumbers: config.showHeadingNumbers,
+        customCommands: config.customCommands,
         isShortcutDisabled: isEditorShortcutDisabled,
-        canDetachToNewWindow: true,
         onSetSplitRatio: editor.setSplitRatio,
         onSplitWithTab: editor.splitWithTab,
-        actions: frame.paneActions
+        actions: editor.paneActions
       }}
-      outlinePanelProps={frame.outlinePanelProps}
-      rightSidebar={frame.rightSidebar}
       leftChrome={leftChrome}
       overlay={overlay}
     />

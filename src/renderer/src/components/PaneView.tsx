@@ -22,7 +22,6 @@ interface PaneViewProps {
   customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
-  canDetachToNewWindow?: boolean
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
@@ -41,7 +40,6 @@ export function PaneView({
   customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
-  canDetachToNewWindow = true,
   buffers,
   draggingTab,
   onDragStartTab,
@@ -88,7 +86,6 @@ export function PaneView({
           tabs={pane.tabs}
           activeTabId={pane.activeTabId}
           canMoveToSplit={canMoveToSplit}
-          canDetachToNewWindow={canDetachToNewWindow}
           buffers={buffers}
           draggingTab={draggingTab}
           onDragStartTab={onDragStartTab}

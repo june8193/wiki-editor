@@ -1,59 +1,75 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useCallback, useState } from 'react'
 import { ListTree } from 'lucide-react'
-import type { CustomCommandConfig, ThemeMode } from '@shared/config'
-import type { PendingDialogState } from '../hooks/useWindowAlerts'
-import { RIGHT_SIDEBAR_WIDTH_BOUNDS } from '../utils/sidebarWidth'
+import type { ConfirmDialogState } from '../hooks/useConfirmDialog'
+import { useDocumentOutline } from '../hooks/useDocumentOutline'
+import {
+  clampSidebarWidth,
+  RIGHT_SIDEBAR_DEFAULT_WIDTH,
+  RIGHT_SIDEBAR_WIDTH_BOUNDS
+} from '../utils/sidebarWidth'
 import { ConfirmDialog } from './ConfirmDialog'
-import { DocumentOutlinePanel, type DocumentOutlinePanelProps } from './DocumentOutlinePanel'
+import { DocumentOutlinePanel } from './DocumentOutlinePanel'
 import { PaneWorkspace, type PaneWorkspaceProps } from './PaneWorkspace'
 import { SidebarResizer } from './SidebarResizer'
 
+interface RightSidebarState {
+  isCollapsed: boolean
+  width: number
+}
+
 export interface EditorWindowFrameProps {
-  theme: ThemeMode
-  autoSave: boolean
-  showHeadingNumbers: boolean
-  customCommands: readonly CustomCommandConfig[]
-  errorMessage: string | null
-  pendingDialog: PendingDialogState | null
-  onDismissDialog: () => void
+  paneWorkspaceProps: Omit<PaneWorkspaceProps, 'scrollRequest'>
   onToggleHeadingNumbers: () => void
-  workspaceProps: Omit<PaneWorkspaceProps, 'theme' | 'autoSave' | 'showHeadingNumbers' | 'customCommands'>
-  outlinePanelProps: Omit<
-    DocumentOutlinePanelProps,
-    'showHeadingNumbers' | 'onToggleHeadingNumbers' | 'onCollapse'
-  >
-  rightSidebar: {
-    isCollapsed: boolean
-    width: number
-    onCollapse: () => void
-    onExpand: () => void
-    onResize: (nextWidth: number) => void
-  }
+  initialRightSidebarCollapsed?: boolean
+  errorMessage: string | null
+  pendingDialog: ConfirmDialogState | null
+  onDismissDialog: () => void
   leftChrome?: ReactNode
   overlay?: ReactNode
 }
 
 /**
- * Shared editor shell frame rendering error banner, optional left chrome, multi-pane editor
- * workspace, right document outline sidebar, optional overlays, and confirmation dialogs.
+ * Shared window frame rendering the error banner, optional left sidebar chrome, pane workspace,
+ * collapsible right sidebar (document outline), optional settings panel, and confirm dialog.
  */
 export function EditorWindowFrame({
-  theme,
-  autoSave,
-  showHeadingNumbers,
-  customCommands,
+  paneWorkspaceProps,
+  onToggleHeadingNumbers,
+  initialRightSidebarCollapsed = false,
   errorMessage,
   pendingDialog,
   onDismissDialog,
-  onToggleHeadingNumbers,
-  workspaceProps,
-  outlinePanelProps,
-  rightSidebar,
   leftChrome,
   overlay
 }: EditorWindowFrameProps) {
+  const [rightSidebar, setRightSidebar] = useState<RightSidebarState>(() => ({
+    isCollapsed: initialRightSidebarCollapsed,
+    width: RIGHT_SIDEBAR_DEFAULT_WIDTH
+  }))
+
+  const handleCollapseRightSidebar = useCallback((): void => {
+    setRightSidebar((prev) => (prev.isCollapsed ? prev : { ...prev, isCollapsed: true }))
+  }, [])
+
+  const handleExpandRightSidebar = useCallback((): void => {
+    setRightSidebar((prev) => (prev.isCollapsed ? { ...prev, isCollapsed: false } : prev))
+  }, [])
+
+  const handleResizeRightSidebar = useCallback((nextWidth: number): void => {
+    const clampedWidth = clampSidebarWidth(nextWidth, RIGHT_SIDEBAR_WIDTH_BOUNDS)
+    setRightSidebar((prev) =>
+      prev.width === clampedWidth ? prev : { ...prev, width: clampedWidth }
+    )
+  }, [])
+
+  const outline = useDocumentOutline(
+    paneWorkspaceProps.layout,
+    paneWorkspaceProps.buffers,
+    paneWorkspaceProps.actions
+  )
+
   return (
-    <div className="app-shell" data-theme={theme}>
+    <div className="app-shell" data-theme={paneWorkspaceProps.theme}>
       {errorMessage && (
         <div className="error-banner" role="alert">
           {errorMessage}
@@ -64,11 +80,9 @@ export function EditorWindowFrame({
         {leftChrome}
 
         <PaneWorkspace
-          {...workspaceProps}
-          theme={theme}
-          autoSave={autoSave}
-          showHeadingNumbers={showHeadingNumbers}
-          customCommands={customCommands}
+          {...paneWorkspaceProps}
+          scrollRequest={outline.scrollRequest}
+          actions={outline.paneActions}
         />
 
         {!rightSidebar.isCollapsed ? (
@@ -78,7 +92,7 @@ export function EditorWindowFrame({
               width={rightSidebar.width}
               bounds={RIGHT_SIDEBAR_WIDTH_BOUNDS}
               ariaLabel="우측 사이드바 너비 조절"
-              onResize={rightSidebar.onResize}
+              onResize={handleResizeRightSidebar}
             />
             <aside
               className="right-sidebar"
@@ -86,10 +100,10 @@ export function EditorWindowFrame({
               style={{ width: `${rightSidebar.width}px` }}
             >
               <DocumentOutlinePanel
-                {...outlinePanelProps}
-                showHeadingNumbers={showHeadingNumbers}
+                {...outline.documentOutlineProps}
+                showHeadingNumbers={paneWorkspaceProps.showHeadingNumbers ?? true}
                 onToggleHeadingNumbers={onToggleHeadingNumbers}
-                onCollapse={rightSidebar.onCollapse}
+                onCollapse={handleCollapseRightSidebar}
               />
             </aside>
           </>
@@ -99,7 +113,7 @@ export function EditorWindowFrame({
             className="right-sidebar-expand-tab"
             aria-label="문서 목차 펼치기"
             title="문서 목차 펼치기"
-            onClick={rightSidebar.onExpand}
+            onClick={handleExpandRightSidebar}
           >
             <ListTree size={18} strokeWidth={1.75} aria-hidden="true" />
           </button>

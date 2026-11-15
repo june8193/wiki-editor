@@ -121,11 +121,7 @@ void app.whenReady().then(async () => {
     configService,
     hub: bufferHub,
     getTargets,
-    logService,
-    initialAutoSaveConfig: {
-      autoSave: initialConfig.autoSave,
-      autoSaveDelayMs: initialConfig.autoSaveDelayMs
-    }
+    logService
   })
   disposeWindowIpc = registerWindowIpc({
     ipcMain,

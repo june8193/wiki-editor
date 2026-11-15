@@ -10,7 +10,12 @@ import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import { createEmptyGitStatus } from '@shared/git'
 import type { AppMenuCommand, WikiApi, WikiBufferApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
-import type { TabTransferPayload, WindowInitContext, WindowRole } from '@shared/window'
+import {
+  cloneTabTransferPayloads,
+  type TabTransferPayload,
+  type WindowInitContext,
+  type WindowRole
+} from '@shared/window'
 import {
   getWorkspaceDisplayName,
   recordRecentWorkspace,
@@ -308,10 +313,7 @@ export function createMultiWindowWikiHarness(
   const createWindow = (options: CreateInMemoryWindowOptions = {}): InMemoryWindowHandle => {
     const windowId = nextWindowId++
     const role: WindowRole = options.role ?? 'main'
-    const initialTabs: TabTransferPayload[] = (options.initialTabs ?? []).map((tab) => ({
-      ...tab,
-      cursor: { ...tab.cursor }
-    }))
+    const initialTabs: TabTransferPayload[] = cloneTabTransferPayloads(options.initialTabs ?? [])
     let destroyed = false
     let hasSyncedNonEmptyTabs = false
     const menuListeners = new Set<(command: AppMenuCommand) => void>()
@@ -580,7 +582,7 @@ export function createMultiWindowWikiHarness(
         async getInitContext() {
           return {
             role,
-            initialTabs: initialTabs.map((tab) => ({ ...tab, cursor: { ...tab.cursor } }))
+            initialTabs: cloneTabTransferPayloads(initialTabs)
           }
         },
         async detachTabToNewWindow(payload) {
@@ -623,7 +625,7 @@ export function createMultiWindowWikiHarness(
       isClosed: () => destroyed,
       getInitContext: () => ({
         role,
-        initialTabs: initialTabs.map((tab) => ({ ...tab, cursor: { ...tab.cursor } }))
+        initialTabs: cloneTabTransferPayloads(initialTabs)
       }),
       destroy: destroyWindow
     }

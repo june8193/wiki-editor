@@ -1,17 +1,14 @@
 import type { BufferKeyRemap } from '@shared/documentBuffer'
-import type { CursorPosition, EditorMode } from '@shared/window'
+import type { CursorPosition, EditorMode, TabViewState } from '@shared/window'
 
-export type { CursorPosition, EditorMode }
+export type { CursorPosition, EditorMode, TabViewState }
 export type PaneId = 'primary' | 'secondary'
 export type SplitMode = 'single' | 'horizontal' | 'vertical'
 export type SplitDirection = Exclude<SplitMode, 'single'>
 
-export interface TabItem {
+export interface TabItem extends TabViewState {
   id: string
   bufferKey: string
-  mode: EditorMode
-  cursor: CursorPosition
-  scrollTop: number
 }
 
 export interface PaneState {
@@ -27,18 +24,11 @@ export interface PaneLayoutState {
   panes: Record<PaneId, PaneState>
 }
 
-export interface OpenTabOptions {
+export interface OpenTabOptions extends Partial<TabViewState> {
   paneId?: PaneId
-  mode?: EditorMode
-  cursor?: CursorPosition
-  scrollTop?: number
 }
 
-export interface TabViewPatch {
-  mode?: EditorMode
-  cursor?: CursorPosition
-  scrollTop?: number
-}
+export type TabViewPatch = Partial<TabViewState>
 
 export interface CloseTabResult {
   closedTab: TabItem

@@ -29,8 +29,50 @@ export type RegisterBufferIpcDependencies = {
   configService: ConfigService
   getTargets: () => BufferWebContentsLike[]
   logService?: LogService
-  initialAutoSaveConfig?: AutoSaveConfig
-} & ({ hub: SharedDocumentBufferHub } | { workspaceService: WorkspaceFsService })
+} & (
+  | { hub: SharedDocumentBufferHub }
+  | { workspaceService: WorkspaceFsService; initialAutoSaveConfig?: AutoSaveConfig }
+)
+
+let nextFallbackHubWindowId = 1
+const assignedHubWindowIds = new WeakMap<object, number>()
+const registeredHubTeardowns = new WeakMap<SharedDocumentBufferHub, WeakSet<object>>()
+
+/**
+ * Resolves a stable hub window identifier for a BrowserWindow WebContents and binds
+ * automatic hub cleanup when that WebContents is destroyed.
+ */
+export function trackHubWindowWebContents(
+  hub: SharedDocumentBufferHub,
+  webContents: BufferWebContentsLike,
+  fallbackId?: number
+): number {
+  let windowId = assignedHubWindowIds.get(webContents)
+  if (windowId === undefined) {
+    windowId =
+      typeof webContents.id === 'number'
+        ? webContents.id
+        : typeof fallbackId === 'number'
+          ? fallbackId
+          : nextFallbackHubWindowId++
+    assignedHubWindowIds.set(webContents, windowId)
+  }
+
+  let hubSenders = registeredHubTeardowns.get(hub)
+  if (!hubSenders) {
+    hubSenders = new WeakSet<object>()
+    registeredHubTeardowns.set(hub, hubSenders)
+  }
+  if (!hubSenders.has(webContents)) {
+    hubSenders.add(webContents)
+    const trackedWindowId = windowId
+    webContents.once?.('destroyed', () => {
+      hub.unregisterWindow(trackedWindowId)
+    })
+  }
+
+  return windowId
+}
 
 /**
  * Creates the main-process SharedDocumentBufferHub backed by workspace and config storage.
@@ -61,10 +103,9 @@ export function createSharedDocumentBufferHub({
  * to all active renderer BrowserWindow targets.
  */
 export function registerBufferIpc(deps: RegisterBufferIpcDependencies): () => void {
-  const { ipcMain, configService, getTargets, logService, initialAutoSaveConfig } = deps
+  const { ipcMain, configService, getTargets, logService } = deps
   let disposed = false
-  let fallbackWindowId = 1
-  const trackedSenders = new WeakMap<object, number>()
+  const initialAutoSaveConfig = 'hub' in deps ? undefined : deps.initialAutoSaveConfig
 
   const hub =
     'hub' in deps
@@ -78,19 +119,7 @@ export function registerBufferIpc(deps: RegisterBufferIpcDependencies): () => vo
 
   const resolveWindowId = (event: unknown): number | undefined => {
     const sender = resolveSenderWebContents<BufferWebContentsLike>(event)
-    if (!sender) return undefined
-
-    const existingId = trackedSenders.get(sender)
-    if (existingId !== undefined) {
-      return existingId
-    }
-
-    const windowId = typeof sender.id === 'number' ? sender.id : fallbackWindowId++
-    trackedSenders.set(sender, windowId)
-    sender.once?.('destroyed', () => {
-      hub.unregisterWindow(windowId)
-    })
-    return windowId
+    return sender ? trackHubWindowWebContents(hub, sender) : undefined
   }
 
   let hasConfigUpdate = false
@@ -103,8 +132,9 @@ export function registerBufferIpc(deps: RegisterBufferIpcDependencies): () => vo
   })
 
   if (
-    initialAutoSaveConfig?.autoSave === undefined ||
-    initialAutoSaveConfig?.autoSaveDelayMs === undefined
+    !('hub' in deps) &&
+    (initialAutoSaveConfig?.autoSave === undefined ||
+      initialAutoSaveConfig?.autoSaveDelayMs === undefined)
   ) {
     void configService.get().then(
       (config) => {

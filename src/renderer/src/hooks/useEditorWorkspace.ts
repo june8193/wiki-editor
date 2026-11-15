@@ -1,9 +1,12 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
+import type { PaneInteractionActions } from '../components/PaneTabBar'
 import { isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import { logRendererInfo } from '../logging/rendererLogger'
 import {
+  countLayoutTabs,
   extractLayoutBufferKeys,
+  getPaneActiveTab,
   PaneTabStore,
   type PaneTabTransition
 } from '../stores/PaneTabStore'
@@ -142,6 +145,31 @@ export function useEditorWorkspace({
 
   const buffers = useSyncExternalStore(bufferStore.subscribe, bufferStore.getSnapshot)
   const layout = useSyncExternalStore(tabStore.subscribe, tabStore.getSnapshot)
+  const activeTab = getPaneActiveTab(layout.panes[layout.activePaneId])
+  const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
+  const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
+  const totalTabCount = countLayoutTabs(layout)
+  const canDetachToNewWindow = wikiApi.window?.role !== 'auxiliary' || totalTabCount > 1
+
+  const paneActions = useMemo<PaneInteractionActions>(
+    () => ({
+      onFocusPane: tabStore.focusPane,
+      onActivateTab: tabStore.activateTab,
+      onCloseTab: syncClient.requestCloseTab,
+      onMoveTab: tabStore.moveTab,
+      onDuplicateTab: tabStore.duplicateTabToOtherPane,
+      ...(canDetachToNewWindow
+        ? {
+            onDetachTabToNewWindow: (paneId, tabId) =>
+              void syncClient.detachTabToNewWindow(paneId, tabId)
+          }
+        : {}),
+      onChangeContent: syncClient.updateBufferContent,
+      onSaveBuffer: syncClient.saveBufferByKey,
+      onUpdateTabViewState: tabStore.updateTabViewState
+    }),
+    [canDetachToNewWindow, syncClient, tabStore]
+  )
 
   useEffect(() => syncClient.start(), [syncClient])
 
@@ -183,6 +211,11 @@ export function useEditorWorkspace({
   return {
     buffers,
     layout,
+    activeTab,
+    activeBuffer,
+    activeFilePath,
+    totalTabCount,
+    paneActions,
     openWorkspaceFile: syncClient.openWorkspaceFile,
     openConfigDocument: syncClient.openConfigDocument,
     refreshCleanConfig: syncClient.refreshCleanConfig,

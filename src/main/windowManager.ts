@@ -2,6 +2,7 @@ import type { BrowserWindowConstructorOptions } from 'electron'
 import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
+  cloneTabTransferPayloads,
   formatWindowTitle,
   WINDOW_ROLE_QUERY_PARAM,
   type DetachTabToNewWindowResult,
@@ -9,7 +10,7 @@ import {
   type WindowInitContext,
   type WindowRole
 } from '@shared/window'
-import type { BufferWebContentsLike } from './ipc/registerBufferIpc'
+import { trackHubWindowWebContents, type BufferWebContentsLike } from './ipc/registerBufferIpc'
 import {
   computeOffsetAuxiliaryBounds,
   createAuxiliaryWindowOptions,
@@ -45,14 +46,8 @@ interface WindowRecord {
   role: WindowRole
   window: BrowserWindowLike
   initialTabs: TabTransferPayload[]
-  hadInitialTabs: boolean
   hasSyncedNonEmptyTabs: boolean
   closing: boolean
-}
-
-// SharedDocumentBufferHub keys windows by IPC sender/WebContents ID (distinct from BrowserWindow.id).
-function resolveWebContentsId(win: BrowserWindowLike): number {
-  return typeof win.webContents.id === 'number' ? win.webContents.id : win.id
 }
 
 function getNumericSenderId(sender: unknown): number | undefined {
@@ -118,20 +113,16 @@ export class WindowManager {
   private registerWindow(
     win: BrowserWindowLike,
     role: WindowRole,
-    initialTabs: TabTransferPayload[]
+    initialTabs: readonly TabTransferPayload[]
   ): WindowRecord {
-    const webContentsId = resolveWebContentsId(win)
-    const clonedTabs = initialTabs.map((tab) => ({
-      ...tab,
-      cursor: { ...tab.cursor }
-    }))
+    const webContentsId = trackHubWindowWebContents(this.bufferHub, win.webContents, win.id)
+    const clonedTabs = cloneTabTransferPayloads(initialTabs)
 
     const record: WindowRecord = {
       webContentsId,
       role,
       window: win,
       initialTabs: clonedTabs,
-      hadInitialTabs: clonedTabs.length > 0,
       hasSyncedNonEmptyTabs: false,
       closing: false
     }
@@ -158,9 +149,6 @@ export class WindowManager {
       if (this.mainWebContentsId === webContentsId) {
         this.mainWebContentsId = null
       }
-      if (!this.disposed) {
-        this.bufferHub.unregisterWindow(webContentsId)
-      }
     })
 
     return record
@@ -174,11 +162,14 @@ export class WindowManager {
   }
 
   createAuxiliaryWindow(
-    initialTabs: TabTransferPayload[] = [],
+    initialTabs: readonly TabTransferPayload[],
     sourceBounds?: WindowBounds
   ): BrowserWindowLike {
-    const firstKey = initialTabs[0]?.bufferKey
-    const firstName = firstKey ? this.bufferHub.getBufferName(firstKey) : undefined
+    if (initialTabs.length === 0) {
+      throw new Error('Auxiliary window requires at least one initial tab')
+    }
+    const firstKey = initialTabs[0].bufferKey
+    const firstName = this.bufferHub.getBufferName(firstKey)
     const bounds = sourceBounds ? computeOffsetAuxiliaryBounds(sourceBounds, this.screen) : undefined
     const options = createAuxiliaryWindowOptions(this.preloadPath, {
       bounds,
@@ -222,7 +213,7 @@ export class WindowManager {
 
     const auxWindow = this.createAuxiliaryWindow([payload], sourceRecord.window.getBounds())
     return {
-      windowId: resolveWebContentsId(auxWindow)
+      windowId: trackHubWindowWebContents(this.bufferHub, auxWindow.webContents, auxWindow.id)
     }
   }
 
@@ -233,10 +224,7 @@ export class WindowManager {
     }
     return {
       role: record.role,
-      initialTabs: record.initialTabs.map((tab) => ({
-        ...tab,
-        cursor: { ...tab.cursor }
-      }))
+      initialTabs: cloneTabTransferPayloads(record.initialTabs)
     }
   }
 
@@ -296,7 +284,7 @@ export class WindowManager {
         continue
       }
 
-      if (record.hasSyncedNonEmptyTabs || (record.hadInitialTabs && record.initialTabs.length === 0)) {
+      if (record.hasSyncedNonEmptyTabs || record.initialTabs.length === 0) {
         this.closeRecord(record)
       }
     }

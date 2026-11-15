@@ -8,7 +8,7 @@ import {
 import { DocumentBufferStore, mergePendingLocalBuffer } from '@shared/documentBufferStore'
 import { toErrorMessage } from '@shared/errors'
 import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
-import type { TabTransferPayload } from '@shared/window'
+import { extractTabViewState, toTabTransferPayload } from '@shared/window'
 import { countBufferKeys } from '@shared/windowTabTracker'
 import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
 import { type PaneId, PaneTabStore } from './PaneTabStore'
@@ -17,6 +17,8 @@ export interface DirtyTabClosePrompt {
   paneId: PaneId
   tabId: string
   buffer: DocumentBuffer
+  saveAndClose: () => Promise<boolean>
+  discardAndClose: () => void
 }
 
 function areStringArraysEqual(
@@ -151,11 +153,7 @@ export class RendererBufferSyncClient {
           for (const tab of initContext.initialTabs) {
             const resolvedKey = this.resolveLatestKey(tab.bufferKey)
             if (resolvedKey in snapshot.buffers) {
-              this.tabStore.openTab(resolvedKey, {
-                mode: tab.mode,
-                cursor: tab.cursor,
-                scrollTop: tab.scrollTop
-              })
+              this.tabStore.openTab(resolvedKey, extractTabViewState(tab))
               openedInitialTabs = true
             }
           }
@@ -717,7 +715,13 @@ export class RendererBufferSyncClient {
       (this.effectiveTabCounts[tab.bufferKey] ?? 1) > 1
     if (buffer?.isDirty && !hasOtherTabAcrossWindows) {
       void this.bufferApi.setAutoSavePaused(true).catch(() => undefined)
-      this.onConfirmCloseDirtyTab({ paneId, tabId, buffer })
+      this.onConfirmCloseDirtyTab({
+        paneId,
+        tabId,
+        buffer,
+        saveAndClose: () => this.saveAndCloseTab(paneId, tabId),
+        discardAndClose: () => this.forceCloseTab(paneId, tabId)
+      })
       return
     }
     this.forceCloseTab(paneId, tabId)
@@ -757,13 +761,7 @@ export class RendererBufferSyncClient {
         return
       }
 
-      const payload: TabTransferPayload = {
-        bufferKey: latestTab.bufferKey,
-        mode: latestTab.mode,
-        cursor: { ...latestTab.cursor },
-        scrollTop: latestTab.scrollTop
-      }
-      await this.windowApi.detachTabToNewWindow(payload)
+      await this.windowApi.detachTabToNewWindow(toTabTransferPayload(latestTab))
       this.forceCloseTab(paneId, latestTab.id)
     } catch (error: unknown) {
       if (this.mounted) {
