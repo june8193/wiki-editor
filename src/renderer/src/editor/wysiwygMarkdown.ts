@@ -3,6 +3,7 @@ import {
   createNodeFromContent,
   Editor,
   Extension,
+  InputRule,
   mergeAttributes,
   Node as TiptapNode
 } from '@tiptap/core'
@@ -297,17 +298,19 @@ export function prepareMarkdownForTiptap(markdown: string): string {
         })
         return
       }
-      if (
-        (node.type === 'image' || node.type === 'definition') &&
-        typeof node.url === 'string' &&
-        !isSafeMarkdownUrl(node.url)
-      ) {
-        patches.push({
-          start,
-          end,
-          replacement: ''
-        })
-        return
+      if ((node.type === 'image' || node.type === 'definition') && typeof node.url === 'string') {
+        const isSafeTarget =
+          node.type === 'image'
+            ? isSafeMarkdownImageUrl(node.url)
+            : isSafeMarkdownUrl(node.url)
+        if (!isSafeTarget) {
+          patches.push({
+            start,
+            end,
+            replacement: ''
+          })
+          return
+        }
       }
     }
     if (node.children) {
@@ -515,6 +518,40 @@ const WikiAssetImage = Image.extend<WikiAssetImageOptions>({
     return title
       ? `![${alt}](${destination} "${title.replace(/"/g, '\\"')}")`
       : `![${alt}](${destination})`
+  },
+
+  addCommands() {
+    const parentCommands = this.parent?.()
+    return {
+      ...parentCommands,
+      setImage:
+        (options) =>
+        (commandProps) => {
+          const rawSrc = options.src?.trim() ?? ''
+          if (!rawSrc || !isSafeMarkdownImageUrl(rawSrc)) {
+            return false
+          }
+          return parentCommands?.setImage?.(options)(commandProps) ?? false
+        }
+    }
+  },
+
+  addInputRules() {
+    const parentRules = this.parent?.() ?? []
+    return parentRules.map(
+      (rule) =>
+        new InputRule({
+          find: rule.find,
+          undoable: rule.undoable,
+          handler: (props) => {
+            const rawSrc = props.match[3]?.trim() ?? ''
+            if (!rawSrc || !isSafeMarkdownImageUrl(rawSrc)) {
+              return null
+            }
+            return rule.handler(props)
+          }
+        })
+    )
   }
 })
 

@@ -333,6 +333,15 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
 })
 
 describe('wysiwygMarkdown local image rendering and roundtrip', () => {
+  afterEach(() => {
+    while (createdEditors.length > 0) {
+      const editor = createdEditors.pop()!
+      if (!editor.isDestroyed) {
+        editor.destroy()
+      }
+    }
+  })
+
   it('renders relative images with wiki-asset display URLs while preserving original relative paths on getMarkdown and heading extraction', () => {
     const documentPath = 'C:\\vault\\docs\\guide\\intro.md'
     const markdown = [
@@ -459,5 +468,30 @@ describe('wysiwygMarkdown local image rendering and roundtrip', () => {
     pasteEditor.commands.setContent(sanitizedUntrusted)
     expect(pasteEditor.getMarkdown()).not.toContain('wiki-asset:')
     expect(pasteEditor.view.dom.querySelectorAll('img:not(.ProseMirror-separator)')).toHaveLength(0)
+
+    // Typing inputRule or calling setImage must also reject unsafe schemes and mailto:
+    expect(pasteEditor.commands.setImage({ src: 'wiki-asset://local/asset?path=/a.png', alt: 'bad' })).toBe(false)
+    expect(pasteEditor.commands.setImage({ src: 'javascript:alert(1)', alt: 'bad' })).toBe(false)
+    expect(pasteEditor.commands.setImage({ src: 'mailto:user@example.com', alt: 'bad' })).toBe(false)
+
+    const simulateInput = (prefixHtml: string, text: string): void => {
+      pasteEditor.commands.setContent(prefixHtml)
+      const endPos = pasteEditor.state.doc.content.size - 1
+      pasteEditor.view.someProp('handleTextInput', (fn) =>
+        fn(pasteEditor.view, endPos, endPos, text, () => pasteEditor.state.tr.insertText(text, endPos))
+      )
+    }
+
+    simulateInput('<p>![bad](wiki-asset://local/asset?path=/a.png</p>', ')')
+    expect(pasteEditor.state.doc.content.toString()).not.toContain('image')
+
+    simulateInput('<p>![ok](./assets/typed.png</p>', ')')
+    let insertedImageSrc: string | null = null
+    pasteEditor.state.doc.descendants((node) => {
+      if (node.type.name === 'image') {
+        insertedImageSrc = node.attrs.src
+      }
+    })
+    expect(insertedImageSrc).toBe('./assets/typed.png')
   })
 })

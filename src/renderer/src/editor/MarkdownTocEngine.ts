@@ -173,6 +173,10 @@ export function stripHeadingNumberPrefix(text: string): string {
   return hasHeadingNumberPrefix(text) ? text.replace(LEADING_HEADING_NUMBER_RE, '') : text
 }
 
+function nextMarkdownCursor(text: string, index: number): number {
+  return text[index] === '\\' && index + 1 < text.length ? index + 2 : index + 1
+}
+
 function findClosingDestinationParen(text: string, openParenIndex: number): number {
   let cursor = openParenIndex + 1
   while (cursor < text.length && text[cursor] === ' ') {
@@ -182,25 +186,17 @@ function findClosingDestinationParen(text: string, openParenIndex: number): numb
   if (text[cursor] === '<') {
     cursor += 1
     while (cursor < text.length) {
-      if (text[cursor] === '\\' && cursor + 1 < text.length) {
-        cursor += 2
-        continue
-      }
       if (text[cursor] === '>') {
         cursor += 1
         break
       }
-      cursor += 1
+      cursor = nextMarkdownCursor(text, cursor)
     }
   }
 
   let parenDepth = 1
   while (cursor < text.length) {
     const ch = text[cursor]
-    if (ch === '\\' && cursor + 1 < text.length) {
-      cursor += 2
-      continue
-    }
     if (ch === '(') {
       parenDepth += 1
     } else if (ch === ')') {
@@ -209,7 +205,7 @@ function findClosingDestinationParen(text: string, openParenIndex: number): numb
         return cursor
       }
     }
-    cursor += 1
+    cursor = nextMarkdownCursor(text, cursor)
   }
   return -1
 }
@@ -224,15 +220,8 @@ function stripInlineLinksAndImages(text: string): string {
     if (isImage || isLink) {
       const labelStart = i + (isImage ? 2 : 1)
       let closeBracket = labelStart
-      while (closeBracket < text.length) {
-        if (text[closeBracket] === '\\' && closeBracket + 1 < text.length) {
-          closeBracket += 2
-          continue
-        }
-        if (text[closeBracket] === ']') {
-          break
-        }
-        closeBracket += 1
+      while (closeBracket < text.length && text[closeBracket] !== ']') {
+        closeBracket = nextMarkdownCursor(text, closeBracket)
       }
 
       const hasValidLabel = isImage ? closeBracket < text.length : closeBracket > labelStart && closeBracket < text.length

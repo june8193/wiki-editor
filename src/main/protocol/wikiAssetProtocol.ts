@@ -13,7 +13,7 @@ export const WIKI_ASSET_PRIVILEGED_SCHEME = {
   }
 }
 
-export const WIKI_ASSET_CSP = "default-src 'none'; style-src 'unsafe-inline'"
+const WIKI_ASSET_CSP = "default-src 'none'; style-src 'unsafe-inline'"
 
 function textResponse(status: number, body: string, headers?: Record<string, string>): Response {
   return new Response(body, {
@@ -37,10 +37,6 @@ export async function handleWikiAssetRequest(
   const targetPath = parseWikiAssetUrl(request.url)
   if (!targetPath) {
     return textResponse(400, 'Bad Request')
-  }
-
-  if (!workspaceService.getWorkspaceRoot()) {
-    return textResponse(403, 'Forbidden')
   }
 
   if (!getImageMimeType(targetPath)) {

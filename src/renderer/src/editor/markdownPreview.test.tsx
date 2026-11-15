@@ -413,6 +413,8 @@ describe('markdownPreview local image rendering', () => {
     const unsafeMarkdown = [
       '![direct-proto](wiki-asset://local/asset?path=C:/vault/secret.png)',
       '![js](javascript:alert(1))',
+      '![proto-rel](//evil.com/a.png)',
+      '![root-abs](/abs/a.png)',
       '![data](data:text/html,<script>alert(1)</script>)',
       '<img src="wiki-asset://local/asset?path=/vault/secret.png" alt="raw-proto" onerror="alert(1)">'
     ].join('\n\n')

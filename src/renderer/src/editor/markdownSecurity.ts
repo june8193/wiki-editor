@@ -3,7 +3,7 @@ import {
   ALLOWED_IMAGE_URI_SCHEME_SET,
   ALLOWED_IMAGE_URI_SCHEMES,
   hasAllowedUriScheme
-} from '@shared/assets'
+} from '@shared/urlSecurity'
 
 export const ALLOWED_URI_SCHEMES = ['http', 'https', 'mailto'] as const
 const ALLOWED_URI_SCHEME_SET = new Set<string>(ALLOWED_URI_SCHEMES)
@@ -16,9 +16,13 @@ export function isSafeMarkdownUrl(url: string): boolean {
 }
 
 /**
- * Validates image URLs against safe image schemes (`http`, `https`, or relative paths).
+ * Validates image URLs against safe image schemes (`http`, `https`, or local relative paths).
  */
 export function isSafeMarkdownImageUrl(url: string): boolean {
+  const trimmed = url.trim()
+  if (trimmed.startsWith('/') || trimmed.startsWith('\\')) {
+    return false
+  }
   return hasAllowedUriScheme(url, ALLOWED_IMAGE_URI_SCHEME_SET)
 }
 

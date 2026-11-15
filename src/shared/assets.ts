@@ -1,11 +1,10 @@
+import { ALLOWED_IMAGE_URI_SCHEME_SET, inspectUriScheme } from './urlSecurity'
+
 export const WIKI_ASSET_SCHEME = 'wiki-asset'
-export const WIKI_ASSET_HOST = 'local'
-export const WIKI_ASSET_PATHNAME = '/asset'
+const WIKI_ASSET_HOST = 'local'
+const WIKI_ASSET_PATHNAME = '/asset'
 
-export const ALLOWED_IMAGE_URI_SCHEMES = ['http', 'https'] as const
-export const ALLOWED_IMAGE_URI_SCHEME_SET: ReadonlySet<string> = new Set(ALLOWED_IMAGE_URI_SCHEMES)
-
-export const IMAGE_MIME_TYPES: Record<string, string> = {
+const IMAGE_MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -14,36 +13,6 @@ export const IMAGE_MIME_TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.bmp': 'image/bmp',
   '.avif': 'image/avif'
-}
-
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHAR_PATTERN = /[\u0000-\u001F\u007F]/
-
-function inspectUriScheme(url: string): { valid: boolean; scheme: string | null } {
-  const normalized = url.replace(/[\u0000-\u0020]+/g, '')
-  if (!normalized || CONTROL_CHAR_PATTERN.test(url)) {
-    return { valid: false, scheme: null }
-  }
-  const colonIdx = normalized.indexOf(':')
-  if (colonIdx === -1) {
-    return { valid: true, scheme: null }
-  }
-  const firstSep = normalized.search(/[/?#]/)
-  if (firstSep !== -1 && colonIdx > firstSep) {
-    return { valid: true, scheme: null }
-  }
-  return { valid: true, scheme: normalized.slice(0, colonIdx).toLowerCase() }
-}
-
-/**
- * Validates URLs against an allowed URI scheme set (relative URLs without a scheme are permitted).
- */
-export function hasAllowedUriScheme(url: string, allowedSchemes: ReadonlySet<string>): boolean {
-  const { valid, scheme } = inspectUriScheme(url)
-  if (!valid) {
-    return false
-  }
-  return scheme === null || allowedSchemes.has(scheme)
 }
 
 export function getImageMimeType(filePath: string): string | null {
@@ -187,11 +156,13 @@ export function resolveImageDisplaySrc(rawSrc: string, documentPath?: string): s
     return ALLOWED_IMAGE_URI_SCHEME_SET.has(scheme) ? rawSrc : ''
   }
 
+  if (isDisallowedRelativeTarget(trimmed)) {
+    return ''
+  }
+
   if (documentPath) {
     const resolvedPath = resolveWorkspaceImagePath(trimmed, documentPath)
-    if (resolvedPath) {
-      return buildWikiAssetUrl(resolvedPath)
-    }
+    return resolvedPath ? buildWikiAssetUrl(resolvedPath) : ''
   }
 
   return rawSrc
