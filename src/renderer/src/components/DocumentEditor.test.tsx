@@ -607,10 +607,9 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       })
     }
     const mermaidRenderer = createMermaidRenderer(driver)
-
-    const { rerender } = render(
+    const buildSplitEditor = (targetDoc: DocumentBuffer) => (
       <DocumentEditor
-        document={doc}
+        document={targetDoc}
         tab={tab}
         theme="light"
         autoSave={false}
@@ -620,6 +619,8 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
         onUpdateViewState={vi.fn()}
       />
     )
+
+    const { rerender } = render(buildSplitEditor(doc))
 
     const previewRegion = screen.getByTestId('split-markdown-preview')
     await waitFor(() => {
@@ -633,18 +634,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       content: '# Arch\n\n```mermaid\nflowchart LR\n  broken\n```\n',
       isDirty: true
     }
-    rerender(
-      <DocumentEditor
-        document={doc}
-        tab={tab}
-        theme="light"
-        autoSave={false}
-        mermaidRenderer={mermaidRenderer}
-        onChangeContent={vi.fn()}
-        onSave={vi.fn()}
-        onUpdateViewState={vi.fn()}
-      />
-    )
+    rerender(buildSplitEditor(doc))
 
     await waitFor(() => {
       expect(within(previewRegion).getByRole('alert')).toHaveTextContent('Syntax error near broken')
@@ -659,18 +649,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       content: '# Arch\n\n```mermaid\nflowchart LR\n  A --> C\n```\n',
       isDirty: true
     }
-    rerender(
-      <DocumentEditor
-        document={doc}
-        tab={tab}
-        theme="light"
-        autoSave={false}
-        mermaidRenderer={mermaidRenderer}
-        onChangeContent={vi.fn()}
-        onSave={vi.fn()}
-        onUpdateViewState={vi.fn()}
-      />
-    )
+    rerender(buildSplitEditor(doc))
 
     await waitFor(() => {
       expect(within(previewRegion).queryByRole('alert')).not.toBeInTheDocument()
