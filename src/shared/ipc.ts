@@ -8,6 +8,12 @@ import type {
   SharedBufferStateSnapshot,
   SyncWindowTabsOptions
 } from './documentBuffer'
+import type {
+  DetachTabToNewWindowResult,
+  TabTransferPayload,
+  WindowInitContext,
+  WindowRole
+} from './window'
 import type { GitBranchList, GitStatus, GitSyncResult } from './git'
 import type { RendererLogPayload } from './logging'
 import type {
@@ -80,6 +86,12 @@ export const BUFFER_IPC_CHANNELS = {
 
 export const LOG_IPC_CHANNELS = {
   write: 'log:write'
+} as const
+
+export const WINDOW_IPC_CHANNELS = {
+  getInitContext: 'window:get-init-context',
+  detachTabToNewWindow: 'window:detach-tab-to-new-window',
+  closeCurrent: 'window:close-current'
 } as const
 
 export interface WikiConfigApi {
@@ -157,11 +169,19 @@ export interface WikiLogApi {
   write(payload: RendererLogPayload): Promise<void>
 }
 
+export interface WikiWindowApi {
+  readonly role: WindowRole
+  getInitContext(): Promise<WindowInitContext>
+  detachTabToNewWindow(payload: TabTransferPayload): Promise<DetachTabToNewWindowResult>
+  closeCurrent(): Promise<void>
+}
+
 export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
   git: WikiGitApi
   menu: WikiMenuApi
   buffer: WikiBufferApi
+  window?: WikiWindowApi
   log?: WikiLogApi
 }

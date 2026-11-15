@@ -8,6 +8,7 @@ import {
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
+  WINDOW_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS
 } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
@@ -267,5 +268,30 @@ describe('createWikiApi', () => {
 
     unsubscribe()
     expect(ipc.listenerCount(BUFFER_IPC_CHANNELS.event)).toBe(0)
+  })
+
+  it('derives window.role synchronously from query string and routes window:* IPC calls', async () => {
+    const mainApi = createWikiApi(createFakeIpcRenderer())
+    expect(mainApi.window.role).toBe('main')
+
+    const auxIpc = createFakeIpcRenderer()
+    const auxApi = createWikiApi(auxIpc, '?foo=1&windowRole=auxiliary')
+    expect(auxApi.window.role).toBe('auxiliary')
+
+    const transferPayload = {
+      bufferKey: 'c:/wiki/note.md',
+      mode: 'wysiwyg' as const,
+      cursor: { selectionStart: 3, selectionEnd: 7 },
+      scrollTop: 140
+    }
+    await auxApi.window.getInitContext()
+    await auxApi.window.detachTabToNewWindow(transferPayload)
+    await auxApi.window.closeCurrent()
+
+    expect(auxIpc.lastInvoked).toEqual([
+      { channel: WINDOW_IPC_CHANNELS.getInitContext, args: [] },
+      { channel: WINDOW_IPC_CHANNELS.detachTabToNewWindow, args: [{ payload: transferPayload }] },
+      { channel: WINDOW_IPC_CHANNELS.closeCurrent, args: [] }
+    ])
   })
 })

@@ -8,6 +8,7 @@ import {
   broadcastIpcEvent,
   type IpcMainLike,
   registerIpcHandlers,
+  resolveSenderWebContents,
   type WebContentsLike
 } from './ipcHelpers'
 
@@ -16,43 +17,29 @@ export interface BufferWebContentsLike extends WebContentsLike {
   once?: (eventName: 'destroyed', listener: () => void) => void
 }
 
-export interface RegisterBufferIpcDependencies {
-  ipcMain: IpcMainLike
+export interface CreateSharedDocumentBufferHubDependencies {
   workspaceService: WorkspaceFsService
   configService: ConfigService
-  getTargets: () => BufferWebContentsLike[]
   logService?: LogService
   initialAutoSaveConfig?: AutoSaveConfig
 }
 
-interface IpcEventWithSender {
-  sender?: BufferWebContentsLike
-}
-
-function resolveSenderWebContents(event: unknown): BufferWebContentsLike | undefined {
-  if (!event || typeof event !== 'object') return undefined
-  const sender = (event as IpcEventWithSender).sender
-  if (!sender || typeof sender !== 'object') return undefined
-  return sender
+export interface RegisterBufferIpcDependencies extends CreateSharedDocumentBufferHubDependencies {
+  ipcMain: IpcMainLike
+  getTargets: () => BufferWebContentsLike[]
+  hub?: SharedDocumentBufferHub
 }
 
 /**
- * Registers main-process IPC handlers for shared document buffers and broadcasts hub updates
- * to all active renderer BrowserWindow targets.
+ * Creates the main-process SharedDocumentBufferHub backed by workspace and config storage.
  */
-export function registerBufferIpc({
-  ipcMain,
+export function createSharedDocumentBufferHub({
   workspaceService,
   configService,
-  getTargets,
   logService,
   initialAutoSaveConfig
-}: RegisterBufferIpcDependencies): () => void {
-  let disposed = false
-  let fallbackWindowId = 1
-  const trackedSenders = new WeakMap<object, number>()
-
-  const hub = new SharedDocumentBufferHub({
+}: CreateSharedDocumentBufferHubDependencies): SharedDocumentBufferHub {
+  return new SharedDocumentBufferHub({
     initialAutoSaveConfig,
     storage: {
       readWorkspaceFile: (filePath) => workspaceService.readFile(filePath),
@@ -65,9 +52,36 @@ export function registerBufferIpc({
       void logService?.error('ipc', message, { data: details })
     }
   })
+}
+
+/**
+ * Registers main-process IPC handlers for shared document buffers and broadcasts hub updates
+ * to all active renderer BrowserWindow targets.
+ */
+export function registerBufferIpc({
+  ipcMain,
+  workspaceService,
+  configService,
+  getTargets,
+  logService,
+  initialAutoSaveConfig,
+  hub: providedHub
+}: RegisterBufferIpcDependencies): () => void {
+  let disposed = false
+  let fallbackWindowId = 1
+  const trackedSenders = new WeakMap<object, number>()
+
+  const hub =
+    providedHub ??
+    createSharedDocumentBufferHub({
+      workspaceService,
+      configService,
+      logService,
+      initialAutoSaveConfig
+    })
 
   const resolveWindowId = (event: unknown): number | undefined => {
-    const sender = resolveSenderWebContents(event)
+    const sender = resolveSenderWebContents<BufferWebContentsLike>(event)
     if (!sender) return undefined
 
     const existingId = trackedSenders.get(sender)

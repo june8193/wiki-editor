@@ -10,6 +10,7 @@ import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import { createEmptyGitStatus } from '@shared/git'
 import type { AppMenuCommand, WikiApi, WikiBufferApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
+import type { TabTransferPayload, WindowInitContext, WindowRole } from '@shared/window'
 import {
   getWorkspaceDisplayName,
   recordRecentWorkspace,
@@ -104,11 +105,19 @@ export async function triggerMenuCommand(
   })
 }
 
+export interface CreateInMemoryWindowOptions {
+  role?: WindowRole
+  initialTabs?: TabTransferPayload[]
+}
+
 export interface InMemoryWindowHandle {
   windowId: number
+  role: WindowRole
   api: WikiApi
   emitMenuCommand: (command: AppMenuCommand) => void
   getMenuListenerCount: () => number
+  isClosed: () => boolean
+  getInitContext: () => WindowInitContext
   destroy: () => void
 }
 
@@ -166,7 +175,15 @@ export function createHubBufferApi(
 }
 
 export interface MultiWindowWikiHarness {
-  createWindow: () => InMemoryWindowHandle
+  createWindow: (options?: CreateInMemoryWindowOptions) => InMemoryWindowHandle
+  getAuxiliaryWindows: () => InMemoryWindowHandle[]
+  getWatchState: () => {
+    active: boolean
+    watchCalls: number
+    unwatchCalls: number
+    auxWatchCalls: number
+    auxUnwatchCalls: number
+  }
   emitExternalChange: (patch: Partial<AppConfig>) => void
   emitWorkspaceChange: (event: WorkspaceChangeEvent) => void
   getListenerCount: () => number
@@ -198,6 +215,12 @@ export function createMultiWindowWikiHarness(
   let activeRoot: string | null = null
   const selectedFolder: string | null = fsOptions.selectedFolder ?? null
   let nextWindowId = 1
+  let watchActive = false
+  let watchCalls = 0
+  let unwatchCalls = 0
+  let auxWatchCalls = 0
+  let auxUnwatchCalls = 0
+  const auxiliaryHandles: InMemoryWindowHandle[] = []
 
   for (const [rootRaw, entries] of Object.entries(fsOptions.workspaces ?? {})) {
     const root = normalizePosix(rootRaw)
@@ -282,16 +305,54 @@ export function createMultiWindowWikiHarness(
     return cloneAppConfig(snapshot)
   }
 
-  const createWindow = (): InMemoryWindowHandle => {
+  const createWindow = (options: CreateInMemoryWindowOptions = {}): InMemoryWindowHandle => {
     const windowId = nextWindowId++
+    const role: WindowRole = options.role ?? 'main'
+    const initialTabs: TabTransferPayload[] = (options.initialTabs ?? []).map((tab) => ({
+      ...tab,
+      cursor: { ...tab.cursor }
+    }))
     let destroyed = false
+    let hasSyncedNonEmptyTabs = false
     const menuListeners = new Set<(command: AppMenuCommand) => void>()
     const bufferListeners = new Set<(event: SharedBufferHubEvent) => void>()
     const windowConfigListeners = new Set<(config: AppConfig) => void>()
     const windowWorkspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
 
+    if (role === 'auxiliary') {
+      for (const tab of initialTabs) {
+        hub.registerPendingTransfer(windowId, tab.bufferKey)
+      }
+    }
+
+    const destroyWindow = (): void => {
+      if (destroyed) return
+      destroyed = true
+      unsubscribeHub()
+      hub.unregisterWindow(windowId)
+      menuListeners.clear()
+      bufferListeners.clear()
+      for (const listener of windowConfigListeners) {
+        configListeners.delete(listener)
+      }
+      windowConfigListeners.clear()
+      for (const listener of windowWorkspaceListeners) {
+        workspaceListeners.delete(listener)
+      }
+      windowWorkspaceListeners.clear()
+    }
+
     const unsubscribeHub = hub.subscribe((event) => {
       if (destroyed) return
+      if (role === 'auxiliary' && (event.type === 'state-changed' || event.type === 'buffers-closed')) {
+        const currentTabCount = hub.getWindowTabCount(windowId)
+        if (currentTabCount > 0) {
+          hasSyncedNonEmptyTabs = true
+        } else if (hasSyncedNonEmptyTabs) {
+          destroyWindow()
+          return
+        }
+      }
       for (const listener of bufferListeners) {
         listener(event)
       }
@@ -345,6 +406,9 @@ export function createMultiWindowWikiHarness(
           return selectedFolder
         },
         async open(rootPath) {
+          if (role !== 'main') {
+            throw new Error('Only the main window can open a workspace')
+          }
           const normalized = normalizePosix(rootPath)
           if (!dirs.has(normalized)) {
             throw new Error(`워크스페이스 폴더를 찾을 수 없습니다: ${rootPath}`)
@@ -453,8 +517,22 @@ export function createMultiWindowWikiHarness(
           }
           throw new Error(`경로를 찾을 수 없습니다: ${targetPath}`)
         },
-        async watch() {},
-        async unwatch() {},
+        async watch() {
+          watchCalls += 1
+          if (role === 'main') {
+            watchActive = true
+          } else {
+            auxWatchCalls += 1
+          }
+        },
+        async unwatch() {
+          unwatchCalls += 1
+          if (role === 'main') {
+            watchActive = false
+          } else {
+            auxUnwatchCalls += 1
+          }
+        },
         onChanged(listener) {
           workspaceListeners.add(listener)
           windowWorkspaceListeners.add(listener)
@@ -497,6 +575,33 @@ export function createMultiWindowWikiHarness(
         }
       },
       buffer: createHubBufferApi(hub, windowId, bufferListeners, () => destroyed),
+      window: {
+        role,
+        async getInitContext() {
+          return {
+            role,
+            initialTabs: initialTabs.map((tab) => ({ ...tab, cursor: { ...tab.cursor } }))
+          }
+        },
+        async detachTabToNewWindow(payload) {
+          if (destroyed) {
+            throw new Error('Cannot detach tab from a closed window')
+          }
+          if (!hub.hasBuffer(payload.bufferKey)) {
+            throw new Error('Cannot detach unknown document buffer')
+          }
+          if (role === 'auxiliary' && hub.getWindowTabCount(windowId) <= 1) {
+            throw new Error('Cannot detach the last tab from an auxiliary window')
+          }
+          const aux = createWindow({ role: 'auxiliary', initialTabs: [payload] })
+          return { windowId: aux.windowId }
+        },
+        async closeCurrent() {
+          if (role === 'auxiliary') {
+            destroyWindow()
+          }
+        }
+      },
       ...(fsOptions.log ? { log: fsOptions.log } : {})
     }
 
@@ -504,37 +609,42 @@ export function createMultiWindowWikiHarness(
       primaryApi = api
     }
 
-    return {
+    const handle: InMemoryWindowHandle = {
       windowId,
+      role,
       api,
       emitMenuCommand(command) {
-        if (destroyed) return
+        if (destroyed || role !== 'main') return
         for (const listener of menuListeners) {
           listener(command)
         }
       },
       getMenuListenerCount: () => menuListeners.size,
-      destroy() {
-        if (destroyed) return
-        destroyed = true
-        unsubscribeHub()
-        hub.unregisterWindow(windowId)
-        menuListeners.clear()
-        bufferListeners.clear()
-        for (const listener of windowConfigListeners) {
-          configListeners.delete(listener)
-        }
-        windowConfigListeners.clear()
-        for (const listener of windowWorkspaceListeners) {
-          workspaceListeners.delete(listener)
-        }
-        windowWorkspaceListeners.clear()
-      }
+      isClosed: () => destroyed,
+      getInitContext: () => ({
+        role,
+        initialTabs: initialTabs.map((tab) => ({ ...tab, cursor: { ...tab.cursor } }))
+      }),
+      destroy: destroyWindow
     }
+
+    if (role === 'auxiliary') {
+      auxiliaryHandles.push(handle)
+    }
+
+    return handle
   }
 
   return {
     createWindow,
+    getAuxiliaryWindows: () => [...auxiliaryHandles],
+    getWatchState: () => ({
+      active: watchActive,
+      watchCalls,
+      unwatchCalls,
+      auxWatchCalls,
+      auxUnwatchCalls
+    }),
     emitExternalChange(patch) {
       applyAndBroadcast({ ...state, ...patch, version: 1 })
     },

@@ -131,6 +131,7 @@ export function useEditorWorkspace({
       bufferStore,
       tabStore,
       bufferApi: wikiApi.buffer,
+      windowApi: wikiApi.window,
       onWorkspaceSaved: () => callbacksRef.current.onWorkspaceSaved?.(),
       onError: (message, error) => callbacksRef.current.onError(message, error),
       onConfirmCloseDirtyTab: (request) => callbacksRef.current.onConfirmCloseDirtyTab(request)
@@ -194,6 +195,7 @@ export function useEditorWorkspace({
     requestCloseTab: syncClient.requestCloseTab,
     forceCloseTab: syncClient.forceCloseTab,
     saveAndCloseTab: syncClient.saveAndCloseTab,
+    detachTabToNewWindow: syncClient.detachTabToNewWindow,
     activateTab: tabStore.activateTab,
     focusPane: tabStore.focusPane,
     setSplitMode: tabStore.setSplitMode,

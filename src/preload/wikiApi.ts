@@ -16,8 +16,14 @@ import {
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
   WikiApi,
+  WINDOW_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS
 } from '@shared/ipc'
+import type {
+  DetachTabToNewWindowResult,
+  WindowInitContext,
+  WindowRole
+} from '@shared/window'
 import type {
   WorkspaceChangeEvent,
   WorkspaceEntry,
@@ -44,10 +50,22 @@ function subscribeChannel<T>(
   }
 }
 
+function resolveWindowRoleFromSearch(search: string | undefined): WindowRole {
+  if (!search) return 'main'
+  return new URLSearchParams(search).get('windowRole') === 'auxiliary' ? 'auxiliary' : 'main'
+}
+
 /**
  * Builds the type-safe window.wikiApi bridge exposed through Electron's contextBridge.
  */
-export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
+export function createWikiApi(
+  ipcRenderer: IpcRendererLike,
+  locationSearch?: string
+): Required<WikiApi> {
+  const windowRole = resolveWindowRoleFromSearch(
+    locationSearch ?? (typeof window !== 'undefined' ? window.location?.search : undefined)
+  )
+
   return {
     config: {
       get: () => ipcRenderer.invoke(CONFIG_IPC_CHANNELS.get) as Promise<AppConfig>,
@@ -183,6 +201,16 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
         ) as Promise<ReconcileBuffersResult>,
       onEvent: (listener) =>
         subscribeChannel<SharedBufferHubEvent>(ipcRenderer, BUFFER_IPC_CHANNELS.event, listener)
+    },
+    window: {
+      role: windowRole,
+      getInitContext: () =>
+        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.getInitContext) as Promise<WindowInitContext>,
+      detachTabToNewWindow: (payload) =>
+        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+          payload
+        }) as Promise<DetachTabToNewWindowResult>,
+      closeCurrent: () => ipcRenderer.invoke(WINDOW_IPC_CHANNELS.closeCurrent) as Promise<void>
     },
     log: {
       write: (payload) => ipcRenderer.invoke(LOG_IPC_CHANNELS.write, payload) as Promise<void>

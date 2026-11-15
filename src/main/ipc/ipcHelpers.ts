@@ -113,6 +113,15 @@ export function registerIpcHandlers(
   }
 }
 
+export function resolveSenderWebContents<T extends WebContentsLike = WebContentsLike>(
+  event: unknown
+): T | undefined {
+  if (!event || typeof event !== 'object') return undefined
+  const sender = (event as { sender?: unknown }).sender
+  if (!sender || typeof sender !== 'object') return undefined
+  return sender as T
+}
+
 export function broadcastIpcEvent(
   getTargets: () => WebContentsLike[],
   channel: string,

@@ -86,6 +86,19 @@ export class SharedDocumentBufferHub {
     }
   }
 
+  hasBuffer(pathOrKey: string): boolean {
+    return this.store.getBuffer(pathOrKey) !== undefined
+  }
+
+  getWindowTabCount(windowId: number): number {
+    return this.tabTracker.getWindowTotalTabCount(windowId)
+  }
+
+  registerPendingTransfer(windowId: number, pathOrKey: string): void {
+    const resolvedKey = this.store.getBuffer(pathOrKey)?.key ?? pathOrKey
+    this.tabTracker.registerPendingTransferOwner(resolvedKey, windowId)
+  }
+
   private emit(event: SharedBufferHubEvent): void {
     if (this.disposed) return
     for (const listener of this.listeners) {

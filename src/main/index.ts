@@ -2,46 +2,30 @@ import { release as getOsRelease } from 'node:os'
 import { join } from 'node:path'
 import {
   app,
-  type BaseWindow,
   BrowserWindow,
   clipboard,
   dialog,
   ipcMain,
   Menu,
   type MessageBoxOptions,
+  screen,
   shell
 } from 'electron'
 import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
-import { registerBufferIpc } from './ipc/registerBufferIpc'
+import { createSharedDocumentBufferHub, registerBufferIpc } from './ipc/registerBufferIpc'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerLogIpc } from './ipc/registerLogIpc'
+import { registerWindowIpc } from './ipc/registerWindowIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import type { AppEnvironmentInfo } from './logging/formatBugReport'
 import { createHelpMenuActions } from './logging/helpMenuActions'
 import { LogService } from './logging/LogService'
 import { registerProcessLifecycleLogging } from './logging/processLifecycleLogging'
 import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
+import { WindowManager } from './windowManager'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
-import { createMainWindowOptions } from './window'
-
-function createMainWindow(): BrowserWindow {
-  const preloadPath = join(__dirname, '../preload/index.js')
-  const mainWindow = new BrowserWindow(createMainWindowOptions(preloadPath))
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show()
-  })
-
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
-
-  return mainWindow
-}
 
 function getActiveWindow(): BrowserWindow | undefined {
   const focused = BrowserWindow.getFocusedWindow()
@@ -62,12 +46,16 @@ let disposeBufferIpc: (() => void) | undefined
 let disposeConfigIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
+let disposeWindowIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
+let windowManager: WindowManager | undefined
 let workspaceService: WorkspaceFsService | undefined
 
 function disposeMainResources(): void {
   disposeLogIpc?.()
   disposeLogIpc = undefined
+  disposeWindowIpc?.()
+  disposeWindowIpc = undefined
   disposeBufferIpc?.()
   disposeBufferIpc = undefined
   disposeGitIpc?.()
@@ -76,6 +64,8 @@ function disposeMainResources(): void {
   disposeWorkspaceIpc = undefined
   disposeConfigIpc?.()
   disposeConfigIpc = undefined
+  windowManager?.dispose()
+  windowManager = undefined
   workspaceService?.dispose()
   workspaceService = undefined
 }
@@ -102,14 +92,27 @@ void app.whenReady().then(async () => {
   })
   const gitService = new GitService({ logService })
 
-  const getTargets = () => BrowserWindow.getAllWindows().map((win) => win.webContents)
-  const getMenuTargetWebContents = (targetWindow?: BaseWindow) => {
-    const win =
-      targetWindow instanceof BrowserWindow && !targetWindow.isDestroyed()
-        ? targetWindow
-        : getActiveWindow()
-    return win && !win.isDestroyed() ? win.webContents : undefined
-  }
+  const bufferHub = createSharedDocumentBufferHub({
+    workspaceService,
+    configService,
+    logService,
+    initialAutoSaveConfig: {
+      autoSave: initialConfig.autoSave,
+      autoSaveDelayMs: initialConfig.autoSaveDelayMs
+    }
+  })
+
+  windowManager = new WindowManager({
+    preloadPath: join(__dirname, '../preload/index.js'),
+    rendererUrl: process.env.ELECTRON_RENDERER_URL,
+    rendererFilePath: join(__dirname, '../renderer/index.html'),
+    bufferHub,
+    createWindow: (options) => new BrowserWindow(options),
+    screen
+  })
+
+  const getTargets = () => windowManager?.getWebContentsTargets() ?? []
+  const getMenuTargetWebContents = () => windowManager?.getMenuTargetWebContents()
 
   disposeLogIpc = registerLogIpc(ipcMain, logService)
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)
@@ -117,12 +120,18 @@ void app.whenReady().then(async () => {
     ipcMain,
     workspaceService,
     configService,
+    hub: bufferHub,
     getTargets,
     logService,
     initialAutoSaveConfig: {
       autoSave: initialConfig.autoSave,
       autoSaveDelayMs: initialConfig.autoSaveDelayMs
     }
+  })
+  disposeWindowIpc = registerWindowIpc({
+    ipcMain,
+    windowManager,
+    logService
   })
   disposeGitIpc = registerGitIpc({
     ipcMain,
@@ -135,6 +144,7 @@ void app.whenReady().then(async () => {
     workspaceService,
     configService,
     getTargets,
+    isMainWindowSender: (sender) => windowManager?.isMainWebContents(sender) ?? false,
     logService,
     selectDirectory: async () => {
       const targetWindow = getActiveWindow()
@@ -179,7 +189,7 @@ void app.whenReady().then(async () => {
   })
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate))
 
-  createMainWindow()
+  windowManager.createMainWindow()
 })
 
 app.on('window-all-closed', () => {

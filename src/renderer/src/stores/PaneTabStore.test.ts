@@ -314,4 +314,22 @@ describe('PaneTabStore', () => {
     expect(singlePaneStore.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([sole.id])
     expect(singlePaneStore.getSnapshot().panes.secondary.tabs).toHaveLength(0)
   })
+
+  it('preserves initial cursor and scrollTop options on openTab and reports total tab count across panes', () => {
+    const store = new PaneTabStore()
+    expect(store.getTotalTabCount()).toBe(0)
+
+    const a = store.openTab('c:/wiki/a.md', {
+      mode: 'wysiwyg',
+      cursor: { selectionStart: 5, selectionEnd: 12 },
+      scrollTop: 210
+    })
+    expect(a.mode).toBe('wysiwyg')
+    expect(a.cursor).toEqual({ selectionStart: 5, selectionEnd: 12 })
+    expect(a.scrollTop).toBe(210)
+    expect(store.getTotalTabCount()).toBe(1)
+
+    store.openTab('c:/wiki/b.md', { paneId: 'secondary', mode: 'preview' })
+    expect(store.getTotalTabCount()).toBe(2)
+  })
 })

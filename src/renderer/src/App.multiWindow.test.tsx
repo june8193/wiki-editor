@@ -5,8 +5,11 @@ import { addFavoriteWorkspace } from '@shared/workspace'
 import { App } from './App'
 import {
   createMultiWindowWikiHarness,
+  getRawEditorScroller,
+  getRawEditorSelection,
   getRawEditorText,
   type InMemoryWindowHandle,
+  setRawEditorSelection,
   setRawEditorText,
   triggerMenuCommand
 } from './test/inMemoryWikiHarness'
@@ -879,5 +882,240 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
 
     await user.click(within(rendered1.container).getByRole('button', { name: 'shared.md 탭 닫기' }))
     expect(await within(rendered1.container).findByRole('alertdialog')).toBeInTheDocument()
+  })
+
+  it('renders stripped auxiliary editing shell, collapsed right sidebar, dynamic title, and preserves main watch ownership', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light', recentWorkspaces: ['C:\\wiki\\docs'] },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'intro.md': '# Intro'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    await openFolderAndNoteInWindow(user, mainRendered.container, mainWin.emitMenuCommand, 'intro.md')
+
+    await waitFor(() => {
+      expect(harness.getWatchState().active).toBe(true)
+    })
+
+    const auxWin = harness.createWindow({ role: 'auxiliary', initialTabs: [] })
+    const auxRendered = render(<App wikiApi={auxWin.api} />)
+
+    await waitFor(() => {
+      expect(document.title).toBe('Wiki Editor')
+    })
+
+    // Auxiliary shell omits Activity Bar, Left Sidebar, and Settings panel, and collapses Right Sidebar
+    expect(within(auxRendered.container).queryByLabelText('액티비티 바')).toBeNull()
+    expect(within(auxRendered.container).queryByLabelText('왼쪽 사이드바')).toBeNull()
+    expect(within(auxRendered.container).queryByLabelText('우측 사이드바')).toBeNull()
+    expect(within(auxRendered.container).getByTestId('pane-workspace')).toBeInTheDocument()
+
+    // Right sidebar expands from collapsed button and resizes within 180-500px
+    const expandBtn = within(auxRendered.container).getByRole('button', { name: '문서 목차 펼치기' })
+    await user.click(expandBtn)
+    const rightSidebar = within(auxRendered.container).getByLabelText('우측 사이드바')
+    expect(rightSidebar).toBeInTheDocument()
+    const rightResizer = within(auxRendered.container).getByRole('separator', {
+      name: '우측 사이드바 너비 조절'
+    })
+    fireEvent.mouseDown(rightResizer, { clientX: 600 })
+    fireEvent.mouseMove(window, { clientX: 520 })
+    fireEvent.mouseUp(window)
+    expect(Number.parseInt(rightSidebar.style.width, 10)).toBeGreaterThanOrEqual(180)
+    expect(Number.parseInt(rightSidebar.style.width, 10)).toBeLessThanOrEqual(500)
+
+    // Unmounting auxiliary never touches main workspace watch ownership
+    auxRendered.unmount()
+    expect(harness.getWatchState().active).toBe(true)
+    expect(harness.getWatchState().auxWatchCalls).toBe(0)
+    expect(harness.getWatchState().auxUnwatchCalls).toBe(0)
+  })
+
+  it('detaches dirty 1-tab document from main via context menu keeping mode, cursor, scrollTop, editor/outline parity, and Ctrl+S save', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'guide.md': '# Heading One\n\nBody paragraph\n\n## Heading Two\n\nMore text'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    const editor = await openFolderAndNoteInWindow(
+      user,
+      mainRendered.container,
+      mainWin.emitMenuCommand,
+      'guide.md'
+    )
+
+    // Make unsaved edit and set cursor + scrollTop on active raw editor
+    setRawEditorText(editor, '# Heading One\n\nEdited unsaved body\n\n## Heading Two\n\nMore text')
+    await waitFor(() => {
+      expect(within(mainRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+    setRawEditorSelection(editor, 5, 10)
+    const scrollDom = getRawEditorScroller(editor)
+    scrollDom.scrollTop = 145
+    fireEvent.scroll(scrollDom)
+
+    // Right-click tab bar item on 1-tab main window -> '새 창으로 이동' is between duplicate & close and enabled
+    const tabButton = within(mainRendered.container).getByRole('tab', { name: /guide\.md/ })
+    fireEvent.contextMenu(tabButton)
+    const menu = await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })
+    const items = within(menu).getAllByRole('menuitem')
+    expect(items.map((el) => el.textContent?.trim())).toEqual([
+      '분할 영역으로 이동',
+      '분할 영역에 복제 열기',
+      '새 창으로 이동',
+      '닫기'
+    ])
+    const detachMenuItem = within(menu).getByRole('menuitem', { name: '새 창으로 이동' })
+    expect(detachMenuItem).not.toBeDisabled()
+
+    await user.click(detachMenuItem)
+
+    // Main window now shows empty workspace without prompting confirm dialog, while shared dirty buffer lives on
+    await waitFor(() => {
+      expect(within(mainRendered.container).queryByRole('tab', { name: /guide\.md/ })).toBeNull()
+      expect(harness.getAuxiliaryWindows()).toHaveLength(1)
+    })
+    expect(within(mainRendered.container).queryByRole('alertdialog')).toBeNull()
+    expect(harness.hub.getSnapshot().buffers['c:/wiki/docs/guide.md']?.isDirty).toBe(true)
+
+    // Mount detached auxiliary window -> receives title, dirty edit, cursor, scrollTop, editor/outline parity & save
+    const auxWin = harness.getAuxiliaryWindows()[0]
+    const auxRendered = render(<App wikiApi={auxWin.api} />)
+
+    const auxEditor = await within(auxRendered.container).findByTestId('document-editor')
+    await waitFor(() => {
+      expect(document.title).toBe('guide.md - Wiki Editor')
+      expect(within(auxRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+      expect(getRawEditorText(auxEditor)).toContain('Edited unsaved body')
+    })
+
+    expect(getRawEditorSelection(auxEditor)).toEqual({ start: 5, end: 10 })
+    expect(getRawEditorScroller(auxEditor).scrollTop).toBe(145)
+
+    // Expand Right Sidebar outline & verify headings + outline scroll + mode switching work inside auxiliary
+    await user.click(within(auxRendered.container).getByRole('button', { name: '문서 목차 펼치기' }))
+    const outlinePanel = within(auxRendered.container).getByLabelText('문서 목차 (Outline)')
+    expect(within(outlinePanel).getByText(/Heading One/)).toBeInTheDocument()
+    const headingTwoBtn = within(outlinePanel).getByText(/Heading Two/)
+    expect(headingTwoBtn).toBeInTheDocument()
+    await user.click(headingTwoBtn)
+    await user.click(within(outlinePanel).getByRole('button', { name: '헤딩 번호 표시' }))
+    await user.click(within(outlinePanel).getByRole('button', { name: '헤딩 번호 표시' }))
+
+    // Toggle preview and back to raw in auxiliary
+    await user.click(within(auxRendered.container).getByRole('button', { name: 'Preview' }))
+    expect(within(auxRendered.container).getByRole('heading', { name: /Heading One/ })).toBeInTheDocument()
+    await user.click(within(auxRendered.container).getByRole('button', { name: 'Raw' }))
+    const auxRawAgain = await within(auxRendered.container).findByTestId('document-editor')
+
+    // Save via Ctrl+S inside auxiliary -> persists edited content to disk and clears dirty indicator
+    fireEvent.keyDown(auxRawAgain, { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(within(auxRendered.container).queryByTestId('dirty-indicator')).toBeNull()
+    })
+    expect(harness.getFilesSnapshot().get('C:/wiki/docs/guide.md')).toContain('Edited unsaved body')
+  })
+
+  it('enforces single-tab disablement on auxiliary windows, allows detaching when 2+ tabs exist, and auto-closes at 0 tabs', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'one.md': '# One',
+            'two.md': '# Two'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+    const sidebar = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('one.md'))
+    await user.click(await within(sidebar).findByText('two.md'))
+    await waitFor(() => {
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/one.md']).toBe(1)
+      expect(harness.hub.getSnapshot().tabCounts['c:/wiki/docs/two.md']).toBe(1)
+    })
+
+    // Seed an auxiliary window with 2 tabs via initialTabs
+    const aux1 = harness.createWindow({
+      role: 'auxiliary',
+      initialTabs: [
+        {
+          bufferKey: 'c:/wiki/docs/one.md',
+          mode: 'raw',
+          cursor: { selectionStart: 0, selectionEnd: 0 },
+          scrollTop: 0
+        },
+        {
+          bufferKey: 'c:/wiki/docs/two.md',
+          mode: 'wysiwyg',
+          cursor: { selectionStart: 0, selectionEnd: 0 },
+          scrollTop: 0
+        }
+      ]
+    })
+    const aux1Rendered = render(<App wikiApi={aux1.api} />)
+    await waitFor(() => {
+      expect(within(aux1Rendered.container).getAllByRole('tab')).toHaveLength(2)
+    })
+
+    // With 2 tabs open in auxiliary, '새 창으로 이동' IS enabled and spawns another auxiliary window
+    fireEvent.contextMenu(within(aux1Rendered.container).getByRole('tab', { name: /two\.md/ }))
+    const auxMenu2 = await within(aux1Rendered.container).findByRole('menu', { name: '탭 작업 메뉴' })
+    const detachBtn2 = within(auxMenu2).getByRole('menuitem', { name: '새 창으로 이동' })
+    expect(detachBtn2).not.toBeDisabled()
+    await user.click(detachBtn2)
+
+    await waitFor(() => {
+      expect(within(aux1Rendered.container).getAllByRole('tab')).toHaveLength(1)
+      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+    })
+
+    // Second auxiliary opens with two.md in wysiwyg mode -> '새 창으로 이동' is disabled on its sole tab
+    const aux2 = harness.getAuxiliaryWindows()[1]
+    const aux2Rendered = render(<App wikiApi={aux2.api} />)
+    await waitFor(() => {
+      expect(within(aux2Rendered.container).getByRole('tab', { name: /two\.md/ })).toBeInTheDocument()
+      expect(within(aux2Rendered.container).getByLabelText('위지윅 문서 에디터')).toBeInTheDocument()
+    })
+
+    fireEvent.contextMenu(within(aux1Rendered.container).getByRole('tab', { name: /one\.md/ }))
+    const aux1SoloMenu = await within(aux1Rendered.container).findByRole('menu', { name: '탭 작업 메뉴' })
+    expect(within(aux1SoloMenu).getByRole('menuitem', { name: '새 창으로 이동' })).toBeDisabled()
+
+    // Closing the sole remaining tab on auxiliary automatically closes that auxiliary window, leaving main untouched
+    await user.click(within(aux1Rendered.container).getByRole('button', { name: 'one.md 탭 닫기' }))
+    await waitFor(() => {
+      expect(aux1.isClosed()).toBe(true)
+    })
+    expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(2)
   })
 })

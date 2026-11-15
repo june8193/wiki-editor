@@ -7,7 +7,8 @@ import {
 } from '@shared/documentBuffer'
 import { DocumentBufferStore, mergePendingLocalBuffer } from '@shared/documentBufferStore'
 import { toErrorMessage } from '@shared/errors'
-import type { WikiBufferApi } from '@shared/ipc'
+import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
+import type { TabTransferPayload } from '@shared/window'
 import { countBufferKeys } from '@shared/windowTabTracker'
 import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
 import { type PaneId, PaneTabStore } from './PaneTabStore'
@@ -74,6 +75,7 @@ export interface RendererBufferSyncClientOptions {
   bufferStore: DocumentBufferStore
   tabStore: PaneTabStore
   bufferApi: WikiBufferApi
+  windowApi?: WikiWindowApi
   onWorkspaceSaved?: () => void
   onError: (message: string | null, error?: unknown) => void
   onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
@@ -87,11 +89,13 @@ export class RendererBufferSyncClient {
   private readonly bufferStore: DocumentBufferStore
   private readonly tabStore: PaneTabStore
   private readonly bufferApi: WikiBufferApi
+  private readonly windowApi?: WikiWindowApi
   private onWorkspaceSaved?: () => void
   private onError: (message: string | null, error?: unknown) => void
   private onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
 
   private windowId: number | null = null
+  private hasAppliedInitContext = false
   private latestHubRevision = -1
   private latestHubTabCounts: Record<string, number> = {}
   private latestHubWindowTabCounts:
@@ -115,6 +119,7 @@ export class RendererBufferSyncClient {
     this.bufferStore = options.bufferStore
     this.tabStore = options.tabStore
     this.bufferApi = options.bufferApi
+    this.windowApi = options.windowApi
     this.onWorkspaceSaved = options.onWorkspaceSaved
     this.onError = options.onError
     this.onConfirmCloseDirtyTab = options.onConfirmCloseDirtyTab
@@ -129,10 +134,35 @@ export class RendererBufferSyncClient {
     this.lastSyncedTabKeys = null
     const unsubscribeHub = this.bufferApi.onEvent((event) => this.handleHubEvent(event))
 
-    void this.bufferApi.getSnapshot().then(
-      (snapshot) => {
-        if (this.mounted) {
-          this.applyHubSnapshot(snapshot)
+    const shouldLoadInitContext = Boolean(this.windowApi && !this.hasAppliedInitContext)
+    const startupPromise = shouldLoadInitContext
+      ? Promise.all([
+          this.bufferApi.getSnapshot(),
+          this.windowApi!.getInitContext().catch(() => null)
+        ])
+      : this.bufferApi.getSnapshot().then((snapshot) => [snapshot, null] as const)
+
+    void startupPromise.then(
+      ([snapshot, initContext]) => {
+        if (!this.mounted) return
+        let openedInitialTabs = false
+        if (initContext && !this.hasAppliedInitContext) {
+          this.hasAppliedInitContext = true
+          for (const tab of initContext.initialTabs) {
+            const resolvedKey = this.resolveLatestKey(tab.bufferKey)
+            if (resolvedKey in snapshot.buffers) {
+              this.tabStore.openTab(resolvedKey, {
+                mode: tab.mode,
+                cursor: tab.cursor,
+                scrollTop: tab.scrollTop
+              })
+              openedInitialTabs = true
+            }
+          }
+        }
+        this.applyHubSnapshot(snapshot)
+        if (openedInitialTabs) {
+          this.syncCurrentLayoutTabs()
         }
       },
       () => undefined
@@ -546,24 +576,32 @@ export class RendererBufferSyncClient {
     this.trackAsyncFlush(this.pendingEditFlushes, resolvedKey, requestPromise, alreadyInSync)
   }
 
+  private hasPendingUpdatesForKey(key: string): boolean {
+    return this.pendingCreateFlushes.has(key) || this.pendingEditFlushes.has(key)
+  }
+
+  private async flushPendingUpdatesForKey(initialKey: string): Promise<string> {
+    let currentKey = this.resolveLatestKey(initialKey)
+    while (this.hasPendingUpdatesForKey(currentKey)) {
+      const pendingCreate = this.pendingCreateFlushes.get(currentKey)
+      if (pendingCreate) {
+        await pendingCreate
+        currentKey = this.resolveLatestKey(currentKey)
+        continue
+      }
+      await this.pendingEditFlushes.get(currentKey)
+      currentKey = this.resolveLatestKey(currentKey)
+    }
+    return currentKey
+  }
+
   private async runSaveBufferRequest(key: string): Promise<boolean> {
     const initialKey = this.resolveLatestKey(key)
     this.pendingManualSaveKeys.add(initialKey)
     try {
-      let currentKey = initialKey
-      while (
-        this.pendingCreateFlushes.has(currentKey) ||
-        this.pendingEditFlushes.has(currentKey)
-      ) {
-        const pendingCreate = this.pendingCreateFlushes.get(currentKey)
-        if (pendingCreate) {
-          await pendingCreate
-          currentKey = this.resolveLatestKey(currentKey)
-          continue
-        }
-        await this.pendingEditFlushes.get(currentKey)
-        currentKey = this.resolveLatestKey(currentKey)
-      }
+      const currentKey = this.hasPendingUpdatesForKey(initialKey)
+        ? await this.flushPendingUpdatesForKey(initialKey)
+        : initialKey
       const localBuf = this.bufferStore.getBuffer(currentKey)
       const hubBuf = this.latestHubBuffers[currentKey]
       if (
@@ -683,6 +721,39 @@ export class RendererBufferSyncClient {
     if (!ok) return false
     this.forceCloseTab(paneId, tabId)
     return true
+  }
+
+  detachTabToNewWindow = async (paneId: PaneId, tabId: string): Promise<void> => {
+    if (!this.windowApi) return
+    const initialTab = this.tabStore.getTab(paneId, tabId)
+    if (!initialTab) return
+    if (this.windowApi.role === 'auxiliary' && this.tabStore.getTotalTabCount() <= 1) {
+      return
+    }
+
+    try {
+      await this.flushPendingUpdatesForKey(initialTab.bufferKey)
+      if (!this.mounted) return
+
+      const latestTab = this.tabStore.getTab(paneId, tabId)
+      if (!latestTab) return
+      if (this.windowApi.role === 'auxiliary' && this.tabStore.getTotalTabCount() <= 1) {
+        return
+      }
+
+      const payload: TabTransferPayload = {
+        bufferKey: latestTab.bufferKey,
+        mode: latestTab.mode,
+        cursor: { ...latestTab.cursor },
+        scrollTop: latestTab.scrollTop
+      }
+      await this.windowApi.detachTabToNewWindow(payload)
+      this.forceCloseTab(paneId, latestTab.id)
+    } catch (error: unknown) {
+      if (this.mounted) {
+        this.onError(toErrorMessage(error, '새 창으로 이동하지 못했습니다.'), error)
+      }
+    }
   }
 
   clearWorkspaceBuffers = (): void => {

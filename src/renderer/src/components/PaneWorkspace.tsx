@@ -15,6 +15,7 @@ interface PaneWorkspaceProps {
   customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
+  canDetachToNewWindow?: boolean
   onSetSplitRatio: (ratio: number) => void
   onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
   actions: PaneInteractionActions
@@ -40,6 +41,7 @@ export function PaneWorkspace({
   customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
+  canDetachToNewWindow = true,
   onSetSplitRatio,
   onSplitWithTab,
   actions
@@ -104,6 +106,7 @@ export function PaneWorkspace({
     customCommands,
     scrollRequest,
     isShortcutDisabled,
+    canDetachToNewWindow,
     buffers,
     draggingTab,
     onDragStartTab: setDraggingTab,

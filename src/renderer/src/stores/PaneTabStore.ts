@@ -1,14 +1,10 @@
 import type { BufferKeyRemap } from '@shared/documentBuffer'
+import type { CursorPosition, EditorMode } from '@shared/window'
 
+export type { CursorPosition, EditorMode }
 export type PaneId = 'primary' | 'secondary'
 export type SplitMode = 'single' | 'horizontal' | 'vertical'
 export type SplitDirection = Exclude<SplitMode, 'single'>
-export type EditorMode = 'raw' | 'preview' | 'wysiwyg'
-
-export interface CursorPosition {
-  selectionStart: number
-  selectionEnd: number
-}
 
 export interface TabItem {
   id: string
@@ -34,6 +30,8 @@ export interface PaneLayoutState {
 export interface OpenTabOptions {
   paneId?: PaneId
   mode?: EditorMode
+  cursor?: CursorPosition
+  scrollTop?: number
 }
 
 export interface TabViewPatch {
@@ -274,6 +272,10 @@ export class PaneTabStore {
     return extractLayoutBufferKeys(this.state)
   }
 
+  getTotalTabCount(): number {
+    return this.state.panes.primary.tabs.length + this.state.panes.secondary.tabs.length
+  }
+
   openTab = (bufferKey: string, options: OpenTabOptions = {}): TabItem =>
     this.openOrFocusTab(bufferKey, options)
 
@@ -299,8 +301,8 @@ export class PaneTabStore {
       id: this.nextTabId(),
       bufferKey,
       mode: options.mode ?? 'raw',
-      cursor: { selectionStart: 0, selectionEnd: 0 },
-      scrollTop: 0
+      cursor: options.cursor ? { ...options.cursor } : { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: options.scrollTop ?? 0
     }
 
     this.commit(

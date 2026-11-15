@@ -19,6 +19,7 @@ export interface PaneInteractionActions {
     targetIndex?: number
   ) => void
   onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
+  onDetachTabToNewWindow: (paneId: PaneId, tabId: string) => void
   onChangeContent: (bufferKey: string, nextContent: string) => void
   onSaveBuffer: (bufferKey: string) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
@@ -105,13 +106,14 @@ interface PaneTabBarProps {
   tabs: readonly TabItem[]
   activeTabId: string | null
   canMoveToSplit: boolean
+  canDetachToNewWindow?: boolean
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
   onDragEndTab: () => void
   actions: Pick<
     PaneInteractionActions,
-    'onActivateTab' | 'onCloseTab' | 'onMoveTab' | 'onDuplicateTab'
+    'onActivateTab' | 'onCloseTab' | 'onMoveTab' | 'onDuplicateTab' | 'onDetachTabToNewWindow'
   >
 }
 
@@ -124,6 +126,7 @@ export function PaneTabBar({
   tabs,
   activeTabId,
   canMoveToSplit,
+  canDetachToNewWindow = true,
   buffers,
   draggingTab,
   onDragStartTab,
@@ -268,6 +271,19 @@ export function PaneTabBar({
             }}
           >
             분할 영역에 복제 열기
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="context-menu-item"
+            disabled={!canDetachToNewWindow}
+            onClick={() => {
+              const targetTabId = contextMenu.tabId
+              setContextMenu(null)
+              actions.onDetachTabToNewWindow(paneId, targetTabId)
+            }}
+          >
+            새 창으로 이동
           </button>
           <button
             type="button"

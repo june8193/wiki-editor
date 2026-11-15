@@ -3,6 +3,7 @@ import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand, WikiApi } from '@shared/ipc'
 import type { GitStatus } from '@shared/git'
+import { formatWindowTitle, type WindowRole } from '@shared/window'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
@@ -94,16 +95,18 @@ export function App({ wikiApi }: AppProps = {}) {
 
 function AppShell() {
   const wikiApi = useWikiApi()
+  const windowRole: WindowRole = wikiApi.window?.role ?? 'main'
+  const isAuxiliaryWindow = windowRole === 'auxiliary'
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
     activeView: 'workspace',
     isCollapsed: false,
     width: LEFT_SIDEBAR_DEFAULT_WIDTH
   })
-  const [rightSidebar, setRightSidebar] = useState<RightSidebarState>({
-    isCollapsed: false,
+  const [rightSidebar, setRightSidebar] = useState<RightSidebarState>(() => ({
+    isCollapsed: isAuxiliaryWindow,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
-  })
+  }))
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const windowWidth = useWindowWidth()
@@ -158,7 +161,7 @@ function AppShell() {
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const isDialogOpenRef = useRef<boolean>(false)
   isDialogOpenRef.current = pendingDialog !== null
-  const isEditorShortcutDisabled = pendingDialog !== null || isSettingsOpen
+  const isEditorShortcutDisabled = pendingDialog !== null || (!isAuxiliaryWindow && isSettingsOpen)
   const isSelectingFolderRef = useRef<boolean>(false)
   const hasWorkspaceInteractionRef = useRef<boolean>(false)
   const hasUserSelectedSidebarViewRef = useRef<boolean>(false)
@@ -224,6 +227,7 @@ function AppShell() {
     requestCloseTab,
     forceCloseTab,
     saveAndCloseTab,
+    detachTabToNewWindow,
     activateTab,
     focusPane,
     setSplitRatio,
@@ -260,6 +264,7 @@ function AppShell() {
     renameEntry,
     deleteEntry
   } = useWorkspaceTree({
+    enabled: !isAuxiliaryWindow,
     onError: reportErrorBanner,
     onWorkspaceOpened: () => {
       clearWorkspaceBuffers()
@@ -291,6 +296,7 @@ function AppShell() {
 
   handleInitialConfigLoadedRef.current = (loadedConfig) => {
     if (
+      isAuxiliaryWindow ||
       hasWorkspaceInteractionRef.current ||
       isSelectingFolderRef.current ||
       workspace !== null
@@ -380,7 +386,7 @@ function AppShell() {
   }, [reconcileWorkspaceBuffersWithDisk, refreshTree])
 
   const git = useGitController({
-    workspaceRootPath: workspace?.rootPath ?? null,
+    workspaceRootPath: isAuxiliaryWindow ? null : (workspace?.rootPath ?? null),
     confirmBeforeWorkspaceMutation: confirmDirtyBuffersBeforeGitMutation,
     onWorkspaceMutated: handleGitWorkspaceMutated
   })
@@ -453,13 +459,16 @@ function AppShell() {
   }
 
   useEffect(() => {
+    if (isAuxiliaryWindow) {
+      return
+    }
     return wikiApi.menu.onCommand((command) => {
       if (isDialogOpenRef.current) {
         return
       }
       menuHandlersRef.current[command]?.()
     })
-  }, [wikiApi])
+  }, [isAuxiliaryWindow, wikiApi])
 
   const handleRequestDelete = useCallback(
     (entry: WorkspaceEntry): void => {
@@ -481,6 +490,29 @@ function AppShell() {
   const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
   const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
+  const totalTabCount = layout.panes.primary.tabs.length + layout.panes.secondary.tabs.length
+  const canDetachToNewWindow = !isAuxiliaryWindow || totalTabCount > 1
+
+  useEffect(() => {
+    if (!isAuxiliaryWindow) {
+      return
+    }
+    document.title = formatWindowTitle(activeBuffer?.name)
+  }, [activeBuffer?.name, isAuxiliaryWindow])
+
+  const hadAuxTabsRef = useRef<boolean>(false)
+  useEffect(() => {
+    if (!isAuxiliaryWindow) {
+      return
+    }
+    if (totalTabCount > 0) {
+      hadAuxTabsRef.current = true
+      return
+    }
+    if (hadAuxTabsRef.current) {
+      void wikiApi.window?.closeCurrent().catch(() => undefined)
+    }
+  }, [isAuxiliaryWindow, totalTabCount, wikiApi])
 
   const applyActiveMarkdownTransform = useCallback(
     (transform: (content: string) => string): void => {
@@ -559,12 +591,14 @@ function AppShell() {
       onCloseTab: requestCloseTab,
       onMoveTab: moveTab,
       onDuplicateTab: duplicateTabToOtherPane,
+      onDetachTabToNewWindow: (paneId, tabId) => void detachTabToNewWindow(paneId, tabId),
       onChangeContent: handlePaneChangeContent,
       onSaveBuffer: saveBufferByKey,
       onUpdateTabViewState: handlePaneUpdateTabViewState
     }),
     [
       activateTab,
+      detachTabToNewWindow,
       duplicateTabToOtherPane,
       focusPane,
       handlePaneChangeContent,
@@ -588,82 +622,86 @@ function AppShell() {
       )}
 
       <main className="app-main">
-        <ActivityBar
-          activeView={leftSidebar.activeView}
-          isCollapsed={leftSidebar.isCollapsed}
-          gitChangedCount={gitChangedCount}
-          onSelectView={handleSelectLeftSidebarView}
-        />
-
-        {!leftSidebar.isCollapsed && (
+        {!isAuxiliaryWindow && (
           <>
-            <aside
-              className="left-sidebar"
-              aria-label="왼쪽 사이드바"
-              style={{ width: `${leftSidebarWidth}px` }}
-            >
-              {leftSidebar.activeView === 'workspace' && (
-                <WorkspaceView
-                  workspace={workspace}
-                  isFavorite={isCurrentWorkspaceFavorite}
-                  favoriteWorkspaces={config.favoriteWorkspaces}
-                  recentWorkspaces={config.recentWorkspaces}
-                  onOpenFolder={handleSelectFolder}
-                  onSwitchWorkspace={handleSwitchWorkspace}
-                  onToggleFavorite={() => {
-                    if (workspace) {
-                      toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
-                    }
-                  }}
-                  onRemoveFavorite={removeFavoriteWorkspace}
-                />
-              )}
-              {leftSidebar.activeView === 'explorer' && (
-                <FolderTreeSidebar
-                  workspace={workspace}
-                  tree={treeState}
-                  activeFilePath={activeFilePath}
-                  onSelectPath={setSelectedTreePath}
-                  onToggleDirectory={toggleDirectory}
-                  onEnsureExpanded={ensureExpanded}
-                  onResolveCreateParentDir={resolveCreateParentDir}
-                  onOpenFile={handleOpenFile}
-                  onRefreshTree={() => void refreshTree()}
-                  onCreateEntry={createEntry}
-                  onRenameEntry={renameEntry}
-                  onRequestDelete={handleRequestDelete}
-                />
-              )}
-
-              {leftSidebar.activeView === 'git' && (
-                <GitSidebarPanel
-                  workspaceRootPath={workspace?.rootPath ?? null}
-                  status={git.status}
-                  branchList={git.branchList}
-                  pendingAction={git.pendingAction}
-                  errorMessage={git.errorMessage}
-                  onDismissError={git.dismissError}
-                  onRefresh={() => void git.refreshStatus()}
-                  onInitRepo={() => void git.initRepo()}
-                  onStageFile={(path) => void git.stageFile(path)}
-                  onStageAll={() => void git.stageAll()}
-                  onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
-                  onUnstageAll={() => void git.unstageAll()}
-                  onCommit={git.commit}
-                  onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
-                  onPull={() => void git.pull()}
-                  onPush={() => void git.push()}
-                  onSync={() => void git.sync()}
-                />
-              )}
-            </aside>
-            <SidebarResizer
-              edge="right"
-              width={leftSidebarWidth}
-              bounds={leftSidebarBounds}
-              ariaLabel="왼쪽 사이드바 너비 조절"
-              onResize={handleResizeLeftSidebar}
+            <ActivityBar
+              activeView={leftSidebar.activeView}
+              isCollapsed={leftSidebar.isCollapsed}
+              gitChangedCount={gitChangedCount}
+              onSelectView={handleSelectLeftSidebarView}
             />
+
+            {!leftSidebar.isCollapsed && (
+              <>
+                <aside
+                  className="left-sidebar"
+                  aria-label="왼쪽 사이드바"
+                  style={{ width: `${leftSidebarWidth}px` }}
+                >
+                  {leftSidebar.activeView === 'workspace' && (
+                    <WorkspaceView
+                      workspace={workspace}
+                      isFavorite={isCurrentWorkspaceFavorite}
+                      favoriteWorkspaces={config.favoriteWorkspaces}
+                      recentWorkspaces={config.recentWorkspaces}
+                      onOpenFolder={handleSelectFolder}
+                      onSwitchWorkspace={handleSwitchWorkspace}
+                      onToggleFavorite={() => {
+                        if (workspace) {
+                          toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
+                        }
+                      }}
+                      onRemoveFavorite={removeFavoriteWorkspace}
+                    />
+                  )}
+                  {leftSidebar.activeView === 'explorer' && (
+                    <FolderTreeSidebar
+                      workspace={workspace}
+                      tree={treeState}
+                      activeFilePath={activeFilePath}
+                      onSelectPath={setSelectedTreePath}
+                      onToggleDirectory={toggleDirectory}
+                      onEnsureExpanded={ensureExpanded}
+                      onResolveCreateParentDir={resolveCreateParentDir}
+                      onOpenFile={handleOpenFile}
+                      onRefreshTree={() => void refreshTree()}
+                      onCreateEntry={createEntry}
+                      onRenameEntry={renameEntry}
+                      onRequestDelete={handleRequestDelete}
+                    />
+                  )}
+
+                  {leftSidebar.activeView === 'git' && (
+                    <GitSidebarPanel
+                      workspaceRootPath={workspace?.rootPath ?? null}
+                      status={git.status}
+                      branchList={git.branchList}
+                      pendingAction={git.pendingAction}
+                      errorMessage={git.errorMessage}
+                      onDismissError={git.dismissError}
+                      onRefresh={() => void git.refreshStatus()}
+                      onInitRepo={() => void git.initRepo()}
+                      onStageFile={(path) => void git.stageFile(path)}
+                      onStageAll={() => void git.stageAll()}
+                      onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
+                      onUnstageAll={() => void git.unstageAll()}
+                      onCommit={git.commit}
+                      onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
+                      onPull={() => void git.pull()}
+                      onPush={() => void git.push()}
+                      onSync={() => void git.sync()}
+                    />
+                  )}
+                </aside>
+                <SidebarResizer
+                  edge="right"
+                  width={leftSidebarWidth}
+                  bounds={leftSidebarBounds}
+                  ariaLabel="왼쪽 사이드바 너비 조절"
+                  onResize={handleResizeLeftSidebar}
+                />
+              </>
+            )}
           </>
         )}
 
@@ -676,6 +714,7 @@ function AppShell() {
           customCommands={config.customCommands}
           scrollRequest={outlineScrollRequest}
           isShortcutDisabled={isEditorShortcutDisabled}
+          canDetachToNewWindow={canDetachToNewWindow}
           onSetSplitRatio={setSplitRatio}
           onSplitWithTab={splitWithTab}
           actions={paneActions}
@@ -722,7 +761,7 @@ function AppShell() {
         )}
       </main>
 
-      {isSettingsOpen && (
+      {!isAuxiliaryWindow && isSettingsOpen && (
         <SettingsPanel
           theme={config.theme}
           autoSave={config.autoSave}
