@@ -2,36 +2,24 @@ import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
+import type {
+  DocumentOutlineSpyUpdate,
+  OutlineActiveHeadingReport,
+  OutlineContextTarget,
+  OutlineScrollRequest
+} from '../editor/outlineScrollSpy'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
-import { EditorMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import { EditorMode, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
-export interface OutlineContextTarget {
-  paneId: PaneId
-  tabId: string
-  mode: EditorMode
-}
-
-export interface OutlineScrollRequest {
-  paneId: PaneId
-  tabId: string
-  mode: EditorMode
-  line: number
-  slug: string
-  index: number
-  nonce: number
-}
-
-export interface DocumentOutlineSpyUpdate extends HeadingScrollSpySample {
-  mode: EditorMode
-}
-
-export interface OutlineActiveHeadingReport extends HeadingScrollSpySample {
-  context: OutlineContextTarget
+export type {
+  DocumentOutlineSpyUpdate,
+  OutlineActiveHeadingReport,
+  OutlineContextTarget,
+  OutlineScrollRequest
 }
 
 interface DocumentEditorProps {

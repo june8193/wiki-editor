@@ -7,9 +7,25 @@ import {
   useMemo,
   useRef
 } from 'react'
-import { isScrollNavigationKey } from '../editor/outlineScrollSpy'
 
 const USER_SCROLL_INTENT_WINDOW_MS = 250
+
+function isScrollNavigationKey(event: ReactKeyboardEvent<HTMLElement>): boolean {
+  if (event.altKey) return false
+  if ((event.ctrlKey || event.metaKey) && event.key !== 'Home' && event.key !== 'End') {
+    return false
+  }
+  return (
+    event.key === 'ArrowUp' ||
+    event.key === 'ArrowDown' ||
+    event.key === 'PageUp' ||
+    event.key === 'PageDown' ||
+    event.key === 'Home' ||
+    event.key === 'End' ||
+    event.key === ' ' ||
+    event.key === 'Spacebar'
+  )
+}
 
 /**
  * Tracks whether a scrollable container's upcoming `scroll` event originates

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { MarkdownHeading } from '../editor/MarkdownTocEngine'
 import type {
   OutlineActiveHeadingReport,
   OutlineContextTarget,
   OutlineScrollRequest
-} from '../components/DocumentEditor'
-import type { MarkdownHeading } from '../editor/MarkdownTocEngine'
+} from '../editor/outlineScrollSpy'
 
 interface ActiveOutlineHeadingState {
   context: OutlineContextTarget
@@ -112,9 +112,7 @@ export function useOutlineScrollSpy({
       if (!activeContext) return
       scrollNonceRef.current += 1
       setOutlineScrollRequest({
-        paneId: activeContext.paneId,
-        tabId: activeContext.tabId,
-        mode: activeContext.mode,
+        ...activeContext,
         line: heading.line,
         slug: heading.slug,
         index,

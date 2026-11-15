@@ -1,8 +1,34 @@
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { EditorMode, PaneId } from '../stores/PaneTabStore'
 import type { MarkdownHeading } from './MarkdownTocEngine'
 
 export const OUTLINE_SPY_TOP_THRESHOLD_PX = 24
 export const OUTLINE_SPY_BOTTOM_EPSILON_PX = 2
+
+export interface HeadingScrollSpySample {
+  headingIndex: number | null
+  isUserScroll: boolean
+}
+
+export interface OutlineContextTarget {
+  paneId: PaneId
+  tabId: string
+  mode: EditorMode
+}
+
+export interface OutlineScrollRequest extends OutlineContextTarget {
+  line: number
+  slug: string
+  index: number
+  nonce: number
+}
+
+export interface DocumentOutlineSpyUpdate extends HeadingScrollSpySample {
+  mode: EditorMode
+}
+
+export interface OutlineActiveHeadingReport extends HeadingScrollSpySample {
+  context: OutlineContextTarget
+}
 
 export interface ScrollContainerMetrics {
   scrollTop: number
@@ -20,11 +46,6 @@ export interface LineActiveHeadingInput extends ScrollContainerMetrics {
   headings: readonly Pick<MarkdownHeading, 'line'>[]
   /** 1-based line number at the scroll container's visible top baseline */
   topLine: number
-}
-
-export interface HeadingScrollSpySample {
-  headingIndex: number | null
-  isUserScroll: boolean
 }
 
 /**
@@ -146,24 +167,4 @@ export function measureActiveHeadingIndexInContainer(
     scrollHeight: container.scrollHeight,
     clientHeight: container.clientHeight
   })
-}
-
-/**
- * Returns true if a keyboard event on a scrollable preview container represents a scroll navigation key.
- */
-export function isScrollNavigationKey(event: ReactKeyboardEvent<HTMLElement>): boolean {
-  if (event.altKey) return false
-  if ((event.ctrlKey || event.metaKey) && event.key !== 'Home' && event.key !== 'End') {
-    return false
-  }
-  return (
-    event.key === 'ArrowUp' ||
-    event.key === 'ArrowDown' ||
-    event.key === 'PageUp' ||
-    event.key === 'PageDown' ||
-    event.key === 'Home' ||
-    event.key === 'End' ||
-    event.key === ' ' ||
-    event.key === 'Spacebar'
-  )
 }
