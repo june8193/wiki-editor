@@ -27,10 +27,8 @@ import {
   detectLinkQuery,
   type LinkQueryMatch
 } from '../editor/LinkAutocompleteEngine'
-import {
-  extractMarkdownLinkHrefAtOffset,
-  isLinkNavigationClick
-} from '../editor/MarkdownLinkNavigation'
+import { isLinkNavigationClick } from '../editor/editorModes'
+import { extractMarkdownLinkHrefAtOffset } from '../editor/MarkdownLinkSyntax'
 import {
   detectDocumentLineEnding,
   insertOrUpdateTocBlock,

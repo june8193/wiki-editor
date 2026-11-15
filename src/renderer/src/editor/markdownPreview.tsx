@@ -21,13 +21,12 @@ import { MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 import {
   createHeadingNumberTracker,
   createHeadingSlugTracker,
+  decodeSlugSafely,
   hasHeadingNumberPrefix,
   LEADING_HEADING_NUMBER_RE
 } from './MarkdownTocEngine'
 import type { MermaidRenderer } from './mermaidRenderer'
-
-import { isLinkNavigationClick } from './MarkdownLinkNavigation'
-import { decodeSlugSafely } from './MarkdownTocEngine'
+import { isLinkNavigationClick } from './editorModes'
 
 export interface MarkdownPreviewRenderOptions {
   theme?: ThemeMode

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   cycleEditorMode,
   getRawEditorLanguage,
+  isLinkNavigationClick,
   isMarkdownDocument,
   resolveEditorShortcut,
   resolveModeShortcut
@@ -79,5 +80,65 @@ describe('editorModes helpers', () => {
     expect(
       resolveEditorShortcut({ key: 'k', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, 'raw', true)
     ).toBeNull()
+  })
+
+  it('triggers link navigation on normal primary click in Preview mode', () => {
+    expect(
+      isLinkNavigationClick('preview', {
+        button: 0,
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false
+      })
+    ).toBe(true)
+
+    expect(
+      isLinkNavigationClick('preview', {
+        button: 1,
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false
+      })
+    ).toBe(false)
+  })
+
+  it('requires Ctrl+click or Meta+click for link navigation in Raw and WYSIWYG modes', () => {
+    for (const mode of ['raw', 'wysiwyg'] as const) {
+      expect(
+        isLinkNavigationClick(mode, {
+          button: 0,
+          ctrlKey: false,
+          metaKey: false,
+          altKey: false
+        })
+      ).toBe(false)
+
+      expect(
+        isLinkNavigationClick(mode, {
+          button: 0,
+          ctrlKey: true,
+          metaKey: false,
+          altKey: false
+        })
+      ).toBe(true)
+
+      expect(
+        isLinkNavigationClick(mode, {
+          button: 0,
+          ctrlKey: false,
+          metaKey: true,
+          altKey: false
+        })
+      ).toBe(true)
+
+      expect(
+        isLinkNavigationClick(mode, {
+          button: 0,
+          ctrlKey: true,
+          metaKey: false,
+          altKey: true
+        })
+      ).toBe(false)
+    }
   })
 })

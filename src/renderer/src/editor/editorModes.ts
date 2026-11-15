@@ -13,6 +13,13 @@ export type EditorShortcutAction =
   | { type: 'save' }
   | { type: 'mode'; mode: EditorMode }
 
+export interface LinkClickModifierState {
+  button: number
+  ctrlKey: boolean
+  metaKey: boolean
+  altKey: boolean
+}
+
 const MODE_ORDER: readonly EditorMode[] = ['raw', 'wysiwyg', 'preview']
 
 /**
@@ -97,4 +104,19 @@ export function resolveEditorShortcut(
   }
   const mode = resolveModeShortcut(event, currentMode, allowRichModes)
   return mode ? { type: 'mode', mode } : null
+}
+
+/**
+ * Determines whether a mouse click should trigger Markdown link navigation in the given editor mode.
+ * Preview navigates on primary click, whereas Raw and WYSIWYG require Ctrl/Meta+click so normal
+ * clicks continue to move the editing caret.
+ */
+export function isLinkNavigationClick(mode: EditorMode, event: LinkClickModifierState): boolean {
+  if (event.button !== 0 || event.altKey) {
+    return false
+  }
+  if (mode === 'preview') {
+    return true
+  }
+  return event.ctrlKey || event.metaKey
 }

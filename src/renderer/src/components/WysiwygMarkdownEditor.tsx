@@ -8,7 +8,7 @@ import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import { isLinkNavigationClick } from '../editor/MarkdownLinkNavigation'
+import { isLinkNavigationClick } from '../editor/editorModes'
 import { findFirstNonFencedSlashTocLine, insertOrUpdateTocBlock } from '../editor/MarkdownTocEngine'
 import {
   addTableRowBeforeSafely,
