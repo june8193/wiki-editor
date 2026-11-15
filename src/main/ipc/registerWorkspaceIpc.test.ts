@@ -6,35 +6,9 @@ import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import { ConfigService } from '../config/ConfigService'
 import { LogService } from '../logging/LogService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
-import type { IpcMainLike, WebContentsLike } from './registerConfigIpc'
+import { createFakeIpcMain } from './ipcTestHelpers'
+import type { WebContentsLike } from './registerConfigIpc'
 import { registerWorkspaceIpc } from './registerWorkspaceIpc'
-
-type Handler = (_event: unknown, ...args: unknown[]) => unknown
-
-function createFakeIpcMain(): IpcMainLike & {
-  invoke(channel: string, ...args: unknown[]): Promise<unknown>
-  hasHandler(channel: string): boolean
-} {
-  const handlers = new Map<string, Handler>()
-  return {
-    handle(channel, listener) {
-      handlers.set(channel, listener)
-    },
-    removeHandler(channel) {
-      handlers.delete(channel)
-    },
-    async invoke(channel, ...args) {
-      const handler = handlers.get(channel)
-      if (!handler) {
-        throw new Error(`No handler registered for ${channel}`)
-      }
-      return handler({}, ...args)
-    },
-    hasHandler(channel) {
-      return handlers.has(channel)
-    }
-  }
-}
 
 describe('registerWorkspaceIpc', () => {
   let tempDir: string
@@ -229,6 +203,61 @@ describe('registerWorkspaceIpc', () => {
     const serialized = JSON.stringify(entries)
     expect(serialized).not.toContain('201')
     expect(serialized).not.toContain('"bytes"')
+
+    dispose()
+  })
+
+  it('keeps workspace open/watch/unwatch restricted to the main window while broadcasting changes to all targets', async () => {
+    const configService = new ConfigService(configPath)
+    const ipcMain = createFakeIpcMain()
+    const mainEvents: unknown[] = []
+    const auxEvents: unknown[] = []
+    const mainTarget: WebContentsLike = {
+      isDestroyed: () => false,
+      send: (channel, payload) => mainEvents.push({ channel, payload })
+    }
+    const auxTarget: WebContentsLike = {
+      isDestroyed: () => false,
+      send: (channel, payload) => auxEvents.push({ channel, payload })
+    }
+
+    const dispose = registerWorkspaceIpc({
+      ipcMain,
+      workspaceService,
+      configService,
+      selectDirectory: async () => workspaceDir,
+      getTargets: () => [mainTarget, auxTarget],
+      isMainWindowSender: (sender) => sender === mainTarget
+    })
+
+    await expect(
+      ipcMain.invokeFrom(auxTarget, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+    ).rejects.toThrow()
+    await ipcMain.invokeFrom(auxTarget, WORKSPACE_IPC_CHANNELS.watch)
+    await writeFile(join(workspaceDir, 'ignored-before-main-watch.md'), 'hi', 'utf8')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(mainEvents).toHaveLength(0)
+
+    await ipcMain.invokeFrom(mainTarget, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+    await ipcMain.invokeFrom(mainTarget, WORKSPACE_IPC_CHANNELS.watch)
+    await writeFile(join(workspaceDir, 'from-main-watch.md'), 'hi', 'utf8')
+    await vi.waitFor(() => {
+      expect(mainEvents.length).toBeGreaterThan(0)
+      expect(auxEvents.length).toBeGreaterThan(0)
+    })
+
+    const countBeforeAuxUnwatch = mainEvents.length
+    await ipcMain.invokeFrom(auxTarget, WORKSPACE_IPC_CHANNELS.unwatch)
+    await writeFile(join(workspaceDir, 'still-watched.md'), 'hi', 'utf8')
+    await vi.waitFor(() => {
+      expect(mainEvents.length).toBeGreaterThan(countBeforeAuxUnwatch)
+    })
+
+    await ipcMain.invokeFrom(mainTarget, WORKSPACE_IPC_CHANNELS.unwatch)
+    const countAfterMainUnwatch = mainEvents.length
+    await writeFile(join(workspaceDir, 'after-main-unwatch.md'), 'hi', 'utf8')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(mainEvents.length).toBe(countAfterMainUnwatch)
 
     dispose()
   })

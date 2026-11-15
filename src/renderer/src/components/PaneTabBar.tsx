@@ -1,30 +1,31 @@
-import { DragEvent, useCallback, useRef, useState } from 'react'
-import { TAB_DRAG_MIME } from '../utils/dragMimeTypes'
+import { useCallback, useRef, useState } from 'react'
+import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
+import type { ScreenPoint } from '@shared/window'
 import { useDismissable } from '../hooks/useDismissable'
-import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { GitDiffViewMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 import {
   formatGitFileLabel,
   getGitDiffContextLabel,
   getGitDiffTabLabel
 } from '../utils/gitFilePresentation'
+import {
+  allowWikiTabDragOver,
+  extractDragEndScreenPoint,
+  handleTabMoveDrop,
+  type TabDragDropActions,
+  type TabDragUiState,
+  writeTabDragDataTransfer
+} from '../stores/tabDragDrop'
 
-export interface DraggingTabPayload {
-  paneId: PaneId
-  tabId: string
-}
-
-export interface PaneInteractionActions {
+export interface PaneInteractionActions extends TabDragDropActions {
   onFocusPane: (paneId: PaneId) => void
   onActivateTab: (paneId: PaneId, tabId: string) => void
   onCloseTab: (paneId: PaneId, tabId: string) => void
-  onMoveTab: (
-    sourcePaneId: PaneId,
-    targetPaneId: PaneId,
-    tabId: string,
-    targetIndex?: number
-  ) => void
   onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
+  onDetachTabToNewWindow?: (paneId: PaneId, tabId: string) => void
+  onStartTabDrag: (paneId: PaneId, tabId: string) => void
+  onCancelTabDrag: () => void
+  onEndTabDrag: (screenPoint?: ScreenPoint) => void
   onChangeContent: (bufferKey: string, nextContent: string) => void
   onSaveBuffer: (bufferKey: string) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
@@ -39,73 +40,6 @@ interface TabContextMenuState {
   y: number
 }
 
-export function parseDraggingTabPayload(
-  event: DragEvent,
-  fallback: DraggingTabPayload | null
-): DraggingTabPayload | null {
-  try {
-    const raw = event.dataTransfer?.getData(TAB_DRAG_MIME)
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<DraggingTabPayload>
-      if (
-        (parsed.paneId === 'primary' || parsed.paneId === 'secondary') &&
-        typeof parsed.tabId === 'string'
-      ) {
-        return { paneId: parsed.paneId, tabId: parsed.tabId }
-      }
-    }
-  } catch {
-    // Ignore malformed drag payload and fall back to in-memory dragging state
-  }
-  return fallback
-}
-
-export function dispatchTabDrop(
-  event: DragEvent,
-  draggingTab: DraggingTabPayload | null,
-  onDragEndTab: () => void,
-  onValidDrop: (payload: DraggingTabPayload) => void,
-  options?: {
-    shouldAccept?: (payload: DraggingTabPayload) => boolean
-    stopPropagation?: boolean
-  }
-): void {
-  const payload = parseDraggingTabPayload(event, draggingTab)
-  if (!payload) return
-  if (options?.shouldAccept && !options.shouldAccept(payload)) return
-  event.preventDefault()
-  if (options?.stopPropagation) {
-    event.stopPropagation()
-  }
-  onValidDrop(payload)
-  onDragEndTab()
-}
-
-export function handleTabMoveDrop(
-  event: DragEvent,
-  draggingTab: DraggingTabPayload | null,
-  onDragEndTab: () => void,
-  targetPaneId: PaneId,
-  onMoveTab: PaneInteractionActions['onMoveTab'],
-  options?: {
-    targetIndex?: number
-    ignoreSamePane?: boolean
-    stopPropagation?: boolean
-  }
-): void {
-  dispatchTabDrop(
-    event,
-    draggingTab,
-    onDragEndTab,
-    (payload) => onMoveTab(payload.paneId, targetPaneId, payload.tabId, options?.targetIndex),
-    {
-      shouldAccept: options?.ignoreSamePane
-        ? (payload) => payload.paneId !== targetPaneId
-        : undefined,
-      stopPropagation: options?.stopPropagation
-    }
-  )
-}
 
 interface PaneTabBarProps {
   paneId: PaneId
@@ -113,12 +47,18 @@ interface PaneTabBarProps {
   activeTabId: string | null
   canMoveToSplit: boolean
   buffers: DocumentBufferSnapshot
-  draggingTab: DraggingTabPayload | null
-  onDragStartTab: (payload: DraggingTabPayload) => void
-  onDragEndTab: () => void
+  dragState: TabDragUiState
   actions: Pick<
     PaneInteractionActions,
-    'onActivateTab' | 'onCloseTab' | 'onMoveTab' | 'onDuplicateTab'
+    | 'onActivateTab'
+    | 'onCloseTab'
+    | 'onMoveTab'
+    | 'onDuplicateTab'
+    | 'onDetachTabToNewWindow'
+    | 'onDropExternalTab'
+    | 'onStartTabDrag'
+    | 'onDropTabInWindow'
+    | 'onEndTabDrag'
   >
 }
 
@@ -132,9 +72,7 @@ export function PaneTabBar({
   activeTabId,
   canMoveToSplit,
   buffers,
-  draggingTab,
-  onDragStartTab,
-  onDragEndTab,
+  dragState,
   actions
 }: PaneTabBarProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
@@ -150,13 +88,9 @@ export function PaneTabBar({
       className="pane-tab-bar"
       role="tablist"
       aria-label={paneId === 'primary' ? '주 탭 목록' : '보조 탭 목록'}
-      onDragOver={(event) => {
-        event.preventDefault()
-      }}
+      onDragOver={(event) => allowWikiTabDragOver(event, dragState)}
       onDrop={(event) =>
-        handleTabMoveDrop(event, draggingTab, onDragEndTab, paneId, actions.onMoveTab, {
-          stopPropagation: true
-        })
+        handleTabMoveDrop(event, dragState, paneId, actions, { stopPropagation: true })
       }
     >
       {tabs.map((tab, index) => {
@@ -176,23 +110,13 @@ export function PaneTabBar({
             className={`tab-item${isActive ? ' is-active' : ''}${isDiff ? ' is-diff-tab' : ''}`}
             draggable
             onDragStart={(event) => {
-              const payload: DraggingTabPayload = { paneId, tabId: tab.id }
-              try {
-                event.dataTransfer?.setData(TAB_DRAG_MIME, JSON.stringify(payload))
-                if (event.dataTransfer) {
-                  event.dataTransfer.effectAllowed = 'move'
-                }
-              } catch {
-                // jsdom environments without DataTransfer still track via draggingTab state
-              }
-              onDragStartTab(payload)
+              writeTabDragDataTransfer(event, { paneId, tabId: tab.id })
+              actions.onStartTabDrag(paneId, tab.id)
             }}
-            onDragEnd={onDragEndTab}
-            onDragOver={(event) => {
-              event.preventDefault()
-            }}
+            onDragEnd={(event) => actions.onEndTabDrag(extractDragEndScreenPoint(event))}
+            onDragOver={(event) => allowWikiTabDragOver(event, dragState)}
             onDrop={(event) =>
-              handleTabMoveDrop(event, draggingTab, onDragEndTab, paneId, actions.onMoveTab, {
+              handleTabMoveDrop(event, dragState, paneId, actions, {
                 targetIndex: index,
                 stopPropagation: true
               })
@@ -250,7 +174,9 @@ export function PaneTabBar({
         )
       })}
 
-      {contextMenu && (
+      {contextMenu && (() => {
+        const contextTab = tabs.find((tab) => tab.id === contextMenu.tabId)
+        return (
         <div
           ref={menuRef}
           role="menu"
@@ -286,6 +212,19 @@ export function PaneTabBar({
           <button
             type="button"
             role="menuitem"
+            className="context-menu-item"
+            disabled={!actions.onDetachTabToNewWindow || contextTab?.kind !== 'document'}
+            onClick={() => {
+              const targetTabId = contextMenu.tabId
+              setContextMenu(null)
+              actions.onDetachTabToNewWindow?.(paneId, targetTabId)
+            }}
+          >
+            새 창으로 이동
+          </button>
+          <button
+            type="button"
+            role="menuitem"
             className="context-menu-item is-danger"
             onClick={() => {
               const targetTabId = contextMenu.tabId
@@ -296,7 +235,8 @@ export function PaneTabBar({
             닫기
           </button>
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DocumentBufferStore } from './DocumentBufferStore'
+import { DocumentBufferStore } from '@shared/documentBufferStore'
 
 describe('DocumentBufferStore', () => {
   it('opens and deduplicates buffers by normalized path across Windows and POSIX styles', () => {
@@ -188,5 +188,24 @@ describe('DocumentBufferStore', () => {
 
     expect(store.removeBuffersUnderPath('C:\\wiki\\media')).toEqual(['c:/wiki/media/diagram.png'])
     expect(store.getBuffer('c:/wiki/media/diagram.png')).toBeUndefined()
+  })
+
+  it('skips redundant listener notifications on identical upsertBuffer or replaceSnapshot calls', () => {
+    const store = new DocumentBufferStore()
+    const opened = store.openBuffer({
+      kind: 'workspace',
+      path: 'C:/wiki/a.md',
+      name: 'a.md',
+      content: 'v0'
+    })
+    const listener = vi.fn()
+    store.subscribe(listener)
+
+    store.upsertBuffer({ ...opened })
+    store.replaceSnapshot({ [opened.key]: { ...opened } })
+    expect(listener).not.toHaveBeenCalled()
+
+    store.upsertBuffer({ ...opened, content: 'v1', isDirty: true, version: 2 })
+    expect(listener).toHaveBeenCalledTimes(1)
   })
 })

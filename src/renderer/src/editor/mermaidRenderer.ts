@@ -1,7 +1,7 @@
 import type { ThemeMode } from '@shared/config'
 import DOMPurify from 'dompurify'
 import type { MermaidConfig } from 'mermaid'
-import { toErrorMessage } from '../utils/toErrorMessage'
+import { toErrorMessage } from '@shared/errors'
 
 export type MermaidTheme = 'default' | 'dark'
 

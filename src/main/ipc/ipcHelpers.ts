@@ -1,6 +1,7 @@
 import { types } from 'node:util'
 import type { GitDiffRequest } from '@shared/git'
 import {
+  BUFFER_IPC_CHANNELS,
   CLIPBOARD_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
   DIAGRAM_IPC_CHANNELS,
@@ -92,7 +93,20 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
       ...(typeof source.filePath === 'string' ? { filePath: source.filePath } : {}),
       ...(byteLength !== undefined ? { byteLength } : {})
     }
-  }
+  },
+  [BUFFER_IPC_CHANNELS.openWorkspaceFile]: ([filePath, name, initialContent]) => ({
+    filePath,
+    name,
+    hasInitialContent: typeof initialContent === 'string',
+    contentLength: typeof initialContent === 'string' ? initialContent.length : 0
+  }),
+  [BUFFER_IPC_CHANNELS.updateContent]: ([key, nextContent]) => ({
+    key,
+    contentLength: typeof nextContent === 'string' ? nextContent.length : 0
+  }),
+  [BUFFER_IPC_CHANNELS.syncWindowTabs]: ([bufferKeys]) => ({
+    tabCount: Array.isArray(bufferKeys) ? bufferKeys.length : 0
+  })
 }
 
 const CHANNEL_RESULT_METADATA_EXTRACTORS: Record<
@@ -166,6 +180,15 @@ export function registerIpcHandlers(
       ipcMain.removeHandler(channel)
     }
   }
+}
+
+export function resolveSenderWebContents<T extends WebContentsLike = WebContentsLike>(
+  event: unknown
+): T | undefined {
+  if (!event || typeof event !== 'object') return undefined
+  const sender = (event as { sender?: unknown }).sender
+  if (!sender || typeof sender !== 'object') return undefined
+  return sender as T
 }
 
 export function broadcastIpcEvent(

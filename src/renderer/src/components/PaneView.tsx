@@ -1,19 +1,19 @@
 import { CSSProperties, SyntheticEvent } from 'react'
 import type { ThemeMode } from '@shared/config'
+import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
-import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 import { DocumentEditor } from './DocumentEditor'
 import { type GitDiffContentState, GitDiffViewer } from './GitDiffViewer'
 import {
-  DraggingTabPayload,
+  allowWikiTabDragOver,
   handleTabMoveDrop,
-  isPaneTabTriggerTarget,
-  PaneInteractionActions,
-  PaneTabBar
-} from './PaneTabBar'
+  type TabDragUiState,
+  type TabDropMoveOptions
+} from '../stores/tabDragDrop'
+import { isPaneTabTriggerTarget, type PaneInteractionActions, PaneTabBar } from './PaneTabBar'
 
 interface PaneViewProps {
   pane: PaneState
@@ -27,9 +27,7 @@ interface PaneViewProps {
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   buffers: DocumentBufferSnapshot
   diffsByKey: Record<string, GitDiffContentState>
-  draggingTab: DraggingTabPayload | null
-  onDragStartTab: (payload: DraggingTabPayload) => void
-  onDragEndTab: () => void
+  dragState: TabDragUiState
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
   actions: PaneInteractionActions
 }
@@ -46,9 +44,7 @@ export function PaneView({
   workspaceMarkdownFiles,
   buffers,
   diffsByKey,
-  draggingTab,
-  onDragStartTab,
-  onDragEndTab,
+  dragState,
   onActiveHeadingChange,
   actions
 }: PaneViewProps) {
@@ -72,6 +68,11 @@ export function PaneView({
     }
   }
 
+  const paneDropOptions: TabDropMoveOptions = {
+    canAcceptExternal: pane.tabs.length === 0,
+    ignoreSamePane: true
+  }
+
   return (
     <section
       className={`workspace-pane${isActivePane ? ' is-active-pane' : ''}`}
@@ -80,16 +81,8 @@ export function PaneView({
       style={paneStyle}
       onMouseDown={handlePaneFocusEvent}
       onFocusCapture={handlePaneFocusEvent}
-      onDragOver={(event) => {
-        if (draggingTab) {
-          event.preventDefault()
-        }
-      }}
-      onDrop={(event) =>
-        handleTabMoveDrop(event, draggingTab, onDragEndTab, pane.id, actions.onMoveTab, {
-          ignoreSamePane: true
-        })
-      }
+      onDragOver={(event) => allowWikiTabDragOver(event, dragState, pane.id, paneDropOptions)}
+      onDrop={(event) => handleTabMoveDrop(event, dragState, pane.id, actions, paneDropOptions)}
     >
       {pane.tabs.length > 0 && (
         <PaneTabBar
@@ -98,9 +91,7 @@ export function PaneView({
           activeTabId={pane.activeTabId}
           canMoveToSplit={canMoveToSplit}
           buffers={buffers}
-          draggingTab={draggingTab}
-          onDragStartTab={onDragStartTab}
-          onDragEndTab={onDragEndTab}
+          dragState={dragState}
           actions={actions}
         />
       )}

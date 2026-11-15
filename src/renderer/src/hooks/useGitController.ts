@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GitBranchList, GitStatus } from '@shared/git'
 import { logRendererError, logRendererWarn } from '../logging/rendererLogger'
-import { toErrorMessage } from '../utils/toErrorMessage'
+import { toErrorMessage } from '@shared/errors'
 import { useGitGraphLog } from './useGitGraphLog'
+import { useWikiApi } from './useWikiApi'
 
 interface UseGitControllerOptions {
   workspaceRootPath: string | null
@@ -18,6 +19,7 @@ export function useGitController({
   confirmBeforeWorkspaceMutation,
   onWorkspaceMutated
 }: UseGitControllerOptions) {
+  const wikiApi = useWikiApi()
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [branchList, setBranchList] = useState<GitBranchList | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
@@ -83,7 +85,7 @@ export function useGitController({
       }
       if (!fetchRepoMetadata) return
 
-      const branchesTask = window.wikiApi.git
+      const branchesTask = wikiApi.git
         .branches(rootPath)
         .then((nextBranches) => {
           if (!isCurrentRequest(rootPath, epoch) || requestSeqRef.current !== applySeq) {
@@ -97,7 +99,7 @@ export function useGitController({
 
       await Promise.all([branchesTask, refreshGraph(rootPath, epoch)])
     },
-    [isCurrentRequest, refreshGraph, resetGraph]
+    [isCurrentRequest, refreshGraph, resetGraph, wikiApi]
   )
 
   const refreshStatus = useCallback(async (): Promise<void> => {
@@ -117,7 +119,7 @@ export function useGitController({
     const epoch = workspaceEpochRef.current
     const refreshSeq = ++requestSeqRef.current
     try {
-      const nextStatus = await window.wikiApi.git.status(rootPath)
+      const nextStatus = await wikiApi.git.status(rootPath)
       if (
         mutationTokenRef.current !== null ||
         !isCurrentRequest(rootPath, epoch) ||
@@ -137,7 +139,7 @@ export function useGitController({
         error
       })
     }
-  }, [applyWorkspaceGitState, isCurrentRequest, resetGraph])
+  }, [applyWorkspaceGitState, isCurrentRequest, resetGraph, wikiApi])
 
   useEffect(() => {
     workspaceEpochRef.current += 1
@@ -211,7 +213,7 @@ export function useGitController({
             error
           })
           if (options.affectsWorkspaceFiles) {
-            await window.wikiApi.git
+            await wikiApi.git
               .status(rootPath)
               .then((fresh) => applyWorkspaceGitState(rootPath, epoch, fresh, true))
               .catch(() => undefined)
@@ -228,61 +230,61 @@ export function useGitController({
         }
       }
     },
-    [applyWorkspaceGitState, isCurrentRequest]
+    [applyWorkspaceGitState, isCurrentRequest, wikiApi]
   )
 
   const initRepo = useCallback(async (): Promise<void> => {
     await runGitAction('Git 초기화', {
       fetchRepoMetadata: true,
       fallbackError: 'Git 저장소를 초기화하지 못했습니다.',
-      run: (rootPath) => window.wikiApi.git.init(rootPath)
+      run: (rootPath) => wikiApi.git.init(rootPath)
     })
-  }, [runGitAction])
+  }, [runGitAction, wikiApi])
 
   const stageFile = useCallback(
     async (filePath: string): Promise<void> => {
       await runGitAction('Stage', {
         fallbackError: '파일을 Stage하지 못했습니다.',
-        run: (rootPath) => window.wikiApi.git.stage(rootPath, [filePath])
+        run: (rootPath) => wikiApi.git.stage(rootPath, [filePath])
       })
     },
-    [runGitAction]
+    [runGitAction, wikiApi]
   )
 
   const stageAll = useCallback(async (): Promise<void> => {
     await runGitAction('전체 Stage', {
       fallbackError: '전체 파일을 Stage하지 못했습니다.',
-      run: (rootPath) => window.wikiApi.git.stageAll(rootPath)
+      run: (rootPath) => wikiApi.git.stageAll(rootPath)
     })
-  }, [runGitAction])
+  }, [runGitAction, wikiApi])
 
   const unstageFile = useCallback(
     async (filePath: string, origPath?: string): Promise<void> => {
       const targets = origPath ? [filePath, origPath] : [filePath]
       await runGitAction('Unstage', {
         fallbackError: '파일을 Unstage하지 못했습니다.',
-        run: (rootPath) => window.wikiApi.git.unstage(rootPath, targets)
+        run: (rootPath) => wikiApi.git.unstage(rootPath, targets)
       })
     },
-    [runGitAction]
+    [runGitAction, wikiApi]
   )
 
   const unstageAll = useCallback(async (): Promise<void> => {
     await runGitAction('전체 Unstage', {
       fallbackError: '전체 파일을 Unstage하지 못했습니다.',
-      run: (rootPath) => window.wikiApi.git.unstageAll(rootPath)
+      run: (rootPath) => wikiApi.git.unstageAll(rootPath)
     })
-  }, [runGitAction])
+  }, [runGitAction, wikiApi])
 
   const commit = useCallback(
     async (message: string): Promise<boolean> => {
       return runGitAction('Commit', {
         fetchRepoMetadata: true,
         fallbackError: '커밋에 실패했습니다.',
-        run: (rootPath) => window.wikiApi.git.commit(rootPath, message)
+        run: (rootPath) => wikiApi.git.commit(rootPath, message)
       })
     },
-    [runGitAction]
+    [runGitAction, wikiApi]
   )
 
   const checkoutBranch = useCallback(
@@ -291,10 +293,10 @@ export function useGitController({
         affectsWorkspaceFiles: true,
         fetchRepoMetadata: true,
         fallbackError: '브랜치를 전환하지 못했습니다.',
-        run: (rootPath) => window.wikiApi.git.checkout(rootPath, branchName)
+        run: (rootPath) => wikiApi.git.checkout(rootPath, branchName)
       })
     },
-    [runGitAction]
+    [runGitAction, wikiApi]
   )
 
   const pull = useCallback(async (): Promise<void> => {
@@ -302,26 +304,26 @@ export function useGitController({
       affectsWorkspaceFiles: true,
       fetchRepoMetadata: true,
       fallbackError: 'Pull에 실패했습니다.',
-      run: (rootPath) => window.wikiApi.git.pull(rootPath)
+      run: (rootPath) => wikiApi.git.pull(rootPath)
     })
-  }, [runGitAction])
+  }, [runGitAction, wikiApi])
 
   const push = useCallback(async (): Promise<void> => {
     await runGitAction('Push', {
       fetchRepoMetadata: true,
       fallbackError: 'Push에 실패했습니다.',
-      run: (rootPath) => window.wikiApi.git.push(rootPath)
+      run: (rootPath) => wikiApi.git.push(rootPath)
     })
-  }, [runGitAction])
+  }, [runGitAction, wikiApi])
 
   const sync = useCallback(async (): Promise<void> => {
     await runGitAction('Sync', {
       affectsWorkspaceFiles: true,
       fetchRepoMetadata: true,
       fallbackError: 'Sync에 실패했습니다.',
-      run: async (rootPath) => (await window.wikiApi.git.sync(rootPath)).status
+      run: async (rootPath) => (await wikiApi.git.sync(rootPath)).status
     })
-  }, [runGitAction])
+  }, [runGitAction, wikiApi])
 
   const dismissError = useCallback((): void => {
     setErrorMessage(null)

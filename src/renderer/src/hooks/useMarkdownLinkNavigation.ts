@@ -3,7 +3,7 @@ import { isMarkdownDocument } from '../editor/editorModes'
 import { resolveMarkdownLinkTarget } from '../editor/MarkdownLinkNavigation'
 import { findMarkdownHeadingBySlug, type MarkdownHeading } from '../editor/MarkdownTocEngine'
 import type { OutlineContextTarget } from '../editor/outlineScrollSpy'
-import type { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
+import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { PaneId, PaneLayoutState } from '../stores/PaneTabStore'
 import type { OpenedWorkspaceDocument } from './useEditorWorkspace'
 

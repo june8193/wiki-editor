@@ -3,7 +3,8 @@ import type { GitDiffRequest, GitStatus } from '@shared/git'
 import type { GitDiffContentState } from '../components/GitDiffViewer'
 import type { PaneLayoutState } from '../stores/PaneTabStore'
 import { formatGitDiffTabKey, toGitDiffRequest } from '../utils/gitFilePresentation'
-import { toErrorMessage } from '../utils/toErrorMessage'
+import { toErrorMessage } from '@shared/errors'
+import { useWikiApi } from './useWikiApi'
 
 interface UseGitDiffTabsOptions {
   workspaceRootPath: string | null
@@ -66,6 +67,7 @@ export function useGitDiffTabs({
   diffsByKey: Record<string, GitDiffContentState>
   refreshDiffRequest: (request: GitDiffRequest) => void
 } {
+  const wikiApi = useWikiApi()
   const [diffsByKey, setDiffsByKey] = useState<Record<string, GitDiffContentState>>({})
   const mountedRef = useRef(true)
   const workspaceEpochRef = useRef(0)
@@ -115,7 +117,7 @@ export function useGitDiffTabs({
         inFlightSeqRef.current.get(tabKey) === nextSeq
 
       const effectiveRequest = resolveEffectiveDiffRequest(request, gitStatusRef.current)
-      void window.wikiApi.git
+      void wikiApi.git
         .diff(rootPath, effectiveRequest)
         .then((diff) => {
           if (!isCurrentOpenRequest()) return
@@ -140,7 +142,7 @@ export function useGitDiffTabs({
           }
         })
     },
-    []
+    [wikiApi]
   )
 
   useEffect(() => {

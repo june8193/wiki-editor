@@ -9,13 +9,13 @@ import {
 } from '../editor/editorModes'
 import { deriveDocumentTitle } from '../editor/mermaidExport'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
+import type { DocumentBuffer } from '@shared/documentBuffer'
 import type {
   DocumentOutlineSpyUpdate,
   HeadingScrollSpySample,
   OutlineScrollRequest
 } from '../editor/outlineScrollSpy'
 import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
-import { DocumentBuffer } from '../stores/DocumentBufferStore'
 import {
   DEFAULT_SPLIT_RATIO,
   DocumentTabItem,

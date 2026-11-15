@@ -16,6 +16,7 @@ import {
   type InspectedDropTransfer,
   type PendingImageSource
 } from '../editor/imageIngestion'
+import { useWikiApi } from './useWikiApi'
 
 export interface ImageTransferContextValue {
   draggingWorkspaceImagePath?: string | null
@@ -224,6 +225,7 @@ export function useWorkspaceImageTransfer(
   clearDraggingWorkspaceImage: () => void
   imageTransferContextValue: ImageTransferContextValue
 } {
+  const wikiApi = useWikiApi()
   const [draggingWorkspaceImagePath, setDraggingWorkspaceImagePath] = useState<string | null>(null)
   const draggingWorkspaceImagePathRef = useRef<string | null>(null)
   draggingWorkspaceImagePathRef.current = draggingWorkspaceImagePath
@@ -260,13 +262,23 @@ export function useWorkspaceImageTransfer(
     }
   }, [])
 
+  const ingestImage = wikiApi?.workspace?.ingestImage
+  const getPathForFile = wikiApi?.workspace?.getPathForFile
   const imageTransferContextValue = useMemo<ImageTransferContextValue>(
     () => ({
       draggingWorkspaceImagePath,
       clearDraggingWorkspaceImage,
-      reportImageError
+      reportImageError,
+      ...(typeof ingestImage === 'function' ? { ingestImage } : {}),
+      ...(typeof getPathForFile === 'function' ? { getPathForFile } : {})
     }),
-    [draggingWorkspaceImagePath, clearDraggingWorkspaceImage, reportImageError]
+    [
+      draggingWorkspaceImagePath,
+      clearDraggingWorkspaceImage,
+      reportImageError,
+      ingestImage,
+      getPathForFile
+    ]
   )
 
   return {

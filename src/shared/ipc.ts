@@ -4,6 +4,15 @@ import type {
 } from './assets'
 import type { AppConfig } from './config'
 import type {
+  BufferKeyRemap,
+  DocumentBuffer,
+  ReconcileBuffersResult,
+  SaveBufferResult,
+  SharedBufferHubEvent,
+  SharedBufferStateSnapshot,
+  SyncWindowTabsOptions
+} from './documentBuffer'
+import type {
   GitBranchList,
   GitCommitDetail,
   GitDiffRequest,
@@ -13,6 +22,19 @@ import type {
   GitStatus,
   GitSyncResult
 } from './git'
+import type {
+  AcceptTabDragDropInput,
+  AcceptTabDragDropResult,
+  ActiveTabDragSession,
+  DetachTabToNewWindowResult,
+  TabDragEndInput,
+  TabDragEndResult,
+  TabDragResolution,
+  TabDragStartInput,
+  TabTransferPayload,
+  WindowInitContext,
+  WindowRole
+} from './window'
 import type { RendererLogPayload } from './logging'
 import type {
   WorkspaceChangeEvent,
@@ -72,6 +94,22 @@ export const MENU_IPC_CHANNELS = {
   command: 'menu:command'
 } as const
 
+export const BUFFER_IPC_CHANNELS = {
+  getSnapshot: 'buffer:get-snapshot',
+  openWorkspaceFile: 'buffer:open-workspace-file',
+  openConfigDocument: 'buffer:open-config-document',
+  refreshCleanConfig: 'buffer:refresh-clean-config',
+  updateContent: 'buffer:update-content',
+  saveBuffer: 'buffer:save-buffer',
+  syncWindowTabs: 'buffer:sync-window-tabs',
+  setAutoSavePaused: 'buffer:set-auto-save-paused',
+  syncRenamedPath: 'buffer:sync-renamed-path',
+  syncDeletedPath: 'buffer:sync-deleted-path',
+  reconcileWorkspaceBuffersWithDisk: 'buffer:reconcile-workspace-buffers-with-disk',
+  clearWorkspaceBuffers: 'buffer:clear-workspace-buffers',
+  event: 'buffer:event'
+} as const
+
 export const LOG_IPC_CHANNELS = {
   write: 'log:write'
 } as const
@@ -79,13 +117,6 @@ export const LOG_IPC_CHANNELS = {
 export const CLIPBOARD_IPC_CHANNELS = {
   writeText: 'clipboard:write-text'
 } as const
-
-export const WINDOW_IPC_CHANNELS = {
-  closeRequested: 'window:close-requested',
-  closeResponse: 'window:close-response'
-} as const
-
-export type WindowCloseResponse = 'confirming' | 'close' | 'cancel'
 
 export const DIAGRAM_IPC_CHANNELS = {
   copyText: 'diagram:copy-text',
@@ -106,6 +137,18 @@ export interface DiagramSaveResult {
   filePath?: string
 }
 
+export const WINDOW_IPC_CHANNELS = {
+  getInitContext: 'window:get-init-context',
+  detachTabToNewWindow: 'window:detach-tab-to-new-window',
+  startTabDrag: 'window:start-tab-drag',
+  updateTabDragOutcome: 'window:update-tab-drag-outcome',
+  acceptTabDragDrop: 'window:accept-tab-drag-drop',
+  endTabDrag: 'window:end-tab-drag',
+  dragStateChanged: 'window:drag-state-changed',
+  closeCurrent: 'window:close-current',
+  closeRequested: 'window:close-requested',
+  resolveCloseRequest: 'window:resolve-close-request'
+} as const
 export interface WikiConfigApi {
   get(): Promise<AppConfig>
   update(patch: Partial<AppConfig>): Promise<AppConfig>
@@ -161,6 +204,31 @@ export interface WikiMenuApi {
   onCommand(listener: (command: AppMenuCommand) => void): () => void
 }
 
+export interface WikiBufferApi {
+  getSnapshot(): Promise<SharedBufferStateSnapshot>
+  openWorkspaceFile(
+    filePath: string,
+    name?: string,
+    initialContent?: string
+  ): Promise<DocumentBuffer>
+  openConfigDocument(): Promise<DocumentBuffer>
+  refreshCleanConfig(): Promise<DocumentBuffer | null>
+  updateContent(key: string, nextContent: string): Promise<DocumentBuffer | null>
+  saveBuffer(key: string): Promise<SaveBufferResult>
+  syncWindowTabs(
+    bufferKeys: string[],
+    options?: SyncWindowTabsOptions
+  ): Promise<SharedBufferStateSnapshot>
+  setAutoSavePaused(paused: boolean): Promise<void>
+  syncRenamedPath(oldPath: string, newPath: string): Promise<BufferKeyRemap[]>
+  syncDeletedPath(targetPath: string): Promise<string[]>
+  reconcileWorkspaceBuffersWithDisk(
+    changeEvent?: WorkspaceChangeEvent
+  ): Promise<ReconcileBuffersResult>
+  clearWorkspaceBuffers(): Promise<string[]>
+  onEvent(listener: (event: SharedBufferHubEvent) => void): () => void
+}
+
 export interface WikiLogApi {
   write(payload: RendererLogPayload): Promise<void>
 }
@@ -169,15 +237,27 @@ export interface WikiClipboardApi {
   writeText(text: string): Promise<void>
 }
 
-export interface WikiWindowApi {
-  onCloseRequested(listener: () => void): () => void
-  respondClose(response: WindowCloseResponse): Promise<void>
-}
-
 export interface WikiDiagramApi {
   copyText(text: string): Promise<void>
   copyImage(pngBytes: Uint8Array): Promise<void>
   saveFile(request: DiagramSaveRequest): Promise<DiagramSaveResult>
+}
+
+export interface WikiWindowApi {
+  readonly role: WindowRole
+  getInitContext(): Promise<WindowInitContext>
+  detachTabToNewWindow(payload: TabTransferPayload): Promise<DetachTabToNewWindowResult>
+  startTabDrag(input: TabDragStartInput): Promise<ActiveTabDragSession>
+  updateTabDragOutcome(
+    dragSessionId: string,
+    outcome: TabDragResolution
+  ): Promise<ActiveTabDragSession | null>
+  acceptTabDragDrop(input?: AcceptTabDragDropInput): Promise<AcceptTabDragDropResult>
+  endTabDrag(input: TabDragEndInput): Promise<TabDragEndResult>
+  onTabDragStateChanged(listener: (session: ActiveTabDragSession | null) => void): () => void
+  closeCurrent(): Promise<void>
+  onCloseRequested(listener: () => void): () => void
+  resolveCloseRequest(approved: boolean): Promise<void>
 }
 
 export interface WikiApi {
@@ -185,6 +265,7 @@ export interface WikiApi {
   workspace: WikiWorkspaceApi
   git: WikiGitApi
   menu: WikiMenuApi
+  buffer: WikiBufferApi
   log?: WikiLogApi
   clipboard?: WikiClipboardApi
   window?: WikiWindowApi

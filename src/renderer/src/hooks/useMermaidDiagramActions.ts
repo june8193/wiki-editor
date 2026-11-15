@@ -7,7 +7,9 @@ import {
   rasterizeMermaidSvgToPng
 } from '../editor/mermaidExport'
 import { logRendererError } from '../logging/rendererLogger'
-import { toErrorMessage } from '../utils/toErrorMessage'
+import { toErrorMessage } from '@shared/errors'
+import type { WikiApi } from '@shared/ipc'
+import { useOptionalWikiApi } from './useWikiApi'
 
 export const MERMAID_ACTION_FEEDBACK_DURATION_MS = 1500
 
@@ -44,10 +46,11 @@ const SAVE_PNG_FAILED_FALLBACK_MESSAGE = 'Mermaid PNG 파일 저장에 실패했
 const SAVE_SVG_FAILED_FALLBACK_MESSAGE = 'Mermaid SVG 파일 저장에 실패했습니다.'
 
 function resolveSaveFileSender(
+  diagramApi: WikiApi['diagram'] | undefined,
   format: DiagramExportFormat,
   documentTitle?: string
 ): (data: Uint8Array | string) => Promise<boolean> {
-  const saveFile = window.wikiApi?.diagram?.saveFile
+  const saveFile = diagramApi?.saveFile
   if (typeof saveFile !== 'function') {
     throw new Error('다이어그램 파일 저장 API를 사용할 수 없습니다.')
   }
@@ -72,6 +75,7 @@ export function useMermaidDiagramActions({
   confirmedSvg,
   documentTitle
 }: UseMermaidDiagramActionsOptions): MermaidDiagramActionsState {
+  const contextWikiApi = useOptionalWikiApi()
   const [activeAction, setActiveAction] = useState<MermaidActionId | null>(null)
   const [completedAction, setCompletedAction] = useState<MermaidActionId | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -225,14 +229,14 @@ export function useMermaidDiagramActions({
         event: 'Mermaid image copy failed',
         fallbackMessage: COPY_IMAGE_FAILED_FALLBACK_MESSAGE,
         resolveSender: () => {
-          const copyImage = window.wikiApi?.diagram?.copyImage
+          const copyImage = (contextWikiApi ?? window.wikiApi)?.diagram?.copyImage
           if (typeof copyImage !== 'function') {
             throw new Error('이미지 클립보드 복사 API를 사용할 수 없습니다.')
           }
           return copyImage
         }
       }),
-    [executePngExportAction]
+    [contextWikiApi, executePngExportAction]
   )
 
   const handleSavePng = useCallback(
@@ -242,9 +246,10 @@ export function useMermaidDiagramActions({
         event: 'Mermaid PNG save failed',
         fallbackMessage: SAVE_PNG_FAILED_FALLBACK_MESSAGE,
         extraLogData: { format: 'png' },
-        resolveSender: () => resolveSaveFileSender('png', documentTitle)
+        resolveSender: () =>
+          resolveSaveFileSender((contextWikiApi ?? window.wikiApi)?.diagram, 'png', documentTitle)
       }),
-    [documentTitle, executePngExportAction]
+    [contextWikiApi, documentTitle, executePngExportAction]
   )
 
   const handleSaveSvg = useCallback(async () => {
@@ -256,7 +261,11 @@ export function useMermaidDiagramActions({
         if (confirmedSvg === null) {
           throw new Error(SAVE_SVG_FAILED_FALLBACK_MESSAGE)
         }
-        const sendSvg = resolveSaveFileSender('svg', documentTitle)
+        const sendSvg = resolveSaveFileSender(
+          (contextWikiApi ?? window.wikiApi)?.diagram,
+          'svg',
+          documentTitle
+        )
         const normalized = normalizeMermaidSvg(confirmedSvg, theme)
         normalizedSvgLength = normalized.svg.length
         return await sendSvg(normalized.svg)
@@ -272,14 +281,14 @@ export function useMermaidDiagramActions({
         })
       }
     )
-  }, [canExport, code.length, confirmedSvg, documentTitle, executeAction, theme])
+  }, [canExport, code.length, confirmedSvg, contextWikiApi, documentTitle, executeAction, theme])
 
   const handleCopyCode = useCallback(async () => {
     await executeAction(
       'copy-code',
       canCopyCode,
       async () => {
-        const copyText = window.wikiApi?.diagram?.copyText
+        const copyText = (contextWikiApi ?? window.wikiApi)?.diagram?.copyText
         if (typeof copyText !== 'function') {
           throw new Error('클립보드 복사 API를 사용할 수 없습니다.')
         }
@@ -292,7 +301,7 @@ export function useMermaidDiagramActions({
         buildData: () => ({ codeLength: code.length })
       }
     )
-  }, [canCopyCode, code, executeAction])
+  }, [canCopyCode, code, contextWikiApi, executeAction])
 
   return {
     canExport,

@@ -1,42 +1,100 @@
-import { WINDOW_IPC_CHANNELS, type WindowCloseResponse } from '@shared/ipc'
+import { WINDOW_IPC_CHANNELS } from '@shared/ipc'
+import type {
+  AcceptTabDragDropInput,
+  TabDragEndInput,
+  TabDragResolution,
+  TabDragStartInput,
+  TabTransferPayload
+} from '@shared/window'
 import type { LogService } from '../logging/LogService'
-import type { WindowCloseCoordinator } from '../window'
-import { type IpcHandlerTuple, type IpcMainLike, registerIpcHandlers } from './ipcHelpers'
+import type { WindowManager } from '../windowManager'
+import {
+  broadcastIpcEvent,
+  type IpcHandlerTuple,
+  type IpcMainLike,
+  registerIpcHandlers,
+  resolveSenderWebContents
+} from './ipcHelpers'
 
 export interface RegisterWindowIpcOptions {
   ipcMain: IpcMainLike
-  coordinator: Pick<WindowCloseCoordinator, 'handleCloseResponse'>
+  windowManager: WindowManager
   logService?: LogService
 }
 
-function isWindowCloseResponse(value: unknown): value is WindowCloseResponse {
-  return value === 'confirming' || value === 'close' || value === 'cancel'
-}
-
 /**
- * Registers the window:close-response IPC handler to forward close confirmation decisions
- * back to the main-process window close coordinator.
+ * Registers window:* IPC handlers for role discovery, auxiliary detachment, drag coordination, and closing.
  */
 export function registerWindowIpc({
   ipcMain,
-  coordinator,
+  windowManager,
   logService
 }: RegisterWindowIpcOptions): () => void {
+  const unsubscribeDragState = windowManager.onTabDragStateChanged((session) => {
+    broadcastIpcEvent(
+      () => windowManager.getWebContentsTargets(),
+      WINDOW_IPC_CHANNELS.dragStateChanged,
+      session
+    )
+  })
+
   const handlers: readonly IpcHandlerTuple[] = [
     [
-      WINDOW_IPC_CHANNELS.closeResponse,
-      (event, response) => {
-        if (!isWindowCloseResponse(response)) {
-          throw new Error('창 종료 응답 형식이 올바르지 않습니다.')
-        }
-        const sender =
-          typeof event === 'object' && event !== null && 'sender' in event
-            ? (event as { sender?: unknown }).sender
-            : undefined
-        coordinator.handleCloseResponse(sender, response)
+      WINDOW_IPC_CHANNELS.getInitContext,
+      (event) => windowManager.getWindowInitContext(resolveSenderWebContents(event))
+    ],
+    [
+      WINDOW_IPC_CHANNELS.detachTabToNewWindow,
+      (event, payload) =>
+        windowManager.detachTabToNewWindow(
+          resolveSenderWebContents(event),
+          payload as TabTransferPayload
+        )
+    ],
+    [
+      WINDOW_IPC_CHANNELS.startTabDrag,
+      (event, input) =>
+        windowManager.startTabDrag(resolveSenderWebContents(event), input as TabDragStartInput)
+    ],
+    [
+      WINDOW_IPC_CHANNELS.updateTabDragOutcome,
+      (event, dragSessionId, outcome) =>
+        windowManager.updateTabDragOutcome(
+          resolveSenderWebContents(event),
+          dragSessionId as string,
+          outcome as TabDragResolution
+        )
+    ],
+    [
+      WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+      (event, input) =>
+        windowManager.acceptTabDragDrop(
+          resolveSenderWebContents(event),
+          input as AcceptTabDragDropInput | undefined
+        )
+    ],
+    [
+      WINDOW_IPC_CHANNELS.endTabDrag,
+      (event, input) =>
+        windowManager.endTabDrag(resolveSenderWebContents(event), input as TabDragEndInput)
+    ],
+    [
+      WINDOW_IPC_CHANNELS.closeCurrent,
+      (event) => {
+        windowManager.closeCurrentWindow(resolveSenderWebContents(event))
+      }
+    ],
+    [
+      WINDOW_IPC_CHANNELS.resolveCloseRequest,
+      (event, approved) => {
+        windowManager.resolveCloseRequest(resolveSenderWebContents(event), Boolean(approved))
       }
     ]
   ]
 
-  return registerIpcHandlers(ipcMain, handlers, { logService })
+  const disposeHandlers = registerIpcHandlers(ipcMain, handlers, { logService })
+  return () => {
+    unsubscribeDragState()
+    disposeHandlers()
+  }
 }

@@ -1,3 +1,4 @@
+/** Extracts a user-facing error message from an unknown thrown value. */
 export function toErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }

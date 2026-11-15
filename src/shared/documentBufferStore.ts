@@ -1,70 +1,73 @@
 import {
-  getWorkspaceDisplayName,
-  getWorkspacePathKey,
-  matchPathSeparators,
-  normalizeWorkspacePath
-} from '@shared/workspace'
+  buildRemappedPath,
+  type BufferKeyRemap,
+  type DocumentBuffer,
+  type DocumentBufferSnapshot,
+  type DocumentContentKind,
+  type DocumentKind,
+  isKeyNestedOrSame,
+  type OpenBufferInput
+} from './documentBuffer'
+import { getWorkspaceDisplayName, getWorkspacePathKey } from './workspace'
 
-export type DocumentKind = 'workspace' | 'config'
-export type DocumentContentKind = 'text' | 'image'
-
-export interface DocumentBuffer {
-  key: string
-  kind: DocumentKind
-  contentKind: DocumentContentKind
-  path: string
-  name: string
-  content: string
-  savedContent: string
-  isDirty: boolean
-  version: number
-  isSaving: boolean
+function areDocumentBuffersEqual(left: DocumentBuffer, right: DocumentBuffer): boolean {
+  return (
+    left.key === right.key &&
+    left.kind === right.kind &&
+    left.contentKind === right.contentKind &&
+    left.path === right.path &&
+    left.name === right.name &&
+    left.content === right.content &&
+    left.savedContent === right.savedContent &&
+    left.isDirty === right.isDirty &&
+    left.version === right.version &&
+    left.isSaving === right.isSaving
+  )
 }
 
-export type OpenBufferInput =
-  | {
-      kind: DocumentKind
-      contentKind?: 'text'
-      path: string
-      name?: string
-      content: string
-    }
-  | {
-      kind: 'workspace'
-      contentKind: 'image'
-      path: string
-      name?: string
-    }
-
-export interface BufferKeyRemap {
-  oldKey: string
-  newKey: string
-}
-
-export type DocumentBufferSnapshot = Readonly<Record<string, DocumentBuffer>>
-
-function isKeyNestedOrSame(candidateKey: string, parentKey: string): boolean {
-  if (!candidateKey || !parentKey) return false
-  if (candidateKey === parentKey) return true
-  return parentKey.endsWith('/')
-    ? candidateKey.startsWith(parentKey)
-    : candidateKey.startsWith(`${parentKey}/`)
-}
-
-function buildRemappedPath(currentPath: string, oldPrefix: string, newPrefix: string): string {
-  const normOld = normalizeWorkspacePath(oldPrefix)
-  const normCurrent = normalizeWorkspacePath(currentPath)
-  const suffix = normCurrent.slice(normOld.length)
-  if (!suffix) {
-    return newPrefix
+/** Creates an initialized DocumentBuffer from open input without requiring store mutation. */
+export function createDocumentBuffer(input: OpenBufferInput): DocumentBuffer {
+  const key = getWorkspacePathKey(input.path)
+  if (!key) {
+    throw new Error('Buffer path must not be empty')
   }
-  const normalizedSuffix = matchPathSeparators(suffix, newPrefix)
-  return `${newPrefix.replace(/[\\/]+$/, '')}${normalizedSuffix}`
+
+  const contentKind: DocumentContentKind = input.contentKind === 'image' ? 'image' : 'text'
+  const initialContent = input.contentKind === 'image' ? '' : input.content
+
+  return {
+    key,
+    kind: input.kind,
+    contentKind,
+    path: input.path,
+    name: input.name?.trim() || getWorkspaceDisplayName(input.path),
+    content: initialContent,
+    savedContent: initialContent,
+    isDirty: false,
+    version: 1,
+    isSaving: false
+  }
+}
+
+/** Merges unacknowledged local editor edits on top of a newer authoritative hub buffer. */
+export function mergePendingLocalBuffer(
+  hubBuffer: DocumentBuffer,
+  localBuffer: DocumentBuffer
+): DocumentBuffer {
+  if (hubBuffer.contentKind === 'image') {
+    return hubBuffer
+  }
+  return {
+    ...hubBuffer,
+    content: localBuffer.content,
+    isDirty: localBuffer.content !== hubBuffer.savedContent,
+    version: Math.max(localBuffer.version, hubBuffer.version)
+  }
 }
 
 /**
  * Centralized document buffer store keyed by normalized file path.
- * Multiple tabs across split panes subscribe to the same buffer entry for real-time sync.
+ * Multiple tabs across split panes and windows subscribe to the same buffer entry for real-time sync.
  */
 export class DocumentBufferStore {
   private buffers: Record<string, DocumentBuffer> = {}
@@ -84,6 +87,31 @@ export class DocumentBufferStore {
     for (const listener of this.listeners) {
       listener()
     }
+  }
+
+  replaceSnapshot(nextBuffers: DocumentBufferSnapshot): void {
+    const currentKeys = Object.keys(this.buffers)
+    const nextKeys = Object.keys(nextBuffers)
+    if (
+      currentKeys.length === nextKeys.length &&
+      nextKeys.every((key) => {
+        const existing = this.buffers[key]
+        const next = nextBuffers[key]
+        return existing !== undefined && next !== undefined && areDocumentBuffersEqual(existing, next)
+      })
+    ) {
+      return
+    }
+    this.commit({ ...nextBuffers })
+  }
+
+  /** Inserts or updates a single buffer entry in place without exposing mutable internals. */
+  upsertBuffer(buffer: DocumentBuffer): void {
+    const existing = this.buffers[buffer.key]
+    if (existing && areDocumentBuffersEqual(existing, buffer)) {
+      return
+    }
+    this.commit({ ...this.buffers, [buffer.key]: { ...buffer } })
   }
 
   private resolveKey(pathOrKey: string): string {
@@ -106,6 +134,16 @@ export class DocumentBufferStore {
     return Object.values(this.buffers)
   }
 
+  /** Returns the singleton config.json buffer if currently open in the store. */
+  getConfigBuffer(): DocumentBuffer | undefined {
+    for (const buffer of Object.values(this.buffers)) {
+      if (buffer.kind === 'config') {
+        return buffer
+      }
+    }
+    return undefined
+  }
+
   getDirtyBuffers(kind?: DocumentKind): readonly DocumentBuffer[] {
     return Object.values(this.buffers).filter(
       (buffer) => buffer.isDirty && (kind === undefined || buffer.kind === kind)
@@ -123,21 +161,7 @@ export class DocumentBufferStore {
       return existing
     }
 
-    const contentKind: DocumentContentKind = input.contentKind === 'image' ? 'image' : 'text'
-    const initialContent = input.contentKind === 'image' ? '' : input.content
-
-    const created: DocumentBuffer = {
-      key,
-      kind: input.kind,
-      contentKind,
-      path: input.path,
-      name: input.name?.trim() || getWorkspaceDisplayName(input.path),
-      content: initialContent,
-      savedContent: initialContent,
-      isDirty: false,
-      version: 1,
-      isSaving: false
-    }
+    const created = createDocumentBuffer(input)
     this.commit({ ...this.buffers, [key]: created })
     return created
   }
@@ -145,17 +169,18 @@ export class DocumentBufferStore {
   private updateMutableTextBuffer(
     pathOrKey: string,
     transform: (current: DocumentBuffer) => DocumentBuffer | null
-  ): void {
+  ): boolean {
     const key = this.resolveKey(pathOrKey)
     const current = this.buffers[key]
-    if (!current || current.contentKind === 'image') return
+    if (!current || current.contentKind === 'image') return false
     const updated = transform(current)
-    if (!updated) return
+    if (!updated) return false
     this.commit({ ...this.buffers, [key]: updated })
+    return true
   }
 
-  updateContent(pathOrKey: string, nextContent: string): void {
-    this.updateMutableTextBuffer(pathOrKey, (current) => {
+  updateContent(pathOrKey: string, nextContent: string): boolean {
+    return this.updateMutableTextBuffer(pathOrKey, (current) => {
       if (current.content === nextContent) return null
       return {
         ...current,
@@ -185,8 +210,8 @@ export class DocumentBufferStore {
     })
   }
 
-  refreshCleanContent(pathOrKey: string, freshContent: string): void {
-    this.updateMutableTextBuffer(pathOrKey, (current) => {
+  refreshCleanContent(pathOrKey: string, freshContent: string): boolean {
+    return this.updateMutableTextBuffer(pathOrKey, (current) => {
       if (current.isDirty) return null
       if (current.content === freshContent && current.savedContent === freshContent) return null
       return {
@@ -203,16 +228,17 @@ export class DocumentBufferStore {
    * Increments the buffer revision of a read-only image buffer so its wiki-asset preview URL
    * busts Chromium's image cache after external disk updates.
    */
-  refreshImageAsset(pathOrKey: string): void {
+  refreshImageAsset(pathOrKey: string): boolean {
     const key = this.resolveKey(pathOrKey)
     const current = this.buffers[key]
-    if (!current || current.contentKind !== 'image') return
+    if (!current || current.contentKind !== 'image') return false
 
     const updated: DocumentBuffer = {
       ...current,
       version: current.version + 1
     }
     this.commit({ ...this.buffers, [key]: updated })
+    return true
   }
 
   syncRenamedPath(oldPath: string, newPath: string): BufferKeyRemap[] {

@@ -8,7 +8,7 @@ import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRend
 import { buildWikiAssetUrl } from '@shared/assets'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { DocumentEditor } from './DocumentEditor'
-import type { DocumentBuffer } from '../stores/DocumentBufferStore'
+import type { DocumentBuffer } from '@shared/documentBuffer'
 import type { DocumentTabItem, EditorMode } from '../stores/PaneTabStore'
 
 function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {

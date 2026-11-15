@@ -8,8 +8,6 @@ import {
 } from './protocol/wikiAssetProtocol'
 import {
   app,
-  protocol,
-  type BaseWindow,
   BrowserWindow,
   ClipboardItem,
   clipboard,
@@ -18,10 +16,13 @@ import {
   Menu,
   type MessageBoxOptions,
   nativeImage,
+  protocol,
+  screen,
   shell
 } from 'electron'
 import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
+import { createSharedDocumentBufferHub, registerBufferIpc } from './ipc/registerBufferIpc'
 import { registerClipboardIpc } from './ipc/registerClipboardIpc'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerDiagramIpc } from './ipc/registerDiagramIpc'
@@ -34,35 +35,9 @@ import { createHelpMenuActions } from './logging/helpMenuActions'
 import { LogService } from './logging/LogService'
 import { registerProcessLifecycleLogging } from './logging/processLifecycleLogging'
 import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
+import { WindowManager } from './windowManager'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
-import {
-  createMainWindowOptions,
-  createWindowCloseCoordinator,
-  hardenWindowNavigation,
-  registerWindowNavigationGuard
-} from './window'
-
-const windowCloseCoordinator = createWindowCloseCoordinator()
-
-function createMainWindow(): BrowserWindow {
-  const preloadPath = join(__dirname, '../preload/index.js')
-  const mainWindow = new BrowserWindow(createMainWindowOptions(preloadPath))
-  registerWindowNavigationGuard(mainWindow.webContents)
-  hardenWindowNavigation(mainWindow.webContents)
-  windowCloseCoordinator.guardWindow(mainWindow)
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show()
-  })
-
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
-
-  return mainWindow
-}
+import { registerWindowNavigationGuard } from './window'
 
 function getActiveWindow(): BrowserWindow | undefined {
   const focused = BrowserWindow.getFocusedWindow()
@@ -81,18 +56,19 @@ const logService = new LogService(join(app.getPath('userData'), 'logs'))
 
 protocol.registerSchemesAsPrivileged([WIKI_ASSET_PRIVILEGED_SCHEME])
 
+let disposeBufferIpc: (() => void) | undefined
 let disposeConfigIpc: (() => void) | undefined
 let disposeDiagramIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
+let disposeWindowIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
 let disposeClipboardIpc: (() => void) | undefined
-let disposeWindowIpc: (() => void) | undefined
 let disposeWikiAssetProtocol: (() => void) | undefined
+let windowManager: WindowManager | undefined
 let workspaceService: WorkspaceFsService | undefined
 
 function disposeMainResources(): void {
-  windowCloseCoordinator.dispose()
   disposeWikiAssetProtocol?.()
   disposeWikiAssetProtocol = undefined
   disposeWindowIpc?.()
@@ -103,12 +79,16 @@ function disposeMainResources(): void {
   disposeLogIpc = undefined
   disposeDiagramIpc?.()
   disposeDiagramIpc = undefined
+  disposeBufferIpc?.()
+  disposeBufferIpc = undefined
   disposeGitIpc?.()
   disposeGitIpc = undefined
   disposeWorkspaceIpc?.()
   disposeWorkspaceIpc = undefined
   disposeConfigIpc?.()
   disposeConfigIpc = undefined
+  windowManager?.dispose()
+  windowManager = undefined
   workspaceService?.dispose()
   workspaceService = undefined
 }
@@ -128,7 +108,7 @@ registerProcessLifecycleLogging({
 void app.whenReady().then(async () => {
   const configPath = join(app.getPath('userData'), 'config.json')
   const configService = new ConfigService(configPath, { logService })
-  await configService.get()
+  const initialConfig = await configService.get()
 
   const activeWorkspaceService = new WorkspaceFsService({
     trashItem: (targetPath) => shell.trashItem(targetPath)
@@ -142,24 +122,36 @@ void app.whenReady().then(async () => {
   }
   const gitService = new GitService({ logService })
 
-  const getTargets = () => BrowserWindow.getAllWindows().map((win) => win.webContents)
-  const getMenuTargetWebContents = (targetWindow?: BaseWindow) => {
-    const win =
-      targetWindow instanceof BrowserWindow && !targetWindow.isDestroyed()
-        ? targetWindow
-        : getActiveWindow()
-    return win && !win.isDestroyed() ? win.webContents : undefined
-  }
+  const bufferHub = createSharedDocumentBufferHub({
+    workspaceService,
+    configService,
+    logService,
+    initialAutoSaveConfig: {
+      autoSave: initialConfig.autoSave,
+      autoSaveDelayMs: initialConfig.autoSaveDelayMs
+    }
+  })
+
+  windowManager = new WindowManager({
+    preloadPath: join(__dirname, '../preload/index.js'),
+    rendererUrl: process.env.ELECTRON_RENDERER_URL,
+    rendererFilePath: join(__dirname, '../renderer/index.html'),
+    bufferHub,
+    createWindow: (options) => {
+      const win = new BrowserWindow(options)
+      registerWindowNavigationGuard(win.webContents)
+      return win
+    },
+    screen
+  })
+
+  const getTargets = () => windowManager?.getWebContentsTargets() ?? []
+  const getMenuTargetWebContents = () => windowManager?.getMenuTargetWebContents()
 
   disposeLogIpc = registerLogIpc(ipcMain, logService)
   disposeClipboardIpc = registerClipboardIpc({
     ipcMain,
     writeClipboardText: (text) => clipboard.writeText(text),
-    logService
-  })
-  disposeWindowIpc = registerWindowIpc({
-    ipcMain,
-    coordinator: windowCloseCoordinator,
     logService
   })
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)
@@ -183,6 +175,18 @@ void app.whenReady().then(async () => {
       typeof data === 'string' ? writeFile(filePath, data, 'utf8') : writeFile(filePath, data),
     logService
   })
+  disposeBufferIpc = registerBufferIpc({
+    ipcMain,
+    configService,
+    hub: bufferHub,
+    getTargets,
+    logService
+  })
+  disposeWindowIpc = registerWindowIpc({
+    ipcMain,
+    windowManager,
+    logService
+  })
   disposeGitIpc = registerGitIpc({
     ipcMain,
     gitService,
@@ -194,6 +198,7 @@ void app.whenReady().then(async () => {
     workspaceService,
     configService,
     getTargets,
+    isMainWindowSender: (sender) => windowManager?.isMainWebContents(sender) ?? false,
     logService,
     selectDirectory: async () => {
       const targetWindow = getActiveWindow()
@@ -238,7 +243,7 @@ void app.whenReady().then(async () => {
   })
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate))
 
-  createMainWindow()
+  windowManager.createMainWindow()
 })
 
 app.on('window-all-closed', () => {

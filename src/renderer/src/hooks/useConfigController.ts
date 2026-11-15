@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppConfig, DEFAULT_APP_CONFIG, ThemeMode } from '@shared/config'
 import { removeRecentWorkspace as removeRecentWorkspaceFromList } from '@shared/workspace'
-import { toErrorMessage } from '../utils/toErrorMessage'
+import { toErrorMessage } from '@shared/errors'
+import { useWikiApi } from './useWikiApi'
 
 interface UseConfigControllerOptions {
   onError: (message: string | null, error?: unknown) => void
@@ -17,6 +18,7 @@ export function useConfigController({
   onExternalConfigCommitted,
   onInitialConfigLoaded
 }: UseConfigControllerOptions) {
+  const wikiApi = useWikiApi()
   const [config, setConfig] = useState<AppConfig>(DEFAULT_APP_CONFIG)
   const [configPath, setConfigPath] = useState<string>('')
 
@@ -25,7 +27,6 @@ export function useConfigController({
   const mutationSeqRef = useRef<number>(0)
   const inFlightUpdatesRef = useRef<number>(0)
   const hasMutationCommitRef = useRef<boolean>(false)
-  const isSavingRawRef = useRef<boolean>(false)
   const mountedRef = useRef<boolean>(true)
   const onErrorRef = useRef(onError)
   const onExternalRef = useRef(onExternalConfigCommitted)
@@ -56,7 +57,7 @@ export function useConfigController({
 
   useEffect(() => {
     mountedRef.current = true
-    const configApi = window.wikiApi.config
+    const configApi = wikiApi.config
 
     void configApi
       .getConfigPath()
@@ -90,16 +91,14 @@ export function useConfigController({
       if (!mountedRef.current) return
       hasMutationCommitRef.current = true
       recordCommittedConfig(updatedConfig, inFlightUpdatesRef.current === 0)
-      if (!isSavingRawRef.current) {
-        onExternalRef.current?.()
-      }
+      onExternalRef.current?.()
     })
 
     return () => {
       mountedRef.current = false
       unsubscribe()
     }
-  }, [recordCommittedConfig])
+  }, [recordCommittedConfig, wikiApi])
 
   const runConfigMutation = useCallback(
     async (
@@ -138,21 +137,21 @@ export function useConfigController({
     const nextTheme: ThemeMode = latestConfigRef.current.theme === 'light' ? 'dark' : 'light'
     void runConfigMutation(
       (prev) => ({ ...prev, theme: nextTheme }),
-      () => window.wikiApi.config.update({ theme: nextTheme }),
+      () => wikiApi.config.update({ theme: nextTheme }),
       '테마 설정 저장에 실패했습니다.'
     )
-  }, [runConfigMutation])
+  }, [runConfigMutation, wikiApi])
 
   const toggleBooleanConfig = useCallback(
     (key: 'autoSave' | 'showHeadingNumbers', errorMessage: string): void => {
       const nextValue = !latestConfigRef.current[key]
       void runConfigMutation(
         (prev) => ({ ...prev, [key]: nextValue }),
-        () => window.wikiApi.config.update({ [key]: nextValue }),
+        () => wikiApi.config.update({ [key]: nextValue }),
         errorMessage
       )
     },
-    [runConfigMutation]
+    [runConfigMutation, wikiApi]
   )
 
   const toggleAutoSave = useCallback((): void => {
@@ -163,26 +162,27 @@ export function useConfigController({
     toggleBooleanConfig('showHeadingNumbers', '목차 번호 표시 설정 변경에 실패했습니다.')
   }, [toggleBooleanConfig])
 
+
   const toggleFavoriteWorkspace = useCallback(
     (workspacePath: string, name: string): void => {
       void runConfigMutation(
         (prev) => prev,
-        () => window.wikiApi.config.toggleFavoriteWorkspace(workspacePath, name),
+        () => wikiApi.config.toggleFavoriteWorkspace(workspacePath, name),
         '즐겨찾기 설정 변경에 실패했습니다.'
       )
     },
-    [runConfigMutation]
+    [runConfigMutation, wikiApi]
   )
 
   const removeFavoriteWorkspace = useCallback(
     (workspacePath: string): void => {
       void runConfigMutation(
         (prev) => prev,
-        () => window.wikiApi.config.removeFavoriteWorkspace(workspacePath),
+        () => wikiApi.config.removeFavoriteWorkspace(workspacePath),
         '즐겨찾기 해제에 실패했습니다.'
       )
     },
-    [runConfigMutation]
+    [runConfigMutation, wikiApi]
   )
 
   const removeRecentWorkspace = useCallback(
@@ -193,28 +193,11 @@ export function useConfigController({
       )
       void runConfigMutation(
         (prev) => ({ ...prev, recentWorkspaces: nextRecents }),
-        () => window.wikiApi.config.update({ recentWorkspaces: nextRecents }),
+        () => wikiApi.config.update({ recentWorkspaces: nextRecents }),
         '최근 워크스페이스 목록 갱신에 실패했습니다.'
       )
     },
-    [runConfigMutation]
-  )
-
-  const saveRawConfig = useCallback(
-    async (rawContent: string): Promise<AppConfig> => {
-      isSavingRawRef.current = true
-      try {
-        const saved = await window.wikiApi.config.saveRaw(rawContent)
-        if (mountedRef.current) {
-          hasMutationCommitRef.current = true
-          recordCommittedConfig(saved, inFlightUpdatesRef.current === 0)
-        }
-        return saved
-      } finally {
-        isSavingRawRef.current = false
-      }
-    },
-    [recordCommittedConfig]
+    [runConfigMutation, wikiApi]
   )
 
   return {
@@ -225,7 +208,6 @@ export function useConfigController({
     toggleShowHeadingNumbers,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
-    removeRecentWorkspace,
-    saveRawConfig
+    removeRecentWorkspace
   }
 }

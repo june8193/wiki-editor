@@ -6,7 +6,8 @@ import {
   type GitLogScope
 } from '@shared/git'
 import { logRendererError } from '../logging/rendererLogger'
-import { toErrorMessage } from '../utils/toErrorMessage'
+import { toErrorMessage } from '@shared/errors'
+import { useWikiApi } from './useWikiApi'
 
 /** Discriminated union for the expanded commit detail panel in the Graph section. */
 export type GitCommitDetailState =
@@ -71,6 +72,7 @@ function appendUniqueCommits(
  * pagination (`더 보기`), and stale-response cancellation.
  */
 export function useGitGraphLog(options: UseGitGraphLogOptions) {
+  const wikiApi = useWikiApi()
   const [graphState, setGraphState] = useState<GitGraphState>(createInitialGitGraphState)
   const graphStateRef = useRef<GitGraphState>(graphState)
   const logRequestSeqRef = useRef(0)
@@ -134,7 +136,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
       }))
 
       try {
-        const result = await window.wikiApi.git.log(rootPath, {
+        const result = await wikiApi.git.log(rootPath, {
           scope,
           limit: DEFAULT_GIT_LOG_LIMIT,
           skip
@@ -187,7 +189,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
         }
       }
     },
-    [isCurrentLogRequest, updateGraphState]
+    [isCurrentLogRequest, updateGraphState, wikiApi]
   )
 
   const refreshGraph = useCallback(
@@ -261,7 +263,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
       }))
 
       try {
-        const detail = await window.wikiApi.git.commitDetail(rootPath, commitHash)
+        const detail = await wikiApi.git.commitDetail(rootPath, commitHash)
         if (!isCurrentDetailRequest()) {
           return
         }
@@ -284,7 +286,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
         })
       }
     },
-    [updateGraphState]
+    [updateGraphState, wikiApi]
   )
 
   return {

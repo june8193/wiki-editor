@@ -9,6 +9,7 @@ import {
   IpcHandlerTuple,
   IpcMainLike,
   registerIpcHandlers,
+  resolveSenderWebContents,
   WebContentsLike
 } from './ipcHelpers'
 
@@ -18,6 +19,7 @@ export interface RegisterWorkspaceIpcOptions {
   configService: ConfigService
   selectDirectory: () => Promise<string | null>
   getTargets: () => WebContentsLike[]
+  isMainWindowSender?: (sender: WebContentsLike | undefined) => boolean
   logService?: LogService
 }
 
@@ -30,6 +32,7 @@ export function registerWorkspaceIpc({
   configService,
   selectDirectory,
   getTargets,
+  isMainWindowSender = () => true,
   logService
 }: RegisterWorkspaceIpcOptions): () => void {
   let stopWatching: (() => void) | null = null
@@ -40,11 +43,17 @@ export function registerWorkspaceIpc({
     workspaceService.unwatch()
   }
 
+  const isAllowedMainSender = (event: unknown): boolean =>
+    isMainWindowSender(resolveSenderWebContents(event))
+
   const handlers: readonly IpcHandlerTuple[] = [
     [WORKSPACE_IPC_CHANNELS.selectFolder, () => selectDirectory()],
     [
       WORKSPACE_IPC_CHANNELS.open,
-      async (_event, rootPath) => {
+      async (event, rootPath) => {
+        if (!isAllowedMainSender(event)) {
+          throw new Error('Only the main window can open a workspace')
+        }
         const info = await workspaceService.openWorkspace(rootPath as string)
         stopWatching = null
         await configService.recordRecentWorkspace(info.rootPath)
@@ -84,17 +93,23 @@ export function registerWorkspaceIpc({
     ],
     [
       WORKSPACE_IPC_CHANNELS.watch,
-      () => {
+      (event) => {
+        if (!isAllowedMainSender(event)) {
+          return
+        }
         if (!stopWatching) {
-          stopWatching = workspaceService.watch((event) => {
-            broadcastIpcEvent(getTargets, WORKSPACE_IPC_CHANNELS.changed, event)
+          stopWatching = workspaceService.watch((changeEvent) => {
+            broadcastIpcEvent(getTargets, WORKSPACE_IPC_CHANNELS.changed, changeEvent)
           })
         }
       }
     ],
     [
       WORKSPACE_IPC_CHANNELS.unwatch,
-      () => {
+      (event) => {
+        if (!isAllowedMainSender(event)) {
+          return
+        }
         clearWatcher()
       }
     ]

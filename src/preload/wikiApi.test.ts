@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_APP_CONFIG } from '@shared/config'
+import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import {
   type AppMenuCommand,
+  BUFFER_IPC_CHANNELS,
   CLIPBOARD_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
   DIAGRAM_IPC_CHANNELS,
@@ -13,6 +15,7 @@ import {
   WORKSPACE_IPC_CHANNELS
 } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
+import type { ActiveTabDragSession } from '@shared/window'
 import { createWikiApi, IpcRendererLike } from './wikiApi'
 
 function createFakeIpcRenderer(): IpcRendererLike & {
@@ -274,37 +277,6 @@ describe('createWikiApi', () => {
     expect(commands).toHaveLength(3)
   })
 
-  it('subscribes to window:close-requested without exposing Electron event and sends window:close-response', async () => {
-    const ipc = createFakeIpcRenderer()
-    const api = createWikiApi(ipc)
-    const receivedArgs: unknown[][] = []
-
-    const unsubscribe = api.window.onCloseRequested((...args: unknown[]) => {
-      receivedArgs.push(args)
-    })
-
-    expect(ipc.listenerCount(WINDOW_IPC_CHANNELS.closeRequested)).toBe(1)
-
-    ipc.emit(WINDOW_IPC_CHANNELS.closeRequested, { secret: 'should-not-leak' })
-    expect(receivedArgs).toEqual([[]])
-
-    await api.window.respondClose('confirming')
-    await api.window.respondClose('close')
-    await api.window.respondClose('cancel')
-
-    expect(ipc.lastInvoked).toEqual([
-      { channel: WINDOW_IPC_CHANNELS.closeResponse, args: ['confirming'] },
-      { channel: WINDOW_IPC_CHANNELS.closeResponse, args: ['close'] },
-      { channel: WINDOW_IPC_CHANNELS.closeResponse, args: ['cancel'] }
-    ])
-
-    unsubscribe()
-    expect(ipc.listenerCount(WINDOW_IPC_CHANNELS.closeRequested)).toBe(0)
-
-    ipc.emit(WINDOW_IPC_CHANNELS.closeRequested, undefined)
-    expect(receivedArgs).toHaveLength(1)
-  })
-
   it('exposes workspace.ingestImage via IPC and workspace.getPathForFile via injected resolver', async () => {
     const ipc = createFakeIpcRenderer()
     const api = createWikiApi(ipc, {
@@ -324,5 +296,150 @@ describe('createWikiApi', () => {
 
     const fallbackApi = createWikiApi(ipc)
     expect(fallbackApi.workspace.getPathForFile({ name: 'pic.png' } as File)).toBe('')
+  })
+
+  it('routes all buffer:* methods through expected IPC channels and unsubscribes buffer:event', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+
+    await api.buffer.getSnapshot()
+    await api.buffer.openWorkspaceFile('C:\\wiki\\note.md', 'note.md', '')
+    await api.buffer.openConfigDocument()
+    await api.buffer.refreshCleanConfig()
+    await api.buffer.updateContent('c:/wiki/note.md', '# Updated')
+    await api.buffer.saveBuffer('c:/wiki/note.md')
+    await api.buffer.syncWindowTabs(['c:/wiki/note.md'])
+    await api.buffer.setAutoSavePaused(true)
+    await api.buffer.syncRenamedPath('C:\\wiki\\note.md', 'C:\\wiki\\renamed.md')
+    await api.buffer.syncDeletedPath('C:\\wiki\\renamed.md')
+    await api.buffer.reconcileWorkspaceBuffersWithDisk()
+    await api.buffer.clearWorkspaceBuffers()
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: BUFFER_IPC_CHANNELS.getSnapshot, args: [] },
+      {
+        channel: BUFFER_IPC_CHANNELS.openWorkspaceFile,
+        args: ['C:\\wiki\\note.md', 'note.md', '']
+      },
+      { channel: BUFFER_IPC_CHANNELS.openConfigDocument, args: [] },
+      { channel: BUFFER_IPC_CHANNELS.refreshCleanConfig, args: [] },
+      { channel: BUFFER_IPC_CHANNELS.updateContent, args: ['c:/wiki/note.md', '# Updated'] },
+      { channel: BUFFER_IPC_CHANNELS.saveBuffer, args: ['c:/wiki/note.md'] },
+      { channel: BUFFER_IPC_CHANNELS.syncWindowTabs, args: [['c:/wiki/note.md']] },
+      { channel: BUFFER_IPC_CHANNELS.setAutoSavePaused, args: [true] },
+      {
+        channel: BUFFER_IPC_CHANNELS.syncRenamedPath,
+        args: ['C:\\wiki\\note.md', 'C:\\wiki\\renamed.md']
+      },
+      { channel: BUFFER_IPC_CHANNELS.syncDeletedPath, args: ['C:\\wiki\\renamed.md'] },
+      { channel: BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk, args: [] },
+      { channel: BUFFER_IPC_CHANNELS.clearWorkspaceBuffers, args: [] }
+    ])
+
+    const received: SharedBufferHubEvent[] = []
+    const unsubscribe = api.buffer.onEvent((event) => {
+      received.push(event)
+    })
+    expect(ipc.listenerCount(BUFFER_IPC_CHANNELS.event)).toBe(1)
+
+    const sampleEvent: SharedBufferHubEvent = {
+      type: 'state-changed',
+      snapshot: { buffers: {}, tabCounts: {} }
+    }
+    ipc.emit(BUFFER_IPC_CHANNELS.event, sampleEvent)
+    expect(received).toEqual([sampleEvent])
+
+    unsubscribe()
+    expect(ipc.listenerCount(BUFFER_IPC_CHANNELS.event)).toBe(0)
+  })
+
+  it('derives window.role synchronously from query string and routes window:* IPC calls', async () => {
+    const mainApi = createWikiApi(createFakeIpcRenderer())
+    expect(mainApi.window.role).toBe('main')
+
+    const auxIpc = createFakeIpcRenderer()
+    const auxApi = createWikiApi(auxIpc, '?foo=1&windowRole=auxiliary')
+    expect(auxApi.window.role).toBe('auxiliary')
+
+    const transferPayload = {
+      bufferKey: 'c:/wiki/note.md',
+      mode: 'wysiwyg' as const,
+      cursor: { selectionStart: 3, selectionEnd: 7 },
+      scrollTop: 140
+    }
+    await auxApi.window.getInitContext()
+    await auxApi.window.detachTabToNewWindow(transferPayload)
+    await auxApi.window.startTabDrag({
+      paneId: 'primary',
+      tabId: 'tab-1',
+      payload: transferPayload
+    })
+    await auxApi.window.updateTabDragOutcome('drag-1', 'cancelled')
+    await auxApi.window.acceptTabDragDrop({ dragSessionId: 'drag-1' })
+    await auxApi.window.endTabDrag({
+      dragSessionId: 'drag-1',
+      screenPoint: { x: 1500, y: 300 },
+      payload: transferPayload
+    })
+    await auxApi.window.closeCurrent()
+    await auxApi.window.resolveCloseRequest(false)
+
+    let closeRequestCount = 0
+    const unsubscribeCloseRequested = auxApi.window.onCloseRequested(() => {
+      closeRequestCount += 1
+    })
+    expect(auxIpc.listenerCount(WINDOW_IPC_CHANNELS.closeRequested)).toBe(1)
+    auxIpc.emit(WINDOW_IPC_CHANNELS.closeRequested, undefined)
+    expect(closeRequestCount).toBe(1)
+    unsubscribeCloseRequested()
+    expect(auxIpc.listenerCount(WINDOW_IPC_CHANNELS.closeRequested)).toBe(0)
+
+    const dragEvents: Array<ActiveTabDragSession | null> = []
+    const unsubscribeDrag = auxApi.window.onTabDragStateChanged((session) => {
+      dragEvents.push(session)
+    })
+    expect(auxIpc.listenerCount(WINDOW_IPC_CHANNELS.dragStateChanged)).toBe(1)
+    const sampleSession: ActiveTabDragSession = {
+      dragSessionId: 'drag-1',
+      sourceWindowId: 100,
+      paneId: 'primary',
+      tabId: 'tab-1',
+      payload: transferPayload,
+      outcome: 'pending'
+    }
+    auxIpc.emit(WINDOW_IPC_CHANNELS.dragStateChanged, sampleSession)
+    auxIpc.emit(WINDOW_IPC_CHANNELS.dragStateChanged, null)
+    expect(dragEvents).toEqual([sampleSession, null])
+    unsubscribeDrag()
+    expect(auxIpc.listenerCount(WINDOW_IPC_CHANNELS.dragStateChanged)).toBe(0)
+
+    expect(auxIpc.lastInvoked).toEqual([
+      { channel: WINDOW_IPC_CHANNELS.getInitContext, args: [] },
+      { channel: WINDOW_IPC_CHANNELS.detachTabToNewWindow, args: [transferPayload] },
+      {
+        channel: WINDOW_IPC_CHANNELS.startTabDrag,
+        args: [{ paneId: 'primary', tabId: 'tab-1', payload: transferPayload }]
+      },
+      {
+        channel: WINDOW_IPC_CHANNELS.updateTabDragOutcome,
+        args: ['drag-1', 'cancelled']
+      },
+      {
+        channel: WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+        args: [{ dragSessionId: 'drag-1' }]
+      },
+      {
+        channel: WINDOW_IPC_CHANNELS.endTabDrag,
+        args: [
+          {
+            dragSessionId: 'drag-1',
+            screenPoint: { x: 1500, y: 300 },
+            payload: transferPayload
+          }
+        ]
+      },
+      { channel: WINDOW_IPC_CHANNELS.closeCurrent, args: [] },
+      { channel: WINDOW_IPC_CHANNELS.resolveCloseRequest, args: [false] }
+    ])
   })
 })

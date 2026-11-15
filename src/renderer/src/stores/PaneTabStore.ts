@@ -1,30 +1,28 @@
+import type { BufferKeyRemap } from '@shared/documentBuffer'
 import type { GitDiffRequest } from '@shared/git'
+import type {
+  CursorPosition,
+  EditorMode,
+  PaneId,
+  TabTransferPayload,
+  TabViewState
+} from '@shared/window'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
-import type { BufferKeyRemap } from './DocumentBufferStore'
 
-export type PaneId = 'primary' | 'secondary'
+export type { CursorPosition, EditorMode, PaneId, TabViewState }
 export type SplitMode = 'single' | 'horizontal' | 'vertical'
 export type SplitDirection = Exclude<SplitMode, 'single'>
-export type EditorMode = 'raw' | 'preview' | 'wysiwyg' | 'split'
 export type GitDiffViewMode = 'side-by-side' | 'inline'
-
-export interface CursorPosition {
-  selectionStart: number
-  selectionEnd: number
-}
 
 export interface DiffTabState {
   request: GitDiffRequest
   viewMode: GitDiffViewMode
 }
 
-export interface DocumentTabItem {
+export interface DocumentTabItem extends TabViewState {
   id: string
   kind: 'document'
   bufferKey: string
-  mode: EditorMode
-  cursor: CursorPosition
-  scrollTop: number
   /** Left Raw region width fraction in Split mode (0.15..0.85, default 0.5); named splitPreviewRatio per spec contract. */
   splitPreviewRatio: number
 }
@@ -55,18 +53,22 @@ export interface PaneLayoutState {
   panes: Record<PaneId, PaneState>
 }
 
-export interface OpenTabOptions {
+export interface OpenTabOptions extends Partial<TabViewState> {
   paneId?: PaneId
-  mode?: EditorMode
-  splitPreviewRatio?: number
 }
 
-export interface TabViewPatch {
-  mode?: EditorMode
-  cursor?: CursorPosition
-  scrollTop?: number
-  splitPreviewRatio?: number
-}
+export type TransferredTabDropTarget =
+  | {
+      kind: 'pane'
+      paneId: PaneId
+      targetIndex?: number
+    }
+  | {
+      kind: 'split'
+      direction: SplitDirection
+    }
+
+export type TabViewPatch = Partial<TabViewState>
 
 export interface CloseTabResult {
   closedTab: TabItem
@@ -244,6 +246,38 @@ function hasPopulatedSplitPanes(layout: PaneLayoutState): boolean {
 export function canSplitWithTab(layout: PaneLayoutState): boolean {
   return layout.panes.primary.tabs.length > 1 || hasPopulatedSplitPanes(layout)
 }
+
+/**
+ * External cross-window drags add a tab rather than moving one out of `primary`, so even a
+ * 1-tab `single`-mode window can split safely into `secondary`.
+ */
+export function canAcceptIncomingSplitDrop(layout: PaneLayoutState): boolean {
+  return layout.panes.primary.tabs.length > 0
+}
+
+export function extractLayoutBufferKeys(layout: PaneLayoutState): string[] {
+  const keys: string[] = []
+  for (const paneId of ['primary', 'secondary'] as const) {
+    const pane = layout.panes[paneId]
+    if (!pane) continue
+    for (const tab of pane.tabs) {
+      if (tab.kind === 'document') {
+        keys.push(tab.bufferKey)
+      }
+    }
+  }
+  return keys
+}
+
+export function countLayoutTabs(layout: PaneLayoutState): number {
+  let count = 0
+  for (const paneId of ['primary', 'secondary'] as const) {
+    const pane = layout.panes[paneId]
+    if (!pane) continue
+    count += pane.tabs.length
+  }
+  return count
+}
 /**
  * Manages up to 2 split panes, independent per-pane tab bars, and lightweight inactive tab state.
  */
@@ -305,10 +339,60 @@ export class PaneTabStore {
     return hasBufferReferenceInPanes(this.state.panes, bufferKey, excludeTabId)
   }
 
+  getBufferKeys(): string[] {
+    return extractLayoutBufferKeys(this.state)
+  }
+
+  getTotalTabCount(): number {
+    return countLayoutTabs(this.state)
+  }
+
   openTab = (bufferKey: string, options: OpenTabOptions = {}): DocumentTabItem =>
     this.openOrFocusTab(bufferKey, options)
 
-  private resolveTargetPaneContext(paneIdOption?: PaneId): {
+  /**
+   * Inserts or activates a transferred tab from another window on either a target pane tab bar
+   * (optionally at `targetIndex`) or a newly activated split pane.
+   */
+  acceptTransferredTab = (
+    payload: TabTransferPayload,
+    target?: TransferredTabDropTarget
+  ): DocumentTabItem => {
+    const viewOptions: OpenTabOptions = {
+      mode: payload.mode,
+      cursor: payload.cursor,
+      scrollTop: payload.scrollTop,
+      splitPreviewRatio: payload.splitPreviewRatio
+    }
+    if (target?.kind === 'split') {
+      if (this.state.panes.primary.tabs.length === 0) {
+        return this.openOrFocusTab(payload.bufferKey, { ...viewOptions, paneId: 'primary' })
+      }
+      return this.openOrFocusTab(
+        payload.bufferKey,
+        { ...viewOptions, paneId: 'secondary' },
+        undefined,
+        { splitDirection: target.direction }
+      )
+    }
+
+    const requestedPaneId = target?.paneId ?? this.state.activePaneId
+    const paneId: PaneId =
+      requestedPaneId === 'secondary' && this.state.panes.primary.tabs.length === 0
+        ? 'primary'
+        : requestedPaneId
+    return this.openOrFocusTab(
+      payload.bufferKey,
+      { ...viewOptions, paneId },
+      undefined,
+      { targetIndex: target?.targetIndex }
+    )
+  }
+
+  private resolveTargetPaneContext(
+    paneIdOption?: PaneId,
+    splitDirection?: SplitDirection
+  ): {
     targetPaneId: PaneId
     targetPane: PaneState
     nextSplitMode: SplitMode
@@ -316,9 +400,10 @@ export class PaneTabStore {
     const targetPaneId = paneIdOption ?? this.state.activePaneId
     const targetPane = this.state.panes[targetPaneId]
     const nextSplitMode =
-      targetPaneId === 'secondary' && this.state.splitMode === 'single'
+      splitDirection ??
+      (targetPaneId === 'secondary' && this.state.splitMode === 'single'
         ? 'horizontal'
-        : this.state.splitMode
+        : this.state.splitMode)
     return { targetPaneId, targetPane, nextSplitMode }
   }
 
@@ -327,7 +412,8 @@ export class PaneTabStore {
     targetPane: PaneState,
     nextSplitMode: SplitMode,
     created: T,
-    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string }
+    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string },
+    targetIndex?: number
   ): T {
     this.commit(
       {
@@ -338,7 +424,7 @@ export class PaneTabStore {
           ...this.state.panes,
           [targetPaneId]: {
             ...targetPane,
-            tabs: [...targetPane.tabs, created],
+            tabs: insertTabAt(targetPane.tabs, created, targetIndex),
             activeTabId: created.id
           }
         }
@@ -423,10 +509,12 @@ export class PaneTabStore {
   private openOrFocusTab(
     bufferKey: string,
     options: OpenTabOptions = {},
-    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string }
+    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string },
+    placement?: { targetIndex?: number; splitDirection?: SplitDirection }
   ): DocumentTabItem {
     const { targetPaneId, targetPane, nextSplitMode } = this.resolveTargetPaneContext(
-      options.paneId
+      options.paneId,
+      placement?.splitDirection
     )
 
     const existing = targetPane.tabs.find(
@@ -442,12 +530,19 @@ export class PaneTabStore {
       kind: 'document',
       bufferKey,
       mode: options.mode ?? 'raw',
-      cursor: { selectionStart: 0, selectionEnd: 0 },
-      scrollTop: 0,
+      cursor: options.cursor ? { ...options.cursor } : { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: options.scrollTop ?? 0,
       splitPreviewRatio: normalizeSplitRatio(options.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
     }
 
-    return this.appendNewTabInPane(targetPaneId, targetPane, nextSplitMode, created, duplicateFrom)
+    return this.appendNewTabInPane(
+      targetPaneId,
+      targetPane,
+      nextSplitMode,
+      created,
+      duplicateFrom,
+      placement?.targetIndex
+    )
   }
 
   activateTab = (paneId: PaneId, tabId: string): void => {

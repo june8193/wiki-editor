@@ -4,6 +4,14 @@ import type {
 } from '@shared/assets'
 import type { AppConfig } from '@shared/config'
 import type {
+  BufferKeyRemap,
+  DocumentBuffer,
+  ReconcileBuffersResult,
+  SaveBufferResult,
+  SharedBufferHubEvent,
+  SharedBufferStateSnapshot
+} from '@shared/documentBuffer'
+import type {
   GitBranchList,
   GitCommitDetail,
   GitDiffRequest,
@@ -14,6 +22,7 @@ import type {
 } from '@shared/git'
 import {
   type AppMenuCommand,
+  BUFFER_IPC_CHANNELS,
   CLIPBOARD_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
   DIAGRAM_IPC_CHANNELS,
@@ -23,9 +32,18 @@ import {
   MENU_IPC_CHANNELS,
   WikiApi,
   WINDOW_IPC_CHANNELS,
-  type WindowCloseResponse,
   WORKSPACE_IPC_CHANNELS
 } from '@shared/ipc'
+import {
+  resolveWindowRole,
+  WINDOW_ROLE_QUERY_PARAM,
+  type AcceptTabDragDropResult,
+  type ActiveTabDragSession,
+  type DetachTabToNewWindowResult,
+  type TabDragEndResult,
+  type WindowInitContext,
+  type WindowRole
+} from '@shared/window'
 import type {
   WorkspaceChangeEvent,
   WorkspaceEntry,
@@ -56,13 +74,25 @@ function subscribeChannel<T>(
   }
 }
 
+function resolveWindowRoleFromSearch(search: string | undefined): WindowRole {
+  if (!search) return 'main'
+  return resolveWindowRole(new URLSearchParams(search).get(WINDOW_ROLE_QUERY_PARAM))
+}
+
 /**
  * Builds the type-safe window.wikiApi bridge exposed through Electron's contextBridge.
  */
 export function createWikiApi(
   ipcRenderer: IpcRendererLike,
-  options: CreateWikiApiOptions = {}
+  optionsOrSearch: CreateWikiApiOptions | string = {},
+  locationSearch?: string
 ): Required<WikiApi> {
+  const options = typeof optionsOrSearch === 'string' ? {} : optionsOrSearch
+  const effectiveSearch =
+    typeof optionsOrSearch === 'string'
+      ? optionsOrSearch
+      : locationSearch ?? (typeof window !== 'undefined' ? window.location?.search : undefined)
+  const windowRole = resolveWindowRoleFromSearch(effectiveSearch)
   return {
     config: {
       get: () => ipcRenderer.invoke(CONFIG_IPC_CHANNELS.get) as Promise<AppConfig>,
@@ -178,20 +208,101 @@ export function createWikiApi(
       onCommand: (listener) =>
         subscribeChannel<AppMenuCommand>(ipcRenderer, MENU_IPC_CHANNELS.command, listener)
     },
+    buffer: {
+      getSnapshot: () =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.getSnapshot) as Promise<SharedBufferStateSnapshot>,
+      openWorkspaceFile: (filePath, name, initialContent) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.openWorkspaceFile,
+          filePath,
+          name,
+          initialContent
+        ) as Promise<DocumentBuffer>,
+      openConfigDocument: () =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.openConfigDocument) as Promise<DocumentBuffer>,
+      refreshCleanConfig: () =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.refreshCleanConfig) as Promise<DocumentBuffer | null>,
+      updateContent: (key, nextContent) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.updateContent,
+          key,
+          nextContent
+        ) as Promise<DocumentBuffer | null>,
+      saveBuffer: (key) =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.saveBuffer, key) as Promise<SaveBufferResult>,
+      syncWindowTabs: (bufferKeys, options) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.syncWindowTabs,
+          bufferKeys,
+          ...(options ? [options] : [])
+        ) as Promise<SharedBufferStateSnapshot>,
+      setAutoSavePaused: (paused) =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.setAutoSavePaused, paused) as Promise<void>,
+      syncRenamedPath: (oldPath, newPath) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.syncRenamedPath,
+          oldPath,
+          newPath
+        ) as Promise<BufferKeyRemap[]>,
+      syncDeletedPath: (targetPath) =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.syncDeletedPath, targetPath) as Promise<string[]>,
+      reconcileWorkspaceBuffersWithDisk: (changeEvent) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk,
+          ...(changeEvent !== undefined ? [changeEvent] : [])
+        ) as Promise<ReconcileBuffersResult>,
+      clearWorkspaceBuffers: () =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.clearWorkspaceBuffers) as Promise<string[]>,
+      onEvent: (listener) =>
+        subscribeChannel<SharedBufferHubEvent>(ipcRenderer, BUFFER_IPC_CHANNELS.event, listener)
+    },
+    window: {
+      role: windowRole,
+      getInitContext: () =>
+        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.getInitContext) as Promise<WindowInitContext>,
+      detachTabToNewWindow: (payload) =>
+        ipcRenderer.invoke(
+          WINDOW_IPC_CHANNELS.detachTabToNewWindow,
+          payload
+        ) as Promise<DetachTabToNewWindowResult>,
+      startTabDrag: (input) =>
+        ipcRenderer.invoke(
+          WINDOW_IPC_CHANNELS.startTabDrag,
+          input
+        ) as Promise<ActiveTabDragSession>,
+      updateTabDragOutcome: (dragSessionId, outcome) =>
+        ipcRenderer.invoke(
+          WINDOW_IPC_CHANNELS.updateTabDragOutcome,
+          dragSessionId,
+          outcome
+        ) as Promise<ActiveTabDragSession | null>,
+      acceptTabDragDrop: (input) =>
+        ipcRenderer.invoke(
+          WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+          input
+        ) as Promise<AcceptTabDragDropResult>,
+      endTabDrag: (input) =>
+        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.endTabDrag, input) as Promise<TabDragEndResult>,
+      onTabDragStateChanged: (listener) =>
+        subscribeChannel<ActiveTabDragSession | null>(
+          ipcRenderer,
+          WINDOW_IPC_CHANNELS.dragStateChanged,
+          listener
+        ),
+      closeCurrent: () => ipcRenderer.invoke(WINDOW_IPC_CHANNELS.closeCurrent) as Promise<void>,
+      onCloseRequested: (listener) =>
+        subscribeChannel<unknown>(ipcRenderer, WINDOW_IPC_CHANNELS.closeRequested, () =>
+          listener()
+        ),
+      resolveCloseRequest: (approved) =>
+        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.resolveCloseRequest, approved) as Promise<void>
+    },
     log: {
       write: (payload) => ipcRenderer.invoke(LOG_IPC_CHANNELS.write, payload) as Promise<void>
     },
     clipboard: {
       writeText: (text) =>
         ipcRenderer.invoke(CLIPBOARD_IPC_CHANNELS.writeText, text) as Promise<void>
-    },
-    window: {
-      onCloseRequested: (listener) =>
-        subscribeChannel<undefined>(ipcRenderer, WINDOW_IPC_CHANNELS.closeRequested, () => {
-          listener()
-        }),
-      respondClose: (response: WindowCloseResponse) =>
-        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.closeResponse, response) as Promise<void>
     },
     diagram: {
       copyText: (text) => ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyText, text) as Promise<void>,
