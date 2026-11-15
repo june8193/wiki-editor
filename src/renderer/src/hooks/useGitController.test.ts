@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createEmptyGitStatus,
+  type GitCommitDetail,
   type GitGraphCommit,
   type GitLogResult,
   type GitStatus
@@ -27,6 +28,20 @@ function makeCommit(hash: string): GitGraphCommit {
     authorName: 'Tester',
     committedAt: '2026-11-15T12:00:00+09:00',
     refs: []
+  }
+}
+
+function makeCommitDetail(hash: string): GitCommitDetail {
+  return {
+    hash,
+    shortHash: hash.slice(0, 7),
+    parents: [],
+    subject: `commit ${hash}`,
+    body: `Detail body for ${hash}`,
+    authorName: 'Tester',
+    authorEmail: 'tester@example.com',
+    committedAt: '2026-11-15T12:00:00+09:00',
+    files: [{ path: `${hash}.md`, status: 'A' }]
   }
 }
 
@@ -444,5 +459,211 @@ describe('useGitController', () => {
       resolveRepoACurrentDelayed({ commits: [makeCommit('stale-repo-a')], hasMore: false })
     })
     expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['b-all-1'])
+  })
+
+  it('toggles inline commit detail expand/collapse, handles errors, and ignores stale detail responses', async () => {
+    let resolveSlowDetail1!: (value: GitCommitDetail) => void
+    const slowDetail1Promise = new Promise<GitCommitDetail>((resolve) => {
+      resolveSlowDetail1 = resolve
+    })
+
+    const detailMock = vi.fn((_ws: string, hash: string) => {
+      if (hash === 'aaaa111') {
+        return slowDetail1Promise
+      }
+      if (hash === 'err3333') {
+        return Promise.reject(new Error('커밋 상세 조회 실패'))
+      }
+      return Promise.resolve(makeCommitDetail(hash))
+    })
+
+    window.wikiApi = {
+      git: {
+        status: vi.fn(async () => makeStatus('main')),
+        init: vi.fn(),
+        stage: vi.fn(),
+        stageAll: vi.fn(),
+        unstage: vi.fn(),
+        unstageAll: vi.fn(),
+        commit: vi.fn(),
+        branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
+        checkout: vi.fn(),
+        pull: vi.fn(),
+        push: vi.fn(),
+        sync: vi.fn(),
+        log: vi.fn(async () => ({
+          commits: [makeCommit('aaaa111'), makeCommit('bbbb222'), makeCommit('err3333')],
+          hasMore: false
+        })),
+        commitDetail: detailMock
+      }
+    } as unknown as WikiApi
+
+    const { result } = renderHook(() => useGitController({ workspaceRootPath: 'C:/wiki' }))
+    await waitFor(() => {
+      expect(result.current.graphState.commits).toHaveLength(3)
+    })
+    expect(result.current.graphState.commitDetail).toEqual({
+      selectedHash: null,
+      detail: null,
+      isLoading: false,
+      errorMessage: null
+    })
+
+    // Start loading detail for aaaa111, then immediately switch to bbbb222
+    let pendingFirst!: Promise<void>
+    act(() => {
+      pendingFirst = result.current.toggleCommitDetail('aaaa111')
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBe('aaaa111')
+    expect(result.current.graphState.commitDetail.isLoading).toBe(true)
+
+    await act(async () => {
+      await result.current.toggleCommitDetail('bbbb222')
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBe('bbbb222')
+    expect(result.current.graphState.commitDetail.detail?.hash).toBe('bbbb222')
+    expect(result.current.graphState.commitDetail.isLoading).toBe(false)
+
+    // Stale slow response for aaaa111 must be ignored
+    await act(async () => {
+      resolveSlowDetail1(makeCommitDetail('aaaa111'))
+      await pendingFirst
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBe('bbbb222')
+    expect(result.current.graphState.commitDetail.detail?.hash).toBe('bbbb222')
+
+    // Clicking bbbb222 again collapses it without re-fetching
+    const callsBeforeCollapse = detailMock.mock.calls.length
+    await act(async () => {
+      await result.current.toggleCommitDetail('bbbb222')
+    })
+    expect(detailMock).toHaveBeenCalledTimes(callsBeforeCollapse)
+    expect(result.current.graphState.commitDetail).toEqual({
+      selectedHash: null,
+      detail: null,
+      isLoading: false,
+      errorMessage: null
+    })
+
+    // Error state is preserved on selected commit until collapsed
+    await act(async () => {
+      await result.current.toggleCommitDetail('err3333')
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBe('err3333')
+    expect(result.current.graphState.commitDetail.detail).toBeNull()
+    expect(result.current.graphState.commitDetail.isLoading).toBe(false)
+    expect(result.current.graphState.commitDetail.errorMessage).toBe('커밋 상세 조회 실패')
+
+    await act(async () => {
+      await result.current.toggleCommitDetail('err3333')
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBeNull()
+    expect(result.current.graphState.commitDetail.errorMessage).toBeNull()
+  })
+
+  it('clears expanded commit detail on scope filter switch, workspace switch, and when refreshed log drops selected commit', async () => {
+    let scopeMode: 'all' | 'current' = 'all'
+    let currentCommits = [makeCommit('main111'), makeCommit('side222')]
+
+    let resolveDelayedDetail!: (value: GitCommitDetail) => void
+    let delayNextDetail = false
+
+    const detailMock = vi.fn((_ws: string, hash: string) => {
+      if (delayNextDetail) {
+        delayNextDetail = false
+        return new Promise<GitCommitDetail>((resolve) => {
+          resolveDelayedDetail = resolve
+        })
+      }
+      return Promise.resolve(makeCommitDetail(hash))
+    })
+
+    window.wikiApi = {
+      git: {
+        status: vi.fn(async (ws) => makeStatus(ws === 'C:/repo-a' ? 'main' : 'other')),
+        init: vi.fn(),
+        stage: vi.fn(),
+        stageAll: vi.fn(),
+        unstage: vi.fn(),
+        unstageAll: vi.fn(),
+        commit: vi.fn(),
+        branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
+        checkout: vi.fn(),
+        pull: vi.fn(),
+        push: vi.fn(),
+        sync: vi.fn(),
+        log: vi.fn(async (_ws: string, options?: { scope?: 'all' | 'current' }) => {
+          scopeMode = options?.scope ?? 'all'
+          if (scopeMode === 'current') {
+            return { commits: [makeCommit('main111')], hasMore: false }
+          }
+          return { commits: currentCommits, hasMore: false }
+        }),
+        commitDetail: detailMock
+      }
+    } as unknown as WikiApi
+
+    const { result, rerender } = renderHook(
+      ({ ws }: { ws: string | null }) => useGitController({ workspaceRootPath: ws }),
+      { initialProps: { ws: 'C:/repo-a' } }
+    )
+    await waitFor(() => {
+      expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['main111', 'side222'])
+    })
+
+    // Expand side222, then switch scope to current -> expansion must clear cleanly
+    await act(async () => {
+      await result.current.toggleCommitDetail('side222')
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBe('side222')
+
+    await act(async () => {
+      await result.current.changeLogScope('current')
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBeNull()
+    expect(result.current.graphState.commitDetail.detail).toBeNull()
+
+    // Expand main111 while switching back to 'all', keeping main111 when refreshed list still includes it
+    await act(async () => {
+      await result.current.changeLogScope('all')
+    })
+    await act(async () => {
+      await result.current.toggleCommitDetail('main111')
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBe('main111')
+
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBe('main111')
+
+    // If refresh drops main111 (e.g. rewritten/different history), selection clears cleanly
+    currentCommits = [makeCommit('other999')]
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBeNull()
+
+    // Start delayed detail fetch in repo-a, then switch to repo-b -> clears & ignores stale response
+    delayNextDetail = true
+    let pendingStaleDetail!: Promise<void>
+    act(() => {
+      pendingStaleDetail = result.current.toggleCommitDetail('other999')
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBe('other999')
+
+    rerender({ ws: 'C:/repo-b' })
+    await waitFor(() => {
+      expect(result.current.status?.branch).toBe('other')
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBeNull()
+
+    await act(async () => {
+      resolveDelayedDetail(makeCommitDetail('other999'))
+      await pendingStaleDetail
+    })
+    expect(result.current.graphState.commitDetail.selectedHash).toBeNull()
+    expect(result.current.graphState.commitDetail.detail).toBeNull()
   })
 })

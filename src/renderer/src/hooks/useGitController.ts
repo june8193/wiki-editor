@@ -42,7 +42,14 @@ export function useGitController({
     )
   }, [])
 
-  const { graphState, resetGraph, refreshGraph, changeLogScope, loadMoreCommits } = useGitGraphLog({
+  const {
+    graphState,
+    resetGraph,
+    refreshGraph,
+    changeLogScope,
+    loadMoreCommits,
+    toggleCommitDetail
+  } = useGitGraphLog({
     isCurrentRequest,
     getWorkspaceRootPath: () => activeWorkspaceRef.current,
     getWorkspaceEpoch: () => workspaceEpochRef.current,
@@ -330,6 +337,7 @@ export function useGitController({
     refreshStatus,
     changeLogScope,
     loadMoreCommits,
+    toggleCommitDetail,
     initRepo,
     stageFile,
     stageAll,

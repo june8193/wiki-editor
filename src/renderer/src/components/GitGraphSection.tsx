@@ -1,6 +1,13 @@
-import { memo, useMemo } from 'react'
-import type { GitGraphCommit, GitLogScope, GitRefBadge, GitRefKind } from '@shared/git'
-import type { GitGraphState } from '../hooks/useGitGraphLog'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import type {
+  GitCommitDetail,
+  GitGraphCommit,
+  GitLogScope,
+  GitRefBadge,
+  GitRefKind
+} from '@shared/git'
+import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
+import { formatGitFileLabel, getGitFileBadgeModifier } from '../utils/gitFilePresentation'
 import {
   buildGitGraphConnectionPath,
   computeGitGraphLayout,
@@ -46,6 +53,7 @@ export interface GitGraphSectionProps {
   isUnborn: boolean
   graphState: GitGraphState
   onLoadMore: () => void
+  onToggleCommitDetail: (commitHash: string) => void
 }
 
 function getLaneColor(colorIndex: number): string {
@@ -210,15 +218,137 @@ const GitGraphLaneSvg = memo(function GitGraphLaneSvg({
   )
 })
 
+function GitCommitDetailFiles({ detail }: { detail: GitCommitDetail }) {
+  if (detail.files.length === 0) {
+    return <p className="git-commit-detail-empty-files">변경된 파일이 없습니다.</p>
+  }
+
+  return (
+    <div className="git-commit-detail-files-section">
+      <div className="git-commit-detail-files-header">변경된 파일 ({detail.files.length})</div>
+      <ul className="git-commit-detail-files" aria-label="변경된 파일">
+        {detail.files.map((file) => {
+          const label = formatGitFileLabel(file)
+          return (
+            <li
+              key={`${file.status}:${file.origPath ?? ''}:${file.path}`}
+              className="git-commit-detail-file-item"
+            >
+              <span className={`git-badge git-badge--${getGitFileBadgeModifier(file.status)}`}>
+                {file.status}
+              </span>
+              <span className="git-commit-detail-file-path" title={label}>
+                {label}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+interface GitCommitDetailPanelProps {
+  shortHash: string
+  detailState: GitCommitDetailState
+}
+
 /**
- * Renders the Graph accordion body with commit SVG lanes, ref badges, metadata, and pagination.
+ * Renders read-only inline commit metadata, hash copy control, and changed files below a row.
+ */
+function GitCommitDetailPanel({ shortHash, detailState }: GitCommitDetailPanelProps) {
+  const [copiedHash, setCopiedHash] = useState<string | null>(null)
+  const copyTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current)
+      }
+    }
+  }, [])
+
+  async function handleCopyHash(hash: string): Promise<void> {
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(hash)
+      setCopiedHash(hash)
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current)
+      }
+      copyTimerRef.current = window.setTimeout(() => {
+        setCopiedHash((current) => (current === hash ? null : current))
+        copyTimerRef.current = null
+      }, 2000)
+    } catch {
+      // Clipboard writes can fail when permissions are unavailable.
+    }
+  }
+
+  const { detail, isLoading, errorMessage } = detailState
+  const isCopied = detail !== null && copiedHash === detail.hash
+  const bodyText = detail?.body.trim() ?? ''
+
+  return (
+    <div
+      className="git-commit-detail"
+      role="region"
+      aria-label={`${shortHash} 커밋 상세`}
+      // Clear inherited commit-row tooltip while hovering inside the expanded detail box.
+      title=""
+    >
+      {isLoading && <p className="git-commit-detail-status">커밋 상세를 불러오는 중...</p>}
+      {!isLoading && errorMessage && (
+        <p className="git-commit-detail-error" role="alert">
+          {errorMessage}
+        </p>
+      )}
+      {!isLoading && !errorMessage && detail && (
+        <>
+          <div className="git-commit-detail-top">
+            <code className="git-commit-detail-hash" title={detail.hash}>
+              {detail.shortHash}
+            </code>
+            <button
+              type="button"
+              className="git-commit-detail-copy-btn"
+              aria-label="해시 복사"
+              onClick={() => void handleCopyHash(detail.hash)}
+            >
+              {isCopied ? '복사됨' : '복사'}
+            </button>
+          </div>
+          <div className="git-commit-detail-subject">{detail.subject}</div>
+          {bodyText.length > 0 && <div className="git-commit-detail-body">{detail.body}</div>}
+          <div className="git-commit-detail-meta">
+            <span className="git-commit-detail-author">
+              {detail.authorEmail
+                ? `${detail.authorName} <${detail.authorEmail}>`
+                : detail.authorName}
+            </span>
+            <span className="git-commit-detail-date">
+              {formatGitCommitTimestamp(detail.committedAt)}
+            </span>
+          </div>
+          <GitCommitDetailFiles detail={detail} />
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Renders the Graph accordion body with commit SVG lanes, ref badges, metadata, inline details, and pagination.
  */
 export const GitGraphSection = memo(function GitGraphSection({
   isUnborn,
   graphState,
-  onLoadMore
+  onLoadMore,
+  onToggleCommitDetail
 }: GitGraphSectionProps) {
-  const { commits, hasMore, isLoading, isLoadingMore, errorMessage } = graphState
+  const { commits, hasMore, isLoading, isLoadingMore, errorMessage, commitDetail } = graphState
   const layout = useMemo(() => computeGitGraphLayout(commits), [commits])
 
   if (isLoading && commits.length === 0) {
@@ -249,33 +379,55 @@ export const GitGraphSection = memo(function GitGraphSection({
         </p>
       )}
       <ul className="git-graph-list" aria-label="커밋 그래프">
-        {layout.rows.map((row) => (
-          <li
-            key={row.commit.hash}
-            className={`git-graph-item${row.isHead ? ' is-head' : ''}`}
-            title={formatGitCommitTooltip(row.commit)}
-          >
-            <GitGraphLaneSvg row={row} maxLanes={layout.maxLanes} />
-            <div className="git-graph-commit-info">
-              <div className="git-graph-commit-primary">
-                {row.commit.refs.length > 0 && (
-                  <span className="git-graph-refs">
-                    {row.commit.refs.map((ref) => (
-                      <span
-                        key={`${ref.kind}:${ref.name}`}
-                        className={getRefBadgeClassName(ref)}
-                      >
-                        {ref.name}
+        {layout.rows.map((row) => {
+          const isSelected = commitDetail.selectedHash === row.commit.hash
+          const isExpanded =
+            isSelected &&
+            (commitDetail.isLoading ||
+              commitDetail.detail !== null ||
+              commitDetail.errorMessage !== null)
+
+          return (
+            <li
+              key={row.commit.hash}
+              className={`git-graph-item${row.isHead ? ' is-head' : ''}${isExpanded ? ' is-expanded' : ''}`}
+              title={formatGitCommitTooltip(row.commit)}
+            >
+              <button
+                type="button"
+                className="git-graph-row-btn"
+                aria-expanded={isExpanded}
+                onClick={() => onToggleCommitDetail(row.commit.hash)}
+              >
+                <GitGraphLaneSvg row={row} maxLanes={layout.maxLanes} />
+                <div className="git-graph-commit-info">
+                  <div className="git-graph-commit-primary">
+                    {row.commit.refs.length > 0 && (
+                      <span className="git-graph-refs">
+                        {row.commit.refs.map((ref) => (
+                          <span
+                            key={`${ref.kind}:${ref.name}`}
+                            className={getRefBadgeClassName(ref)}
+                          >
+                            {ref.name}
+                          </span>
+                        ))}
                       </span>
-                    ))}
-                  </span>
-                )}
-                <span className="git-graph-subject">{row.commit.subject}</span>
-              </div>
-              <span className="git-graph-author">{row.commit.authorName}</span>
-            </div>
-          </li>
-        ))}
+                    )}
+                    <span className="git-graph-subject">{row.commit.subject}</span>
+                  </div>
+                  <span className="git-graph-author">{row.commit.authorName}</span>
+                </div>
+              </button>
+              {isExpanded && (
+                <GitCommitDetailPanel
+                  shortHash={row.commit.shortHash}
+                  detailState={commitDetail}
+                />
+              )}
+            </li>
+          )
+        })}
       </ul>
       {hasMore && (
         <button

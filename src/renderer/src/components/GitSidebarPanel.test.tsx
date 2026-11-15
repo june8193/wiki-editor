@@ -63,6 +63,7 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     graphState: createInitialGitGraphState(),
     onChangeLogScope: vi.fn(),
     onLoadMoreCommits: vi.fn(),
+    onToggleCommitDetail: vi.fn(),
     splitState: createDefaultGitPanelSplitState(),
     onToggleChangesCollapsed: vi.fn(),
     onToggleGraphCollapsed: vi.fn(),
@@ -564,5 +565,179 @@ describe('GitSidebarPanel', () => {
     const loadMoreBtn = within(graphRegion).getByRole('button', { name: '더 보기' })
     await user.click(loadMoreBtn)
     expect(onLoadMoreCommits).toHaveBeenCalledTimes(1)
+  })
+
+  it('toggles inline commit detail panel, displays metadata and changed files, and copies full hash', async () => {
+    const user = userEvent.setup()
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const onToggleCommitDetail = vi.fn()
+    const fullHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    const baseGraph = createInitialGitGraphState()
+    const commits = [
+      {
+        hash: fullHash,
+        shortHash: 'aaaaaaa',
+        parents: ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
+        subject: 'feat: add inline detail',
+        authorName: 'Alice',
+        committedAt: '2026-11-15T09:00:00+09:00',
+        refs: [{ name: 'main', kind: 'local-branch' as const }]
+      },
+      {
+        hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        shortHash: 'bbbbbbb',
+        parents: [],
+        subject: 'chore: initial commit',
+        authorName: 'Bob',
+        committedAt: '2026-11-14T09:00:00+09:00',
+        refs: []
+      }
+    ]
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          onToggleCommitDetail,
+          graphState: {
+            ...baseGraph,
+            commits
+          }
+        })}
+      />
+    )
+
+    const graphRegion = screen.getByRole('region', { name: 'Graph' })
+    const firstRowBtn = within(graphRegion).getByRole('button', { name: /feat: add inline detail/ })
+    expect(firstRowBtn.getAttribute('aria-expanded')).toBe('false')
+    await user.click(firstRowBtn)
+    expect(onToggleCommitDetail).toHaveBeenCalledWith(fullHash)
+
+    // Loading state
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          onToggleCommitDetail,
+          graphState: {
+            ...baseGraph,
+            commits,
+            commitDetail: {
+              selectedHash: fullHash,
+              detail: null,
+              isLoading: true,
+              errorMessage: null
+            }
+          }
+        })}
+      />
+    )
+    expect(within(graphRegion).getByText('커밋 상세를 불러오는 중...')).toBeInTheDocument()
+
+    // Error state
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          onToggleCommitDetail,
+          graphState: {
+            ...baseGraph,
+            commits,
+            commitDetail: {
+              selectedHash: fullHash,
+              detail: null,
+              isLoading: false,
+              errorMessage: '상세 조회 실패'
+            }
+          }
+        })}
+      />
+    )
+    expect(within(graphRegion).getByRole('alert')).toHaveTextContent('상세 조회 실패')
+
+    // Loaded state with body and A/M/D/R files
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          onToggleCommitDetail,
+          graphState: {
+            ...baseGraph,
+            commits,
+            commitDetail: {
+              selectedHash: fullHash,
+              detail: {
+                hash: fullHash,
+                shortHash: 'aaaaaaa',
+                parents: ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
+                subject: 'feat: add inline detail',
+                body: 'First detail line\nSecond detail line',
+                authorName: 'Alice',
+                authorEmail: 'alice@example.com',
+                committedAt: '2026-11-15T09:00:00+09:00',
+                files: [
+                  { status: 'A', path: 'notes/new.md' },
+                  { status: 'M', path: 'README.md' },
+                  { status: 'D', path: 'legacy.md' },
+                  { status: 'R', origPath: 'old/title.md', path: 'new/title.md' }
+                ]
+              },
+              isLoading: false,
+              errorMessage: null
+            }
+          }
+        })}
+      />
+    )
+
+    const expandedBtn = within(graphRegion).getByRole('button', { name: /feat: add inline detail/ })
+    expect(expandedBtn.getAttribute('aria-expanded')).toBe('true')
+    const detailRegion = within(graphRegion).getByRole('region', { name: 'aaaaaaa 커밋 상세' })
+    expect(detailRegion).toHaveTextContent('aaaaaaa')
+    expect(detailRegion).toHaveTextContent('First detail line')
+    expect(detailRegion).toHaveTextContent('Second detail line')
+    expect(detailRegion).toHaveTextContent('alice@example.com')
+    expect(detailRegion).toHaveTextContent('변경된 파일 (4)')
+    expect(detailRegion).toHaveTextContent('notes/new.md')
+    expect(detailRegion).toHaveTextContent('README.md')
+    expect(detailRegion).toHaveTextContent('legacy.md')
+    expect(detailRegion).toHaveTextContent('old/title.md → new/title.md')
+
+    // Copy full hash button preserves accessible label while showing feedback
+    const copyBtn = within(detailRegion).getByRole('button', { name: '해시 복사' })
+    await user.click(copyBtn)
+    expect(writeTextSpy).toHaveBeenCalledWith(fullHash)
+    expect(within(detailRegion).getByRole('button', { name: '해시 복사' })).toHaveTextContent('복사됨')
+
+    // Read-only guarantee: no checkout/reset/branch creation actions inside detail panel
+    expect(within(detailRegion).queryByRole('button', { name: /checkout|reset|revert|branch/i })).toBeNull()
+
+    // Empty body and empty changed files state
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          onToggleCommitDetail,
+          graphState: {
+            ...baseGraph,
+            commits,
+            commitDetail: {
+              selectedHash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+              detail: {
+                hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                shortHash: 'bbbbbbb',
+                parents: [],
+                subject: 'chore: initial commit',
+                body: '',
+                authorName: 'Bob',
+                authorEmail: 'bob@example.com',
+                committedAt: '2026-11-14T09:00:00+09:00',
+                files: []
+              },
+              isLoading: false,
+              errorMessage: null
+            }
+          }
+        })}
+      />
+    )
+    const emptyDetailRegion = within(graphRegion).getByRole('region', { name: 'bbbbbbb 커밋 상세' })
+    expect(emptyDetailRegion).toHaveTextContent('변경된 파일이 없습니다.')
+    expect(emptyDetailRegion.querySelector('.git-commit-detail-body')).toBeNull()
   })
 })

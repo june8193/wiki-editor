@@ -160,6 +160,7 @@ describe('createWikiApi', () => {
     await api.git.sync('C:\\wiki')
     await api.git.log('C:\\wiki')
     await api.git.log('C:\\wiki', { scope: 'current', limit: 50, skip: 20 })
+    await api.git.commitDetail('C:\\wiki', 'abc1234')
 
     expect(ipc.lastInvoked).toEqual([
       { channel: GIT_IPC_CHANNELS.status, args: ['C:\\wiki'] },
@@ -178,7 +179,8 @@ describe('createWikiApi', () => {
       {
         channel: GIT_IPC_CHANNELS.log,
         args: ['C:\\wiki', { scope: 'current', limit: 50, skip: 20 }]
-      }
+      },
+      { channel: GIT_IPC_CHANNELS.commitDetail, args: ['C:\\wiki', 'abc1234'] }
     ])
   })
 

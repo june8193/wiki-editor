@@ -16,6 +16,7 @@ import {
   type GitStatus
 } from '@shared/git'
 import type { GitGraphState } from '../hooks/useGitGraphLog'
+import { formatGitFileLabel, getGitFileBadgeModifier } from '../utils/gitFilePresentation'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
 import { GitGraphScopeToggle, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
@@ -32,6 +33,7 @@ export interface GitSidebarPanelProps {
   onRefresh: () => void
   onChangeLogScope: (nextScope: GitLogScope) => void
   onLoadMoreCommits: () => void
+  onToggleCommitDetail: (commitHash: string) => void
   onInitRepo: () => void
   onStageFile: (path: string) => void
   onStageAll: () => void
@@ -45,14 +47,6 @@ export interface GitSidebarPanelProps {
   onToggleChangesCollapsed: () => void
   onToggleGraphCollapsed: () => void
   onResizeChangesRatio: (nextRatio: number) => void
-}
-
-function formatGitFileLabel(file: GitChangedFile): string {
-  return file.origPath ? `${file.origPath} → ${file.path}` : file.path
-}
-
-function getBadgeModifier(code: GitChangedFile['status']): string {
-  return code === '?' ? 'untracked' : code.toLowerCase()
 }
 
 function getSectionFlexStyle(flexRatio: number | null): CSSProperties | undefined {
@@ -107,7 +101,7 @@ function GitFileSection({
         <ul className="git-file-list" role="list">
           {files.map((file) => (
             <li key={`${itemActionTitle}:${file.status}:${file.path}`} className="git-file-item">
-              <span className={`git-badge git-badge--${getBadgeModifier(file.status)}`}>
+              <span className={`git-badge git-badge--${getGitFileBadgeModifier(file.status)}`}>
                 {file.status}
               </span>
               <span className="git-file-path" title={formatGitFileLabel(file)}>
@@ -223,6 +217,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onRefresh,
   onChangeLogScope,
   onLoadMoreCommits,
+  onToggleCommitDetail,
   onInitRepo,
   onStageFile,
   onStageAll,
@@ -496,6 +491,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 isUnborn={status.isUnborn}
                 graphState={graphState}
                 onLoadMore={onLoadMoreCommits}
+                onToggleCommitDetail={onToggleCommitDetail}
               />
             </GitAccordionSection>
           </div>

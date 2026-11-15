@@ -413,6 +413,17 @@ function createInMemoryWikiApi(
         summary: '동기화 완료'
       }),
       log: async () => ({ commits: [], hasMore: false }),
+      commitDetail: async (_workspacePath, commitHash) => ({
+        hash: commitHash,
+        shortHash: commitHash.slice(0, 7),
+        parents: [],
+        subject: '',
+        body: '',
+        authorName: '',
+        authorEmail: '',
+        committedAt: '',
+        files: []
+      }),
       ...fsOptions.git
     },
     menu: {
@@ -3982,6 +3993,172 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     await waitFor(() => {
       expect(within(graphRegion).getByText('External CLI commit')).toBeInTheDocument()
     })
+  })
+
+  it('expands inline commit detail with files, switches/collapses commits, copies full hash, and clears on scope switch', async () => {
+    const user = userEvent.setup()
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const firstHash = '1111111111111111111111111111111111111111'
+    const emptyHash = '2222222222222222222222222222222222222222'
+
+    const commitDetailSpy = vi.fn(async (_rootPath: string, commitHash: string) => {
+      if (commitHash === firstHash) {
+        return {
+          hash: firstHash,
+          shortHash: '1111111',
+          parents: [emptyHash],
+          subject: 'feat: graph detail commit',
+          body: 'Detailed body line 1\nDetailed body line 2',
+          authorName: 'Alice',
+          authorEmail: 'alice@example.com',
+          committedAt: '2026-11-15T10:00:00+09:00',
+          files: [
+            { status: 'A' as GitFileStatusCode, path: 'docs/added.md' },
+            { status: 'M' as GitFileStatusCode, path: 'notes.md' },
+            { status: 'R' as GitFileStatusCode, origPath: 'old.md', path: 'renamed.md' }
+          ]
+        }
+      }
+
+      return {
+        hash: emptyHash,
+        shortHash: '2222222',
+        parents: [],
+        subject: 'chore: empty root commit',
+        body: '',
+        authorName: 'Bob',
+        authorEmail: 'bob@example.com',
+        committedAt: '2026-11-14T10:00:00+09:00',
+        files: []
+      }
+    })
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/graph-detail-app',
+        workspaces: {
+          'C:/wiki/graph-detail-app': {
+            'notes.md': '# Notes'
+          }
+        },
+        git: {
+          status: vi.fn(async () => ({
+            ...createEmptyGitStatus(true, 'C:/wiki/graph-detail-app'),
+            branch: 'main'
+          })),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [{ name: 'main', current: true, upstream: null }]
+          })),
+          log: vi.fn(async (_rootPath: string, options?: { scope?: 'all' | 'current' }) => ({
+            commits:
+              options?.scope === 'current'
+                ? [
+                    {
+                      hash: emptyHash,
+                      shortHash: '2222222',
+                      parents: [],
+                      subject: 'chore: empty root commit',
+                      authorName: 'Bob',
+                      committedAt: '2026-11-14T10:00:00+09:00',
+                      refs: [{ name: 'HEAD', kind: 'head' as const }]
+                    }
+                  ]
+                : [
+                    {
+                      hash: firstHash,
+                      shortHash: '1111111',
+                      parents: [emptyHash],
+                      subject: 'feat: graph detail commit',
+                      authorName: 'Alice',
+                      committedAt: '2026-11-15T10:00:00+09:00',
+                      refs: [{ name: 'main', kind: 'local-branch' as const }]
+                    },
+                    {
+                      hash: emptyHash,
+                      shortHash: '2222222',
+                      parents: [],
+                      subject: 'chore: empty root commit',
+                      authorName: 'Bob',
+                      committedAt: '2026-11-14T10:00:00+09:00',
+                      refs: [{ name: 'HEAD', kind: 'head' as const }]
+                    }
+                  ],
+            hasMore: false
+          })),
+          commitDetail: commitDetailSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const graphRegion = within(gitRegion).getByRole('region', { name: 'Graph' })
+
+    const firstRowBtn = await within(graphRegion).findByRole('button', {
+      name: /feat: graph detail commit/
+    })
+    expect(firstRowBtn).toHaveAttribute('aria-expanded', 'false')
+
+    // Click commit row -> expands inline detail directly inside the same commit item
+    await user.click(firstRowBtn)
+    expect(commitDetailSpy).toHaveBeenCalledWith('C:/wiki/graph-detail-app', firstHash)
+
+    const firstDetailRegion = await within(graphRegion).findByRole('region', {
+      name: '1111111 커밋 상세'
+    })
+    expect(firstRowBtn).toHaveAttribute('aria-expanded', 'true')
+    const firstListItem = firstRowBtn.closest('li')
+    expect(firstListItem).not.toBeNull()
+    expect(firstListItem?.contains(firstDetailRegion)).toBe(true)
+
+    expect(firstDetailRegion).toHaveTextContent('Detailed body line 1')
+    expect(firstDetailRegion).toHaveTextContent('Detailed body line 2')
+    expect(firstDetailRegion).toHaveTextContent('alice@example.com')
+    expect(firstDetailRegion).toHaveTextContent('docs/added.md')
+    expect(firstDetailRegion).toHaveTextContent('notes.md')
+    expect(firstDetailRegion).toHaveTextContent('old.md → renamed.md')
+
+    // Copy full commit hash
+    await user.click(within(firstDetailRegion).getByRole('button', { name: '해시 복사' }))
+    expect(writeTextSpy).toHaveBeenCalledWith(firstHash)
+
+    // Click another commit -> replaces inline detail and collapses previous row
+    const secondRowBtn = within(graphRegion).getByRole('button', {
+      name: /chore: empty root commit/
+    })
+    await user.click(secondRowBtn)
+    expect(commitDetailSpy).toHaveBeenCalledWith('C:/wiki/graph-detail-app', emptyHash)
+
+    const emptyDetailRegion = await within(graphRegion).findByRole('region', {
+      name: '2222222 커밋 상세'
+    })
+    expect(firstRowBtn).toHaveAttribute('aria-expanded', 'false')
+    expect(secondRowBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(emptyDetailRegion).toHaveTextContent('변경된 파일이 없습니다.')
+    expect(within(graphRegion).queryByRole('region', { name: '1111111 커밋 상세' })).toBeNull()
+
+    // Scope toggle clears expanded detail cleanly
+    await user.click(within(graphRegion).getByRole('button', { name: '현재 브랜치' }))
+    await waitFor(() => {
+      expect(within(graphRegion).queryByRole('region', { name: '2222222 커밋 상세' })).toBeNull()
+    })
+
+    // Re-expand and click same commit row again to collapse
+    const currentRowBtn = await within(graphRegion).findByRole('button', {
+      name: /chore: empty root commit/
+    })
+    await user.click(currentRowBtn)
+    await within(graphRegion).findByRole('region', { name: '2222222 커밋 상세' })
+    await user.click(currentRowBtn)
+    expect(currentRowBtn).toHaveAttribute('aria-expanded', 'false')
+    expect(within(graphRegion).queryByRole('region', { name: '2222222 커밋 상세' })).toBeNull()
   })
 })
 

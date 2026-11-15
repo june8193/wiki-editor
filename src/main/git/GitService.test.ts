@@ -566,6 +566,121 @@ describe('GitService integration (isolated temp repos)', () => {
     expect(defaultPage2.hasMore).toBe(false)
     expect(defaultPage2.commits[4].subject).toBe('commit 1')
   }, 60_000)
+
+  it('validates commit hashes and parses commitDetail for root, normal (A/M/D/R + body), merge (--first-parent), and empty commits', async () => {
+    await expect(service.commitDetail(nonGitDir, 'abcdef1')).rejects.toThrow(/Git 저장소가 아닙니다/)
+
+    await service.init(repoDir)
+    await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
+    await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
+
+    // Reject option-injection and invalid hash formats before invoking git
+    for (const invalidHash of [
+      '',
+      'abc123',
+      '-abc1234',
+      '--all',
+      '-n1',
+      'zzzzzzz',
+      'HEAD',
+      'a'.repeat(65),
+      'abcdef1 --stat'
+    ]) {
+      await expect(service.commitDetail(repoDir, invalidHash)).rejects.toThrow(/커밋 해시/)
+    }
+
+    // 1. Root commit (--root): all files reported as 'A'
+    await writeFile(join(repoDir, 'keep.md'), '# Keep\n', 'utf8')
+    await writeFile(join(repoDir, 'delete-me.md'), '# Delete me\n', 'utf8')
+    await writeFile(join(repoDir, '한글 이름.md'), '# Rename target\nLine 2\nLine 3\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'root commit')
+    const rootHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    await expect(service.commitDetail(repoDir, '0123456789abcdef')).rejects.toThrow()
+
+    const rootDetail = await service.commitDetail(repoDir, rootHash.slice(0, 7))
+    expect(rootDetail.hash).toBe(rootHash)
+    expect(rootDetail.shortHash).toBe(rootHash.slice(0, rootDetail.shortHash.length))
+    expect(rootDetail.parents).toEqual([])
+    expect(rootDetail.subject).toBe('root commit')
+    expect(rootDetail.body).toBe('')
+    expect(rootDetail.authorName).toBe('Wiki Tester')
+    expect(rootDetail.authorEmail).toBe('tester@example.com')
+    expect(Number.isNaN(Date.parse(rootDetail.committedAt))).toBe(false)
+    expect(rootDetail.files).toEqual([
+      { path: 'delete-me.md', status: 'A' },
+      { path: 'keep.md', status: 'A' },
+      { path: '한글 이름.md', status: 'A' }
+    ])
+
+    // 2. Normal commit with multi-line body and A / M / D / R changes
+    await writeFile(join(repoDir, 'keep.md'), '# Keep Updated\n', 'utf8')
+    await writeFile(join(repoDir, 'added note.md'), '# Added\n', 'utf8')
+    await rm(join(repoDir, 'delete-me.md'))
+    await runGit(repoDir, ['mv', '한글 이름.md', 'moved 한글.md'])
+    await service.stageAll(repoDir)
+    await runGit(repoDir, [
+      'commit',
+      '-m',
+      'update and reorganize docs',
+      '-m',
+      'Detailed body line 1.\n\nDetailed body paragraph 2.'
+    ])
+    const normalHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    const normalDetail = await service.commitDetail(repoDir, normalHash)
+    expect(normalDetail.hash).toBe(normalHash)
+    expect(normalDetail.parents).toEqual([rootHash])
+    expect(normalDetail.subject).toBe('update and reorganize docs')
+    expect(normalDetail.body).toBe('Detailed body line 1.\n\nDetailed body paragraph 2.')
+    expect(normalDetail.files).toEqual(
+      expect.arrayContaining([
+        { path: 'added note.md', status: 'A' },
+        { path: 'keep.md', status: 'M' },
+        { path: 'delete-me.md', status: 'D' },
+        { path: 'moved 한글.md', origPath: '한글 이름.md', status: 'R' }
+      ])
+    )
+    expect(normalDetail.files).toHaveLength(4)
+
+    // 3. Merge commit (--first-parent): clean merge without conflicts still yields merged branch changes
+    await runGit(repoDir, ['checkout', '-b', 'feature/detail'])
+    await writeFile(join(repoDir, 'feature-only.md'), '# Feature\n', 'utf8')
+    await writeFile(join(repoDir, 'keep.md'), '# Keep From Feature\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'feature changes')
+    const featureHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    await runGit(repoDir, ['checkout', 'main'])
+    await writeFile(join(repoDir, 'main-only.md'), '# Main only\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'main changes')
+    const mainBeforeMergeHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    await runGit(repoDir, ['merge', '--no-ff', 'feature/detail', '-m', 'merge feature/detail'])
+    const mergeHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    const mergeDetail = await service.commitDetail(repoDir, mergeHash)
+    expect(mergeDetail.parents).toEqual([mainBeforeMergeHash, featureHash])
+    expect(mergeDetail.subject).toBe('merge feature/detail')
+    expect(mergeDetail.files).toEqual(
+      expect.arrayContaining([
+        { path: 'feature-only.md', status: 'A' },
+        { path: 'keep.md', status: 'M' }
+      ])
+    )
+    expect(mergeDetail.files).toHaveLength(2)
+
+    // 4. Empty commit (--allow-empty): returns empty files list
+    await runGit(repoDir, ['commit', '--allow-empty', '-m', 'empty checkpoint'])
+    const emptyHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    const emptyDetail = await service.commitDetail(repoDir, emptyHash)
+    expect(emptyDetail.subject).toBe('empty checkpoint')
+    expect(emptyDetail.body).toBe('')
+    expect(emptyDetail.files).toEqual([])
+  }, 30_000)
 })
 
 describe('GitService helpers (unit)', () => {

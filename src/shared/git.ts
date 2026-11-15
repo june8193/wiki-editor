@@ -75,6 +75,18 @@ export interface GitLogResult {
   hasMore: boolean
 }
 
+export interface GitCommitDetail {
+  hash: string
+  shortHash: string
+  parents: string[]
+  subject: string
+  body: string
+  authorName: string
+  authorEmail: string
+  committedAt: string
+  files: GitChangedFile[]
+}
+
 export function createEmptyGitStatus(isRepo = false, repoRoot: string | null = null): GitStatus {
   return {
     isRepo,

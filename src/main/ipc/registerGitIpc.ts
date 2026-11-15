@@ -85,6 +85,12 @@ export function registerGitIpc({
       withWorkspace<[GitLogOptions | undefined], Awaited<ReturnType<GitService['log']>>>(
         (rootPath, options) => gitService.log(rootPath, options)
       )
+    ],
+    [
+      GIT_IPC_CHANNELS.commitDetail,
+      withWorkspace<[string], Awaited<ReturnType<GitService['commitDetail']>>>(
+        (rootPath, commitHash) => gitService.commitDetail(rootPath, commitHash)
+      )
     ]
   ]
 

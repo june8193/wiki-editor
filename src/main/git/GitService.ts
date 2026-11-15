@@ -7,6 +7,7 @@ import {
   DEFAULT_GIT_LOG_LIMIT,
   type GitBranchInfo,
   type GitBranchList,
+  type GitCommitDetail,
   type GitLogOptions,
   type GitLogResult,
   type GitStatus,
@@ -25,6 +26,7 @@ import {
   formatGitError,
   GitFormattedError
 } from './gitErrors'
+import { assertValidCommitHash, parseCommitDetailOutput } from './gitCommitDetail'
 import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
 import { parsePorcelainV2Z } from './gitPorcelain'
 
@@ -343,6 +345,29 @@ export class GitService {
       }
     } catch (error) {
       throw await this.formatAndLogGitError('log', error)
+    }
+  }
+
+  async commitDetail(workspacePath: string, commitHash: string): Promise<GitCommitDetail> {
+    const validatedHash = assertValidCommitHash(commitHash)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    try {
+      const raw = await this.execGit(repoRoot, [
+        '-c',
+        'core.quotePath=false',
+        'show',
+        '--first-parent',
+        '-m',
+        '--root',
+        '-M',
+        '--name-status',
+        '-z',
+        '--format=%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%cI%x1f%b%x1e',
+        `${validatedHash}^{commit}`
+      ])
+      return parseCommitDetailOutput(raw)
+    } catch (error) {
+      throw await this.formatAndLogGitError('commitDetail', error)
     }
   }
 

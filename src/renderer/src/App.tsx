@@ -653,6 +653,7 @@ export function App() {
                   onRefresh={() => void git.refreshStatus()}
                   onChangeLogScope={(nextScope) => void git.changeLogScope(nextScope)}
                   onLoadMoreCommits={() => void git.loadMoreCommits()}
+                  onToggleCommitDetail={(commitHash) => void git.toggleCommitDetail(commitHash)}
                   onInitRepo={() => void git.initRepo()}
                   onStageFile={(path) => void git.stageFile(path)}
                   onStageAll={() => void git.stageAll()}
