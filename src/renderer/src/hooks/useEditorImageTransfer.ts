@@ -1,10 +1,19 @@
-import { createContext, useCallback, useContext, useEffect, useRef } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import type { WorkspaceImageIngestResult } from '@shared/assets'
 import {
   extractClipboardImageSources,
   inspectDropTransfer,
   resolvePendingImageSources,
   type ImageIngestor,
+  type InspectedDropTransfer,
   type PendingImageSource
 } from '../editor/imageIngestion'
 
@@ -44,8 +53,33 @@ export interface EditorImageTransferHandlers<TTarget> {
   handleDrop: (event: DragEvent, targetOverride?: TTarget | null) => boolean
 }
 
+type DragInspectOutcome =
+  | { handled: true; returnValue: boolean; inspected: null }
+  | { handled: false; inspected: InspectedDropTransfer }
+
+function inspectEditorDragEvent<TTarget>(
+  event: DragEvent,
+  options: EditorImageTransferOptions<TTarget>,
+  context: ImageTransferContextValue
+): DragInspectOutcome {
+  if (event.defaultPrevented) {
+    return { handled: true, returnValue: false, inspected: null }
+  }
+  const inspected = inspectDropTransfer(event.dataTransfer, {
+    getPathForFile: context.getPathForFile,
+    draggingWorkspaceImagePath: context.draggingWorkspaceImagePath ?? null
+  })
+  if (inspected.isTabDrag) {
+    return { handled: true, returnValue: Boolean(options.suppressNativeTabDrop), inspected: null }
+  }
+  if (!inspected.isWorkspaceOrFileDrag) {
+    return { handled: true, returnValue: false, inspected: null }
+  }
+  return { handled: false, inspected }
+}
+
 /**
- * Unifies clipboard paste and OS/workspace-tree image drag-and-drop handling across Raw and WYSIWYG editors.
+ * Unifies clipboard paste and OS / Folder Tree image drag-and-drop handling across Raw and WYSIWYG editors.
  */
 export function useEditorImageTransfer<TTarget>(
   options: EditorImageTransferOptions<TTarget>
@@ -121,19 +155,10 @@ export function useEditorImageTransfer<TTarget>(
   )
 
   const handleDragOver = useCallback((event: DragEvent): boolean => {
-    if (event.defaultPrevented) {
-      return false
-    }
     const { options: opts, context: ctx } = optionsRef.current
-    const inspected = inspectDropTransfer(event.dataTransfer, {
-      getPathForFile: ctx.getPathForFile,
-      draggingWorkspaceImagePath: ctx.draggingWorkspaceImagePath ?? null
-    })
-    if (inspected.isTabDrag) {
-      return Boolean(opts.suppressNativeTabDrop)
-    }
-    if (!inspected.isWorkspaceOrFileDrag) {
-      return false
+    const check = inspectEditorDragEvent(event, opts, ctx)
+    if (check.handled) {
+      return check.returnValue
     }
 
     event.preventDefault()
@@ -146,26 +171,17 @@ export function useEditorImageTransfer<TTarget>(
 
   const handleDrop = useCallback(
     (event: DragEvent, targetOverride?: TTarget | null): boolean => {
-      if (event.defaultPrevented) {
-        return false
-      }
       const { options: opts, context: ctx } = optionsRef.current
-      const inspected = inspectDropTransfer(event.dataTransfer, {
-        getPathForFile: ctx.getPathForFile,
-        draggingWorkspaceImagePath: ctx.draggingWorkspaceImagePath ?? null
-      })
-      if (inspected.isTabDrag) {
-        return Boolean(opts.suppressNativeTabDrop)
-      }
-      if (!inspected.isWorkspaceOrFileDrag) {
-        return false
+      const check = inspectEditorDragEvent(event, opts, ctx)
+      if (check.handled) {
+        return check.returnValue
       }
 
       event.preventDefault()
       event.stopPropagation()
       ctx.clearDraggingWorkspaceImage?.()
 
-      if (!opts.enableImageInsertion || !opts.documentPath || inspected.sources.length === 0) {
+      if (!opts.enableImageInsertion || !opts.documentPath || check.inspected.sources.length === 0) {
         return true
       }
 
@@ -189,11 +205,73 @@ export function useEditorImageTransfer<TTarget>(
       const targetRange =
         dropPos !== null ? { from: dropPos, to: dropPos } : opts.getSelectionRange(target)
 
-      runImageInsertion(opts.documentPath, inspected.sources, targetRange)
+      runImageInsertion(opts.documentPath, check.inspected.sources, targetRange)
       return true
     },
     [runImageInsertion]
   )
 
   return { handlePaste, handleDragOver, handleDrop }
+}
+
+/**
+ * Manages global window drag-drop navigation blocking and Folder Tree image drag context at the App shell.
+ */
+export function useWorkspaceImageTransfer(
+  reportImageError: (title: string, error: unknown) => void
+): {
+  setDraggingWorkspaceImagePath: (filePath: string | null) => void
+  clearDraggingWorkspaceImage: () => void
+  imageTransferContextValue: ImageTransferContextValue
+} {
+  const [draggingWorkspaceImagePath, setDraggingWorkspaceImagePath] = useState<string | null>(null)
+  const draggingWorkspaceImagePathRef = useRef<string | null>(null)
+  draggingWorkspaceImagePathRef.current = draggingWorkspaceImagePath
+
+  const clearDraggingWorkspaceImage = useCallback((): void => {
+    setDraggingWorkspaceImagePath(null)
+  }, [])
+
+  useEffect(() => {
+    const blockUnsafeFileTransfer = (event: DragEvent, isDrop: boolean): void => {
+      const inspected = inspectDropTransfer(event.dataTransfer, {
+        draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
+      })
+      if (isDrop && inspected.isWorkspaceOrFileDrag) {
+        setDraggingWorkspaceImagePath(null)
+      }
+      if (event.defaultPrevented || inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
+        return
+      }
+      event.preventDefault()
+      if (!isDrop && event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'none'
+      }
+    }
+
+    const handleWindowDragOver = (event: DragEvent): void => blockUnsafeFileTransfer(event, false)
+    const handleWindowDrop = (event: DragEvent): void => blockUnsafeFileTransfer(event, true)
+
+    window.addEventListener('dragover', handleWindowDragOver)
+    window.addEventListener('drop', handleWindowDrop)
+    return () => {
+      window.removeEventListener('dragover', handleWindowDragOver)
+      window.removeEventListener('drop', handleWindowDrop)
+    }
+  }, [])
+
+  const imageTransferContextValue = useMemo<ImageTransferContextValue>(
+    () => ({
+      draggingWorkspaceImagePath,
+      clearDraggingWorkspaceImage,
+      reportImageError
+    }),
+    [draggingWorkspaceImagePath, clearDraggingWorkspaceImage, reportImageError]
+  )
+
+  return {
+    setDraggingWorkspaceImagePath,
+    clearDraggingWorkspaceImage,
+    imageTransferContextValue
+  }
 }

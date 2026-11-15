@@ -50,7 +50,7 @@ export interface WorkspaceFsServiceOptions {
 export type WorkspaceWatchListener = (event: WorkspaceChangeEvent) => void
 
 const INVALID_ENTRY_NAME_RE = /[<>:"/\\|?*\x00-\x1f]/
-const INVALID_IMAGE_STEM_CHARS_RE = /[<>:"/\\|?*\x00-\x1f]+/g
+const INVALID_IMAGE_STEM_CHARS_RE = new RegExp(`${INVALID_ENTRY_NAME_RE.source}+`, 'g')
 const WINDOWS_RESERVED_IMAGE_STEM_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
 const DEFAULT_WATCH_DEBOUNCE_MS = 120
 const MAX_IMAGE_COLLISION_INDEX = 10000

@@ -6,7 +6,7 @@ import {
   type WorkspaceImageIngestInput,
   type WorkspaceImageIngestResult
 } from '@shared/assets'
-import { TAB_DRAG_MIME, WORKSPACE_IMAGE_DRAG_MIME } from '../dragMimeTypes'
+import { TAB_DRAG_MIME, WORKSPACE_IMAGE_DRAG_MIME } from '../utils/dragMimeTypes'
 
 export type ImageIngestor = (
   input: WorkspaceImageIngestInput
@@ -28,11 +28,15 @@ export interface InspectedDropTransfer {
   sources: PendingImageSource[]
 }
 
+function getWorkspaceBridge() {
+  return typeof window !== 'undefined' ? window.wikiApi?.workspace : undefined
+}
+
 function resolveGetPathForFile(override?: (file: File) => string): ((file: File) => string) | undefined {
   if (override) {
     return override
   }
-  const workspaceApi = typeof window !== 'undefined' ? window.wikiApi?.workspace : undefined
+  const workspaceApi = getWorkspaceBridge()
   if (workspaceApi && typeof workspaceApi.getPathForFile === 'function') {
     return (file) => workspaceApi.getPathForFile(file)
   }
@@ -43,7 +47,7 @@ function resolveIngestor(override?: ImageIngestor): ImageIngestor {
   if (override) {
     return override
   }
-  const workspaceApi = typeof window !== 'undefined' ? window.wikiApi?.workspace : undefined
+  const workspaceApi = getWorkspaceBridge()
   if (workspaceApi && typeof workspaceApi.ingestImage === 'function') {
     return (input) => workspaceApi.ingestImage(input)
   }
@@ -125,7 +129,7 @@ export function extractClipboardImageSources(
 }
 
 /**
- * Inspects a dragover/drop DataTransfer synchronously for tab drags, workspace tree images, or OS files.
+ * Inspects a dragover/drop DataTransfer synchronously for tab drags, Folder Tree images, or OS files.
  */
 export function inspectDropTransfer(
   dataTransfer: DataTransfer | null,

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkspaceImageIngestInput, WorkspaceImageIngestResult } from '@shared/assets'
-import { TAB_DRAG_MIME, WORKSPACE_IMAGE_DRAG_MIME } from '../dragMimeTypes'
+import { TAB_DRAG_MIME, WORKSPACE_IMAGE_DRAG_MIME } from '../utils/dragMimeTypes'
 import {
   extractClipboardImageSources,
   formatRawMarkdownImages,
@@ -66,7 +66,7 @@ describe('imageIngestion helpers', () => {
     expect(screenshotGetPath).toHaveBeenCalledTimes(1)
   })
 
-  it('inspectDropTransfer distinguishes tab drags, workspace tree drags, OS file drops, and text drags', () => {
+  it('inspectDropTransfer distinguishes tab drags, Folder Tree drags, OS file drops, and text drags', () => {
     expect(inspectDropTransfer(null)).toEqual({
       isTabDrag: false,
       isWorkspaceOrFileDrag: false,

@@ -15,7 +15,6 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { SidebarResizer } from './components/SidebarResizer'
 import { WorkspaceView } from './components/WorkspaceView'
 import { isMarkdownDocument } from './editor/editorModes'
-import { inspectDropTransfer } from './editor/imageIngestion'
 import type { OutlineContextTarget } from './editor/outlineScrollSpy'
 import { deriveDocumentTitle } from './editor/SlashCommandEngine'
 import {
@@ -26,7 +25,10 @@ import {
   stripHeadingNumbers
 } from './editor/MarkdownTocEngine'
 import { useConfigController } from './hooks/useConfigController'
-import { ImageTransferContext, type ImageTransferContextValue } from './hooks/useEditorImageTransfer'
+import {
+  ImageTransferContext,
+  useWorkspaceImageTransfer
+} from './hooks/useEditorImageTransfer'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
 import { useOutlineScrollSpy } from './hooks/useOutlineScrollSpy'
@@ -93,37 +95,6 @@ export function App() {
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
   })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [draggingWorkspaceImagePath, setDraggingWorkspaceImagePath] = useState<string | null>(null)
-  const draggingWorkspaceImagePathRef = useRef<string | null>(null)
-  draggingWorkspaceImagePathRef.current = draggingWorkspaceImagePath
-
-  useEffect(() => {
-    const blockUnsafeFileTransfer = (event: DragEvent, isDrop: boolean): void => {
-      const inspected = inspectDropTransfer(event.dataTransfer, {
-        draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
-      })
-      if (isDrop && inspected.isWorkspaceOrFileDrag) {
-        setDraggingWorkspaceImagePath(null)
-      }
-      if (event.defaultPrevented || inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
-        return
-      }
-      event.preventDefault()
-      if (!isDrop && event.dataTransfer) {
-        event.dataTransfer.dropEffect = 'none'
-      }
-    }
-
-    const handleWindowDragOver = (event: DragEvent): void => blockUnsafeFileTransfer(event, false)
-    const handleWindowDrop = (event: DragEvent): void => blockUnsafeFileTransfer(event, true)
-
-    window.addEventListener('dragover', handleWindowDragOver)
-    window.addEventListener('drop', handleWindowDrop)
-    return () => {
-      window.removeEventListener('dragover', handleWindowDragOver)
-      window.removeEventListener('drop', handleWindowDrop)
-    }
-  }, [])
 
   const windowWidth = useWindowWidth()
   const leftSidebarBounds = getLeftSidebarWidthBounds(windowWidth)
@@ -580,9 +551,11 @@ export function App() {
     [reportErrorBanner]
   )
 
-  const handleClearDraggingWorkspaceImage = useCallback((): void => {
-    setDraggingWorkspaceImagePath(null)
-  }, [])
+  const {
+    setDraggingWorkspaceImagePath,
+    clearDraggingWorkspaceImage,
+    imageTransferContextValue
+  } = useWorkspaceImageTransfer(handleReportImageError)
 
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
@@ -605,15 +578,6 @@ export function App() {
       requestCloseTab,
       saveBufferByKey
     ]
-  )
-
-  const imageTransferContextValue = useMemo<ImageTransferContextValue>(
-    () => ({
-      draggingWorkspaceImagePath,
-      clearDraggingWorkspaceImage: handleClearDraggingWorkspaceImage,
-      reportImageError: handleReportImageError
-    }),
-    [draggingWorkspaceImagePath, handleClearDraggingWorkspaceImage, handleReportImageError]
   )
 
   const isCurrentWorkspaceFavorite =
@@ -674,7 +638,7 @@ export function App() {
                   onRenameEntry={renameEntry}
                   onRequestDelete={handleRequestDelete}
                   onDragStartWorkspaceImage={setDraggingWorkspaceImagePath}
-                  onDragEndWorkspaceImage={handleClearDraggingWorkspaceImage}
+                  onDragEndWorkspaceImage={clearDraggingWorkspaceImage}
                 />
               )}
 
