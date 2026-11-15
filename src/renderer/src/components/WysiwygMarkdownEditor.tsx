@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { resolveImageDisplaySrc } from '@shared/assets'
 import {
   DEFAULT_CUSTOM_COMMANDS,
   type CustomCommandConfig,
@@ -23,7 +22,8 @@ import {
   insertWysiwygMarkdownWithCursor,
   prepareMarkdownForTiptap,
   sanitizeHtmlWithRehype,
-  slashInsertPluginKey
+  slashInsertPluginKey,
+  syncWysiwygImageDisplaySources
 } from '../editor/wysiwygMarkdown'
 import { useDismissable } from '../hooks/useDismissable'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
@@ -351,15 +351,7 @@ export function WysiwygMarkdownEditor({
 
   useEffect(() => {
     documentPathRef.current = documentPath
-    if (!editor || editor.isDestroyed) return
-
-    for (const img of editor.view.dom.querySelectorAll('img[data-markdown-src]')) {
-      const rawSrc = img.getAttribute('data-markdown-src') ?? ''
-      const nextSrc = resolveImageDisplaySrc(rawSrc, documentPath)
-      if (nextSrc && img.getAttribute('src') !== nextSrc) {
-        img.setAttribute('src', nextSrc)
-      }
-    }
+    syncWysiwygImageDisplaySources(editor, documentPath)
   }, [documentPath, editor])
 
   const syncEditorContent = useCallback(

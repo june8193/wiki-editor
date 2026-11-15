@@ -392,6 +392,8 @@ export function deleteTableRowPreservingHeader(editor: Editor): boolean {
  * Returns the standard TipTap v3 extension stack for GFM WYSIWYG editing, Mermaid NodeView,
  * dynamic heading numbering decorations, and roundtrip serialization.
  */
+const IMAGE_MARKDOWN_SRC_ATTR = 'data-markdown-src'
+
 interface WikiAssetImageOptions extends ImageOptions {
   getDocumentPath?: () => string | undefined
 }
@@ -416,7 +418,7 @@ function formatMarkdownImageDestination(src: string): string {
 
 function parseSafeImageAttrs(
   dom: unknown,
-  attrName: 'data-markdown-src' | 'src'
+  attrName: typeof IMAGE_MARKDOWN_SRC_ATTR | 'src'
 ): { src: string; alt: string | null; title: string | null } | false {
   if (!(dom instanceof HTMLElement)) {
     return false
@@ -429,6 +431,22 @@ function parseSafeImageAttrs(
     src: rawSrc,
     alt: dom.getAttribute('alt') ?? null,
     title: dom.getAttribute('title') ?? null
+  }
+}
+
+export function syncWysiwygImageDisplaySources(
+  editor: Editor | null,
+  documentPath?: string
+): void {
+  if (!editor || editor.isDestroyed) {
+    return
+  }
+  for (const img of editor.view.dom.querySelectorAll(`img[${IMAGE_MARKDOWN_SRC_ATTR}]`)) {
+    const rawSrc = img.getAttribute(IMAGE_MARKDOWN_SRC_ATTR) ?? ''
+    const nextSrc = resolveImageDisplaySrc(rawSrc, documentPath)
+    if (nextSrc && img.getAttribute('src') !== nextSrc) {
+      img.setAttribute('src', nextSrc)
+    }
   }
 }
 
@@ -447,11 +465,11 @@ const WikiAssetImage = Image.extend<WikiAssetImageOptions>({
   parseHTML() {
     return [
       {
-        tag: 'img[data-markdown-src]',
-        getAttrs: (dom) => parseSafeImageAttrs(dom, 'data-markdown-src')
+        tag: `img[${IMAGE_MARKDOWN_SRC_ATTR}]`,
+        getAttrs: (dom) => parseSafeImageAttrs(dom, IMAGE_MARKDOWN_SRC_ATTR)
       },
       {
-        tag: 'img[src]:not([data-markdown-src]):not([src^="data:"])',
+        tag: `img[src]:not([${IMAGE_MARKDOWN_SRC_ATTR}]):not([src^="data:"])`,
         getAttrs: (dom) => parseSafeImageAttrs(dom, 'src')
       }
     ]
@@ -464,12 +482,12 @@ const WikiAssetImage = Image.extend<WikiAssetImageOptions>({
       : ''
     const merged = mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)
     delete merged.src
-    delete merged['data-markdown-src']
+    delete merged[IMAGE_MARKDOWN_SRC_ATTR]
     if (displaySrc) {
       merged.src = displaySrc
     }
     if (rawSrc && isSafeMarkdownImageUrl(rawSrc)) {
-      merged['data-markdown-src'] = rawSrc
+      merged[IMAGE_MARKDOWN_SRC_ATTR] = rawSrc
     }
     return ['img', merged]
   },

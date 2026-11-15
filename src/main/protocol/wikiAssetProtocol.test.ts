@@ -117,42 +117,28 @@ describe('wikiAssetProtocol', () => {
     }
   })
 
+  async function assertBlockedSymlink(targetPath: string, linkPath: string): Promise<void> {
+    try {
+      await symlink(targetPath, linkPath, 'file')
+    } catch {
+      // Skip symlink sub-case on hosts where symlink privileges are disabled
+      return
+    }
+    const res = await handleWikiAssetRequest(new Request(buildWikiAssetUrl(linkPath)), service)
+    expect(res.status).toBe(403)
+  }
+
   it('blocks external symlinks and symlinks to non-image files', async () => {
     await service.openWorkspace(workspaceDir)
 
-    const outsideSymlink = path.join(workspaceDir, 'assets', 'outside-link.png')
-    let createdOutside = false
-    try {
-      await symlink(path.join(outsideDir, 'secret.png'), outsideSymlink, 'file')
-      createdOutside = true
-    } catch {
-      // Skip symlink sub-case on hosts where symlink privileges are disabled
-    }
-
-    if (createdOutside) {
-      const res = await handleWikiAssetRequest(
-        new Request(buildWikiAssetUrl(outsideSymlink)),
-        service
-      )
-      expect(res.status).toBe(403)
-    }
-
-    const nonImageSymlink = path.join(workspaceDir, 'assets', 'hidden-md.png')
-    let createdNonImage = false
-    try {
-      await symlink(path.join(workspaceDir, 'notes.md'), nonImageSymlink, 'file')
-      createdNonImage = true
-    } catch {
-      // Skip symlink sub-case on hosts where symlink privileges are disabled
-    }
-
-    if (createdNonImage) {
-      const res = await handleWikiAssetRequest(
-        new Request(buildWikiAssetUrl(nonImageSymlink)),
-        service
-      )
-      expect(res.status).toBe(403)
-    }
+    await assertBlockedSymlink(
+      path.join(outsideDir, 'secret.png'),
+      path.join(workspaceDir, 'assets', 'outside-link.png')
+    )
+    await assertBlockedSymlink(
+      path.join(workspaceDir, 'notes.md'),
+      path.join(workspaceDir, 'assets', 'hidden-md.png')
+    )
   })
 
   it('returns 404 for missing images and directory targets', async () => {

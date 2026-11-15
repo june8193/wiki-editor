@@ -2,27 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   buildWikiAssetUrl,
   getImageMimeType,
-  isSupportedImagePath,
   parseWikiAssetUrl,
   resolveImageDisplaySrc,
   resolveWorkspaceImagePath,
-  SUPPORTED_IMAGE_EXTENSIONS,
   WIKI_ASSET_SCHEME
 } from './assets'
 
 describe('shared assets helpers', () => {
   it('supports the required image extensions case-insensitively and resolves MIME types', () => {
-    expect(SUPPORTED_IMAGE_EXTENSIONS).toEqual([
-      '.png',
-      '.jpg',
-      '.jpeg',
-      '.gif',
-      '.webp',
-      '.svg',
-      '.bmp',
-      '.avif'
-    ])
-
     expect(getImageMimeType('diagram.png')).toBe('image/png')
     expect(getImageMimeType('PHOTO.JPG')).toBe('image/jpeg')
     expect(getImageMimeType('photo.JPEG')).toBe('image/jpeg')
@@ -32,11 +19,11 @@ describe('shared assets helpers', () => {
     expect(getImageMimeType('bitmap.bmp')).toBe('image/bmp')
     expect(getImageMimeType('hero.AVIF')).toBe('image/avif')
 
-    expect(isSupportedImagePath('assets/pic (1).PNG')).toBe(true)
-    expect(isSupportedImagePath('notes/readme.md')).toBe(false)
-    expect(isSupportedImagePath('notes/script.html')).toBe(false)
-    expect(isSupportedImagePath('notes/noext')).toBe(false)
+    expect(getImageMimeType('assets/pic (1).PNG')).toBe('image/png')
     expect(getImageMimeType('notes/readme.md')).toBeNull()
+    expect(getImageMimeType('notes/script.html')).toBeNull()
+    expect(getImageMimeType('notes/noext')).toBeNull()
+    expect(getImageMimeType('.png')).toBeNull()
   })
 
   it('roundtrips POSIX and Windows paths with spaces and parentheses via wiki-asset URLs', () => {

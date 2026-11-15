@@ -349,19 +349,13 @@ export class WorkspaceFsService {
     { status: 'ok'; resolvedPath: string } | { status: 'forbidden' } | { status: 'not-found' }
   > {
     try {
-      const root = this.requireWorkspaceRoot()
-      const candidate = this.assertLexicalWorkspacePath(root, inputPath)
-      const { resolvedReal, exists } = await this.resolveRealWithAncestor(root, candidate)
+      const { resolvedReal, exists } = await this.resolveRealWorkspaceTarget(inputPath)
       if (!exists) {
         return { status: 'not-found' }
       }
       return { status: 'ok', resolvedPath: resolvedReal }
     } catch (error) {
-      const code =
-        typeof error === 'object' && error !== null && 'code' in error
-          ? (error as { code?: unknown }).code
-          : undefined
-      if (code === 'ENOENT' || code === 'ENOTDIR') {
+      if (isErrnoCode(error, 'ENOENT') || isErrnoCode(error, 'ENOTDIR')) {
         return { status: 'not-found' }
       }
       return { status: 'forbidden' }
@@ -411,10 +405,16 @@ export class WorkspaceFsService {
     })
   }
 
-  private async resolveExistingPath(inputPath: string): Promise<string> {
+  private async resolveRealWorkspaceTarget(
+    inputPath: string
+  ): Promise<{ resolvedReal: string; exists: boolean }> {
     const root = this.requireWorkspaceRoot()
     const candidate = this.assertLexicalWorkspacePath(root, inputPath)
-    const { resolvedReal, exists } = await this.resolveRealWithAncestor(root, candidate)
+    return this.resolveRealWithAncestor(root, candidate)
+  }
+
+  private async resolveExistingPath(inputPath: string): Promise<string> {
+    const { resolvedReal, exists } = await this.resolveRealWorkspaceTarget(inputPath)
     if (!exists) {
       throw new Error(`경로를 찾을 수 없습니다: ${inputPath}`)
     }
@@ -422,9 +422,7 @@ export class WorkspaceFsService {
   }
 
   private async resolveWritablePath(inputPath: string): Promise<string> {
-    const root = this.requireWorkspaceRoot()
-    const candidate = this.assertLexicalWorkspacePath(root, inputPath)
-    const { resolvedReal } = await this.resolveRealWithAncestor(root, candidate)
+    const { resolvedReal } = await this.resolveRealWorkspaceTarget(inputPath)
     return resolvedReal
   }
 

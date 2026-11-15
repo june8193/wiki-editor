@@ -2,6 +2,9 @@ export const WIKI_ASSET_SCHEME = 'wiki-asset'
 export const WIKI_ASSET_HOST = 'local'
 export const WIKI_ASSET_PATHNAME = '/asset'
 
+export const ALLOWED_IMAGE_URI_SCHEMES = ['http', 'https'] as const
+export const ALLOWED_IMAGE_URI_SCHEME_SET: ReadonlySet<string> = new Set(ALLOWED_IMAGE_URI_SCHEMES)
+
 export const IMAGE_MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -13,11 +16,35 @@ export const IMAGE_MIME_TYPES: Record<string, string> = {
   '.avif': 'image/avif'
 }
 
-export const SUPPORTED_IMAGE_EXTENSIONS: readonly string[] = Object.keys(IMAGE_MIME_TYPES)
-
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHAR_PATTERN = /[\u0000-\u001F\u007F]/
-const URI_SCHEME_PATTERN = /^([a-zA-Z][a-zA-Z0-9+.-]*):/
+
+function inspectUriScheme(url: string): { valid: boolean; scheme: string | null } {
+  const normalized = url.replace(/[\u0000-\u0020]+/g, '')
+  if (!normalized || CONTROL_CHAR_PATTERN.test(url)) {
+    return { valid: false, scheme: null }
+  }
+  const colonIdx = normalized.indexOf(':')
+  if (colonIdx === -1) {
+    return { valid: true, scheme: null }
+  }
+  const firstSep = normalized.search(/[/?#]/)
+  if (firstSep !== -1 && colonIdx > firstSep) {
+    return { valid: true, scheme: null }
+  }
+  return { valid: true, scheme: normalized.slice(0, colonIdx).toLowerCase() }
+}
+
+/**
+ * Validates URLs against an allowed URI scheme set (relative URLs without a scheme are permitted).
+ */
+export function hasAllowedUriScheme(url: string, allowedSchemes: ReadonlySet<string>): boolean {
+  const { valid, scheme } = inspectUriScheme(url)
+  if (!valid) {
+    return false
+  }
+  return scheme === null || allowedSchemes.has(scheme)
+}
 
 export function getImageMimeType(filePath: string): string | null {
   const fileName = filePath.split(/[\\/]/).pop() ?? ''
@@ -29,10 +56,6 @@ export function getImageMimeType(filePath: string): string | null {
   return Object.prototype.hasOwnProperty.call(IMAGE_MIME_TYPES, ext)
     ? IMAGE_MIME_TYPES[ext]
     : null
-}
-
-export function isSupportedImagePath(filePath: string): boolean {
-  return getImageMimeType(filePath) !== null
 }
 
 export function buildWikiAssetUrl(filePath: string): string {
@@ -105,18 +128,16 @@ function splitRootAndSegments(filePath: string): {
 }
 
 function isDisallowedRelativeTarget(value: string): boolean {
-  if (!value || CONTROL_CHAR_PATTERN.test(value)) {
+  const { valid, scheme } = inspectUriScheme(value)
+  if (!valid || scheme !== null) {
     return true
   }
-  if (
+  return (
     value.startsWith('/') ||
     value.startsWith('\\') ||
     value.startsWith('#') ||
     value.startsWith('?')
-  ) {
-    return true
-  }
-  return URI_SCHEME_PATTERN.test(value)
+  )
 }
 
 export function resolveWorkspaceImagePath(rawSrc: string, documentPath: string): string | null {
@@ -157,17 +178,13 @@ export function resolveWorkspaceImagePath(rawSrc: string, documentPath: string):
 
 export function resolveImageDisplaySrc(rawSrc: string, documentPath?: string): string {
   const trimmed = rawSrc.trim()
-  if (!trimmed || CONTROL_CHAR_PATTERN.test(trimmed)) {
+  const { valid, scheme } = inspectUriScheme(trimmed)
+  if (!valid) {
     return ''
   }
 
-  const schemeMatch = URI_SCHEME_PATTERN.exec(trimmed)
-  if (schemeMatch) {
-    const scheme = schemeMatch[1].toLowerCase()
-    if (scheme === 'http' || scheme === 'https') {
-      return rawSrc
-    }
-    return ''
+  if (scheme !== null) {
+    return ALLOWED_IMAGE_URI_SCHEME_SET.has(scheme) ? rawSrc : ''
   }
 
   if (documentPath) {
