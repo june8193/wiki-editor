@@ -451,6 +451,14 @@ async function triggerMenuCommand(
   })
 }
 
+async function openActivityBarView(
+  user: ReturnType<typeof userEvent.setup>,
+  label: '탐색기' | 'Git'
+): Promise<void> {
+  const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+  await user.click(within(activityBar).getByRole('button', { name: label }))
+}
+
 describe('App shell, theme persistence, and settings panel', () => {
   beforeEach(() => {
     document.documentElement.removeAttribute('data-theme')
@@ -892,6 +900,7 @@ describe('App shell, theme persistence, and settings panel', () => {
     await user.click(await within(sidebar).findByText('dirty.md'))
     appendRawEditorText(await screen.findByTestId('document-editor'), ' unsaved')
 
+    await openActivityBarView(user, 'Git')
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
     const gitDialog = await screen.findByRole('alertdialog')
@@ -3279,13 +3288,20 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     window.wikiApi = api
     render(<App />)
 
-    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
-    expect(within(gitRegion).getByText(/워크스페이스를 먼저 열어주세요/)).toBeInTheDocument()
+    await openActivityBarView(user, 'Git')
+    const gitRegionInitial = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(
+      within(gitRegionInitial).getByText(/워크스페이스를 먼저 열어주세요/)
+    ).toBeInTheDocument()
 
+    await openActivityBarView(user, '탐색기')
     const explorer = screen.getByLabelText('워크스페이스 탐색기')
 
     await triggerMenuCommand(emitMenuCommand, 'open-folder')
     await within(explorer).findByText('guide.md')
+
+    await openActivityBarView(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     expect(within(gitRegion).getByRole('button', { name: /Git 저장소 초기화/i })).toBeInTheDocument()
     await user.click(within(gitRegion).getByRole('button', { name: /Git 저장소 초기화/i }))
 
@@ -3296,21 +3312,29 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(gitMocks.commit).toHaveBeenCalledWith('C:/wiki', 'feat: stage guide')
 
     // Open guide.md cleanly in editor, then trigger Pull -> clean buffer & tree refresh automatically
-    await user.click(within(explorer).getByText('guide.md'))
+    await openActivityBarView(user, '탐색기')
+    await user.click(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('guide.md'))
     const editorEl = await screen.findByTestId('document-editor')
     expect(getRawEditorText(editorEl)).toBe('# Initial Guide')
 
-    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    await openActivityBarView(user, 'Git')
+    const gitRegionAfterOpen = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(within(gitRegionAfterOpen).getByRole('button', { name: 'Pull' }))
 
     await waitFor(() => {
       expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Pulled From Remote')
     })
-    expect(await within(explorer).findByText('pulled.md')).toBeInTheDocument()
+    await openActivityBarView(user, '탐색기')
+    expect(
+      await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('pulled.md')
+    ).toBeInTheDocument()
 
     // Edit guide.md without saving -> Checkout prompts confirmation
     appendRawEditorText(screen.getByTestId('document-editor'), '\nUnsaved draft line')
-    await user.selectOptions(within(gitRegion).getByLabelText('브랜치 선택'), 'docs-v2')
-    await user.click(within(gitRegion).getByRole('button', { name: '브랜치 전환' }))
+    await openActivityBarView(user, 'Git')
+    const gitRegionForBranch = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.selectOptions(within(gitRegionForBranch).getByLabelText('브랜치 선택'), 'docs-v2')
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: '브랜치 전환' }))
 
     const confirmDialog = await screen.findByRole('alertdialog')
     expect(within(confirmDialog).getByText(/guide.md/)).toBeInTheDocument()
@@ -3320,7 +3344,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(gitMocks.checkout).not.toHaveBeenCalled()
 
     // Trigger checkout again and proceed without saving -> dirty edit is preserved & conflict warning appears
-    await user.click(within(gitRegion).getByRole('button', { name: '브랜치 전환' }))
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: '브랜치 전환' }))
     const secondDialog = await screen.findByRole('alertdialog')
     await user.click(within(secondDialog).getByRole('button', { name: '저장 없이 진행' }))
 
@@ -3328,19 +3352,21 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       expect(gitMocks.checkout).toHaveBeenCalledWith('C:/wiki', 'docs-v2')
     })
     expect(getRawEditorText(screen.getByTestId('document-editor'))).toContain('Unsaved draft line')
-    expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(/충돌할 수 있습니다 \(guide\.md\)/)
+    expect(await within(gitRegionForBranch).findByRole('alert')).toHaveTextContent(
+      /충돌할 수 있습니다 \(guide\.md\)/
+    )
 
     // Dismiss Git error and trigger real Git error -> displayed safely inside Git panel
-    await user.click(within(gitRegion).getByRole('button', { name: 'Git 오류 닫기' }))
-    expect(within(gitRegion).queryByRole('alert')).not.toBeInTheDocument()
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: 'Git 오류 닫기' }))
+    expect(within(gitRegionForBranch).queryByRole('alert')).not.toBeInTheDocument()
 
     // Save dirty edits via saving dialog path, then test Git pull failure
     pullFailure = new Error('원격 저장소 인증에 실패했습니다.')
-    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: 'Pull' }))
     const saveDialog = await screen.findByRole('alertdialog')
     await user.click(within(saveDialog).getByRole('button', { name: '저장 후 진행' }))
 
-    expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(
+    expect(await within(gitRegionForBranch).findByRole('alert')).toHaveTextContent(
       '원격 저장소 인증에 실패했습니다.'
     )
   })
@@ -3390,7 +3416,6 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     render(<App />)
 
     const explorer = screen.getByLabelText('워크스페이스 탐색기')
-    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     await triggerMenuCommand(emitMenuCommand, 'open-folder')
 
     // Open both files: leave obsolete.md clean and make keep-dirty.md dirty
@@ -3400,7 +3425,9 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     await user.click(within(explorer).getByText('keep-dirty.md'))
     appendRawEditorText(await screen.findByTestId('document-editor'), '\nImportant local edit')
 
-    // Click Sync -> proceed without saving -> obsolete.md clean tab closes, dirty keep-dirty.md stays open with warning
+    // Switch to Git view and click Sync -> proceed without saving -> obsolete.md clean tab closes, dirty keep-dirty.md stays open with warning
+    await openActivityBarView(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     await user.click(within(gitRegion).getByRole('button', { name: 'Sync' }))
     const dialog = await screen.findByRole('alertdialog')
     await user.click(within(dialog).getByRole('button', { name: '저장 없이 진행' }))
@@ -3558,6 +3585,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Disk full')
 
+    await openActivityBarView(user, 'Git')
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     await user.click(within(gitRegion).getByRole('button', { name: 'Push' }))
     expect(await within(gitRegion).findByRole('alert')).toHaveTextContent('Remote auth failed')
@@ -3725,5 +3753,354 @@ describe('Renderer error logging & UI breadcrumbs', () => {
       { message: 'Tab switched', paneId: 'primary' },
       { message: 'Tab switched', paneId: 'secondary' }
     ])
+  })
+})
+
+describe('Activity bar and left sidebar view switching', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('renders activity bar with 탐색기 and Git buttons, shows only Explorer view initially, and switches to Git view on click', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
+    const paneWorkspace = screen.getByTestId('pane-workspace')
+
+    expect(
+      activityBar.compareDocumentPosition(leftSidebar) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      leftSidebar.compareDocumentPosition(paneWorkspace) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    const explorerBtn = within(activityBar).getByRole('button', { name: '탐색기' })
+    const gitBtn = within(activityBar).getByRole('button', { name: 'Git' })
+
+    expect(explorerBtn).toHaveAttribute('title', '탐색기')
+    expect(gitBtn).toHaveAttribute('title', 'Git')
+    expect(explorerBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(gitBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    // Initial view is Explorer: only FolderTreeSidebar is rendered
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(explorerBtn).toHaveClass('is-active')
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(gitBtn).not.toHaveClass('is-active')
+    expect(within(leftSidebar).getByRole('region', { name: '워크스페이스 탐색기' })).toBeInTheDocument()
+    expect(
+      within(leftSidebar).queryByRole('region', { name: 'Git 소스 제어' })
+    ).not.toBeInTheDocument()
+
+    // Click Git -> switches left sidebar to Git panel only
+    await user.click(gitBtn)
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(gitBtn).toHaveClass('is-active')
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(explorerBtn).not.toHaveClass('is-active')
+    expect(within(leftSidebar).getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
+    expect(
+      within(leftSidebar).queryByRole('region', { name: '워크스페이스 탐색기' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('collapses and expands left sidebar via activity bar transitions and keeps sidebar state session-only', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi({ theme: 'light' })
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    const view = render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    const explorerBtn = within(activityBar).getByRole('button', { name: '탐색기' })
+    const gitBtn = within(activityBar).getByRole('button', { name: 'Git' })
+
+    // Collapse from Explorer by clicking active Explorer button
+    await user.click(explorerBtn)
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '워크스페이스 탐색기' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Git 소스 제어' })).not.toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: '액티비티 바' })).toBeInTheDocument()
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(explorerBtn).not.toHaveClass('is-active')
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(gitBtn).not.toHaveClass('is-active')
+
+    // Click Git while collapsed -> expands straight into Git view
+    await user.click(gitBtn)
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(gitBtn).toHaveClass('is-active')
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
+
+    // Collapse from Git by clicking active Git button
+    await user.click(gitBtn)
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    expect(gitBtn).toHaveAttribute('aria-pressed', 'false')
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'false')
+
+    // Click Explorer while collapsed -> expands straight into Explorer view
+    await user.click(explorerBtn)
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '워크스페이스 탐색기' })).toBeInTheDocument()
+    expect(explorerBtn).toHaveAttribute('aria-pressed', 'true')
+
+    // Collapse again and verify nothing is persisted to config.json; remount starts expanded on Explorer
+    await user.click(explorerBtn)
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+
+    view.unmount()
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    })
+    const restartedBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    expect(within(restartedBar).getByRole('button', { name: '탐색기' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.getByRole('complementary', { name: '왼쪽 사이드바' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '워크스페이스 탐색기' })).toBeInTheDocument()
+  })
+
+  it('preserves folder tree expansion and Git state across view switches and collapse/expand, and keeps context menu and branch selector functional', async () => {
+    const user = userEvent.setup()
+    let staged: Array<{ path: string; status: 'M' }> = []
+    let unstaged: Array<{ path: string; status: 'M' }> = [{ path: 'notes.md', status: 'M' }]
+    const gitStatusSpy = vi.fn(async () => ({
+      ...createEmptyGitStatus(true, 'C:/wiki/preserve'),
+      branch: 'main',
+      hasUpstream: true,
+      staged,
+      unstaged,
+      untracked: []
+    }))
+    const gitStageSpy = vi.fn(async (_ws: string, paths: string[]) => {
+      for (const p of paths) {
+        unstaged = unstaged.filter((item) => item.path !== p)
+        staged = [...staged, { path: p, status: 'M' }]
+      }
+      return {
+        ...createEmptyGitStatus(true, 'C:/wiki/preserve'),
+        branch: 'main',
+        hasUpstream: true,
+        staged,
+        unstaged,
+        untracked: []
+      }
+    })
+
+    const { api, emitMenuCommand, readDirCalls } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\preserve',
+        workspaces: {
+          'C:\\wiki\\preserve': {
+            'docs/intro.md': '# Intro',
+            'notes.md': '# Notes'
+          }
+        },
+        git: {
+          status: gitStatusSpy,
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [
+              { name: 'main', current: true, upstream: 'origin/main' },
+              { name: 'feature/sidebar', current: false, upstream: null }
+            ]
+          })),
+          stage: gitStageSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('docs'))
+    expect(await within(explorer).findByText('intro.md')).toBeInTheDocument()
+    expect(readDirCalls).toEqual(['C:/wiki/preserve', 'C:/wiki/preserve/docs'])
+
+    // Context menu opens and executes on tree entry inside Explorer view
+    fireEvent.contextMenu(within(explorer).getByText('intro.md'))
+    const contextMenu = await screen.findByRole('menu')
+    await user.click(within(contextMenu).getByRole('menuitem', { name: '열기' }))
+    expect(await screen.findByRole('tab', { name: 'intro.md' })).toBeInTheDocument()
+
+    // Switch to Git view -> Git state & branch dropdown work, stage notes.md
+    const statusCallsBeforeSwitch = gitStatusSpy.mock.calls.length
+    await openActivityBarView(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const branchSelect = within(gitRegion).getByLabelText('브랜치 선택') as HTMLSelectElement
+    expect(Array.from(branchSelect.options).map((o) => o.value)).toEqual([
+      'main',
+      'feature/sidebar'
+    ])
+    await user.selectOptions(branchSelect, 'feature/sidebar')
+    expect(branchSelect.value).toBe('feature/sidebar')
+
+    await user.click(within(gitRegion).getByRole('button', { name: 'notes.md Stage' }))
+    expect(await within(gitRegion).findByRole('button', { name: 'notes.md Unstage' })).toBeInTheDocument()
+
+    // Switch back to Explorer, collapse, and reopen Explorer -> expansion & selection preserved without re-reading dir
+    await openActivityBarView(user, '탐색기')
+    const reopenedExplorer = screen.getByLabelText('워크스페이스 탐색기')
+    expect(within(reopenedExplorer).getByText('intro.md')).toBeInTheDocument()
+    expect(within(reopenedExplorer).getByRole('treeitem', { name: 'docs' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(reopenedExplorer).getByRole('treeitem', { name: 'intro.md' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    await openActivityBarView(user, '탐색기')
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    await openActivityBarView(user, '탐색기')
+    expect(
+      within(screen.getByLabelText('워크스페이스 탐색기')).getByText('intro.md')
+    ).toBeInTheDocument()
+    expect(readDirCalls).toEqual(['C:/wiki/preserve', 'C:/wiki/preserve/docs'])
+
+    // Switch back to Git -> staged state preserved without extra git.status fetch
+    await openActivityBarView(user, 'Git')
+    const reopenedGit = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(within(reopenedGit).getByRole('button', { name: 'notes.md Unstage' })).toBeInTheDocument()
+    expect(gitStatusSpy).toHaveBeenCalledTimes(statusCallsBeforeSwitch)
+  })
+
+  it('displays Git badge for staged + unstaged + untracked changes (>0, capped at 99+) and hides it when 0, non-repo, or no workspace', async () => {
+    const user = userEvent.setup()
+    const makeFiles = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, idx) => ({
+        path: `${prefix}-${idx}.md`,
+        status: 'M' as const
+      }))
+
+    let currentStatusByRoot: Record<string, ReturnType<typeof createEmptyGitStatus>> = {
+      'C:/wiki/repo': {
+        ...createEmptyGitStatus(true, 'C:/wiki/repo'),
+        branch: 'main',
+        staged: makeFiles('staged', 1),
+        unstaged: makeFiles('unstaged', 2),
+        untracked: [{ path: 'new.md', status: '?' }]
+      },
+      'C:/wiki/plain': {
+        ...createEmptyGitStatus(false, 'C:/wiki/plain'),
+        // Even if arrays were non-empty, isRepo=false must never render a badge
+        unstaged: makeFiles('ignored', 2)
+      }
+    }
+
+    let nextSelectedFolder = 'C:/wiki/repo'
+    const { api, emitMenuCommand, emitWorkspaceChange } = createInMemoryWikiApi(
+      {},
+      {
+        workspaces: {
+          'C:\\wiki\\repo': { 'a.md': '# A' },
+          'C:\\wiki\\plain': { 'b.md': '# B' }
+        },
+        git: {
+          status: vi.fn(async (rootPath) => {
+            const norm = rootPath.replace(/\\/g, '/')
+            return currentStatusByRoot[norm] ?? createEmptyGitStatus(false, rootPath)
+          })
+        }
+      }
+    )
+    api.workspace.selectFolder = async () => nextSelectedFolder
+    window.wikiApi = api
+
+    render(<App />)
+
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    const gitBtn = within(activityBar).getByRole('button', { name: 'Git' })
+
+    // 1. No workspace open -> no badge
+    expect(gitBtn).toHaveTextContent('')
+
+    // 2. Open Git repo with 1 + 2 + 1 = 4 changes (while Explorer view is still active)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(await within(gitBtn).findByText('4')).toBeInTheDocument()
+
+    // Badge remains visible when sidebar is collapsed
+    await user.click(within(activityBar).getByRole('button', { name: '탐색기' }))
+    expect(screen.queryByRole('complementary', { name: '왼쪽 사이드바' })).not.toBeInTheDocument()
+    expect(within(gitBtn).getByText('4')).toBeInTheDocument()
+
+    const triggerRepoChange = (): void => {
+      act(() => {
+        emitWorkspaceChange({ rootPath: 'C:/wiki/repo', eventType: 'change', relativePath: 'a.md' })
+      })
+    }
+
+    // 3. Exactly 99 changes -> '99'
+    currentStatusByRoot['C:/wiki/repo'] = {
+      ...createEmptyGitStatus(true, 'C:/wiki/repo'),
+      branch: 'main',
+      staged: makeFiles('s', 33),
+      unstaged: makeFiles('u', 33),
+      untracked: Array.from({ length: 33 }, (_, i) => ({ path: `n-${i}.md`, status: '?' as const }))
+    }
+    triggerRepoChange()
+    expect(await within(gitBtn).findByText('99')).toBeInTheDocument()
+
+    // 4. Over 99 changes (100) -> '99+'
+    currentStatusByRoot['C:/wiki/repo'] = {
+      ...createEmptyGitStatus(true, 'C:/wiki/repo'),
+      branch: 'main',
+      staged: makeFiles('s', 34),
+      unstaged: makeFiles('u', 33),
+      untracked: Array.from({ length: 33 }, (_, i) => ({ path: `n-${i}.md`, status: '?' as const }))
+    }
+    triggerRepoChange()
+    expect(await within(gitBtn).findByText('99+')).toBeInTheDocument()
+
+    // 5. Clean repo (0 changes) -> badge disappears
+    currentStatusByRoot['C:/wiki/repo'] = {
+      ...createEmptyGitStatus(true, 'C:/wiki/repo'),
+      branch: 'main'
+    }
+    triggerRepoChange()
+    await waitFor(() => {
+      expect(gitBtn).toHaveTextContent('')
+    })
+
+    // Restore changes, then switch to non-git workspace -> badge disappears
+    currentStatusByRoot['C:/wiki/repo'] = {
+      ...createEmptyGitStatus(true, 'C:/wiki/repo'),
+      branch: 'main',
+      unstaged: makeFiles('u', 3)
+    }
+    triggerRepoChange()
+    expect(await within(gitBtn).findByText('3')).toBeInTheDocument()
+
+    nextSelectedFolder = 'C:/wiki/plain'
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await waitFor(() => {
+      expect(gitBtn).toHaveTextContent('')
+    })
   })
 })

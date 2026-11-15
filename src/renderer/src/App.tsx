@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppMenuCommand } from '@shared/ipc'
+import type { GitStatus } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
 import type { OutlineScrollRequest } from './components/DocumentEditor'
 import { DocumentOutlinePanel } from './components/DocumentOutlinePanel'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
@@ -30,6 +32,28 @@ import { toErrorMessage } from './utils/toErrorMessage'
 
 const RIGHT_SIDEBAR_DEFAULT_WIDTH = 240
 
+interface LeftSidebarState {
+  activeView: LeftSidebarView
+  isCollapsed: boolean
+}
+
+function selectLeftSidebarView(
+  prev: LeftSidebarState,
+  view: LeftSidebarView
+): LeftSidebarState {
+  if (!prev.isCollapsed && prev.activeView === view) {
+    return { ...prev, isCollapsed: true }
+  }
+  return { activeView: view, isCollapsed: false }
+}
+
+function getGitChangedCount(workspaceRootPath: string | null, status: GitStatus | null): number {
+  if (!workspaceRootPath || !status || !status.isRepo) {
+    return 0
+  }
+  return status.staged.length + status.unstaged.length + status.untracked.length
+}
+
 interface PendingDialogState {
   title: string
   message: string
@@ -42,7 +66,15 @@ interface PendingDialogState {
 
 export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
+  const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
+    activeView: 'explorer',
+    isCollapsed: false
+  })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  const handleSelectLeftSidebarView = useCallback((view: LeftSidebarView): void => {
+    setLeftSidebar((prev) => selectLeftSidebarView(prev, view))
+  }, [])
 
   const reportErrorBanner = useCallback((message: string | null, error?: unknown): void => {
     setErrorMessage(message)
@@ -436,6 +468,7 @@ export function App() {
 
   const isCurrentWorkspaceFavorite =
     workspace !== null && isFavoriteWorkspacePath(config.favoriteWorkspaces, workspace.rootPath)
+  const gitChangedCount = getGitChangedCount(workspace?.rootPath ?? null, git.status)
 
   return (
     <div className="app-shell" data-theme={config.theme}>
@@ -446,57 +479,70 @@ export function App() {
       )}
 
       <main className="app-main">
-        <aside className="left-sidebar" aria-label="왼쪽 사이드바">
-          <FolderTreeSidebar
-            workspace={workspace}
-            isFavorite={isCurrentWorkspaceFavorite}
-            workspaceSwitcher={
-              <WorkspaceSwitcher
-                workspace={workspace}
-                favoriteWorkspaces={config.favoriteWorkspaces}
-                recentWorkspaces={config.recentWorkspaces}
-                onSwitchWorkspace={handleSwitchWorkspace}
-                onRemoveFavorite={removeFavoriteWorkspace}
-              />
-            }
-            tree={treeState}
-            activeFilePath={activeFilePath}
-            onToggleFavorite={() => {
-              if (workspace) {
-                toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
-              }
-            }}
-            onSelectPath={setSelectedTreePath}
-            onToggleDirectory={toggleDirectory}
-            onEnsureExpanded={ensureExpanded}
-            onResolveCreateParentDir={resolveCreateParentDir}
-            onOpenFile={handleOpenFile}
-            onRefreshTree={() => void refreshTree()}
-            onCreateEntry={createEntry}
-            onRenameEntry={renameEntry}
-            onRequestDelete={handleRequestDelete}
-          />
+        <ActivityBar
+          activeView={leftSidebar.activeView}
+          isCollapsed={leftSidebar.isCollapsed}
+          gitChangedCount={gitChangedCount}
+          onSelectView={handleSelectLeftSidebarView}
+        />
 
-          <GitSidebarPanel
-            workspaceRootPath={workspace?.rootPath ?? null}
-            status={git.status}
-            branchList={git.branchList}
-            pendingAction={git.pendingAction}
-            errorMessage={git.errorMessage}
-            onDismissError={git.dismissError}
-            onRefresh={() => void git.refreshStatus()}
-            onInitRepo={() => void git.initRepo()}
-            onStageFile={(path) => void git.stageFile(path)}
-            onStageAll={() => void git.stageAll()}
-            onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
-            onUnstageAll={() => void git.unstageAll()}
-            onCommit={git.commit}
-            onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
-            onPull={() => void git.pull()}
-            onPush={() => void git.push()}
-            onSync={() => void git.sync()}
-          />
-        </aside>
+        {!leftSidebar.isCollapsed && (
+          <aside className="left-sidebar" aria-label="왼쪽 사이드바">
+            {leftSidebar.activeView === 'explorer' && (
+              <FolderTreeSidebar
+                workspace={workspace}
+                isFavorite={isCurrentWorkspaceFavorite}
+                workspaceSwitcher={
+                  <WorkspaceSwitcher
+                    workspace={workspace}
+                    favoriteWorkspaces={config.favoriteWorkspaces}
+                    recentWorkspaces={config.recentWorkspaces}
+                    onSwitchWorkspace={handleSwitchWorkspace}
+                    onRemoveFavorite={removeFavoriteWorkspace}
+                  />
+                }
+                tree={treeState}
+                activeFilePath={activeFilePath}
+                onToggleFavorite={() => {
+                  if (workspace) {
+                    toggleFavoriteWorkspace(workspace.rootPath, workspace.name)
+                  }
+                }}
+                onSelectPath={setSelectedTreePath}
+                onToggleDirectory={toggleDirectory}
+                onEnsureExpanded={ensureExpanded}
+                onResolveCreateParentDir={resolveCreateParentDir}
+                onOpenFile={handleOpenFile}
+                onRefreshTree={() => void refreshTree()}
+                onCreateEntry={createEntry}
+                onRenameEntry={renameEntry}
+                onRequestDelete={handleRequestDelete}
+              />
+            )}
+
+            {leftSidebar.activeView === 'git' && (
+              <GitSidebarPanel
+                workspaceRootPath={workspace?.rootPath ?? null}
+                status={git.status}
+                branchList={git.branchList}
+                pendingAction={git.pendingAction}
+                errorMessage={git.errorMessage}
+                onDismissError={git.dismissError}
+                onRefresh={() => void git.refreshStatus()}
+                onInitRepo={() => void git.initRepo()}
+                onStageFile={(path) => void git.stageFile(path)}
+                onStageAll={() => void git.stageAll()}
+                onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
+                onUnstageAll={() => void git.unstageAll()}
+                onCommit={git.commit}
+                onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
+                onPull={() => void git.pull()}
+                onPush={() => void git.push()}
+                onSync={() => void git.sync()}
+              />
+            )}
+          </aside>
+        )}
 
         <PaneWorkspace
           layout={layout}

@@ -293,9 +293,71 @@ body,
   min-height: 0;
 }
 
+.activity-bar {
+  width: 46px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  background-color: var(--bg-surface);
+  border-right: 1px solid var(--border-color);
+}
+
+.activity-bar-btn {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.activity-bar-btn:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-elevated);
+}
+
+.activity-bar-btn:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+.activity-bar-btn.is-active {
+  color: var(--accent-color);
+  background-color: var(--bg-elevated);
+  box-shadow: inset 2px 0 0 0 var(--accent-color);
+}
+
+.activity-bar-badge {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--accent-color);
+  color: var(--accent-contrast);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
 .left-sidebar {
   width: 260px;
-  min-width: 200px;
+  flex-shrink: 0;
+  min-width: 180px;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1579,14 +1641,13 @@ body,
 /* Git Sidebar Panel */
 
 .git-sidebar {
-  flex: 0 1 auto;
-  max-height: 44%;
+  flex: 1 1 0;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--border-color);
   background-color: var(--bg-surface);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .git-header {
