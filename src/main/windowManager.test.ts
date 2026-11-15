@@ -8,7 +8,9 @@ import { BUFFER_IPC_CHANNELS, WINDOW_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
   WINDOW_BASE_TITLE,
+  type ActiveTabDragSession,
   type DetachTabToNewWindowResult,
+  type TabDragEndResult,
   type TabTransferPayload,
   type WindowInitContext
 } from '@shared/window'
@@ -30,6 +32,8 @@ interface FakeWindowInstance extends BrowserWindowLike {
   closedCount: number
   sentMessages: Array<{ channel: string; payload: unknown }>
   emitReadyToShow: () => void
+  emitBeforeInput: (input: { type?: string; key?: string; code?: string }) => void
+  getBeforeInputListenerCount: () => number
   simulateUserClose: () => void
 }
 
@@ -48,6 +52,9 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
       closed: [] as Array<() => void>
     }
     const webContentsDestroyedListeners: Array<() => void> = []
+    const beforeInputListeners = new Set<
+      (event: unknown, input: { type?: string; key?: string; code?: string }) => void
+    >()
     const sentMessages: Array<{ channel: string; payload: unknown }> = []
     const loadedUrls: string[] = []
     const loadedFiles: Array<{ filePath: string; query?: Record<string, string> }> = []
@@ -92,6 +99,22 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
           if (eventName === 'destroyed') {
             webContentsDestroyedListeners.push(listener)
           }
+        },
+        on: (
+          eventName: 'before-input-event',
+          listener: (event: unknown, input: { type?: string; key?: string; code?: string }) => void
+        ) => {
+          if (eventName === 'before-input-event') {
+            beforeInputListeners.add(listener)
+          }
+        },
+        removeListener: (
+          eventName: 'before-input-event',
+          listener: (event: unknown, input: { type?: string; key?: string; code?: string }) => void
+        ) => {
+          if (eventName === 'before-input-event') {
+            beforeInputListeners.delete(listener)
+          }
         }
       },
       getBounds: () => ({ ...bounds }),
@@ -120,6 +143,12 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
           listener()
         }
       },
+      emitBeforeInput: (input) => {
+        for (const listener of beforeInputListeners) {
+          listener({ preventDefault: vi.fn() }, input)
+        }
+      },
+      getBeforeInputListenerCount: () => beforeInputListeners.size,
       simulateUserClose: () => {
         destroyWindow()
       }
@@ -472,5 +501,361 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     // Aux closes before sending any buffer:* IPC
     auxWin.simulateUserClose()
     expect(bufferHub.hasBuffer(alphaBuf.key)).toBe(false)
+  })
+
+  it('detaches dirty 1-tab from main into clamped cursor auxiliary window on outside dragend and ignores drops inside any open window bounds', async () => {
+    const wideFactory = createFakeBrowserWindowFactory({ x: 100, y: 120, width: 1280, height: 820 })
+    const wideScreen: ScreenLike = {
+      getDisplayNearestPoint: ({ x }) =>
+        x < 0
+          ? { workArea: { x: -1920, y: 0, width: 1920, height: 1040 } }
+          : { workArea: { x: 0, y: 0, width: 2560, height: 1440 } }
+    }
+    const wideManager = new WindowManager({
+      preloadPath: 'C:\\app\\out\\preload\\index.js',
+      rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
+      bufferHub,
+      createWindow: wideFactory.createWindow,
+      screen: wideScreen
+    })
+    const wideIpc = createFakeIpcMain()
+    const disposeWideIpc = [
+      registerBufferIpc({
+        ipcMain: wideIpc,
+        configService,
+        hub: bufferHub,
+        getTargets: () => wideManager.getWebContentsTargets()
+      }),
+      registerWorkspaceIpc({
+        ipcMain: wideIpc,
+        workspaceService,
+        configService,
+        selectDirectory: async () => workspaceDir,
+        getTargets: () => wideManager.getWebContentsTargets(),
+        isMainWindowSender: (sender) => wideManager.isMainWebContents(sender)
+      }),
+      registerWindowIpc({
+        ipcMain: wideIpc,
+        windowManager: wideManager
+      })
+    ]
+
+    try {
+      const mainWin = wideManager.createMainWindow() as FakeWindowInstance
+      await wideIpc.invokeFrom(mainWin.webContents, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+      const alphaBuf = (await wideIpc.invokeFrom(
+        mainWin.webContents,
+        BUFFER_IPC_CHANNELS.openWorkspaceFile,
+        join(workspaceDir, 'alpha.md'),
+        'alpha.md'
+      )) as DocumentBuffer
+      await wideIpc.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+        alphaBuf.key
+      ])
+      await wideIpc.invokeFrom(
+        mainWin.webContents,
+        BUFFER_IPC_CHANNELS.updateContent,
+        alphaBuf.key,
+        '# Dirty drag content'
+      )
+
+      const payload: TabTransferPayload = {
+        bufferKey: alphaBuf.key,
+        mode: 'preview',
+        cursor: { selectionStart: 2, selectionEnd: 7 },
+        scrollTop: 220
+      }
+
+      // Drop inside main window bounds -> does NOT detach
+      const insideSession = await wideIpc.invokeFrom<ActiveTabDragSession>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        { paneId: 'primary', tabId: 'tab-1', payload }
+      )
+      expect(insideSession).toMatchObject({
+        sourceWindowId: mainWin.webContents.id,
+        paneId: 'primary',
+        tabId: 'tab-1',
+        outcome: 'pending'
+      })
+      const insideEnd = await wideIpc.invokeFrom<TabDragEndResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.endTabDrag,
+        { dragSessionId: insideSession.dragSessionId, screenPoint: { x: 600, y: 400 }, payload }
+      )
+      expect(insideEnd).toEqual({ detached: false, outcome: 'cancelled' })
+      expect(wideFactory.createdWindows).toHaveLength(1)
+
+      // Drop outside main window (right edge x=1380 is half-open outside) near workArea bottom-right -> detaches at clamped cursor bounds
+      const outsideSession = await wideIpc.invokeFrom<ActiveTabDragSession>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        { paneId: 'primary', tabId: 'tab-1', payload }
+      )
+      expect(
+        mainWin.sentMessages.some(
+          (m) =>
+            m.channel === WINDOW_IPC_CHANNELS.dragStateChanged &&
+            (m.payload as ActiveTabDragSession | null)?.dragSessionId ===
+              outsideSession.dragSessionId &&
+            (m.payload as ActiveTabDragSession | null)?.outcome === 'pending'
+        )
+      ).toBe(true)
+
+      const outsideEnd = await wideIpc.invokeFrom<TabDragEndResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.endTabDrag,
+        { dragSessionId: outsideSession.dragSessionId, screenPoint: { x: 1800, y: 800 }, payload }
+      )
+      expect(outsideEnd.detached).toBe(true)
+      expect(wideFactory.createdWindows).toHaveLength(2)
+
+      const aux1 = wideFactory.createdWindows[1]
+      expect(outsideEnd.windowId).toBe(aux1.webContents.id)
+      expect(aux1.removedMenu).toBe(true)
+      // (1800, 800) with 960x760 inside 2560x1440 workArea -> maxX=1600, maxY=680
+      expect(aux1.getBounds()).toEqual({ x: 1600, y: 680, width: 960, height: 760 })
+
+      // Main clears its sole tab after detach while shared dirty buffer remains alive for aux1
+      const afterClear = await wideIpc.invokeFrom<SharedBufferStateSnapshot>(
+        mainWin.webContents,
+        BUFFER_IPC_CHANNELS.syncWindowTabs,
+        []
+      )
+      expect(afterClear.buffers[alphaBuf.key]?.content).toBe('# Dirty drag content')
+      expect(afterClear.buffers[alphaBuf.key]?.isDirty).toBe(true)
+      expect(
+        await wideIpc.invokeFrom<WindowInitContext>(
+          aux1.webContents,
+          WINDOW_IPC_CHANNELS.getInitContext
+        )
+      ).toEqual({ role: 'auxiliary', initialTabs: [payload] })
+
+      // Dropping inside ANY open auxiliary window's bounds also suppresses detach
+      const betaBuf = (await wideIpc.invokeFrom(
+        mainWin.webContents,
+        BUFFER_IPC_CHANNELS.openWorkspaceFile,
+        join(workspaceDir, 'beta.md'),
+        'beta.md'
+      )) as DocumentBuffer
+      await wideIpc.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+        betaBuf.key
+      ])
+      const overAuxSession = await wideIpc.invokeFrom<ActiveTabDragSession>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        {
+          paneId: 'primary',
+          tabId: 'tab-2',
+          payload: {
+            bufferKey: betaBuf.key,
+            mode: 'raw',
+            cursor: { selectionStart: 0, selectionEnd: 0 },
+            scrollTop: 0
+          }
+        }
+      )
+      const overAuxEnd = await wideIpc.invokeFrom<TabDragEndResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.endTabDrag,
+        {
+          dragSessionId: overAuxSession.dragSessionId,
+          screenPoint: { x: 1700, y: 800 }
+        }
+      )
+      expect(overAuxEnd).toEqual({ detached: false, outcome: 'cancelled' })
+      expect(wideFactory.createdWindows).toHaveLength(2)
+    } finally {
+      for (const dispose of disposeWideIpc.reverse()) {
+        dispose()
+      }
+      wideManager.dispose()
+    }
+  })
+
+  it('cancels drag via before-input-event Escape or dropped-in-window outcome, uses screen cursor point, and enforces auxiliary single-tab drag guard', async () => {
+    let screenCursor = { x: 1500, y: 200 }
+    const cursorFactory = createFakeBrowserWindowFactory({ x: 100, y: 120, width: 1280, height: 820 })
+    const cursorManager = new WindowManager({
+      preloadPath: 'C:\\app\\out\\preload\\index.js',
+      rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
+      bufferHub,
+      createWindow: cursorFactory.createWindow,
+      screen: {
+        getDisplayNearestPoint: () => ({
+          workArea: { x: 0, y: 0, width: 2560, height: 1440 }
+        }),
+        getCursorScreenPoint: () => ({ ...screenCursor })
+      }
+    })
+    const cursorIpc = createFakeIpcMain()
+    const disposeCursorIpc = [
+      registerBufferIpc({
+        ipcMain: cursorIpc,
+        configService,
+        hub: bufferHub,
+        getTargets: () => cursorManager.getWebContentsTargets()
+      }),
+      registerWorkspaceIpc({
+        ipcMain: cursorIpc,
+        workspaceService,
+        configService,
+        selectDirectory: async () => workspaceDir,
+        getTargets: () => cursorManager.getWebContentsTargets(),
+        isMainWindowSender: (sender) => cursorManager.isMainWebContents(sender)
+      }),
+      registerWindowIpc({
+        ipcMain: cursorIpc,
+        windowManager: cursorManager
+      })
+    ]
+
+    try {
+      const mainWin = cursorManager.createMainWindow() as FakeWindowInstance
+      await cursorIpc.invokeFrom(mainWin.webContents, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+      const alphaBuf = (await cursorIpc.invokeFrom(
+        mainWin.webContents,
+        BUFFER_IPC_CHANNELS.openWorkspaceFile,
+        join(workspaceDir, 'alpha.md')
+      )) as DocumentBuffer
+      const betaBuf = (await cursorIpc.invokeFrom(
+        mainWin.webContents,
+        BUFFER_IPC_CHANNELS.openWorkspaceFile,
+        join(workspaceDir, 'beta.md')
+      )) as DocumentBuffer
+      await cursorIpc.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+        alphaBuf.key,
+        betaBuf.key
+      ])
+
+      const alphaPayload: TabTransferPayload = {
+        bufferKey: alphaBuf.key,
+        mode: 'raw',
+        cursor: { selectionStart: 0, selectionEnd: 0 },
+        scrollTop: 0
+      }
+
+      // Esc during drag (via Electron before-input-event) marks session 'cancelled' and blocks outside detach
+      const escSession = await cursorIpc.invokeFrom<ActiveTabDragSession>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        { paneId: 'primary', tabId: 'tab-1', payload: alphaPayload }
+      )
+      mainWin.emitBeforeInput({ type: 'keyDown', key: 'Escape' })
+      expect(
+        mainWin.sentMessages.some(
+          (m) =>
+            m.channel === WINDOW_IPC_CHANNELS.dragStateChanged &&
+            (m.payload as ActiveTabDragSession | null)?.dragSessionId === escSession.dragSessionId &&
+            (m.payload as ActiveTabDragSession | null)?.outcome === 'cancelled'
+        )
+      ).toBe(true)
+
+      screenCursor = { x: 1500, y: 200 }
+      const escEnd = await cursorIpc.invokeFrom<TabDragEndResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.endTabDrag,
+        { dragSessionId: escSession.dragSessionId, screenPoint: { x: 1500, y: 200 } }
+      )
+      expect(escEnd).toEqual({ detached: false, outcome: 'cancelled' })
+      expect(cursorFactory.createdWindows).toHaveLength(1)
+
+      // In-window drop transition prevents detach even if dragend arrives with outside coordinates
+      const inWinSession = await cursorIpc.invokeFrom<ActiveTabDragSession>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        { paneId: 'primary', tabId: 'tab-1', payload: alphaPayload }
+      )
+      await cursorIpc.invokeFrom(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.updateTabDragOutcome,
+        inWinSession.dragSessionId,
+        'dropped-in-window'
+      )
+      const inWinEnd = await cursorIpc.invokeFrom<TabDragEndResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.endTabDrag,
+        { dragSessionId: inWinSession.dragSessionId, screenPoint: { x: 1500, y: 200 } }
+      )
+      expect(inWinEnd).toEqual({ detached: false, outcome: 'dropped-in-window' })
+      expect(cursorFactory.createdWindows).toHaveLength(1)
+
+      // Successful drag-out uses authoritative screen.getCursorScreenPoint() even if renderer sent stale (0,0)
+      const validSession = await cursorIpc.invokeFrom<ActiveTabDragSession>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        { paneId: 'primary', tabId: 'tab-1', payload: alphaPayload }
+      )
+      screenCursor = { x: 1520, y: 210 }
+      const validEnd = await cursorIpc.invokeFrom<TabDragEndResult>(
+        mainWin.webContents,
+        WINDOW_IPC_CHANNELS.endTabDrag,
+        { dragSessionId: validSession.dragSessionId, screenPoint: { x: 200, y: 200 } }
+      )
+      expect(validEnd.detached).toBe(true)
+      const aux1 = cursorFactory.createdWindows[1]
+      expect(aux1.getBounds()).toEqual({ x: 1520, y: 210, width: 960, height: 760 })
+      await cursorIpc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [alphaBuf.key])
+
+      // Single-tab auxiliary window outside drop is silently ignored (no new window, no throw)
+      screenCursor = { x: 20, y: 30 }
+      const soloAuxDrag = await cursorIpc.invokeFrom<ActiveTabDragSession>(
+        aux1.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        { paneId: 'primary', tabId: 'tab-1', payload: alphaPayload }
+      )
+      const soloAuxEnd = await cursorIpc.invokeFrom<TabDragEndResult>(
+        aux1.webContents,
+        WINDOW_IPC_CHANNELS.endTabDrag,
+        { dragSessionId: soloAuxDrag.dragSessionId, screenPoint: { x: 20, y: 30 } }
+      )
+      expect(soloAuxEnd).toEqual({ detached: false, outcome: 'cancelled' })
+      expect(cursorFactory.createdWindows).toHaveLength(2)
+
+      // Auxiliary window with 2 tabs CAN detach via drag-out, and closing mid-drag cleans listeners
+      await cursorIpc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+        alphaBuf.key,
+        betaBuf.key
+      ])
+      const multiAuxDrag = await cursorIpc.invokeFrom<ActiveTabDragSession>(
+        aux1.webContents,
+        WINDOW_IPC_CHANNELS.startTabDrag,
+        {
+          paneId: 'primary',
+          tabId: 'tab-2',
+          payload: {
+            bufferKey: betaBuf.key,
+            mode: 'wysiwyg',
+            cursor: { selectionStart: 1, selectionEnd: 1 },
+            scrollTop: 50
+          }
+        }
+      )
+      const multiAuxEnd = await cursorIpc.invokeFrom<TabDragEndResult>(
+        aux1.webContents,
+        WINDOW_IPC_CHANNELS.endTabDrag,
+        { dragSessionId: multiAuxDrag.dragSessionId, screenPoint: { x: 20, y: 30 } }
+      )
+      expect(multiAuxEnd.detached).toBe(true)
+      expect(cursorFactory.createdWindows).toHaveLength(3)
+
+      // Mid-drag close clears active drag session and detaches before-input-event listener
+      expect(aux1.getBeforeInputListenerCount()).toBe(1)
+      await cursorIpc.invokeFrom(aux1.webContents, WINDOW_IPC_CHANNELS.startTabDrag, {
+        paneId: 'primary',
+        tabId: 'tab-1',
+        payload: alphaPayload
+      })
+      aux1.simulateUserClose()
+      expect(aux1.getBeforeInputListenerCount()).toBe(0)
+      expect(
+        mainWin.sentMessages[mainWin.sentMessages.length - 1]
+      ).toEqual({ channel: WINDOW_IPC_CHANNELS.dragStateChanged, payload: null })
+    } finally {
+      for (const dispose of disposeCursorIpc.reverse()) {
+        dispose()
+      }
+      cursorManager.dispose()
+    }
   })
 })

@@ -1,8 +1,7 @@
 import type { BufferKeyRemap } from '@shared/documentBuffer'
-import type { CursorPosition, EditorMode, TabViewState } from '@shared/window'
+import type { CursorPosition, EditorMode, PaneId, TabViewState } from '@shared/window'
 
-export type { CursorPosition, EditorMode, TabViewState }
-export type PaneId = 'primary' | 'secondary'
+export type { CursorPosition, EditorMode, PaneId, TabViewState }
 export type SplitMode = 'single' | 'horizontal' | 'vertical'
 export type SplitDirection = Exclude<SplitMode, 'single'>
 

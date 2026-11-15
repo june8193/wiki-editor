@@ -9,7 +9,12 @@ import type {
   SyncWindowTabsOptions
 } from './documentBuffer'
 import type {
+  ActiveTabDragSession,
   DetachTabToNewWindowResult,
+  TabDragEndInput,
+  TabDragEndResult,
+  TabDragOutcome,
+  TabDragStartInput,
   TabTransferPayload,
   WindowInitContext,
   WindowRole
@@ -91,6 +96,10 @@ export const LOG_IPC_CHANNELS = {
 export const WINDOW_IPC_CHANNELS = {
   getInitContext: 'window:get-init-context',
   detachTabToNewWindow: 'window:detach-tab-to-new-window',
+  startTabDrag: 'window:start-tab-drag',
+  updateTabDragOutcome: 'window:update-tab-drag-outcome',
+  endTabDrag: 'window:end-tab-drag',
+  dragStateChanged: 'window:drag-state-changed',
   closeCurrent: 'window:close-current'
 } as const
 
@@ -173,6 +182,13 @@ export interface WikiWindowApi {
   readonly role: WindowRole
   getInitContext(): Promise<WindowInitContext>
   detachTabToNewWindow(payload: TabTransferPayload): Promise<DetachTabToNewWindowResult>
+  startTabDrag(input: TabDragStartInput): Promise<ActiveTabDragSession>
+  updateTabDragOutcome(
+    dragSessionId: string,
+    outcome: TabDragOutcome
+  ): Promise<ActiveTabDragSession | null>
+  endTabDrag(input: TabDragEndInput): Promise<TabDragEndResult>
+  onTabDragStateChanged(listener: (session: ActiveTabDragSession | null) => void): () => void
   closeCurrent(): Promise<void>
 }
 

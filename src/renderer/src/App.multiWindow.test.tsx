@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { addFavoriteWorkspace } from '@shared/workspace'
@@ -13,6 +13,21 @@ import {
   setRawEditorText,
   triggerMenuCommand
 } from './test/inMemoryWikiHarness'
+
+function dispatchDragEndAtScreenPoint(
+  target: Element,
+  screenX: number,
+  screenY: number
+): void {
+  // Chromium DragEvent subclasses MouseEvent; jsdom omits DragEvent so dispatch MouseEvent to preserve screenX/screenY
+  const event = new MouseEvent('dragend', {
+    bubbles: true,
+    cancelable: false,
+    screenX,
+    screenY
+  })
+  fireEvent(target, event)
+}
 
 function deferBufferMethod<K extends 'syncWindowTabs' | 'updateContent'>(
   bufferApi: InMemoryWindowHandle['api']['buffer'],
@@ -1157,6 +1172,267 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     await waitFor(() => {
       expect(aux1.isClosed()).toBe(true)
     })
+    expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(2)
+  })
+
+  it('detaches sole tab from main window outside all bounds at clamped cursor position with state preserved', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\drag',
+        workspaces: {
+          'C:\\wiki\\drag': {
+            'alpha.md': '# Alpha initial content'
+          }
+        },
+        mainBounds: { x: 100, y: 120, width: 1280, height: 820 },
+        screen: {
+          getDisplayNearestPoint: () => ({
+            workArea: { x: 0, y: 0, width: 1920, height: 1080 }
+          })
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+
+    const rawEditor = (await openFolderAndNoteInWindow(
+      user,
+      mainRendered.container,
+      mainWin.emitMenuCommand,
+      'alpha.md'
+    )) as HTMLTextAreaElement
+    setRawEditorText(rawEditor, '# Alpha unsaved drag edit')
+    await waitFor(() => {
+      expect(within(mainRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+    setRawEditorSelection(rawEditor, 2, 7)
+    const mainScroller = getRawEditorScroller(rawEditor)
+    mainScroller.scrollTop = 180
+    fireEvent.scroll(mainScroller)
+
+    const alphaTab = within(mainRendered.container).getByRole('tab', { name: /alpha\.md/ })
+    fireEvent.dragStart(alphaTab)
+    dispatchDragEndAtScreenPoint(alphaTab, 1600, 500)
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(1)
+      expect(within(mainRendered.container).queryAllByRole('tab')).toHaveLength(0)
+    })
+
+    // Main window retains an empty editor space (편집 공간)
+    expect(within(mainRendered.container).getByText('마크다운 위키 에디터 준비 완료')).toBeInTheDocument()
+
+    const aux1 = harness.getAuxiliaryWindows()[0]
+    expect(aux1.getBounds()).toEqual({ x: 960, y: 320, width: 960, height: 760 })
+
+    const auxRendered = render(<App wikiApi={aux1.api} />)
+    const auxEditor = await within(auxRendered.container).findByTestId('document-editor')
+    await waitFor(() => {
+      expect(within(auxRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+      expect(getRawEditorText(auxEditor)).toBe('# Alpha unsaved drag edit')
+    })
+    expect(getRawEditorSelection(auxEditor)).toEqual({ start: 2, end: 7 })
+    expect(getRawEditorScroller(auxEditor).scrollTop).toBe(180)
+  })
+
+  it('suppresses detach on inside-window drops and enforces auxiliary single-tab vs multi-tab drag-out', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\drag',
+        workspaces: {
+          'C:\\wiki\\drag': {
+            'one.md': '# One',
+            'two.md': '# Two'
+          }
+        },
+        mainBounds: { x: 100, y: 120, width: 1280, height: 820 },
+        screen: {
+          getDisplayNearestPoint: () => ({
+            workArea: { x: 0, y: 0, width: 2560, height: 1440 }
+          })
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+
+    const sidebar = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('one.md'))
+    await user.click(await within(sidebar).findByText('two.md'))
+
+    await waitFor(() => {
+      expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(2)
+    })
+
+    // Dropping in a non-drop area inside main window (same-pane editor body / sidebar) must not detach
+    const oneTab = within(mainRendered.container).getByRole('tab', { name: /one\.md/ })
+    const primaryPane = within(mainRendered.container).getByTestId('pane-primary')
+    fireEvent.dragStart(oneTab)
+    fireEvent.dragOver(primaryPane)
+    fireEvent.drop(primaryPane)
+    fireEvent.dragOver(sidebar)
+    fireEvent.drop(sidebar)
+    dispatchDragEndAtScreenPoint(oneTab, 180, 320)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(harness.getAuxiliaryWindows()).toHaveLength(0)
+    expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(2)
+
+    // Drag two.md outside main bounds -> opens aux1 at (1450, 200)
+    const twoTab = within(mainRendered.container).getByRole('tab', { name: /two\.md/ })
+    fireEvent.dragStart(twoTab)
+    dispatchDragEndAtScreenPoint(twoTab, 1450, 200)
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(1)
+      expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(1)
+    })
+    const aux1 = harness.getAuxiliaryWindows()[0]
+    expect(aux1.getBounds()).toEqual({ x: 1450, y: 200, width: 960, height: 760 })
+    const aux1Rendered = render(<App wikiApi={aux1.api} />)
+    await waitFor(() => {
+      expect(within(aux1Rendered.container).getAllByRole('tab')).toHaveLength(1)
+    })
+
+    // Dropping one.md inside open aux1 non-drop area (1600, 450) does NOT create a new window
+    const mainOneTab = within(mainRendered.container).getByRole('tab', { name: /one\.md/ })
+    fireEvent.dragStart(mainOneTab)
+    dispatchDragEndAtScreenPoint(mainOneTab, 1600, 450)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(harness.getAuxiliaryWindows()).toHaveLength(1)
+    expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(1)
+
+    // Outside drop from 1-tab auxiliary window is silently ignored (no new window, no error banner)
+    const aux1SoloTab = within(aux1Rendered.container).getByRole('tab', { name: /two\.md/ })
+    fireEvent.dragStart(aux1SoloTab)
+    dispatchDragEndAtScreenPoint(aux1SoloTab, 20, 20)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(harness.getAuxiliaryWindows()).toHaveLength(1)
+    expect(aux1.isClosed()).toBe(false)
+    expect(within(aux1Rendered.container).getAllByRole('tab')).toHaveLength(1)
+    expect(within(aux1Rendered.container).queryByRole('alert')).not.toBeInTheDocument()
+
+    // Seed an auxiliary window with 2 tabs in wysiwyg mode -> dragging 1 tab outside detaches to a new auxiliary
+    const auxMulti = harness.createWindow({
+      role: 'auxiliary',
+      bounds: { x: 200, y: 80, width: 960, height: 760 },
+      initialTabs: [
+        {
+          bufferKey: 'c:/wiki/drag/one.md',
+          mode: 'raw',
+          cursor: { selectionStart: 0, selectionEnd: 0 },
+          scrollTop: 0
+        },
+        {
+          bufferKey: 'c:/wiki/drag/two.md',
+          mode: 'wysiwyg',
+          cursor: { selectionStart: 0, selectionEnd: 0 },
+          scrollTop: 0
+        }
+      ]
+    })
+    const auxMultiRendered = render(<App wikiApi={auxMulti.api} />)
+    await waitFor(() => {
+      expect(within(auxMultiRendered.container).getAllByRole('tab')).toHaveLength(2)
+    })
+
+    const auxMultiTwoTab = within(auxMultiRendered.container).getByRole('tab', { name: /two\.md/ })
+    fireEvent.dragStart(auxMultiTwoTab)
+    dispatchDragEndAtScreenPoint(auxMultiTwoTab, 1500, 1100)
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(3)
+      expect(within(auxMultiRendered.container).getAllByRole('tab')).toHaveLength(1)
+    })
+
+    const auxDetachedFromAux = harness.getAuxiliaryWindows()[2]
+    const auxDetachedRendered = render(<App wikiApi={auxDetachedFromAux.api} />)
+    await waitFor(() => {
+      expect(
+        within(auxDetachedRendered.container).getByRole('tab', { name: /two\.md/ })
+      ).toBeInTheDocument()
+      expect(
+        within(auxDetachedRendered.container).getByLabelText('위지윅 문서 에디터')
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('cancels active tab drag and hides split drop zones on Escape (DOM keydown and main before-input-event), blocking outside detach', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\drag-esc',
+        workspaces: {
+          'C:\\wiki\\drag-esc': {
+            'a.md': '# A',
+            'b.md': '# B'
+          }
+        },
+        mainBounds: { x: 100, y: 120, width: 1280, height: 820 },
+        screen: {
+          getDisplayNearestPoint: () => ({
+            workArea: { x: 0, y: 0, width: 2560, height: 1440 }
+          })
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+
+    const sidebar = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(sidebar).findByText('a.md'))
+    await user.click(await within(sidebar).findByText('b.md'))
+
+    await waitFor(() => {
+      expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(2)
+    })
+
+    // 1. DOM Escape keydown during drag hides drop zones and prevents outside detach
+    const bTab = within(mainRendered.container).getByRole('tab', { name: /b\.md/ })
+    fireEvent.dragStart(bTab)
+    expect(within(mainRendered.container).getByTestId('split-drop-zone-horizontal')).toBeInTheDocument()
+    expect(within(mainRendered.container).getByTestId('split-drop-zone-vertical')).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(
+      within(mainRendered.container).queryByTestId('split-drop-zone-horizontal')
+    ).not.toBeInTheDocument()
+    expect(
+      within(mainRendered.container).queryByTestId('split-drop-zone-vertical')
+    ).not.toBeInTheDocument()
+
+    dispatchDragEndAtScreenPoint(bTab, 1700, 300)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(harness.getAuxiliaryWindows()).toHaveLength(0)
+    expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(2)
+
+    // 2. Main-process before-input-event Escape during drag also cancels and blocks outside detach
+    fireEvent.dragStart(bTab)
+    expect(within(mainRendered.container).getByTestId('split-drop-zone-vertical')).toBeInTheDocument()
+
+    await act(async () => {
+      mainWin.emitBeforeInput({ type: 'keyDown', key: 'Escape' })
+    })
+    expect(
+      within(mainRendered.container).queryByTestId('split-drop-zone-vertical')
+    ).not.toBeInTheDocument()
+
+    dispatchDragEndAtScreenPoint(bTab, 1700, 300)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(harness.getAuxiliaryWindows()).toHaveLength(0)
     expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(2)
   })
 })

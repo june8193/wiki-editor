@@ -11,9 +11,19 @@ import { createEmptyGitStatus } from '@shared/git'
 import type { AppMenuCommand, WikiApi, WikiBufferApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
+  TabDragCoordinator,
+  type BeforeInputKeyEventLike
+} from '@shared/tabDragSession'
+import {
+  AUXILIARY_WINDOW_DEFAULT_HEIGHT,
+  AUXILIARY_WINDOW_DEFAULT_WIDTH,
   canDetachTabFromWindow,
   cloneTabTransferPayloads,
+  computeOffsetAuxiliaryBounds,
+  type ActiveTabDragSession,
+  type ScreenLike,
   type TabTransferPayload,
+  type WindowBounds,
   type WindowInitContext,
   type WindowRole
 } from '@shared/window'
@@ -32,6 +42,8 @@ export interface VirtualFsOptions {
   selectedFolder?: string | null
   git?: Partial<WikiGitApi>
   log?: WikiLogApi
+  screen?: ScreenLike
+  mainBounds?: WindowBounds
 }
 
 export function normalizePosix(pathValue: string): string {
@@ -114,6 +126,7 @@ export async function triggerMenuCommand(
 export interface CreateInMemoryWindowOptions {
   role?: WindowRole
   initialTabs?: TabTransferPayload[]
+  bounds?: WindowBounds
 }
 
 export interface InMemoryWindowHandle {
@@ -121,6 +134,8 @@ export interface InMemoryWindowHandle {
   role: WindowRole
   api: WikiApi
   emitMenuCommand: (command: AppMenuCommand) => void
+  emitBeforeInput: (input: BeforeInputKeyEventLike) => void
+  getBounds: () => WindowBounds
   getMenuListenerCount: () => number
   isClosed: () => boolean
   getInitContext: () => WindowInitContext
@@ -227,6 +242,21 @@ export function createMultiWindowWikiHarness(
   let auxWatchCalls = 0
   let auxUnwatchCalls = 0
   const auxiliaryHandles: InMemoryWindowHandle[] = []
+  const screen: ScreenLike = fsOptions.screen ?? {
+    getDisplayNearestPoint: () => ({
+      workArea: { x: 0, y: 0, width: 1920, height: 1080 }
+    })
+  }
+  const openWindows = new Map<number, { isDestroyed: () => boolean; getBounds: () => WindowBounds }>()
+  const dragListenersByWindow = new Map<number, Set<(session: ActiveTabDragSession | null) => void>>()
+  const dragCoordinator = new TabDragCoordinator()
+  dragCoordinator.onStateChanged((session) => {
+    for (const listeners of dragListenersByWindow.values()) {
+      for (const listener of listeners) {
+        listener(session)
+      }
+    }
+  })
 
   for (const [rootRaw, entries] of Object.entries(fsOptions.workspaces ?? {})) {
     const root = normalizePosix(rootRaw)
@@ -315,12 +345,28 @@ export function createMultiWindowWikiHarness(
     const windowId = nextWindowId++
     const role: WindowRole = options.role ?? 'main'
     const initialTabs: TabTransferPayload[] = cloneTabTransferPayloads(options.initialTabs ?? [])
+    const defaultBounds: WindowBounds =
+      role === 'main'
+        ? (fsOptions.mainBounds ?? { x: 0, y: 0, width: 1280, height: 820 })
+        : {
+            x: 40,
+            y: 40,
+            width: AUXILIARY_WINDOW_DEFAULT_WIDTH,
+            height: AUXILIARY_WINDOW_DEFAULT_HEIGHT
+          }
+    const windowBounds: WindowBounds = { ...(options.bounds ?? defaultBounds) }
     let destroyed = false
     let hasSyncedNonEmptyTabs = false
     const menuListeners = new Set<(command: AppMenuCommand) => void>()
     const bufferListeners = new Set<(event: SharedBufferHubEvent) => void>()
+    const dragListeners = new Set<(session: ActiveTabDragSession | null) => void>()
     const windowConfigListeners = new Set<(config: AppConfig) => void>()
     const windowWorkspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
+    dragListenersByWindow.set(windowId, dragListeners)
+    openWindows.set(windowId, {
+      isDestroyed: () => destroyed,
+      getBounds: () => ({ ...windowBounds })
+    })
 
     if (role === 'auxiliary') {
       for (const tab of initialTabs) {
@@ -331,6 +377,10 @@ export function createMultiWindowWikiHarness(
     const destroyWindow = (): void => {
       if (destroyed) return
       destroyed = true
+      dragCoordinator.clearForWindow(windowId)
+      openWindows.delete(windowId)
+      dragListeners.clear()
+      dragListenersByWindow.delete(windowId)
       unsubscribeHub()
       hub.unregisterWindow(windowId)
       menuListeners.clear()
@@ -596,8 +646,56 @@ export function createMultiWindowWikiHarness(
           if (!canDetachTabFromWindow(role, hub.getWindowTabCount(windowId))) {
             throw new Error('Cannot detach the last tab from an auxiliary window')
           }
-          const aux = createWindow({ role: 'auxiliary', initialTabs: [payload] })
+          const aux = createWindow({
+            role: 'auxiliary',
+            initialTabs: [payload],
+            bounds: computeOffsetAuxiliaryBounds(windowBounds, screen)
+          })
           return { windowId: aux.windowId }
+        },
+        async startTabDrag(input) {
+          if (destroyed) {
+            throw new Error('Cannot start tab drag from a closed window')
+          }
+          if (!hub.hasBuffer(input.payload.bufferKey)) {
+            throw new Error('Cannot drag unknown document buffer')
+          }
+          return dragCoordinator.start(windowId, input)
+        },
+        async updateTabDragOutcome(dragSessionId, outcome) {
+          if (destroyed) return null
+          return dragCoordinator.updateOutcome(windowId, dragSessionId, outcome)
+        },
+        async endTabDrag(input) {
+          if (destroyed) {
+            return { detached: false, outcome: 'cancelled' }
+          }
+          const openWindowBounds = Array.from(openWindows.values())
+            .filter((win) => !win.isDestroyed())
+            .map((win) => win.getBounds())
+          const canDetach = canDetachTabFromWindow(role, hub.getWindowTabCount(windowId))
+          const plan = dragCoordinator.finish({
+            sourceWindowId: windowId,
+            input,
+            openWindowBounds,
+            canDetach,
+            screen
+          })
+          if (!plan.detachPayload || !hub.hasBuffer(plan.detachPayload.bufferKey)) {
+            return plan.result.detached ? { detached: false, outcome: 'cancelled' } : plan.result
+          }
+          const aux = createWindow({
+            role: 'auxiliary',
+            initialTabs: [plan.detachPayload],
+            bounds: plan.targetBounds
+          })
+          return { ...plan.result, windowId: aux.windowId }
+        },
+        onTabDragStateChanged(listener) {
+          dragListeners.add(listener)
+          return () => {
+            dragListeners.delete(listener)
+          }
         },
         async closeCurrent() {
           if (role === 'auxiliary') {
@@ -622,6 +720,11 @@ export function createMultiWindowWikiHarness(
           listener(command)
         }
       },
+      emitBeforeInput(input) {
+        if (destroyed) return
+        dragCoordinator.handleBeforeInput(input)
+      },
+      getBounds: () => ({ ...windowBounds }),
       getMenuListenerCount: () => menuListeners.size,
       isClosed: () => destroyed,
       getInitContext: () => ({
@@ -661,6 +764,9 @@ export function createMultiWindowWikiHarness(
     readDirCalls,
     hub,
     dispose() {
+      dragCoordinator.dispose()
+      openWindows.clear()
+      dragListenersByWindow.clear()
       hub.dispose()
       configListeners.clear()
       workspaceListeners.clear()

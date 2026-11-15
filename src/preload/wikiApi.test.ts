@@ -12,6 +12,7 @@ import {
   WORKSPACE_IPC_CHANNELS
 } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
+import type { ActiveTabDragSession } from '@shared/window'
 import { createWikiApi, IpcRendererLike } from './wikiApi'
 
 function createFakeIpcRenderer(): IpcRendererLike & {
@@ -286,11 +287,59 @@ describe('createWikiApi', () => {
     }
     await auxApi.window.getInitContext()
     await auxApi.window.detachTabToNewWindow(transferPayload)
+    await auxApi.window.startTabDrag({
+      paneId: 'primary',
+      tabId: 'tab-1',
+      payload: transferPayload
+    })
+    await auxApi.window.updateTabDragOutcome('drag-1', 'cancelled')
+    await auxApi.window.endTabDrag({
+      dragSessionId: 'drag-1',
+      screenPoint: { x: 1500, y: 300 },
+      payload: transferPayload
+    })
     await auxApi.window.closeCurrent()
+
+    const dragEvents: Array<ActiveTabDragSession | null> = []
+    const unsubscribeDrag = auxApi.window.onTabDragStateChanged((session) => {
+      dragEvents.push(session)
+    })
+    expect(auxIpc.listenerCount(WINDOW_IPC_CHANNELS.dragStateChanged)).toBe(1)
+    const sampleSession: ActiveTabDragSession = {
+      dragSessionId: 'drag-1',
+      sourceWindowId: 100,
+      paneId: 'primary',
+      tabId: 'tab-1',
+      payload: transferPayload,
+      outcome: 'pending'
+    }
+    auxIpc.emit(WINDOW_IPC_CHANNELS.dragStateChanged, sampleSession)
+    auxIpc.emit(WINDOW_IPC_CHANNELS.dragStateChanged, null)
+    expect(dragEvents).toEqual([sampleSession, null])
+    unsubscribeDrag()
+    expect(auxIpc.listenerCount(WINDOW_IPC_CHANNELS.dragStateChanged)).toBe(0)
 
     expect(auxIpc.lastInvoked).toEqual([
       { channel: WINDOW_IPC_CHANNELS.getInitContext, args: [] },
       { channel: WINDOW_IPC_CHANNELS.detachTabToNewWindow, args: [transferPayload] },
+      {
+        channel: WINDOW_IPC_CHANNELS.startTabDrag,
+        args: [{ paneId: 'primary', tabId: 'tab-1', payload: transferPayload }]
+      },
+      {
+        channel: WINDOW_IPC_CHANNELS.updateTabDragOutcome,
+        args: ['drag-1', 'cancelled']
+      },
+      {
+        channel: WINDOW_IPC_CHANNELS.endTabDrag,
+        args: [
+          {
+            dragSessionId: 'drag-1',
+            screenPoint: { x: 1500, y: 300 },
+            payload: transferPayload
+          }
+        ]
+      },
       { channel: WINDOW_IPC_CHANNELS.closeCurrent, args: [] }
     ])
   })

@@ -1,8 +1,14 @@
 import { WINDOW_IPC_CHANNELS } from '@shared/ipc'
-import type { TabTransferPayload } from '@shared/window'
+import type {
+  TabDragEndInput,
+  TabDragOutcome,
+  TabDragStartInput,
+  TabTransferPayload
+} from '@shared/window'
 import type { LogService } from '../logging/LogService'
 import type { WindowManager } from '../windowManager'
 import {
+  broadcastIpcEvent,
   type IpcHandlerTuple,
   type IpcMainLike,
   registerIpcHandlers,
@@ -16,13 +22,21 @@ export interface RegisterWindowIpcOptions {
 }
 
 /**
- * Registers window:* IPC handlers for role discovery, auxiliary detachment, and zero-tab auto-closing.
+ * Registers window:* IPC handlers for role discovery, auxiliary detachment, drag coordination, and closing.
  */
 export function registerWindowIpc({
   ipcMain,
   windowManager,
   logService
 }: RegisterWindowIpcOptions): () => void {
+  const unsubscribeDragState = windowManager.onTabDragStateChanged((session) => {
+    broadcastIpcEvent(
+      () => windowManager.getWebContentsTargets(),
+      WINDOW_IPC_CHANNELS.dragStateChanged,
+      session
+    )
+  })
+
   const handlers: readonly IpcHandlerTuple[] = [
     [
       WINDOW_IPC_CHANNELS.getInitContext,
@@ -37,6 +51,25 @@ export function registerWindowIpc({
         )
     ],
     [
+      WINDOW_IPC_CHANNELS.startTabDrag,
+      (event, input) =>
+        windowManager.startTabDrag(resolveSenderWebContents(event), input as TabDragStartInput)
+    ],
+    [
+      WINDOW_IPC_CHANNELS.updateTabDragOutcome,
+      (event, dragSessionId, outcome) =>
+        windowManager.updateTabDragOutcome(
+          resolveSenderWebContents(event),
+          dragSessionId as string,
+          outcome as TabDragOutcome
+        )
+    ],
+    [
+      WINDOW_IPC_CHANNELS.endTabDrag,
+      (event, input) =>
+        windowManager.endTabDrag(resolveSenderWebContents(event), input as TabDragEndInput)
+    ],
+    [
       WINDOW_IPC_CHANNELS.closeCurrent,
       (event) => {
         windowManager.closeCurrentWindow(resolveSenderWebContents(event))
@@ -44,5 +77,9 @@ export function registerWindowIpc({
     ]
   ]
 
-  return registerIpcHandlers(ipcMain, handlers, { logService })
+  const disposeHandlers = registerIpcHandlers(ipcMain, handlers, { logService })
+  return () => {
+    unsubscribeDragState()
+    disposeHandlers()
+  }
 }

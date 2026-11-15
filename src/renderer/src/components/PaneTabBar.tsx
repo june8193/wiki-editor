@@ -1,6 +1,7 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
 import { useDismissable } from '../hooks/useDismissable'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
+import type { ScreenPoint } from '@shared/window'
 import { PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 
 export interface DraggingTabPayload {
@@ -20,6 +21,10 @@ export interface PaneInteractionActions {
   ) => void
   onDuplicateTab: (sourcePaneId: PaneId, tabId: string) => void
   onDetachTabToNewWindow?: (paneId: PaneId, tabId: string) => void
+  onStartTabDrag?: (paneId: PaneId, tabId: string) => void
+  onDropTabInWindow?: () => void
+  onCancelTabDrag?: () => void
+  onEndTabDrag?: (screenPoint: ScreenPoint) => void
   onChangeContent: (bufferKey: string, nextContent: string) => void
   onSaveBuffer: (bufferKey: string) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
@@ -57,7 +62,7 @@ export function parseDraggingTabPayload(
 export function dispatchTabDrop(
   event: DragEvent,
   draggingTab: DraggingTabPayload | null,
-  onDragEndTab: () => void,
+  onDropInWindow: () => void,
   onValidDrop: (payload: DraggingTabPayload) => void,
   options?: {
     shouldAccept?: (payload: DraggingTabPayload) => boolean
@@ -72,13 +77,13 @@ export function dispatchTabDrop(
     event.stopPropagation()
   }
   onValidDrop(payload)
-  onDragEndTab()
+  onDropInWindow()
 }
 
 export function handleTabMoveDrop(
   event: DragEvent,
   draggingTab: DraggingTabPayload | null,
-  onDragEndTab: () => void,
+  onDropInWindow: () => void,
   targetPaneId: PaneId,
   onMoveTab: PaneInteractionActions['onMoveTab'],
   options?: {
@@ -90,7 +95,7 @@ export function handleTabMoveDrop(
   dispatchTabDrop(
     event,
     draggingTab,
-    onDragEndTab,
+    onDropInWindow,
     (payload) => onMoveTab(payload.paneId, targetPaneId, payload.tabId, options?.targetIndex),
     {
       shouldAccept: options?.ignoreSamePane
@@ -109,7 +114,8 @@ interface PaneTabBarProps {
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
-  onDragEndTab: () => void
+  onDropInWindow: () => void
+  onDragEndTab: (event: DragEvent) => void
   actions: Pick<
     PaneInteractionActions,
     'onActivateTab' | 'onCloseTab' | 'onMoveTab' | 'onDuplicateTab' | 'onDetachTabToNewWindow'
@@ -128,6 +134,7 @@ export function PaneTabBar({
   buffers,
   draggingTab,
   onDragStartTab,
+  onDropInWindow,
   onDragEndTab,
   actions
 }: PaneTabBarProps) {
@@ -148,7 +155,7 @@ export function PaneTabBar({
         event.preventDefault()
       }}
       onDrop={(event) =>
-        handleTabMoveDrop(event, draggingTab, onDragEndTab, paneId, actions.onMoveTab, {
+        handleTabMoveDrop(event, draggingTab, onDropInWindow, paneId, actions.onMoveTab, {
           stopPropagation: true
         })
       }
@@ -180,7 +187,7 @@ export function PaneTabBar({
               event.preventDefault()
             }}
             onDrop={(event) =>
-              handleTabMoveDrop(event, draggingTab, onDragEndTab, paneId, actions.onMoveTab, {
+              handleTabMoveDrop(event, draggingTab, onDropInWindow, paneId, actions.onMoveTab, {
                 targetIndex: index,
                 stopPropagation: true
               })

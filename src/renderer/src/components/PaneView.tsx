@@ -1,4 +1,4 @@
-import { CSSProperties, SyntheticEvent } from 'react'
+import { CSSProperties, DragEvent, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
@@ -25,7 +25,8 @@ interface PaneViewProps {
   buffers: DocumentBufferSnapshot
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
-  onDragEndTab: () => void
+  onDropInWindow: () => void
+  onDragEndTab: (event: DragEvent) => void
   actions: PaneInteractionActions
 }
 
@@ -43,6 +44,7 @@ export function PaneView({
   buffers,
   draggingTab,
   onDragStartTab,
+  onDropInWindow,
   onDragEndTab,
   actions
 }: PaneViewProps) {
@@ -70,12 +72,12 @@ export function PaneView({
       onMouseDown={handlePaneFocusEvent}
       onFocusCapture={handlePaneFocusEvent}
       onDragOver={(event) => {
-        if (draggingTab) {
+        if (draggingTab && draggingTab.paneId !== pane.id) {
           event.preventDefault()
         }
       }}
       onDrop={(event) =>
-        handleTabMoveDrop(event, draggingTab, onDragEndTab, pane.id, actions.onMoveTab, {
+        handleTabMoveDrop(event, draggingTab, onDropInWindow, pane.id, actions.onMoveTab, {
           ignoreSamePane: true
         })
       }
@@ -89,6 +91,7 @@ export function PaneView({
           buffers={buffers}
           draggingTab={draggingTab}
           onDragStartTab={onDragStartTab}
+          onDropInWindow={onDropInWindow}
           onDragEndTab={onDragEndTab}
           actions={actions}
         />

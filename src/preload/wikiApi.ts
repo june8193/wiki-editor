@@ -22,7 +22,9 @@ import {
 import {
   resolveWindowRole,
   WINDOW_ROLE_QUERY_PARAM,
+  type ActiveTabDragSession,
   type DetachTabToNewWindowResult,
+  type TabDragEndResult,
   type WindowInitContext,
   type WindowRole
 } from '@shared/window'
@@ -213,6 +215,25 @@ export function createWikiApi(
           WINDOW_IPC_CHANNELS.detachTabToNewWindow,
           payload
         ) as Promise<DetachTabToNewWindowResult>,
+      startTabDrag: (input) =>
+        ipcRenderer.invoke(
+          WINDOW_IPC_CHANNELS.startTabDrag,
+          input
+        ) as Promise<ActiveTabDragSession>,
+      updateTabDragOutcome: (dragSessionId, outcome) =>
+        ipcRenderer.invoke(
+          WINDOW_IPC_CHANNELS.updateTabDragOutcome,
+          dragSessionId,
+          outcome
+        ) as Promise<ActiveTabDragSession | null>,
+      endTabDrag: (input) =>
+        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.endTabDrag, input) as Promise<TabDragEndResult>,
+      onTabDragStateChanged: (listener) =>
+        subscribeChannel<ActiveTabDragSession | null>(
+          ipcRenderer,
+          WINDOW_IPC_CHANNELS.dragStateChanged,
+          listener
+        ),
       closeCurrent: () => ipcRenderer.invoke(WINDOW_IPC_CHANNELS.closeCurrent) as Promise<void>
     },
     log: {

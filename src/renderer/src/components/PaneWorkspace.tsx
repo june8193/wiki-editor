@@ -1,4 +1,4 @@
-import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
+import { DragEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import { canSplitWithTab, PaneId, PaneLayoutState, SplitDirection } from '../stores/PaneTabStore'
@@ -15,6 +15,7 @@ export interface PaneWorkspaceProps {
   customCommands?: readonly CustomCommandConfig[]
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
+  dragCancelNonce?: number
   onSetSplitRatio: (ratio: number) => void
   onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
   actions: PaneInteractionActions
@@ -40,6 +41,7 @@ export function PaneWorkspace({
   customCommands,
   scrollRequest = null,
   isShortcutDisabled = false,
+  dragCancelNonce = 0,
   onSetSplitRatio,
   onSplitWithTab,
   actions
@@ -90,7 +92,44 @@ export function PaneWorkspace({
     }
   }
 
-  const clearDragging = (): void => setDraggingTab(null)
+  const hasDraggingTab = draggingTab !== null
+
+  useEffect(() => {
+    if (dragCancelNonce > 0) {
+      setDraggingTab(null)
+    }
+  }, [dragCancelNonce])
+
+  useEffect(() => {
+    if (!hasDraggingTab) return
+    const handleWindowKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      setDraggingTab(null)
+      actions.onCancelTabDrag?.()
+    }
+    window.addEventListener('keydown', handleWindowKeyDown, true)
+    return () => {
+      window.removeEventListener('keydown', handleWindowKeyDown, true)
+    }
+  }, [hasDraggingTab, actions])
+
+  const handleDragStartTab = (payload: DraggingTabPayload): void => {
+    setDraggingTab(payload)
+    actions.onStartTabDrag?.(payload.paneId, payload.tabId)
+  }
+
+  const handleDropInWindow = (): void => {
+    setDraggingTab(null)
+    actions.onDropTabInWindow?.()
+  }
+
+  const handleDragEndTab = (event: DragEvent): void => {
+    setDraggingTab(null)
+    const x = Number.isFinite(event.screenX) ? event.screenX : 0
+    const y = Number.isFinite(event.screenY) ? event.screenY : 0
+    actions.onEndTabDrag?.({ x, y })
+  }
+
   const isSplit = layout.splitMode !== 'single'
   const canDropToSplit = draggingTab !== null && canSplitWithTab(layout)
   const visibleDropZones = canDropToSplit
@@ -106,8 +145,9 @@ export function PaneWorkspace({
     isShortcutDisabled,
     buffers,
     draggingTab,
-    onDragStartTab: setDraggingTab,
-    onDragEndTab: clearDragging,
+    onDragStartTab: handleDragStartTab,
+    onDropInWindow: handleDropInWindow,
+    onDragEndTab: handleDragEndTab,
     actions
   }
 
@@ -136,7 +176,7 @@ export function PaneWorkspace({
             dispatchTabDrop(
               event,
               draggingTab,
-              clearDragging,
+              handleDropInWindow,
               (payload) => onSplitWithTab(payload.paneId, payload.tabId, zone.direction),
               { stopPropagation: true }
             )

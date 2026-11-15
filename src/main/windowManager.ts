@@ -2,11 +2,20 @@ import type { BrowserWindowConstructorOptions } from 'electron'
 import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
+  TabDragCoordinator,
+  type BeforeInputKeyEventLike
+} from '@shared/tabDragSession'
+import {
   canDetachTabFromWindow,
   cloneTabTransferPayloads,
   formatWindowTitle,
   WINDOW_ROLE_QUERY_PARAM,
+  type ActiveTabDragSession,
   type DetachTabToNewWindowResult,
+  type TabDragEndInput,
+  type TabDragEndResult,
+  type TabDragOutcome,
+  type TabDragStartInput,
   type TabTransferPayload,
   type WindowInitContext,
   type WindowRole
@@ -20,10 +29,22 @@ import {
   type WindowBounds
 } from './window'
 
+export interface WindowWebContentsLike extends BufferWebContentsLike {
+  on?: (
+    eventName: 'before-input-event',
+    listener: (event: unknown, input: BeforeInputKeyEventLike) => void
+  ) => void
+  removeListener?: (
+    eventName: 'before-input-event',
+    listener: (event: unknown, input: BeforeInputKeyEventLike) => void
+  ) => void
+}
+
 export interface BrowserWindowLike {
   id: number
-  webContents: BufferWebContentsLike
+  webContents: WindowWebContentsLike
   getBounds(): WindowBounds
+  isMinimized?(): boolean
   removeMenu(): void
   show(): void
   close(): void
@@ -49,6 +70,7 @@ interface WindowRecord {
   initialTabs: TabTransferPayload[]
   hasSyncedNonEmptyTabs: boolean
   closing: boolean
+  cleanupBeforeInput?: () => void
 }
 
 function getNumericSenderId(sender: unknown): number | undefined {
@@ -71,6 +93,7 @@ export class WindowManager {
 
   private readonly windowsByWebContentsId = new Map<number, WindowRecord>()
   private readonly recordsByWebContents = new WeakMap<object, WindowRecord>()
+  private readonly dragCoordinator = new TabDragCoordinator()
   private mainWebContentsId: number | null = null
   private readonly unsubscribeHub: () => void
   private disposed = false
@@ -145,7 +168,18 @@ export class WindowManager {
       }
     })
 
+    const handleBeforeInput = (_event: unknown, input: BeforeInputKeyEventLike): void => {
+      this.dragCoordinator.handleBeforeInput(input)
+    }
+    win.webContents.on?.('before-input-event', handleBeforeInput)
+    record.cleanupBeforeInput = () => {
+      win.webContents.removeListener?.('before-input-event', handleBeforeInput)
+      record.cleanupBeforeInput = undefined
+    }
+
     win.once('closed', () => {
+      record.cleanupBeforeInput?.()
+      this.dragCoordinator.clearForWindow(webContentsId)
       this.windowsByWebContentsId.delete(webContentsId)
       if (this.mainWebContentsId === webContentsId) {
         this.mainWebContentsId = null
@@ -166,12 +200,19 @@ export class WindowManager {
     initialTabs: readonly TabTransferPayload[],
     sourceBounds?: WindowBounds
   ): BrowserWindowLike {
+    const bounds = sourceBounds ? computeOffsetAuxiliaryBounds(sourceBounds, this.screen) : undefined
+    return this.openAuxiliaryWindowWithBounds(initialTabs, bounds)
+  }
+
+  private openAuxiliaryWindowWithBounds(
+    initialTabs: readonly TabTransferPayload[],
+    bounds?: WindowBounds
+  ): BrowserWindowLike {
     if (initialTabs.length === 0) {
       throw new Error('Auxiliary window requires at least one initial tab')
     }
     const firstKey = initialTabs[0].bufferKey
     const firstName = this.bufferHub.getBufferName(firstKey)
-    const bounds = sourceBounds ? computeOffsetAuxiliaryBounds(sourceBounds, this.screen) : undefined
     const options = createAuxiliaryWindowOptions(this.preloadPath, {
       bounds,
       title: formatWindowTitle(firstName)
@@ -183,6 +224,16 @@ export class WindowManager {
     return win
   }
 
+  private createDetachedAuxiliaryWindow(
+    payload: TabTransferPayload,
+    bounds?: WindowBounds
+  ): DetachTabToNewWindowResult {
+    const auxWindow = this.openAuxiliaryWindowWithBounds([payload], bounds)
+    return {
+      windowId: trackHubWindowWebContents(this.bufferHub, auxWindow.webContents, auxWindow.id)
+    }
+  }
+
   private resolveRecordFromSender(sender: unknown): WindowRecord | undefined {
     if (!sender || typeof sender !== 'object') return undefined
     const direct = this.recordsByWebContents.get(sender)
@@ -192,18 +243,36 @@ export class WindowManager {
     return numericId !== undefined ? this.windowsByWebContentsId.get(numericId) : undefined
   }
 
+  private requireSourceWindow(sender: unknown, action: string): WindowRecord {
+    const sourceRecord = this.resolveRecordFromSender(sender)
+    if (!sourceRecord || sourceRecord.window.isDestroyed()) {
+      throw new Error(`Cannot ${action} from an unknown source window`)
+    }
+    return sourceRecord
+  }
+
+  private assertKnownBuffer(payload: TabTransferPayload | undefined, action: string): void {
+    if (!payload || typeof payload.bufferKey !== 'string' || !this.bufferHub.hasBuffer(payload.bufferKey)) {
+      throw new Error(`Cannot ${action} unknown document buffer`)
+    }
+  }
+
+  private getOpenWindowBounds(): WindowBounds[] {
+    const bounds: WindowBounds[] = []
+    for (const record of this.windowsByWebContentsId.values()) {
+      if (!record.window.isDestroyed() && !record.window.isMinimized?.()) {
+        bounds.push(record.window.getBounds())
+      }
+    }
+    return bounds
+  }
+
   detachTabToNewWindow(
     sender: unknown,
     payload: TabTransferPayload
   ): DetachTabToNewWindowResult {
-    const sourceRecord = this.resolveRecordFromSender(sender)
-    if (!sourceRecord || sourceRecord.window.isDestroyed()) {
-      throw new Error('Cannot detach tab from an unknown source window')
-    }
-
-    if (!payload || typeof payload.bufferKey !== 'string' || !this.bufferHub.hasBuffer(payload.bufferKey)) {
-      throw new Error('Cannot detach unknown document buffer')
-    }
+    const sourceRecord = this.requireSourceWindow(sender, 'detach tab')
+    this.assertKnownBuffer(payload, 'detach')
 
     if (
       !canDetachTabFromWindow(
@@ -214,10 +283,58 @@ export class WindowManager {
       throw new Error('Cannot detach the last tab from an auxiliary window')
     }
 
-    const auxWindow = this.createAuxiliaryWindow([payload], sourceRecord.window.getBounds())
-    return {
-      windowId: trackHubWindowWebContents(this.bufferHub, auxWindow.webContents, auxWindow.id)
+    return this.createDetachedAuxiliaryWindow(
+      payload,
+      computeOffsetAuxiliaryBounds(sourceRecord.window.getBounds(), this.screen)
+    )
+  }
+
+  onTabDragStateChanged(listener: (session: ActiveTabDragSession | null) => void): () => void {
+    return this.dragCoordinator.onStateChanged(listener)
+  }
+
+  startTabDrag(sender: unknown, input: TabDragStartInput): ActiveTabDragSession {
+    const sourceRecord = this.requireSourceWindow(sender, 'start tab drag')
+    this.assertKnownBuffer(input?.payload, 'drag')
+    return this.dragCoordinator.start(sourceRecord.webContentsId, input)
+  }
+
+  updateTabDragOutcome(
+    sender: unknown,
+    dragSessionId: string,
+    outcome: TabDragOutcome
+  ): ActiveTabDragSession | null {
+    const sourceRecord = this.resolveRecordFromSender(sender)
+    if (!sourceRecord || sourceRecord.window.isDestroyed()) {
+      return null
     }
+    return this.dragCoordinator.updateOutcome(sourceRecord.webContentsId, dragSessionId, outcome)
+  }
+
+  endTabDrag(sender: unknown, input: TabDragEndInput): TabDragEndResult {
+    const sourceRecord = this.resolveRecordFromSender(sender)
+    if (!sourceRecord || sourceRecord.window.isDestroyed()) {
+      return { detached: false, outcome: 'cancelled' }
+    }
+
+    const canDetach = canDetachTabFromWindow(
+      sourceRecord.role,
+      this.bufferHub.getWindowTabCount(sourceRecord.webContentsId)
+    )
+    const plan = this.dragCoordinator.finish({
+      sourceWindowId: sourceRecord.webContentsId,
+      input,
+      openWindowBounds: this.getOpenWindowBounds(),
+      canDetach,
+      screen: this.screen
+    })
+
+    if (!plan.detachPayload || !this.bufferHub.hasBuffer(plan.detachPayload.bufferKey)) {
+      return plan.result.detached ? { detached: false, outcome: 'cancelled' } : plan.result
+    }
+
+    const { windowId } = this.createDetachedAuxiliaryWindow(plan.detachPayload, plan.targetBounds)
+    return { ...plan.result, windowId }
   }
 
   getWindowInitContext(sender: unknown): WindowInitContext {
@@ -320,6 +437,10 @@ export class WindowManager {
   dispose(): void {
     this.disposed = true
     this.unsubscribeHub()
+    for (const record of this.windowsByWebContentsId.values()) {
+      record.cleanupBeforeInput?.()
+    }
+    this.dragCoordinator.dispose()
     this.windowsByWebContentsId.clear()
     this.mainWebContentsId = null
   }

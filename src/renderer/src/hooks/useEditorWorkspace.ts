@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
 import { canDetachTabFromWindow } from '@shared/window'
 import type { PaneInteractionActions } from '../components/PaneTabBar'
@@ -107,6 +107,7 @@ export function useEditorWorkspace({
   onConfirmCloseDirtyTab
 }: UseEditorWorkspaceOptions) {
   const wikiApi = useWikiApi()
+  const [dragCancelNonce, setDragCancelNonce] = useState(0)
   const isShortcutDisabledRef = useRef<boolean>(isShortcutDisabled)
   const callbacksRef = useRef({
     onWorkspaceSaved,
@@ -138,7 +139,8 @@ export function useEditorWorkspace({
       windowApi: wikiApi.window,
       onWorkspaceSaved: () => callbacksRef.current.onWorkspaceSaved?.(),
       onError: (message, error) => callbacksRef.current.onError(message, error),
-      onConfirmCloseDirtyTab: (request) => callbacksRef.current.onConfirmCloseDirtyTab(request)
+      onConfirmCloseDirtyTab: (request) => callbacksRef.current.onConfirmCloseDirtyTab(request),
+      onRemoteTabDragCancelled: () => setDragCancelNonce((prev) => prev + 1)
     })
     storesRef.current = { bufferStore, tabStore, syncClient }
   }
@@ -165,6 +167,10 @@ export function useEditorWorkspace({
               void syncClient.detachTabToNewWindow(paneId, tabId)
           }
         : {}),
+      onStartTabDrag: syncClient.startTabDrag,
+      onDropTabInWindow: syncClient.markTabDragDroppedInWindow,
+      onCancelTabDrag: syncClient.cancelTabDrag,
+      onEndTabDrag: (screenPoint) => void syncClient.endTabDrag(screenPoint),
       onChangeContent: syncClient.updateBufferContent,
       onSaveBuffer: syncClient.saveBufferByKey,
       onUpdateTabViewState: tabStore.updateTabViewState
@@ -216,6 +222,7 @@ export function useEditorWorkspace({
     activeBuffer,
     activeFilePath,
     totalTabCount,
+    dragCancelNonce,
     paneActions,
     openWorkspaceFile: syncClient.openWorkspaceFile,
     openConfigDocument: syncClient.openConfigDocument,
