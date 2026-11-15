@@ -1,3 +1,4 @@
+import { EditorView } from '@codemirror/view'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -655,5 +656,196 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
       expect(within(previewRegion).queryByRole('alert')).not.toBeInTheDocument()
       expect(within(previewRegion).getByTestId('mermaid-svg')).toHaveTextContent('A --> C')
     })
+  })
+
+  it('synchronizes scroll bidirectionally by source line in Split mode with anti-ping-pong loop guard and preserves boundaries', async () => {
+    const mermaidLines = ['```mermaid', 'flowchart LR', '  A --> B', '  B --> C', '  C --> D', '  D --> E', '  E --> F', '```']
+    const trailingLines = Array.from({ length: 49 }, (_, i) => `Trailing line ${i + 1}`)
+    const docLines = [
+      '# Top',
+      '',
+      ...mermaidLines, // lines 3..10
+      '',
+      ...trailingLines.map((t) => `- ${t}`) // lines 12..60 (49-line ul)
+    ]
+    const fullContent = docLines.join('\n')
+    expect(docLines).toHaveLength(60)
+
+    let latestTab = createTab('split', 0.5)
+    const onUpdateViewState = vi.fn((patch: Partial<TabItem>) => {
+      latestTab = { ...latestTab, ...patch }
+    })
+    const doc = createDoc({ content: fullContent, savedContent: fullContent })
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({ svg: '<svg><text>Diagram</text></svg>' }))
+    }
+
+    const { container } = render(
+      <DocumentEditor
+        document={doc}
+        tab={latestTab}
+        theme="light"
+        autoSave={false}
+        mermaidRenderer={createMermaidRenderer(driver)}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    const rawScroller = container.querySelector('.cm-scroller') as HTMLElement
+    const previewRegion = screen.getByTestId('split-markdown-preview') as HTMLElement
+    const cmView = EditorView.findFromDOM(rawScroller)!
+    expect(cmView).not.toBeNull()
+
+    Object.defineProperty(rawScroller, 'clientHeight', { configurable: true, value: 240 })
+    Object.defineProperty(rawScroller, 'scrollHeight', {
+      configurable: true,
+      get: () => cmView.contentHeight
+    })
+
+    // Preview has non-proportional heights: huge Mermaid block (600px) for lines 3..10
+    Object.defineProperty(previewRegion, 'clientHeight', { configurable: true, value: 240 })
+    Object.defineProperty(previewRegion, 'scrollHeight', { configurable: true, value: 1400 })
+    previewRegion.getBoundingClientRect = () =>
+      ({ top: 0, left: 0, right: 500, bottom: 240, width: 500, height: 240, x: 0, y: 0, toJSON: () => ({}) })
+
+    const h1 = previewRegion.querySelector('h1[data-source-line="1"]') as HTMLElement
+    const mermaidEl = screen.getByTestId('mermaid-diagram')
+    const ulEl = previewRegion.querySelector('ul[data-source-line="12"]') as HTMLElement
+    expect(mermaidEl).toHaveAttribute('data-source-line', '3')
+    expect(mermaidEl).toHaveAttribute('data-source-end-line', '10')
+    expect(ulEl).toHaveAttribute('data-source-end-line', '60')
+
+    const mockRect = (el: HTMLElement, docTop: number, height: number) => {
+      el.getBoundingClientRect = () => {
+        const y = docTop - previewRegion.scrollTop
+        return { top: y, left: 0, right: 500, bottom: y + height, width: 500, height, x: 0, y, toJSON: () => ({}) }
+      }
+    }
+    mockRect(h1, 0, 40)
+    mockRect(mermaidEl, 60, 600)
+    mockRect(ulEl, 680, 720)
+
+    // 1. Scroll Raw to exact start of line 7 (50% through 8-line Mermaid block [3, 11])
+    const line7Top = cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(7).from).top
+    rawScroller.scrollTop = line7Top
+    fireEvent.scroll(rawScroller)
+    // Preview interpolates inside Mermaid block: 60 + 0.5 * 600 = 360 (NOT naive proportional scroll)
+    expect(previewRegion.scrollTop).toBeCloseTo(360, 5)
+
+    // Immediate echo scroll from Preview must be ignored by loop guard (no ping-pong back to Raw)
+    onUpdateViewState.mockClear()
+    fireEvent.scroll(previewRegion)
+    expect(rawScroller.scrollTop).toBe(line7Top)
+    expect(onUpdateViewState).not.toHaveBeenCalled()
+
+    // 2. User scrolls Preview into list block (25% into [12, 61] => line 24.25): 680 + 0.25 * 720 = 860
+    previewRegion.scrollTop = 860
+    fireEvent.scroll(previewRegion)
+    const line24Block = cmView.lineBlockAt(cmView.state.doc.line(24).from)
+    const expectedLine24_25Top = cmView.documentPadding.top + line24Block.top + 0.25 * line24Block.height
+    expect(rawScroller.scrollTop).toBeCloseTo(expectedLine24_25Top, 5)
+    expect(onUpdateViewState).toHaveBeenCalledWith({ scrollTop: rawScroller.scrollTop })
+
+    // Immediate echo scroll from Raw must be ignored by loop guard (no ping-pong back to Preview)
+    fireEvent.scroll(rawScroller)
+    expect(previewRegion.scrollTop).toBe(860)
+
+    // 3. Bottom and top boundaries are preserved
+    rawScroller.scrollTop = cmView.contentHeight - 240
+    fireEvent.scroll(rawScroller)
+    expect(previewRegion.scrollTop).toBe(1160) // previewMax = 1400 - 240
+
+    previewRegion.scrollTop = 0
+    fireEvent.scroll(previewRegion)
+    expect(rawScroller.scrollTop).toBe(0)
+  })
+
+  it('scrolls both Raw editor and Preview to the target heading on Outline scrollRequest in Split mode', async () => {
+    const origScrollIntoView = Element.prototype.scrollIntoView
+    const scrollIntoViewMock = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoViewMock
+
+    try {
+      const md = '# Arch\n\nIntro\n\n## Flow\n\nDetails'
+      const doc = createDoc({ content: md, savedContent: md })
+      const tab = createTab('split', 0.5)
+      const onChangeContent = vi.fn()
+
+      const { rerender } = render(
+        <DocumentEditor
+          document={doc}
+          tab={tab}
+          theme="light"
+          autoSave={false}
+          showHeadingNumbers={false}
+          onChangeContent={onChangeContent}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      rerender(
+        <DocumentEditor
+          document={doc}
+          tab={tab}
+          theme="light"
+          autoSave={false}
+          showHeadingNumbers={false}
+          scrollRequest={{
+            paneId: 'primary',
+            tabId: 'tab-1',
+            mode: 'split',
+            line: 5,
+            slug: 'flow',
+            index: 1,
+            nonce: 7
+          }}
+          onChangeContent={onChangeContent}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      const rawEditor = screen.getByTestId('document-editor')
+      const previewRegion = screen.getByTestId('split-markdown-preview')
+      const targetHeading = within(previewRegion).getByRole('heading', { level: 2, name: 'Flow' })
+
+      await waitFor(() => {
+        expect(rawEditor.getAttribute('data-selection-start')).toBe(String(md.indexOf('## Flow')))
+        expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      })
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(targetHeading)
+      expect(onChangeContent).not.toHaveBeenCalled()
+
+      // Same nonce does not re-scroll on unrelated rerender
+      scrollIntoViewMock.mockClear()
+      rerender(
+        <DocumentEditor
+          document={doc}
+          tab={tab}
+          theme="dark"
+          autoSave={false}
+          showHeadingNumbers={false}
+          scrollRequest={{
+            paneId: 'primary',
+            tabId: 'tab-1',
+            mode: 'split',
+            line: 5,
+            slug: 'flow',
+            index: 1,
+            nonce: 7
+          }}
+          onChangeContent={onChangeContent}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+    } finally {
+      Element.prototype.scrollIntoView = origScrollIntoView
+    }
   })
 })

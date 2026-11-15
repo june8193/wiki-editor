@@ -79,8 +79,10 @@ export interface UseRawCodeMirrorEditorOptions {
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
   scrollRequest?: RawScrollRequest | null
+  editorViewRef?: { current: EditorView | null }
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
+  onRawScroll?: () => void
 }
 
 const markdownHighlightStyle = HighlightStyle.define([
@@ -185,8 +187,10 @@ export function useRawCodeMirrorEditor({
   customCommands = DEFAULT_CUSTOM_COMMANDS,
   documentTitle,
   scrollRequest,
+  editorViewRef,
   onChangeContent,
-  onUpdateViewState
+  onUpdateViewState,
+  onRawScroll
 }: UseRawCodeMirrorEditorOptions) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -207,7 +211,8 @@ export function useRawCodeMirrorEditor({
     customCommands,
     documentTitle,
     onChangeContent,
-    onUpdateViewState
+    onUpdateViewState,
+    onRawScroll
   })
   runtimeRef.current = {
     content,
@@ -220,7 +225,8 @@ export function useRawCodeMirrorEditor({
     customCommands,
     documentTitle,
     onChangeContent,
-    onUpdateViewState
+    onUpdateViewState,
+    onRawScroll
   }
 
   const {
@@ -372,9 +378,13 @@ export function useRawCodeMirrorEditor({
     syncSelectionAttrs(view)
     view.scrollDOM.scrollTop = initial.scrollTop
     viewRef.current = view
+    if (editorViewRef) {
+      editorViewRef.current = view
+    }
 
     const handleScroll = (): void => {
       runtimeRef.current.onUpdateViewState({ scrollTop: view.scrollDOM.scrollTop })
+      runtimeRef.current.onRawScroll?.()
     }
     view.scrollDOM.addEventListener('scroll', handleScroll)
 
@@ -382,6 +392,9 @@ export function useRawCodeMirrorEditor({
       view.scrollDOM.removeEventListener('scroll', handleScroll)
       view.destroy()
       viewRef.current = null
+      if (editorViewRef) {
+        editorViewRef.current = null
+      }
     }
   }, [])
 

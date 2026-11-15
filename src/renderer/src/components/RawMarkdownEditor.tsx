@@ -1,3 +1,4 @@
+import type { EditorView } from '@codemirror/view'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
@@ -15,8 +16,10 @@ interface RawMarkdownEditorProps {
   customCommands?: readonly CustomCommandConfig[]
   documentTitle?: string
   scrollRequest?: RawScrollRequest | null
+  editorViewRef?: { current: EditorView | null }
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
+  onRawScroll?: () => void
 }
 
 const RAW_TABLE_BUTTONS: ReadonlyArray<{
@@ -47,8 +50,10 @@ export function RawMarkdownEditor({
   customCommands,
   documentTitle,
   scrollRequest,
+  editorViewRef,
   onChangeContent,
-  onUpdateViewState
+  onUpdateViewState,
+  onRawScroll
 }: RawMarkdownEditorProps) {
   const { shellRef, hostRef, inTable, runTableAction, insertToc, slashMenuProps } =
     useRawCodeMirrorEditor({
@@ -62,8 +67,10 @@ export function RawMarkdownEditor({
       customCommands,
       documentTitle,
       scrollRequest,
+      editorViewRef,
       onChangeContent,
-      onUpdateViewState
+      onUpdateViewState,
+      onRawScroll
     })
 
   return (

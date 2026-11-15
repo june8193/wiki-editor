@@ -3874,4 +3874,141 @@ describe('Renderer error logging & UI breadcrumbs', () => {
     expect(serialized).not.toContain('SECRET_ALPHA')
     expect(serialized).not.toContain('SECRET_BETA')
   })
+
+  it('synchronizes Split mode scroll bidirectionally with PaneTabStore persistence and jumps both Raw and Preview on Outline click', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewMock = vi.fn()
+    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollIntoView'
+    )
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+    try {
+      const mermaidBlock = [
+        '```mermaid',
+        'flowchart LR',
+        '  A --> B',
+        '  B --> C',
+        '  C --> D',
+        '  D --> E',
+        '  E --> F',
+        '```'
+      ]
+      const listItems = Array.from({ length: 40 }, (_, i) => `- Item ${i + 1}`)
+      const docContent = [
+        '# Overview',
+        '',
+        ...mermaidBlock, // lines 3..10
+        '',
+        '## Architecture', // line 12
+        '',
+        ...listItems // lines 14..53
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { autoSave: false, showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:/wiki/split-scroll',
+          workspaces: {
+            'C:/wiki/split-scroll': {
+              'diagram-doc.md': docContent
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('diagram-doc.md'))
+
+      // Switch to Split mode via Ctrl+4
+      fireEvent.keyDown(screen.getByTestId('document-editor'), { key: '4', ctrlKey: true })
+      const previewRegion = screen.getByTestId('split-markdown-preview')
+      await waitFor(() => {
+        expect(within(previewRegion).getByTestId('mermaid-svg')).toBeInTheDocument()
+      })
+
+      // Verify post-sanitize top-level source line annotations
+      const h1El = previewRegion.querySelector('h1[data-source-line="1"]') as HTMLElement
+      const mermaidEl = within(previewRegion).getByTestId('mermaid-diagram')
+      const h2El = previewRegion.querySelector('h2[data-source-line="12"]') as HTMLElement
+      const ulEl = previewRegion.querySelector('ul[data-source-line="14"]') as HTMLElement
+      expect(mermaidEl).toHaveAttribute('data-source-line', '3')
+      expect(mermaidEl).toHaveAttribute('data-source-end-line', '10')
+      expect(ulEl).toHaveAttribute('data-source-end-line', '53')
+
+      const rawEditorEl = screen.getByTestId('document-editor')
+      const cmView = getRawEditorView(rawEditorEl)
+      const rawScroller = getRawEditorScroller(rawEditorEl)
+
+      Object.defineProperty(rawScroller, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(rawScroller, 'scrollHeight', {
+        configurable: true,
+        get: () => cmView.contentHeight
+      })
+      Object.defineProperty(previewRegion, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(previewRegion, 'scrollHeight', { configurable: true, value: 1480 })
+      previewRegion.getBoundingClientRect = () =>
+        ({ top: 0, left: 0, right: 500, bottom: 200, width: 500, height: 200, x: 0, y: 0, toJSON: () => ({}) })
+
+      const mockRect = (el: HTMLElement, docTop: number, height: number) => {
+        el.getBoundingClientRect = () => {
+          const y = docTop - previewRegion.scrollTop
+          return { top: y, left: 0, right: 500, bottom: y + height, width: 500, height, x: 0, y, toJSON: () => ({}) }
+        }
+      }
+      mockRect(h1El, 0, 40)
+      mockRect(mermaidEl, 60, 560)
+      mockRect(h2El, 640, 40)
+      mockRect(ulEl, 700, 780)
+
+      // 1. Raw -> Preview interpolation inside Mermaid block (line 7 = 50% of [3, 11] => 60 + 0.5*560 = 340)
+      const line7Top = cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(7).from).top
+      rawScroller.scrollTop = line7Top
+      fireEvent.scroll(rawScroller)
+      expect(previewRegion.scrollTop).toBeCloseTo(340, 5)
+
+      // Echo scroll on Preview does not ping-pong back to Raw
+      fireEvent.scroll(previewRegion)
+      expect(rawScroller.scrollTop).toBe(line7Top)
+
+      // 2. Preview -> Raw interpolation in list (50% of [14, 54] => line 34, 700 + 0.5*780 = 1090)
+      previewRegion.scrollTop = 1090
+      fireEvent.scroll(previewRegion)
+      const expectedLine34Top =
+        cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(34).from).top
+      expect(rawScroller.scrollTop).toBeCloseTo(expectedLine34Top, 5)
+
+      // Switching Split -> Raw restores synced scrollTop persisted in PaneTabStore
+      fireEvent.keyDown(rawEditorEl, { key: '1', ctrlKey: true })
+      const rawOnlyEditor = screen.getByTestId('document-editor')
+      expect(getRawEditorScroller(rawOnlyEditor).scrollTop).toBeCloseTo(expectedLine34Top, 5)
+
+      // Switch back to Split and test Outline heading jump scrolls both Raw and Preview
+      fireEvent.keyDown(rawOnlyEditor, { key: '4', ctrlKey: true })
+      scrollIntoViewMock.mockClear()
+
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const archBtn = within(outline).getByRole('button', { name: /Architecture/ })
+      await user.click(archBtn)
+
+      await waitFor(() => {
+        expect(getRawEditorSelection(screen.getByTestId('document-editor')).start).toBe(
+          docContent.indexOf('## Architecture')
+        )
+        expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      })
+      const jumpedPreview = screen.getByTestId('split-markdown-preview')
+      const jumpedArchHeading = within(jumpedPreview).getByRole('heading', { level: 2, name: 'Architecture' })
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(jumpedArchHeading)
+    } finally {
+      if (origScrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+      }
+    }
+  })
 })

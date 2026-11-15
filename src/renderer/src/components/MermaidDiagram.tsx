@@ -14,6 +14,8 @@ interface MermaidDiagramProps {
   renderer?: MermaidRenderer
   debounceMs?: number
   className?: string
+  sourceLine?: string | number
+  sourceEndLine?: string | number
 }
 
 interface ValidDiagramSnapshot {
@@ -77,7 +79,9 @@ export function MermaidDiagram({
   theme,
   renderer = defaultMermaidRenderer,
   debounceMs = DEFAULT_DEBOUNCE_MS,
-  className
+  className,
+  sourceLine,
+  sourceEndLine
 }: MermaidDiagramProps) {
   const mermaidTheme = mapThemeToMermaidTheme(theme)
   const cachedSvg = renderer.getCachedSvg(code, theme)
@@ -171,6 +175,8 @@ export function MermaidDiagram({
       className={`mermaid-diagram-block${className ? ` ${className}` : ''}`}
       data-testid="mermaid-diagram"
       data-mermaid-theme={mermaidTheme}
+      data-source-line={sourceLine}
+      data-source-end-line={sourceEndLine}
     >
       {showFallbackErrorBox ? (
         <div className="mermaid-error-box" role="alert">
