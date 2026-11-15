@@ -16,6 +16,7 @@ interface MarkdownPreviewProps {
   scrollTop: number
   theme?: ThemeMode
   mermaidRenderer?: MermaidRenderer
+  documentTitle?: string
   scrollRequest?: PreviewScrollRequest | null
   isActive?: boolean
   scrollContainerRef?: { current: HTMLDivElement | null }
@@ -36,6 +37,7 @@ export function MarkdownPreview({
   scrollTop,
   theme = 'light',
   mermaidRenderer,
+  documentTitle,
   scrollRequest,
   isActive = true,
   scrollContainerRef,
@@ -87,10 +89,11 @@ export function MarkdownPreview({
       renderMarkdownToReact(content, {
         theme,
         mermaidRenderer,
+        documentTitle,
         onAnchorNavigate: onLinkNavigate ? undefined : handleAnchorNavigate,
         onLinkNavigate
       }),
-    [content, handleAnchorNavigate, mermaidRenderer, onLinkNavigate, theme]
+    [content, documentTitle, handleAnchorNavigate, mermaidRenderer, onLinkNavigate, theme]
   )
 
   return (

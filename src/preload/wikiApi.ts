@@ -12,6 +12,8 @@ import {
   type AppMenuCommand,
   CLIPBOARD_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
+  DIAGRAM_IPC_CHANNELS,
+  type DiagramSaveResult,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
@@ -167,6 +169,13 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
         }),
       respondClose: (response: WindowCloseResponse) =>
         ipcRenderer.invoke(WINDOW_IPC_CHANNELS.closeResponse, response) as Promise<void>
+    },
+    diagram: {
+      copyText: (text) => ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyText, text) as Promise<void>,
+      copyImage: (pngBytes) =>
+        ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyImage, pngBytes) as Promise<void>,
+      saveFile: (request) =>
+        ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.saveFile, request) as Promise<DiagramSaveResult>
     }
   }
 }

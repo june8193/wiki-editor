@@ -2,6 +2,7 @@ import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef } fro
 import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { getRawEditorLanguage, resolveEditorShortcut, resolveEffectiveEditorMode } from '../editor/editorModes'
+import { deriveDocumentTitle } from '../editor/mermaidExport'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import type {
   DocumentOutlineSpyUpdate,
@@ -73,6 +74,7 @@ export function DocumentEditor({
   const rawRatio = normalizeSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
   const previewRatio = roundSplitRatio(1 - rawRatio)
   const rawLanguage = getRawEditorLanguage(activeDoc)
+  const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
   const matchedScrollRequest =
     scrollRequest && scrollRequest.mode === effectiveMode ? scrollRequest : null
   const previewScrollRequest = matchedScrollRequest
@@ -260,6 +262,7 @@ export function DocumentEditor({
           isShortcutDisabled={isShortcutDisabled}
           workspaceMarkdownFiles={workspaceMarkdownFiles}
           activeFilePath={activeFilePath}
+          documentTitle={documentTitle}
           mermaidRenderer={mermaidRenderer}
           scrollRequest={
             matchedScrollRequest
@@ -280,6 +283,7 @@ export function DocumentEditor({
           scrollTop={tab.scrollTop}
           theme={theme}
           mermaidRenderer={mermaidRenderer}
+          documentTitle={documentTitle}
           scrollRequest={previewScrollRequest}
           isActive={isActive}
           onScrollTopChange={handleScrollTopChange}
@@ -311,6 +315,7 @@ export function DocumentEditor({
               scrollTop={0}
               theme={theme}
               mermaidRenderer={mermaidRenderer}
+              documentTitle={documentTitle}
               scrollRequest={previewScrollRequest}
               isActive={isActive}
               onScrollTopChange={handleSplitPreviewScroll}

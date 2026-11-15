@@ -1,10 +1,21 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { WikiApi } from '@shared/ipc'
 import { MarkdownPreview } from '../components/MarkdownPreview'
+import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { createMermaidRenderer, type MermaidDriver } from './mermaidRenderer'
 import { renderMarkdownToReact } from './markdownPreview'
 
 describe('markdownPreview pipeline and XSS sanitization', () => {
+  const originalWikiApi = (window as { wikiApi?: WikiApi }).wikiApi
+
+  afterEach(() => {
+    if (originalWikiApi === undefined) {
+      delete (window as { wikiApi?: WikiApi }).wikiApi
+    } else {
+      window.wikiApi = originalWikiApi
+    }
+  })
   it('renders GFM headings, tables, task lists, code blocks, blockquotes, and safe links', () => {
     const md = [
       '# Main Heading',
@@ -178,7 +189,10 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Bad mermaid syntax')
     expect(screen.getByRole('alert')).toHaveTextContent('invalid diagram')
     // Raw HTML <svg onload> outside fenced mermaid block must still be stripped by rehype-sanitize
-    expect(container.querySelector('circle')).toBeNull()
+    const nonActionCircles = Array.from(container.querySelectorAll('circle')).filter(
+      (element) => !element.closest('.mermaid-action-bar')
+    )
+    expect(nonActionCircles).toHaveLength(0)
 
     rerender(
       <MarkdownPreview
@@ -360,5 +374,72 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
     expect(nestedP).not.toHaveAttribute('data-source-line')
     expect(nestedP.parentElement).toHaveAttribute('data-source-line', '29')
     expect(nestedP.parentElement).toHaveAttribute('data-source-end-line', '29')
+  })
+
+  it('threads documentTitle through MarkdownPreview context to MermaidDiagram save actions and falls back to mermaid-diagram when omitted', async () => {
+    const canvasStub = installSvgCanvasStub()
+
+    try {
+      const saveFile = vi.fn(async () => ({ canceled: false, filePath: 'C:\\exports\\out' }))
+      window.wikiApi = {
+        diagram: {
+          copyText: vi.fn(async () => {}),
+          copyImage: vi.fn(async () => {}),
+          saveFile
+        }
+      } as unknown as WikiApi
+
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async () => ({
+          svg: '<svg viewBox="0 0 100 50"><g><text>Preview</text></g></svg>'
+        }))
+      }
+      const renderer = createMermaidRenderer(driver)
+      const md = ['```mermaid', 'graph TD', '  A --> B', '```'].join('\n')
+
+      const { rerender } = render(
+        <MarkdownPreview
+          content={md}
+          scrollTop={0}
+          theme="light"
+          documentTitle="API: <v2>."
+          mermaidRenderer={renderer}
+        />
+      )
+
+      await screen.findByTestId('mermaid-svg')
+      fireEvent.click(screen.getByRole('button', { name: 'PNG 저장' }))
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(1)
+      })
+      expect(saveFile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          format: 'png',
+          suggestedName: 'API v2-diagram.png'
+        })
+      )
+
+      rerender(
+        <MarkdownPreview
+          content={md}
+          scrollTop={0}
+          theme="light"
+          mermaidRenderer={renderer}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'SVG 저장' }))
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(2)
+      })
+      expect(saveFile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          format: 'svg',
+          suggestedName: 'mermaid-diagram.svg'
+        })
+      )
+    } finally {
+      canvasStub.restore()
+    }
   })
 })

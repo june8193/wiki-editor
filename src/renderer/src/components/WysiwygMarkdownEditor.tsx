@@ -39,6 +39,7 @@ interface WysiwygMarkdownEditorProps {
   theme?: ThemeMode
   enableLinkAutocomplete?: boolean
   isShortcutDisabled?: boolean
+  documentTitle?: string
   mermaidRenderer?: MermaidRenderer
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   activeFilePath?: string | null
@@ -218,6 +219,7 @@ export function WysiwygMarkdownEditor({
   theme = 'light',
   enableLinkAutocomplete = true,
   isShortcutDisabled = false,
+  documentTitle,
   mermaidRenderer,
   workspaceMarkdownFiles,
   activeFilePath,
@@ -432,8 +434,8 @@ export function WysiwygMarkdownEditor({
   })
 
   const mermaidContextValue = useMemo(
-    () => ({ theme, mermaidRenderer }),
-    [mermaidRenderer, theme]
+    () => ({ theme, mermaidRenderer, documentTitle }),
+    [documentTitle, mermaidRenderer, theme]
   )
 
   return (

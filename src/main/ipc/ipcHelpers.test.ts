@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   CONFIG_IPC_CHANNELS,
+  DIAGRAM_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS
@@ -218,6 +219,187 @@ describe('registerIpcHandlers logging wrapper', () => {
         path: 'docs/secret.md'
       }
     })
+    dispose()
+  })
+
+  it('logs diagram:copy-text metadata with textLength only and redacts raw Mermaid source', async () => {
+    const ipcMain = createFakeIpcMain()
+    const secretMermaidCode = 'flowchart TD\n  SECRET_SOURCE --> SECRET_TARGET'
+    const dispose = registerIpcHandlers(
+      ipcMain,
+      [
+        [
+          DIAGRAM_IPC_CHANNELS.copyText,
+          async (_event, text) => {
+            if (typeof text !== 'string') {
+              throw new TypeError('Invalid clipboard text')
+            }
+          }
+        ]
+      ],
+      { logService }
+    )
+
+    await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.copyText, secretMermaidCode)
+    await expect(ipcMain.invoke(DIAGRAM_IPC_CHANNELS.copyText, 12345)).rejects.toThrow(
+      'Invalid clipboard text'
+    )
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(2)
+    expect(JSON.stringify(entries)).not.toContain('SECRET_SOURCE')
+    expect(JSON.stringify(entries)).not.toContain('SECRET_TARGET')
+
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.copyText,
+        success: true,
+        textLength: secretMermaidCode.length
+      }
+    })
+    expect(entries[1]).toMatchObject({
+      level: 'error',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.copyText,
+        success: false,
+        textLength: 0
+      },
+      error: {
+        name: 'TypeError',
+        message: 'Invalid clipboard text'
+      }
+    })
+
+    dispose()
+  })
+
+  it('logs diagram:copy-image metadata with byteLength only and redacts raw PNG bytes', async () => {
+    const ipcMain = createFakeIpcMain()
+    const secretPngBytes = new Uint8Array([137, 80, 78, 71, 222, 173, 190, 239])
+    const dispose = registerIpcHandlers(
+      ipcMain,
+      [
+        [
+          DIAGRAM_IPC_CHANNELS.copyImage,
+          async (_event, pngBytes) => {
+            if (!(pngBytes instanceof Uint8Array)) {
+              throw new TypeError('Invalid clipboard image bytes')
+            }
+          }
+        ]
+      ],
+      { logService }
+    )
+
+    await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.copyImage, secretPngBytes)
+    await expect(ipcMain.invoke(DIAGRAM_IPC_CHANNELS.copyImage, 'not-bytes')).rejects.toThrow(
+      'Invalid clipboard image bytes'
+    )
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(2)
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('222')
+    expect(serialized).not.toContain('173')
+    expect(serialized).not.toContain('190')
+    expect(serialized).not.toContain('239')
+    expect(serialized).not.toContain('not-bytes')
+
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.copyImage,
+        success: true,
+        byteLength: secretPngBytes.byteLength
+      }
+    })
+    expect(entries[1]).toMatchObject({
+      level: 'error',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.copyImage,
+        success: false,
+        byteLength: 0
+      },
+      error: {
+        name: 'TypeError',
+        message: 'Invalid clipboard image bytes'
+      }
+    })
+
+    dispose()
+  })
+
+  it('logs diagram:save-file metadata with format, byte/text length, and canceled flag without leaking file contents or names', async () => {
+    const ipcMain = createFakeIpcMain()
+    const secretPngBytes = new Uint8Array([137, 80, 78, 71, 201, 202, 203, 204])
+    const secretSvgMarkup = '<svg><text>SECRET_SVG_NODE</text></svg>'
+
+    const dispose = registerIpcHandlers(
+      ipcMain,
+      [
+        [
+          DIAGRAM_IPC_CHANNELS.saveFile,
+          async (_event, request) => {
+            const req = request as { format: string }
+            if (req.format === 'png') {
+              return { canceled: false, filePath: 'C:\\exports\\SECRET_PATH_PNG.png' }
+            }
+            return { canceled: true }
+          }
+        ]
+      ],
+      { logService }
+    )
+
+    await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.saveFile, {
+      format: 'png',
+      suggestedName: 'SECRET_SUGGESTED_PNG-diagram.png',
+      data: secretPngBytes
+    })
+    await ipcMain.invoke(DIAGRAM_IPC_CHANNELS.saveFile, {
+      format: 'svg',
+      suggestedName: 'SECRET_SUGGESTED_SVG-diagram.svg',
+      data: secretSvgMarkup
+    })
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(2)
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain('SECRET_SVG_NODE')
+    expect(serialized).not.toContain('SECRET_SUGGESTED_PNG')
+    expect(serialized).not.toContain('SECRET_SUGGESTED_SVG')
+    expect(serialized).not.toContain('SECRET_PATH_PNG')
+    expect(serialized).not.toContain('201')
+    expect(serialized).not.toContain('204')
+
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.saveFile,
+        success: true,
+        format: 'png',
+        byteLength: secretPngBytes.byteLength,
+        canceled: false
+      }
+    })
+    expect(entries[1]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: DIAGRAM_IPC_CHANNELS.saveFile,
+        success: true,
+        format: 'svg',
+        textLength: secretSvgMarkup.length,
+        canceled: true
+      }
+    })
+
     dispose()
   })
 })

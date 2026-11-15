@@ -4,6 +4,8 @@ import {
   type AppMenuCommand,
   CLIPBOARD_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
+  DIAGRAM_IPC_CHANNELS,
+  type DiagramSaveRequest,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
@@ -33,6 +35,9 @@ function createFakeIpcRenderer(): IpcRendererLike & {
       }
       if (channel === CONFIG_IPC_CHANNELS.update) {
         return { ...DEFAULT_APP_CONFIG, ...(args[0] as object) }
+      }
+      if (channel === DIAGRAM_IPC_CHANNELS.saveFile) {
+        return { canceled: false, filePath: 'C:\\exports\\guide-diagram.png' }
       }
       return DEFAULT_APP_CONFIG
     },
@@ -217,6 +222,32 @@ describe('createWikiApi', () => {
 
     expect(ipc.lastInvoked).toEqual([
       { channel: CLIPBOARD_IPC_CHANNELS.writeText, args: ['guides/setup.md'] }
+    ])
+  })
+
+  it('routes diagram.copyText, diagram.copyImage, and diagram.saveFile through expected IPC channels with exact payloads', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+    const diagramSource = 'flowchart LR\n  A --> B'
+    const pngBytes = new Uint8Array([137, 80, 78, 71])
+    const saveRequest: DiagramSaveRequest = {
+      format: 'png',
+      suggestedName: 'guide-diagram.png',
+      data: pngBytes
+    }
+
+    await api.diagram.copyText(diagramSource)
+    await api.diagram.copyImage(pngBytes)
+    const saveResult = await api.diagram.saveFile(saveRequest)
+
+    expect(saveResult).toEqual({
+      canceled: false,
+      filePath: 'C:\\exports\\guide-diagram.png'
+    })
+    expect(ipc.lastInvoked).toEqual([
+      { channel: DIAGRAM_IPC_CHANNELS.copyText, args: [diagramSource] },
+      { channel: DIAGRAM_IPC_CHANNELS.copyImage, args: [pngBytes] },
+      { channel: DIAGRAM_IPC_CHANNELS.saveFile, args: [saveRequest] }
     ])
   })
 

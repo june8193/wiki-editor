@@ -1,8 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { WikiApi } from '@shared/ipc'
+import type { RendererLogPayload } from '@shared/logging'
 import type { WorkspaceEntry } from '@shared/workspace'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
+import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 function placeCaretInProseMirror(editorEl: HTMLElement, targetEl: Element): void {
@@ -17,6 +20,17 @@ function placeCaretInProseMirror(editorEl: HTMLElement, targetEl: Element): void
 }
 
 describe('WysiwygMarkdownEditor', () => {
+  const originalWikiApi = (window as { wikiApi?: WikiApi }).wikiApi
+
+  afterEach(() => {
+    vi.useRealTimers()
+    if (originalWikiApi === undefined) {
+      delete (window as { wikiApi?: WikiApi }).wikiApi
+    } else {
+      window.wikiApi = originalWikiApi
+    }
+  })
+
   it('mounts without firing onChangeContent on unchanged markdown and syncs external updates cleanly', () => {
     const onChangeContent = vi.fn()
     const initial = '# Keep Exact\n\n*   preserved spacing'
@@ -608,6 +622,463 @@ describe('WysiwygMarkdownEditor', () => {
     )
 
     expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
+  })
+
+  it('integrates a single action bar in mermaid-node-header without duplicating a floating bar in preview, handles syntax errors, blanks, failures, and 1500ms feedback without mutating markdown', async () => {
+    const entries: RendererLogPayload[] = []
+    let shouldFail = false
+    const copyText = vi.fn(async () => {
+      if (shouldFail) {
+        throw new Error('위지윅 클립보드 복사 실패')
+      }
+    })
+    window.wikiApi = {
+      diagram: { copyText },
+      log: {
+        write: vi.fn(async (payload: RendererLogPayload) => {
+          entries.push(payload)
+        })
+      }
+    } as unknown as WikiApi
+
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => {
+        if (text.includes('broken_wysiwyg')) {
+          throw new Error('Parse error')
+        }
+        return { svg: `<svg><text>${text.trim()}</text></svg>` }
+      })
+    }
+    const mermaidRenderer = createMermaidRenderer(driver)
+    const onChangeContent = vi.fn()
+    const validSource = 'graph TD\n  SECRET_WYS --> NodeB'
+    const brokenSource = 'graph TD\n  broken_wysiwyg'
+
+    const markdown = [
+      '```mermaid',
+      validSource,
+      '```',
+      '',
+      '```mermaid',
+      brokenSource,
+      '```',
+      '',
+      '```mermaid',
+      '   ',
+      '```'
+    ].join('\n')
+
+    render(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        theme="light"
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
+      expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
+    })
+
+    const blocks = screen.getAllByTestId('wysiwyg-mermaid-block')
+    const validBlock = blocks[0]
+    const brokenBlock = blocks[1]
+    const blankBlock = blocks[2]
+
+    // Each WYSIWYG Mermaid block has exactly ONE action toolbar in .mermaid-node-header and ZERO inside .mermaid-node-preview
+    const header = validBlock.querySelector('.mermaid-node-header') as HTMLElement
+    const preview = validBlock.querySelector('.mermaid-node-preview') as HTMLElement
+    expect(within(validBlock).getAllByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })).toHaveLength(1)
+    expect(within(header).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })).toHaveClass('is-inline')
+    expect(within(header).getByRole('button', { name: '코드 복사' })).toBeInTheDocument()
+    expect(within(header).getByRole('button', { name: '코드 편집' })).toBeInTheDocument()
+    expect(within(preview).queryByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })).not.toBeInTheDocument()
+
+    // Blank block has disabled copy button
+    const blankCopyBtn = within(blankBlock).getByRole('button', { name: '코드 복사' })
+    expect(blankCopyBtn).toBeDisabled()
+    fireEvent.click(blankCopyBtn)
+    expect(copyText).not.toHaveBeenCalled()
+
+    // Broken block retains syntax error alert and still allows copying raw broken source
+    await within(brokenBlock).findByText('Mermaid 다이어그램 문법 오류')
+    const brokenCopyBtn = within(brokenBlock).getByRole('button', { name: '코드 복사' })
+    expect(brokenCopyBtn).toBeEnabled()
+    await act(async () => {
+      fireEvent.click(brokenCopyBtn)
+      await Promise.resolve()
+    })
+    expect(copyText).toHaveBeenCalledWith(brokenSource)
+
+    // Failure on valid block shows inline alert inside validBlock + sanitized log (no raw source)
+    shouldFail = true
+    const validCopyBtn = within(validBlock).getByRole('button', { name: '코드 복사' })
+    await act(async () => {
+      fireEvent.click(validCopyBtn)
+      await Promise.resolve()
+    })
+    expect(within(validBlock).getByRole('alert')).toHaveTextContent('위지윅 클립보드 복사 실패')
+    const copyFailureEntries = entries.filter(
+      (entry) => entry.message === 'Mermaid code copy failed'
+    )
+    expect(copyFailureEntries).toHaveLength(1)
+    expect(copyFailureEntries[0]).toMatchObject({
+      level: 'error',
+      category: 'ui',
+      message: 'Mermaid code copy failed',
+      data: { codeLength: validSource.length }
+    })
+    expect(JSON.stringify(entries)).not.toContain('SECRET_WYS')
+
+    // Retry success with fake timers -> clears alert and displays 1500ms check feedback
+    shouldFail = false
+    vi.useFakeTimers()
+    await act(async () => {
+      fireEvent.click(validCopyBtn)
+      await Promise.resolve()
+    })
+    expect(copyText).toHaveBeenLastCalledWith(validSource)
+    expect(within(validBlock).queryByRole('alert')).not.toBeInTheDocument()
+    expect(validCopyBtn).toHaveTextContent('복사됨')
+    expect(validCopyBtn).toHaveClass('is-copied')
+
+    act(() => {
+      vi.advanceTimersByTime(1500)
+    })
+    expect(validCopyBtn).not.toHaveTextContent('복사됨')
+    expect(onChangeContent).not.toHaveBeenCalled()
+  })
+
+  it('supports inline 이미지 복사 in WYSIWYG light/dark themes with 1500ms feedback, syntax-error disabling, sanitized failure alerts, and zero markdown mutation', async () => {
+    const canvasStub = installSvgCanvasStub()
+
+    try {
+      const entries: RendererLogPayload[] = []
+      let failCopyImage = false
+      const copyImage = vi.fn(async () => {
+        if (failCopyImage) {
+          throw new Error('위지윅 이미지 클립보드 실패')
+        }
+      })
+      window.wikiApi = {
+        diagram: { copyText: vi.fn(async () => {}), copyImage },
+        log: {
+          write: vi.fn(async (payload: RendererLogPayload) => {
+            entries.push(payload)
+          })
+        }
+      } as unknown as WikiApi
+
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => {
+          if (text.includes('broken_img')) {
+            throw new Error('Syntax error')
+          }
+          return {
+            svg: `<svg viewBox="0 0 120 60" width="100%" style="max-width: 120px;"><g><text>${text.trim()}</text></g></svg>`
+          }
+        })
+      }
+      const mermaidRenderer = createMermaidRenderer(driver)
+      const onChangeContent = vi.fn()
+      const validSource = 'graph TD\n  WYS_IMG_SECRET --> Out'
+      const brokenSource = 'graph TD\n  broken_img'
+      const markdown = [
+        '```mermaid',
+        validSource,
+        '```',
+        '',
+        '```mermaid',
+        brokenSource,
+        '```',
+        '',
+        '```mermaid',
+        '   ',
+        '```'
+      ].join('\n')
+
+      const { rerender } = render(
+        <WysiwygMarkdownEditor
+          content={markdown}
+          scrollTop={0}
+          theme="light"
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={onChangeContent}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
+        expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
+      })
+
+      const blocks = screen.getAllByTestId('wysiwyg-mermaid-block')
+      const validBlock = blocks[0]
+      const brokenBlock = blocks[1]
+      const blankBlock = blocks[2]
+
+      const toolbar = within(validBlock).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+      expect(within(toolbar).getAllByRole('button').map((btn) => btn.getAttribute('aria-label'))).toEqual([
+        '이미지 복사',
+        '코드 복사',
+        'PNG 저장',
+        'SVG 저장'
+      ])
+
+      const validImageBtn = within(validBlock).getByRole('button', { name: '이미지 복사' })
+      const brokenImageBtn = within(brokenBlock).getByRole('button', { name: '이미지 복사' })
+      const brokenCodeBtn = within(brokenBlock).getByRole('button', { name: '코드 복사' })
+      const blankImageBtn = within(blankBlock).getByRole('button', { name: '이미지 복사' })
+
+      expect(validImageBtn).toBeEnabled()
+      expect(brokenImageBtn).toBeDisabled()
+      expect(brokenCodeBtn).toBeEnabled()
+      expect(blankImageBtn).toBeDisabled()
+
+      // Light theme PNG copy
+      fireEvent.click(validImageBtn)
+      await waitFor(() => {
+        expect(copyImage).toHaveBeenCalledTimes(1)
+        expect(validImageBtn).toHaveTextContent('복사됨')
+      })
+      expect(canvasStub.calls).toHaveLength(1)
+      expect(canvasStub.calls[0]).toMatchObject({
+        pixelWidth: 304,
+        pixelHeight: 184
+      })
+      expect(canvasStub.calls[0].decodedSvg).toContain('width="152"')
+      expect(canvasStub.calls[0].decodedSvg).toContain('height="92"')
+      expect(canvasStub.calls[0].decodedSvg).toContain('fill="#ffffff"')
+      expect(copyImage).toHaveBeenLastCalledWith(new Uint8Array([137, 80, 78, 71, 1, 304 & 0xff]))
+
+      // Switch to dark theme and verify failure alert + sanitized log
+      rerender(
+        <WysiwygMarkdownEditor
+          content={markdown}
+          scrollTop={0}
+          theme="dark"
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={onChangeContent}
+        />
+      )
+      await waitFor(() => {
+        expect(within(validBlock).getByTestId('mermaid-diagram')).toHaveAttribute(
+          'data-mermaid-theme',
+          'dark'
+        )
+        expect(within(validBlock).getByRole('button', { name: '이미지 복사' })).toBeEnabled()
+      })
+
+      failCopyImage = true
+      fireEvent.click(validImageBtn)
+      await waitFor(() => {
+        expect(validBlock.querySelector('.mermaid-action-error')).toHaveTextContent(
+          '위지윅 이미지 클립보드 실패'
+        )
+      })
+      const validActionAlert = validBlock.querySelector('.mermaid-action-error')
+      expect(validActionAlert).toHaveAttribute('role', 'alert')
+      expect(brokenBlock.querySelector('.mermaid-action-error')).toBeNull()
+      expect(blankBlock.querySelector('.mermaid-action-error')).toBeNull()
+      const imageFailures = entries.filter((e) => e.message === 'Mermaid image copy failed')
+      expect(imageFailures).toHaveLength(1)
+      expect(imageFailures[0].data).toMatchObject({
+        theme: 'dark',
+        codeLength: validSource.length,
+        byteLength: 6
+      })
+      expect(JSON.stringify(imageFailures[0])).not.toContain('WYS_IMG_SECRET')
+
+      // Recover and advance 1500ms feedback timer
+      failCopyImage = false
+      vi.useFakeTimers()
+      await act(async () => {
+        fireEvent.click(validImageBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(canvasStub.calls[2].decodedSvg).toContain('fill="#161b22"')
+      expect(within(validBlock).queryByRole('alert')).not.toBeInTheDocument()
+      expect(validImageBtn).toHaveTextContent('복사됨')
+
+      act(() => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(validImageBtn).not.toHaveTextContent('복사됨')
+      expect(onChangeContent).not.toHaveBeenCalled()
+    } finally {
+      canvasStub.restore()
+    }
+  })
+
+  it('supports inline PNG 저장 and SVG 저장 in WYSIWYG with documentTitle context, 1500ms feedback, cancel reset, syntax-error disabling, and sanitized alerts', async () => {
+    const canvasStub = installSvgCanvasStub()
+
+    try {
+      const entries: RendererLogPayload[] = []
+      let nextCanceled = false
+      let failSave = false
+      const saveFile = vi.fn(async (req: { format: 'png' | 'svg'; suggestedName: string; data: Uint8Array | string }) => {
+        if (failSave) {
+          throw new Error('위지윅 파일 저장 실패')
+        }
+        return nextCanceled
+          ? { canceled: true }
+          : { canceled: false, filePath: `C:\\exports\\${req.suggestedName}` }
+      })
+      window.wikiApi = {
+        diagram: {
+          copyText: vi.fn(async () => {}),
+          copyImage: vi.fn(async () => {}),
+          saveFile
+        },
+        log: {
+          write: vi.fn(async (payload: RendererLogPayload) => {
+            entries.push(payload)
+          })
+        }
+      } as unknown as WikiApi
+
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => {
+          if (text.includes('broken_save')) {
+            throw new Error('Syntax error')
+          }
+          return {
+            svg: `<svg viewBox="0 0 120 60" width="100%" style="max-width: 120px;"><g><text>${text.trim()}</text></g></svg>`
+          }
+        })
+      }
+      const mermaidRenderer = createMermaidRenderer(driver)
+      const onChangeContent = vi.fn()
+      const validSource = 'graph TD\n  WYS_SAVE_SECRET --> End'
+      const markdown = [
+        '```mermaid',
+        validSource,
+        '```',
+        '',
+        '```mermaid',
+        'graph TD\n  broken_save',
+        '```',
+        '',
+        '```mermaid',
+        '   ',
+        '```'
+      ].join('\n')
+
+      const { rerender } = render(
+        <WysiwygMarkdownEditor
+          content={markdown}
+          scrollTop={0}
+          theme="light"
+          documentTitle="  ..Design: Spec...  "
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={onChangeContent}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
+        expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
+      })
+
+      const blocks = screen.getAllByTestId('wysiwyg-mermaid-block')
+      const validBlock = blocks[0]
+      const brokenBlock = blocks[1]
+      const blankBlock = blocks[2]
+
+      const validPngBtn = within(validBlock).getByRole('button', { name: 'PNG 저장' })
+      const validSvgBtn = within(validBlock).getByRole('button', { name: 'SVG 저장' })
+      expect(validPngBtn).toBeEnabled()
+      expect(validSvgBtn).toBeEnabled()
+      expect(within(brokenBlock).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
+      expect(within(brokenBlock).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
+      expect(within(blankBlock).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
+      expect(within(blankBlock).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
+
+      // Confirmed PNG save uses sanitized documentTitle
+      fireEvent.click(validPngBtn)
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(1)
+        expect(validPngBtn).toHaveTextContent('저장됨')
+      })
+      expect(saveFile).toHaveBeenLastCalledWith({
+        format: 'png',
+        suggestedName: 'Design Spec-diagram.png',
+        data: new Uint8Array([137, 80, 78, 71, 1, 304 & 0xff])
+      })
+
+      // Switch to dark theme + canceled SVG save -> no feedback or alert
+      rerender(
+        <WysiwygMarkdownEditor
+          content={markdown}
+          scrollTop={0}
+          theme="dark"
+          documentTitle="  ..Design: Spec...  "
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={onChangeContent}
+        />
+      )
+      await waitFor(() => {
+        expect(within(validBlock).getByTestId('mermaid-diagram')).toHaveAttribute(
+          'data-mermaid-theme',
+          'dark'
+        )
+        expect(validSvgBtn).toBeEnabled()
+      })
+
+      nextCanceled = true
+      fireEvent.click(validSvgBtn)
+      await waitFor(() => {
+        expect(saveFile).toHaveBeenCalledTimes(2)
+      })
+      expect(saveFile.mock.calls[1][0]).toMatchObject({
+        format: 'svg',
+        suggestedName: 'Design Spec-diagram.svg'
+      })
+      expect(saveFile.mock.calls[1][0].data).toContain('fill="#161b22"')
+      expect(validSvgBtn).not.toHaveTextContent('저장됨')
+      expect(within(validBlock).queryByRole('alert')).not.toBeInTheDocument()
+
+      // Failure displays inline alert and sanitized error log
+      nextCanceled = false
+      failSave = true
+      fireEvent.click(validSvgBtn)
+      await waitFor(() => {
+        expect(validBlock.querySelector('.mermaid-action-error')).toHaveTextContent('위지윅 파일 저장 실패')
+      })
+      const saveErrorLogs = entries.filter((e) => e.message === 'Mermaid SVG save failed')
+      expect(saveErrorLogs).toHaveLength(1)
+      expect(saveErrorLogs[0].data).toMatchObject({
+        format: 'svg',
+        theme: 'dark',
+        codeLength: validSource.length
+      })
+      expect(JSON.stringify(saveErrorLogs[0])).not.toContain('WYS_SAVE_SECRET')
+      expect(JSON.stringify(saveErrorLogs[0])).not.toContain('<svg')
+
+      // Retry confirmed SVG save with fake timers -> 1500ms 저장됨 feedback
+      failSave = false
+      vi.useFakeTimers()
+      await act(async () => {
+        fireEvent.click(validSvgBtn)
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(within(validBlock).queryByRole('alert')).not.toBeInTheDocument()
+      expect(validSvgBtn).toHaveTextContent('저장됨')
+      act(() => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(validSvgBtn).not.toHaveTextContent('저장됨')
+      expect(onChangeContent).not.toHaveBeenCalled()
+    } finally {
+      canvasStub.restore()
+    }
   })
 })
 

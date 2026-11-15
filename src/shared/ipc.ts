@@ -82,6 +82,25 @@ export const WINDOW_IPC_CHANNELS = {
 
 export type WindowCloseResponse = 'confirming' | 'close' | 'cancel'
 
+export const DIAGRAM_IPC_CHANNELS = {
+  copyText: 'diagram:copy-text',
+  copyImage: 'diagram:copy-image',
+  saveFile: 'diagram:save-file'
+} as const
+
+export type DiagramExportFormat = 'png' | 'svg'
+
+export interface DiagramSaveRequest {
+  format: DiagramExportFormat
+  suggestedName: string
+  data: Uint8Array | string
+}
+
+export interface DiagramSaveResult {
+  canceled: boolean
+  filePath?: string
+}
+
 export interface WikiConfigApi {
   get(): Promise<AppConfig>
   update(patch: Partial<AppConfig>): Promise<AppConfig>
@@ -148,6 +167,12 @@ export interface WikiWindowApi {
   respondClose(response: WindowCloseResponse): Promise<void>
 }
 
+export interface WikiDiagramApi {
+  copyText(text: string): Promise<void>
+  copyImage(pngBytes: Uint8Array): Promise<void>
+  saveFile(request: DiagramSaveRequest): Promise<DiagramSaveResult>
+}
+
 export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
@@ -156,4 +181,5 @@ export interface WikiApi {
   log?: WikiLogApi
   clipboard?: WikiClipboardApi
   window?: WikiWindowApi
+  diagram?: WikiDiagramApi
 }

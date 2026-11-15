@@ -1,20 +1,24 @@
+import { writeFile } from 'node:fs/promises'
 import { release as getOsRelease } from 'node:os'
 import { join } from 'node:path'
 import {
   app,
   type BaseWindow,
   BrowserWindow,
+  ClipboardItem,
   clipboard,
   dialog,
   ipcMain,
   Menu,
   type MessageBoxOptions,
+  nativeImage,
   shell
 } from 'electron'
 import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
 import { registerClipboardIpc } from './ipc/registerClipboardIpc'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
+import { registerDiagramIpc } from './ipc/registerDiagramIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerLogIpc } from './ipc/registerLogIpc'
 import { registerWindowIpc } from './ipc/registerWindowIpc'
@@ -68,6 +72,7 @@ function showMessageBox(options: MessageBoxOptions): Promise<Electron.MessageBox
 const logService = new LogService(join(app.getPath('userData'), 'logs'))
 
 let disposeConfigIpc: (() => void) | undefined
+let disposeDiagramIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
@@ -83,6 +88,8 @@ function disposeMainResources(): void {
   disposeClipboardIpc = undefined
   disposeLogIpc?.()
   disposeLogIpc = undefined
+  disposeDiagramIpc?.()
+  disposeDiagramIpc = undefined
   disposeGitIpc?.()
   disposeGitIpc = undefined
   disposeWorkspaceIpc?.()
@@ -136,6 +143,26 @@ void app.whenReady().then(async () => {
     logService
   })
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)
+  disposeDiagramIpc = registerDiagramIpc({
+    ipcMain,
+    writeClipboardText: (text) => clipboard.writeText(text),
+    createImageFromBuffer: (buffer) => nativeImage.createFromBuffer(buffer),
+    writeClipboardImage: (image) =>
+      clipboard.write([
+        new ClipboardItem({
+          'image/png': new Blob([new Uint8Array(image.toPNG())], { type: 'image/png' })
+        })
+      ]),
+    showSaveDialog: (options) => {
+      const targetWindow = getActiveWindow()
+      return targetWindow
+        ? dialog.showSaveDialog(targetWindow, options)
+        : dialog.showSaveDialog(options)
+    },
+    writeFile: (filePath, data) =>
+      typeof data === 'string' ? writeFile(filePath, data, 'utf8') : writeFile(filePath, data),
+    logService
+  })
   disposeGitIpc = registerGitIpc({
     ipcMain,
     gitService,

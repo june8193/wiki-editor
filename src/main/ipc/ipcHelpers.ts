@@ -1,7 +1,11 @@
+import { types } from 'node:util'
 import type { GitDiffRequest } from '@shared/git'
 import {
   CLIPBOARD_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
+  DIAGRAM_IPC_CHANNELS,
+  type DiagramSaveRequest,
+  type DiagramSaveResult,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS
@@ -52,6 +56,33 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
       ...(req?.path ? { path: req.path } : {}),
       ...(req?.kind === 'commit' && req.commitHash ? { commitHash: req.commitHash } : {})
     }
+  },
+  [DIAGRAM_IPC_CHANNELS.copyText]: ([text]) => ({
+    textLength: typeof text === 'string' ? text.length : 0
+  }),
+  [DIAGRAM_IPC_CHANNELS.copyImage]: ([pngBytes]) => ({
+    byteLength: types.isUint8Array(pngBytes) ? pngBytes.byteLength : 0
+  }),
+  [DIAGRAM_IPC_CHANNELS.saveFile]: ([request]) => {
+    const req = request as Partial<DiagramSaveRequest> | undefined
+    const format = req?.format === 'png' || req?.format === 'svg' ? req.format : 'unknown'
+    if (types.isUint8Array(req?.data)) {
+      return { format, byteLength: req.data.byteLength }
+    }
+    if (typeof req?.data === 'string') {
+      return { format, textLength: req.data.length }
+    }
+    return format === 'svg' ? { format, textLength: 0 } : { format, byteLength: 0 }
+  }
+}
+
+const CHANNEL_RESULT_METADATA_EXTRACTORS: Record<
+  string,
+  (result: unknown) => Record<string, unknown>
+> = {
+  [DIAGRAM_IPC_CHANNELS.saveFile]: (result) => {
+    const res = result as Partial<DiagramSaveResult> | undefined
+    return typeof res?.canceled === 'boolean' ? { canceled: res.canceled } : {}
   }
 }
 
@@ -75,12 +106,16 @@ function wrapIpcHandler(
   return async (event: unknown, ...args: unknown[]) => {
     const startedAt = performance.now()
     const metadata = extractIpcMetadata(channel, args)
-    const logOutcome = (success: boolean, error?: unknown): Promise<void> => {
+    const logOutcome = (success: boolean, error?: unknown, result?: unknown): Promise<void> => {
+      const resultMetadata = success
+        ? (CHANNEL_RESULT_METADATA_EXTRACTORS[channel]?.(result) ?? {})
+        : {}
       const data = {
         channel,
         success,
         durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
-        ...metadata
+        ...metadata,
+        ...resultMetadata
       }
       return success
         ? logService.info('ipc', `IPC ${channel}`, { data })
@@ -89,7 +124,7 @@ function wrapIpcHandler(
 
     try {
       const result = await handler(event, ...args)
-      await logOutcome(true)
+      await logOutcome(true, undefined, result)
       return result
     } catch (error) {
       await logOutcome(false, error)

@@ -25,6 +25,7 @@ import { isLinkNavigationClick } from './editorModes'
 export interface MarkdownPreviewRenderOptions {
   theme?: ThemeMode
   mermaidRenderer?: MermaidRenderer
+  documentTitle?: string
   onAnchorNavigate?: (slug: string) => void
   onLinkNavigate?: (href: string) => void
 }
@@ -32,6 +33,7 @@ export interface MarkdownPreviewRenderOptions {
 interface PreviewRenderContextValue {
   theme: ThemeMode
   mermaidRenderer?: MermaidRenderer
+  documentTitle?: string
   onAnchorNavigate?: (slug: string) => void
   onLinkNavigate?: (href: string) => void
 }
@@ -170,7 +172,7 @@ function PreviewCheckbox(props: ComponentPropsWithoutRef<'input'>) {
 }
 
 function PreviewPre(props: ComponentPropsWithoutRef<'pre'> & SourceLineDataProps) {
-  const { theme, mermaidRenderer } = useContext(PreviewRenderContext)
+  const { theme, mermaidRenderer, documentTitle } = useContext(PreviewRenderContext)
   const childrenArray = Children.toArray(props.children)
 
   if (childrenArray.length === 1) {
@@ -186,6 +188,7 @@ function PreviewPre(props: ComponentPropsWithoutRef<'pre'> & SourceLineDataProps
           code={diagramCode}
           theme={theme}
           renderer={mermaidRenderer}
+          documentTitle={documentTitle}
           sourceLine={props['data-source-line']}
           sourceEndLine={props['data-source-end-line']}
         />
@@ -249,6 +252,7 @@ export function renderMarkdownToReact(
   const contextValue: PreviewRenderContextValue = {
     theme: options.theme ?? 'light',
     mermaidRenderer: options.mermaidRenderer,
+    documentTitle: options.documentTitle,
     onAnchorNavigate: options.onAnchorNavigate,
     onLinkNavigate: options.onLinkNavigate
   }
