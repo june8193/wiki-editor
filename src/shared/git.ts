@@ -59,3 +59,10 @@ export function createEmptyGitStatus(isRepo = false, repoRoot: string | null = n
     untracked: []
   }
 }
+
+export function getGitChangedCount(status: GitStatus | null): number {
+  if (!status || !status.isRepo) {
+    return 0
+  }
+  return status.staged.length + status.unstaged.length + status.untracked.length
+}

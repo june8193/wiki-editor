@@ -8,7 +8,12 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from 'react'
-import type { GitBranchList, GitChangedFile, GitStatus } from '@shared/git'
+import {
+  getGitChangedCount,
+  type GitBranchList,
+  type GitChangedFile,
+  type GitStatus
+} from '@shared/git'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
 import { GitSectionResizer } from './GitSectionResizer'
 
@@ -157,8 +162,6 @@ interface GitAccordionSectionProps {
   badgeCount?: number
   isExpanded: boolean
   flexRatio: number | null
-  className: string
-  bodyClassName: string
   onToggle: () => void
   children: ReactNode
 }
@@ -168,14 +171,12 @@ function GitAccordionSection({
   badgeCount,
   isExpanded,
   flexRatio,
-  className,
-  bodyClassName,
   onToggle,
   children
 }: GitAccordionSectionProps) {
   return (
     <section
-      className={`git-accordion-section ${className}${isExpanded ? '' : ' is-collapsed'}`}
+      className={`git-accordion-section${isExpanded ? '' : ' is-collapsed'}`}
       aria-label={title}
       style={getSectionFlexStyle(flexRatio)}
     >
@@ -193,7 +194,7 @@ function GitAccordionSection({
           {badgeCount !== undefined && <span className="git-accordion-badge">{badgeCount}</span>}
         </button>
       </div>
-      {isExpanded && <div className={`git-accordion-body ${bodyClassName}`}>{children}</div>}
+      {isExpanded && <div className="git-accordion-body">{children}</div>}
     </section>
   )
 }
@@ -247,9 +248,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   const branchLabel = status?.isRepo
     ? status.branch ?? (status.isDetached ? '(detached)' : 'HEAD')
     : null
-  const totalChangedCount = status?.isRepo
-    ? status.staged.length + status.unstaged.length + status.untracked.length
-    : 0
+  const totalChangedCount = getGitChangedCount(status)
   const layout = computeGitSectionLayout(splitState)
 
   const submitCommit = async (): Promise<void> => {
@@ -404,8 +403,6 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
               badgeCount={totalChangedCount}
               isExpanded={layout.showChangesBody}
               flexRatio={layout.changesFlexRatio}
-              className="git-changes-section"
-              bodyClassName="git-changes-body"
               onToggle={onToggleChangesCollapsed}
             >
               <form className="git-commit-form" onSubmit={handleCommitFormSubmit}>
@@ -478,8 +475,6 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
               title="Graph"
               isExpanded={layout.showGraphBody}
               flexRatio={layout.graphFlexRatio}
-              className="git-graph-section"
-              bodyClassName="git-graph-body"
               onToggle={onToggleGraphCollapsed}
             >
               <p className="git-empty-subtext">

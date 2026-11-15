@@ -8,7 +8,10 @@ import {
   GIT_PANEL_MAX_CHANGES_RATIO,
   GIT_PANEL_MIN_CHANGES_RATIO,
   stepChangesHeightRatio,
-  toChangesHeightPercent
+  toChangesHeightPercent,
+  toggleGitChangesCollapsed,
+  toggleGitGraphCollapsed,
+  updateChangesHeightRatio
 } from './gitPanelSplit'
 
 describe('gitPanelSplit', () => {
@@ -130,5 +133,29 @@ describe('gitPanelSplit', () => {
       changesFlexRatio: null,
       graphFlexRatio: null
     })
+  })
+
+  it('provides pure state updaters for accordion toggles and clamped height ratio updates', () => {
+    const initial = createDefaultGitPanelSplitState()
+    const changesCollapsed = toggleGitChangesCollapsed(initial)
+    expect(changesCollapsed).toEqual({
+      isChangesCollapsed: true,
+      isGraphCollapsed: false,
+      changesHeightRatio: 0.5
+    })
+    expect(toggleGitChangesCollapsed(changesCollapsed)).toEqual(initial)
+
+    const graphCollapsed = toggleGitGraphCollapsed(changesCollapsed)
+    expect(graphCollapsed).toEqual({
+      isChangesCollapsed: true,
+      isGraphCollapsed: true,
+      changesHeightRatio: 0.5
+    })
+
+    const resized = updateChangesHeightRatio(initial, 0.7)
+    expect(resized.changesHeightRatio).toBe(0.7)
+    expect(updateChangesHeightRatio(resized, 0.7)).toBe(resized)
+    expect(updateChangesHeightRatio(resized, 0.99).changesHeightRatio).toBe(0.8)
+    expect(updateChangesHeightRatio(resized, 0.05).changesHeightRatio).toBe(0.2)
   })
 })

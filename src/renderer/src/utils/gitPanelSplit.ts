@@ -39,6 +39,31 @@ export function clampChangesHeightRatio(ratio: number): number {
 }
 
 /**
+ * Toggles the collapsed state of the Changes accordion section.
+ */
+export function toggleGitChangesCollapsed(state: GitPanelSplitState): GitPanelSplitState {
+  return { ...state, isChangesCollapsed: !state.isChangesCollapsed }
+}
+
+/**
+ * Toggles the collapsed state of the Graph accordion section.
+ */
+export function toggleGitGraphCollapsed(state: GitPanelSplitState): GitPanelSplitState {
+  return { ...state, isGraphCollapsed: !state.isGraphCollapsed }
+}
+
+/**
+ * Returns an updated split state with a clamped Changes height ratio, preserving reference equality on no-ops.
+ */
+export function updateChangesHeightRatio(
+  state: GitPanelSplitState,
+  nextRatio: number
+): GitPanelSplitState {
+  const clamped = clampChangesHeightRatio(nextRatio)
+  return state.changesHeightRatio === clamped ? state : { ...state, changesHeightRatio: clamped }
+}
+
+/**
  * Applies a relative ratio delta and rounds away binary float drift before clamping into [0.2, 0.8].
  */
 export function stepChangesHeightRatio(ratio: number, delta: number): number {

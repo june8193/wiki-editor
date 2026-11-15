@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand } from '@shared/ipc'
-import type { GitStatus } from '@shared/git'
+import { getGitChangedCount } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
@@ -33,8 +33,10 @@ import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
 import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
 import {
-  clampChangesHeightRatio,
   createDefaultGitPanelSplitState,
+  toggleGitChangesCollapsed,
+  toggleGitGraphCollapsed,
+  updateChangesHeightRatio,
   type GitPanelSplitState
 } from './utils/gitPanelSplit'
 import {
@@ -65,13 +67,6 @@ function selectLeftSidebarView(
     return { ...prev, isCollapsed: true }
   }
   return { ...prev, activeView: view, isCollapsed: false }
-}
-
-function getGitChangedCount(workspaceRootPath: string | null, status: GitStatus | null): number {
-  if (!workspaceRootPath || !status || !status.isRepo) {
-    return 0
-  }
-  return status.staged.length + status.unstaged.length + status.untracked.length
 }
 
 interface PendingDialogState {
@@ -135,18 +130,15 @@ export function App() {
   }, [])
 
   const handleToggleGitChangesCollapsed = useCallback((): void => {
-    setGitPanelSplit((prev) => ({ ...prev, isChangesCollapsed: !prev.isChangesCollapsed }))
+    setGitPanelSplit(toggleGitChangesCollapsed)
   }, [])
 
   const handleToggleGitGraphCollapsed = useCallback((): void => {
-    setGitPanelSplit((prev) => ({ ...prev, isGraphCollapsed: !prev.isGraphCollapsed }))
+    setGitPanelSplit(toggleGitGraphCollapsed)
   }, [])
 
   const handleResizeGitChangesRatio = useCallback((nextRatio: number): void => {
-    const clampedRatio = clampChangesHeightRatio(nextRatio)
-    setGitPanelSplit((prev) =>
-      prev.changesHeightRatio === clampedRatio ? prev : { ...prev, changesHeightRatio: clampedRatio }
-    )
+    setGitPanelSplit((prev) => updateChangesHeightRatio(prev, nextRatio))
   }, [])
 
   const reportErrorBanner = useCallback((message: string | null, error?: unknown): void => {
@@ -590,7 +582,7 @@ export function App() {
 
   const isCurrentWorkspaceFavorite =
     workspace !== null && isFavoriteWorkspacePath(config.favoriteWorkspaces, workspace.rootPath)
-  const gitChangedCount = getGitChangedCount(workspace?.rootPath ?? null, git.status)
+  const gitChangedCount = workspace?.rootPath ? getGitChangedCount(git.status) : 0
 
   return (
     <div className="app-shell" data-theme={config.theme}>

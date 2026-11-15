@@ -4,8 +4,10 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { createEmptyGitStatus, type GitBranchList, type GitStatus } from '@shared/git'
 import {
-  clampChangesHeightRatio,
   createDefaultGitPanelSplitState,
+  toggleGitChangesCollapsed,
+  toggleGitGraphCollapsed,
+  updateChangesHeightRatio,
   type GitPanelSplitState
 } from '../utils/gitPanelSplit'
 import { GitSidebarPanel, type GitSidebarPanelProps } from './GitSidebarPanel'
@@ -67,24 +69,11 @@ function StatefulGitSidebarPanel(props: GitSidebarPanelProps) {
     <GitSidebarPanel
       {...props}
       splitState={splitState}
-      onToggleChangesCollapsed={() =>
-        setSplitState((prev) => ({
-          ...prev,
-          isChangesCollapsed: !prev.isChangesCollapsed
-        }))
+      onToggleChangesCollapsed={() => setSplitState(toggleGitChangesCollapsed)}
+      onToggleGraphCollapsed={() => setSplitState(toggleGitGraphCollapsed)}
+      onResizeChangesRatio={(nextRatio) =>
+        setSplitState((prev) => updateChangesHeightRatio(prev, nextRatio))
       }
-      onToggleGraphCollapsed={() =>
-        setSplitState((prev) => ({
-          ...prev,
-          isGraphCollapsed: !prev.isGraphCollapsed
-        }))
-      }
-      onResizeChangesRatio={(nextRatio) => {
-        const clamped = clampChangesHeightRatio(nextRatio)
-        setSplitState((prev) =>
-          prev.changesHeightRatio === clamped ? prev : { ...prev, changesHeightRatio: clamped }
-        )
-      }}
     />
   )
 }

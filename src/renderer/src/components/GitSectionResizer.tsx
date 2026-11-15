@@ -1,10 +1,5 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type RefObject
-} from 'react'
+import { type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
+import { usePointerDragSession } from '../hooks/usePointerDragSession'
 import {
   clampChangesHeightRatio,
   GIT_PANEL_CHANGES_RATIO_STEP,
@@ -14,9 +9,6 @@ import {
   stepChangesHeightRatio,
   toChangesHeightPercent
 } from '../utils/gitPanelSplit'
-
-const MOVE_EVENTS = ['pointermove', 'mousemove'] as const
-const END_EVENTS = ['pointerup', 'pointercancel', 'mouseup', 'blur'] as const
 
 const MIN_PERCENT = toChangesHeightPercent(GIT_PANEL_MIN_CHANGES_RATIO)
 const MAX_PERCENT = toChangesHeightPercent(GIT_PANEL_MAX_CHANGES_RATIO)
@@ -28,72 +20,25 @@ export interface GitSectionResizerProps {
 }
 
 /**
- * Accessible horizontal splitter between the Git Changes and Graph accordion sections.
+ * Accessible horizontal section resizer between the Git Changes and Graph accordion sections.
  */
 export function GitSectionResizer({
   changesHeightRatio,
   containerRef,
   onResizeRatio
 }: GitSectionResizerProps) {
-  const [isDragging, setIsDragging] = useState(false)
-  const isDraggingRef = useRef(false)
-  const latestRef = useRef({ containerRef, onResizeRatio })
-  latestRef.current = { containerRef, onResizeRatio }
-
-  useEffect(() => {
-    if (!isDragging) return
-
-    const prevCursor = document.body.style.cursor
-    const prevUserSelect = document.body.style.userSelect
-    document.body.classList.add('is-resizing-git-sections')
-    document.body.style.cursor = 'row-resize'
-    document.body.style.userSelect = 'none'
-
-    const handleMove = (event: Event): void => {
-      if (!isDraggingRef.current || typeof (event as MouseEvent).clientY !== 'number') return
-      const container = latestRef.current.containerRef.current
+  const { isDragging, handleDragStart } = usePointerDragSession({
+    bodyClassName: 'is-resizing-git-sections',
+    cursor: 'row-resize',
+    onDragMove: (event) => {
+      if (typeof event.clientY !== 'number') return
+      const container = containerRef.current
       if (!container) return
       const rect = container.getBoundingClientRect()
       if (rect.height <= 0) return
-      const nextRatio = clampChangesHeightRatio(((event as MouseEvent).clientY - rect.top) / rect.height)
-      latestRef.current.onResizeRatio(nextRatio)
+      onResizeRatio(clampChangesHeightRatio((event.clientY - rect.top) / rect.height))
     }
-
-    const handleEnd = (): void => {
-      isDraggingRef.current = false
-      setIsDragging(false)
-    }
-
-    for (const name of MOVE_EVENTS) {
-      window.addEventListener(name, handleMove)
-    }
-    for (const name of END_EVENTS) {
-      window.addEventListener(name, handleEnd)
-    }
-
-    return () => {
-      isDraggingRef.current = false
-      document.body.classList.remove('is-resizing-git-sections')
-      document.body.style.cursor = prevCursor
-      document.body.style.userSelect = prevUserSelect
-      for (const name of MOVE_EVENTS) {
-        window.removeEventListener(name, handleMove)
-      }
-      for (const name of END_EVENTS) {
-        window.removeEventListener(name, handleEnd)
-      }
-    }
-  }, [isDragging])
-
-  const handleDragStart = (event: { button?: number; preventDefault: () => void }): void => {
-    if (event.button !== undefined && event.button !== 0) return
-    event.preventDefault()
-    // Real browsers fire pointerdown before mousedown; avoid restarting the active drag session.
-    if (!isDraggingRef.current) {
-      isDraggingRef.current = true
-      setIsDragging(true)
-    }
-  }
+  })
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     const keySign = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0

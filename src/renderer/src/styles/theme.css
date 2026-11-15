@@ -354,13 +354,17 @@ body,
   overflow: visible;
 }
 
-.sidebar-resizer {
+.sidebar-resizer,
+.git-section-resizer {
   position: relative;
-  width: 5px;
   flex-shrink: 0;
-  cursor: col-resize;
   z-index: 10;
   background: transparent;
+}
+
+.sidebar-resizer {
+  width: 5px;
+  cursor: col-resize;
 }
 
 .sidebar-resizer.is-right {
@@ -387,18 +391,28 @@ body,
 
 .sidebar-resizer:hover::after,
 .sidebar-resizer:focus-visible::after,
-.sidebar-resizer.is-dragging::after {
+.sidebar-resizer.is-dragging::after,
+.git-section-resizer:hover::after,
+.git-section-resizer:focus-visible::after,
+.git-section-resizer.is-dragging::after {
   background-color: var(--accent-color);
 }
 
-.sidebar-resizer:focus-visible {
+.sidebar-resizer:focus-visible,
+.git-section-resizer:focus-visible {
   outline: none;
+}
+
+body.is-resizing-sidebar,
+body.is-resizing-sidebar *,
+body.is-resizing-git-sections,
+body.is-resizing-git-sections * {
+  user-select: none !important;
 }
 
 body.is-resizing-sidebar,
 body.is-resizing-sidebar * {
   cursor: col-resize !important;
-  user-select: none !important;
 }
 
 body.is-resizing-sidebar .pane-workspace {
@@ -1878,12 +1892,9 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .git-section-resizer {
-  position: relative;
   height: 5px;
   flex: 0 0 5px;
   cursor: row-resize;
-  z-index: 10;
-  background: transparent;
 }
 
 .git-section-resizer::after {
@@ -1902,17 +1913,11 @@ body.is-resizing-sidebar .pane-workspace {
 .git-section-resizer:focus-visible::after,
 .git-section-resizer.is-dragging::after {
   height: 3px;
-  background-color: var(--accent-color);
-}
-
-.git-section-resizer:focus-visible {
-  outline: none;
 }
 
 body.is-resizing-git-sections,
 body.is-resizing-git-sections * {
   cursor: row-resize !important;
-  user-select: none !important;
 }
 
 .git-empty-text,
