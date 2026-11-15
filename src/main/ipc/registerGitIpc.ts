@@ -1,4 +1,4 @@
-import type { GitLogOptions } from '@shared/git'
+import type { GitDiffRequest, GitLogOptions } from '@shared/git'
 import { GIT_IPC_CHANNELS } from '@shared/ipc'
 import { isSameWorkspacePath } from '@shared/workspace'
 import type { GitService } from '../git/GitService'
@@ -90,6 +90,12 @@ export function registerGitIpc({
       GIT_IPC_CHANNELS.commitDetail,
       withWorkspace<[string], Awaited<ReturnType<GitService['commitDetail']>>>(
         (rootPath, commitHash) => gitService.commitDetail(rootPath, commitHash)
+      )
+    ],
+    [
+      GIT_IPC_CHANNELS.diff,
+      withWorkspace<[GitDiffRequest], Awaited<ReturnType<GitService['diff']>>>(
+        (rootPath, request) => gitService.diff(rootPath, request)
       )
     ]
   ]

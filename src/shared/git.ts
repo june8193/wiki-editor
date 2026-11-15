@@ -87,6 +87,31 @@ export interface GitCommitDetail {
   files: GitChangedFile[]
 }
 
+export const GIT_EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+export const GIT_DIFF_MAX_BYTES = 1024 * 1024
+
+export type GitDiffRequest =
+  | { kind: 'staged'; path: string; origPath?: string; status: GitFileStatusCode }
+  | { kind: 'unstaged'; path: string; origPath?: string; status: GitFileStatusCode }
+  | {
+      kind: 'commit'
+      commitHash: string
+      shortHash: string
+      path: string
+      origPath?: string
+      status: GitFileStatusCode
+    }
+
+export interface GitFileDiff {
+  path: string
+  origPath?: string
+  status: GitFileStatusCode
+  isBinary: boolean
+  isTruncated: boolean
+  existsInWorkspace: boolean
+  rawPatch: string
+}
+
 export function createEmptyGitStatus(isRepo = false, repoRoot: string | null = null): GitStatus {
   return {
     isRepo,

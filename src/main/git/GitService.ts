@@ -8,6 +8,8 @@ import {
   type GitBranchInfo,
   type GitBranchList,
   type GitCommitDetail,
+  type GitDiffRequest,
+  type GitFileDiff,
   type GitLogOptions,
   type GitLogResult,
   type GitStatus,
@@ -31,6 +33,7 @@ import {
   GIT_COMMIT_DETAIL_FORMAT,
   parseCommitDetailOutput
 } from './gitCommitDetail'
+import { computeGitDiff } from './gitDiff'
 import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
 import { parsePorcelainV2Z } from './gitPorcelain'
 
@@ -375,6 +378,39 @@ export class GitService {
     }
   }
 
+  async diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff> {
+    if (
+      !request ||
+      (request.kind !== 'staged' && request.kind !== 'unstaged' && request.kind !== 'commit')
+    ) {
+      throw new Error('유효하지 않은 Diff 요청 형식입니다.')
+    }
+
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const rawPaths = request.origPath ? [request.path, request.origPath] : [request.path]
+    const [safePath, safeOrigPath] = await this.validateRepoRelativePaths(repoRoot, rawPaths)
+
+    try {
+      const hasHeadCommit = request.kind === 'staged' ? await this.hasHeadCommit(repoRoot) : true
+      return await computeGitDiff({
+        repoRoot,
+        request,
+        safePath,
+        safeOrigPath,
+        hasHeadCommit,
+        env: this.createGitChildEnv(),
+        timeoutMs: this.localTimeoutMs,
+        onFailureMeta: (error, cwd, args) => {
+          if (typeof error === 'object' && error !== null) {
+            this.failedExecMeta.set(error, { cwd, args })
+          }
+        }
+      })
+    } catch (error) {
+      throw await this.formatAndLogGitError('diff', error)
+    }
+  }
+
   private async execUnstageTargets(repoRoot: string, targets: readonly string[]): Promise<void> {
     const hasHead = await this.hasHeadCommit(repoRoot)
     try {
@@ -607,11 +643,7 @@ export class GitService {
     return formatGitError(error)
   }
 
-  private async execGit(
-    cwd: string,
-    args: readonly string[],
-    timeoutMs = this.localTimeoutMs
-  ): Promise<string> {
+  private createGitChildEnv(): NodeJS.ProcessEnv {
     const childEnv: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.env,
@@ -622,6 +654,15 @@ export class GitService {
       LANGUAGE: 'C'
     }
     delete childEnv.LC_ALL
+    return childEnv
+  }
+
+  private async execGit(
+    cwd: string,
+    args: readonly string[],
+    timeoutMs = this.localTimeoutMs
+  ): Promise<string> {
+    const childEnv = this.createGitChildEnv()
 
     try {
       const { stdout } = await execFileAsync('git', [...args], {

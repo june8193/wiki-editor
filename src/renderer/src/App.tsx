@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand } from '@shared/ipc'
-import { getGitChangedCount } from '@shared/git'
+import { getGitChangedCount, type GitDiffRequest } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
@@ -28,10 +28,12 @@ import {
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
+import { useGitDiffTabs } from './hooks/useGitDiffTabs'
 import { useWindowWidth } from './hooks/useWindowWidth'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
 import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
+import { getGitFileBaseName } from './utils/gitFilePresentation'
 import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
@@ -233,6 +235,8 @@ export function App() {
     splitWithTab,
     duplicateTabToOtherPane,
     updateTabViewState,
+    openDiffTab,
+    updateDiffTabViewMode,
     clearWorkspaceBuffers,
     syncRenamedPath,
     syncDeletedPath,
@@ -391,6 +395,37 @@ export function App() {
   })
   refreshGitStatusRef.current = git.refreshStatus
 
+  const { diffsByKey, refreshDiffRequest } = useGitDiffTabs({
+    workspaceRootPath: workspace?.rootPath ?? null,
+    gitStatus: git.status,
+    layout
+  })
+
+  const handleOpenFileDiff = useCallback(
+    (request: GitDiffRequest): void => {
+      openDiffTab(request)
+      refreshDiffRequest(request)
+    },
+    [openDiffTab, refreshDiffRequest]
+  )
+
+  const handleOpenDiffTargetFile = useCallback(
+    (repoRelativePath: string): void => {
+      const baseRoot = git.status?.repoRoot ?? workspace?.rootPath
+      if (!baseRoot) return
+      const sep = baseRoot.includes('\\') && !baseRoot.includes('/') ? '\\' : '/'
+      const normalizedRel = sep === '\\' ? repoRelativePath.replace(/\//g, '\\') : repoRelativePath
+      const fullPath = `${baseRoot.replace(/[\\/]+$/, '')}${sep}${normalizedRel}`
+      void openWorkspaceFile({
+        name: getGitFileBaseName(repoRelativePath),
+        path: fullPath,
+        relativePath: repoRelativePath,
+        kind: 'file'
+      })
+    },
+    [git.status?.repoRoot, openWorkspaceFile, workspace?.rootPath]
+  )
+
   const guardUnsavedWorkspaceChanges = useCallback(
     (proceed: () => Promise<unknown>): void => {
       void promptUnsavedWorkspaceChanges({
@@ -483,7 +518,7 @@ export function App() {
 
   const activePane = layout.panes[layout.activePaneId]
   const activeTab = getPaneActiveTab(activePane)
-  const activeBuffer = activeTab ? buffers[activeTab.bufferKey] : undefined
+  const activeBuffer = activeTab?.kind === 'document' ? buffers[activeTab.bufferKey] : undefined
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
   const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
 
@@ -566,17 +601,21 @@ export function App() {
       onDuplicateTab: duplicateTabToOtherPane,
       onChangeContent: handlePaneChangeContent,
       onSaveBuffer: saveBufferByKey,
-      onUpdateTabViewState: handlePaneUpdateTabViewState
+      onUpdateTabViewState: handlePaneUpdateTabViewState,
+      onChangeDiffViewMode: updateDiffTabViewMode,
+      onOpenDiffTargetFile: handleOpenDiffTargetFile
     }),
     [
       activateTab,
       duplicateTabToOtherPane,
       focusPane,
+      handleOpenDiffTargetFile,
       handlePaneChangeContent,
       handlePaneUpdateTabViewState,
       moveTab,
       requestCloseTab,
-      saveBufferByKey
+      saveBufferByKey,
+      updateDiffTabViewMode
     ]
   )
 
@@ -664,6 +703,7 @@ export function App() {
                   onPull={() => void git.pull()}
                   onPush={() => void git.push()}
                   onSync={() => void git.sync()}
+                  onOpenFileDiff={handleOpenFileDiff}
                   onToggleChangesCollapsed={handleToggleGitChangesCollapsed}
                   onToggleGraphCollapsed={handleToggleGitGraphCollapsed}
                   onResizeChangesRatio={handleResizeGitChangesRatio}
@@ -683,6 +723,7 @@ export function App() {
         <PaneWorkspace
           layout={layout}
           buffers={buffers}
+          diffsByKey={diffsByKey}
           theme={config.theme}
           autoSave={config.autoSave}
           showHeadingNumbers={config.showHeadingNumbers}
@@ -709,7 +750,11 @@ export function App() {
               style={{ width: `${rightSidebar.width}px` }}
             >
               <DocumentOutlinePanel
-                documentName={activeBuffer?.name ?? null}
+                documentName={
+                  activeTab?.kind === 'diff'
+                    ? getGitFileBaseName(activeTab.diff.request.path)
+                    : (activeBuffer?.name ?? null)
+                }
                 content={activeBuffer?.content ?? ''}
                 isMarkdownDocument={isActiveMarkdown}
                 showHeadingNumbers={config.showHeadingNumbers}

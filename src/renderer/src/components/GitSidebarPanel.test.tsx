@@ -65,6 +65,7 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onLoadMoreCommits: vi.fn(),
     onToggleCommitDetail: vi.fn(),
     splitState: createDefaultGitPanelSplitState(),
+    onOpenFileDiff: vi.fn(),
     onToggleChangesCollapsed: vi.fn(),
     onToggleGraphCollapsed: vi.fn(),
     onResizeChangesRatio: vi.fn(),
@@ -738,5 +739,59 @@ describe('GitSidebarPanel', () => {
     const emptyDetailRegion = within(graphRegion).getByRole('region', { name: 'bbbbbbb 커밋 상세' })
     expect(emptyDetailRegion).toHaveTextContent('변경된 파일이 없습니다.')
     expect(emptyDetailRegion.querySelector('.git-commit-detail-body')).toBeNull()
+  })
+
+  it('opens staged/unstaged diffs on file item click without firing diff on +/- stage buttons', async () => {
+    const user = userEvent.setup()
+    const onOpenFileDiff = vi.fn()
+    const onStageFile = vi.fn()
+    const onUnstageFile = vi.fn()
+
+    render(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [{ path: 'docs/renamed.md', origPath: 'docs/old.md', status: 'R' }],
+            unstaged: [{ path: 'README.md', status: 'M' }],
+            untracked: [{ path: 'notes.md', status: '?' }]
+          }),
+          onOpenFileDiff,
+          onStageFile,
+          onUnstageFile
+        })}
+      />
+    )
+
+    await user.click(screen.getByText('docs/old.md → docs/renamed.md'))
+    expect(onOpenFileDiff).toHaveBeenCalledWith({
+      kind: 'staged',
+      path: 'docs/renamed.md',
+      origPath: 'docs/old.md',
+      status: 'R'
+    })
+
+    await user.click(screen.getByText('README.md'))
+    expect(onOpenFileDiff).toHaveBeenCalledWith({
+      kind: 'unstaged',
+      path: 'README.md',
+      status: 'M'
+    })
+
+    await user.click(screen.getByText('notes.md'))
+    expect(onOpenFileDiff).toHaveBeenCalledWith({
+      kind: 'unstaged',
+      path: 'notes.md',
+      status: '?'
+    })
+
+    onOpenFileDiff.mockClear()
+
+    await user.click(screen.getByRole('button', { name: 'docs/renamed.md Unstage' }))
+    expect(onUnstageFile).toHaveBeenCalledWith('docs/renamed.md', 'docs/old.md')
+    expect(onOpenFileDiff).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'README.md Stage' }))
+    expect(onStageFile).toHaveBeenCalledWith('README.md')
+    expect(onOpenFileDiff).not.toHaveBeenCalled()
   })
 })

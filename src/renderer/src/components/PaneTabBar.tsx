@@ -1,7 +1,12 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
 import { useDismissable } from '../hooks/useDismissable'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
-import { PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import { GitDiffViewMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import {
+  formatGitFileLabel,
+  getGitDiffContextLabel,
+  getGitFileBaseName
+} from '../utils/gitFilePresentation'
 
 export interface DraggingTabPayload {
   paneId: PaneId
@@ -22,6 +27,8 @@ export interface PaneInteractionActions {
   onChangeContent: (bufferKey: string, nextContent: string) => void
   onSaveBuffer: (bufferKey: string) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
+  onChangeDiffViewMode: (paneId: PaneId, tabId: string, viewMode: GitDiffViewMode) => void
+  onOpenDiffTargetFile: (repoRelativePath: string) => void
 }
 
 interface TabContextMenuState {
@@ -153,14 +160,20 @@ export function PaneTabBar({
       }
     >
       {tabs.map((tab, index) => {
-        const buffer = buffers[tab.bufferKey]
-        if (!buffer) return null
+        const buffer = tab.kind === 'document' ? buffers[tab.bufferKey] : undefined
+        if (tab.kind === 'document' && !buffer) return null
         const isActive = tab.id === activeTabId
+        const isDiff = tab.kind === 'diff'
+        const tabLabel = isDiff ? getGitFileBaseName(tab.diff.request.path) : buffer!.name
+        const tabTitle = isDiff
+          ? `${formatGitFileLabel(tab.diff.request)} · ${getGitDiffContextLabel(tab.diff.request)}`
+          : buffer!.path
+        const isDirty = !isDiff && Boolean(buffer?.isDirty)
 
         return (
           <div
             key={tab.id}
-            className={`tab-item${isActive ? ' is-active' : ''}`}
+            className={`tab-item${isActive ? ' is-active' : ''}${isDiff ? ' is-diff-tab' : ''}`}
             draggable
             onDragStart={(event) => {
               const payload: DraggingTabPayload = { paneId, tabId: tab.id }
@@ -207,11 +220,12 @@ export function PaneTabBar({
               role="tab"
               aria-selected={isActive}
               className="tab-trigger"
-              title={buffer.path}
+              title={tabTitle}
               onClick={() => actions.onActivateTab(paneId, tab.id)}
             >
-              <span className="tab-label">{buffer.name}</span>
-              {buffer.isDirty && (
+              {isDiff && <span className="tab-diff-badge">Diff</span>}
+              <span className="tab-label">{tabLabel}</span>
+              {isDirty && (
                 <span
                   className="tab-dirty-dot"
                   data-testid="tab-dirty-indicator"
@@ -224,7 +238,7 @@ export function PaneTabBar({
             <button
               type="button"
               className="tab-close-btn"
-              aria-label={`${buffer.name} 탭 닫기`}
+              aria-label={`${tabLabel} 탭 닫기`}
               onClick={(event) => {
                 event.stopPropagation()
                 actions.onCloseTab(paneId, tab.id)

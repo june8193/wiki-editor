@@ -3,6 +3,7 @@ import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
+import { type GitDiffContentState, GitDiffViewer } from './GitDiffViewer'
 import {
   DraggingTabPayload,
   handleTabMoveDrop,
@@ -23,6 +24,7 @@ interface PaneViewProps {
   scrollRequest?: OutlineScrollRequest | null
   isShortcutDisabled?: boolean
   buffers: DocumentBufferSnapshot
+  diffsByKey: Record<string, GitDiffContentState>
   draggingTab: DraggingTabPayload | null
   onDragStartTab: (payload: DraggingTabPayload) => void
   onDragEndTab: () => void
@@ -41,13 +43,19 @@ export function PaneView({
   scrollRequest = null,
   isShortcutDisabled = false,
   buffers,
+  diffsByKey,
   draggingTab,
   onDragStartTab,
   onDragEndTab,
   actions
 }: PaneViewProps) {
   const activeTab = getPaneActiveTab(pane)
-  const activeBuffer = activeTab ? (buffers[activeTab.bufferKey] ?? null) : null
+  const activeBuffer =
+    activeTab?.kind === 'document' ? (buffers[activeTab.bufferKey] ?? null) : null
+  const activeDiffState =
+    activeTab?.kind === 'diff'
+      ? (diffsByKey[activeTab.bufferKey] ?? { status: 'loading' as const })
+      : null
   const activeScrollRequest =
     activeTab && scrollRequest && scrollRequest.paneId === pane.id && scrollRequest.tabId === activeTab.id
       ? scrollRequest
@@ -94,7 +102,17 @@ export function PaneView({
         />
       )}
 
-      {activeTab && activeBuffer ? (
+      {activeTab?.kind === 'diff' && activeDiffState ? (
+        <GitDiffViewer
+          request={activeTab.diff.request}
+          viewMode={activeTab.diff.viewMode}
+          state={activeDiffState}
+          onChangeViewMode={(nextMode) =>
+            actions.onChangeDiffViewMode(pane.id, activeTab.id, nextMode)
+          }
+          onOpenFile={actions.onOpenDiffTargetFile}
+        />
+      ) : activeTab?.kind === 'document' && activeBuffer ? (
         <DocumentEditor
           key={activeTab.id}
           document={activeBuffer}

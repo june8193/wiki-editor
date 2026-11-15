@@ -6,7 +6,8 @@ import { DocumentBuffer, DocumentBufferStore } from '../stores/DocumentBufferSto
 import {
   type PaneId,
   PaneTabStore,
-  type PaneTabTransition
+  type PaneTabTransition,
+  type TabItem
 } from '../stores/PaneTabStore'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
@@ -35,15 +36,17 @@ function logPaneTabTransition(
   bufferStore: DocumentBufferStore,
   transition: PaneTabTransition
 ): void {
-  const resolvePath = (bufferKey: string): string =>
-    bufferStore.getBuffer(bufferKey)?.path ?? bufferKey
+  const resolveTabPath = (tab: TabItem): string =>
+    tab.kind === 'diff'
+      ? tab.diff.request.path
+      : (bufferStore.getBuffer(tab.bufferKey)?.path ?? tab.bufferKey)
 
   switch (transition.type) {
     case 'tab-opened':
       logRendererInfo('ui', 'Tab opened', {
         paneId: transition.paneId,
         tabId: transition.tab.id,
-        filePath: resolvePath(transition.tab.bufferKey),
+        filePath: resolveTabPath(transition.tab),
         mode: transition.tab.mode
       })
       return
@@ -53,7 +56,7 @@ function logPaneTabTransition(
         targetPaneId: transition.targetPaneId,
         sourceTabId: transition.sourceTabId,
         tabId: transition.tab.id,
-        filePath: resolvePath(transition.tab.bufferKey),
+        filePath: resolveTabPath(transition.tab),
         mode: transition.tab.mode
       })
       return
@@ -61,7 +64,7 @@ function logPaneTabTransition(
       logRendererInfo('ui', 'Tab switched', {
         paneId: transition.paneId,
         tabId: transition.tab.id,
-        filePath: resolvePath(transition.tab.bufferKey),
+        filePath: resolveTabPath(transition.tab),
         mode: transition.tab.mode
       })
       return
@@ -70,7 +73,7 @@ function logPaneTabTransition(
         sourcePaneId: transition.sourcePaneId,
         targetPaneId: transition.targetPaneId,
         tabId: transition.tab.id,
-        filePath: resolvePath(transition.tab.bufferKey),
+        filePath: resolveTabPath(transition.tab),
         ...(transition.targetIndex !== undefined ? { targetIndex: transition.targetIndex } : {})
       })
       return
@@ -78,7 +81,7 @@ function logPaneTabTransition(
       logRendererInfo('ui', 'Tab closed', {
         paneId: transition.paneId,
         tabId: transition.closedTab.id,
-        filePath: resolvePath(transition.closedTab.bufferKey),
+        filePath: resolveTabPath(transition.closedTab),
         isLastReferenceForBuffer: transition.isLastReferenceForBuffer
       })
       return
@@ -86,7 +89,7 @@ function logPaneTabTransition(
       logRendererInfo('ui', 'Editor mode changed', {
         paneId: transition.paneId,
         tabId: transition.tab.id,
-        filePath: resolvePath(transition.tab.bufferKey),
+        filePath: resolveTabPath(transition.tab),
         from: transition.from,
         to: transition.to
       })
@@ -236,7 +239,7 @@ export function useEditorWorkspace({
 
   const saveActivePaneDocument = useCallback((): void => {
     const activeTab = tabStore.getActiveTab()
-    if (!activeTab) return
+    if (!activeTab || activeTab.kind === 'diff') return
     saveBufferByKey(activeTab.bufferKey)
   }, [saveBufferByKey, tabStore])
 
@@ -288,7 +291,7 @@ export function useEditorWorkspace({
     const handleGlobalKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || isShortcutDisabledRef.current) return
       const activeTab = tabStore.getActiveTab()
-      if (!activeTab) return
+      if (!activeTab || activeTab.kind === 'diff') return
       const activeBuffer = bufferStore.getBuffer(activeTab.bufferKey)
       const allowRichModes = activeBuffer ? isMarkdownDocument(activeBuffer) : false
 
@@ -483,7 +486,7 @@ export function useEditorWorkspace({
   const forceCloseTab = useCallback(
     (paneId: PaneId, tabId: string): void => {
       const result = tabStore.closeTab(paneId, tabId)
-      if (result?.isLastReferenceForBuffer) {
+      if (result?.closedTab.kind === 'document' && result.isLastReferenceForBuffer) {
         cleanupBufferTracking([result.closedTab.bufferKey])
         bufferStore.removeBuffer(result.closedTab.bufferKey)
       }
@@ -495,6 +498,10 @@ export function useEditorWorkspace({
     (paneId: PaneId, tabId: string): void => {
       const tab = tabStore.getTab(paneId, tabId)
       if (!tab) return
+      if (tab.kind === 'diff') {
+        forceCloseTab(paneId, tabId)
+        return
+      }
       const buffer = bufferStore.getBuffer(tab.bufferKey)
       if (buffer?.isDirty && !tabStore.hasOtherTabForBuffer(tab.bufferKey, tab.id)) {
         callbacksRef.current.onConfirmCloseDirtyTab({ paneId, tabId, buffer })
@@ -509,6 +516,10 @@ export function useEditorWorkspace({
     async (paneId: PaneId, tabId: string): Promise<boolean> => {
       const tab = tabStore.getTab(paneId, tabId)
       if (!tab) return true
+      if (tab.kind === 'diff') {
+        forceCloseTab(paneId, tabId)
+        return true
+      }
       const ok = await ensureSavedBuffer(tab.bufferKey)
       if (!ok) return false
       forceCloseTab(paneId, tabId)
@@ -521,6 +532,7 @@ export function useEditorWorkspace({
     const removedKeys = bufferStore.clearWorkspaceBuffers()
     cleanupBufferTracking(removedKeys)
     tabStore.closeTabsByBufferKeys(removedKeys)
+    tabStore.closeAllDiffTabs()
   }, [bufferStore, cleanupBufferTracking, tabStore])
 
   const syncRenamedPath = useCallback(
@@ -636,6 +648,9 @@ export function useEditorWorkspace({
     splitWithTab: tabStore.splitWithTab,
     duplicateTabToOtherPane: tabStore.duplicateTabToOtherPane,
     updateTabViewState: tabStore.updateTabViewState,
+    openDiffTab: tabStore.openDiffTab,
+    updateDiffTabViewMode: tabStore.updateDiffTabViewMode,
+    closeAllDiffTabs: tabStore.closeAllDiffTabs,
     clearWorkspaceBuffers,
     syncRenamedPath,
     syncDeletedPath,

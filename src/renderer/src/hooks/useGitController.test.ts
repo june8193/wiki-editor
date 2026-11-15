@@ -62,6 +62,15 @@ function installMockGitWikiApi(overrides: Partial<WikiApi['git']> = {}): void {
       sync: vi.fn(),
       log: vi.fn(async () => ({ commits: [], hasMore: false })),
       commitDetail: vi.fn(async (_ws: string, hash: string) => makeCommitDetail(hash)),
+      diff: vi.fn(async (_ws: string, req) => ({
+        path: req.path,
+        ...(req.origPath ? { origPath: req.origPath } : {}),
+        status: req.status,
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        rawPatch: ''
+      })),
       ...overrides
     }
   } as unknown as WikiApi

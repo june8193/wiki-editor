@@ -12,6 +12,7 @@ import {
   getGitChangedCount,
   type GitBranchList,
   type GitChangedFile,
+  type GitDiffRequest,
   type GitLogScope,
   type GitStatus
 } from '@shared/git'
@@ -44,6 +45,7 @@ export interface GitSidebarPanelProps {
   onPull: () => void
   onPush: () => void
   onSync: () => void
+  onOpenFileDiff: (request: GitDiffRequest) => void
   onToggleChangesCollapsed: () => void
   onToggleGraphCollapsed: () => void
   onResizeChangesRatio: (nextRatio: number) => void
@@ -63,6 +65,7 @@ interface GitFileSectionProps {
   itemActionTitle: 'Stage' | 'Unstage'
   isBusy: boolean
   onBulkAction: () => void
+  onSelectFile: (file: GitChangedFile) => void
   onItemAction: (file: GitChangedFile) => void
 }
 
@@ -76,6 +79,7 @@ function GitFileSection({
   itemActionTitle,
   isBusy,
   onBulkAction,
+  onSelectFile,
   onItemAction
 }: GitFileSectionProps) {
   return (
@@ -101,12 +105,17 @@ function GitFileSection({
         <ul className="git-file-list" role="list">
           {files.map((file) => (
             <li key={`${itemActionTitle}:${file.status}:${file.path}`} className="git-file-item">
-              <span className={`git-badge git-badge--${getGitFileBadgeModifier(file.status)}`}>
-                {file.status}
-              </span>
-              <span className="git-file-path" title={formatGitFileLabel(file)}>
-                {formatGitFileLabel(file)}
-              </span>
+              <button
+                type="button"
+                className="git-file-trigger"
+                title={formatGitFileLabel(file)}
+                onClick={() => onSelectFile(file)}
+              >
+                <span className={`git-badge git-badge--${getGitFileBadgeModifier(file.status)}`}>
+                  {file.status}
+                </span>
+                <span className="git-file-path">{formatGitFileLabel(file)}</span>
+              </button>
               <button
                 type="button"
                 className="git-file-action-btn"
@@ -228,6 +237,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onPull,
   onPush,
   onSync,
+  onOpenFileDiff,
   onToggleChangesCollapsed,
   onToggleGraphCollapsed,
   onResizeChangesRatio
@@ -453,6 +463,14 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 itemActionTitle="Unstage"
                 isBusy={isBusy}
                 onBulkAction={onUnstageAll}
+                onSelectFile={(file) =>
+                  onOpenFileDiff({
+                    kind: 'staged',
+                    path: file.path,
+                    ...(file.origPath ? { origPath: file.origPath } : {}),
+                    status: file.status
+                  })
+                }
                 onItemAction={(file) => onUnstageFile(file.path, file.origPath)}
               />
 
@@ -466,6 +484,14 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 itemActionTitle="Stage"
                 isBusy={isBusy}
                 onBulkAction={onStageAll}
+                onSelectFile={(file) =>
+                  onOpenFileDiff({
+                    kind: 'unstaged',
+                    path: file.path,
+                    ...(file.origPath ? { origPath: file.origPath } : {}),
+                    status: file.status
+                  })
+                }
                 onItemAction={(file) => onStageFile(file.path)}
               />
             </GitAccordionSection>

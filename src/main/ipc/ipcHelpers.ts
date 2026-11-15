@@ -1,4 +1,10 @@
-import { CONFIG_IPC_CHANNELS, LOG_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import type { GitDiffRequest } from '@shared/git'
+import {
+  CONFIG_IPC_CHANNELS,
+  GIT_IPC_CHANNELS,
+  LOG_IPC_CHANNELS,
+  WORKSPACE_IPC_CHANNELS
+} from '@shared/ipc'
 import type { LogService } from '../logging/LogService'
 
 export interface IpcMainLike {
@@ -33,7 +39,16 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
   }),
   [CONFIG_IPC_CHANNELS.saveRaw]: ([raw]) => ({
     contentLength: typeof raw === 'string' ? raw.length : 0
-  })
+  }),
+  [GIT_IPC_CHANNELS.diff]: ([workspacePath, request]) => {
+    const req = request as Partial<GitDiffRequest> | undefined
+    return {
+      workspacePath,
+      ...(req?.kind ? { kind: req.kind } : {}),
+      ...(req?.path ? { path: req.path } : {}),
+      ...(req?.kind === 'commit' && req.commitHash ? { commitHash: req.commitHash } : {})
+    }
+  }
 }
 
 function extractIpcMetadata(channel: string, args: unknown[]): Record<string, unknown> {

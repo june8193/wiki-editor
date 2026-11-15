@@ -24,6 +24,7 @@ function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
 function createTab(mode: EditorMode = 'raw'): TabItem {
   return {
     id: 'tab-1',
+    kind: 'document',
     bufferKey: 'c:/wiki/doc.md',
     mode,
     cursor: { selectionStart: 0, selectionEnd: 0 },

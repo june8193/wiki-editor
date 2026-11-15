@@ -1,9 +1,10 @@
 import { execFile, spawn } from 'node:child_process'
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { GIT_DIFF_MAX_BYTES } from '@shared/git'
 import { LogService } from '../logging/LogService'
 import { formatGitError, GitService, parsePorcelainV2Z } from './GitService'
 
@@ -680,6 +681,209 @@ describe('GitService integration (isolated temp repos)', () => {
     expect(emptyDetail.subject).toBe('empty checkpoint')
     expect(emptyDetail.body).toBe('')
     expect(emptyDetail.files).toEqual([])
+  }, 30_000)
+
+  it('computes staged, unstaged, untracked, renamed, deleted, binary, and >1MB truncated diffs while enforcing path security', async () => {
+    await expect(
+      service.diff(nonGitDir, { kind: 'unstaged', path: 'note.md', status: 'M' })
+    ).rejects.toThrow(/Git 저장소가 아닙니다/)
+
+    await service.init(repoDir)
+    await runGit(repoDir, ['config', 'user.name', 'Test User'])
+    await runGit(repoDir, ['config', 'user.email', 'test@example.com'])
+
+    // Path traversal, outside absolute path, and .git metadata path are blocked (including origPath)
+    const outsideFile = join(tempRoot, 'outside.md')
+    await writeFile(outsideFile, 'outside secret', 'utf8')
+    await expect(
+      service.diff(repoDir, { kind: 'unstaged', path: '../outside.md', status: 'M' })
+    ).rejects.toThrow(/저장소 밖/)
+    await expect(
+      service.diff(repoDir, { kind: 'unstaged', path: outsideFile, status: 'M' })
+    ).rejects.toThrow(/저장소 밖/)
+    await expect(
+      service.diff(repoDir, { kind: 'staged', path: '.git/config', status: 'M' })
+    ).rejects.toThrow(/\.git/)
+    await expect(
+      service.diff(repoDir, {
+        kind: 'staged',
+        path: 'note.md',
+        origPath: '../outside.md',
+        status: 'R'
+      })
+    ).rejects.toThrow(/저장소 밖/)
+
+    try {
+      const linkPath = join(repoDir, 'escape-link.md')
+      await symlink(outsideFile, linkPath)
+      await expect(
+        service.diff(repoDir, { kind: 'unstaged', path: 'escape-link.md', status: '?' })
+      ).rejects.toThrow(/저장소 밖/)
+      await rm(linkPath, { force: true })
+    } catch {
+      // Symlink creation without Developer Mode may fail on Windows
+    }
+
+    // 1. Unborn repo: untracked text, untracked empty, untracked binary, and staged file
+    await writeFile(join(repoDir, '새노트.md'), '# 안녕\n둘째 줄\n', 'utf8')
+    await writeFile(join(repoDir, 'empty.md'), '', 'utf8')
+    await writeFile(join(repoDir, 'untracked-bin.dat'), Buffer.from([0x89, 0x50, 0x00, 0x0a]))
+
+    const untrackedDiff = await service.diff(repoDir, {
+      kind: 'unstaged',
+      path: '새노트.md',
+      status: '?'
+    })
+    expect(untrackedDiff).toMatchObject({
+      path: '새노트.md',
+      status: '?',
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: true
+    })
+    expect(untrackedDiff.rawPatch).toContain('@@ -0,0 +1,2 @@')
+    expect(untrackedDiff.rawPatch).toContain('+# 안녕')
+    expect(untrackedDiff.rawPatch).toContain('+둘째 줄')
+
+    const emptyUntrackedDiff = await service.diff(repoDir, {
+      kind: 'unstaged',
+      path: 'empty.md',
+      status: '?'
+    })
+    expect(emptyUntrackedDiff.rawPatch).toBe('')
+    expect(emptyUntrackedDiff.isBinary).toBe(false)
+
+    const untrackedBinDiff = await service.diff(repoDir, {
+      kind: 'unstaged',
+      path: 'untracked-bin.dat',
+      status: '?'
+    })
+    expect(untrackedBinDiff).toMatchObject({
+      path: 'untracked-bin.dat',
+      status: '?',
+      isBinary: true,
+      isTruncated: false,
+      existsInWorkspace: true,
+      rawPatch: ''
+    })
+
+    await service.stage(repoDir, ['새노트.md'])
+    const unbornStagedDiff = await service.diff(repoDir, {
+      kind: 'staged',
+      path: '새노트.md',
+      status: 'A'
+    })
+    expect(unbornStagedDiff.isBinary).toBe(false)
+    expect(unbornStagedDiff.existsInWorkspace).toBe(true)
+    expect(unbornStagedDiff.rawPatch).toContain('+# 안녕')
+
+    await service.stage(repoDir, ['untracked-bin.dat'])
+    const unbornStagedBinDiff = await service.diff(repoDir, {
+      kind: 'staged',
+      path: 'untracked-bin.dat',
+      status: 'A'
+    })
+    expect(unbornStagedBinDiff.isBinary).toBe(true)
+    expect(unbornStagedBinDiff.rawPatch).toBe('')
+
+    await rm(join(repoDir, 'untracked-bin.dat'), { force: true })
+    await service.unstageAll(repoDir)
+    await service.stage(repoDir, ['새노트.md'])
+    await writeFile(join(repoDir, 'base.md'), 'line 1\nline 2\n', 'utf8')
+    await writeFile(join(repoDir, 'keep-old.md'), 'alpha\nbeta\ngamma\ndelta\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'initial commit')
+    const rootHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    // 2. Post-commit: tracked unstaged M, tracked staged R (-M rename), and deleted file (existsInWorkspace=false)
+    await writeFile(join(repoDir, 'base.md'), 'line 1\nline 2 updated\n', 'utf8')
+    const unstagedModDiff = await service.diff(repoDir, {
+      kind: 'unstaged',
+      path: 'base.md',
+      status: 'M'
+    })
+    expect(unstagedModDiff.rawPatch).toContain('-line 2')
+    expect(unstagedModDiff.rawPatch).toContain('+line 2 updated')
+    expect(unstagedModDiff.existsInWorkspace).toBe(true)
+
+    await mkdir(join(repoDir, 'sub'), { recursive: true })
+    await writeFile(join(repoDir, 'sub/moved.md'), 'alpha\nbeta\ngamma\ndelta\n', 'utf8')
+    await rm(join(repoDir, 'keep-old.md'))
+    await service.stageAll(repoDir)
+
+    const stagedRenameDiff = await service.diff(repoDir, {
+      kind: 'staged',
+      path: 'sub/moved.md',
+      origPath: 'keep-old.md',
+      status: 'R'
+    })
+    expect(stagedRenameDiff).toMatchObject({
+      path: 'sub/moved.md',
+      origPath: 'keep-old.md',
+      status: 'R',
+      isBinary: false,
+      existsInWorkspace: true
+    })
+    expect(stagedRenameDiff.rawPatch).toContain('rename from keep-old.md')
+    expect(stagedRenameDiff.rawPatch).toContain('rename to sub/moved.md')
+
+    await service.commit(repoDir, 'modify and move')
+    await rm(join(repoDir, 'base.md'))
+    const unstagedDeletedDiff = await service.diff(repoDir, {
+      kind: 'unstaged',
+      path: 'base.md',
+      status: 'D'
+    })
+    expect(unstagedDeletedDiff.existsInWorkspace).toBe(false)
+    expect(unstagedDeletedDiff.rawPatch).toContain('-line 2 updated')
+
+    await service.stage(repoDir, ['base.md'])
+    const stagedDeletedDiff = await service.diff(repoDir, {
+      kind: 'staged',
+      path: 'base.md',
+      status: 'D'
+    })
+    expect(stagedDeletedDiff.existsInWorkspace).toBe(false)
+    expect(stagedDeletedDiff.rawPatch).toContain('-line 1')
+    await service.commit(repoDir, 'delete base')
+
+    // 3. Commit diff for a file no longer in workspace -> existsInWorkspace=false
+    const historicalCommitDiff = await service.diff(repoDir, {
+      kind: 'commit',
+      commitHash: rootHash,
+      shortHash: rootHash.slice(0, 7),
+      path: 'base.md',
+      status: 'A'
+    })
+    expect(historicalCommitDiff.existsInWorkspace).toBe(false)
+    expect(historicalCommitDiff.rawPatch).toContain('+line 1')
+
+    // 4. >1MB large tracked diff and >1MB untracked diff are truncated
+    const bigLine = 'A'.repeat(1024) + '\n'
+    const bigBody = bigLine.repeat(1200) // ~1.2MB
+    await writeFile(join(repoDir, 'huge-untracked.md'), bigBody, 'utf8')
+    const hugeUntrackedDiff = await service.diff(repoDir, {
+      kind: 'unstaged',
+      path: 'huge-untracked.md',
+      status: '?'
+    })
+    expect(hugeUntrackedDiff.isTruncated).toBe(true)
+    expect(Buffer.byteLength(hugeUntrackedDiff.rawPatch, 'utf8')).toBeLessThanOrEqual(
+      GIT_DIFF_MAX_BYTES
+    )
+
+    await service.stage(repoDir, ['huge-untracked.md'])
+    await service.commit(repoDir, 'add huge file')
+    await writeFile(join(repoDir, 'huge-untracked.md'), 'B'.repeat(1024).concat('\n').repeat(1200), 'utf8')
+    const hugeTrackedDiff = await service.diff(repoDir, {
+      kind: 'unstaged',
+      path: 'huge-untracked.md',
+      status: 'M'
+    })
+    expect(hugeTrackedDiff.isTruncated).toBe(true)
+    expect(Buffer.byteLength(hugeTrackedDiff.rawPatch, 'utf8')).toBeLessThanOrEqual(
+      GIT_DIFF_MAX_BYTES
+    )
   }, 30_000)
 })
 

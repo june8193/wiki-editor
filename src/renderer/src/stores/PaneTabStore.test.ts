@@ -314,4 +314,61 @@ describe('PaneTabStore', () => {
     expect(singlePaneStore.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([sole.id])
     expect(singlePaneStore.getSnapshot().panes.secondary.tabs).toHaveLength(0)
   })
+
+  it('opens, replaces in active pane, duplicates, moves, toggles view mode, and closes diff tabs cleanly', () => {
+    const store = new PaneTabStore()
+    const docTab = store.openTab('c:/wiki/readme.md')
+
+    const diffTab1 = store.openDiffTab({ kind: 'unstaged', path: 'docs/a.md', status: 'M' })
+    expect(diffTab1.kind).toBe('diff')
+    expect(diffTab1.diff).toEqual({
+      request: { kind: 'unstaged', path: 'docs/a.md', status: 'M' },
+      viewMode: 'side-by-side'
+    })
+    expect(store.getSnapshot().panes.primary.tabs).toHaveLength(2)
+    expect(store.getSnapshot().panes.primary.activeTabId).toBe(diffTab1.id)
+
+    store.updateDiffTabViewMode('primary', diffTab1.id, 'inline')
+    expect(store.getTab('primary', diffTab1.id)).toMatchObject({
+      kind: 'diff',
+      diff: { viewMode: 'inline' }
+    })
+
+    // Opening another diff in same active pane replaces the diff tab instead of adding a third tab
+    const diffTabReplaced = store.openDiffTab({ kind: 'staged', path: 'docs/b.md', status: 'A' })
+    expect(diffTabReplaced.id).toBe(diffTab1.id)
+    expect(store.getSnapshot().panes.primary.tabs).toHaveLength(2)
+    expect(diffTabReplaced.diff).toEqual({
+      request: { kind: 'staged', path: 'docs/b.md', status: 'A' },
+      viewMode: 'side-by-side'
+    })
+
+    // Moving diff tab to secondary keeps secondary diff tab isolated when primary opens a new diff tab
+    store.moveTab('primary', 'secondary', diffTabReplaced.id)
+    expect(store.getSnapshot().splitMode).toBe('horizontal')
+    expect(store.getSnapshot().panes.secondary.tabs.map((t) => t.id)).toEqual([diffTabReplaced.id])
+
+    store.focusPane('primary')
+    const primaryDiff = store.openDiffTab({ kind: 'unstaged', path: 'docs/c.md', status: 'M' })
+    expect(primaryDiff.id).not.toBe(diffTabReplaced.id)
+    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id, primaryDiff.id])
+    expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(1)
+    expect(store.getSnapshot().panes.secondary.tabs[0]).toMatchObject({
+      kind: 'diff',
+      diff: { request: { kind: 'staged', path: 'docs/b.md', status: 'A' } }
+    })
+
+    // Duplicating a diff tab preserves diff metadata and viewMode
+    store.updateDiffTabViewMode('primary', primaryDiff.id, 'inline')
+    const dupDiff = store.duplicateTabToOtherPane('primary', primaryDiff.id)
+    expect(dupDiff).not.toBeNull()
+    expect(dupDiff!.kind).toBe('diff')
+    expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(2)
+
+    // closeAllDiffTabs closes all diff tabs while preserving document tabs
+    store.closeAllDiffTabs()
+    expect(store.getSnapshot().splitMode).toBe('single')
+    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id])
+    expect(store.getSnapshot().panes.secondary.tabs).toHaveLength(0)
+  })
 })

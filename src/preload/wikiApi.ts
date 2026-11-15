@@ -2,6 +2,8 @@ import type { AppConfig } from '@shared/config'
 import type {
   GitBranchList,
   GitCommitDetail,
+  GitDiffRequest,
+  GitFileDiff,
   GitLogResult,
   GitStatus,
   GitSyncResult
@@ -138,7 +140,9 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
           GIT_IPC_CHANNELS.commitDetail,
           workspacePath,
           commitHash
-        ) as Promise<GitCommitDetail>
+        ) as Promise<GitCommitDetail>,
+      diff: (workspacePath, request: GitDiffRequest) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.diff, workspacePath, request) as Promise<GitFileDiff>
     },
     menu: {
       onCommand: (listener) =>

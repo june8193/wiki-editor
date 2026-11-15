@@ -71,6 +71,14 @@ describe('registerGitIpc', () => {
       committedAt: '2026-11-15T12:00:00+09:00',
       files: [{ path: 'README.md', status: 'A' as const }]
     }
+    const sampleDiff = {
+      path: 'README.md',
+      status: 'M' as const,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: true,
+      rawPatch: '@@ -1 +1 @@\n-old\n+new\n'
+    }
     const fakeGitService: Pick<
       GitService,
       | 'status'
@@ -87,6 +95,7 @@ describe('registerGitIpc', () => {
       | 'sync'
       | 'log'
       | 'commitDetail'
+      | 'diff'
     > = {
       status: vi.fn(async () => sampleStatus),
       init: vi.fn(async () => sampleStatus),
@@ -105,7 +114,8 @@ describe('registerGitIpc', () => {
       push: vi.fn(async () => sampleStatus),
       sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'done' })),
       log: vi.fn(async () => sampleLog),
-      commitDetail: vi.fn(async () => sampleCommitDetail)
+      commitDetail: vi.fn(async () => sampleCommitDetail),
+      diff: vi.fn(async () => sampleDiff)
     }
 
     const ipcMain = createFakeIpcMain()
@@ -115,9 +125,14 @@ describe('registerGitIpc', () => {
       workspaceService
     })
 
+    const diffRequest = { kind: 'staged' as const, path: 'README.md', status: 'M' as const }
+
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.log, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.commitDetail, workspaceDir, 'abc1234')).rejects.toThrow(
+      /열린 워크스페이스/
+    )
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.diff, workspaceDir, diffRequest)).rejects.toThrow(
       /열린 워크스페이스/
     )
 
@@ -126,6 +141,9 @@ describe('registerGitIpc', () => {
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, otherDir)).rejects.toThrow(/일치하지 않습니다/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.log, otherDir)).rejects.toThrow(/일치하지 않습니다/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.commitDetail, otherDir, 'abc1234')).rejects.toThrow(
+      /일치하지 않습니다/
+    )
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.diff, otherDir, diffRequest)).rejects.toThrow(
       /일치하지 않습니다/
     )
 
@@ -179,6 +197,9 @@ describe('registerGitIpc', () => {
     )
     expect(fakeGitService.commitDetail).toHaveBeenCalledWith(opened.rootPath, 'abc1234')
 
+    expect(await ipcMain.invoke(GIT_IPC_CHANNELS.diff, workspaceDir, diffRequest)).toEqual(sampleDiff)
+    expect(fakeGitService.diff).toHaveBeenCalledWith(opened.rootPath, diffRequest)
+
     dispose()
     for (const channel of Object.values(GIT_IPC_CHANNELS)) {
       expect(ipcMain.hasHandler(channel)).toBe(false)
@@ -204,6 +225,7 @@ describe('registerGitIpc', () => {
       | 'sync'
       | 'log'
       | 'commitDetail'
+      | 'diff'
     > = {
       status: vi.fn(async () => sampleStatus),
       init: vi.fn(async () => sampleStatus),
@@ -216,7 +238,7 @@ describe('registerGitIpc', () => {
       checkout: vi.fn(async () => sampleStatus),
       pull: vi.fn(async () => sampleStatus),
       push: vi.fn(async () => sampleStatus),
-      sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'ok' })),
+      sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'done' })),
       log: vi.fn(async () => ({ commits: [], hasMore: false })),
       commitDetail: vi.fn(async () => ({
         hash: 'abc1234',
@@ -228,6 +250,14 @@ describe('registerGitIpc', () => {
         authorEmail: '',
         committedAt: '',
         files: []
+      })),
+      diff: vi.fn(async () => ({
+        path: 'README.md',
+        status: 'M' as const,
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        rawPatch: ''
       }))
     }
 

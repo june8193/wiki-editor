@@ -10,6 +10,7 @@ import {
 } from '@shared/config'
 import {
   createEmptyGitStatus,
+  type GitDiffRequest,
   type GitFileStatusCode,
   type GitGraphCommit,
   type GitLogResult
@@ -423,6 +424,15 @@ function createInMemoryWikiApi(
         authorEmail: '',
         committedAt: '',
         files: []
+      }),
+      diff: async (_workspacePath, request) => ({
+        path: request.path,
+        ...(request.origPath ? { origPath: request.origPath } : {}),
+        status: request.status,
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        rawPatch: ''
       }),
       ...fsOptions.git
     },
@@ -5488,5 +5498,270 @@ describe('Settings Panel centered modal', () => {
     })
     const configEditor = await screen.findByTestId('document-editor')
     expect(getRawEditorText(configEditor)).toContain('"theme": "light"')
+  })
+})
+
+describe('Git Diff viewer tab and Changes section integration', () => {
+  it('opens read-only diff tabs on Changes clicks, toggles inline/side-by-side, ignores +/- buttons, and opens editable files', async () => {
+    const user = userEvent.setup()
+    let revision = 1
+    const diffSpy = vi.fn(async (_workspacePath: string, request: GitDiffRequest) => ({
+      path: request.path,
+      ...(request.origPath ? { origPath: request.origPath } : {}),
+      status: request.status,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: request.path !== 'deleted.md',
+      rawPatch:
+        request.path === 'deleted.md'
+          ? ['diff --git a/deleted.md b/deleted.md', '@@ -1 +0,0 @@', '-gone'].join('\n')
+          : [
+              `diff --git a/${request.path} b/${request.path}`,
+              `--- a/${request.path}`,
+              `+++ b/${request.path}`,
+              '@@ -1 +1 @@',
+              `-old ${request.path} r${revision}`,
+              `+new ${request.path} r${revision}`
+            ].join('\n')
+    }))
+    const stageSpy = vi.fn(async (workspacePath: string) => ({
+      ...createEmptyGitStatus(true, workspacePath),
+      branch: 'main',
+      staged: [{ path: 'guide.md', status: 'M' as const }],
+      unstaged: [{ path: 'deleted.md', status: 'D' as const }]
+    }))
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {
+        version: 1,
+        theme: 'light',
+        autoSave: false,
+        autoSaveDelayMs: 1000,
+        showHeadingNumbers: true,
+        recentWorkspaces: [],
+        favoriteWorkspaces: [],
+        customCommands: []
+      },
+      {
+        workspaces: {
+          'C:/wiki/diff-app': {
+            'guide.md': '# Guide\n## Sub\nUpdated body',
+            'notes.md': '# Notes'
+          }
+        },
+        selectedFolder: 'C:/wiki/diff-app',
+        git: {
+          status: async (workspacePath) => ({
+            ...createEmptyGitStatus(true, workspacePath),
+            branch: 'main',
+            staged: [{ path: 'guide.md', status: 'M' }],
+            unstaged: [{ path: 'deleted.md', status: 'D' }],
+            untracked: [{ path: 'notes.md', status: '?' }]
+          }),
+          stage: stageSpy,
+          diff: diffSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await user.click(screen.getByRole('button', { name: 'Git' }))
+
+    const gitPanel = await screen.findByLabelText('Git 소스 제어')
+
+    // 1. Clicking + Stage button must NOT open a diff tab
+    await user.click(await within(gitPanel).findByRole('button', { name: 'notes.md Stage' }))
+    expect(stageSpy).toHaveBeenCalledWith('C:/wiki/diff-app', ['notes.md'])
+    expect(screen.queryByRole('tab')).toBeNull()
+
+    // 2. Clicking staged file opens Diff tab defaulting to side-by-side
+    const stagedList = within(gitPanel).getByText('스테이지됨 (1)').closest('.git-section') as HTMLElement
+    await user.click(within(stagedList).getByText('guide.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(1)
+    expect(within(primaryPane).getByRole('tab', { name: /guide\.md/ })).toBeInTheDocument()
+    expect(within(primaryPane).getByText('Staged')).toBeInTheDocument()
+    expect(within(primaryPane).getByTestId('diff-side-by-side')).toBeInTheDocument()
+    expect(within(primaryPane).getByText('old guide.md r1')).toBeInTheDocument()
+
+    // Switch to inline view
+    await user.click(within(primaryPane).getByRole('button', { name: '인라인' }))
+    expect(within(primaryPane).getByTestId('diff-inline')).toBeInTheDocument()
+
+    // 3. Clicking another file in Changes reuses the existing Diff tab in primary pane
+    const changesList = within(gitPanel).getByText('변경 사항 (1)').closest('.git-section') as HTMLElement
+    await user.click(within(changesList).getByText('deleted.md'))
+
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('Working Tree')).toBeInTheDocument()
+    })
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(1)
+    expect(within(primaryPane).getByRole('tab', { name: /deleted\.md/ })).toBeInTheDocument()
+    expect(within(primaryPane).getByRole('button', { name: '파일 열기' })).toBeDisabled()
+
+    // 4. Switch back to guide.md and click 파일 열기 to open editable workspace tab
+    revision = 2
+    await user.click(within(stagedList).getByText('guide.md'))
+    const openFileBtn = await within(primaryPane).findByRole('button', { name: '파일 열기' })
+    await waitFor(() => expect(openFileBtn).toBeEnabled())
+    await user.click(openFileBtn)
+
+    await waitFor(() => {
+      expect(within(primaryPane).getAllByRole('tab')).toHaveLength(2)
+    })
+    const docEditor = await within(primaryPane).findByTestId('document-editor')
+    expect(getRawEditorText(docEditor)).toContain('Updated body')
+  })
+
+  it('preserves split diff tabs, excludes diffs from autoSave/dirty/shortcuts/outline, refreshes on Git changes, and clears on workspace switch', async () => {
+    const user = userEvent.setup()
+    let patchCounter = 1
+    let currentStaged: Array<{ path: string; status: 'M' | 'A' }> = [{ path: 'doc.md', status: 'M' }]
+    let currentUnstaged: Array<{ path: string; status: 'M' | 'D' }> = [{ path: 'other.md', status: 'M' }]
+    const writeFileSpy = vi.fn(async () => {})
+    const diffSpy = vi.fn(async (_workspacePath: string, request: GitDiffRequest) => ({
+      path: request.path,
+      status: request.status,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: true,
+      rawPatch:
+        currentStaged.length === 0 && request.kind === 'staged'
+          ? ''
+          : [
+              `diff --git a/${request.path} b/${request.path}`,
+              `--- a/${request.path}`,
+              `+++ b/${request.path}`,
+              '@@ -1 +1 @@',
+              `-before v${patchCounter}`,
+              `+after v${patchCounter}`
+            ].join('\n')
+    }))
+
+    const folders = {
+      selected: 'C:/wiki/diff-one'
+    }
+    const { api, emitMenuCommand, emitWorkspaceChange } = createInMemoryWikiApi(
+      {
+        version: 1,
+        theme: 'light',
+        autoSave: true,
+        autoSaveDelayMs: 60,
+        showHeadingNumbers: true,
+        recentWorkspaces: [],
+        favoriteWorkspaces: [],
+        customCommands: []
+      },
+      {
+        workspaces: {
+          'C:/wiki/diff-one': {
+            'doc.md': '# Heading\nbody',
+            'other.md': '# Other'
+          },
+          'C:/wiki/diff-two': {
+            'two.md': '# Two'
+          }
+        },
+        git: {
+          status: async (workspacePath) => ({
+            ...createEmptyGitStatus(true, workspacePath),
+            branch: 'main',
+            staged: currentStaged,
+            unstaged: currentUnstaged
+          }),
+          commit: async (workspacePath) => {
+            currentStaged = []
+            patchCounter += 1
+            return {
+              ...createEmptyGitStatus(true, workspacePath),
+              branch: 'main',
+              staged: [],
+              unstaged: currentUnstaged
+            }
+          },
+          diff: diffSpy
+        }
+      }
+    )
+    api.workspace.selectFolder = async () => folders.selected
+    api.workspace.writeFile = writeFileSpy
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    // Open a regular document tab and config.json first so secondary pane move is enabled
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('doc.md'))
+    await screen.findByTestId('document-editor')
+
+    await user.click(screen.getByRole('button', { name: 'Git' }))
+    const gitPanel = await screen.findByLabelText('Git 소스 제어')
+
+    // Open Staged diff for doc.md in primary pane -> move it to secondary pane
+    const stagedList = within(gitPanel).getByText('스테이지됨 (1)').closest('.git-section') as HTMLElement
+    await user.click(within(stagedList).getByText('doc.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    await within(primaryPane).findByText('after v1')
+
+    // Document Outline must exclude active Diff tab even when target is .md
+    const outlinePanel = screen.getByLabelText('문서 목차 (Outline)')
+    expect(within(outlinePanel).getByText('마크다운 문서에서만 목차를 지원합니다.')).toBeInTheDocument()
+
+    // Ctrl+S and Ctrl+Shift+M must NOT save or change editor mode on Diff tab
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 'M', ctrlKey: true, shiftKey: true })
+    expect(writeFileSpy).not.toHaveBeenCalled()
+
+    // Move Diff tab to secondary pane via tab context menu
+    const diffTabInPrimary = within(primaryPane).getByRole('tab', { name: /Diff\s*doc\.md/ })
+    fireEvent.contextMenu(diffTabInPrimary)
+    await user.click(await screen.findByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*doc\.md/ })).toBeInTheDocument()
+
+    // Focus primary pane and open another Diff tab -> secondary Diff tab stays preserved
+    fireEvent.mouseDown(primaryPane)
+    const changesList = within(gitPanel).getByText('변경 사항 (1)').closest('.git-section') as HTMLElement
+    await user.click(within(changesList).getByText('other.md'))
+    await within(primaryPane).findByText('after v1')
+    expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*doc\.md/ })).toBeInTheDocument()
+
+    // Wait longer than autoSaveDelayMs (60ms) -> Diff tab never triggers writeFile
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(writeFileSpy).not.toHaveBeenCalled()
+
+    // Commit -> triggers Git refresh -> open Diff tabs auto-refresh (staged doc.md empties, unstaged other.md gets v2)
+    await user.type(within(gitPanel).getByLabelText('커밋 메시지'), 'commit staged')
+    await user.click(within(gitPanel).getByRole('button', { name: 'Commit' }))
+
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('after v2')).toBeInTheDocument()
+      expect(within(secondaryPane).getByText('표시할 텍스트 변경 사항이 없습니다.')).toBeInTheDocument()
+    })
+
+    // External FS change event triggers Git refresh -> open unstaged Diff tab refreshes automatically
+    patchCounter = 3
+    act(() => {
+      emitWorkspaceChange({ rootPath: 'C:/wiki/diff-one', eventType: 'change', relativePath: 'other.md' })
+    })
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('after v3')).toBeInTheDocument()
+    })
+
+    // Closing Diff tab never shows unsaved alertdialog
+    await user.click(within(primaryPane).getByRole('button', { name: 'other.md 탭 닫기' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+
+    // Switching workspace closes remaining Diff tab automatically
+    folders.selected = 'C:/wiki/diff-two'
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await waitFor(() => {
+      expect(screen.queryByRole('tab', { name: /Diff\s*doc\.md/ })).not.toBeInTheDocument()
+    })
   })
 })
