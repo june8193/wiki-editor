@@ -1,4 +1,4 @@
-import type { DocumentBuffer } from '../stores/DocumentBufferStore'
+import type { DocumentBuffer } from '@shared/documentBuffer'
 import type { EditorMode } from '../stores/PaneTabStore'
 
 export interface ModeShortcutEvent {

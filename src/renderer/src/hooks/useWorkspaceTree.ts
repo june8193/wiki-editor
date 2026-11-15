@@ -9,7 +9,7 @@ import {
   WorkspaceSummary
 } from '@shared/workspace'
 import { logRendererInfo } from '../logging/rendererLogger'
-import { toErrorMessage } from '../utils/toErrorMessage'
+import { toErrorMessage } from '@shared/errors'
 import { useWikiApi } from './useWikiApi'
 
 export interface WorkspaceTreeState {

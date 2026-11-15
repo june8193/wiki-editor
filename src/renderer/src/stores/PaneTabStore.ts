@@ -1,4 +1,4 @@
-import type { BufferKeyRemap } from './DocumentBufferStore'
+import type { BufferKeyRemap } from '@shared/documentBuffer'
 
 export type PaneId = 'primary' | 'secondary'
 export type SplitMode = 'single' | 'horizontal' | 'vertical'

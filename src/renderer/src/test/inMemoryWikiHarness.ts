@@ -109,7 +109,6 @@ export interface InMemoryWindowHandle {
   api: WikiApi
   emitMenuCommand: (command: AppMenuCommand) => void
   getMenuListenerCount: () => number
-  getBufferListenerCount: () => number
   destroy: () => void
 }
 
@@ -511,7 +510,6 @@ export function createMultiWindowWikiHarness(
         }
       },
       getMenuListenerCount: () => menuListeners.size,
-      getBufferListenerCount: () => bufferListeners.size,
       destroy() {
         if (destroyed) return
         destroyed = true

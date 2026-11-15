@@ -1,6 +1,6 @@
 import { CSSProperties, SyntheticEvent } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
-import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
+import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { DocumentEditor, type OutlineScrollRequest } from './DocumentEditor'
 import {

@@ -40,7 +40,7 @@ import {
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
   RIGHT_SIDEBAR_WIDTH_BOUNDS
 } from './utils/sidebarWidth'
-import { toErrorMessage } from './utils/toErrorMessage'
+import { toErrorMessage } from '@shared/errors'
 
 interface LeftSidebarState {
   activeView: LeftSidebarView

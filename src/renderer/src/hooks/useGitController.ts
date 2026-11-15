@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GitBranchList, GitStatus } from '@shared/git'
 import { logRendererError, logRendererWarn } from '../logging/rendererLogger'
-import { toErrorMessage } from '../utils/toErrorMessage'
+import { toErrorMessage } from '@shared/errors'
 import { useWikiApi } from './useWikiApi'
 
 interface UseGitControllerOptions {

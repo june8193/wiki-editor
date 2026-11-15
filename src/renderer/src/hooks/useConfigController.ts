@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppConfig, type CustomCommandConfig, DEFAULT_APP_CONFIG, ThemeMode } from '@shared/config'
 import { removeRecentWorkspace as removeRecentWorkspaceFromList } from '@shared/workspace'
-import { toErrorMessage } from '../utils/toErrorMessage'
+import { toErrorMessage } from '@shared/errors'
 import { useWikiApi } from './useWikiApi'
 
 interface UseConfigControllerOptions {

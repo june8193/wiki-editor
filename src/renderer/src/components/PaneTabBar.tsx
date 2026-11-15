@@ -1,6 +1,6 @@
 import { DragEvent, useCallback, useRef, useState } from 'react'
 import { useDismissable } from '../hooks/useDismissable'
-import { DocumentBufferSnapshot } from '../stores/DocumentBufferStore'
+import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import { PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
 
 export interface DraggingTabPayload {

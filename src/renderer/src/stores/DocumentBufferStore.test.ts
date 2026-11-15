@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DocumentBufferStore } from './DocumentBufferStore'
+import { DocumentBufferStore } from '@shared/documentBufferStore'
 
 describe('DocumentBufferStore', () => {
   it('opens and deduplicates buffers by normalized path across Windows and POSIX styles', () => {

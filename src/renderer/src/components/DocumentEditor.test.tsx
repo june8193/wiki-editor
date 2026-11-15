@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { DocumentEditor } from './DocumentEditor'
-import type { DocumentBuffer } from '../stores/DocumentBufferStore'
+import type { DocumentBuffer } from '@shared/documentBuffer'
 import type { EditorMode, TabItem } from '../stores/PaneTabStore'
 
 function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
