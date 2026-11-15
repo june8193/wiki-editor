@@ -130,8 +130,8 @@ async function execGitStdoutCapped({
       if (chunk.includes(0)) {
         hasNullByte = true
       }
-      const remaining = GIT_DIFF_MAX_BYTES - collectedBytes
-      if (chunk.length > remaining) {
+      const remaining = GIT_DIFF_MAX_BYTES + 1 - collectedBytes
+      if (chunk.length >= remaining) {
         if (remaining > 0) {
           stdoutChunks.push(chunk.subarray(0, remaining))
           collectedBytes += remaining

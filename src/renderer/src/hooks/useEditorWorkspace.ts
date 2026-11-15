@@ -652,7 +652,6 @@ export function useEditorWorkspace({
     updateTabViewState: tabStore.updateTabViewState,
     openDiffTab: tabStore.openDiffTab,
     updateDiffTabViewMode: tabStore.updateDiffTabViewMode,
-    closeAllDiffTabs: tabStore.closeAllDiffTabs,
     clearWorkspaceBuffers,
     syncRenamedPath,
     syncDeletedPath,

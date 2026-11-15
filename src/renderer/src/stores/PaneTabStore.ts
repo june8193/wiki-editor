@@ -18,19 +18,17 @@ export interface DiffTabState {
   viewMode: GitDiffViewMode
 }
 
-interface BaseTabItem {
+export interface DocumentTabItem {
   id: string
-  scrollTop: number
-}
-
-export interface DocumentTabItem extends BaseTabItem {
   kind: 'document'
   bufferKey: string
   mode: EditorMode
   cursor: CursorPosition
+  scrollTop: number
 }
 
-export interface DiffTabItem extends BaseTabItem {
+export interface DiffTabItem {
+  id: string
   kind: 'diff'
   diff: DiffTabState
 }
@@ -364,8 +362,7 @@ export class PaneTabStore {
         options.viewMode ?? (isSameTarget ? existing.diff.viewMode : 'side-by-side')
       const updatedTab: DiffTabItem = {
         ...existing,
-        diff: { request, viewMode: nextViewMode },
-        scrollTop: isSameTarget ? existing.scrollTop : 0
+        diff: { request, viewMode: nextViewMode }
       }
       const nextTabs = targetPane.tabs.map((tab) => (tab.id === existing.id ? updatedTab : tab))
       const tabChanged =
@@ -398,8 +395,7 @@ export class PaneTabStore {
     const created: DiffTabItem = {
       id: this.nextTabId(),
       kind: 'diff',
-      diff: { request, viewMode: options.viewMode ?? 'side-by-side' },
-      scrollTop: 0
+      diff: { request, viewMode: options.viewMode ?? 'side-by-side' }
     }
 
     return this.appendNewTabInPane(targetPaneId, targetPane, nextSplitMode, created, duplicateFrom)
@@ -726,6 +722,30 @@ export class PaneTabStore {
     )
   }
 
+  private replaceTabInPane(
+    paneId: PaneId,
+    index: number,
+    updatedTab: TabItem,
+    transitions: PaneTabTransition[] = []
+  ): void {
+    const pane = this.state.panes[paneId]
+    const nextTabs = [...pane.tabs]
+    nextTabs[index] = updatedTab
+    this.commit(
+      {
+        ...this.state,
+        panes: {
+          ...this.state.panes,
+          [paneId]: {
+            ...pane,
+            tabs: nextTabs
+          }
+        }
+      },
+      transitions
+    )
+  }
+
   updateDiffTabViewMode = (
     paneId: PaneId,
     tabId: string,
@@ -737,22 +757,9 @@ export class PaneTabStore {
     const current = pane.tabs[index]
     if (current.kind !== 'diff' || current.diff.viewMode === viewMode) return
 
-    const updatedTab: DiffTabItem = {
+    this.replaceTabInPane(paneId, index, {
       ...current,
       diff: { ...current.diff, viewMode }
-    }
-    const nextTabs = [...pane.tabs]
-    nextTabs[index] = updatedTab
-
-    this.commit({
-      ...this.state,
-      panes: {
-        ...this.state.panes,
-        [paneId]: {
-          ...pane,
-          tabs: nextTabs
-        }
-      }
     })
   }
 
@@ -762,28 +769,11 @@ export class PaneTabStore {
     if (index === -1) return
 
     const current = pane.tabs[index]
-    const nextScrollTop = patch.scrollTop ?? current.scrollTop
-
-    if (current.kind === 'diff') {
-      if (nextScrollTop === current.scrollTop) return
-      const updatedDiffTab: DiffTabItem = { ...current, scrollTop: nextScrollTop }
-      const nextTabs = [...pane.tabs]
-      nextTabs[index] = updatedDiffTab
-      this.commit({
-        ...this.state,
-        panes: {
-          ...this.state.panes,
-          [paneId]: {
-            ...pane,
-            tabs: nextTabs
-          }
-        }
-      })
-      return
-    }
+    if (current.kind !== 'document') return
 
     const nextMode = patch.mode ?? current.mode
     const nextCursor = patch.cursor ?? current.cursor
+    const nextScrollTop = patch.scrollTop ?? current.scrollTop
 
     if (
       nextMode === current.mode &&
@@ -800,8 +790,6 @@ export class PaneTabStore {
       cursor: { ...nextCursor },
       scrollTop: nextScrollTop
     }
-    const nextTabs = [...pane.tabs]
-    nextTabs[index] = updatedTab
 
     const transitions: PaneTabTransition[] =
       nextMode !== current.mode
@@ -816,19 +804,7 @@ export class PaneTabStore {
           ]
         : []
 
-    this.commit(
-      {
-        ...this.state,
-        panes: {
-          ...this.state.panes,
-          [paneId]: {
-            ...pane,
-            tabs: nextTabs
-          }
-        }
-      },
-      transitions
-    )
+    this.replaceTabInPane(paneId, index, updatedTab, transitions)
   }
 
   remapBufferKeys(remappings: readonly BufferKeyRemap[]): void {
