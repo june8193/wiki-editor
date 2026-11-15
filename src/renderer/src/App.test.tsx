@@ -4901,6 +4901,18 @@ function isZeroCssLength(value: string): boolean {
   return value === '0px' || value === '0'
 }
 
+function assertSidebarPanelIsolation(
+  panel: HTMLElement,
+  header: HTMLElement,
+  scrollBody: HTMLElement
+): void {
+  expect(isZeroCssLength(getComputedStyle(panel).minHeight)).toBe(true)
+  expect(getComputedStyle(panel).overflow).toBe('hidden')
+  expect(getComputedStyle(header).flexShrink).toBe('0')
+  expect(isZeroCssLength(getComputedStyle(scrollBody).minHeight)).toBe(true)
+  expect(getComputedStyle(scrollBody).overflowY).toBe('auto')
+}
+
 describe('App shell viewport scroll isolation and left sidebar overflow contracts', () => {
   it('enforces viewport overflow isolation, min-height: 0 flex chain, and non-shrinking headers/toolbars across Raw, 위지윅, Preview, and single/horizontal/vertical split modes', async () => {
     const user = userEvent.setup()
@@ -4944,27 +4956,24 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
       // Activity bar, left sidebar, right sidebar, and Document Outline scroll isolation
       expect(getComputedStyle(screen.getByRole('navigation', { name: '액티비티 바' })).flexShrink).toBe('0')
 
-      const leftSidebar = screen.getByRole('complementary', { name: '왼쪽 사이드바' })
-      expect(getComputedStyle(leftSidebar).flexShrink).toBe('0')
-      expect(isZeroCssLength(getComputedStyle(leftSidebar).minHeight)).toBe(true)
-      expect(getComputedStyle(leftSidebar).overflow).toBe('hidden')
-
-      const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
-      expect(getComputedStyle(rightSidebar).flexShrink).toBe('0')
-      expect(isZeroCssLength(getComputedStyle(rightSidebar).minHeight)).toBe(true)
-      expect(getComputedStyle(rightSidebar).overflow).toBe('hidden')
+      for (const sidebar of [
+        screen.getByRole('complementary', { name: '왼쪽 사이드바' }),
+        screen.getByRole('complementary', { name: '우측 사이드바' })
+      ]) {
+        const sidebarStyle = getComputedStyle(sidebar)
+        expect(sidebarStyle.flexShrink).toBe('0')
+        expect(isZeroCssLength(sidebarStyle.minHeight)).toBe(true)
+        expect(sidebarStyle.overflow).toBe('hidden')
+      }
 
       const outlineRegion = screen.getByRole('region', { name: '문서 목차 (Outline)' })
-      expect(isZeroCssLength(getComputedStyle(outlineRegion).minHeight)).toBe(true)
-      expect(getComputedStyle(outlineRegion).overflow).toBe('hidden')
-      expect(getComputedStyle(outlineRegion.firstElementChild as HTMLElement).flexShrink).toBe('0')
+      const outlineHeader = outlineRegion.firstElementChild as HTMLElement
       const outlineActions = within(outlineRegion)
         .getByRole('button', { name: '본문에 목차(/toc) 삽입' })
         .parentElement as HTMLElement
-      expect(getComputedStyle(outlineActions).flexShrink).toBe('0')
       const outlineListContainer = within(outlineRegion).getByRole('list').parentElement as HTMLElement
-      expect(isZeroCssLength(getComputedStyle(outlineListContainer).minHeight)).toBe(true)
-      expect(getComputedStyle(outlineListContainer).overflowY).toBe('auto')
+      assertSidebarPanelIsolation(outlineRegion, outlineHeader, outlineListContainer)
+      expect(getComputedStyle(outlineActions).flexShrink).toBe('0')
 
       const paneWorkspace = screen.getByTestId('pane-workspace')
       expect(isZeroCssLength(getComputedStyle(paneWorkspace).minHeight)).toBe(true)
@@ -5112,12 +5121,11 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
 
       // 1. Explorer view (Folder Tree)
       const explorer = await screen.findByRole('region', { name: '워크스페이스 탐색기' })
-      expect(isZeroCssLength(getComputedStyle(explorer).minHeight)).toBe(true)
-      expect(getComputedStyle(explorer).overflow).toBe('hidden')
-      expect(getComputedStyle(explorer.firstElementChild as HTMLElement).flexShrink).toBe('0')
-      const tree = within(explorer).getByRole('tree')
-      expect(isZeroCssLength(getComputedStyle(tree).minHeight)).toBe(true)
-      expect(getComputedStyle(tree).overflowY).toBe('auto')
+      assertSidebarPanelIsolation(
+        explorer,
+        explorer.firstElementChild as HTMLElement,
+        within(explorer).getByRole('tree')
+      )
 
       // Context menu uses fixed positioning with no transform/filter containing block on ancestors
       fireEvent.contextMenu(await within(explorer).findByText('doc.md'), { clientX: 80, clientY: 120 })
@@ -5139,17 +5147,11 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
       // 2. Git view (Git Panel)
       await clickActivityBarButton(user, 'Git')
       const gitPanel = screen.getByRole('region', { name: 'Git 소스 제어' })
-      expect(isZeroCssLength(getComputedStyle(gitPanel).minHeight)).toBe(true)
-      expect(getComputedStyle(gitPanel).overflow).toBe('hidden')
-      const gitTitle = within(gitPanel).getByText('Git')
-      const gitHeader = gitTitle.closest('.git-header') as HTMLElement
-      expect(getComputedStyle(gitHeader).flexShrink).toBe('0')
+      const gitHeader = within(gitPanel).getByText('Git').closest('.git-header') as HTMLElement
+      assertSidebarPanelIsolation(gitPanel, gitHeader, gitPanel.lastElementChild as HTMLElement)
       for (const btn of within(gitPanel).getAllByRole('button')) {
         expect(btn).not.toHaveAttribute('aria-expanded')
       }
-      const gitBody = gitPanel.lastElementChild as HTMLElement
-      expect(isZeroCssLength(getComputedStyle(gitBody).minHeight)).toBe(true)
-      expect(getComputedStyle(gitBody).overflowY).toBe('auto')
 
       const branchSelect = within(gitPanel).getByLabelText('브랜치 선택') as HTMLSelectElement
       await user.selectOptions(branchSelect, 'feature/layout')
@@ -5161,12 +5163,11 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
       // 3. Workspace view
       await clickActivityBarButton(user, '워크스페이스')
       const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
-      expect(isZeroCssLength(getComputedStyle(workspaceView).minHeight)).toBe(true)
-      expect(getComputedStyle(workspaceView).overflow).toBe('hidden')
-      expect(getComputedStyle(workspaceView.firstElementChild as HTMLElement).flexShrink).toBe('0')
-      const workspaceBody = workspaceView.lastElementChild as HTMLElement
-      expect(isZeroCssLength(getComputedStyle(workspaceBody).minHeight)).toBe(true)
-      expect(getComputedStyle(workspaceBody).overflowY).toBe('auto')
+      assertSidebarPanelIsolation(
+        workspaceView,
+        workspaceView.firstElementChild as HTMLElement,
+        workspaceView.lastElementChild as HTMLElement
+      )
     } finally {
       cleanup()
     }
