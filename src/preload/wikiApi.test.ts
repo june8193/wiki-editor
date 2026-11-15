@@ -158,6 +158,8 @@ describe('createWikiApi', () => {
     await api.git.pull('C:\\wiki')
     await api.git.push('C:\\wiki')
     await api.git.sync('C:\\wiki')
+    await api.git.log('C:\\wiki')
+    await api.git.log('C:\\wiki', { scope: 'current', limit: 50, skip: 20 })
 
     expect(ipc.lastInvoked).toEqual([
       { channel: GIT_IPC_CHANNELS.status, args: ['C:\\wiki'] },
@@ -171,7 +173,12 @@ describe('createWikiApi', () => {
       { channel: GIT_IPC_CHANNELS.checkout, args: ['C:\\wiki', 'main'] },
       { channel: GIT_IPC_CHANNELS.pull, args: ['C:\\wiki'] },
       { channel: GIT_IPC_CHANNELS.push, args: ['C:\\wiki'] },
-      { channel: GIT_IPC_CHANNELS.sync, args: ['C:\\wiki'] }
+      { channel: GIT_IPC_CHANNELS.sync, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.log, args: ['C:\\wiki', undefined] },
+      {
+        channel: GIT_IPC_CHANNELS.log,
+        args: ['C:\\wiki', { scope: 'current', limit: 50, skip: 20 }]
+      }
     ])
   })
 

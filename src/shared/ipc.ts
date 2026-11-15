@@ -1,5 +1,11 @@
 import type { AppConfig } from './config'
-import type { GitBranchList, GitStatus, GitSyncResult } from './git'
+import type {
+  GitBranchList,
+  GitLogOptions,
+  GitLogResult,
+  GitStatus,
+  GitSyncResult
+} from './git'
 import type { RendererLogPayload } from './logging'
 import type {
   WorkspaceChangeEvent,
@@ -45,7 +51,8 @@ export const GIT_IPC_CHANNELS = {
   checkout: 'git:checkout',
   pull: 'git:pull',
   push: 'git:push',
-  sync: 'git:sync'
+  sync: 'git:sync',
+  log: 'git:log'
 } as const
 
 export type AppMenuCommand = 'open-folder' | 'toggle-theme' | 'toggle-settings'
@@ -101,6 +108,7 @@ export interface WikiGitApi {
   pull(workspacePath: string): Promise<GitStatus>
   push(workspacePath: string): Promise<GitStatus>
   sync(workspacePath: string): Promise<GitSyncResult>
+  log(workspacePath: string, options?: GitLogOptions): Promise<GitLogResult>
 }
 
 export interface WikiMenuApi {

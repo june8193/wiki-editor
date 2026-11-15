@@ -645,11 +645,19 @@ export function App() {
                   workspaceRootPath={workspace?.rootPath ?? null}
                   status={git.status}
                   branchList={git.branchList}
+                  logCommits={git.logCommits}
+                  logHasMore={git.logHasMore}
+                  logScope={git.logScope}
+                  isLogLoading={git.isLogLoading}
+                  isLogLoadingMore={git.isLogLoadingMore}
+                  logErrorMessage={git.logErrorMessage}
                   pendingAction={git.pendingAction}
                   errorMessage={git.errorMessage}
                   splitState={gitPanelSplit}
                   onDismissError={git.dismissError}
                   onRefresh={() => void git.refreshStatus()}
+                  onChangeLogScope={(nextScope) => void git.changeLogScope(nextScope)}
+                  onLoadMoreCommits={() => void git.loadMoreCommits()}
                   onInitRepo={() => void git.initRepo()}
                   onStageFile={(path) => void git.stageFile(path)}
                   onStageAll={() => void git.stageAll()}

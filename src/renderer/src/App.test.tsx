@@ -8,7 +8,12 @@ import {
   DEFAULT_APP_CONFIG,
   validateConfigRaw
 } from '@shared/config'
-import { createEmptyGitStatus, type GitFileStatusCode } from '@shared/git'
+import {
+  createEmptyGitStatus,
+  type GitFileStatusCode,
+  type GitGraphCommit,
+  type GitLogResult
+} from '@shared/git'
 import type { AppMenuCommand, WikiApi, WikiGitApi, WikiLogApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import {
@@ -407,6 +412,7 @@ function createInMemoryWikiApi(
         pushed: true,
         summary: '동기화 완료'
       }),
+      log: async () => ({ commits: [], hasMore: false }),
       ...fsOptions.git
     },
     menu: {
@@ -3708,6 +3714,274 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(
       within(remountedGit).getByRole('separator', { name: 'Git 섹션 높이 조절' })
     ).toHaveAttribute('aria-valuenow', '50')
+  })
+
+  it('shows unborn commit history empty message in Graph section when repository has no commits', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/unborn-repo',
+        workspaces: {
+          'C:/wiki/unborn-repo': {
+            'README.md': '# Hello'
+          }
+        },
+        git: {
+          status: vi.fn(async () => ({
+            ...createEmptyGitStatus(true, 'C:/wiki/unborn-repo'),
+            branch: 'main',
+            isUnborn: true
+          })),
+          branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
+          log: vi.fn(async () => ({ commits: [], hasMore: false }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const graphRegion = screen.getByRole('region', { name: 'Graph' })
+    expect(within(graphRegion).getByText('아직 커밋된 내역이 없습니다.')).toBeInTheDocument()
+  })
+
+  it('renders Graph commit lanes and badges, filters 전체/현재 브랜치 without collapsing, paginates with 더 보기, and refreshes on commit and workspace changes', async () => {
+    const user = userEvent.setup()
+
+    const makeCommit = (
+      hash: string,
+      parents: string[],
+      subject: string,
+      authorName: string,
+      refs: GitGraphCommit['refs'] = []
+    ): GitGraphCommit => ({
+      hash,
+      shortHash: hash.slice(0, 7),
+      parents,
+      subject,
+      authorName,
+      committedAt: '2026-11-15T06:30:00Z',
+      refs
+    })
+
+    const allCommits: GitGraphCommit[] = [
+      makeCommit(
+        'aaaa111111111111111111111111111111111111',
+        ['bbbb222222222222222222222222222222222222', 'cccc333333333333333333333333333333333333'],
+        'Merge feature-x',
+        'Alice',
+        [
+          { name: 'HEAD', kind: 'head', isCurrentHead: true },
+          { name: 'main', kind: 'local-branch', isCurrentHead: true },
+          { name: 'origin/main', kind: 'remote-branch' },
+          { name: 'v1.0.0', kind: 'tag' }
+        ]
+      ),
+      makeCommit(
+        'cccc333333333333333333333333333333333333',
+        ['bbbb222222222222222222222222222222222222'],
+        'Side branch work',
+        'Bob',
+        [{ name: 'feature-x', kind: 'local-branch' }]
+      )
+    ]
+
+    const currentPage1: GitGraphCommit[] = [
+      makeCommit(
+        'aaaa111111111111111111111111111111111111',
+        ['bbbb222222222222222222222222222222222222'],
+        'Merge feature-x',
+        'Alice',
+        [
+          { name: 'HEAD', kind: 'head', isCurrentHead: true },
+          { name: 'main', kind: 'local-branch', isCurrentHead: true }
+        ]
+      )
+    ]
+
+    const currentPage2: GitGraphCommit[] = [
+      makeCommit(
+        'bbbb222222222222222222222222222222222222',
+        [],
+        'Older mainline commit',
+        'Carol'
+      )
+    ]
+
+    const committedHead = makeCommit(
+      'dddd444444444444444444444444444444444444',
+      ['aaaa111111111111111111111111111111111111'],
+      'Add sidebar graph test',
+      'Alice',
+      [
+        { name: 'HEAD', kind: 'head', isCurrentHead: true },
+        { name: 'main', kind: 'local-branch', isCurrentHead: true }
+      ]
+    )
+
+    const externalCommit = makeCommit(
+      'eeee555555555555555555555555555555555555',
+      ['dddd444444444444444444444444444444444444'],
+      'External CLI commit',
+      'Dana',
+      [
+        { name: 'HEAD', kind: 'head', isCurrentHead: true },
+        { name: 'main', kind: 'local-branch', isCurrentHead: true }
+      ]
+    )
+
+    let hasCommitted = false
+    let hasExternalCommit = false
+    let delayNextAllScope = false
+    let resolveDelayedAll!: (result: GitLogResult) => void
+
+    const logSpy = vi.fn(
+      (_ws: string, options?: { scope?: 'all' | 'current'; limit?: number; skip?: number }) => {
+        if (options?.scope === 'current') {
+          if (hasExternalCommit) {
+            return Promise.resolve({ commits: [externalCommit, committedHead], hasMore: false })
+          }
+          if (hasCommitted) {
+            return Promise.resolve({ commits: [committedHead, ...currentPage1], hasMore: false })
+          }
+          if ((options.skip ?? 0) > 0) {
+            return Promise.resolve({ commits: currentPage2, hasMore: false })
+          }
+          return Promise.resolve({ commits: currentPage1, hasMore: true })
+        }
+
+        if (delayNextAllScope) {
+          delayNextAllScope = false
+          return new Promise<GitLogResult>((resolve) => {
+            resolveDelayedAll = resolve
+          })
+        }
+
+        return Promise.resolve({ commits: allCommits, hasMore: false })
+      }
+    )
+
+    const { api, emitMenuCommand, emitWorkspaceChange } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/graph-app',
+        workspaces: {
+          'C:/wiki/graph-app': {
+            'notes.md': '# Notes'
+          }
+        },
+        git: {
+          status: vi.fn(async () => ({
+            ...createEmptyGitStatus(true, 'C:/wiki/graph-app'),
+            branch: 'main',
+            staged: hasCommitted ? [] : [{ path: 'notes.md', status: 'M' as GitFileStatusCode }]
+          })),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [
+              { name: 'main', current: true, upstream: 'origin/main' },
+              { name: 'feature-x', current: false, upstream: null }
+            ]
+          })),
+          commit: vi.fn(async () => {
+            hasCommitted = true
+            return {
+              ...createEmptyGitStatus(true, 'C:/wiki/graph-app'),
+              branch: 'main'
+            }
+          }),
+          log: logSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const graphRegion = within(gitRegion).getByRole('region', { name: 'Graph' })
+    const graphAccordionBtn = within(graphRegion).getByRole('button', { name: /Graph/i })
+
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('Merge feature-x')).toBeInTheDocument()
+    })
+    expect(within(graphRegion).getByText('Side branch work')).toBeInTheDocument()
+    expect(within(graphRegion).getByText('HEAD')).toHaveClass('is-head')
+    expect(within(graphRegion).getByText('main')).toHaveClass('is-local-branch')
+    expect(within(graphRegion).getByText('origin/main')).toHaveClass('is-remote-branch')
+    expect(within(graphRegion).getByText('v1.0.0')).toHaveClass('is-tag')
+    expect(graphRegion.querySelectorAll('svg.git-graph-svg').length).toBe(2)
+
+    const items = within(within(graphRegion).getByRole('list', { name: '커밋 그래프' })).getAllByRole(
+      'listitem'
+    )
+    expect(items[0].getAttribute('title')).toMatch(
+      /^aaaa111 · Alice · \d{4}-\d{2}-\d{2} \d{2}:\d{2} · Merge feature-x$/
+    )
+
+    // Switch to 현재 브랜치 without toggling Graph accordion collapse
+    const allBtn = within(graphRegion).getByRole('button', { name: '전체' })
+    const currentBtn = within(graphRegion).getByRole('button', { name: '현재 브랜치' })
+    expect(allBtn).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(currentBtn)
+    await waitFor(() => {
+      expect(within(graphRegion).queryByText('Side branch work')).not.toBeInTheDocument()
+    })
+    expect(graphAccordionBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(currentBtn).toHaveAttribute('aria-pressed', 'true')
+
+    // Click 더 보기 to paginate current branch commits
+    await user.click(within(graphRegion).getByRole('button', { name: '더 보기' }))
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('Older mainline commit')).toBeInTheDocument()
+    })
+    expect(logSpy).toHaveBeenCalledWith('C:/wiki/graph-app', {
+      scope: 'current',
+      limit: 100,
+      skip: 1
+    })
+
+    // Trigger delayed 전체 request, then immediately toggle back to 현재 브랜치 -> stale response ignored
+    delayNextAllScope = true
+    await user.click(allBtn)
+    await user.click(currentBtn)
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('Merge feature-x')).toBeInTheDocument()
+    })
+    await act(async () => {
+      resolveDelayedAll({
+        commits: [makeCommit('stale99999999999999999999999999999999999', [], 'Stale commit', 'Ghost')],
+        hasMore: false
+      })
+    })
+    expect(within(graphRegion).queryByText('Stale commit')).not.toBeInTheDocument()
+
+    // Commit refreshes Graph to latest page 1
+    await user.type(within(gitRegion).getByLabelText('커밋 메시지'), 'Add sidebar graph test')
+    await user.click(within(gitRegion).getByRole('button', { name: 'Commit' }))
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('Add sidebar graph test')).toBeInTheDocument()
+    })
+
+    // Workspace change event also refreshes Graph automatically
+    hasExternalCommit = true
+    await act(async () => {
+      emitWorkspaceChange({
+        rootPath: 'C:/wiki/graph-app',
+        eventType: 'change',
+        relativePath: 'notes.md'
+      })
+    })
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('External CLI commit')).toBeInTheDocument()
+    })
   })
 })
 

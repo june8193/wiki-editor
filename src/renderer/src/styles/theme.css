@@ -1843,7 +1843,7 @@ body.is-resizing-sidebar .pane-workspace {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
+  flex: 1 1 auto;
   min-width: 0;
   border: none;
   background: transparent;
@@ -2113,4 +2113,196 @@ body.is-resizing-git-sections * {
 .git-badge--d,
 .git-badge--u {
   color: var(--danger-color);
+}
+
+.git-graph-scope-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  margin-right: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background-color: var(--bg-elevated);
+}
+
+.git-graph-scope-btn {
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 2px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.git-graph-scope-btn:hover {
+  color: var(--text-primary);
+}
+
+.git-graph-scope-btn.is-active {
+  background-color: var(--accent-color);
+  color: #ffffff;
+}
+
+.git-graph-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.git-graph-error {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--danger-color);
+  color: var(--danger-color);
+  font-size: 11px;
+}
+
+.git-graph-list {
+  --git-graph-lane-0: #2563eb;
+  --git-graph-lane-1: #16a34a;
+  --git-graph-lane-2: #9333ea;
+  --git-graph-lane-3: #d97706;
+  --git-graph-lane-4: #db2777;
+  --git-graph-lane-5: #0891b2;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.git-graph-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 4px;
+  border-radius: 4px;
+  min-width: 0;
+}
+
+.git-graph-item:hover {
+  background-color: var(--bg-elevated);
+}
+
+.git-graph-item.is-head .git-graph-subject {
+  font-weight: 600;
+}
+
+.git-graph-svg {
+  flex: 0 0 auto;
+  display: block;
+}
+
+.git-graph-merge-dot {
+  fill: var(--bg-surface);
+}
+
+.git-graph-commit-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.git-graph-commit-primary {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.git-graph-refs {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.git-ref-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.git-ref-badge.is-head {
+  border-color: var(--accent-color);
+  background-color: var(--accent-color);
+  color: #ffffff;
+}
+
+.git-ref-badge.is-local-branch.is-current-head {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.git-ref-badge.is-remote-branch {
+  border-style: dashed;
+  color: var(--text-secondary);
+}
+
+.git-ref-badge.is-tag {
+  border-color: #d97706;
+  color: #b45309;
+}
+
+.git-graph-subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.git-graph-author {
+  flex: 0 0 auto;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.git-graph-load-more-btn {
+  align-self: stretch;
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.git-graph-load-more-btn:hover:not(:disabled) {
+  background-color: var(--bg-elevated);
+}
+
+.git-graph-load-more-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }

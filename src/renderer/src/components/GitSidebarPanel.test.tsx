@@ -2,7 +2,12 @@ import { useState } from 'react'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { createEmptyGitStatus, type GitBranchList, type GitStatus } from '@shared/git'
+import {
+  createEmptyGitStatus,
+  type GitBranchList,
+  type GitGraphCommit,
+  type GitStatus
+} from '@shared/git'
 import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
@@ -54,6 +59,14 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onPull: vi.fn(),
     onPush: vi.fn(),
     onSync: vi.fn(),
+    logCommits: [],
+    logHasMore: false,
+    logScope: 'all',
+    isLogLoading: false,
+    isLogLoadingMore: false,
+    logErrorMessage: null,
+    onChangeLogScope: vi.fn(),
+    onLoadMoreCommits: vi.fn(),
     splitState: createDefaultGitPanelSplitState(),
     onToggleChangesCollapsed: vi.fn(),
     onToggleGraphCollapsed: vi.fn(),
@@ -460,5 +473,97 @@ describe('GitSidebarPanel', () => {
     await user.click(within(region).getByRole('button', { name: /Changes/i }))
     expect(within(region).queryByRole('separator', { name: 'Git 섹션 높이 조절' })).not.toBeInTheDocument()
     expect(graphSection).toHaveStyle({ flex: '1 1 0%' })
+  })
+
+  it('renders Graph scope toggle independently of accordion collapse and renders SVG lanes, ref badges, tooltips, and 더 보기 pagination', async () => {
+    const user = userEvent.setup()
+    const onChangeLogScope = vi.fn()
+    const onLoadMoreCommits = vi.fn()
+    const onToggleGraphCollapsed = vi.fn()
+
+    const commits: GitGraphCommit[] = [
+      {
+        hash: '1111111222222233333334444444555555566666',
+        shortHash: '1111111',
+        parents: ['2222222000000000000000000000000000000000', '3333333000000000000000000000000000000000'],
+        subject: 'Merge feature branch into main',
+        authorName: 'Alice',
+        committedAt: '2026-11-15T06:30:00Z',
+        refs: [
+          { name: 'HEAD', kind: 'head', isCurrentHead: true },
+          { name: 'main', kind: 'local-branch', isCurrentHead: true },
+          { name: 'origin/main', kind: 'remote-branch' },
+          { name: 'v1.0.0', kind: 'tag' }
+        ]
+      },
+      {
+        hash: '2222222000000000000000000000000000000000',
+        shortHash: '2222222',
+        parents: ['3333333000000000000000000000000000000000'],
+        subject: 'Update docs',
+        authorName: 'Bob',
+        committedAt: '2026-11-15T05:15:00Z',
+        refs: []
+      },
+      {
+        hash: '3333333000000000000000000000000000000000',
+        shortHash: '3333333',
+        parents: [],
+        subject: 'Initial wiki commit',
+        authorName: 'Carol',
+        committedAt: '2026-11-14T10:00:00Z',
+        refs: [{ name: 'feature/side', kind: 'local-branch' }]
+      }
+    ]
+
+    render(
+      <GitSidebarPanel
+        {...buildProps({
+          logCommits: commits,
+          logHasMore: true,
+          logScope: 'all',
+          onChangeLogScope,
+          onLoadMoreCommits,
+          onToggleGraphCollapsed
+        })}
+      />
+    )
+
+    const graphRegion = screen.getByRole('region', { name: 'Graph' })
+    const allBtn = within(graphRegion).getByRole('button', { name: '전체' })
+    const currentBtn = within(graphRegion).getByRole('button', { name: '현재 브랜치' })
+    expect(allBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(currentBtn).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(currentBtn)
+    expect(onChangeLogScope).toHaveBeenCalledWith('current')
+    expect(onToggleGraphCollapsed).not.toHaveBeenCalled()
+
+    // Commit rows, ref badges, SVG lanes, and tooltips
+    const list = within(graphRegion).getByRole('list', { name: '커밋 그래프' })
+    const items = within(list).getAllByRole('listitem')
+    expect(items).toHaveLength(3)
+
+    expect(within(items[0]).getByText('Merge feature branch into main')).toBeInTheDocument()
+    expect(within(items[0]).getByText('Alice')).toBeInTheDocument()
+    expect(within(items[0]).getByText('HEAD')).toHaveClass('is-head')
+    expect(within(items[0]).getByText('main')).toHaveClass('is-local-branch')
+    expect(within(items[0]).getByText('origin/main')).toHaveClass('is-remote-branch')
+    expect(within(items[0]).getByText('v1.0.0')).toHaveClass('is-tag')
+    expect(items[0].getAttribute('title')).toMatch(
+      /^1111111 · Alice · \d{4}-\d{2}-\d{2} \d{2}:\d{2} · Merge feature branch into main$/
+    )
+
+    // HEAD emphasis ring + merge marker + SVG paths rendered across lanes
+    expect(items[0].querySelector('svg.git-graph-svg')).not.toBeNull()
+    expect(items[0].querySelector('circle.git-graph-head-ring')).not.toBeNull()
+    expect(items[0].querySelector('circle.git-graph-merge-dot')).not.toBeNull()
+    expect(items[1].querySelector('circle.git-graph-head-ring')).toBeNull()
+    expect(items[1].querySelector('circle.git-graph-merge-dot')).toBeNull()
+
+    // More pagination button
+    const loadMoreBtn = within(graphRegion).getByRole('button', { name: '더 보기' })
+    await user.click(loadMoreBtn)
+    expect(onLoadMoreCommits).toHaveBeenCalledTimes(1)
   })
 })

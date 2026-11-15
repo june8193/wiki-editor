@@ -59,6 +59,7 @@ describe('registerGitIpc', () => {
 
   it('rejects git IPC calls when no workspace is open or path mismatches the open workspace, routes all channels, and disposes handlers', async () => {
     const sampleStatus = createEmptyGitStatus(true, workspaceDir)
+    const sampleLog = { commits: [], hasMore: false }
     const fakeGitService: Pick<
       GitService,
       | 'status'
@@ -73,6 +74,7 @@ describe('registerGitIpc', () => {
       | 'pull'
       | 'push'
       | 'sync'
+      | 'log'
     > = {
       status: vi.fn(async () => sampleStatus),
       init: vi.fn(async () => sampleStatus),
@@ -89,7 +91,8 @@ describe('registerGitIpc', () => {
       checkout: vi.fn(async () => sampleStatus),
       pull: vi.fn(async () => sampleStatus),
       push: vi.fn(async () => sampleStatus),
-      sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'done' }))
+      sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'done' })),
+      log: vi.fn(async () => sampleLog)
     }
 
     const ipcMain = createFakeIpcMain()
@@ -100,10 +103,12 @@ describe('registerGitIpc', () => {
     })
 
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.log, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
 
     const opened = await workspaceService.openWorkspace(workspaceDir)
 
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, otherDir)).rejects.toThrow(/일치하지 않습니다/)
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.log, otherDir)).rejects.toThrow(/일치하지 않습니다/)
 
     expect(await ipcMain.invoke(GIT_IPC_CHANNELS.status, workspaceDir)).toEqual(sampleStatus)
     expect(fakeGitService.status).toHaveBeenCalledWith(opened.rootPath)
@@ -141,6 +146,15 @@ describe('registerGitIpc', () => {
     await ipcMain.invoke(GIT_IPC_CHANNELS.sync, workspaceDir)
     expect(fakeGitService.sync).toHaveBeenCalledWith(opened.rootPath)
 
+    expect(
+      await ipcMain.invoke(GIT_IPC_CHANNELS.log, workspaceDir, { scope: 'current', limit: 50, skip: 10 })
+    ).toEqual(sampleLog)
+    expect(fakeGitService.log).toHaveBeenCalledWith(opened.rootPath, {
+      scope: 'current',
+      limit: 50,
+      skip: 10
+    })
+
     dispose()
     for (const channel of Object.values(GIT_IPC_CHANNELS)) {
       expect(ipcMain.hasHandler(channel)).toBe(false)
@@ -164,6 +178,7 @@ describe('registerGitIpc', () => {
       | 'pull'
       | 'push'
       | 'sync'
+      | 'log'
     > = {
       status: vi.fn(async () => sampleStatus),
       init: vi.fn(async () => sampleStatus),
@@ -176,7 +191,8 @@ describe('registerGitIpc', () => {
       checkout: vi.fn(async () => sampleStatus),
       pull: vi.fn(async () => sampleStatus),
       push: vi.fn(async () => sampleStatus),
-      sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'ok' }))
+      sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'ok' })),
+      log: vi.fn(async () => ({ commits: [], hasMore: false }))
     }
 
     const ipcMain = createFakeIpcMain()

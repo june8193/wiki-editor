@@ -1,6 +1,11 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createEmptyGitStatus, type GitStatus } from '@shared/git'
+import {
+  createEmptyGitStatus,
+  type GitGraphCommit,
+  type GitLogResult,
+  type GitStatus
+} from '@shared/git'
 import type { WikiApi } from '@shared/ipc'
 import { useGitController } from './useGitController'
 
@@ -48,7 +53,8 @@ describe('useGitController', () => {
         checkout: vi.fn(),
         pull: pullMock,
         push: vi.fn(),
-        sync: vi.fn()
+        sync: vi.fn(),
+        log: vi.fn(async () => ({ commits: [], hasMore: false }))
       }
     } as unknown as WikiApi
 
@@ -119,7 +125,8 @@ describe('useGitController', () => {
         checkout: vi.fn(),
         pull: vi.fn(),
         push: vi.fn(),
-        sync: vi.fn()
+        sync: vi.fn(),
+        log: vi.fn(async () => ({ commits: [], hasMore: false }))
       }
     } as unknown as WikiApi
 
@@ -177,7 +184,8 @@ describe('useGitController', () => {
         checkout: vi.fn(),
         pull: pullMock,
         push: vi.fn(),
-        sync: vi.fn()
+        sync: vi.fn(),
+        log: vi.fn(async () => ({ commits: [], hasMore: false }))
       }
     } as unknown as WikiApi
 
@@ -226,5 +234,223 @@ describe('useGitController', () => {
     })
     expect(result.current.pendingAction).toBeNull()
     expect(result.current.status?.branch).toBe('b-updated')
+  })
+
+  it('loads commit graph on repo init, filters by scope, paginates with loadMoreCommits, and refreshes page 1 on repository mutations', async () => {
+    const makeCommit = (hash: string): GitGraphCommit => ({
+      hash,
+      shortHash: hash.slice(0, 7),
+      parents: [],
+      subject: `commit ${hash}`,
+      authorName: 'Tester',
+      committedAt: '2026-11-15T12:00:00+09:00',
+      refs: []
+    })
+
+    const allPage1 = [makeCommit('a1'), makeCommit('a2')]
+    const allPage2 = [makeCommit('a3')]
+    const currentPage1 = [makeCommit('c1')]
+    const refreshedCurrent = [makeCommit('c2'), makeCommit('c1')]
+
+    let committed = false
+    const logMock = vi.fn(async (_ws, options?: { scope?: string; skip?: number }) => {
+      if (options?.scope === 'current') {
+        return {
+          commits: committed ? refreshedCurrent : currentPage1,
+          hasMore: false
+        }
+      }
+      if ((options?.skip ?? 0) === 2) {
+        return { commits: allPage2, hasMore: false }
+      }
+      return { commits: allPage1, hasMore: true }
+    })
+
+    const nextStatus = makeStatus('main', 0)
+    window.wikiApi = {
+      git: {
+        status: vi.fn(async () => nextStatus),
+        init: vi.fn(async () => nextStatus),
+        stage: vi.fn(async () => nextStatus),
+        stageAll: vi.fn(async () => nextStatus),
+        unstage: vi.fn(async () => nextStatus),
+        unstageAll: vi.fn(async () => nextStatus),
+        commit: vi.fn(async () => {
+          committed = true
+          return nextStatus
+        }),
+        branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
+        checkout: vi.fn(async () => nextStatus),
+        pull: vi.fn(async () => nextStatus),
+        push: vi.fn(async () => nextStatus),
+        sync: vi.fn(async () => nextStatus),
+        log: logMock
+      }
+    } as unknown as WikiApi
+
+    const { result } = renderHook(() => useGitController({ workspaceRootPath: 'C:/wiki' }))
+
+    await waitFor(() => {
+      expect(result.current.logCommits.map((c) => c.hash)).toEqual(['a1', 'a2'])
+    })
+    expect(result.current.logScope).toBe('all')
+    expect(result.current.logHasMore).toBe(true)
+    expect(logMock).toHaveBeenCalledWith('C:/wiki', { scope: 'all', limit: 100, skip: 0 })
+
+    // Load next page
+    await act(async () => {
+      await result.current.loadMoreCommits()
+    })
+    expect(logMock).toHaveBeenLastCalledWith('C:/wiki', { scope: 'all', limit: 100, skip: 2 })
+    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['a1', 'a2', 'a3'])
+    expect(result.current.logHasMore).toBe(false)
+
+    // Stage/unstage should NOT re-fetch commit history
+    const callsBeforeStage = logMock.mock.calls.length
+    await act(async () => {
+      await result.current.stageFile('notes.md')
+      await result.current.unstageFile('notes.md')
+    })
+    expect(logMock).toHaveBeenCalledTimes(callsBeforeStage)
+
+    // Switch filter to current branch
+    await act(async () => {
+      await result.current.changeLogScope('current')
+    })
+    expect(result.current.logScope).toBe('current')
+    expect(logMock).toHaveBeenLastCalledWith('C:/wiki', { scope: 'current', limit: 100, skip: 0 })
+    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['c1'])
+
+    // Commit, Checkout, Pull, Push, Sync, and Refresh each refresh page 1 with active scope
+    await act(async () => {
+      await result.current.commit('Add feature')
+    })
+    expect(logMock).toHaveBeenLastCalledWith('C:/wiki', { scope: 'current', limit: 100, skip: 0 })
+    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['c2', 'c1'])
+
+    const callsBeforeActions = logMock.mock.calls.length
+    await act(async () => {
+      await result.current.checkoutBranch('main')
+      await result.current.pull()
+      await result.current.push()
+      await result.current.sync()
+      await result.current.refreshStatus()
+    })
+    expect(logMock).toHaveBeenCalledTimes(callsBeforeActions + 5)
+  })
+
+  it('ignores stale git.log responses across filter switches, loadMore races, and workspace switches', async () => {
+    const makeCommit = (hash: string): GitGraphCommit => ({
+      hash,
+      shortHash: hash.slice(0, 7),
+      parents: [],
+      subject: hash,
+      authorName: 'Tester',
+      committedAt: '2026-11-15T12:00:00+09:00',
+      refs: []
+    })
+
+    let resolveRepoAAllPage2!: (value: GitLogResult) => void
+    const repoAAllPage2Promise = new Promise<GitLogResult>((resolve) => {
+      resolveRepoAAllPage2 = resolve
+    })
+
+    let resolveRepoACurrentDelayed!: (value: GitLogResult) => void
+    let delayRepoACurrent = false
+    const repoACurrentDelayedPromise = new Promise<GitLogResult>((resolve) => {
+      resolveRepoACurrentDelayed = resolve
+    })
+
+    let resolveRepoBLog!: (value: GitLogResult) => void
+    const repoBLogPromise = new Promise<GitLogResult>((resolve) => {
+      resolveRepoBLog = resolve
+    })
+
+    const logMock = vi.fn((ws: string, options?: { scope?: string; skip?: number }) => {
+      if (ws === 'C:/repo-a') {
+        if (options?.scope === 'current') {
+          if (delayRepoACurrent) {
+            return repoACurrentDelayedPromise
+          }
+          return Promise.resolve({ commits: [makeCommit('a-current-1')], hasMore: false })
+        }
+        if ((options?.skip ?? 0) === 1) {
+          return repoAAllPage2Promise
+        }
+        return Promise.resolve({ commits: [makeCommit('a-all-1')], hasMore: true })
+      }
+      return repoBLogPromise
+    })
+
+    window.wikiApi = {
+      git: {
+        status: vi.fn(async (ws) => makeStatus(ws === 'C:/repo-a' ? 'branch-a' : 'branch-b')),
+        init: vi.fn(),
+        stage: vi.fn(),
+        stageAll: vi.fn(),
+        unstage: vi.fn(),
+        unstageAll: vi.fn(),
+        commit: vi.fn(),
+        branches: vi.fn(async () => ({ current: 'branch-a', isDetached: false, branches: [] })),
+        checkout: vi.fn(),
+        pull: vi.fn(),
+        push: vi.fn(),
+        sync: vi.fn(),
+        log: logMock
+      }
+    } as unknown as WikiApi
+
+    const { result, rerender } = renderHook(
+      ({ ws }: { ws: string | null }) => useGitController({ workspaceRootPath: ws }),
+      { initialProps: { ws: 'C:/repo-a' } }
+    )
+
+    await waitFor(() => {
+      expect(result.current.logCommits.map((c) => c.hash)).toEqual(['a-all-1'])
+    })
+
+    // Start slow loadMore on 'all', then switch filter to 'current' before page 2 resolves
+    let pendingLoadMore!: Promise<void>
+    act(() => {
+      pendingLoadMore = result.current.loadMoreCommits()
+    })
+
+    await act(async () => {
+      await result.current.changeLogScope('current')
+    })
+    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['a-current-1'])
+
+    // Stale page-2 response resolves later -> must NOT append onto 'current' results
+    await act(async () => {
+      resolveRepoAAllPage2({ commits: [makeCommit('stale-page-2')], hasMore: false })
+      await pendingLoadMore
+    })
+    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['a-current-1'])
+    expect(result.current.logScope).toBe('current')
+    expect(result.current.isLogLoadingMore).toBe(false)
+
+    // Trigger a slow refresh in repo-a before switching to repo-b
+    delayRepoACurrent = true
+    act(() => {
+      void result.current.refreshStatus()
+    })
+
+    // Switch workspace -> scope resets to 'all' and previous repo commits clear cleanly
+    rerender({ ws: 'C:/repo-b' })
+    await waitFor(() => {
+      expect(result.current.logScope).toBe('all')
+    })
+    expect(result.current.logCommits).toEqual([])
+
+    await act(async () => {
+      resolveRepoBLog({ commits: [makeCommit('b-all-1')], hasMore: false })
+    })
+    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['b-all-1'])
+
+    // Stale repo-a response resolving after repo-b finished must be ignored
+    await act(async () => {
+      resolveRepoACurrentDelayed({ commits: [makeCommit('stale-repo-a')], hasMore: false })
+    })
+    expect(result.current.logCommits.map((c) => c.hash)).toEqual(['b-all-1'])
   })
 })

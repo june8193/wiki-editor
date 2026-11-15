@@ -1,5 +1,5 @@
 import type { AppConfig } from '@shared/config'
-import type { GitBranchList, GitStatus, GitSyncResult } from '@shared/git'
+import type { GitBranchList, GitLogResult, GitStatus, GitSyncResult } from '@shared/git'
 import {
   type AppMenuCommand,
   CONFIG_IPC_CHANNELS,
@@ -124,7 +124,9 @@ export function createWikiApi(ipcRenderer: IpcRendererLike): Required<WikiApi> {
       push: (workspacePath) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.push, workspacePath) as Promise<GitStatus>,
       sync: (workspacePath) =>
-        ipcRenderer.invoke(GIT_IPC_CHANNELS.sync, workspacePath) as Promise<GitSyncResult>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.sync, workspacePath) as Promise<GitSyncResult>,
+      log: (workspacePath, options) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.log, workspacePath, options) as Promise<GitLogResult>
     },
     menu: {
       onCommand: (listener) =>

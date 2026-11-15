@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -364,6 +364,208 @@ describe('GitService integration (isolated temp repos)', () => {
     expect(entries[1].error?.code).toBe(1)
     expect(entries[1].error?.stdout).toMatch(/nothing to commit/i)
   }, 30_000)
+
+  it('returns empty commits for unborn repo, rejects non-git folders, and paginates linear history with refs and ISO timestamps', async () => {
+    await expect(service.log(nonGitDir)).rejects.toThrow(/Git 저장소가 아닙니다/)
+
+    await service.init(repoDir)
+    await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
+    await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
+
+    expect(await service.log(repoDir)).toEqual({ commits: [], hasMore: false })
+    expect(await service.log(repoDir, { scope: 'current' })).toEqual({ commits: [], hasMore: false })
+
+    await writeFile(join(repoDir, 'a.md'), '# A\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'initial commit')
+
+    await writeFile(join(repoDir, 'b.md'), '# B\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, '한글 제목: second commit')
+
+    await writeFile(join(repoDir, 'c.md'), '# C\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'third commit')
+
+    const page1 = await service.log(repoDir, { limit: 2, skip: 0 })
+    expect(page1.hasMore).toBe(true)
+    expect(page1.commits).toHaveLength(2)
+
+    const [c3, c2] = page1.commits
+    expect(c3.subject).toBe('third commit')
+    expect(c3.authorName).toBe('Wiki Tester')
+    expect(c3.hash).toMatch(/^[0-9a-f]{40}$/)
+    expect(c3.shortHash).toBe(c3.hash.slice(0, c3.shortHash.length))
+    expect(c3.parents).toEqual([c2.hash])
+    expect(Number.isNaN(Date.parse(c3.committedAt))).toBe(false)
+    expect(c3.refs).toEqual([
+      { name: 'HEAD', kind: 'head', isCurrentHead: true },
+      { name: 'main', kind: 'local-branch', isCurrentHead: true }
+    ])
+
+    expect(c2.subject).toBe('한글 제목: second commit')
+    expect(c2.refs).toEqual([])
+
+    const page2 = await service.log(repoDir, { limit: 2, skip: 2 })
+    expect(page2.hasMore).toBe(false)
+    expect(page2.commits).toHaveLength(1)
+    expect(page2.commits[0].subject).toBe('initial commit')
+    expect(page2.commits[0].parents).toEqual([])
+    expect(c2.parents).toEqual([page2.commits[0].hash])
+
+    await expect(service.log(repoDir, { limit: 0 })).rejects.toThrow(/limit/)
+    await expect(service.log(repoDir, { skip: -1 })).rejects.toThrow(/skip/)
+  }, 30_000)
+
+  it('filters log by scope (all vs current+upstream), resolves branches/remotes/annotated tags, excludes refs/stash and */HEAD, and defaults pagination to 100 commits', async () => {
+    const bareRemote = join(tempRoot, 'graph-remote.git')
+    const cloneA = join(tempRoot, 'graph-clone-a')
+    const cloneB = join(tempRoot, 'graph-clone-b')
+    await mkdir(bareRemote, { recursive: true })
+    await runGit(bareRemote, ['init', '--bare'])
+
+    await runGit(tempRoot, ['clone', bareRemote, cloneA])
+    await runGit(cloneA, ['checkout', '-b', 'main'])
+    await runGit(cloneA, ['config', 'user.name', 'Alice'])
+    await runGit(cloneA, ['config', 'user.email', 'alice@example.com'])
+    await writeFile(join(cloneA, 'base.md'), '# Base\n', 'utf8')
+    await service.stageAll(cloneA)
+    await service.commit(cloneA, 'base commit')
+    const baseHash = (await runGit(cloneA, ['rev-parse', 'HEAD'])).trim()
+    await runGit(cloneA, ['tag', 'v1.0'])
+    await runGit(cloneA, ['tag', '-a', 'v1.0-ann', '-m', 'Release v1.0'])
+    await service.push(cloneA)
+    await runGit(cloneA, ['push', 'origin', '--tags'])
+    await runGit(bareRemote, ['symbolic-ref', 'HEAD', 'refs/heads/main'])
+
+    // Clone B tracks origin/main and creates origin/HEAD symbolic ref on fetch/clone
+    await runGit(tempRoot, ['clone', bareRemote, cloneB])
+    await runGit(cloneB, ['config', 'user.name', 'Bob'])
+    await runGit(cloneB, ['config', 'user.email', 'bob@example.com'])
+    await runGit(cloneB, ['remote', 'set-head', 'origin', 'main'])
+
+    // Feature branch merged with --no-ff on cloneB
+    await runGit(cloneB, ['checkout', '-b', 'feature/graph'])
+    await writeFile(join(cloneB, 'feat.md'), '# Feat\n', 'utf8')
+    await service.stageAll(cloneB)
+    await service.commit(cloneB, 'feature work')
+    const featureHash = (await runGit(cloneB, ['rev-parse', 'HEAD'])).trim()
+
+    await runGit(cloneB, ['checkout', 'main'])
+    await runGit(cloneB, ['merge', '--no-ff', 'feature/graph', '-m', 'merge feature/graph'])
+    const mergeHash = (await runGit(cloneB, ['rev-parse', 'HEAD'])).trim()
+
+    // Separate side branch not merged into main
+    await runGit(cloneB, ['checkout', '-b', 'side/only', baseHash])
+    await writeFile(join(cloneB, 'side.md'), '# Side\n', 'utf8')
+    await service.stageAll(cloneB)
+    await service.commit(cloneB, 'side branch commit')
+    const sideHash = (await runGit(cloneB, ['rev-parse', 'HEAD'])).trim()
+
+    // Return to main and create a stash (refs/stash MUST be excluded from scope:'all')
+    await runGit(cloneB, ['checkout', 'main'])
+    await writeFile(join(cloneB, 'stash-temp.md'), '# Stashed\n', 'utf8')
+    await runGit(cloneB, ['stash', 'push', '-u', '-m', 'secret stash wip'])
+
+    // Advance origin/main from cloneA and fetch in cloneB so @{upstream} has an unpulled commit
+    await writeFile(join(cloneA, 'remote-next.md'), '# Remote\n', 'utf8')
+    await service.stageAll(cloneA)
+    await service.commit(cloneA, 'upstream commit')
+    const upstreamHash = (await runGit(cloneA, ['rev-parse', 'HEAD'])).trim()
+    await service.push(cloneA)
+    await runGit(cloneB, ['fetch', '--tags'])
+
+    const allResult = await service.log(cloneB, { scope: 'all' })
+    const allHashes = allResult.commits.map((c) => c.hash)
+    expect(allHashes).toContain(upstreamHash)
+    expect(allHashes).toContain(mergeHash)
+    expect(allHashes).toContain(featureHash)
+    expect(allHashes).toContain(sideHash)
+    expect(allHashes).toContain(baseHash)
+    expect(allResult.commits.some((c) => c.subject.includes('secret stash wip'))).toBe(false)
+    expect(allResult.commits.flatMap((c) => c.refs).some((r) => r.name.includes('HEAD') && r.kind === 'remote-branch')).toBe(false)
+    expect(allResult.commits.flatMap((c) => c.refs).some((r) => r.name === 'origin')).toBe(false)
+
+    const mergeCommit = allResult.commits.find((c) => c.hash === mergeHash)!
+    expect(mergeCommit.parents).toHaveLength(2)
+    expect(mergeCommit.refs).toEqual([
+      { name: 'HEAD', kind: 'head', isCurrentHead: true },
+      { name: 'main', kind: 'local-branch', isCurrentHead: true }
+    ])
+
+    const upstreamCommit = allResult.commits.find((c) => c.hash === upstreamHash)!
+    expect(upstreamCommit.refs).toEqual([{ name: 'origin/main', kind: 'remote-branch' }])
+
+    const baseCommit = allResult.commits.find((c) => c.hash === baseHash)!
+    expect(baseCommit.refs).toEqual([
+      { name: 'v1.0', kind: 'tag' },
+      { name: 'v1.0-ann', kind: 'tag' }
+    ])
+
+    // scope: 'current' includes HEAD + @{upstream} and excludes side/only
+    const currentResult = await service.log(cloneB, { scope: 'current' })
+    const currentHashes = currentResult.commits.map((c) => c.hash)
+    expect(currentHashes).toContain(upstreamHash)
+    expect(currentHashes).toContain(mergeHash)
+    expect(currentHashes).toContain(featureHash)
+    expect(currentHashes).toContain(baseHash)
+    expect(currentHashes).not.toContain(sideHash)
+
+    // Detached HEAD commit not reachable from any branch is included in both 'all' and 'current'
+    await runGit(cloneB, ['checkout', '--detach', baseHash])
+    await writeFile(join(cloneB, 'detached.md'), '# Detached\n', 'utf8')
+    await service.stageAll(cloneB)
+    await service.commit(cloneB, 'detached tip')
+    const detachedHash = (await runGit(cloneB, ['rev-parse', 'HEAD'])).trim()
+
+    const detachedAll = await service.log(cloneB, { scope: 'all' })
+    const detachedTip = detachedAll.commits.find((c) => c.hash === detachedHash)!
+    expect(detachedTip.refs).toEqual([{ name: 'HEAD', kind: 'head', isCurrentHead: true }])
+
+    const detachedCurrent = await service.log(cloneB, { scope: 'current' })
+    expect(detachedCurrent.commits.map((c) => c.hash)).toEqual([detachedHash, baseHash])
+
+    // Default pagination limit = 100 verified via fast-import of 105 linear commits
+    await service.init(repoDir)
+    const fastImportLines: string[] = []
+    for (let i = 1; i <= 105; i += 1) {
+      fastImportLines.push(
+        `commit refs/heads/main`,
+        `mark :${i}`,
+        `committer Wiki Tester <tester@example.com> ${1700000000 + i} +0000`,
+        `data ${Buffer.byteLength(`commit ${i}`)}`,
+        `commit ${i}`,
+        ...(i > 1 ? [`from :${i - 1}`] : [])
+      )
+    }
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('git', ['fast-import', '--quiet'], {
+        cwd: repoDir,
+        windowsHide: true,
+        env: {
+          ...process.env,
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_CONFIG_GLOBAL: gitConfigFile
+        }
+      })
+      child.on('error', reject)
+      child.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`git fast-import exited with code ${code}`))
+      })
+      child.stdin.end(fastImportLines.join('\n') + '\n')
+    })
+
+    const defaultPage1 = await service.log(repoDir)
+    expect(defaultPage1.commits).toHaveLength(100)
+    expect(defaultPage1.hasMore).toBe(true)
+    expect(defaultPage1.commits[0].subject).toBe('commit 105')
+
+    const defaultPage2 = await service.log(repoDir, { skip: 100 })
+    expect(defaultPage2.commits).toHaveLength(5)
+    expect(defaultPage2.hasMore).toBe(false)
+    expect(defaultPage2.commits[4].subject).toBe('commit 1')
+  }, 60_000)
 })
 
 describe('GitService helpers (unit)', () => {

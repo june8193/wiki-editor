@@ -43,6 +43,38 @@ export interface GitSyncResult {
   summary: string
 }
 
+export const DEFAULT_GIT_LOG_LIMIT = 100
+
+export type GitLogScope = 'all' | 'current'
+export type GitRefKind = 'head' | 'local-branch' | 'remote-branch' | 'tag'
+
+export interface GitRefBadge {
+  name: string
+  kind: GitRefKind
+  isCurrentHead?: boolean
+}
+
+export interface GitGraphCommit {
+  hash: string
+  shortHash: string
+  parents: string[]
+  subject: string
+  authorName: string
+  committedAt: string
+  refs: GitRefBadge[]
+}
+
+export interface GitLogOptions {
+  scope?: GitLogScope
+  limit?: number
+  skip?: number
+}
+
+export interface GitLogResult {
+  commits: GitGraphCommit[]
+  hasMore: boolean
+}
+
 export function createEmptyGitStatus(isRepo = false, repoRoot: string | null = null): GitStatus {
   return {
     isRepo,

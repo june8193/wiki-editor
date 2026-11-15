@@ -12,20 +12,31 @@ import {
   getGitChangedCount,
   type GitBranchList,
   type GitChangedFile,
+  type GitGraphCommit,
+  type GitLogScope,
   type GitStatus
 } from '@shared/git'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
+import { GitGraphScopeToggle, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
 
 export interface GitSidebarPanelProps {
   workspaceRootPath: string | null
   status: GitStatus | null
   branchList: GitBranchList | null
+  logCommits: readonly GitGraphCommit[]
+  logHasMore: boolean
+  logScope: GitLogScope
+  isLogLoading: boolean
+  isLogLoadingMore: boolean
+  logErrorMessage: string | null
   pendingAction: string | null
   errorMessage: string | null
   splitState: GitPanelSplitState
   onDismissError: () => void
   onRefresh: () => void
+  onChangeLogScope: (nextScope: GitLogScope) => void
+  onLoadMoreCommits: () => void
   onInitRepo: () => void
   onStageFile: (path: string) => void
   onStageAll: () => void
@@ -160,6 +171,7 @@ function GitCommonBanners({ pendingAction, errorMessage, onDismissError }: GitCo
 interface GitAccordionSectionProps {
   title: string
   badgeCount?: number
+  headerActions?: ReactNode
   isExpanded: boolean
   flexRatio: number | null
   onToggle: () => void
@@ -169,6 +181,7 @@ interface GitAccordionSectionProps {
 function GitAccordionSection({
   title,
   badgeCount,
+  headerActions,
   isExpanded,
   flexRatio,
   onToggle,
@@ -193,6 +206,7 @@ function GitAccordionSection({
           <span className="git-accordion-title">{title}</span>
           {badgeCount !== undefined && <span className="git-accordion-badge">{badgeCount}</span>}
         </button>
+        {headerActions}
       </div>
       {isExpanded && <div className="git-accordion-body">{children}</div>}
     </section>
@@ -206,11 +220,19 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   workspaceRootPath,
   status,
   branchList,
+  logCommits,
+  logHasMore,
+  logScope,
+  isLogLoading,
+  isLogLoadingMore,
+  logErrorMessage,
   pendingAction,
   errorMessage,
   splitState,
   onDismissError,
   onRefresh,
+  onChangeLogScope,
+  onLoadMoreCommits,
   onInitRepo,
   onStageFile,
   onStageAll,
@@ -473,13 +495,22 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
 
             <GitAccordionSection
               title="Graph"
+              headerActions={
+                <GitGraphScopeToggle scope={logScope} onChangeScope={onChangeLogScope} />
+              }
               isExpanded={layout.showGraphBody}
               flexRatio={layout.graphFlexRatio}
               onToggle={onToggleGraphCollapsed}
             >
-              <p className="git-empty-subtext">
-                {status.isUnborn ? '아직 커밋된 내역이 없습니다.' : '표시할 커밋 히스토리가 없습니다.'}
-              </p>
+              <GitGraphSection
+                isUnborn={status.isUnborn}
+                commits={logCommits}
+                hasMore={logHasMore}
+                isLoading={isLogLoading}
+                isLoadingMore={isLogLoadingMore}
+                errorMessage={logErrorMessage}
+                onLoadMore={onLoadMoreCommits}
+              />
             </GitAccordionSection>
           </div>
         </>

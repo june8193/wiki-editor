@@ -4,8 +4,11 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
   createEmptyGitStatus,
+  DEFAULT_GIT_LOG_LIMIT,
   type GitBranchInfo,
   type GitBranchList,
+  type GitLogOptions,
+  type GitLogResult,
   type GitStatus,
   type GitSyncResult
 } from '@shared/git'
@@ -22,6 +25,7 @@ import {
   formatGitError,
   GitFormattedError
 } from './gitErrors'
+import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
 import { parsePorcelainV2Z } from './gitPorcelain'
 
 export { formatGitError, parsePorcelainV2Z }
@@ -271,6 +275,77 @@ export class GitService {
     }
   }
 
+  async log(workspacePath: string, options: GitLogOptions = {}): Promise<GitLogResult> {
+    const scope = options.scope ?? 'all'
+    if (scope !== 'all' && scope !== 'current') {
+      throw new Error('유효한 Git 로그 조회 범위가 아닙니다.')
+    }
+    const limit = options.limit ?? DEFAULT_GIT_LOG_LIMIT
+    if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
+      throw new Error('유효한 커밋 조회 개수(limit)가 아닙니다.')
+    }
+    const skip = options.skip ?? 0
+    if (typeof skip !== 'number' || !Number.isInteger(skip) || skip < 0) {
+      throw new Error('유효한 커밋 건너뛰기(skip) 값이 아닙니다.')
+    }
+
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const headHash = await this.resolveRevisionHash(repoRoot, 'HEAD')
+    if (scope === 'current' && !headHash) {
+      return { commits: [], hasMore: false }
+    }
+
+    try {
+      const [headRefName, forEachRefRaw] = await Promise.all([
+        headHash ? this.resolveSymbolicHeadRef(repoRoot) : Promise.resolve(null),
+        this.execGit(repoRoot, [
+          'for-each-ref',
+          '--format=%(objectname)%09%(*objectname)%09%(refname)%09%(refname:short)%09%(symref)',
+          'refs/heads',
+          'refs/remotes',
+          'refs/tags'
+        ])
+      ])
+
+      const refsByHash = parseForEachRefOutput(forEachRefRaw, headRefName)
+      if (scope === 'all' && !headHash && refsByHash.size === 0) {
+        return { commits: [], hasMore: false }
+      }
+
+      const revArgs =
+        scope === 'current'
+          ? (await this.resolveRevisionHash(repoRoot, '@{upstream}')) !== null
+            ? ['HEAD', '@{upstream}']
+            : ['HEAD']
+          : [
+              ...(headHash ? ['HEAD'] : []),
+              '--branches',
+              '--exclude=refs/remotes/*/HEAD',
+              '--remotes',
+              '--tags'
+            ]
+
+      const raw = await this.execGit(repoRoot, [
+        'log',
+        '--topo-order',
+        '-z',
+        `--max-count=${limit + 1}`,
+        `--skip=${skip}`,
+        '--format=%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%cI',
+        ...revArgs
+      ])
+
+      const parsed = parseGitLogOutput(raw, refsByHash, headHash)
+      const hasMore = parsed.length > limit
+      return {
+        commits: hasMore ? parsed.slice(0, limit) : parsed,
+        hasMore
+      }
+    } catch (error) {
+      throw await this.formatAndLogGitError('log', error)
+    }
+  }
+
   private async execUnstageTargets(repoRoot: string, targets: readonly string[]): Promise<void> {
     const hasHead = await this.hasHeadCommit(repoRoot)
     try {
@@ -422,11 +497,26 @@ export class GitService {
   }
 
   private async hasHeadCommit(repoRoot: string): Promise<boolean> {
+    return (await this.resolveRevisionHash(repoRoot, 'HEAD')) !== null
+  }
+
+  private async resolveRevisionHash(repoRoot: string, rev: string): Promise<string | null> {
     try {
-      await this.execGit(repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD'])
-      return true
+      const hash = (await this.execGit(repoRoot, ['rev-parse', '--verify', '--quiet', rev])).trim()
+      return hash || null
     } catch {
-      return false
+      return null
+    }
+  }
+
+  private async resolveSymbolicHeadRef(repoRoot: string): Promise<string | null> {
+    try {
+      const refName = (
+        await this.execGit(repoRoot, ['symbolic-ref', '--quiet', 'HEAD'])
+      ).trim()
+      return refName || null
+    } catch {
+      return null
     }
   }
 

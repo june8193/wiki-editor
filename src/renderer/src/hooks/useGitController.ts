@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { GitBranchList, GitStatus } from '@shared/git'
+import {
+  DEFAULT_GIT_LOG_LIMIT,
+  type GitBranchList,
+  type GitGraphCommit,
+  type GitLogScope,
+  type GitStatus
+} from '@shared/git'
 import { logRendererError, logRendererWarn } from '../logging/rendererLogger'
 import { toErrorMessage } from '../utils/toErrorMessage'
 
@@ -7,6 +13,21 @@ interface UseGitControllerOptions {
   workspaceRootPath: string | null
   confirmBeforeWorkspaceMutation?: (actionLabel: string) => Promise<boolean>
   onWorkspaceMutated?: () => Promise<readonly string[]>
+}
+
+function appendUniqueCommits(
+  existing: readonly GitGraphCommit[],
+  incoming: readonly GitGraphCommit[]
+): GitGraphCommit[] {
+  const seenHashes = new Set(existing.map((commit) => commit.hash))
+  const next = [...existing]
+  for (const commit of incoming) {
+    if (!seenHashes.has(commit.hash)) {
+      seenHashes.add(commit.hash)
+      next.push(commit)
+    }
+  }
+  return next
 }
 
 /**
@@ -19,6 +40,12 @@ export function useGitController({
 }: UseGitControllerOptions) {
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [branchList, setBranchList] = useState<GitBranchList | null>(null)
+  const [logCommits, setLogCommits] = useState<readonly GitGraphCommit[]>([])
+  const [logHasMore, setLogHasMore] = useState(false)
+  const [logScope, setLogScope] = useState<GitLogScope>('all')
+  const [isLogLoading, setIsLogLoading] = useState(false)
+  const [isLogLoadingMore, setIsLogLoadingMore] = useState(false)
+  const [logErrorMessage, setLogErrorMessage] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
@@ -26,6 +53,12 @@ export function useGitController({
   const activeWorkspaceRef = useRef<string | null>(workspaceRootPath)
   const workspaceEpochRef = useRef(0)
   const requestSeqRef = useRef(0)
+  const logRequestSeqRef = useRef(0)
+  const logScopeRef = useRef<GitLogScope>('all')
+  const logCommitsRef = useRef<readonly GitGraphCommit[]>([])
+  const logHasMoreRef = useRef(false)
+  const isLogLoadingRef = useRef(false)
+  const isLogLoadingMoreRef = useRef(false)
   const mutationTokenRef = useRef<number | null>(null)
   const mutationCounterRef = useRef(0)
   const callbacksRef = useRef({ confirmBeforeWorkspaceMutation, onWorkspaceMutated })
@@ -41,6 +74,98 @@ export function useGitController({
     )
   }, [])
 
+  const resetLogState = useCallback((resetScope: boolean): void => {
+    logRequestSeqRef.current += 1
+    logCommitsRef.current = []
+    logHasMoreRef.current = false
+    isLogLoadingRef.current = false
+    isLogLoadingMoreRef.current = false
+    if (resetScope) {
+      logScopeRef.current = 'all'
+      setLogScope('all')
+    }
+    setLogCommits([])
+    setLogHasMore(false)
+    setIsLogLoading(false)
+    setIsLogLoadingMore(false)
+    setLogErrorMessage(null)
+  }, [])
+
+  const fetchCommitLog = useCallback(
+    async (
+      rootPath: string,
+      epoch: number,
+      scope: GitLogScope,
+      append: boolean
+    ): Promise<void> => {
+      if (!isCurrentRequest(rootPath, epoch)) {
+        return
+      }
+
+      const logSeq = ++logRequestSeqRef.current
+      const skip = append ? logCommitsRef.current.length : 0
+
+      if (append) {
+        isLogLoadingMoreRef.current = true
+        setIsLogLoadingMore(true)
+      } else {
+        isLogLoadingMoreRef.current = false
+        isLogLoadingRef.current = true
+        setIsLogLoadingMore(false)
+        setIsLogLoading(true)
+      }
+      setLogErrorMessage(null)
+
+      try {
+        const result = await window.wikiApi.git.log(rootPath, {
+          scope,
+          limit: DEFAULT_GIT_LOG_LIMIT,
+          skip
+        })
+        if (
+          !isCurrentRequest(rootPath, epoch) ||
+          logRequestSeqRef.current !== logSeq ||
+          logScopeRef.current !== scope
+        ) {
+          return
+        }
+
+        const nextCommits = append
+          ? appendUniqueCommits(logCommitsRef.current, result.commits)
+          : result.commits
+        logCommitsRef.current = nextCommits
+        logHasMoreRef.current = result.hasMore
+        setLogCommits(nextCommits)
+        setLogHasMore(result.hasMore)
+      } catch (error: unknown) {
+        if (
+          !isCurrentRequest(rootPath, epoch) ||
+          logRequestSeqRef.current !== logSeq ||
+          logScopeRef.current !== scope
+        ) {
+          return
+        }
+        const message = toErrorMessage(error, '커밋 히스토리를 불러오지 못했습니다.')
+        setLogErrorMessage(message)
+        logRendererError('git', 'Git commit log fetch failed', {
+          data: { workspaceRootPath: rootPath, scope, skip, errorMessage: message },
+          error
+        })
+      } finally {
+        if (mountedRef.current && logRequestSeqRef.current === logSeq) {
+          if (append) {
+            isLogLoadingMoreRef.current = false
+            setIsLogLoadingMore(false)
+          } else {
+            isLogLoadingRef.current = false
+            setIsLogLoading(false)
+          }
+        }
+      }
+    },
+    [isCurrentRequest]
+  )
+
   useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -53,7 +178,7 @@ export function useGitController({
       rootPath: string,
       epoch: number,
       nextStatus: GitStatus,
-      fetchBranches: boolean
+      fetchRepoMetadata: boolean
     ): Promise<void> => {
       if (!isCurrentRequest(rootPath, epoch)) {
         return
@@ -63,21 +188,27 @@ export function useGitController({
 
       if (!nextStatus.isRepo) {
         setBranchList(null)
+        resetLogState(false)
         return
       }
-      if (!fetchBranches) return
+      if (!fetchRepoMetadata) return
 
-      try {
-        const nextBranches = await window.wikiApi.git.branches(rootPath)
-        if (!isCurrentRequest(rootPath, epoch) || requestSeqRef.current !== applySeq) {
-          return
-        }
-        setBranchList(nextBranches)
-      } catch {
-        // Branch lookup failures are non-fatal if status succeeded cleanly
-      }
+      const branchesTask = window.wikiApi.git
+        .branches(rootPath)
+        .then((nextBranches) => {
+          if (!isCurrentRequest(rootPath, epoch) || requestSeqRef.current !== applySeq) {
+            return
+          }
+          setBranchList(nextBranches)
+        })
+        .catch(() => {
+          // Branch lookup failures are non-fatal if status succeeded cleanly
+        })
+
+      const logTask = fetchCommitLog(rootPath, epoch, logScopeRef.current, false)
+      await Promise.all([branchesTask, logTask])
     },
-    [isCurrentRequest]
+    [fetchCommitLog, isCurrentRequest, resetLogState]
   )
 
   const refreshStatus = useCallback(async (): Promise<void> => {
@@ -86,6 +217,7 @@ export function useGitController({
       setStatus(null)
       setBranchList(null)
       setErrorMessage(null)
+      resetLogState(false)
       return
     }
     // Active mutations fetch fresh Git state when done; skip concurrent FS watch refreshes while locked
@@ -116,7 +248,7 @@ export function useGitController({
         error
       })
     }
-  }, [applyWorkspaceGitState, isCurrentRequest])
+  }, [applyWorkspaceGitState, isCurrentRequest, resetLogState])
 
   useEffect(() => {
     workspaceEpochRef.current += 1
@@ -125,11 +257,12 @@ export function useGitController({
     setStatus(null)
     setBranchList(null)
     setPendingAction(null)
+    resetLogState(true)
 
     if (workspaceRootPath) {
       void refreshStatus()
     }
-  }, [refreshStatus, workspaceRootPath])
+  }, [refreshStatus, resetLogState, workspaceRootPath])
 
   const runGitAction = useCallback(
     async (
@@ -301,6 +434,37 @@ export function useGitController({
     })
   }, [runGitAction])
 
+  const changeLogScope = useCallback(
+    async (nextScope: GitLogScope): Promise<void> => {
+      if (logScopeRef.current === nextScope) {
+        return
+      }
+      logScopeRef.current = nextScope
+      setLogScope(nextScope)
+      resetLogState(false)
+
+      const rootPath = activeWorkspaceRef.current
+      if (!rootPath) {
+        return
+      }
+      await fetchCommitLog(rootPath, workspaceEpochRef.current, nextScope, false)
+    },
+    [fetchCommitLog, resetLogState]
+  )
+
+  const loadMoreCommits = useCallback(async (): Promise<void> => {
+    const rootPath = activeWorkspaceRef.current
+    if (
+      !rootPath ||
+      isLogLoadingRef.current ||
+      isLogLoadingMoreRef.current ||
+      !logHasMoreRef.current
+    ) {
+      return
+    }
+    await fetchCommitLog(rootPath, workspaceEpochRef.current, logScopeRef.current, true)
+  }, [fetchCommitLog])
+
   const dismissError = useCallback((): void => {
     setErrorMessage(null)
   }, [])
@@ -308,10 +472,18 @@ export function useGitController({
   return {
     status,
     branchList,
+    logCommits,
+    logHasMore,
+    logScope,
+    isLogLoading,
+    isLogLoadingMore,
+    logErrorMessage,
     pendingAction,
     errorMessage,
     dismissError,
     refreshStatus,
+    changeLogScope,
+    loadMoreCommits,
     initRepo,
     stageFile,
     stageAll,
