@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppMenuCommand } from '@shared/ipc'
 import type { GitStatus } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
@@ -26,6 +26,7 @@ import {
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
+import { useWindowWidth } from './hooks/useWindowWidth'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
 import { getPaneActiveTab, type PaneId, type TabViewPatch } from './stores/PaneTabStore'
@@ -37,30 +38,6 @@ import {
 import { toErrorMessage } from './utils/toErrorMessage'
 
 const RIGHT_SIDEBAR_DEFAULT_WIDTH = 240
-const FALLBACK_WINDOW_WIDTH = 1024
-
-function subscribeWindowResize(callback: () => void): () => void {
-  window.addEventListener('resize', callback)
-  return () => window.removeEventListener('resize', callback)
-}
-
-function useWindowWidth(fallbackWidth = FALLBACK_WINDOW_WIDTH): number {
-  const lastValidRef = useRef<number>(
-    typeof window !== 'undefined' && Number.isFinite(window.innerWidth) && window.innerWidth > 0
-      ? window.innerWidth
-      : fallbackWidth
-  )
-  return useSyncExternalStore(subscribeWindowResize, () => {
-    if (
-      typeof window !== 'undefined' &&
-      Number.isFinite(window.innerWidth) &&
-      window.innerWidth > 0
-    ) {
-      lastValidRef.current = window.innerWidth
-    }
-    return lastValidRef.current
-  })
-}
 
 interface LeftSidebarState {
   activeView: LeftSidebarView
@@ -106,12 +83,7 @@ export function App() {
 
   const windowWidth = useWindowWidth()
   const leftSidebarBounds = getLeftSidebarWidthBounds(windowWidth)
-  const leftSidebarWidth = clampSidebarWidth(
-    leftSidebar.width,
-    leftSidebarBounds.min,
-    leftSidebarBounds.max,
-    leftSidebarBounds.defaultWidth
-  )
+  const leftSidebarWidth = clampSidebarWidth(leftSidebar.width, leftSidebarBounds)
 
   useEffect(() => {
     setLeftSidebar((prev) =>
@@ -607,9 +579,7 @@ export function App() {
             <SidebarResizer
               edge="right"
               width={leftSidebarWidth}
-              minWidth={leftSidebarBounds.min}
-              maxWidth={leftSidebarBounds.max}
-              defaultWidth={leftSidebarBounds.defaultWidth}
+              bounds={leftSidebarBounds}
               ariaLabel="왼쪽 사이드바 너비 조절"
               onResize={handleResizeLeftSidebar}
             />

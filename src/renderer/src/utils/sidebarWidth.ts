@@ -10,21 +10,16 @@ export interface SidebarWidthBounds {
 }
 
 /**
- * Clamps a sidebar width into [minWidth, maxWidth], falling back safely for non-finite inputs.
+ * Clamps a sidebar width into [bounds.min, bounds.max], falling back safely for non-finite inputs.
  */
-export function clampSidebarWidth(
-  width: number,
-  minWidth: number,
-  maxWidth: number,
-  fallbackWidth = minWidth
-): number {
-  const effectiveMax = Math.max(minWidth, maxWidth)
+export function clampSidebarWidth(width: number, bounds: SidebarWidthBounds): number {
+  const effectiveMax = Math.max(bounds.min, bounds.max)
   const target = Number.isFinite(width)
     ? width
-    : Number.isFinite(fallbackWidth)
-      ? fallbackWidth
-      : minWidth
-  return Math.min(effectiveMax, Math.max(minWidth, target))
+    : Number.isFinite(bounds.defaultWidth)
+      ? bounds.defaultWidth
+      : bounds.min
+  return Math.min(effectiveMax, Math.max(bounds.min, target))
 }
 
 /**
@@ -42,12 +37,4 @@ export function getLeftSidebarWidthBounds(windowWidth: number): SidebarWidthBoun
     max,
     defaultWidth: LEFT_SIDEBAR_DEFAULT_WIDTH
   }
-}
-
-/**
- * Clamps a left sidebar width against the bounds derived from the current window width.
- */
-export function clampLeftSidebarWidth(width: number, windowWidth: number): number {
-  const bounds = getLeftSidebarWidthBounds(windowWidth)
-  return clampSidebarWidth(width, bounds.min, bounds.max, bounds.defaultWidth)
 }

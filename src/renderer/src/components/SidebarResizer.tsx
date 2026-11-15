@@ -1,12 +1,5 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent
-} from 'react'
-import { clampSidebarWidth } from '../utils/sidebarWidth'
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { clampSidebarWidth, type SidebarWidthBounds } from '../utils/sidebarWidth'
 
 export type SidebarResizerEdge = 'left' | 'right'
 
@@ -18,9 +11,7 @@ const END_EVENTS = ['pointerup', 'pointercancel', 'mouseup', 'blur'] as const
 export interface SidebarResizerProps {
   edge: SidebarResizerEdge
   width: number
-  minWidth: number
-  maxWidth: number
-  defaultWidth: number
+  bounds: SidebarWidthBounds
   ariaLabel: string
   onResize: (nextWidth: number) => void
 }
@@ -32,9 +23,7 @@ export interface SidebarResizerProps {
 export function SidebarResizer({
   edge,
   width,
-  minWidth,
-  maxWidth,
-  defaultWidth,
+  bounds,
   ariaLabel,
   onResize
 }: SidebarResizerProps) {
@@ -42,8 +31,8 @@ export function SidebarResizer({
   const dragOriginRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const direction = edge === 'right' ? 1 : -1
 
-  const resizeConstraintsRef = useRef({ direction, minWidth, maxWidth, onResize })
-  resizeConstraintsRef.current = { direction, minWidth, maxWidth, onResize }
+  const resizeConstraintsRef = useRef({ direction, bounds, onResize })
+  resizeConstraintsRef.current = { direction, bounds, onResize }
 
   useEffect(() => {
     if (!isDragging) return
@@ -59,12 +48,11 @@ export function SidebarResizer({
       if (!origin || typeof (event as MouseEvent).clientX !== 'number') return
       const {
         direction: activeDir,
-        minWidth: activeMin,
-        maxWidth: activeMax,
+        bounds: activeBounds,
         onResize: activeOnResize
       } = resizeConstraintsRef.current
       const delta = ((event as MouseEvent).clientX - origin.startX) * activeDir
-      activeOnResize(clampSidebarWidth(origin.startWidth + delta, activeMin, activeMax))
+      activeOnResize(clampSidebarWidth(origin.startWidth + delta, activeBounds))
     }
 
     const handleEnd = (): void => {
@@ -93,40 +81,29 @@ export function SidebarResizer({
     }
   }, [isDragging])
 
-  const startDrag = (clientX: number): void => {
-    dragOriginRef.current = { startX: clientX, startWidth: width }
-    setIsDragging(true)
-  }
-
-  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.button !== undefined && event.button !== 0) return
-    event.preventDefault()
-    if (dragOriginRef.current === null) {
-      startDrag(event.clientX)
-    }
-  }
-
-  const handleMouseDown = (event: ReactMouseEvent<HTMLDivElement>): void => {
+  const handleDragStart = (event: {
+    button?: number
+    clientX: number
+    preventDefault: () => void
+  }): void => {
     if (event.button !== undefined && event.button !== 0) return
     event.preventDefault()
     // Real browsers fire pointerdown before mousedown; avoid restarting the same drag session.
     if (dragOriginRef.current === null) {
-      startDrag(event.clientX)
+      dragOriginRef.current = { startX: event.clientX, startWidth: width }
+      setIsDragging(true)
     }
   }
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === 'ArrowRight') {
-      event.preventDefault()
-      onResize(clampSidebarWidth(width + KEYBOARD_RESIZE_STEP * direction, minWidth, maxWidth))
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault()
-      onResize(clampSidebarWidth(width - KEYBOARD_RESIZE_STEP * direction, minWidth, maxWidth))
-    }
+    const keySign = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+    if (keySign === 0) return
+    event.preventDefault()
+    onResize(clampSidebarWidth(width + KEYBOARD_RESIZE_STEP * direction * keySign, bounds))
   }
 
   const handleDoubleClick = (): void => {
-    onResize(clampSidebarWidth(defaultWidth, minWidth, maxWidth))
+    onResize(clampSidebarWidth(bounds.defaultWidth, bounds))
   }
 
   return (
@@ -135,12 +112,12 @@ export function SidebarResizer({
       tabIndex={0}
       aria-label={ariaLabel}
       aria-orientation="vertical"
-      aria-valuemin={minWidth}
-      aria-valuemax={maxWidth}
+      aria-valuemin={bounds.min}
+      aria-valuemax={bounds.max}
       aria-valuenow={width}
       className={`sidebar-resizer is-${edge}${isDragging ? ' is-dragging' : ''}`}
-      onPointerDown={handlePointerDown}
-      onMouseDown={handleMouseDown}
+      onPointerDown={handleDragStart}
+      onMouseDown={handleDragStart}
       onKeyDown={handleKeyDown}
       onDoubleClick={handleDoubleClick}
     />

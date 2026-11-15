@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  clampLeftSidebarWidth,
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
   LEFT_SIDEBAR_DEFAULT_WIDTH
@@ -52,28 +51,33 @@ describe('sidebarWidth', () => {
     })
   })
 
-  it('clamps left sidebar widths to [180, min(600, windowWidth * 0.5)] and handles non-finite inputs', () => {
-    expect(clampLeftSidebarWidth(100, 1024)).toBe(180)
-    expect(clampLeftSidebarWidth(180, 1024)).toBe(180)
-    expect(clampLeftSidebarWidth(320, 1024)).toBe(320)
-    expect(clampLeftSidebarWidth(512, 1024)).toBe(512)
-    expect(clampLeftSidebarWidth(550, 1024)).toBe(512)
+  it('clamps left sidebar widths against window-derived bounds and handles non-finite inputs', () => {
+    const standardBounds = getLeftSidebarWidthBounds(1024)
+    expect(clampSidebarWidth(100, standardBounds)).toBe(180)
+    expect(clampSidebarWidth(180, standardBounds)).toBe(180)
+    expect(clampSidebarWidth(320, standardBounds)).toBe(320)
+    expect(clampSidebarWidth(512, standardBounds)).toBe(512)
+    expect(clampSidebarWidth(550, standardBounds)).toBe(512)
+    expect(clampSidebarWidth(Number.NaN, standardBounds)).toBe(260)
 
-    expect(clampLeftSidebarWidth(550, 1400)).toBe(550)
-    expect(clampLeftSidebarWidth(650, 1400)).toBe(600)
+    const wideBounds = getLeftSidebarWidthBounds(1400)
+    expect(clampSidebarWidth(550, wideBounds)).toBe(550)
+    expect(clampSidebarWidth(650, wideBounds)).toBe(600)
 
-    expect(clampLeftSidebarWidth(260, 400)).toBe(200)
-    expect(clampLeftSidebarWidth(260, 300)).toBe(180)
+    const narrowBounds = getLeftSidebarWidthBounds(400)
+    expect(clampSidebarWidth(260, narrowBounds)).toBe(200)
+    expect(clampSidebarWidth(Number.POSITIVE_INFINITY, narrowBounds)).toBe(200)
 
-    expect(clampLeftSidebarWidth(Number.NaN, 1024)).toBe(260)
-    expect(clampLeftSidebarWidth(Number.POSITIVE_INFINITY, 400)).toBe(200)
+    const minOnlyBounds = getLeftSidebarWidthBounds(300)
+    expect(clampSidebarWidth(260, minOnlyBounds)).toBe(180)
   })
 
-  it('clamps generic sidebar widths against arbitrary min/max limits', () => {
-    expect(clampSidebarWidth(120, 180, 500, 240)).toBe(180)
-    expect(clampSidebarWidth(240, 180, 500, 240)).toBe(240)
-    expect(clampSidebarWidth(620, 180, 500, 240)).toBe(500)
-    expect(clampSidebarWidth(Number.NaN, 180, 500, 240)).toBe(240)
-    expect(clampSidebarWidth(Number.NaN, 180, 200, 240)).toBe(200)
+  it('clamps widths against arbitrary min/max/default bounds', () => {
+    const fixedBounds = { min: 180, max: 500, defaultWidth: 240 }
+    expect(clampSidebarWidth(120, fixedBounds)).toBe(180)
+    expect(clampSidebarWidth(240, fixedBounds)).toBe(240)
+    expect(clampSidebarWidth(620, fixedBounds)).toBe(500)
+    expect(clampSidebarWidth(Number.NaN, fixedBounds)).toBe(240)
+    expect(clampSidebarWidth(Number.NaN, { min: 180, max: 200, defaultWidth: 240 })).toBe(200)
   })
 })
