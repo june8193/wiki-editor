@@ -6,7 +6,6 @@ import type { GitStatus } from '@shared/git'
 import { isFavoriteWorkspacePath, WorkspaceEntry } from '@shared/workspace'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { ActivityBar, type LeftSidebarView } from './components/ActivityBar'
-import type { OutlineActiveHeadingReport, OutlineScrollRequest } from './components/DocumentEditor'
 import { DocumentOutlinePanel } from './components/DocumentOutlinePanel'
 import { FolderTreeSidebar } from './components/FolderTreeSidebar'
 import { GitSidebarPanel } from './components/GitSidebarPanel'
@@ -21,13 +20,13 @@ import {
   applyHeadingNumbers,
   findFirstNonFencedSlashTocLine,
   insertOrUpdateTocBlock,
-  type MarkdownHeading,
   resolveRawCursorLine,
   stripHeadingNumbers
 } from './editor/MarkdownTocEngine'
 import { useConfigController } from './hooks/useConfigController'
 import { DirtyTabCloseRequest, useEditorWorkspace } from './hooks/useEditorWorkspace'
 import { useGitController } from './hooks/useGitController'
+import { useOutlineScrollSpy } from './hooks/useOutlineScrollSpy'
 import { useWindowWidth } from './hooks/useWindowWidth'
 import { useWorkspaceTree } from './hooks/useWorkspaceTree'
 import { logRendererError, registerRendererGlobalErrorLogging } from './logging/rendererLogger'
@@ -77,17 +76,6 @@ interface PendingDialogState {
   onConfirm: () => Promise<void> | void
   onSecondary?: () => Promise<void> | void
   onCancel?: () => void
-}
-
-interface ActiveOutlineHeadingState {
-  contextKey: string
-  index: number | null
-}
-
-interface PinnedOutlineHeadingState {
-  contextKey: string
-  content: string
-  index: number
 }
 
 export function App() {
@@ -147,13 +135,6 @@ export function App() {
     }
   }, [])
   const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null)
-  const [outlineScrollRequest, setOutlineScrollRequest] = useState<OutlineScrollRequest | null>(null)
-  const [spyOutlineHeading, setSpyOutlineHeading] = useState<ActiveOutlineHeadingState | null>(null)
-  const [pinnedOutlineHeading, setPinnedOutlineHeading] = useState<PinnedOutlineHeadingState | null>(
-    null
-  )
-  const scrollNonceRef = useRef(0)
-  const activeOutlineContextKeyRef = useRef<string | null>(null)
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
   const reconcileBuffersRef = useRef<() => Promise<readonly string[]>>(async () => [])
@@ -488,38 +469,20 @@ export function App() {
   const activeFilePath = activeBuffer?.kind === 'workspace' ? activeBuffer.path : null
   const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
   const activeBufferContent = activeBuffer?.content ?? ''
-  const activeTabId = activeTab?.id ?? null
-  const activeTabMode = activeTab?.mode ?? null
-  const activeOutlineContextKey =
-    activeTabId && activeTabMode && activeBuffer && isActiveMarkdown
-      ? `${activePane.id}:${activeTabId}:${activeTabMode}`
-      : null
-  activeOutlineContextKeyRef.current = activeOutlineContextKey
 
-  const isPinnedOutlineActive =
-    activeOutlineContextKey !== null &&
-    pinnedOutlineHeading !== null &&
-    pinnedOutlineHeading.contextKey === activeOutlineContextKey &&
-    pinnedOutlineHeading.content === activeBufferContent
-
-  const activeOutlineHeadingIndex = isPinnedOutlineActive
-    ? pinnedOutlineHeading.index
-    : activeOutlineContextKey !== null && spyOutlineHeading?.contextKey === activeOutlineContextKey
-      ? spyOutlineHeading.index
-      : null
-
-  useEffect(() => {
-    setPinnedOutlineHeading((prev) =>
-      prev &&
-      prev.contextKey === activeOutlineContextKey &&
-      prev.content === activeBufferContent
-        ? prev
-        : null
-    )
-    setSpyOutlineHeading((prev) =>
-      prev && prev.contextKey === activeOutlineContextKey ? prev : null
-    )
-  }, [activeOutlineContextKey, activeBufferContent])
+  const {
+    outlineScrollRequest,
+    activeHeadingIndex: activeOutlineHeadingIndex,
+    handleActiveHeadingReport,
+    selectHeading: handleSelectOutlineHeading,
+    clearScrollRequest: clearOutlineScrollRequest
+  } = useOutlineScrollSpy({
+    paneId: activePane.id,
+    tabId: activeTab?.id ?? null,
+    mode: activeTab?.mode ?? null,
+    isMarkdownDocument: isActiveMarkdown,
+    bufferContent: activeBufferContent
+  })
 
   const applyActiveMarkdownTransform = useCallback(
     (transform: (content: string) => string): void => {
@@ -531,49 +494,6 @@ export function App() {
     },
     [activeBuffer, isActiveMarkdown, updateBufferContent]
   )
-
-  const handleActiveHeadingReport = useCallback((report: OutlineActiveHeadingReport): void => {
-    const reportContextKey = `${report.paneId}:${report.tabId}:${report.mode}`
-    if (reportContextKey !== activeOutlineContextKeyRef.current) {
-      return
-    }
-    if (report.isUserScroll) {
-      setPinnedOutlineHeading((prev) => (prev === null ? prev : null))
-    }
-    setSpyOutlineHeading((prev) =>
-      prev?.contextKey === reportContextKey && prev.index === report.headingIndex
-        ? prev
-        : { contextKey: reportContextKey, index: report.headingIndex }
-    )
-  }, [])
-
-  const handleSelectOutlineHeading = useCallback(
-    (heading: MarkdownHeading, index: number): void => {
-      if (!activeTabId || !activeTabMode || !activeOutlineContextKey) return
-      scrollNonceRef.current += 1
-      setOutlineScrollRequest({
-        paneId: activePane.id,
-        tabId: activeTabId,
-        mode: activeTabMode,
-        line: heading.line,
-        slug: heading.slug,
-        index,
-        nonce: scrollNonceRef.current
-      })
-      setPinnedOutlineHeading({
-        contextKey: activeOutlineContextKey,
-        content: activeBufferContent,
-        index
-      })
-    },
-    [activeBufferContent, activeOutlineContextKey, activePane.id, activeTabId, activeTabMode]
-  )
-
-  useEffect(() => {
-    if (outlineScrollRequest !== null) {
-      setOutlineScrollRequest(null)
-    }
-  }, [outlineScrollRequest])
 
   const handleOutlineInsertToc = useCallback((): void => {
     applyActiveMarkdownTransform((content) => {
@@ -595,20 +515,20 @@ export function App() {
 
   const handlePaneChangeContent = useCallback(
     (bufferKey: string, nextContent: string): void => {
-      setOutlineScrollRequest(null)
+      clearOutlineScrollRequest()
       updateBufferContent(bufferKey, nextContent)
     },
-    [updateBufferContent]
+    [clearOutlineScrollRequest, updateBufferContent]
   )
 
   const handlePaneUpdateTabViewState = useCallback(
     (paneId: PaneId, tabId: string, patch: TabViewPatch): void => {
       if (patch.mode !== undefined) {
-        setOutlineScrollRequest(null)
+        clearOutlineScrollRequest()
       }
       updateTabViewState(paneId, tabId, patch)
     },
-    [updateTabViewState]
+    [clearOutlineScrollRequest, updateTabViewState]
   )
 
   const paneActions = useMemo<PaneInteractionActions>(
@@ -757,6 +677,7 @@ export function App() {
             >
               <DocumentOutlinePanel
                 documentName={activeBuffer?.name ?? null}
+                documentKey={activeBuffer?.key ?? null}
                 content={activeBufferContent}
                 isMarkdownDocument={isActiveMarkdown}
                 activeHeadingIndex={activeOutlineHeadingIndex}

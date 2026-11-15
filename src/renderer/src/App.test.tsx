@@ -5450,6 +5450,12 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
       expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
       expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
 
+      // Non-scroll prose click inside Preview does not arm user-scroll intent
+      await user.click(within(primaryPreview).getByText('Section 1 body'))
+      fireEvent.scroll(primaryPreview)
+      expect(outlineButtons()[3]).toHaveAttribute('aria-current', 'location')
+      expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
+
       // 2. Actual wheel scroll releases protection and lets scroll spy resume
       scrollIntoViewMock.mockClear()
       fireEvent.wheel(primaryPreview)

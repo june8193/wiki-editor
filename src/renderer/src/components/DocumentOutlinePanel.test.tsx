@@ -260,6 +260,26 @@ describe('DocumentOutlinePanel', () => {
       expect(screen.queryByRole('list')).not.toBeInTheDocument()
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
 
+      rerender(
+        <DocumentOutlinePanel
+          {...baseProps}
+          documentName="README.md"
+          documentKey="workspace:C:/wiki/a/README.md"
+          activeHeadingIndex={1}
+        />
+      )
+      scrollIntoViewMock.mockClear()
+      rerender(
+        <DocumentOutlinePanel
+          {...baseProps}
+          documentName="README.md"
+          documentKey="workspace:C:/wiki/b/README.md"
+          activeHeadingIndex={1}
+        />
+      )
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ block: 'nearest' })
+
       // Environment without scrollIntoView method skips auto-scroll safely
       delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
       rerender(<DocumentOutlinePanel {...baseProps} activeHeadingIndex={2} />)

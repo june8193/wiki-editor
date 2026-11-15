@@ -116,13 +116,11 @@ export function PaneView({
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}
           onActiveHeadingChange={
             onActiveHeadingChange
-              ? (mode, headingIndex, isUserScroll) =>
+              ? (update) =>
                   onActiveHeadingChange({
                     paneId: pane.id,
                     tabId: activeTab.id,
-                    mode,
-                    headingIndex,
-                    isUserScroll
+                    ...update
                   })
               : undefined
           }

@@ -8,6 +8,7 @@ import {
 
 export interface DocumentOutlinePanelProps {
   documentName: string | null
+  documentKey?: string | null
   content: string
   isMarkdownDocument: boolean
   activeHeadingIndex?: number | null
@@ -20,6 +21,11 @@ export interface DocumentOutlinePanelProps {
   onCollapse: () => void
 }
 
+interface ActiveOutlineScrollTarget {
+  documentKey: string
+  index: number
+}
+
 /**
  * Right sidebar panel displaying the live document heading outline,
  * active heading indicator and auto-scroll, dynamic numbering toggle,
@@ -27,6 +33,7 @@ export interface DocumentOutlinePanelProps {
  */
 export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   documentName,
+  documentKey,
   content,
   isMarkdownDocument,
   activeHeadingIndex = null,
@@ -39,7 +46,7 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   onCollapse
 }: DocumentOutlinePanelProps) {
   const itemButtonRefs = useRef<Map<number, HTMLButtonElement>>(new Map())
-  const prevScrollTargetKeyRef = useRef<string | null>(null)
+  const prevScrollTargetRef = useRef<ActiveOutlineScrollTarget | null>(null)
 
   const headings = useMemo(() => {
     if (!documentName || !isMarkdownDocument) return []
@@ -55,18 +62,24 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
       ? activeHeadingIndex
       : null
 
-  const scrollTargetKey = validActiveIndex !== null ? `${documentName}:${validActiveIndex}` : null
+  const resolvedDocumentKey = documentName ? (documentKey ?? documentName) : null
 
   useEffect(() => {
-    if (scrollTargetKey === prevScrollTargetKeyRef.current) return
-    prevScrollTargetKeyRef.current = scrollTargetKey
-    if (validActiveIndex === null) return
+    if (validActiveIndex === null || resolvedDocumentKey === null) {
+      prevScrollTargetRef.current = null
+      return
+    }
+    const prev = prevScrollTargetRef.current
+    if (prev?.documentKey === resolvedDocumentKey && prev.index === validActiveIndex) {
+      return
+    }
+    prevScrollTargetRef.current = { documentKey: resolvedDocumentKey, index: validActiveIndex }
 
     const targetButton = itemButtonRefs.current.get(validActiveIndex)
     if (targetButton && typeof targetButton.scrollIntoView === 'function') {
       targetButton.scrollIntoView({ block: 'nearest' })
     }
-  }, [scrollTargetKey, validActiveIndex])
+  }, [resolvedDocumentKey, validActiveIndex])
 
   const renderBodyContent = () => {
     if (!documentName) {

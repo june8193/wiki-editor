@@ -2,6 +2,7 @@ import { KeyboardEvent as ReactKeyboardEvent, useCallback } from 'react'
 import type { CustomCommandConfig, ThemeMode } from '@shared/config'
 import { getRawEditorLanguage, isMarkdownDocument, resolveEditorShortcut } from '../editor/editorModes'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
+import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
 import { deriveDocumentTitle } from '../editor/SlashCommandEngine'
 import { DocumentBuffer } from '../stores/DocumentBufferStore'
 import { EditorMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
@@ -19,12 +20,13 @@ export interface OutlineScrollRequest {
   nonce: number
 }
 
-export interface OutlineActiveHeadingReport {
+export interface DocumentOutlineSpyUpdate extends HeadingScrollSpySample {
+  mode: EditorMode
+}
+
+export interface OutlineActiveHeadingReport extends DocumentOutlineSpyUpdate {
   paneId: PaneId
   tabId: string
-  mode: EditorMode
-  headingIndex: number | null
-  isUserScroll: boolean
 }
 
 interface DocumentEditorProps {
@@ -40,7 +42,7 @@ interface DocumentEditorProps {
   onChangeContent: (nextContent: string) => void
   onSave: () => void
   onUpdateViewState: (patch: TabViewPatch) => void
-  onActiveHeadingChange?: (mode: EditorMode, headingIndex: number | null, isUserScroll: boolean) => void
+  onActiveHeadingChange?: (update: DocumentOutlineSpyUpdate) => void
 }
 
 const EDITOR_MODE_OPTIONS: ReadonlyArray<{
@@ -236,8 +238,7 @@ export function DocumentEditor({
           onScrollTopChange={handleScrollTopChange}
           onActiveHeadingChange={
             onActiveHeadingChange
-              ? (headingIndex, isUserScroll) =>
-                  onActiveHeadingChange('preview', headingIndex, isUserScroll)
+              ? (sample) => onActiveHeadingChange({ mode: 'preview', ...sample })
               : undefined
           }
         />
