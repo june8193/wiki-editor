@@ -95,7 +95,7 @@ export function MermaidDiagram({
     error: null
   }))
   const [isHovered, setIsHovered] = useState(false)
-  const { canCopyCode, activeAction, completedAction, errorMessage, handleCopyCode } =
+  const { canCopyCode, isCopyingCode, isCopiedCode, errorMessage, handleCopyCode } =
     useMermaidDiagramActions({ code })
   const lastValidRef = useRef<ValidDiagramSnapshot | null>(asyncState.lastValid)
   const mountedThemeRef = useRef<ThemeMode | null>(null)
@@ -223,8 +223,8 @@ export function MermaidDiagram({
             variant="floating"
             isVisible={isHovered}
             canCopyCode={canCopyCode}
-            activeAction={activeAction}
-            completedAction={completedAction}
+            isCopyingCode={isCopyingCode}
+            isCopiedCode={isCopiedCode}
             onCopyCode={handleCopyCode}
           />
           <MermaidActionErrorAlert message={errorMessage} />

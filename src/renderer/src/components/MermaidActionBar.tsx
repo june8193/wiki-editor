@@ -1,12 +1,11 @@
 import { Check, Copy } from 'lucide-react'
-import type { MermaidActionId } from '../hooks/useMermaidDiagramActions'
 
 export interface MermaidActionBarProps {
   variant: 'floating' | 'inline'
   isVisible?: boolean
   canCopyCode: boolean
-  activeAction: MermaidActionId | null
-  completedAction: MermaidActionId | null
+  isCopyingCode: boolean
+  isCopiedCode: boolean
   onCopyCode: () => void | Promise<void>
 }
 
@@ -22,13 +21,12 @@ export function MermaidActionBar({
   variant,
   isVisible = false,
   canCopyCode,
-  activeAction,
-  completedAction,
+  isCopyingCode,
+  isCopiedCode,
   onCopyCode
 }: MermaidActionBarProps) {
-  const isCopyBusy = activeAction === 'copy-code'
-  const isCopyCompleted = completedAction === 'copy-code'
-  const shouldBeVisible = Boolean(isVisible || activeAction !== null || completedAction !== null)
+  const shouldBeVisible =
+    variant === 'floating' && Boolean(isVisible || isCopyingCode || isCopiedCode)
 
   const variantClass = variant === 'floating' ? 'is-floating' : 'is-inline'
   const visibleClass = shouldBeVisible ? ' is-visible' : ''
@@ -41,16 +39,16 @@ export function MermaidActionBar({
     >
       <button
         type="button"
-        className={`mermaid-action-btn${isCopyCompleted ? ' is-copied' : ''}`}
+        className={`mermaid-action-btn${isCopiedCode ? ' is-copied' : ''}`}
         aria-label="코드 복사"
-        title={isCopyCompleted ? '복사됨' : '코드 복사'}
+        title={isCopiedCode ? '복사됨' : '코드 복사'}
         disabled={!canCopyCode}
-        aria-busy={isCopyBusy || undefined}
+        aria-busy={isCopyingCode || undefined}
         onClick={() => {
           void onCopyCode()
         }}
       >
-        {isCopyCompleted ? (
+        {isCopiedCode ? (
           <>
             <Check size={14} strokeWidth={2} aria-hidden="true" />
             <span className="mermaid-action-feedback">복사됨</span>

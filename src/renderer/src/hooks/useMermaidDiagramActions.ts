@@ -4,19 +4,19 @@ import { toErrorMessage } from '../utils/toErrorMessage'
 
 export const MERMAID_ACTION_FEEDBACK_DURATION_MS = 1500
 
-export type MermaidActionId = 'copy-code'
-
 export interface UseMermaidDiagramActionsOptions {
   code: string
 }
 
 export interface MermaidDiagramActionsState {
   canCopyCode: boolean
-  activeAction: MermaidActionId | null
-  completedAction: MermaidActionId | null
+  isCopyingCode: boolean
+  isCopiedCode: boolean
   errorMessage: string | null
   handleCopyCode: () => Promise<void>
 }
+
+const COPY_FAILED_FALLBACK_MESSAGE = 'Mermaid 코드 복사에 실패했습니다.'
 
 /**
  * Manages clipboard copy execution, single-run concurrency, 1500ms completion
@@ -25,8 +25,8 @@ export interface MermaidDiagramActionsState {
 export function useMermaidDiagramActions({
   code
 }: UseMermaidDiagramActionsOptions): MermaidDiagramActionsState {
-  const [activeAction, setActiveAction] = useState<MermaidActionId | null>(null)
-  const [completedAction, setCompletedAction] = useState<MermaidActionId | null>(null)
+  const [isCopyingCode, setIsCopyingCode] = useState(false)
+  const [isCopiedCode, setIsCopiedCode] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const isMountedRef = useRef(true)
@@ -61,8 +61,8 @@ export function useMermaidDiagramActions({
     executionTokenRef.current += 1
     clearFeedbackTimer()
     isBusyRef.current = false
-    setActiveAction(null)
-    setCompletedAction(null)
+    setIsCopyingCode(false)
+    setIsCopiedCode(false)
     setErrorMessage(null)
   }, [clearFeedbackTimer, code])
 
@@ -74,13 +74,13 @@ export function useMermaidDiagramActions({
     const token = ++executionTokenRef.current
     clearFeedbackTimer()
     isBusyRef.current = true
-    setActiveAction('copy-code')
-    setCompletedAction(null)
+    setIsCopyingCode(true)
+    setIsCopiedCode(false)
     setErrorMessage(null)
 
     try {
       const copyText = window.wikiApi?.diagram?.copyText
-      if (!copyText) {
+      if (typeof copyText !== 'function') {
         throw new Error('클립보드 복사 API를 사용할 수 없습니다.')
       }
 
@@ -89,13 +89,13 @@ export function useMermaidDiagramActions({
         return
       }
 
-      setCompletedAction('copy-code')
+      setIsCopiedCode(true)
       feedbackTimerRef.current = window.setTimeout(() => {
         feedbackTimerRef.current = null
         if (!isMountedRef.current || executionTokenRef.current !== token) {
           return
         }
-        setCompletedAction(null)
+        setIsCopiedCode(false)
       }, MERMAID_ACTION_FEEDBACK_DURATION_MS)
     } catch (error) {
       logRendererError('ui', 'Mermaid code copy failed', {
@@ -105,12 +105,13 @@ export function useMermaidDiagramActions({
       if (!isMountedRef.current || executionTokenRef.current !== token) {
         return
       }
-      setErrorMessage(toErrorMessage(error, 'Mermaid 코드 복사에 실패했습니다.'))
+      const message = toErrorMessage(error, COPY_FAILED_FALLBACK_MESSAGE)
+      setErrorMessage(message.trim().length > 0 ? message : COPY_FAILED_FALLBACK_MESSAGE)
     } finally {
       if (executionTokenRef.current === token) {
         isBusyRef.current = false
         if (isMountedRef.current) {
-          setActiveAction(null)
+          setIsCopyingCode(false)
         }
       }
     }
@@ -118,8 +119,8 @@ export function useMermaidDiagramActions({
 
   return {
     canCopyCode,
-    activeAction,
-    completedAction,
+    isCopyingCode,
+    isCopiedCode,
     errorMessage,
     handleCopyCode
   }

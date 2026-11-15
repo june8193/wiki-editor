@@ -19,7 +19,7 @@ export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
   const { theme, mermaidRenderer } = useContext(WysiwygMermaidContext)
   const [showSource, setShowSource] = useState(false)
   const language = typeof node.attrs.language === 'string' ? node.attrs.language : ''
-  const { canCopyCode, activeAction, completedAction, errorMessage, handleCopyCode } =
+  const { canCopyCode, isCopyingCode, isCopiedCode, errorMessage, handleCopyCode } =
     useMermaidDiagramActions({ code: language === 'mermaid' ? node.textContent : '' })
 
   if (language !== 'mermaid') {
@@ -45,10 +45,9 @@ export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
         <div className="mermaid-node-header-actions">
           <MermaidActionBar
             variant="inline"
-            isVisible
             canCopyCode={canCopyCode}
-            activeAction={activeAction}
-            completedAction={completedAction}
+            isCopyingCode={isCopyingCode}
+            isCopiedCode={isCopiedCode}
             onCopyCode={handleCopyCode}
           />
           <button
