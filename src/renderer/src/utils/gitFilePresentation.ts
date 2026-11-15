@@ -25,6 +25,15 @@ export function getGitFileBaseName(filePath: string): string {
 /**
  * Maps a diff source request to its human-readable context badge label.
  */
+/**
+ * Returns the short tab display label for a Diff tab, appending the abbreviated
+ * commit hash when inspecting a historical commit file.
+ */
+export function getGitDiffTabLabel(request: GitDiffRequest): string {
+  const baseName = getGitFileBaseName(request.path)
+  return request.kind === 'commit' ? `${baseName} (${request.shortHash})` : baseName
+}
+
 export function getGitDiffContextLabel(request: GitDiffRequest): string {
   switch (request.kind) {
     case 'staged':
@@ -50,14 +59,30 @@ export function formatGitDiffTabKey(request: GitDiffRequest): string {
 /**
  * Converts a changed working-tree entry into a GitDiffRequest payload.
  */
+export type GitDiffTarget =
+  | 'staged'
+  | 'unstaged'
+  | { kind: 'commit'; commitHash: string; shortHash: string }
+
+/**
+ * Builds a typed GitDiffRequest from either a Working/Staged target or a Commit target.
+ */
 export function toGitDiffRequest(
-  kind: 'staged' | 'unstaged',
+  target: GitDiffTarget,
   file: GitChangedFile
 ): GitDiffRequest {
-  return {
-    kind,
+  const base = {
     path: file.path,
     ...(file.origPath ? { origPath: file.origPath } : {}),
     status: file.status
+  }
+  if (typeof target === 'string') {
+    return { kind: target, ...base }
+  }
+  return {
+    kind: 'commit',
+    commitHash: target.commitHash,
+    shortHash: target.shortHash,
+    ...base
   }
 }

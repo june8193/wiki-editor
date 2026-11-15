@@ -931,6 +931,227 @@ describe('GitService integration (isolated temp repos)', () => {
       GIT_DIFF_MAX_BYTES
     )
   }, 30_000)
+
+  it('validates commit hashes and computes commit diffs for root, normal, merge (--first-parent), rename, binary, and deleted historical paths while enforcing path security', async () => {
+    await expect(
+      service.diff(nonGitDir, {
+        kind: 'commit',
+        commitHash: '1234567',
+        shortHash: '1234567',
+        path: 'guide.md',
+        status: 'M'
+      })
+    ).rejects.toThrow()
+
+    await service.init(repoDir)
+    await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
+    await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
+
+    for (const invalidHash of ['', 'abc123', '-flag', 'HEAD', 'zzzzzzzz', 'a'.repeat(65), 'abcdef12 --stat']) {
+      await expect(
+        service.diff(repoDir, {
+          kind: 'commit',
+          commitHash: invalidHash,
+          shortHash: 'abc1234',
+          path: 'guide.md',
+          status: 'M'
+        })
+      ).rejects.toThrow(/커밋 해시/)
+    }
+
+    await expect(
+      service.diff(repoDir, {
+        kind: 'commit',
+        commitHash: '1234567',
+        shortHash: '1234567',
+        path: '.git/config',
+        status: 'M'
+      })
+    ).rejects.toThrow()
+
+    await expect(
+      service.diff(repoDir, {
+        kind: 'commit',
+        commitHash: '1234567',
+        shortHash: '1234567',
+        path: '../outside.md',
+        status: 'M'
+      })
+    ).rejects.toThrow()
+
+    await expect(
+      service.diff(repoDir, {
+        kind: 'commit',
+        commitHash: '1234567',
+        shortHash: '1234567',
+        path: 'guide.md',
+        origPath: '../outside.md',
+        status: 'R'
+      })
+    ).rejects.toThrow()
+
+    // 1. Root commit (--root), including nested folder and binary asset
+    await mkdir(join(repoDir, 'archived', 'sub'), { recursive: true })
+    await writeFile(join(repoDir, 'guide.md'), '# Guide v1\nline 2\n', 'utf8')
+    await writeFile(join(repoDir, 'archived', 'sub', 'old-note.md'), '# Old Archived Note\n', 'utf8')
+    await writeFile(join(repoDir, '한글 이름.md'), '# Rename source\nbody 1\nbody 2\n', 'utf8')
+    await writeFile(join(repoDir, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]))
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'root commit')
+    const rootHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    const rootGuideDiff = await service.diff(repoDir, {
+      kind: 'commit',
+      commitHash: rootHash,
+      shortHash: rootHash.slice(0, 7),
+      path: 'guide.md',
+      status: 'A'
+    })
+    expect(rootGuideDiff).toMatchObject({
+      path: 'guide.md',
+      status: 'A',
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: true
+    })
+    expect(rootGuideDiff.rawPatch).toContain('+# Guide v1')
+
+    const rootBinaryDiff = await service.diff(repoDir, {
+      kind: 'commit',
+      commitHash: rootHash,
+      shortHash: rootHash.slice(0, 7),
+      path: 'logo.png',
+      status: 'A'
+    })
+    expect(rootBinaryDiff).toMatchObject({
+      path: 'logo.png',
+      status: 'A',
+      isBinary: true,
+      rawPatch: '',
+      existsInWorkspace: true
+    })
+
+    // 2. Normal commit: modify, delete nested folder, rename non-ASCII file
+    await writeFile(join(repoDir, 'guide.md'), '# Guide v2\nline 2\n', 'utf8')
+    await rm(join(repoDir, 'archived'), { recursive: true, force: true })
+    await runGit(repoDir, ['mv', '한글 이름.md', 'moved 한글.md'])
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'reorganize and update guide')
+    const normalHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    const renamedCommitDiff = await service.diff(repoDir, {
+      kind: 'commit',
+      commitHash: normalHash,
+      shortHash: normalHash.slice(0, 7),
+      path: 'moved 한글.md',
+      origPath: '한글 이름.md',
+      status: 'R'
+    })
+    expect(renamedCommitDiff).toMatchObject({
+      path: 'moved 한글.md',
+      origPath: '한글 이름.md',
+      status: 'R',
+      isBinary: false,
+      existsInWorkspace: true
+    })
+    expect(renamedCommitDiff.rawPatch).toContain('rename from 한글 이름.md')
+    expect(renamedCommitDiff.rawPatch).toContain('rename to moved 한글.md')
+
+    // 3. Historically deleted file whose parent dir is deleted AND replaced by a regular file (ENOTDIR edge case)
+    await writeFile(join(repoDir, 'archived'), 'now a regular file blocking dir traversal\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'replace archived dir with file')
+
+    const deletedNestedDiff = await service.diff(repoDir, {
+      kind: 'commit',
+      commitHash: rootHash,
+      shortHash: rootHash.slice(0, 7),
+      path: 'archived/sub/old-note.md',
+      status: 'A'
+    })
+    expect(deletedNestedDiff).toMatchObject({
+      path: 'archived/sub/old-note.md',
+      status: 'A',
+      isBinary: false,
+      existsInWorkspace: false
+    })
+    expect(deletedNestedDiff.rawPatch).toContain('+# Old Archived Note')
+
+    const deletedInNormalDiff = await service.diff(repoDir, {
+      kind: 'commit',
+      commitHash: normalHash,
+      shortHash: normalHash.slice(0, 7),
+      path: 'archived/sub/old-note.md',
+      status: 'D'
+    })
+    expect(deletedInNormalDiff).toMatchObject({
+      path: 'archived/sub/old-note.md',
+      status: 'D',
+      existsInWorkspace: false
+    })
+    expect(deletedInNormalDiff.rawPatch).toContain('-# Old Archived Note')
+
+    // 4. Merge commit (--first-parent): diff matches <merge>^1 <-> <merge>
+    await runGit(repoDir, ['checkout', '-b', 'feature/diff-test'])
+    await writeFile(join(repoDir, 'guide.md'), '# Guide Merge Feature\nline 2\n', 'utf8')
+    await writeFile(join(repoDir, 'feature-doc.md'), '# Feature Doc\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'feature updates')
+
+    await runGit(repoDir, ['checkout', 'main'])
+    await writeFile(join(repoDir, 'main-doc.md'), '# Main Doc\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'main updates')
+
+    await runGit(repoDir, ['merge', '--no-ff', 'feature/diff-test', '-m', 'merge feature/diff-test'])
+    const mergeHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    const mergeGuideDiff = await service.diff(repoDir, {
+      kind: 'commit',
+      commitHash: mergeHash,
+      shortHash: mergeHash.slice(0, 7),
+      path: 'guide.md',
+      status: 'M'
+    })
+    expect(mergeGuideDiff.isBinary).toBe(false)
+    expect(mergeGuideDiff.existsInWorkspace).toBe(true)
+    expect(mergeGuideDiff.rawPatch).toContain('-# Guide v2')
+    expect(mergeGuideDiff.rawPatch).toContain('+# Guide Merge Feature')
+
+    const mergeAddedDiff = await service.diff(repoDir, {
+      kind: 'commit',
+      commitHash: mergeHash,
+      shortHash: mergeHash.slice(0, 7),
+      path: 'feature-doc.md',
+      status: 'A'
+    })
+    expect(mergeAddedDiff.rawPatch).toContain('+# Feature Doc')
+
+    // 5. Subdirectory workspace existsInWorkspace check for commit diffs
+    await mkdir(join(repoDir, 'sub-ws'), { recursive: true })
+    await writeFile(join(repoDir, 'sub-ws', 'inside.md'), '# Inside\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'add sub-ws file')
+    const subHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+    const insideSubWsDiff = await service.diff(join(repoDir, 'sub-ws'), {
+      kind: 'commit',
+      commitHash: subHash,
+      shortHash: subHash.slice(0, 7),
+      path: 'sub-ws/inside.md',
+      status: 'A'
+    })
+    expect(insideSubWsDiff.existsInWorkspace).toBe(true)
+
+    const outsideSubWsDiff = await service.diff(join(repoDir, 'sub-ws'), {
+      kind: 'commit',
+      commitHash: subHash,
+      shortHash: subHash.slice(0, 7),
+      path: 'guide.md',
+      status: 'M'
+    })
+    expect(outsideSubWsDiff.existsInWorkspace).toBe(false)
+  }, 30_000)
 })
 
 describe('GitService helpers (unit)', () => {

@@ -504,6 +504,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 graphState={graphState}
                 onLoadMore={onLoadMoreCommits}
                 onToggleCommitDetail={onToggleCommitDetail}
+                onOpenFileDiff={onOpenFileDiff}
               />
             </GitAccordionSection>
           </div>

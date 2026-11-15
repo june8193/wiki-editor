@@ -794,4 +794,88 @@ describe('GitSidebarPanel', () => {
     expect(onStageFile).toHaveBeenCalledWith('README.md')
     expect(onOpenFileDiff).not.toHaveBeenCalled()
   })
+
+  it('opens commit diff requests when clicking changed files inside expanded graph commit detail', async () => {
+    const user = userEvent.setup()
+    const onOpenFileDiff = vi.fn()
+    const onToggleCommitDetail = vi.fn()
+    const fullHash = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'
+    const baseGraph = createInitialGitGraphState()
+
+    render(
+      <GitSidebarPanel
+        {...buildProps({
+          onOpenFileDiff,
+          onToggleCommitDetail,
+          graphState: {
+            ...baseGraph,
+            commits: [
+              {
+                hash: fullHash,
+                shortHash: 'a1b2c3d',
+                parents: [],
+                subject: 'feat: graph commit diff',
+                authorName: 'Alice',
+                committedAt: '2026-11-15T09:00:00+09:00',
+                refs: [{ name: 'main', kind: 'local-branch' as const }]
+              }
+            ],
+            commitDetail: {
+              status: 'loaded',
+              selectedHash: fullHash,
+              detail: {
+                hash: fullHash,
+                shortHash: 'a1b2c3d',
+                parents: [],
+                subject: 'feat: graph commit diff',
+                body: '',
+                authorName: 'Alice',
+                authorEmail: 'alice@example.com',
+                committedAt: '2026-11-15T09:00:00+09:00',
+                files: [
+                  { status: 'M', path: 'docs/guide.md' },
+                  { status: 'D', path: 'docs/deleted.md' },
+                  { status: 'R', origPath: 'docs/old.md', path: 'docs/renamed.md' }
+                ]
+              }
+            }
+          }
+        })}
+      />
+    )
+
+    const detailRegion = screen.getByRole('region', { name: 'a1b2c3d 커밋 상세' })
+
+    await user.click(within(detailRegion).getByRole('button', { name: /docs\/guide\.md/ }))
+    expect(onOpenFileDiff).toHaveBeenCalledWith({
+      kind: 'commit',
+      commitHash: fullHash,
+      shortHash: 'a1b2c3d',
+      path: 'docs/guide.md',
+      status: 'M'
+    })
+
+    await user.click(within(detailRegion).getByRole('button', { name: /docs\/deleted\.md/ }))
+    expect(onOpenFileDiff).toHaveBeenCalledWith({
+      kind: 'commit',
+      commitHash: fullHash,
+      shortHash: 'a1b2c3d',
+      path: 'docs/deleted.md',
+      status: 'D'
+    })
+
+    await user.click(
+      within(detailRegion).getByRole('button', { name: /docs\/old\.md → docs\/renamed\.md/ })
+    )
+    expect(onOpenFileDiff).toHaveBeenCalledWith({
+      kind: 'commit',
+      commitHash: fullHash,
+      shortHash: 'a1b2c3d',
+      path: 'docs/renamed.md',
+      origPath: 'docs/old.md',
+      status: 'R'
+    })
+
+    expect(onToggleCommitDetail).not.toHaveBeenCalled()
+  })
 })

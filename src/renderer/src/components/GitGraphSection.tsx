@@ -1,13 +1,18 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   GitCommitDetail,
+  GitDiffRequest,
   GitGraphCommit,
   GitLogScope,
   GitRefBadge,
   GitRefKind
 } from '@shared/git'
 import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
-import { formatGitFileLabel, getGitFileBadgeModifier } from '../utils/gitFilePresentation'
+import {
+  formatGitFileLabel,
+  getGitFileBadgeModifier,
+  toGitDiffRequest
+} from '../utils/gitFilePresentation'
 import {
   buildGitGraphConnectionPath,
   computeGitGraphLayout,
@@ -54,6 +59,7 @@ export interface GitGraphSectionProps {
   graphState: GitGraphState
   onLoadMore: () => void
   onToggleCommitDetail: (commitHash: string) => void
+  onOpenFileDiff: (request: GitDiffRequest) => void
 }
 
 function getLaneColor(colorIndex: number): string {
@@ -218,7 +224,13 @@ const GitGraphLaneSvg = memo(function GitGraphLaneSvg({
   )
 })
 
-function GitCommitDetailFiles({ detail }: { detail: GitCommitDetail }) {
+function GitCommitDetailFiles({
+  detail,
+  onOpenFileDiff
+}: {
+  detail: GitCommitDetail
+  onOpenFileDiff: (request: GitDiffRequest) => void
+}) {
   if (detail.files.length === 0) {
     return <p className="git-commit-detail-empty-files">변경된 파일이 없습니다.</p>
   }
@@ -234,12 +246,28 @@ function GitCommitDetailFiles({ detail }: { detail: GitCommitDetail }) {
               key={`${file.status}:${file.origPath ?? ''}:${file.path}`}
               className="git-commit-detail-file-item"
             >
-              <span className={`git-badge git-badge--${getGitFileBadgeModifier(file.status)}`}>
-                {file.status}
-              </span>
-              <span className="git-commit-detail-file-path" title={label}>
-                {label}
-              </span>
+              <button
+                type="button"
+                className="git-file-trigger"
+                title={label}
+                onClick={() =>
+                  onOpenFileDiff(
+                    toGitDiffRequest(
+                      {
+                        kind: 'commit',
+                        commitHash: detail.hash,
+                        shortHash: detail.shortHash
+                      },
+                      file
+                    )
+                  )
+                }
+              >
+                <span className={`git-badge git-badge--${getGitFileBadgeModifier(file.status)}`}>
+                  {file.status}
+                </span>
+                <span className="git-commit-detail-file-path">{label}</span>
+              </button>
             </li>
           )
         })}
@@ -251,12 +279,17 @@ function GitCommitDetailFiles({ detail }: { detail: GitCommitDetail }) {
 interface GitCommitDetailPanelProps {
   shortHash: string
   detailState: GitCommitDetailState
+  onOpenFileDiff: (request: GitDiffRequest) => void
 }
 
 /**
  * Renders read-only inline commit metadata, hash copy control, and changed files below a row.
  */
-function GitCommitDetailPanel({ shortHash, detailState }: GitCommitDetailPanelProps) {
+function GitCommitDetailPanel({
+  shortHash,
+  detailState,
+  onOpenFileDiff
+}: GitCommitDetailPanelProps) {
   const [copiedHash, setCopiedHash] = useState<string | null>(null)
   const copyTimerRef = useRef<number | null>(null)
 
@@ -334,7 +367,7 @@ function GitCommitDetailPanel({ shortHash, detailState }: GitCommitDetailPanelPr
               {formatGitCommitTimestamp(loadedDetail.committedAt)}
             </span>
           </div>
-          <GitCommitDetailFiles detail={loadedDetail} />
+          <GitCommitDetailFiles detail={loadedDetail} onOpenFileDiff={onOpenFileDiff} />
         </>
       )}
     </div>
@@ -348,7 +381,8 @@ export const GitGraphSection = memo(function GitGraphSection({
   isUnborn,
   graphState,
   onLoadMore,
-  onToggleCommitDetail
+  onToggleCommitDetail,
+  onOpenFileDiff
 }: GitGraphSectionProps) {
   const { commits, hasMore, isLoading, isLoadingMore, errorMessage, commitDetail } = graphState
   const layout = useMemo(() => computeGitGraphLayout(commits), [commits])
@@ -421,6 +455,7 @@ export const GitGraphSection = memo(function GitGraphSection({
                 <GitCommitDetailPanel
                   shortHash={row.commit.shortHash}
                   detailState={commitDetail}
+                  onOpenFileDiff={onOpenFileDiff}
                 />
               )}
             </li>

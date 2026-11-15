@@ -5794,3 +5794,243 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     })
   })
 })
+
+describe('Git Graph commit file diff integration', () => {
+  it('opens read-only commit Diff tabs from Graph commit files, reuses active pane tabs while preserving split pane, toggles layout, and gates 파일 열기 by workspace existence', async () => {
+    const user = userEvent.setup()
+    const commitHash = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'
+    const shortHash = 'a1b2c3d'
+    const diffSpy = vi.fn(async (_workspacePath: string, request: GitDiffRequest) => {
+      if (request.kind === 'commit' && request.path === 'docs/removed-old.md') {
+        return {
+          path: request.path,
+          status: request.status,
+          isBinary: false,
+          isTruncated: false,
+          existsInWorkspace: false,
+          rawPatch: [
+            'diff --git a/docs/removed-old.md b/docs/removed-old.md',
+            '--- a/docs/removed-old.md',
+            '+++ /dev/null',
+            '@@ -1 +0,0 @@',
+            '-removed historical line'
+          ].join('\n')
+        }
+      }
+      if (request.kind === 'commit' && request.path === 'docs/renamed.md') {
+        return {
+          path: request.path,
+          origPath: request.origPath,
+          status: request.status,
+          isBinary: false,
+          isTruncated: false,
+          existsInWorkspace: true,
+          rawPatch: [
+            'diff --git a/docs/legacy.md b/docs/renamed.md',
+            'similarity index 90%',
+            'rename from docs/legacy.md',
+            'rename to docs/renamed.md',
+            '@@ -1 +1 @@',
+            '-legacy title',
+            '+renamed title'
+          ].join('\n')
+        }
+      }
+      if (request.kind === 'commit') {
+        return {
+          path: request.path,
+          status: request.status,
+          isBinary: false,
+          isTruncated: false,
+          existsInWorkspace: true,
+          rawPatch: [
+            `diff --git a/${request.path} b/${request.path}`,
+            `--- a/${request.path}`,
+            `+++ b/${request.path}`,
+            '@@ -1 +1 @@',
+            '-commit before',
+            '+commit after'
+          ].join('\n')
+        }
+      }
+      return {
+        path: request.path,
+        status: request.status,
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        rawPatch: [
+          `diff --git a/${request.path} b/${request.path}`,
+          `--- a/${request.path}`,
+          `+++ b/${request.path}`,
+          '@@ -1 +1 @@',
+          '-working before',
+          '+working after'
+        ].join('\n')
+      }
+    })
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {
+        version: 1,
+        theme: 'light',
+        autoSave: false,
+        autoSaveDelayMs: 1000,
+        showHeadingNumbers: true,
+        recentWorkspaces: [],
+        favoriteWorkspaces: [],
+        customCommands: []
+      },
+      {
+        workspaces: {
+          'C:/wiki/graph-diff-app': {
+            'docs/guide.md': '# Guide Current\nLatest workspace text',
+            'docs/renamed.md': '# Renamed Current',
+            'notes.md': '# Notes'
+          }
+        },
+        selectedFolder: 'C:/wiki/graph-diff-app',
+        git: {
+          status: async (workspacePath) => ({
+            ...createEmptyGitStatus(true, workspacePath),
+            branch: 'main',
+            unstaged: [{ path: 'notes.md', status: 'M' }]
+          }),
+          log: async () => ({
+            commits: [
+              {
+                hash: commitHash,
+                shortHash,
+                parents: [],
+                subject: 'feat: commit with changed files',
+                authorName: 'Alice',
+                committedAt: '2026-11-15T10:00:00+09:00',
+                refs: [{ name: 'main', kind: 'local-branch' }]
+              }
+            ],
+            hasMore: false
+          }),
+          commitDetail: async () => ({
+            hash: commitHash,
+            shortHash,
+            parents: [],
+            subject: 'feat: commit with changed files',
+            body: 'Commit body context',
+            authorName: 'Alice',
+            authorEmail: 'alice@example.com',
+            committedAt: '2026-11-15T10:00:00+09:00',
+            files: [
+              { status: 'M', path: 'docs/guide.md' },
+              { status: 'D', path: 'docs/removed-old.md' },
+              { status: 'R', origPath: 'docs/legacy.md', path: 'docs/renamed.md' }
+            ]
+          }),
+          diff: diffSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    // Open a regular document tab first so moving a Diff tab to secondary pane is enabled
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('notes.md'))
+    await screen.findByTestId('document-editor')
+
+    await user.click(screen.getByRole('button', { name: 'Git' }))
+
+    const gitPanel = await screen.findByLabelText('Git 소스 제어')
+    const graphRegion = within(gitPanel).getByRole('region', { name: 'Graph' })
+
+    // 1. Expand commit in Graph section and click an existing changed file
+    await user.click(within(graphRegion).getByRole('button', { name: /feat: commit with changed files/ }))
+    const detailRegion = await within(graphRegion).findByRole('region', {
+      name: `${shortHash} 커밋 상세`
+    })
+
+    await user.click(within(detailRegion).getByRole('button', { name: /docs\/guide\.md/ }))
+    expect(diffSpy).toHaveBeenCalledWith('C:/wiki/graph-diff-app', {
+      kind: 'commit',
+      commitHash,
+      shortHash,
+      path: 'docs/guide.md',
+      status: 'M'
+    })
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    const guideCommitTab = await within(primaryPane).findByRole('tab', {
+      name: /Diff\s*guide\.md \(a1b2c3d\)/
+    })
+    expect(guideCommitTab).toHaveAttribute('title', 'docs/guide.md · Commit a1b2c3d')
+    expect(within(primaryPane).getByText(`Commit ${shortHash}`)).toBeInTheDocument()
+    expect(within(primaryPane).getByTestId('diff-side-by-side')).toBeInTheDocument()
+    expect(within(primaryPane).getByText('commit after')).toBeInTheDocument()
+
+    // Toggle Side-by-Side -> Inline on commit Diff tab
+    await user.click(within(primaryPane).getByRole('button', { name: '인라인' }))
+    expect(within(primaryPane).getByTestId('diff-inline')).toBeInTheDocument()
+
+    const openFileBtn = within(primaryPane).getByRole('button', { name: '파일 열기' })
+    expect(openFileBtn).toBeEnabled()
+
+    // 2. Click historically deleted file in the same commit -> replaces active Diff tab and disables 파일 열기
+    await user.click(within(detailRegion).getByRole('button', { name: /docs\/removed-old\.md/ }))
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('removed historical line')).toBeInTheDocument()
+    })
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(2)
+    expect(
+      within(primaryPane).getByRole('tab', { name: /Diff\s*removed-old\.md \(a1b2c3d\)/ })
+    ).toBeInTheDocument()
+    expect(within(primaryPane).getByRole('button', { name: '파일 열기' })).toBeDisabled()
+
+    // 3. Click renamed commit file -> passes origPath and replaces active Diff tab
+    await user.click(
+      within(detailRegion).getByRole('button', { name: /docs\/legacy\.md → docs\/renamed\.md/ })
+    )
+    expect(diffSpy).toHaveBeenLastCalledWith('C:/wiki/graph-diff-app', {
+      kind: 'commit',
+      commitHash,
+      shortHash,
+      path: 'docs/renamed.md',
+      origPath: 'docs/legacy.md',
+      status: 'R'
+    })
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('renamed title')).toBeInTheDocument()
+    })
+
+    // 4. Open Working Tree Diff tab from Changes -> replaces commit Diff tab in active pane
+    const changesList = within(gitPanel).getByText('변경 사항 (1)').closest('.git-section') as HTMLElement
+    await user.click(within(changesList).getByText('notes.md'))
+    await waitFor(() => {
+      expect(within(primaryPane).getByText('working after')).toBeInTheDocument()
+    })
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(2)
+
+    // Move Working Tree Diff tab to secondary pane, focus primary pane, and open commit Diff tab in primary
+    const workingTab = within(primaryPane).getByRole('tab', { name: /Diff\s*notes\.md/ })
+    fireEvent.contextMenu(workingTab)
+    await user.click(await screen.findByRole('menuitem', { name: '분할 영역으로 이동' }))
+
+    const secondaryPane = screen.getByTestId('pane-secondary')
+    expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*notes\.md/ })).toBeInTheDocument()
+
+    fireEvent.mouseDown(primaryPane)
+    await user.click(within(detailRegion).getByRole('button', { name: /docs\/guide\.md/ }))
+    await within(primaryPane).findByText('commit after')
+    expect(
+      within(primaryPane).getByRole('tab', { name: /Diff\s*guide\.md \(a1b2c3d\)/ })
+    ).toBeInTheDocument()
+    expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*notes\.md/ })).toBeInTheDocument()
+
+    // 5. Click 파일 열기 from commit Diff tab -> opens editable workspace document, close Diff tab cleanly
+    await user.click(within(primaryPane).getByRole('button', { name: '파일 열기' }))
+    const docEditor = await within(primaryPane).findByTestId('document-editor')
+    expect(getRawEditorText(docEditor)).toContain('Latest workspace text')
+
+    await user.click(within(primaryPane).getByRole('button', { name: 'guide.md (a1b2c3d) 탭 닫기' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+})

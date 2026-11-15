@@ -2500,6 +2500,11 @@ body.is-resizing-git-sections * {
   background-color: var(--bg-elevated);
 }
 
+.git-file-trigger:focus-visible {
+  outline: 1px solid var(--accent-color);
+  outline-offset: -1px;
+}
+
 .git-diff-viewer {
   flex: 1;
   min-width: 0;

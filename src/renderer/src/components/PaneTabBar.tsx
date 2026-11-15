@@ -5,7 +5,7 @@ import { GitDiffViewMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTa
 import {
   formatGitFileLabel,
   getGitDiffContextLabel,
-  getGitFileBaseName
+  getGitDiffTabLabel
 } from '../utils/gitFilePresentation'
 
 export interface DraggingTabPayload {
@@ -164,7 +164,7 @@ export function PaneTabBar({
         if (tab.kind === 'document' && !buffer) return null
         const isActive = tab.id === activeTabId
         const isDiff = tab.kind === 'diff'
-        const tabLabel = isDiff ? getGitFileBaseName(tab.diff.request.path) : buffer!.name
+        const tabLabel = isDiff ? getGitDiffTabLabel(tab.diff.request) : buffer!.name
         const tabTitle = isDiff
           ? `${formatGitFileLabel(tab.diff.request)} · ${getGitDiffContextLabel(tab.diff.request)}`
           : buffer!.path
