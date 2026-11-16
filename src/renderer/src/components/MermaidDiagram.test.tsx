@@ -9,6 +9,23 @@ import themeCss from '../styles/theme.css?raw'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { MermaidDiagram } from './MermaidDiagram'
 
+function mockViewportRect(
+  viewport: HTMLElement,
+  { left = 0, top = 0, width, height }: { left?: number; top?: number; width: number; height: number }
+): void {
+  vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue({
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height,
+    x: left,
+    y: top,
+    toJSON: () => ({})
+  })
+}
+
 describe('MermaidDiagram', () => {
   const originalWikiApi = (window as { wikiApi?: WikiApi }).wikiApi
 
@@ -566,17 +583,30 @@ describe('MermaidDiagram', () => {
       await screen.findByTestId('mermaid-svg')
       const block = screen.getByTestId('mermaid-diagram')
       const toolbar = within(block).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
+      const zoomOutBtn = within(toolbar).getByRole('button', { name: '축소' })
+      const resetZoomBtn = within(toolbar).getByRole('button', { name: '배율 초기화' })
+      const zoomInBtn = within(toolbar).getByRole('button', { name: '확대' })
       const copyImageBtn = within(toolbar).getByRole('button', { name: '이미지 복사' })
       const copyBtn = within(toolbar).getByRole('button', { name: '코드 복사' })
       const savePngBtn = within(toolbar).getByRole('button', { name: 'PNG 저장' })
       const saveSvgBtn = within(toolbar).getByRole('button', { name: 'SVG 저장' })
+      const resizeHandle = within(block).getByRole('separator', { name: 'Mermaid 다이어그램 높이 조절' })
       const beforeBtn = screen.getByRole('button', { name: 'Before Diagram' })
 
       expect(toolbar).toHaveClass('is-floating')
       expect(getComputedStyle(toolbar).opacity).toBe('0')
 
-      // Tab from preceding control reaches all 4 action buttons while keeping toolbar visible
+      // Tab from preceding control reaches all toolbar buttons and resize handle while keeping toolbar visible
       beforeBtn.focus()
+      await user.tab()
+      expect(zoomOutBtn).toHaveFocus()
+      expect(getComputedStyle(toolbar).opacity).toBe('1')
+      await user.tab()
+      expect(resetZoomBtn).toHaveFocus()
+      expect(getComputedStyle(toolbar).opacity).toBe('1')
+      await user.tab()
+      expect(zoomInBtn).toHaveFocus()
+      expect(getComputedStyle(toolbar).opacity).toBe('1')
       await user.tab()
       expect(copyImageBtn).toHaveFocus()
       expect(getComputedStyle(toolbar).opacity).toBe('1')
@@ -588,6 +618,9 @@ describe('MermaidDiagram', () => {
       expect(getComputedStyle(toolbar).opacity).toBe('1')
       await user.tab()
       expect(saveSvgBtn).toHaveFocus()
+      expect(getComputedStyle(toolbar).opacity).toBe('1')
+      await user.tab()
+      expect(resizeHandle).toHaveFocus()
       expect(getComputedStyle(toolbar).opacity).toBe('1')
 
       // Moving focus away hides until hover
@@ -815,14 +848,17 @@ describe('MermaidDiagram', () => {
       const firstToolbar = within(blocks[0]).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
       const buttons = within(firstToolbar).getAllByRole('button')
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+        '축소',
+        '배율 초기화',
+        '확대',
         '이미지 복사',
         '코드 복사',
         'PNG 저장',
         'SVG 저장'
       ])
 
-      const firstImageBtn = buttons[0]
-      const firstCodeBtn = buttons[1]
+      const firstImageBtn = within(firstToolbar).getByRole('button', { name: '이미지 복사' })
+      const firstCodeBtn = within(firstToolbar).getByRole('button', { name: '코드 복사' })
       const secondImageBtn = within(blocks[1]).getByRole('button', { name: '이미지 복사' })
 
       // 1. Light theme copy: #ffffff opaque background + 16px margin + 2x scale
@@ -1563,6 +1599,281 @@ describe('MermaidDiagram', () => {
       expect(within(fallbackBlock).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
       expect(within(fallbackBlock).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
       expect(within(fallbackBlock).getByRole('button', { name: '코드 복사' })).toBeEnabled()
+    } finally {
+      canvasStub.restore()
+    }
+  })
+
+  it('zooms in/out in 25% steps within 25%~400% via toolbar buttons, locks auto height while transformed, and resets on 배율 초기화', async () => {
+    let resolvePending!: (res: { svg: string }) => void
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => {
+        if (text.includes('pending_zoom')) {
+          return new Promise<{ svg: string }>((resolve) => {
+            resolvePending = resolve
+          })
+        }
+        return {
+          svg: `<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>`
+        }
+      })
+    }
+    const renderer = createMermaidRenderer(driver)
+
+    const { rerender } = render(
+      <MermaidDiagram code={'graph TD\n  pending_zoom'} theme="light" renderer={renderer} debounceMs={0} />
+    )
+
+    const block = screen.getByTestId('mermaid-diagram')
+    const zoomOutBtn = within(block).getByRole('button', { name: '축소' })
+    const resetBtn = within(block).getByRole('button', { name: '배율 초기화' })
+    const zoomInBtn = within(block).getByRole('button', { name: '확대' })
+
+    // Loading state disables zoom controls and omits resize handle
+    expect(zoomOutBtn).toBeDisabled()
+    expect(resetBtn).toBeDisabled()
+    expect(zoomInBtn).toBeDisabled()
+    expect(resetBtn).toHaveTextContent('100%')
+    expect(within(block).queryByTestId('mermaid-resize-handle')).not.toBeInTheDocument()
+
+    await act(async () => {
+      resolvePending({ svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>' })
+      await Promise.resolve()
+    })
+
+    rerender(<MermaidDiagram code={'graph TD\n  A-->B'} theme="light" renderer={renderer} debounceMs={0} />)
+    const viewport = await screen.findByTestId('mermaid-svg')
+    const stage = within(viewport).getByTestId('mermaid-svg-stage')
+
+    mockViewportRect(viewport, { width: 400, height: 180 })
+
+    expect(zoomOutBtn).toBeEnabled()
+    expect(resetBtn).toBeEnabled()
+    expect(zoomInBtn).toBeEnabled()
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+    expect(viewport.style.height).toBe('')
+
+    // Zoom in -> 125% locks measured auto height (180px)
+    fireEvent.click(zoomInBtn)
+    expect(resetBtn).toHaveTextContent('125%')
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\.25\)$/)
+    expect(viewport.style.height).toBe('180px')
+
+    // Zoom back to 100% -> unlocks auto height
+    fireEvent.click(zoomOutBtn)
+    expect(resetBtn).toHaveTextContent('100%')
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+    expect(viewport.style.height).toBe('')
+
+    // Zoom out to min 25% disables 축소
+    fireEvent.click(zoomOutBtn)
+    fireEvent.click(zoomOutBtn)
+    fireEvent.click(zoomOutBtn)
+    expect(resetBtn).toHaveTextContent('25%')
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(0\.25\)$/)
+    expect(zoomOutBtn).toBeDisabled()
+    expect(zoomInBtn).toBeEnabled()
+
+    // Reset to 100%
+    fireEvent.click(resetBtn)
+    expect(resetBtn).toHaveTextContent('100%')
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+    expect(viewport.style.height).toBe('')
+
+    // Zoom in to max 400% (12 steps from 100%) disables 확대
+    for (let i = 0; i < 12; i += 1) {
+      fireEvent.click(zoomInBtn)
+    }
+    expect(resetBtn).toHaveTextContent('400%')
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(4\)$/)
+    expect(zoomInBtn).toBeDisabled()
+    expect(zoomOutBtn).toBeEnabled()
+  })
+
+  it('zooms around cursor on Ctrl+wheel and Meta+wheel with preventDefault, while leaving plain wheel scrolling untouched', async () => {
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+      }))
+    }
+    const renderer = createMermaidRenderer(driver)
+
+    render(<MermaidDiagram code={'graph TD\n  A-->B'} theme="light" renderer={renderer} debounceMs={0} />)
+    const viewport = await screen.findByTestId('mermaid-svg')
+    const stage = within(viewport).getByTestId('mermaid-svg-stage')
+    const resetBtn = screen.getByRole('button', { name: '배율 초기화' })
+
+    mockViewportRect(viewport, { left: 100, top: 50, width: 400, height: 200 })
+    // Viewport center is (300, 150)
+
+    // Plain wheel without Ctrl/Meta -> does not preventDefault or zoom
+    const plainWheel = new WheelEvent('wheel', {
+      deltaY: -100,
+      clientX: 350,
+      clientY: 170,
+      bubbles: true,
+      cancelable: true
+    })
+    const plainNotCanceled = viewport.dispatchEvent(plainWheel)
+    expect(plainNotCanceled).toBe(true)
+    expect(plainWheel.defaultPrevented).toBe(false)
+    expect(resetBtn).toHaveTextContent('100%')
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+
+    // Ctrl+wheel up -> +10% (1.1) anchored at cursor (350, 170) => offset (50, 20)
+    // nextPan = offset * (1 - 1.1) = (-5, -2)
+    const ctrlWheelIn = new WheelEvent('wheel', {
+      deltaY: -100,
+      ctrlKey: true,
+      clientX: 350,
+      clientY: 170,
+      bubbles: true,
+      cancelable: true
+    })
+    act(() => {
+      viewport.dispatchEvent(ctrlWheelIn)
+    })
+    expect(ctrlWheelIn.defaultPrevented).toBe(true)
+    expect(resetBtn).toHaveTextContent('110%')
+    expect(stage.style.transform).toBe('translate(-5px, -2px) scale(1.1)')
+    expect(viewport.style.height).toBe('200px')
+
+    // Meta+wheel down -> -10% back to 1.0 around same cursor => returns pan to (0, 0) and unlocks height
+    const metaWheelOut = new WheelEvent('wheel', {
+      deltaY: 100,
+      metaKey: true,
+      clientX: 350,
+      clientY: 170,
+      bubbles: true,
+      cancelable: true
+    })
+    act(() => {
+      viewport.dispatchEvent(metaWheelOut)
+    })
+    expect(metaWheelOut.defaultPrevented).toBe(true)
+    expect(resetBtn).toHaveTextContent('100%')
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+    expect(viewport.style.height).toBe('')
+  })
+
+  it('pans diagram by dragging inside viewport and resets pan and zoom together on 배율 초기화', async () => {
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+      }))
+    }
+    const renderer = createMermaidRenderer(driver)
+
+    render(<MermaidDiagram code={'graph TD\n  A-->B'} theme="light" renderer={renderer} debounceMs={0} />)
+    const viewport = await screen.findByTestId('mermaid-svg')
+    const stage = within(viewport).getByTestId('mermaid-svg-stage')
+    const resetBtn = screen.getByRole('button', { name: '배율 초기화' })
+
+    mockViewportRect(viewport, { width: 320, height: 160 })
+
+    fireEvent.mouseDown(viewport, { button: 0, clientX: 100, clientY: 80 })
+    expect(viewport).toHaveClass('is-panning')
+    expect(document.body).toHaveClass('is-panning-mermaid')
+
+    fireEvent.mouseMove(window, { clientX: 145, clientY: 60 })
+    expect(stage.style.transform).toBe('translate(45px, -20px) scale(1)')
+    expect(viewport.style.height).toBe('160px')
+
+    fireEvent.mouseUp(window)
+    expect(viewport).not.toHaveClass('is-panning')
+    expect(document.body).not.toHaveClass('is-panning-mermaid')
+
+    // Reset clears both pan and zoom, and unlocks auto height
+    fireEvent.click(screen.getByRole('button', { name: '확대' }))
+    expect(resetBtn).toHaveTextContent('125%')
+    fireEvent.click(resetBtn)
+    expect(resetBtn).toHaveTextContent('100%')
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+    expect(viewport.style.height).toBe('')
+  })
+
+  it('resizes viewport height via bottom handle drag/keyboard (clamped 120~1200px), preserves height on zoom reset, restores auto on double-click, and exports unscaled SVG/PNG', async () => {
+    const canvasStub = installSvgCanvasStub()
+    try {
+      const saveFile = vi.fn(
+        async (_req: { format: 'png' | 'svg'; suggestedName: string; data: Uint8Array | string }) => ({
+          canceled: false,
+          filePath: 'C:\\exports\\out.svg'
+        })
+      )
+      window.wikiApi = {
+        diagram: { copyText: vi.fn(async () => {}), copyImage: vi.fn(async () => {}), saveFile }
+      } as unknown as WikiApi
+
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async () => ({
+          svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+        }))
+      }
+      const renderer = createMermaidRenderer(driver)
+
+      render(<MermaidDiagram code={'graph TD\n  A-->B'} theme="light" renderer={renderer} debounceMs={0} />)
+      const viewport = await screen.findByTestId('mermaid-svg')
+      const stage = within(viewport).getByTestId('mermaid-svg-stage')
+      const handle = screen.getByTestId('mermaid-resize-handle')
+
+      mockViewportRect(viewport, { width: 400, height: 200 })
+
+      expect(handle).toHaveAttribute('role', 'separator')
+      expect(handle).toHaveAttribute('aria-orientation', 'horizontal')
+      expect(handle).toHaveAttribute('aria-valuemin', '120')
+      expect(handle).toHaveAttribute('aria-valuemax', '1200')
+
+      // Pointer drag increases height and clamps to 120..1200
+      fireEvent.mouseDown(handle, { button: 0, clientY: 200 })
+      expect(handle).toHaveClass('is-dragging')
+      expect(document.body).toHaveClass('is-resizing-mermaid')
+
+      fireEvent.mouseMove(window, { clientY: 350 })
+      expect(viewport.style.height).toBe('350px')
+      expect(handle).toHaveAttribute('aria-valuenow', '350')
+
+      fireEvent.mouseMove(window, { clientY: 2000 })
+      expect(viewport.style.height).toBe('1200px')
+
+      fireEvent.mouseMove(window, { clientY: 10 })
+      expect(viewport.style.height).toBe('120px')
+
+      fireEvent.mouseMove(window, { clientY: 300 })
+      expect(viewport.style.height).toBe('300px')
+      fireEvent.mouseUp(window)
+      expect(handle).not.toHaveClass('is-dragging')
+
+      // Keyboard ArrowDown / ArrowUp adjust by 24px
+      fireEvent.keyDown(handle, { key: 'ArrowDown' })
+      expect(viewport.style.height).toBe('324px')
+      fireEvent.keyDown(handle, { key: 'ArrowUp' })
+      expect(viewport.style.height).toBe('300px')
+
+      // Zooming and resetting zoom preserves custom height
+      fireEvent.click(screen.getByRole('button', { name: '확대' }))
+      expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\.25\)$/)
+      expect(viewport.style.height).toBe('300px')
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'SVG 저장' }))
+        await Promise.resolve()
+      })
+      expect(saveFile).toHaveBeenCalledTimes(1)
+      expect(saveFile.mock.calls[0][0].data).toContain('width="132"')
+      expect(saveFile.mock.calls[0][0].data).toContain('height="82"')
+
+      fireEvent.click(screen.getByRole('button', { name: '배율 초기화' }))
+      expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+      expect(viewport.style.height).toBe('300px')
+
+      // Double click on handle resets custom height back to auto
+      fireEvent.doubleClick(handle)
+      expect(viewport.style.height).toBe('')
     } finally {
       canvasStub.restore()
     }

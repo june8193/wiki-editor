@@ -1,10 +1,12 @@
-import { Check, Copy, FileCode, Image as ImageIcon, ImageDown } from 'lucide-react'
+import { Check, Copy, FileCode, Image as ImageIcon, ImageDown, ZoomIn, ZoomOut } from 'lucide-react'
 import type { MermaidActionId, MermaidDiagramActionsState } from '../hooks/useMermaidDiagramActions'
+import type { MermaidViewportState } from '../hooks/useMermaidViewport'
 
 export interface MermaidActionBarProps {
   variant: 'floating' | 'inline'
   isVisible?: boolean
   actions: MermaidDiagramActionsState
+  viewport: MermaidViewportState
 }
 
 export interface MermaidActionErrorAlertProps {
@@ -15,7 +17,7 @@ export interface MermaidActionErrorAlertProps {
  * Shared toolbar for Mermaid blocks rendered either as a floating overlay in
  * Preview/Split modes or inline inside the WYSIWYG block header.
  */
-export function MermaidActionBar({ variant, isVisible = false, actions }: MermaidActionBarProps) {
+export function MermaidActionBar({ variant, isVisible = false, actions, viewport }: MermaidActionBarProps) {
   const shouldBeVisible =
     variant === 'floating' &&
     Boolean(isVisible || actions.activeAction !== null || actions.completedAction !== null)
@@ -76,6 +78,37 @@ export function MermaidActionBar({ variant, isVisible = false, actions }: Mermai
       aria-label="Mermaid 다이어그램 작업"
       className={`mermaid-action-bar ${variantClass}${visibleClass}`}
     >
+      <button
+        type="button"
+        className="mermaid-action-btn"
+        aria-label="축소"
+        title="축소"
+        disabled={!viewport.canZoomOut}
+        onClick={viewport.handleZoomOut}
+      >
+        <ZoomOut size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="mermaid-action-btn mermaid-zoom-reset-btn"
+        aria-label="배율 초기화"
+        title="배율 초기화 (100%)"
+        disabled={!viewport.hasSvg}
+        onClick={viewport.handleResetZoom}
+      >
+        {viewport.zoomPercent}%
+      </button>
+      <button
+        type="button"
+        className="mermaid-action-btn"
+        aria-label="확대"
+        title="확대"
+        disabled={!viewport.canZoomIn}
+        onClick={viewport.handleZoomIn}
+      >
+        <ZoomIn size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+      <span className="mermaid-action-divider" aria-hidden="true" />
       {actionItems.map(({ id, label, feedbackLabel, completedClass, Icon, canExecute, onTrigger }) => {
         const isBusy = actions.activeAction === id
         const isCompleted = actions.completedAction === id

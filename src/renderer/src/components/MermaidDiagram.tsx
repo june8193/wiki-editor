@@ -3,6 +3,12 @@ import type { ThemeMode } from '@shared/config'
 import { defaultMermaidRenderer, type MermaidRenderer, type MermaidTheme } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { DEFAULT_MERMAID_DEBOUNCE_MS, useMermaidRenderState } from '../hooks/useMermaidRenderState'
+import {
+  MERMAID_MAX_HEIGHT_PX,
+  MERMAID_MIN_HEIGHT_PX,
+  type MermaidViewportState,
+  useMermaidViewport
+} from '../hooks/useMermaidViewport'
 import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
 
 export interface MermaidDiagramViewProps {
@@ -10,6 +16,7 @@ export interface MermaidDiagramViewProps {
   mermaidTheme: MermaidTheme
   displaySvg: string | null
   displayError: string | null
+  viewport: MermaidViewportState
   className?: string
   sourceLine?: string
   sourceEndLine?: string
@@ -27,6 +34,7 @@ export function MermaidDiagramView({
   mermaidTheme,
   displaySvg,
   displayError,
+  viewport,
   className,
   sourceLine,
   sourceEndLine,
@@ -65,10 +73,26 @@ export function MermaidDiagramView({
           {displaySvg !== null ? (
             <div
               key="mermaid-svg"
-              className="mermaid-svg-container"
+              ref={viewport.viewportRef}
+              className={`mermaid-svg-container is-interactive${viewport.isPanning ? ' is-panning' : ''}`}
               data-testid="mermaid-svg"
-              dangerouslySetInnerHTML={{ __html: displaySvg }}
-            />
+              style={
+                viewport.effectiveHeightPx !== null
+                  ? { height: `${viewport.effectiveHeightPx}px` }
+                  : undefined
+              }
+              onPointerDown={viewport.handlePanStart}
+              onMouseDown={viewport.handlePanStart}
+            >
+              <div
+                className="mermaid-svg-stage"
+                data-testid="mermaid-svg-stage"
+                style={{
+                  transform: `translate(${viewport.pan.x}px, ${viewport.pan.y}px) scale(${viewport.zoom})`
+                }}
+                dangerouslySetInnerHTML={{ __html: displaySvg }}
+              />
+            </div>
           ) : (
             <div key="mermaid-loading" className="mermaid-loading">
               Mermaid 다이어그램 렌더링 중...
@@ -77,6 +101,23 @@ export function MermaidDiagramView({
         </>
       )}
       {children}
+      {displaySvg !== null && (
+        <div
+          role="separator"
+          tabIndex={0}
+          aria-label="Mermaid 다이어그램 높이 조절"
+          aria-orientation="horizontal"
+          aria-valuemin={MERMAID_MIN_HEIGHT_PX}
+          aria-valuemax={MERMAID_MAX_HEIGHT_PX}
+          aria-valuenow={viewport.effectiveHeightPx ?? undefined}
+          data-testid="mermaid-resize-handle"
+          className={`mermaid-resize-handle${viewport.isResizingHeight ? ' is-dragging' : ''}`}
+          onPointerDown={viewport.handleResizeStart}
+          onMouseDown={viewport.handleResizeStart}
+          onKeyDown={viewport.handleResizeKeyDown}
+          onDoubleClick={viewport.handleResizeDoubleClick}
+        />
+      )}
     </div>
   )
 }
@@ -94,7 +135,7 @@ interface MermaidDiagramProps {
 
 /**
  * Renders a Mermaid diagram block with debounced live updates, theme synchronization,
- * last-valid SVG retention, and floating action controls.
+ * last-valid SVG retention, interactive zoom/pan/resize viewport controls, and floating action controls.
  */
 export function MermaidDiagram({
   code,
@@ -122,19 +163,24 @@ export function MermaidDiagram({
     documentTitle
   })
 
+  const viewport = useMermaidViewport({
+    hasSvg: displaySvg !== null
+  })
+
   return (
     <MermaidDiagramView
       code={code}
       mermaidTheme={mermaidTheme}
       displaySvg={displaySvg}
       displayError={displayError}
+      viewport={viewport}
       className={className}
       sourceLine={sourceLine}
       sourceEndLine={sourceEndLine}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <MermaidActionBar variant="floating" isVisible={isHovered} actions={actions} />
+      <MermaidActionBar variant="floating" isVisible={isHovered} actions={actions} viewport={viewport} />
       <MermaidActionErrorAlert message={actions.errorMessage} />
     </MermaidDiagramView>
   )

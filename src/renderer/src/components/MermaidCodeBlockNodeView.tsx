@@ -4,6 +4,7 @@ import { NodeViewContent, type NodeViewProps, NodeViewWrapper } from '@tiptap/re
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { useMermaidRenderState } from '../hooks/useMermaidRenderState'
+import { useMermaidViewport } from '../hooks/useMermaidViewport'
 import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
 import { MermaidDiagramView } from './MermaidDiagram'
 
@@ -34,6 +35,10 @@ function WysiwygMermaidBlock({ code }: { code: string }) {
     documentTitle
   })
 
+  const viewport = useMermaidViewport({
+    hasSvg: displaySvg !== null
+  })
+
   return (
     <NodeViewWrapper
       as="div"
@@ -47,7 +52,7 @@ function WysiwygMermaidBlock({ code }: { code: string }) {
       >
         <span className="mermaid-node-badge">Mermaid</span>
         <div className="mermaid-node-header-actions">
-          <MermaidActionBar variant="inline" actions={actions} />
+          <MermaidActionBar variant="inline" actions={actions} viewport={viewport} />
           <button
             type="button"
             className="toolbar-btn"
@@ -71,12 +76,14 @@ function WysiwygMermaidBlock({ code }: { code: string }) {
         className="mermaid-node-preview"
         contentEditable={false}
         onMouseDown={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
       >
         <MermaidDiagramView
           code={code}
           mermaidTheme={mermaidTheme}
           displaySvg={displaySvg}
           displayError={displayError}
+          viewport={viewport}
         />
       </div>
 
