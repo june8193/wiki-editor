@@ -5,17 +5,21 @@ import { toErrorMessage } from '@shared/errors'
 import { useGitGraphLog } from './useGitGraphLog'
 import { useWikiApi } from './useWikiApi'
 
+export interface WorkspaceDiscardTarget {
+  scope: 'all' | 'paths'
+  paths: readonly string[]
+}
+
 interface UseGitControllerOptions {
   workspaceRootPath: string | null
   confirmBeforeWorkspaceMutation?: (
     actionLabel: string,
     targetRepoPaths?: readonly string[]
   ) => Promise<boolean>
-  onBeforeWorkspaceDiscard?: (targetRepoPaths: readonly string[]) => Promise<void>
+  onBeforeWorkspaceDiscard?: (target: WorkspaceDiscardTarget) => Promise<void>
   onAfterWorkspaceDiscard?: (
-    targetRepoPaths: readonly string[],
-    succeeded: boolean,
-    isDiscardAll?: boolean
+    target: WorkspaceDiscardTarget,
+    succeeded: boolean
   ) => Promise<void>
   onWorkspaceMutated?: () => Promise<readonly string[]>
   onWorkspaceMutationActiveChange?: (active: boolean) => void
@@ -194,8 +198,7 @@ export function useGitController({
       options: {
         affectsWorkspaceFiles?: boolean
         fetchRepoMetadata?: boolean
-        discardTargetPaths?: readonly string[]
-        isDiscardAll?: boolean
+        discardTarget?: WorkspaceDiscardTarget
         fallbackError: string
         run: (rootPath: string) => Promise<GitStatus>
       }
@@ -214,13 +217,9 @@ export function useGitController({
       const completeWorkspaceEffects = async (succeeded: boolean): Promise<void> => {
         if (!options.affectsWorkspaceFiles || workspaceEffectsCompleted) return
         workspaceEffectsCompleted = true
-        if (options.discardTargetPaths) {
+        if (options.discardTarget) {
           if (succeeded || preparedDiscard) {
-            await callbacksRef.current.onAfterWorkspaceDiscard?.(
-              options.discardTargetPaths,
-              succeeded,
-              ...(options.isDiscardAll ? ([true] as const) : ([] as const))
-            )
+            await callbacksRef.current.onAfterWorkspaceDiscard?.(options.discardTarget, succeeded)
           }
           return
         }
@@ -238,7 +237,7 @@ export function useGitController({
         if (options.affectsWorkspaceFiles && callbacksRef.current.confirmBeforeWorkspaceMutation) {
           const confirmed = await callbacksRef.current.confirmBeforeWorkspaceMutation(
             actionLabel,
-            options.discardTargetPaths
+            options.discardTarget?.paths
           )
           if (!confirmed || !isCurrentRequest(rootPath, epoch)) {
             return false
@@ -249,9 +248,9 @@ export function useGitController({
           setPendingAction(actionLabel)
         }
 
-        if (options.discardTargetPaths && callbacksRef.current.onBeforeWorkspaceDiscard) {
+        if (options.discardTarget && callbacksRef.current.onBeforeWorkspaceDiscard) {
           preparedDiscard = true
-          await callbacksRef.current.onBeforeWorkspaceDiscard(options.discardTargetPaths)
+          await callbacksRef.current.onBeforeWorkspaceDiscard(options.discardTarget)
           if (!isCurrentRequest(rootPath, epoch)) {
             return false
           }
@@ -346,7 +345,7 @@ export function useGitController({
       await runGitAction('변경 사항 롤백', {
         affectsWorkspaceFiles: true,
         fetchRepoMetadata: false,
-        discardTargetPaths: [filePath],
+        discardTarget: { scope: 'paths', paths: [filePath] },
         fallbackError: '변경 사항을 롤백하지 못했습니다.',
         run: (rootPath) => wikiApi.git.discard(rootPath, [filePath])
       })
@@ -356,7 +355,7 @@ export function useGitController({
 
   const discardAll = useCallback(async (): Promise<void> => {
     const current = statusRef.current
-    const targetPaths = current
+    const paths = current
       ? [
           ...new Set([
             ...current.unstaged.map((item) => item.path),
@@ -367,8 +366,7 @@ export function useGitController({
     await runGitAction('전체 변경 사항 롤백', {
       affectsWorkspaceFiles: true,
       fetchRepoMetadata: false,
-      discardTargetPaths: targetPaths,
-      isDiscardAll: true,
+      discardTarget: { scope: 'all', paths },
       fallbackError: '전체 변경 사항을 롤백하지 못했습니다.',
       run: (rootPath) => wikiApi.git.discardAll(rootPath)
     })

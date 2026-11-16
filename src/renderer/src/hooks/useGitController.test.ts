@@ -740,9 +740,12 @@ describe('useGitController', () => {
     await act(async () => {
       await result.current.discardFile('notes.md')
     })
-    expect(onBeforeWorkspaceDiscard).toHaveBeenCalledWith(['notes.md'])
+    expect(onBeforeWorkspaceDiscard).toHaveBeenCalledWith({ scope: 'paths', paths: ['notes.md'] })
     expect(discardMock).toHaveBeenCalledWith('C:/wiki', ['notes.md'])
-    expect(onAfterWorkspaceDiscard).toHaveBeenCalledWith(['notes.md'], true)
+    expect(onAfterWorkspaceDiscard).toHaveBeenCalledWith(
+      { scope: 'paths', paths: ['notes.md'] },
+      true
+    )
     expect(onWorkspaceMutated).not.toHaveBeenCalled()
     expect(result.current.status?.unstaged).toEqual([])
     expect(logMock).toHaveBeenCalledTimes(logCallsBeforeDiscard)
@@ -751,11 +754,14 @@ describe('useGitController', () => {
     await act(async () => {
       await result.current.discardFile('notes.md')
     })
-    expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith(['notes.md'], false)
+    expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith(
+      { scope: 'paths', paths: ['notes.md'] },
+      false
+    )
     expect(result.current.errorMessage).toBe('discard failed')
   })
 
-  it('runs discardAll with unstaged+untracked target paths (excluding staged-only), passes isDiscardAll=true, skips log refetch, and recovers on failure', async () => {
+  it('runs discardAll with unstaged+untracked target paths (excluding staged-only), scope=all, skips log refetch, and recovers on failure', async () => {
     const cleanAfterStatus: GitStatus = {
       ...makeStatus('main', 0),
       staged: [{ path: 'staged-only.md', status: 'A' }]
@@ -814,14 +820,20 @@ describe('useGitController', () => {
     expect(discardAllMock).not.toHaveBeenCalled()
     expect(onAfterWorkspaceDiscard).not.toHaveBeenCalled()
 
-    // 2. Approved confirmation runs discardAll, skips log refetch, and passes isDiscardAll=true
+    // 2. Approved confirmation runs discardAll, skips log refetch, and passes scope=all
     confirmDecision = true
     await act(async () => {
       await result.current.discardAll()
     })
-    expect(onBeforeWorkspaceDiscard).toHaveBeenCalledWith(expectedTargets)
+    expect(onBeforeWorkspaceDiscard).toHaveBeenCalledWith({
+      scope: 'all',
+      paths: expectedTargets
+    })
     expect(discardAllMock).toHaveBeenCalledWith('C:/wiki')
-    expect(onAfterWorkspaceDiscard).toHaveBeenCalledWith(expectedTargets, true, true)
+    expect(onAfterWorkspaceDiscard).toHaveBeenCalledWith(
+      { scope: 'all', paths: expectedTargets },
+      true
+    )
     expect(onWorkspaceMutated).not.toHaveBeenCalled()
     expect(result.current.status?.unstaged).toEqual([])
     expect(result.current.status?.untracked).toEqual([])
@@ -832,7 +844,7 @@ describe('useGitController', () => {
     await act(async () => {
       await result.current.discardAll()
     })
-    expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith([], false, true)
+    expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith({ scope: 'all', paths: [] }, false)
     expect(result.current.errorMessage).toBe('discardAll failed')
   })
 })

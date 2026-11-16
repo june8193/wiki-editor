@@ -45,6 +45,7 @@ const execFileAsync = promisify(execFile)
 const DEFAULT_LOCAL_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_BUFFER_BYTES = 10 * 1024 * 1024
 const GIT_METADATA_NAMES: ReadonlySet<string> = new Set(['.git'])
+const OUTSIDE_REPO_PATH_MESSAGE = '워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.'
 
 export interface GitServiceOptions {
   env?: NodeJS.ProcessEnv
@@ -743,13 +744,9 @@ export class GitService {
     }
   }
 
-  private assertRepoCandidatePath(
-    repoRoot: string,
-    candidatePath: string,
-    outsideMessage = '워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.'
-  ): void {
+  private assertRepoCandidatePath(repoRoot: string, candidatePath: string): void {
     if (!isPathInsideRoot(repoRoot, candidatePath) || candidatePath === repoRoot) {
-      throw new Error(outsideMessage)
+      throw new Error(OUTSIDE_REPO_PATH_MESSAGE)
     }
     if (hasBlockedPathSegment(relative(repoRoot, candidatePath), GIT_METADATA_NAMES)) {
       throw new Error('시스템 .git 경로에는 접근할 수 없습니다.')
@@ -766,7 +763,6 @@ export class GitService {
     }
 
     const followLeafSymlink = options.followLeafSymlink ?? true
-    const outsideMessage = '워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.'
     const validated: string[] = []
     for (const rawPath of paths) {
       if (typeof rawPath !== 'string' || rawPath.trim().length === 0 || rawPath.includes('\0')) {
@@ -774,16 +770,16 @@ export class GitService {
       }
 
       const candidate = isAbsolute(rawPath) ? resolve(rawPath) : resolve(repoRoot, rawPath)
-      this.assertRepoCandidatePath(repoRoot, candidate, outsideMessage)
+      this.assertRepoCandidatePath(repoRoot, candidate)
 
       const assertResolvedInsideRepo = (resolved: string): void => {
         if (!isPathInsideRoot(repoRoot, resolved)) {
-          throw new Error(outsideMessage)
+          throw new Error(OUTSIDE_REPO_PATH_MESSAGE)
         }
       }
       const targetToResolve = followLeafSymlink ? candidate : dirname(candidate)
       const { resolvedReal: resolvedTarget } = await resolveRealPathWithAncestor(targetToResolve, {
-        outsideMessage,
+        outsideMessage: OUTSIDE_REPO_PATH_MESSAGE,
         assertResolved: assertResolvedInsideRepo
       })
       const resolvedReal = followLeafSymlink

@@ -15,7 +15,7 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
-import { useGitController } from '../hooks/useGitController'
+import { useGitController, type WorkspaceDiscardTarget } from '../hooks/useGitController'
 import { useGitDiffTabs } from '../hooks/useGitDiffTabs'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
@@ -335,8 +335,8 @@ export function MainAppShell() {
   )
 
   const handleBeforeWorkspaceDiscard = useCallback(
-    async (targetRepoPaths: readonly string[]): Promise<void> => {
-      const targetPaths = resolveTargetWorkspacePaths(targetRepoPaths)
+    async (target: WorkspaceDiscardTarget): Promise<void> => {
+      const targetPaths = resolveTargetWorkspacePaths(target.paths)
       activeDiscardTargetPathsRef.current = targetPaths
       if (targetPaths.length === 0) return
       await prepareWorkspacePathsForDiscard(targetPaths)
@@ -345,22 +345,18 @@ export function MainAppShell() {
   )
 
   const handleAfterWorkspaceDiscard = useCallback(
-    async (
-      targetRepoPaths: readonly string[],
-      succeeded: boolean,
-      isDiscardAll = false
-    ): Promise<void> => {
+    async (target: WorkspaceDiscardTarget, succeeded: boolean): Promise<void> => {
       const targetPaths =
-        activeDiscardTargetPathsRef.current ?? resolveTargetWorkspacePaths(targetRepoPaths)
+        activeDiscardTargetPathsRef.current ?? resolveTargetWorkspacePaths(target.paths)
       activeDiscardTargetPathsRef.current = null
       if (targetPaths.length > 0) {
         await finishWorkspacePathsDiscard(targetPaths, succeeded)
       }
       if (succeeded) {
-        if (isDiscardAll) {
+        if (target.scope === 'all') {
           closeAllUnstagedDiffTabs()
         } else {
-          closeUnstagedDiffTabsForPaths(targetRepoPaths)
+          closeUnstagedDiffTabsForPaths(target.paths)
         }
         await refreshTree()
       }
