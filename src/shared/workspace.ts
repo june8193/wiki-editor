@@ -9,6 +9,11 @@ export interface WorkspaceEntry {
   kind: WorkspaceEntryKind
 }
 
+export interface WorkspaceMovedEntry {
+  oldPath: string
+  entry: WorkspaceEntry
+}
+
 export interface WorkspaceSummary {
   rootPath: string
   name: string
@@ -125,6 +130,74 @@ export function isNestedOrSamePath(candidatePath: string, parentPath: string): b
     candidatePath === parentPath ||
     candidatePath.startsWith(`${parentPath}/`) ||
     candidatePath.startsWith(`${parentPath}\\`)
+  )
+}
+
+function isPathKeyNestedOrSame(candidateKey: string, parentKey: string): boolean {
+  if (!candidateKey || !parentKey) return false
+  if (candidateKey === parentKey) return true
+  return parentKey.endsWith('/')
+    ? candidateKey.startsWith(parentKey)
+    : candidateKey.startsWith(`${parentKey}/`)
+}
+
+/**
+ * Returns true when `candidatePath` is identical to or nested inside `parentPath` using
+ * canonical workspace path key comparison.
+ */
+export function isNestedOrSameWorkspacePath(candidatePath: string, parentPath: string): boolean {
+  return isPathKeyNestedOrSame(
+    getWorkspacePathKey(candidatePath),
+    getWorkspacePathKey(parentPath)
+  )
+}
+
+/**
+ * Deduplicates workspace items by canonical path key and drops items strictly nested inside a
+ * selected directory item, preserving original order.
+ */
+export function filterTopLevelWorkspaceItems<T>(
+  items: readonly T[],
+  getPath: (item: T) => string,
+  isDirectory: (item: T) => boolean
+): T[] {
+  const deduped: Array<{ item: T; key: string; isDir: boolean }> = []
+  const seenKeys = new Set<string>()
+
+  for (const item of items) {
+    const key = getWorkspacePathKey(getPath(item))
+    if (!key || seenKeys.has(key)) continue
+    seenKeys.add(key)
+    deduped.push({
+      item,
+      key,
+      isDir: isDirectory(item)
+    })
+  }
+
+  return deduped
+    .filter(
+      (candidate) =>
+        !deduped.some(
+          (other) =>
+            other.isDir &&
+            other.key !== candidate.key &&
+            isPathKeyNestedOrSame(candidate.key, other.key)
+        )
+    )
+    .map((entry) => entry.item)
+}
+
+/**
+ * Deduplicates WorkspaceEntry items and drops entries nested inside a selected directory entry.
+ */
+export function filterTopLevelWorkspaceEntries(
+  entries: readonly WorkspaceEntry[]
+): WorkspaceEntry[] {
+  return filterTopLevelWorkspaceItems(
+    entries,
+    (entry) => entry.path,
+    (entry) => entry.kind === 'directory'
   )
 }
 

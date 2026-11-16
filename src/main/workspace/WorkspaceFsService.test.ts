@@ -547,4 +547,68 @@ describe('WorkspaceFsService', () => {
       }
     }
   })
+
+  it('moves single/multiple entries cleanly, skips same-parent entries, deduplicates nested selections, and enforces all-or-nothing validation', async () => {
+    await service.openWorkspace(workspaceDir)
+
+    const folderA = await service.createEntry('.', 'folder-a', 'directory')
+    const folderB = await service.createEntry('.', 'folder-b', 'directory')
+    const subA = await service.createEntry(folderA.path, 'sub', 'directory')
+    const note1 = await service.createEntry(folderA.path, 'note-1.md', 'file', '# Note 1')
+    const subNote = await service.createEntry(subA.path, 'nested.md', 'file', '# Nested')
+    const rootNote = await service.createEntry('.', 'root.md', 'file', '# Root')
+
+    // 1. Move multiple items including parent folder + its nested child + item already in target
+    const moved = await service.moveEntries(
+      [subA.path, subNote.path, rootNote.path, note1.path],
+      folderB.path
+    )
+    expect(moved.map((item) => item.entry.relativePath)).toEqual([
+      'folder-b/sub',
+      'folder-b/root.md',
+      'folder-b/note-1.md'
+    ])
+    expect(moved.map((item) => item.oldPath)).toEqual([subA.path, rootNote.path, note1.path])
+
+    // Already-in-target item should be skipped safely (no-op)
+    const noopMoved = await service.moveEntries([moved[1].entry.path], folderB.path)
+    expect(noopMoved).toEqual([])
+
+    // Verify nested file moved along with parent folder
+    expect(await readFile(join(folderB.path, 'sub', 'nested.md'), 'utf8')).toBe('# Nested')
+    expect(await readFile(join(folderB.path, 'root.md'), 'utf8')).toBe('# Root')
+    expect(await readFile(join(folderB.path, 'note-1.md'), 'utf8')).toBe('# Note 1')
+
+    // 2. All-or-nothing collision check: existing name in target aborts entire batch
+    const conflictInA = await service.createEntry(folderA.path, 'note-1.md', 'file', '# Conflict')
+    const freshInA = await service.createEntry(folderA.path, 'fresh.md', 'file', '# Fresh')
+    await expect(
+      service.moveEntries([freshInA.path, conflictInA.path], folderB.path)
+    ).rejects.toThrow(/이미 존재/)
+    // fresh.md must NOT have moved
+    expect(await service.readFile(freshInA.path)).toBe('# Fresh')
+    await expect(lstat(join(folderB.path, 'fresh.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    // 3. All-or-nothing collision check: duplicate basenames from different folders in the same batch
+    const subC = await service.createEntry('.', 'folder-c', 'directory')
+    const dupInC = await service.createEntry(subC.path, 'fresh.md', 'file', '# Dup')
+    await expect(service.moveEntries([freshInA.path, dupInC.path], folderB.path)).rejects.toThrow(
+      /이미 존재/
+    )
+    expect(await service.readFile(freshInA.path)).toBe('# Fresh')
+    expect(await service.readFile(dupInC.path)).toBe('# Dup')
+
+    // 4. Reject moving a folder into itself or a descendant
+    await expect(service.moveEntries([folderB.path], folderB.path)).rejects.toThrow(
+      /자기 자신이나 하위 폴더/
+    )
+    await expect(
+      service.moveEntries([folderB.path], join(folderB.path, 'sub'))
+    ).rejects.toThrow(/자기 자신이나 하위 폴더/)
+
+    // 5. Reject moving workspace root or escaping workspace root
+    await expect(service.moveEntries(['.'], folderB.path)).rejects.toThrow(/루트/)
+    await expect(service.moveEntries([outsideDir], folderB.path)).rejects.toThrow(/워크스페이스|경로/i)
+    await expect(service.moveEntries([freshInA.path], outsideDir)).rejects.toThrow(/워크스페이스|경로/i)
+  })
 })

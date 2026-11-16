@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addFavoriteWorkspace,
+  filterTopLevelWorkspaceItems,
   formatAbsoluteEntryPath,
   formatRelativeEntryPath,
   getParentDirectory,
@@ -9,6 +10,7 @@ import {
   isFavoriteWorkspacePath,
   isMarkdownFileName,
   isNestedOrSamePath,
+  isNestedOrSameWorkspacePath,
   isSameWorkspacePath,
   isWorkspaceChangeAffectingPath,
   joinWorkspacePath,
@@ -273,5 +275,28 @@ describe('shared workspace path and favorites helpers', () => {
         relativePath: 'assets-other/logo.png'
       })
     ).toBe(false)
+  })
+
+  it('compares nested workspace paths canonically and filters top-level selected entries', () => {
+    expect(isNestedOrSameWorkspacePath('C:/Wiki/Docs/a.md', 'c:\\wiki\\docs\\')).toBe(true)
+    expect(isNestedOrSameWorkspacePath('C:/Wiki/Docs-2/a.md', 'C:\\Wiki\\Docs')).toBe(false)
+    expect(isNestedOrSameWorkspacePath('C:/Wiki/a.md', 'C:\\')).toBe(true)
+
+    const items = [
+      { path: 'C:\\wiki\\docs\\guide.md', kind: 'file' as const },
+      { path: 'c:/wiki/docs/', kind: 'directory' as const },
+      { path: 'C:\\wiki\\docs\\guide.md', kind: 'file' as const },
+      { path: 'C:\\wiki\\docs-other\\note.md', kind: 'file' as const }
+    ]
+    expect(
+      filterTopLevelWorkspaceItems(
+        items,
+        (item) => item.path,
+        (item) => item.kind === 'directory'
+      )
+    ).toEqual([
+      { path: 'c:/wiki/docs/', kind: 'directory' },
+      { path: 'C:\\wiki\\docs-other\\note.md', kind: 'file' }
+    ])
   })
 })

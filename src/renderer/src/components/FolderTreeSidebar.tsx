@@ -6,18 +6,24 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState
 } from 'react'
-import { isSupportedImageFile } from '@shared/assets'
 import {
+  getWorkspacePathKey,
   isSameWorkspacePath,
   WorkspaceEntry,
   WorkspaceEntryKind,
   WorkspaceSummary
 } from '@shared/workspace'
-import { WORKSPACE_IMAGE_DRAG_MIME } from '../utils/dragMimeTypes'
+import {
+  buildTreeEntryMap,
+  collectVisibleTreeEntries,
+  resolveSelectedTreeEntries
+} from '../utils/folderTree'
 import { useDismissable } from '../hooks/useDismissable'
+import { useFolderTreeDnd } from '../hooks/useFolderTreeDnd'
 import type { WorkspaceTreeState } from '../hooks/useWorkspaceTree'
 
 interface InlineCreateState {
@@ -27,6 +33,7 @@ interface InlineCreateState {
 
 interface ContextMenuState {
   entry: WorkspaceEntry
+  targets: readonly WorkspaceEntry[]
   x: number
   y: number
 }
@@ -58,6 +65,7 @@ function InlineTreeInput({
       onSubmit={handleSubmit}
       className="tree-inline-form"
       onClick={(event) => event.stopPropagation()}
+      onDragStart={(event) => event.stopPropagation()}
     >
       <input
         type="text"
@@ -90,6 +98,8 @@ interface FolderTreeSidebarProps {
   tree: WorkspaceTreeState
   activeFilePath: string | null
   onSelectPath: (path: string | null) => void
+  onToggleSelectPath: (path: string) => void
+  onSelectPathRange: (targetPath: string, visibleEntries: readonly WorkspaceEntry[]) => void
   onToggleDirectory: (entry: WorkspaceEntry) => void
   onEnsureExpanded: (dirPath: string) => Promise<void>
   onResolveCreateParentDir: () => string | null
@@ -97,9 +107,10 @@ interface FolderTreeSidebarProps {
   onRefreshTree: () => void
   onCreateEntry: (parentDirPath: string, name: string, kind: WorkspaceEntryKind) => Promise<void>
   onRenameEntry: (targetPath: string, newName: string) => Promise<void>
-  onRequestDelete: (entry: WorkspaceEntry) => void
-  onCopyEntryPath: (entry: WorkspaceEntry, mode: EntryPathCopyMode) => void
-  onDragStartWorkspaceImage?: (filePath: string) => void
+  onMoveEntries: (sourcePaths: readonly string[], targetDirPath: string) => Promise<void>
+  onRequestDelete: (entries: readonly WorkspaceEntry[]) => void
+  onCopyEntryPath: (entries: readonly WorkspaceEntry[], mode: EntryPathCopyMode) => void
+  onDragStartWorkspaceImages?: (filePaths: readonly string[]) => void
   onDragEndWorkspaceImage?: () => void
 }
 
@@ -108,6 +119,8 @@ export function FolderTreeSidebar({
   tree,
   activeFilePath,
   onSelectPath,
+  onToggleSelectPath,
+  onSelectPathRange,
   onToggleDirectory,
   onEnsureExpanded,
   onResolveCreateParentDir,
@@ -115,9 +128,10 @@ export function FolderTreeSidebar({
   onRefreshTree,
   onCreateEntry,
   onRenameEntry,
+  onMoveEntries,
   onRequestDelete,
   onCopyEntryPath,
-  onDragStartWorkspaceImage,
+  onDragStartWorkspaceImages,
   onDragEndWorkspaceImage
 }: FolderTreeSidebarProps) {
   const [inlineCreate, setInlineCreate] = useState<InlineCreateState | null>(null)
@@ -145,6 +159,52 @@ export function FolderTreeSidebar({
       setContextMenu((prev) => (prev ? { ...prev, x: clampedX, y: clampedY } : null))
     }
   }, [contextMenu])
+
+  const visibleEntries = useMemo(
+    () => collectVisibleTreeEntries(tree.rootEntries, tree),
+    [tree]
+  )
+
+  const entryByKey = useMemo(() => buildTreeEntryMap(tree), [tree])
+
+  const selectedPathKeys = useMemo(
+    () => new Set(tree.selectedPaths.map((path) => getWorkspacePathKey(path))),
+    [tree.selectedPaths]
+  )
+
+  const selectedEntries = useMemo(
+    () =>
+      resolveSelectedTreeEntries(visibleEntries, entryByKey, tree.selectedPaths, selectedPathKeys),
+    [entryByKey, selectedPathKeys, tree.selectedPaths, visibleEntries]
+  )
+
+  const isPathSelected = useCallback(
+    (entryPath: string): boolean => selectedPathKeys.has(getWorkspacePathKey(entryPath)),
+    [selectedPathKeys]
+  )
+
+  const resolveEntryActionTargets = (entry: WorkspaceEntry): readonly WorkspaceEntry[] =>
+    isPathSelected(entry.path) && selectedEntries.length > 0 ? selectedEntries : [entry]
+
+  const {
+    dropTargetDirPath,
+    handleEntryDragStart,
+    handleTreeDragOver,
+    handleTreeDrop,
+    handleTreeDragLeave,
+    handleTreeDragEnd
+  } = useFolderTreeDnd({
+    workspace,
+    expandedDirs: tree.expandedDirs,
+    entryByKey,
+    isPathSelected,
+    resolveActionTargets: resolveEntryActionTargets,
+    onSelectPath,
+    onEnsureExpanded,
+    onMoveEntries,
+    onDragStartWorkspaceImages,
+    onDragEndWorkspaceImage
+  })
 
   // Reset transient editing states whenever active workspace changes
   useEffect(() => {
@@ -207,13 +267,17 @@ export function FolderTreeSidebar({
     }
 
     if (event.key === 'F2') {
+      if (selectedEntries.length > 1) {
+        return
+      }
       event.preventDefault()
       event.stopPropagation()
       beginRename(entry)
     } else if (event.key === 'Delete') {
       event.preventDefault()
       event.stopPropagation()
-      onRequestDelete(entry)
+      const targets = selectedEntries.length > 0 ? selectedEntries : [entry]
+      onRequestDelete(targets)
     } else if (event.key === 'Enter') {
       event.preventDefault()
       event.stopPropagation()
@@ -231,15 +295,18 @@ export function FolderTreeSidebar({
   ): void => {
     event.preventDefault()
     event.stopPropagation()
-    onSelectPath(entry.path)
-    setContextMenu({ entry, x: event.clientX, y: event.clientY })
+    const targets = resolveEntryActionTargets(entry)
+    if (!isPathSelected(entry.path)) {
+      onSelectPath(entry.path)
+    }
+    setContextMenu({ entry, targets, x: event.clientX, y: event.clientY })
   }
 
   const handleCopyPath = (mode: EntryPathCopyMode): void => {
     if (!contextMenu) return
-    const target = contextMenu.entry
+    const targets = contextMenu.targets
     setContextMenu(null)
-    onCopyEntryPath(target, mode)
+    onCopyEntryPath(targets, mode)
   }
 
   const renderInlineCreateRow = (depth: number) => {
@@ -263,11 +330,14 @@ export function FolderTreeSidebar({
       const isDir = entry.kind === 'directory'
       const isExpanded = isDir && tree.expandedDirs.has(entry.path)
       const isLoading = isDir && tree.loadingDirs.has(entry.path)
-      const isSelected = tree.selectedPath === entry.path
+      const isSelected = isPathSelected(entry.path)
       const isActiveFile =
         !isDir && activeFilePath !== null && isSameWorkspacePath(activeFilePath, entry.path)
       const isRenaming = renamingEntry?.path === entry.path
-      const isDraggableImage = !isDir && !isRenaming && isSupportedImageFile(entry.path)
+      const isDropTarget =
+        isDir &&
+        dropTargetDirPath !== null &&
+        isSameWorkspacePath(dropTargetDirPath, entry.path)
       const childEntries = tree.childrenByDir[entry.path] ?? []
       const showCreateInside = inlineCreate?.parentDirPath === entry.path
 
@@ -280,32 +350,28 @@ export function FolderTreeSidebar({
           aria-selected={isSelected}
           tabIndex={0}
           className="tree-item-wrapper"
-          draggable={isDraggableImage}
-          onDragStart={(event) => {
-            if (!isDraggableImage) {
-              return
-            }
-            event.stopPropagation()
-            if (event.dataTransfer) {
-              event.dataTransfer.effectAllowed = 'copy'
-              event.dataTransfer.setData(WORKSPACE_IMAGE_DRAG_MIME, entry.path)
-            }
-            onDragStartWorkspaceImage?.(entry.path)
-          }}
-          onDragEnd={() => {
-            if (!isDraggableImage) {
-              return
-            }
-            onDragEndWorkspaceImage?.()
-          }}
+          draggable={!isRenaming}
+          onDragStart={(event) => handleEntryDragStart(event, entry, isRenaming)}
+          onDragOver={(event) => handleTreeDragOver(event, entry)}
+          onDrop={(event) => handleTreeDrop(event, entry)}
+          onDragEnd={handleTreeDragEnd}
           onKeyDown={(event) => handleTreeItemKeyDown(event, entry)}
           onContextMenu={(event) => handleRowContextMenu(event, entry)}
         >
           <div
-            className={`tree-row${isSelected ? ' is-selected' : ''}${isActiveFile ? ' is-active-file' : ''}`}
+            className={`tree-row${isSelected ? ' is-selected' : ''}${isActiveFile ? ' is-active-file' : ''}${isDropTarget ? ' is-drop-target' : ''}`}
+            data-drop-target={isDropTarget ? 'true' : undefined}
             style={treeIndentStyle(depth)}
             onClick={(event) => {
               event.stopPropagation()
+              if (event.shiftKey) {
+                onSelectPathRange(entry.path, visibleEntries)
+                return
+              }
+              if (event.ctrlKey || event.metaKey) {
+                onToggleSelectPath(entry.path)
+                return
+              }
               onSelectPath(entry.path)
               if (isDir) {
                 onToggleDirectory(entry)
@@ -346,6 +412,13 @@ export function FolderTreeSidebar({
         </li>
       )
     })
+
+  const isRootDropTarget = Boolean(
+    workspace &&
+      dropTargetDirPath !== null &&
+      isSameWorkspacePath(dropTargetDirPath, workspace.rootPath)
+  )
+  const isMultiContextMenu = Boolean(contextMenu && contextMenu.targets.length > 1)
 
   return (
     <section className="workspace-sidebar" aria-label="워크스페이스 탐색기">
@@ -393,7 +466,16 @@ export function FolderTreeSidebar({
           </p>
         </div>
       ) : (
-        <ul role="tree" className="folder-tree" onClick={() => onSelectPath(null)}>
+        <ul
+          role="tree"
+          aria-multiselectable="true"
+          className={`folder-tree${isRootDropTarget ? ' is-root-drop-target' : ''}`}
+          data-drop-target={isRootDropTarget ? 'root' : undefined}
+          onClick={() => onSelectPath(null)}
+          onDragOver={(event) => handleTreeDragOver(event, null)}
+          onDrop={(event) => handleTreeDrop(event, null)}
+          onDragLeave={handleTreeDragLeave}
+        >
           {inlineCreate?.parentDirPath === workspace.rootPath && renderInlineCreateRow(0)}
           {tree.rootEntries.length === 0 && !inlineCreate ? (
             <li className="tree-status-row">빈 폴더입니다.</li>
@@ -416,6 +498,7 @@ export function FolderTreeSidebar({
                 type="button"
                 role="menuitem"
                 className="context-menu-item"
+                disabled={isMultiContextMenu}
                 onClick={() => void beginCreate('file', contextMenu.entry.path)}
               >
                 새 파일
@@ -424,6 +507,7 @@ export function FolderTreeSidebar({
                 type="button"
                 role="menuitem"
                 className="context-menu-item"
+                disabled={isMultiContextMenu}
                 onClick={() => void beginCreate('directory', contextMenu.entry.path)}
               >
                 새 폴더
@@ -434,6 +518,7 @@ export function FolderTreeSidebar({
               type="button"
               role="menuitem"
               className="context-menu-item"
+              disabled={isMultiContextMenu}
               onClick={() => {
                 const target = contextMenu.entry
                 setContextMenu(null)
@@ -465,6 +550,7 @@ export function FolderTreeSidebar({
             type="button"
             role="menuitem"
             className="context-menu-item"
+            disabled={isMultiContextMenu}
             onClick={() => beginRename(contextMenu.entry)}
           >
             이름 변경 (F2)
@@ -474,9 +560,9 @@ export function FolderTreeSidebar({
             role="menuitem"
             className="context-menu-item is-danger"
             onClick={() => {
-              const target = contextMenu.entry
+              const targets = contextMenu.targets
               setContextMenu(null)
-              onRequestDelete(target)
+              onRequestDelete(targets)
             }}
           >
             삭제

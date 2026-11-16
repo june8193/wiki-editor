@@ -6,7 +6,12 @@ import {
   type WorkspaceImageIngestInput,
   type WorkspaceImageIngestResult
 } from '@shared/assets'
-import { TAB_DRAG_MIME, WORKSPACE_IMAGE_DRAG_MIME } from '../utils/dragMimeTypes'
+import {
+  parseWorkspaceDragPaths,
+  TAB_DRAG_MIME,
+  WORKSPACE_ENTRY_DRAG_MIME,
+  WORKSPACE_IMAGE_DRAG_MIME
+} from '../utils/dragMimeTypes'
 
 export type ImageIngestor = (
   input: WorkspaceImageIngestInput
@@ -19,12 +24,13 @@ export type PendingImageSource =
 
 export interface ImageTransferInspectOptions {
   getPathForFile?: (file: File) => string
-  draggingWorkspaceImagePath?: string | null
+  draggingWorkspaceImagePaths?: readonly string[]
 }
 
 export interface InspectedDropTransfer {
   isTabDrag: boolean
   isWorkspaceOrFileDrag: boolean
+  isNonImageWorkspaceDrag: boolean
   sources: PendingImageSource[]
 }
 
@@ -136,36 +142,56 @@ export function inspectDropTransfer(
   options: ImageTransferInspectOptions = {}
 ): InspectedDropTransfer {
   if (!dataTransfer) {
-    return { isTabDrag: false, isWorkspaceOrFileDrag: false, sources: [] }
+    return {
+      isTabDrag: false,
+      isWorkspaceOrFileDrag: false,
+      isNonImageWorkspaceDrag: false,
+      sources: []
+    }
   }
 
   const types = Array.from(dataTransfer.types ?? [])
   if (types.includes(TAB_DRAG_MIME)) {
-    return { isTabDrag: true, isWorkspaceOrFileDrag: false, sources: [] }
+    return {
+      isTabDrag: true,
+      isWorkspaceOrFileDrag: false,
+      isNonImageWorkspaceDrag: false,
+      sources: []
+    }
   }
 
   const files = Array.from(dataTransfer.files ?? [])
-  const hasExplicitWorkspaceMime = types.includes(WORKSPACE_IMAGE_DRAG_MIME)
+  const hasWorkspaceImageMime = types.includes(WORKSPACE_IMAGE_DRAG_MIME)
+  const hasWorkspaceEntryMime = types.includes(WORKSPACE_ENTRY_DRAG_MIME)
   const rawWorkspaceMimeData = dataTransfer.getData(WORKSPACE_IMAGE_DRAG_MIME)
-  const fallbackWorkspacePath =
-    files.length === 0 && (types.length === 0 || hasExplicitWorkspaceMime)
-      ? (options.draggingWorkspaceImagePath ?? '')
-      : ''
-  const workspaceImagePath = rawWorkspaceMimeData || fallbackWorkspacePath
+  const canUseFallbackPaths =
+    files.length === 0 && (types.length === 0 || hasWorkspaceImageMime)
+  const fallbackPaths = canUseFallbackPaths ? (options.draggingWorkspaceImagePaths ?? []) : []
+  const workspaceImagePaths = rawWorkspaceMimeData
+    ? parseWorkspaceDragPaths(rawWorkspaceMimeData)
+    : fallbackPaths
 
   const isWorkspaceOrFileDrag =
-    hasExplicitWorkspaceMime ||
-    Boolean(workspaceImagePath) ||
+    hasWorkspaceImageMime ||
+    hasWorkspaceEntryMime ||
+    workspaceImagePaths.length > 0 ||
     types.includes('Files') ||
     files.length > 0
 
   if (!isWorkspaceOrFileDrag) {
-    return { isTabDrag: false, isWorkspaceOrFileDrag: false, sources: [] }
+    return {
+      isTabDrag: false,
+      isWorkspaceOrFileDrag: false,
+      isNonImageWorkspaceDrag: false,
+      sources: []
+    }
   }
 
   const sources: PendingImageSource[] = []
-  if (workspaceImagePath && isSupportedImageFile(workspaceImagePath)) {
-    sources.push({ kind: 'filePath', filePath: workspaceImagePath })
+  for (const workspaceImagePath of workspaceImagePaths) {
+    if (isSupportedImageFile(workspaceImagePath)) {
+      sources.push({ kind: 'filePath', filePath: workspaceImagePath })
+    }
   }
 
   const getPathForFile = resolveGetPathForFile(options.getPathForFile)
@@ -185,6 +211,7 @@ export function inspectDropTransfer(
   return {
     isTabDrag: false,
     isWorkspaceOrFileDrag: true,
+    isNonImageWorkspaceDrag: hasWorkspaceEntryMime && !hasWorkspaceImageMime && sources.length === 0,
     sources
   }
 }

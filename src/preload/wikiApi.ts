@@ -47,7 +47,8 @@ import {
 import type {
   WorkspaceChangeEvent,
   WorkspaceEntry,
-  WorkspaceInfo
+  WorkspaceInfo,
+  WorkspaceMovedEntry
 } from '@shared/workspace'
 
 export interface IpcRendererLike {
@@ -141,6 +142,12 @@ export function createWikiApi(
           targetPath,
           newName
         ) as Promise<WorkspaceEntry>,
+      moveEntries: (sourcePaths, targetDirPath) =>
+        ipcRenderer.invoke(
+          WORKSPACE_IPC_CHANNELS.moveEntries,
+          sourcePaths,
+          targetDirPath
+        ) as Promise<WorkspaceMovedEntry[]>,
       deleteEntry: (targetPath) =>
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.deleteEntry, targetPath) as Promise<void>,
       ingestImage: (input) =>

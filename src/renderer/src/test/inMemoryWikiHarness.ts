@@ -46,14 +46,18 @@ import {
 } from '@shared/window'
 import {
   compareWorkspaceEntriesByRelativePath,
+  filterTopLevelWorkspaceItems,
   getWorkspaceDisplayName,
+  getWorkspacePathKey,
   isMarkdownFileName,
+  isNestedOrSameWorkspacePath,
   recordRecentWorkspace,
   removeFavoriteWorkspace,
   toggleFavoriteWorkspace,
   type WorkspaceChangeEvent,
   type WorkspaceEntry,
-  type WorkspaceEntryKind
+  type WorkspaceEntryKind,
+  type WorkspaceMovedEntry
 } from '@shared/workspace'
 
 export interface VirtualFsOptions {
@@ -493,6 +497,37 @@ export function createMultiWindowWikiHarness(
       }
     })
 
+    const relocateVirtualEntry = (
+      oldPath: string,
+      nextPath: string,
+      kind: WorkspaceEntryKind
+    ): WorkspaceEntry => {
+      if (kind === 'file') {
+        const content = files.get(oldPath)!
+        files.delete(oldPath)
+        files.set(nextPath, content)
+      } else {
+        const movedDirs = [...dirs].filter(
+          (d) => d === oldPath || d.startsWith(`${oldPath}/`)
+        )
+        const movedFiles = [...files.entries()].filter(([f]) => f.startsWith(`${oldPath}/`))
+        for (const d of movedDirs) {
+          dirs.delete(d)
+          dirs.add(nextPath + d.slice(oldPath.length))
+        }
+        for (const [f, c] of movedFiles) {
+          files.delete(f)
+          files.set(nextPath + f.slice(oldPath.length), c)
+        }
+      }
+      return {
+        name: baseNameOf(nextPath),
+        path: nextPath,
+        relativePath: activeRoot ? nextPath.slice(activeRoot.length + 1) : baseNameOf(nextPath),
+        kind
+      }
+    }
+
     const api: WikiApi = {
       config: {
         async get() {
@@ -632,35 +667,76 @@ export function createMultiWindowWikiHarness(
             throw new Error(`이미 존재하는 이름입니다: ${newName}`)
           }
           if (files.has(target)) {
-            const content = files.get(target)!
-            files.delete(target)
-            files.set(next, content)
-            return {
-              name: newName,
-              path: next,
-              relativePath: next.slice(activeRoot.length + 1),
-              kind: 'file'
-            }
+            return relocateVirtualEntry(target, next, 'file')
           }
           if (dirs.has(target)) {
-            const movedDirs = [...dirs].filter((d) => d === target || d.startsWith(`${target}/`))
-            const movedFiles = [...files.entries()].filter(([f]) => f.startsWith(`${target}/`))
-            for (const d of movedDirs) {
-              dirs.delete(d)
-              dirs.add(next + d.slice(target.length))
-            }
-            for (const [f, c] of movedFiles) {
-              files.delete(f)
-              files.set(next + f.slice(target.length), c)
-            }
-            return {
-              name: newName,
-              path: next,
-              relativePath: next.slice(activeRoot.length + 1),
-              kind: 'directory'
-            }
+            return relocateVirtualEntry(target, next, 'directory')
           }
           throw new Error(`경로를 찾을 수 없습니다: ${targetPath}`)
+        },
+        async moveEntries(sourcePaths, targetDirPath): Promise<WorkspaceMovedEntry[]> {
+          if (!activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+          const targetDir = normalizePosix(targetDirPath === '.' ? activeRoot : targetDirPath)
+          if (!dirs.has(targetDir)) {
+            throw new Error(`폴더를 찾을 수 없습니다: ${targetDirPath}`)
+          }
+          if (sourcePaths.length === 0) return []
+
+          const resolved: Array<{ path: string; kind: WorkspaceEntryKind }> = []
+          for (const rawSource of sourcePaths) {
+            const source = normalizePosix(rawSource === '.' ? activeRoot : rawSource)
+            if (source === activeRoot) {
+              throw new Error('워크스페이스 루트 폴더는 이동할 수 없습니다.')
+            }
+            if (dirs.has(source)) {
+              resolved.push({ path: source, kind: 'directory' })
+            } else if (files.has(source)) {
+              resolved.push({ path: source, kind: 'file' })
+            } else {
+              throw new Error(`경로를 찾을 수 없습니다: ${rawSource}`)
+            }
+          }
+
+          const topLevel = filterTopLevelWorkspaceItems(
+            resolved,
+            (item) => item.path,
+            (item) => item.kind === 'directory'
+          )
+
+          const plannedKeys = new Set<string>()
+          const existingKeys = new Set(
+            [...dirs, ...files.keys()].map((item) => getWorkspacePathKey(item))
+          )
+          const plans: Array<{ oldPath: string; nextPath: string; kind: WorkspaceEntryKind }> = []
+
+          for (const item of topLevel) {
+            if (
+              item.kind === 'directory' &&
+              isNestedOrSameWorkspacePath(targetDir, item.path)
+            ) {
+              throw new Error('폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.')
+            }
+            if (parentDirOf(item.path) === targetDir) {
+              continue
+            }
+            const name = baseNameOf(item.path)
+            const nextPath = `${targetDir}/${name}`
+            const nextKey = getWorkspacePathKey(nextPath)
+            if (plannedKeys.has(nextKey) || existingKeys.has(nextKey)) {
+              throw new Error(`이미 존재하는 이름입니다: ${name}`)
+            }
+            plannedKeys.add(nextKey)
+            plans.push({ oldPath: item.path, nextPath, kind: item.kind })
+          }
+
+          const moved: WorkspaceMovedEntry[] = []
+          for (const plan of plans) {
+            moved.push({
+              oldPath: plan.oldPath,
+              entry: relocateVirtualEntry(plan.oldPath, plan.nextPath, plan.kind)
+            })
+          }
+          return moved
         },
         async deleteEntry(targetPath) {
           const target = normalizePosix(targetPath)

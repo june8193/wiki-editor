@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkspaceImageIngestInput, WorkspaceImageIngestResult } from '@shared/assets'
-import { TAB_DRAG_MIME, WORKSPACE_IMAGE_DRAG_MIME } from '../utils/dragMimeTypes'
+import {
+  TAB_DRAG_MIME,
+  WORKSPACE_ENTRY_DRAG_MIME,
+  WORKSPACE_IMAGE_DRAG_MIME
+} from '../utils/dragMimeTypes'
 import {
   extractClipboardImageSources,
   formatRawMarkdownImages,
@@ -70,17 +74,19 @@ describe('imageIngestion helpers', () => {
     expect(inspectDropTransfer(null)).toEqual({
       isTabDrag: false,
       isWorkspaceOrFileDrag: false,
+      isNonImageWorkspaceDrag: false,
       sources: []
     })
 
     expect(
       inspectDropTransfer(
         createDataTransferStub({ types: [TAB_DRAG_MIME, 'text/plain'] }),
-        { draggingWorkspaceImagePath: '/ws/pic.png' }
+        { draggingWorkspaceImagePaths: ['/ws/pic.png'] }
       )
     ).toEqual({
       isTabDrag: true,
       isWorkspaceOrFileDrag: false,
+      isNonImageWorkspaceDrag: false,
       sources: []
     })
 
@@ -88,11 +94,12 @@ describe('imageIngestion helpers', () => {
     expect(
       inspectDropTransfer(
         createDataTransferStub({ types: [WORKSPACE_IMAGE_DRAG_MIME] }),
-        { draggingWorkspaceImagePath: '/ws/hero.png' }
+        { draggingWorkspaceImagePaths: ['/ws/hero.png'] }
       )
     ).toEqual({
       isTabDrag: false,
       isWorkspaceOrFileDrag: true,
+      isNonImageWorkspaceDrag: false,
       sources: [{ kind: 'filePath', filePath: '/ws/hero.png' }]
     })
 
@@ -113,6 +120,7 @@ describe('imageIngestion helpers', () => {
     ).toEqual({
       isTabDrag: false,
       isWorkspaceOrFileDrag: true,
+      isNonImageWorkspaceDrag: false,
       sources: [
         { kind: 'filePath', filePath: 'D:/assets/a.png' },
         { kind: 'externalFile', file: rawBytesImg }
@@ -123,6 +131,59 @@ describe('imageIngestion helpers', () => {
     expect(inspectDropTransfer(createDataTransferStub({ types: ['text/plain'] }))).toEqual({
       isTabDrag: false,
       isWorkspaceOrFileDrag: false,
+      isNonImageWorkspaceDrag: false,
+      sources: []
+    })
+
+    // Multi-image Folder Tree drag via MIME data and fallback array context state
+    expect(
+      inspectDropTransfer(
+        createDataTransferStub({
+          types: [WORKSPACE_ENTRY_DRAG_MIME, WORKSPACE_IMAGE_DRAG_MIME],
+          dataByMime: {
+            [WORKSPACE_IMAGE_DRAG_MIME]: '/ws/a.png\n/ws/sub/b.webp\n/ws/note.md'
+          }
+        })
+      )
+    ).toEqual({
+      isTabDrag: false,
+      isWorkspaceOrFileDrag: true,
+      isNonImageWorkspaceDrag: false,
+      sources: [
+        { kind: 'filePath', filePath: '/ws/a.png' },
+        { kind: 'filePath', filePath: '/ws/sub/b.webp' }
+      ]
+    })
+
+    expect(
+      inspectDropTransfer(
+        createDataTransferStub({
+          types: [WORKSPACE_ENTRY_DRAG_MIME, WORKSPACE_IMAGE_DRAG_MIME]
+        }),
+        { draggingWorkspaceImagePaths: ['/ws/one.png', '/ws/two.jpg'] }
+      )
+    ).toEqual({
+      isTabDrag: false,
+      isWorkspaceOrFileDrag: true,
+      isNonImageWorkspaceDrag: false,
+      sources: [
+        { kind: 'filePath', filePath: '/ws/one.png' },
+        { kind: 'filePath', filePath: '/ws/two.jpg' }
+      ]
+    })
+
+    // Non-image Folder Tree drag is recognized as workspace drag with isNonImageWorkspaceDrag=true
+    expect(
+      inspectDropTransfer(
+        createDataTransferStub({
+          types: [WORKSPACE_ENTRY_DRAG_MIME],
+          dataByMime: { [WORKSPACE_ENTRY_DRAG_MIME]: '/ws/note.md' }
+        })
+      )
+    ).toEqual({
+      isTabDrag: false,
+      isWorkspaceOrFileDrag: true,
+      isNonImageWorkspaceDrag: true,
       sources: []
     })
   })

@@ -19,7 +19,7 @@ import {
 import { useWikiApi } from './useWikiApi'
 
 export interface ImageTransferContextValue {
-  draggingWorkspaceImagePath?: string | null
+  draggingWorkspaceImagePaths?: readonly string[]
   clearDraggingWorkspaceImage?: () => void
   reportImageError?: (title: string, error: unknown) => void
   ingestImage?: ImageIngestor
@@ -68,7 +68,7 @@ function inspectEditorDragEvent<TTarget>(
   }
   const inspected = inspectDropTransfer(event.dataTransfer, {
     getPathForFile: context.getPathForFile,
-    draggingWorkspaceImagePath: context.draggingWorkspaceImagePath ?? null
+    draggingWorkspaceImagePaths: context.draggingWorkspaceImagePaths
   })
   if (inspected.isTabDrag) {
     return { handled: true, returnValue: Boolean(options.suppressNativeTabDrop), inspected: null }
@@ -165,7 +165,11 @@ export function useEditorImageTransfer<TTarget>(
     event.preventDefault()
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect =
-        opts.enableImageInsertion && opts.documentPath ? 'copy' : 'none'
+        !check.inspected.isNonImageWorkspaceDrag &&
+        opts.enableImageInsertion &&
+        opts.documentPath
+          ? 'copy'
+          : 'none'
     }
     return true
   }, [])
@@ -221,26 +225,32 @@ export function useEditorImageTransfer<TTarget>(
 export function useWorkspaceImageTransfer(
   reportImageError: (title: string, error: unknown) => void
 ): {
-  setDraggingWorkspaceImagePath: (filePath: string | null) => void
+  setDraggingWorkspaceImagePaths: (filePaths: readonly string[]) => void
   clearDraggingWorkspaceImage: () => void
   imageTransferContextValue: ImageTransferContextValue
 } {
   const wikiApi = useWikiApi()
-  const [draggingWorkspaceImagePath, setDraggingWorkspaceImagePath] = useState<string | null>(null)
-  const draggingWorkspaceImagePathRef = useRef<string | null>(null)
-  draggingWorkspaceImagePathRef.current = draggingWorkspaceImagePath
+  const [draggingWorkspaceImagePaths, setDraggingWorkspaceImagePathsState] = useState<
+    readonly string[]
+  >([])
+  const draggingWorkspaceImagePathsRef = useRef<readonly string[]>([])
+  draggingWorkspaceImagePathsRef.current = draggingWorkspaceImagePaths
+
+  const setDraggingWorkspaceImagePaths = useCallback((filePaths: readonly string[]): void => {
+    setDraggingWorkspaceImagePathsState(filePaths)
+  }, [])
 
   const clearDraggingWorkspaceImage = useCallback((): void => {
-    setDraggingWorkspaceImagePath(null)
+    setDraggingWorkspaceImagePathsState([])
   }, [])
 
   useEffect(() => {
     const blockUnsafeFileTransfer = (event: DragEvent, isDrop: boolean): void => {
       const inspected = inspectDropTransfer(event.dataTransfer, {
-        draggingWorkspaceImagePath: draggingWorkspaceImagePathRef.current
+        draggingWorkspaceImagePaths: draggingWorkspaceImagePathsRef.current
       })
       if (isDrop && inspected.isWorkspaceOrFileDrag) {
-        setDraggingWorkspaceImagePath(null)
+        setDraggingWorkspaceImagePathsState([])
       }
       if (event.defaultPrevented || inspected.isTabDrag || !inspected.isWorkspaceOrFileDrag) {
         return
@@ -266,14 +276,14 @@ export function useWorkspaceImageTransfer(
   const getPathForFile = wikiApi?.workspace?.getPathForFile
   const imageTransferContextValue = useMemo<ImageTransferContextValue>(
     () => ({
-      draggingWorkspaceImagePath,
+      draggingWorkspaceImagePaths,
       clearDraggingWorkspaceImage,
       reportImageError,
       ...(typeof ingestImage === 'function' ? { ingestImage } : {}),
       ...(typeof getPathForFile === 'function' ? { getPathForFile } : {})
     }),
     [
-      draggingWorkspaceImagePath,
+      draggingWorkspaceImagePaths,
       clearDraggingWorkspaceImage,
       reportImageError,
       ingestImage,
@@ -282,7 +292,7 @@ export function useWorkspaceImageTransfer(
   )
 
   return {
-    setDraggingWorkspaceImagePath,
+    setDraggingWorkspaceImagePaths,
     clearDraggingWorkspaceImage,
     imageTransferContextValue
   }

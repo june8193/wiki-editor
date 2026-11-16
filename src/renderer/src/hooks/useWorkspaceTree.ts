@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  filterTopLevelWorkspaceEntries,
   getParentPath,
+  getWorkspacePathKey,
   isMarkdownFileName,
-  isNestedOrSamePath,
+  isNestedOrSameWorkspacePath,
   isSameWorkspacePath,
   remapPathPrefix,
   toWorkspaceRelativePath,
   WorkspaceChangeEvent,
   WorkspaceEntry,
   WorkspaceEntryKind,
+  WorkspaceMovedEntry,
   WorkspaceSummary
 } from '@shared/workspace'
 import { logRendererInfo } from '../logging/rendererLogger'
@@ -20,7 +23,19 @@ export interface WorkspaceTreeState {
   childrenByDir: Readonly<Record<string, readonly WorkspaceEntry[]>>
   expandedDirs: ReadonlySet<string>
   loadingDirs: ReadonlySet<string>
-  selectedPath: string | null
+  selectedPaths: readonly string[]
+}
+
+function dedupeWorkspacePaths(paths: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const path of paths) {
+    const key = getWorkspacePathKey(path)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    unique.push(path)
+  }
+  return unique
 }
 
 export interface OpenWorkspaceOptions {
@@ -55,11 +70,14 @@ export function useWorkspaceTree({
   const [markdownFiles, setMarkdownFiles] = useState<WorkspaceEntry[]>([])
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set())
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(() => new Set())
-  const [selectedTreePath, setSelectedTreePath] = useState<string | null>(null)
+  const [selectedTreePaths, setSelectedTreePathsState] = useState<string[]>([])
+  const [selectionAnchorPath, setSelectionAnchorPath] = useState<string | null>(null)
+  const selectedTreePath = selectedTreePaths[selectedTreePaths.length - 1] ?? null
 
   const mountedRef = useRef<boolean>(true)
   const workspaceRef = useRef<WorkspaceSummary | null>(null)
   const expandedDirsRef = useRef<Set<string>>(expandedDirs)
+  const selectionAnchorPathRef = useRef<string | null>(selectionAnchorPath)
   const openRequestSeqRef = useRef<number>(0)
   const markdownFilesSeqRef = useRef<number>(0)
   const callbacksRef = useRef({
@@ -73,6 +91,7 @@ export function useWorkspaceTree({
 
   workspaceRef.current = workspace
   expandedDirsRef.current = expandedDirs
+  selectionAnchorPathRef.current = selectionAnchorPath
   callbacksRef.current = {
     onError,
     onWorkspaceOpened,
@@ -162,6 +181,51 @@ export function useWorkspaceTree({
     }
   }, [refreshTree, wikiApi])
 
+  const setSelectedTreePath = useCallback((path: string | null): void => {
+    if (path === null) {
+      setSelectedTreePathsState([])
+      setSelectionAnchorPath(null)
+      return
+    }
+    setSelectedTreePathsState([path])
+    setSelectionAnchorPath(path)
+  }, [])
+
+  const toggleSelectTreePath = useCallback((path: string): void => {
+    setSelectedTreePathsState((prev) => {
+      const exists = prev.some((item) => isSameWorkspacePath(item, path))
+      if (exists) {
+        return prev.filter((item) => !isSameWorkspacePath(item, path))
+      }
+      return [...prev, path]
+    })
+    setSelectionAnchorPath(path)
+  }, [])
+
+  const selectTreePathRange = useCallback(
+    (targetPath: string, visibleEntries: readonly WorkspaceEntry[]): void => {
+      const targetIndex = visibleEntries.findIndex((entry) =>
+        isSameWorkspacePath(entry.path, targetPath)
+      )
+      if (targetIndex === -1) {
+        setSelectedTreePath(targetPath)
+        return
+      }
+      const currentAnchor = selectionAnchorPathRef.current
+      const anchorIndex = currentAnchor
+        ? visibleEntries.findIndex((entry) => isSameWorkspacePath(entry.path, currentAnchor))
+        : -1
+      if (anchorIndex === -1) {
+        setSelectedTreePath(visibleEntries[targetIndex].path)
+        return
+      }
+      const start = Math.min(anchorIndex, targetIndex)
+      const end = Math.max(anchorIndex, targetIndex)
+      setSelectedTreePathsState(visibleEntries.slice(start, end + 1).map((entry) => entry.path))
+    },
+    [setSelectedTreePath]
+  )
+
   const openWorkspace = useCallback(
     async (targetPath: string, options?: OpenWorkspaceOptions): Promise<boolean> => {
       const seq = ++openRequestSeqRef.current
@@ -201,7 +265,7 @@ export function useWorkspaceTree({
         return false
       }
     },
-    [wikiApi]
+    [setSelectedTreePath, wikiApi]
   )
 
   const loadDirectoryChildren = useCallback(async (dirPath: string): Promise<void> => {
@@ -310,7 +374,62 @@ export function useWorkspaceTree({
         }
       }
     },
-    [refreshDirectory, refreshMarkdownFiles, wikiApi]
+    [refreshDirectory, refreshMarkdownFiles, setSelectedTreePath, wikiApi]
+  )
+
+  const applyTreePathRemappings = useCallback(
+    (
+      remappings: readonly WorkspaceMovedEntry[],
+      rootPath: string
+    ): void => {
+      const remapWithEntries = (
+        candidatePath: string,
+        entries: readonly WorkspaceMovedEntry[]
+      ): string => {
+        const matched = entries.find((item) =>
+          item.entry.kind === 'directory'
+            ? isNestedOrSameWorkspacePath(candidatePath, item.oldPath)
+            : isSameWorkspacePath(candidatePath, item.oldPath)
+        )
+        return matched
+          ? remapPathPrefix(candidatePath, matched.oldPath, matched.entry.path)
+          : candidatePath
+      }
+
+      const dirRemappings = remappings.filter((item) => item.entry.kind === 'directory')
+      if (dirRemappings.length > 0) {
+        setExpandedDirs((prev) => {
+          const next = new Set<string>()
+          for (const dir of prev) {
+            next.add(remapWithEntries(dir, dirRemappings))
+          }
+          return next
+        })
+        setChildrenByDir((prev) => {
+          const next: Record<string, WorkspaceEntry[]> = {}
+          for (const [dir, entries] of Object.entries(prev)) {
+            const remappedDir = remapWithEntries(dir, dirRemappings)
+            next[remappedDir] = entries.map((item) => {
+              const remappedPath = remapWithEntries(item.path, dirRemappings)
+              if (remappedPath === item.path) return item
+              return {
+                ...item,
+                path: remappedPath,
+                relativePath:
+                  toWorkspaceRelativePath(rootPath, remappedPath) || item.relativePath
+              }
+            })
+          }
+          return next
+        })
+      }
+
+      setSelectedTreePathsState((prev) =>
+        dedupeWorkspacePaths(prev.map((path) => remapWithEntries(path, remappings)))
+      )
+      setSelectionAnchorPath((prev) => (prev ? remapWithEntries(prev, remappings) : prev))
+    },
+    []
   )
 
   const renameEntry = useCallback(
@@ -322,6 +441,7 @@ export function useWorkspaceTree({
         const renamed = await wikiApi.workspace.renameEntry(targetPath, newName)
         if (!mountedRef.current) return
 
+        applyTreePathRemappings([{ oldPath: targetPath, entry: renamed }], currentWs.rootPath)
         const parentDir = getParentPath(targetPath, currentWs.rootPath)
         await refreshDirectory(parentDir)
         if (
@@ -333,32 +453,6 @@ export function useWorkspaceTree({
         }
         setSelectedTreePath(renamed.path)
 
-        if (renamed.kind === 'directory') {
-          setExpandedDirs((prev) => {
-            const next = new Set<string>()
-            for (const dir of prev) {
-              next.add(remapPathPrefix(dir, targetPath, renamed.path))
-            }
-            return next
-          })
-          setChildrenByDir((prev) => {
-            const next: Record<string, WorkspaceEntry[]> = {}
-            for (const [dir, entries] of Object.entries(prev)) {
-              const remappedDir = remapPathPrefix(dir, targetPath, renamed.path)
-              next[remappedDir] = entries.map((item) => {
-                const remappedPath = remapPathPrefix(item.path, targetPath, renamed.path)
-                return {
-                  ...item,
-                  path: remappedPath,
-                  relativePath:
-                    toWorkspaceRelativePath(currentWs.rootPath, remappedPath) || item.relativePath
-                }
-              })
-            }
-            return next
-          })
-        }
-
         callbacksRef.current.onEntryRenamed?.(targetPath, renamed)
       } catch (error: unknown) {
         if (mountedRef.current) {
@@ -366,46 +460,90 @@ export function useWorkspaceTree({
         }
       }
     },
-    [refreshDirectory, refreshMarkdownFiles, wikiApi]
+    [applyTreePathRemappings, refreshDirectory, refreshMarkdownFiles, setSelectedTreePath, wikiApi]
   )
 
-  const deleteEntry = useCallback(
-    async (entry: WorkspaceEntry): Promise<void> => {
+  const refreshAffectedDirectories = useCallback(
+    async (
+      candidateDirs: readonly string[],
+      rootPath: string,
+      isExcludedDir: (dirPath: string) => boolean,
+      shouldRefreshMarkdown: boolean
+    ): Promise<void> => {
+      const dirsToRefresh = dedupeWorkspacePaths(
+        candidateDirs.filter((dirPath) => !isExcludedDir(dirPath))
+      )
+
+      await Promise.all(dirsToRefresh.map((dirPath) => refreshDirectory(dirPath)))
+      if (!mountedRef.current || workspaceRef.current?.rootPath !== rootPath) return
+
+      if (shouldRefreshMarkdown) {
+        await refreshMarkdownFiles(rootPath)
+      }
+    },
+    [refreshDirectory, refreshMarkdownFiles]
+  )
+
+  const moveEntries = useCallback(
+    async (sourcePaths: readonly string[], targetDirPath: string): Promise<void> => {
       const currentWs = workspaceRef.current
-      if (!currentWs) return
+      if (!currentWs || sourcePaths.length === 0) return
       callbacksRef.current.onError(null)
       try {
-        await wikiApi.workspace.deleteEntry(entry.path)
-        if (!mountedRef.current) return
+        const movedEntries = await wikiApi.workspace.moveEntries([...sourcePaths], targetDirPath)
+        if (!mountedRef.current || movedEntries.length === 0) return
 
-        const parentDir = getParentPath(entry.path, currentWs.rootPath)
-        await refreshDirectory(parentDir)
-        if (entry.kind === 'directory' || isMarkdownFileName(entry.name)) {
-          await refreshMarkdownFiles(currentWs.rootPath)
+        applyTreePathRemappings(movedEntries, currentWs.rootPath)
+        for (const moved of movedEntries) {
+          callbacksRef.current.onEntryRenamed?.(moved.oldPath, moved.entry)
         }
 
-        setExpandedDirs((prev) => {
-          const next = new Set<string>()
-          for (const dir of prev) {
-            if (!isNestedOrSamePath(dir, entry.path)) {
-              next.add(dir)
-            }
-          }
-          return next
-        })
-        setChildrenByDir((prev) => {
-          const next: Record<string, WorkspaceEntry[]> = {}
-          for (const [dir, entries] of Object.entries(prev)) {
-            if (!isNestedOrSamePath(dir, entry.path)) {
-              next[dir] = entries
-            }
-          }
-          return next
-        })
-        setSelectedTreePath((prev) =>
-          prev && isNestedOrSamePath(prev, entry.path) ? null : prev
+        const candidateDirs = [
+          ...movedEntries.map((moved) => getParentPath(moved.oldPath, currentWs.rootPath)),
+          targetDirPath
+        ]
+        const isInsideMovedDir = (dirPath: string): boolean =>
+          movedEntries.some(
+            (moved) =>
+              moved.entry.kind === 'directory' &&
+              isNestedOrSameWorkspacePath(dirPath, moved.oldPath)
+          )
+        const shouldRefreshMarkdown = movedEntries.some(
+          (moved) =>
+            moved.entry.kind === 'directory' ||
+            isMarkdownFileName(moved.entry.name) ||
+            isMarkdownFileName(moved.oldPath)
         )
-        callbacksRef.current.onEntryDeleted?.(entry.path)
+        await refreshAffectedDirectories(
+          candidateDirs,
+          currentWs.rootPath,
+          isInsideMovedDir,
+          shouldRefreshMarkdown
+        )
+      } catch (error: unknown) {
+        if (mountedRef.current) {
+          callbacksRef.current.onError(toErrorMessage(error, '항목을 이동하지 못했습니다.'), error)
+        }
+      }
+    },
+    [applyTreePathRemappings, refreshAffectedDirectories, wikiApi]
+  )
+
+  const deleteEntries = useCallback(
+    async (entries: readonly WorkspaceEntry[]): Promise<void> => {
+      const currentWs = workspaceRef.current
+      if (!currentWs || entries.length === 0) return
+      const targets = filterTopLevelWorkspaceEntries(entries)
+      if (targets.length === 0) return
+
+      callbacksRef.current.onError(null)
+      const deletedTargets: WorkspaceEntry[] = []
+      try {
+        for (const target of targets) {
+          await wikiApi.workspace.deleteEntry(target.path)
+          if (!mountedRef.current) return
+          deletedTargets.push(target)
+        }
       } catch (error: unknown) {
         if (mountedRef.current) {
           callbacksRef.current.onError(
@@ -414,8 +552,51 @@ export function useWorkspaceTree({
           )
         }
       }
+
+      if (!mountedRef.current || deletedTargets.length === 0) return
+
+      const isUnderDeletedTarget = (candidatePath: string): boolean =>
+        deletedTargets.some((target) => isNestedOrSameWorkspacePath(candidatePath, target.path))
+
+      setExpandedDirs((prev) => {
+        const next = new Set<string>()
+        for (const dir of prev) {
+          if (!isUnderDeletedTarget(dir)) {
+            next.add(dir)
+          }
+        }
+        return next
+      })
+      setChildrenByDir((prev) => {
+        const next: Record<string, WorkspaceEntry[]> = {}
+        for (const [dir, dirEntries] of Object.entries(prev)) {
+          if (!isUnderDeletedTarget(dir)) {
+            next[dir] = dirEntries
+          }
+        }
+        return next
+      })
+      setSelectedTreePathsState((prev) => prev.filter((path) => !isUnderDeletedTarget(path)))
+      setSelectionAnchorPath((prev) => (prev && isUnderDeletedTarget(prev) ? null : prev))
+
+      for (const target of deletedTargets) {
+        callbacksRef.current.onEntryDeleted?.(target.path)
+      }
+
+      const candidateDirs = deletedTargets.map((target) =>
+        getParentPath(target.path, currentWs.rootPath)
+      )
+      const shouldRefreshMarkdown = deletedTargets.some(
+        (target) => target.kind === 'directory' || isMarkdownFileName(target.name)
+      )
+      await refreshAffectedDirectories(
+        candidateDirs,
+        currentWs.rootPath,
+        isUnderDeletedTarget,
+        shouldRefreshMarkdown
+      )
     },
-    [refreshDirectory, refreshMarkdownFiles, wikiApi]
+    [refreshAffectedDirectories, wikiApi]
   )
 
   const treeState: WorkspaceTreeState = {
@@ -423,7 +604,7 @@ export function useWorkspaceTree({
     childrenByDir,
     expandedDirs,
     loadingDirs,
-    selectedPath: selectedTreePath
+    selectedPaths: selectedTreePaths
   }
 
   return {
@@ -431,6 +612,8 @@ export function useWorkspaceTree({
     treeState,
     markdownFiles,
     setSelectedTreePath,
+    toggleSelectTreePath,
+    selectTreePathRange,
     resolveCreateParentDir,
     openWorkspace,
     refreshTree,
@@ -438,6 +621,7 @@ export function useWorkspaceTree({
     ensureExpanded: expandDirectory,
     createEntry,
     renameEntry,
-    deleteEntry
+    moveEntries,
+    deleteEntries
   }
 }

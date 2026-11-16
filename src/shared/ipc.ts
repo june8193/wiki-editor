@@ -40,7 +40,8 @@ import type {
   WorkspaceChangeEvent,
   WorkspaceEntry,
   WorkspaceEntryKind,
-  WorkspaceInfo
+  WorkspaceInfo,
+  WorkspaceMovedEntry
 } from './workspace'
 
 export const CONFIG_IPC_CHANNELS = {
@@ -63,6 +64,7 @@ export const WORKSPACE_IPC_CHANNELS = {
   writeFile: 'workspace:write-file',
   createEntry: 'workspace:create-entry',
   renameEntry: 'workspace:rename-entry',
+  moveEntries: 'workspace:move-entries',
   deleteEntry: 'workspace:delete-entry',
   ingestImage: 'workspace:ingest-image',
   watch: 'workspace:watch',
@@ -174,6 +176,7 @@ export interface WikiWorkspaceApi {
     initialContent?: string
   ): Promise<WorkspaceEntry>
   renameEntry(targetPath: string, newName: string): Promise<WorkspaceEntry>
+  moveEntries(sourcePaths: string[], targetDirPath: string): Promise<WorkspaceMovedEntry[]>
   deleteEntry(targetPath: string): Promise<void>
   ingestImage(input: WorkspaceImageIngestInput): Promise<WorkspaceImageIngestResult>
   getPathForFile(file: File): string

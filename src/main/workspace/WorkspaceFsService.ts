@@ -20,14 +20,17 @@ import {
 } from '@shared/assets'
 import {
   compareWorkspaceEntriesByRelativePath,
+  filterTopLevelWorkspaceItems,
   getWorkspaceDisplayName,
   getWorkspacePathKey,
   isMarkdownFileName,
+  isNestedOrSameWorkspacePath,
   isSameWorkspacePath,
   WorkspaceChangeEvent,
   WorkspaceEntry,
   WorkspaceEntryKind,
-  WorkspaceInfo
+  WorkspaceInfo,
+  WorkspaceMovedEntry
 } from '@shared/workspace'
 import {
   hasBlockedPathSegment,
@@ -350,21 +353,120 @@ export class WorkspaceFsService {
       process.platform === 'win32' && logicalTarget.toLowerCase() === nextPath.toLowerCase()
 
     if (!isWindowsCaseOnlyRename) {
-      const exists = await lstat(nextPath).then(
-        () => true,
-        (error) => {
-          if (isErrnoCode(error, 'ENOENT')) return false
-          throw error
-        }
-      )
-      if (exists) {
-        throw new Error(`이미 존재하는 이름입니다: ${validName}`)
-      }
+      await this.assertPathDoesNotExist(nextPath, validName)
     }
 
     await rename(logicalTarget, nextPath)
 
     return buildEntry(root, nextPath, kind)
+  }
+
+  private async assertPathDoesNotExist(targetPath: string, entryName: string): Promise<void> {
+    const exists = await lstat(targetPath).then(
+      () => true,
+      (error) => {
+        if (isErrnoCode(error, 'ENOENT')) return false
+        throw error
+      }
+    )
+    if (exists) {
+      throw new Error(`이미 존재하는 이름입니다: ${entryName}`)
+    }
+  }
+
+  async moveEntries(
+    sourcePaths: readonly string[],
+    targetDirPath: string
+  ): Promise<WorkspaceMovedEntry[]> {
+    const root = this.requireWorkspaceRoot()
+    const resolvedTargetDir = await this.resolveExistingPath(targetDirPath || '.')
+    const targetStats = await stat(resolvedTargetDir)
+    if (!targetStats.isDirectory()) {
+      throw new Error('이동 대상 경로가 폴더가 아닙니다.')
+    }
+
+    if (sourcePaths.length === 0) {
+      return []
+    }
+
+    const resolvedSources: Array<{
+      logicalSource: string
+      kind: WorkspaceEntryKind
+      isRealDirectory: boolean
+    }> = []
+
+    for (const sourcePath of sourcePaths) {
+      const logicalSource = await this.resolveExistingLogicalPath(sourcePath)
+      if (isSameWorkspacePath(logicalSource, root)) {
+        throw new Error('워크스페이스 루트 폴더는 이동할 수 없습니다.')
+      }
+      const currentStats = await lstat(logicalSource)
+      const isSymlink = currentStats.isSymbolicLink()
+      const isRealDirectory = !isSymlink && currentStats.isDirectory()
+      const kind: WorkspaceEntryKind = isSymlink
+        ? (await stat(logicalSource).catch(() => null))?.isDirectory()
+          ? 'directory'
+          : 'file'
+        : isRealDirectory
+          ? 'directory'
+          : 'file'
+      resolvedSources.push({ logicalSource, kind, isRealDirectory })
+    }
+
+    const topLevelSources = filterTopLevelWorkspaceItems(
+      resolvedSources,
+      (item) => item.logicalSource,
+      (item) => item.isRealDirectory
+    )
+
+    const plannedTargetKeys = new Set<string>()
+    const movePlans: Array<{
+      logicalSource: string
+      nextPath: string
+      kind: WorkspaceEntryKind
+    }> = []
+
+    for (const source of topLevelSources) {
+      if (
+        source.isRealDirectory &&
+        isNestedOrSameWorkspacePath(resolvedTargetDir, source.logicalSource)
+      ) {
+        throw new Error('폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.')
+      }
+
+      if (isSameWorkspacePath(dirname(source.logicalSource), resolvedTargetDir)) {
+        continue
+      }
+
+      const entryName = basename(source.logicalSource)
+      const nextPath = join(resolvedTargetDir, entryName)
+      this.assertLexicalWorkspacePath(root, nextPath)
+
+      const nextKey = getWorkspacePathKey(nextPath)
+      if (plannedTargetKeys.has(nextKey)) {
+        throw new Error(`이미 존재하는 이름입니다: ${entryName}`)
+      }
+      plannedTargetKeys.add(nextKey)
+
+      await this.assertPathDoesNotExist(nextPath, entryName)
+
+      movePlans.push({
+        logicalSource: source.logicalSource,
+        nextPath,
+        kind: source.kind
+      })
+    }
+
+    const movedEntries: WorkspaceMovedEntry[] = []
+    for (const plan of movePlans) {
+      await rename(plan.logicalSource, plan.nextPath)
+      movedEntries.push({
+        oldPath: plan.logicalSource,
+        entry: buildEntry(root, plan.nextPath, plan.kind)
+      })
+    }
+
+    return movedEntries
   }
 
   async deleteEntry(targetPath: string): Promise<void> {
