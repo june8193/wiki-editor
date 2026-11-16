@@ -225,6 +225,30 @@ export class DocumentBufferStore {
   }
 
   /**
+   * Resets a workspace or config text buffer to authoritative disk content even when dirty.
+   */
+  forceSyncContent(pathOrKey: string, diskContent: string): boolean {
+    return this.updateMutableTextBuffer(pathOrKey, (current) => {
+      if (
+        !current.isDirty &&
+        !current.isSaving &&
+        current.content === diskContent &&
+        current.savedContent === diskContent
+      ) {
+        return null
+      }
+      return {
+        ...current,
+        content: diskContent,
+        savedContent: diskContent,
+        isDirty: false,
+        isSaving: false,
+        version: current.version + 1
+      }
+    })
+  }
+
+  /**
    * Increments the buffer revision of a read-only image buffer so its wiki-asset preview URL
    * busts Chromium's image cache after external disk updates.
    */

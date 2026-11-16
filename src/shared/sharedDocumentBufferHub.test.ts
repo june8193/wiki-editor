@@ -199,4 +199,123 @@ describe('SharedDocumentBufferHub race guards', () => {
       hub.dispose()
     }
   })
+
+  it('prepareWorkspacePathsForDiscard and finishWorkspacePathsDiscard cancel auto-save/in-flight saves, block mid-discard edits/warnings, force-sync restored files, and close removed dirty buffers', async () => {
+    const files = new Map<string, string>([
+      ['C:/wiki/target.md', '# Target Initial'],
+      ['C:/wiki/missing.md', '# Missing Initial'],
+      ['C:/wiki/untouched.md', '# Untouched Initial']
+    ])
+    let writeCountForTarget = 0
+    let releaseInFlightSave!: () => void
+    const inFlightSaveGate = createDeferred()
+
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: true, autoSaveDelayMs: 25 },
+      storage: {
+        readWorkspaceFile: async (filePath) => {
+          const content = files.get(filePath)
+          if (content === undefined) {
+            throw new Error(`파일을 찾을 수 없습니다: ${filePath}`)
+          }
+          return content
+        },
+        writeWorkspaceFile: async (filePath, content) => {
+          if (filePath.endsWith('target.md')) {
+            writeCountForTarget += 1
+            await inFlightSaveGate.promise
+          }
+          files.set(filePath, content)
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+    const events: string[] = []
+    hub.subscribe((event) => events.push(event.type))
+
+    try {
+      const target = await hub.openWorkspaceFile('C:/wiki/target.md', 'target.md', undefined, 1)
+      const missing = await hub.openWorkspaceFile('C:/wiki/missing.md', 'missing.md', undefined, 1)
+      const untouched = await hub.openWorkspaceFile(
+        'C:/wiki/untouched.md',
+        'untouched.md',
+        undefined,
+        1
+      )
+      const config = await hub.openConfigDocument(1)
+      hub.syncWindowTabs(1, [target.key, missing.key, untouched.key, config.key])
+
+      // Start an in-flight save on target, plus dirty missing and untouched
+      hub.updateContent(target.key, '# Target Stale Inflight')
+      const inflightSave = hub.saveBuffer(target.key)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      // Prepare waits for in-flight save, cancels auto-save, and enters discard lock
+      let prepared = false
+      const preparePromise = hub.prepareWorkspacePathsForDiscard([
+        'C:/wiki/target.md',
+        'C:/wiki/missing.md'
+      ]).then(() => {
+        prepared = true
+      })
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(prepared).toBe(false)
+
+      releaseInFlightSave = inFlightSaveGate.resolve
+      releaseInFlightSave()
+      await inflightSave
+      await preparePromise
+
+      // Edit target again into dirty state? While in discard window, stale updateContent & watcher reconcile warnings are suppressed
+      hub.updateContent(target.key, '# Target Dirty Suppressed')
+      expect(hub.getBuffer(target.key)?.content).toBe('# Target Stale Inflight')
+
+      hub.updateContent(missing.key, '# Missing Dirty')
+      hub.updateContent(untouched.key, '# Untouched Dirty')
+      hub.updateContent(config.key, '{"dirty":true}')
+
+      // Simulate git discard restoring target.md on disk and deleting missing.md on disk
+      files.set('C:/wiki/target.md', '# Target Restored From Git')
+      files.delete('C:/wiki/missing.md')
+
+      // Mid-discard reconcile ignores keys in discard window (no spurious conflict/missing warning)
+      const midReconcile = await hub.reconcileWorkspaceBuffersWithDisk()
+      expect(midReconcile.warnings).toEqual([])
+      expect(midReconcile.closedKeys).toEqual([])
+
+      // Finish with forceSync=true -> target force-synced (isDirty: false), missing closed, untouched & config preserved
+      const closedKeys = await hub.finishWorkspacePathsDiscard(
+        ['C:/wiki/target.md', 'C:/wiki/missing.md'],
+        true
+      )
+      expect(closedKeys).toEqual([missing.key])
+      expect(events).toContain('buffers-force-synced')
+      expect(events).toContain('buffers-closed')
+
+      const targetAfter = hub.getBuffer(target.key)!
+      expect(targetAfter.content).toBe('# Target Restored From Git')
+      expect(targetAfter.savedContent).toBe('# Target Restored From Git')
+      expect(targetAfter.isDirty).toBe(false)
+      expect(hub.getBuffer(missing.key)).toBeUndefined()
+      expect(hub.getBuffer(untouched.key)?.isDirty).toBe(true)
+      expect(hub.getBuffer(config.key)?.isDirty).toBe(true)
+
+      // Wait longer than autoSaveDelayMs: target must NOT be overwritten by any residual auto-save timer
+      const writesBeforeWait = writeCountForTarget
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      expect(writeCountForTarget).toBe(writesBeforeWait)
+      expect(files.get('C:/wiki/target.md')).toBe('# Target Restored From Git')
+
+      // If discard fails (forceSync=false), discard lock releases cleanly so subsequent edits work again
+      await hub.prepareWorkspacePathsForDiscard(['C:/wiki/target.md'])
+      await hub.finishWorkspacePathsDiscard(['C:/wiki/target.md'], false)
+      hub.updateContent(target.key, '# Edited After Failed Discard')
+      expect(hub.getBuffer(target.key)?.content).toBe('# Edited After Failed Discard')
+      expect(hub.getBuffer(target.key)?.isDirty).toBe(true)
+    } finally {
+      hub.dispose()
+    }
+  })
 })

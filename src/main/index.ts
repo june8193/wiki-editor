@@ -120,7 +120,10 @@ void app.whenReady().then(async () => {
   disposeWikiAssetProtocol = () => {
     protocol.unhandle(WIKI_ASSET_SCHEME)
   }
-  const gitService = new GitService({ logService })
+  const gitService = new GitService({
+    logService,
+    trashItem: (targetPath) => shell.trashItem(targetPath)
+  })
 
   const bufferHub = createSharedDocumentBufferHub({
     workspaceService,

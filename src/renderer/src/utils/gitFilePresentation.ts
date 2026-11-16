@@ -83,3 +83,21 @@ export function toGitDiffRequest(
     ...base
   }
 }
+
+/**
+ * Formats the discard-all confirmation message distinguishing irreversible tracked restores
+ * and OS trash moves for untracked files.
+ */
+export function buildDiscardAllConfirmMessage(
+  trackedCount: number,
+  untrackedCount: number
+): string {
+  if (trackedCount > 0 && untrackedCount > 0) {
+    const totalCount = trackedCount + untrackedCount
+    return `총 ${totalCount}개 파일의 변경 사항을 롤백합니다. 추적된 파일 ${trackedCount}개는 이전 상태로 되돌려지며(복구 불가), 추적되지 않은 새 파일 ${untrackedCount}개는 OS 휴지통으로 이동됩니다. 계속할까요?`
+  }
+  if (trackedCount > 0) {
+    return `추적된 변경 파일 ${trackedCount}개를 이전 상태로 되돌립니다. 되돌린 변경 사항은 복구할 수 없습니다. 계속할까요?`
+  }
+  return `추적되지 않은 새 파일 ${untrackedCount}개를 OS 휴지통으로 이동합니다. 계속할까요?`
+}

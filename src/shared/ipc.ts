@@ -79,6 +79,8 @@ export const GIT_IPC_CHANNELS = {
   stageAll: 'git:stage-all',
   unstage: 'git:unstage',
   unstageAll: 'git:unstage-all',
+  discard: 'git:discard',
+  discardAll: 'git:discard-all',
   commit: 'git:commit',
   branches: 'git:branches',
   checkout: 'git:checkout',
@@ -108,6 +110,8 @@ export const BUFFER_IPC_CHANNELS = {
   syncRenamedPath: 'buffer:sync-renamed-path',
   syncDeletedPath: 'buffer:sync-deleted-path',
   reconcileWorkspaceBuffersWithDisk: 'buffer:reconcile-workspace-buffers-with-disk',
+  prepareDiscardPaths: 'buffer:prepare-discard-paths',
+  finishDiscardPaths: 'buffer:finish-discard-paths',
   clearWorkspaceBuffers: 'buffer:clear-workspace-buffers',
   event: 'buffer:event'
 } as const
@@ -192,6 +196,8 @@ export interface WikiGitApi {
   stageAll(workspacePath: string): Promise<GitStatus>
   unstage(workspacePath: string, paths: string[]): Promise<GitStatus>
   unstageAll(workspacePath: string): Promise<GitStatus>
+  discard(workspacePath: string, paths: string[]): Promise<GitStatus>
+  discardAll(workspacePath: string): Promise<GitStatus>
   commit(workspacePath: string, message: string): Promise<GitStatus>
   branches(workspacePath: string): Promise<GitBranchList>
   checkout(workspacePath: string, branchName: string): Promise<GitStatus>
@@ -228,6 +234,8 @@ export interface WikiBufferApi {
   reconcileWorkspaceBuffersWithDisk(
     changeEvent?: WorkspaceChangeEvent
   ): Promise<ReconcileBuffersResult>
+  prepareDiscardPaths(targetPaths: readonly string[]): Promise<void>
+  finishDiscardPaths(targetPaths: readonly string[], forceSync: boolean): Promise<string[]>
   clearWorkspaceBuffers(): Promise<string[]>
   onEvent(listener: (event: SharedBufferHubEvent) => void): () => void
 }

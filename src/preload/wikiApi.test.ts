@@ -166,6 +166,8 @@ describe('createWikiApi', () => {
     await api.git.stageAll('C:\\wiki')
     await api.git.unstage('C:\\wiki', ['a.md'])
     await api.git.unstageAll('C:\\wiki')
+    await api.git.discard('C:\\wiki', ['a.md'])
+    await api.git.discardAll('C:\\wiki')
     await api.git.commit('C:\\wiki', 'feat: add note')
     await api.git.branches('C:\\wiki')
     await api.git.checkout('C:\\wiki', 'main')
@@ -184,6 +186,8 @@ describe('createWikiApi', () => {
       { channel: GIT_IPC_CHANNELS.stageAll, args: ['C:\\wiki'] },
       { channel: GIT_IPC_CHANNELS.unstage, args: ['C:\\wiki', ['a.md']] },
       { channel: GIT_IPC_CHANNELS.unstageAll, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.discard, args: ['C:\\wiki', ['a.md']] },
+      { channel: GIT_IPC_CHANNELS.discardAll, args: ['C:\\wiki'] },
       { channel: GIT_IPC_CHANNELS.commit, args: ['C:\\wiki', 'feat: add note'] },
       { channel: GIT_IPC_CHANNELS.branches, args: ['C:\\wiki'] },
       { channel: GIT_IPC_CHANNELS.checkout, args: ['C:\\wiki', 'main'] },
@@ -315,6 +319,8 @@ describe('createWikiApi', () => {
     await api.buffer.syncRenamedPath('C:\\wiki\\note.md', 'C:\\wiki\\renamed.md')
     await api.buffer.syncDeletedPath('C:\\wiki\\renamed.md')
     await api.buffer.reconcileWorkspaceBuffersWithDisk()
+    await api.buffer.prepareDiscardPaths(['C:\\wiki\\renamed.md'])
+    await api.buffer.finishDiscardPaths(['C:\\wiki\\renamed.md'], true)
     await api.buffer.clearWorkspaceBuffers()
 
     expect(ipc.lastInvoked).toEqual([
@@ -335,6 +341,8 @@ describe('createWikiApi', () => {
       },
       { channel: BUFFER_IPC_CHANNELS.syncDeletedPath, args: ['C:\\wiki\\renamed.md'] },
       { channel: BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk, args: [] },
+      { channel: BUFFER_IPC_CHANNELS.prepareDiscardPaths, args: [['C:\\wiki\\renamed.md']] },
+      { channel: BUFFER_IPC_CHANNELS.finishDiscardPaths, args: [['C:\\wiki\\renamed.md'], true] },
       { channel: BUFFER_IPC_CHANNELS.clearWorkspaceBuffers, args: [] }
     ])
 

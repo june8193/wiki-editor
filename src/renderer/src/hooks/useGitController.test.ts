@@ -54,6 +54,8 @@ function installMockGitWikiApi(overrides: Partial<WikiApi['git']> = {}): void {
       stageAll: vi.fn(),
       unstage: vi.fn(),
       unstageAll: vi.fn(),
+      discard: vi.fn(),
+      discardAll: vi.fn(),
       commit: vi.fn(),
       branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
       checkout: vi.fn(),
@@ -679,5 +681,170 @@ describe('useGitController', () => {
       await pendingStaleDetail
     })
     expect(result.current.graphState.commitDetail).toEqual({ status: 'idle' })
+  })
+
+  it('runs discardFile with target-scoped confirm, prepare/finish discard callbacks, status refresh without log refetch, and error recovery', async () => {
+    const cleanStatus = makeStatus('main', 0)
+    const dirtyStatus: GitStatus = {
+      ...cleanStatus,
+      unstaged: [{ path: 'notes.md', status: 'M' }]
+    }
+    const discardMock = vi
+      .fn()
+      .mockResolvedValueOnce(cleanStatus)
+      .mockRejectedValueOnce(new Error('discard failed'))
+    const logMock = vi.fn(async () => ({ commits: [], hasMore: false }))
+
+    installMockGitWikiApi({
+      status: vi.fn(async () => dirtyStatus),
+      discard: discardMock,
+      log: logMock
+    })
+
+    let confirmDecision = false
+    const confirmBeforeWorkspaceMutation = vi.fn(async () => confirmDecision)
+    const onBeforeWorkspaceDiscard = vi.fn(async () => undefined)
+    const onAfterWorkspaceDiscard = vi.fn(async () => undefined)
+    const onWorkspaceMutated = vi.fn(async () => [])
+    const activeTransitions: boolean[] = []
+
+    const { result } = renderHook(() =>
+      useGitController({
+        workspaceRootPath: 'C:/wiki',
+        confirmBeforeWorkspaceMutation,
+        onBeforeWorkspaceDiscard,
+        onAfterWorkspaceDiscard,
+        onWorkspaceMutated,
+        onWorkspaceMutationActiveChange: (active) => activeTransitions.push(active)
+      })
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.unstaged).toHaveLength(1)
+    })
+    const logCallsBeforeDiscard = logMock.mock.calls.length
+
+    // 1. Canceled confirmation aborts discard cleanly
+    await act(async () => {
+      await result.current.discardFile('notes.md')
+    })
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledWith('변경 사항 롤백', ['notes.md'])
+    expect(onBeforeWorkspaceDiscard).not.toHaveBeenCalled()
+    expect(discardMock).not.toHaveBeenCalled()
+    expect(onAfterWorkspaceDiscard).not.toHaveBeenCalled()
+    expect(onWorkspaceMutated).not.toHaveBeenCalled()
+    expect(activeTransitions).toEqual([true, false])
+
+    // 2. Approved confirmation prepares, discards, updates status, and skips log refetch
+    confirmDecision = true
+    await act(async () => {
+      await result.current.discardFile('notes.md')
+    })
+    expect(onBeforeWorkspaceDiscard).toHaveBeenCalledWith({ scope: 'paths', paths: ['notes.md'] })
+    expect(discardMock).toHaveBeenCalledWith('C:/wiki', ['notes.md'])
+    expect(onAfterWorkspaceDiscard).toHaveBeenCalledWith(
+      { scope: 'paths', paths: ['notes.md'] },
+      true
+    )
+    expect(onWorkspaceMutated).not.toHaveBeenCalled()
+    expect(result.current.status?.unstaged).toEqual([])
+    expect(logMock).toHaveBeenCalledTimes(logCallsBeforeDiscard)
+
+    // 3. Failure releases discard lock with succeeded=false and reports error
+    await act(async () => {
+      await result.current.discardFile('notes.md')
+    })
+    expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith(
+      { scope: 'paths', paths: ['notes.md'] },
+      false
+    )
+    expect(result.current.errorMessage).toBe('discard failed')
+  })
+
+  it('runs discardAll with unstaged+untracked target paths (excluding staged-only), scope=all, skips log refetch, and recovers on failure', async () => {
+    const cleanAfterStatus: GitStatus = {
+      ...makeStatus('main', 0),
+      staged: [{ path: 'staged-only.md', status: 'A' }]
+    }
+    const mixedStatus: GitStatus = {
+      ...cleanAfterStatus,
+      unstaged: [
+        { path: 'modified.md', status: 'M' },
+        { path: 'conflict.md', status: 'U' }
+      ],
+      untracked: [{ path: 'draft.md', status: '?' }]
+    }
+    const discardAllMock = vi
+      .fn()
+      .mockResolvedValueOnce(cleanAfterStatus)
+      .mockRejectedValueOnce(new Error('discardAll failed'))
+    const logMock = vi.fn(async () => ({ commits: [], hasMore: false }))
+
+    installMockGitWikiApi({
+      status: vi.fn(async () => mixedStatus),
+      discardAll: discardAllMock,
+      log: logMock
+    })
+
+    let confirmDecision = false
+    const confirmBeforeWorkspaceMutation = vi.fn(async () => confirmDecision)
+    const onBeforeWorkspaceDiscard = vi.fn(async () => undefined)
+    const onAfterWorkspaceDiscard = vi.fn(async () => undefined)
+    const onWorkspaceMutated = vi.fn(async () => [])
+
+    const { result } = renderHook(() =>
+      useGitController({
+        workspaceRootPath: 'C:/wiki',
+        confirmBeforeWorkspaceMutation,
+        onBeforeWorkspaceDiscard,
+        onAfterWorkspaceDiscard,
+        onWorkspaceMutated
+      })
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.unstaged).toHaveLength(2)
+    })
+    const logCallsBeforeDiscardAll = logMock.mock.calls.length
+    const expectedTargets = ['modified.md', 'conflict.md', 'draft.md']
+
+    // 1. Canceled confirmation aborts cleanly
+    await act(async () => {
+      await result.current.discardAll()
+    })
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledWith(
+      '전체 변경 사항 롤백',
+      expectedTargets
+    )
+    expect(onBeforeWorkspaceDiscard).not.toHaveBeenCalled()
+    expect(discardAllMock).not.toHaveBeenCalled()
+    expect(onAfterWorkspaceDiscard).not.toHaveBeenCalled()
+
+    // 2. Approved confirmation runs discardAll, skips log refetch, and passes scope=all
+    confirmDecision = true
+    await act(async () => {
+      await result.current.discardAll()
+    })
+    expect(onBeforeWorkspaceDiscard).toHaveBeenCalledWith({
+      scope: 'all',
+      paths: expectedTargets
+    })
+    expect(discardAllMock).toHaveBeenCalledWith('C:/wiki')
+    expect(onAfterWorkspaceDiscard).toHaveBeenCalledWith(
+      { scope: 'all', paths: expectedTargets },
+      true
+    )
+    expect(onWorkspaceMutated).not.toHaveBeenCalled()
+    expect(result.current.status?.unstaged).toEqual([])
+    expect(result.current.status?.untracked).toEqual([])
+    expect(result.current.status?.staged).toEqual([{ path: 'staged-only.md', status: 'A' }])
+    expect(logMock).toHaveBeenCalledTimes(logCallsBeforeDiscardAll)
+
+    // 3. Failure releases discard lock with succeeded=false and reports error
+    await act(async () => {
+      await result.current.discardAll()
+    })
+    expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith({ scope: 'all', paths: [] }, false)
+    expect(result.current.errorMessage).toBe('discardAll failed')
   })
 })

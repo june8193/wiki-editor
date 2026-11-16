@@ -5,10 +5,24 @@ import { toErrorMessage } from '@shared/errors'
 import { useGitGraphLog } from './useGitGraphLog'
 import { useWikiApi } from './useWikiApi'
 
+export interface WorkspaceDiscardTarget {
+  scope: 'all' | 'paths'
+  paths: readonly string[]
+}
+
 interface UseGitControllerOptions {
   workspaceRootPath: string | null
-  confirmBeforeWorkspaceMutation?: (actionLabel: string) => Promise<boolean>
+  confirmBeforeWorkspaceMutation?: (
+    actionLabel: string,
+    targetRepoPaths?: readonly string[]
+  ) => Promise<boolean>
+  onBeforeWorkspaceDiscard?: (target: WorkspaceDiscardTarget) => Promise<void>
+  onAfterWorkspaceDiscard?: (
+    target: WorkspaceDiscardTarget,
+    succeeded: boolean
+  ) => Promise<void>
   onWorkspaceMutated?: () => Promise<readonly string[]>
+  onWorkspaceMutationActiveChange?: (active: boolean) => void
 }
 
 /**
@@ -17,7 +31,10 @@ interface UseGitControllerOptions {
 export function useGitController({
   workspaceRootPath,
   confirmBeforeWorkspaceMutation,
-  onWorkspaceMutated
+  onBeforeWorkspaceDiscard,
+  onAfterWorkspaceDiscard,
+  onWorkspaceMutated,
+  onWorkspaceMutationActiveChange
 }: UseGitControllerOptions) {
   const wikiApi = useWikiApi()
   const [status, setStatus] = useState<GitStatus | null>(null)
@@ -27,14 +44,28 @@ export function useGitController({
 
   const mountedRef = useRef(true)
   const activeWorkspaceRef = useRef<string | null>(workspaceRootPath)
+  const statusRef = useRef<GitStatus | null>(status)
+  statusRef.current = status
   const workspaceEpochRef = useRef(0)
   const requestSeqRef = useRef(0)
   const mutationTokenRef = useRef<number | null>(null)
   const mutationCounterRef = useRef(0)
-  const callbacksRef = useRef({ confirmBeforeWorkspaceMutation, onWorkspaceMutated })
+  const callbacksRef = useRef({
+    confirmBeforeWorkspaceMutation,
+    onBeforeWorkspaceDiscard,
+    onAfterWorkspaceDiscard,
+    onWorkspaceMutated,
+    onWorkspaceMutationActiveChange
+  })
 
   activeWorkspaceRef.current = workspaceRootPath
-  callbacksRef.current = { confirmBeforeWorkspaceMutation, onWorkspaceMutated }
+  callbacksRef.current = {
+    confirmBeforeWorkspaceMutation,
+    onBeforeWorkspaceDiscard,
+    onAfterWorkspaceDiscard,
+    onWorkspaceMutated,
+    onWorkspaceMutationActiveChange
+  }
 
   const isCurrentRequest = useCallback((rootPath: string, epoch: number): boolean => {
     return (
@@ -76,6 +107,7 @@ export function useGitController({
         return
       }
       const applySeq = ++requestSeqRef.current
+      statusRef.current = nextStatus
       setStatus(nextStatus)
 
       if (!nextStatus.isRepo) {
@@ -142,9 +174,14 @@ export function useGitController({
   }, [applyWorkspaceGitState, isCurrentRequest, resetGraph, wikiApi])
 
   useEffect(() => {
+    const wasMutating = mutationTokenRef.current !== null
     workspaceEpochRef.current += 1
     mutationTokenRef.current = null
+    if (wasMutating) {
+      callbacksRef.current.onWorkspaceMutationActiveChange?.(false)
+    }
     setErrorMessage(null)
+    statusRef.current = null
     setStatus(null)
     setBranchList(null)
     setPendingAction(null)
@@ -161,6 +198,7 @@ export function useGitController({
       options: {
         affectsWorkspaceFiles?: boolean
         fetchRepoMetadata?: boolean
+        discardTarget?: WorkspaceDiscardTarget
         fallbackError: string
         run: (rootPath: string) => Promise<GitStatus>
       }
@@ -171,11 +209,36 @@ export function useGitController({
       const epoch = workspaceEpochRef.current
       const token = ++mutationCounterRef.current
       mutationTokenRef.current = token
+      callbacksRef.current.onWorkspaceMutationActiveChange?.(true)
       setErrorMessage(null)
+      let preparedDiscard = false
+      let workspaceEffectsCompleted = false
+
+      const completeWorkspaceEffects = async (succeeded: boolean): Promise<void> => {
+        if (!options.affectsWorkspaceFiles || workspaceEffectsCompleted) return
+        workspaceEffectsCompleted = true
+        if (options.discardTarget) {
+          if (succeeded || preparedDiscard) {
+            await callbacksRef.current.onAfterWorkspaceDiscard?.(options.discardTarget, succeeded)
+          }
+          return
+        }
+        const warnings = (await callbacksRef.current.onWorkspaceMutated?.()) ?? []
+        if (succeeded && warnings.length > 0 && isCurrentRequest(rootPath, epoch)) {
+          const message = warnings.join(' ')
+          setErrorMessage(message)
+          logRendererWarn('git', 'Git workspace mutation completed with warnings', {
+            data: { action: actionLabel, workspaceRootPath: rootPath, warningMessage: message }
+          })
+        }
+      }
 
       try {
         if (options.affectsWorkspaceFiles && callbacksRef.current.confirmBeforeWorkspaceMutation) {
-          const confirmed = await callbacksRef.current.confirmBeforeWorkspaceMutation(actionLabel)
+          const confirmed = await callbacksRef.current.confirmBeforeWorkspaceMutation(
+            actionLabel,
+            options.discardTarget?.paths
+          )
           if (!confirmed || !isCurrentRequest(rootPath, epoch)) {
             return false
           }
@@ -185,22 +248,19 @@ export function useGitController({
           setPendingAction(actionLabel)
         }
 
+        if (options.discardTarget && callbacksRef.current.onBeforeWorkspaceDiscard) {
+          preparedDiscard = true
+          await callbacksRef.current.onBeforeWorkspaceDiscard(options.discardTarget)
+          if (!isCurrentRequest(rootPath, epoch)) {
+            return false
+          }
+        }
+
         const nextStatus = await options.run(rootPath)
         await applyWorkspaceGitState(rootPath, epoch, nextStatus, options.fetchRepoMetadata ?? false)
 
-        if (
-          options.affectsWorkspaceFiles &&
-          isCurrentRequest(rootPath, epoch) &&
-          callbacksRef.current.onWorkspaceMutated
-        ) {
-          const warnings = await callbacksRef.current.onWorkspaceMutated()
-          if (isCurrentRequest(rootPath, epoch) && warnings.length > 0) {
-            const message = warnings.join(' ')
-            setErrorMessage(message)
-            logRendererWarn('git', 'Git workspace mutation completed with warnings', {
-              data: { action: actionLabel, workspaceRootPath: rootPath, warningMessage: message }
-            })
-          }
+        if (isCurrentRequest(rootPath, epoch)) {
+          await completeWorkspaceEffects(true)
         }
 
         return true
@@ -217,13 +277,17 @@ export function useGitController({
               .status(rootPath)
               .then((fresh) => applyWorkspaceGitState(rootPath, epoch, fresh, true))
               .catch(() => undefined)
-            await callbacksRef.current.onWorkspaceMutated?.().catch(() => [])
+            await completeWorkspaceEffects(false).catch(() => undefined)
           }
         }
         return false
       } finally {
+        if (preparedDiscard && !workspaceEffectsCompleted) {
+          await completeWorkspaceEffects(false).catch(() => undefined)
+        }
         if (mutationTokenRef.current === token) {
           mutationTokenRef.current = null
+          callbacksRef.current.onWorkspaceMutationActiveChange?.(false)
           if (mountedRef.current) {
             setPendingAction(null)
           }
@@ -273,6 +337,38 @@ export function useGitController({
     await runGitAction('전체 Unstage', {
       fallbackError: '전체 파일을 Unstage하지 못했습니다.',
       run: (rootPath) => wikiApi.git.unstageAll(rootPath)
+    })
+  }, [runGitAction, wikiApi])
+
+  const discardFile = useCallback(
+    async (filePath: string): Promise<void> => {
+      await runGitAction('변경 사항 롤백', {
+        affectsWorkspaceFiles: true,
+        fetchRepoMetadata: false,
+        discardTarget: { scope: 'paths', paths: [filePath] },
+        fallbackError: '변경 사항을 롤백하지 못했습니다.',
+        run: (rootPath) => wikiApi.git.discard(rootPath, [filePath])
+      })
+    },
+    [runGitAction, wikiApi]
+  )
+
+  const discardAll = useCallback(async (): Promise<void> => {
+    const current = statusRef.current
+    const paths = current
+      ? [
+          ...new Set([
+            ...current.unstaged.map((item) => item.path),
+            ...current.untracked.map((item) => item.path)
+          ])
+        ]
+      : []
+    await runGitAction('전체 변경 사항 롤백', {
+      affectsWorkspaceFiles: true,
+      fetchRepoMetadata: false,
+      discardTarget: { scope: 'all', paths },
+      fallbackError: '전체 변경 사항을 롤백하지 못했습니다.',
+      run: (rootPath) => wikiApi.git.discardAll(rootPath)
     })
   }, [runGitAction, wikiApi])
 
@@ -345,6 +441,8 @@ export function useGitController({
     stageAll,
     unstageFile,
     unstageAll,
+    discardFile,
+    discardAll,
     commit,
     checkoutBranch,
     pull,

@@ -189,6 +189,21 @@ export function registerBufferIpc({
         (_event, changeEvent) =>
           hub.reconcileWorkspaceBuffersWithDisk(changeEvent as WorkspaceChangeEvent | undefined)
       ],
+      [
+        BUFFER_IPC_CHANNELS.prepareDiscardPaths,
+        (_event, targetPaths) =>
+          hub.prepareWorkspacePathsForDiscard(
+            Array.isArray(targetPaths) ? (targetPaths as string[]) : []
+          )
+      ],
+      [
+        BUFFER_IPC_CHANNELS.finishDiscardPaths,
+        (_event, targetPaths, forceSync) =>
+          hub.finishWorkspacePathsDiscard(
+            Array.isArray(targetPaths) ? (targetPaths as string[]) : [],
+            Boolean(forceSync)
+          )
+      ],
       [BUFFER_IPC_CHANNELS.clearWorkspaceBuffers, () => hub.clearWorkspaceBuffers()]
     ],
     { logService }

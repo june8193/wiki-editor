@@ -78,6 +78,11 @@ export type SharedBufferHubEvent =
       closedKeys: string[]
     }
   | {
+      type: 'buffers-force-synced'
+      snapshot: SharedBufferStateSnapshot
+      syncedKeys: string[]
+    }
+  | {
       type: 'workspace-saved'
       key: string
       path: string

@@ -1,7 +1,10 @@
+import type { ConfirmDialogTone } from '../hooks/useConfirmDialog'
+
 interface ConfirmDialogProps {
   title: string
   message: string
   confirmLabel: string
+  confirmTone?: ConfirmDialogTone
   secondaryLabel?: string
   onConfirm: () => void
   onSecondary?: () => void
@@ -12,11 +15,13 @@ export function ConfirmDialog({
   title,
   message,
   confirmLabel,
+  confirmTone = 'primary',
   secondaryLabel,
   onConfirm,
   onSecondary,
   onCancel
 }: ConfirmDialogProps) {
+  const confirmButtonClassName = confirmTone === 'danger' ? 'btn btn-danger' : 'btn btn-primary'
   return (
     <div className="modal-backdrop" role="presentation" onClick={onCancel}>
       <div
@@ -42,7 +47,7 @@ export function ConfirmDialog({
               {secondaryLabel}
             </button>
           )}
-          <button type="button" className="btn btn-primary" onClick={onConfirm} autoFocus>
+          <button type="button" className={confirmButtonClassName} onClick={onConfirm} autoFocus>
             {confirmLabel}
           </button>
         </div>

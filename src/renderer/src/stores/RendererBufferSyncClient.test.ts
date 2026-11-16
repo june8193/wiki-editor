@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { SharedBufferHubEvent } from '@shared/documentBuffer'
+import type { DocumentBuffer, SharedBufferHubEvent } from '@shared/documentBuffer'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
 import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
@@ -591,6 +591,128 @@ describe('RendererBufferSyncClient race guards', () => {
       expect(savedConfigRaw).toBe('{"autoSave":false,"theme":"dark"}')
       expect(win1.client.getDirtyCloseSummary()).toBeNull()
       expect(win2.client.getDirtyCloseSummary()).toBeNull()
+    } finally {
+      stop1()
+      stop2()
+      win1.detach()
+      win2.detach()
+      hub.dispose()
+    }
+  })
+
+  it('scopes dirty summary/save to targetPaths and force-syncs or closes discarded buffers across windows without flushing stale local edits', async () => {
+    const files = new Map<string, string>([
+      ['C:/wiki/target.md', '# Target Disk'],
+      ['C:/wiki/other.md', '# Other Disk'],
+      ['C:/wiki/untracked.md', '# Untracked Disk']
+    ])
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async (filePath) => {
+          const val = files.get(filePath)
+          if (val === undefined) throw new Error(`ENOENT: ${filePath}`)
+          return val
+        },
+        writeWorkspaceFile: async (filePath, content) => {
+          files.set(filePath, content)
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+
+    const win1 = attachWindowClient(hub, 1, createMockWindowApi('main'))
+    const win2 = attachWindowClient(hub, 2, createMockWindowApi('auxiliary'))
+    const stop1 = win1.client.start()
+    const stop2 = win2.client.start()
+
+    try {
+      await win1.client.openWorkspaceFile({
+        name: 'target.md',
+        path: 'C:/wiki/target.md',
+        relativePath: 'target.md',
+        kind: 'file'
+      })
+      await win1.client.openWorkspaceFile({
+        name: 'other.md',
+        path: 'C:/wiki/other.md',
+        relativePath: 'other.md',
+        kind: 'file'
+      })
+      await win1.client.openWorkspaceFile({
+        name: 'untracked.md',
+        path: 'C:/wiki/untracked.md',
+        relativePath: 'untracked.md',
+        kind: 'file'
+      })
+      win1.client.syncWindowTabs(win1.tabStore.getBufferKeys())
+
+      await win2.client.openWorkspaceFile({
+        name: 'target.md',
+        path: 'C:/wiki/target.md',
+        relativePath: 'target.md',
+        kind: 'file'
+      })
+      await win2.client.openWorkspaceFile({
+        name: 'untracked.md',
+        path: 'C:/wiki/untracked.md',
+        relativePath: 'untracked.md',
+        kind: 'file'
+      })
+      win2.client.syncWindowTabs(win2.tabStore.getBufferKeys())
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      // Dirty other.md and untracked.md while target.md is clean
+      win1.client.updateBufferContent('c:/wiki/other.md', '# Other Dirty')
+      win2.client.updateBufferContent('c:/wiki/untracked.md', '# Untracked Dirty')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      expect(win1.client.getDirtyWorkspaceSummary(['C:/wiki/target.md'])).toBeNull()
+      expect(win1.client.getDirtyWorkspaceSummary(['C:/wiki/untracked.md'])).toBe('untracked.md')
+
+      // Save only target (other.md stays dirty and unsaved)
+      win2.client.updateBufferContent('c:/wiki/target.md', '# Target Dirty From Aux')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(win1.client.getDirtyWorkspaceSummary(['C:/wiki/target.md'])).toBe('target.md')
+      expect(await win1.client.ensureAllWorkspaceBuffersSaved(['C:/wiki/target.md'])).toBe(true)
+      expect(files.get('C:/wiki/target.md')).toBe('# Target Dirty From Aux')
+      expect(files.get('C:/wiki/other.md')).toBe('# Other Disk')
+      expect(win1.bufferStore.getBuffer('c:/wiki/other.md')?.isDirty).toBe(true)
+
+      // Edit target.md with deferred updateContent in win1, then discard without saving
+      const updateGate = createDeferred<DocumentBuffer | null>()
+      const origUpdate = win1.bufferApi.updateContent.bind(win1.bufferApi)
+      win1.bufferApi.updateContent = async () => updateGate.promise
+
+      win1.client.updateBufferContent('c:/wiki/target.md', '# Pending Edit 1')
+      win1.client.updateBufferContent('c:/wiki/target.md', '# Pending Edit 2')
+
+      await win1.client.prepareWorkspacePathsForDiscard(['C:/wiki/target.md'])
+      files.set('C:/wiki/target.md', '# Target Restored')
+      await win1.client.finishWorkspacePathsDiscard(['C:/wiki/target.md'], true)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      // Resolve old first updateContent promise -> chained edit 2 must NOT flush!
+      win1.bufferApi.updateContent = origUpdate
+      updateGate.resolve(null)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      expect(win1.bufferStore.getBuffer('c:/wiki/target.md')?.content).toBe('# Target Restored')
+      expect(win1.bufferStore.getBuffer('c:/wiki/target.md')?.isDirty).toBe(false)
+      expect(win2.bufferStore.getBuffer('c:/wiki/target.md')?.content).toBe('# Target Restored')
+      expect(win2.bufferStore.getBuffer('c:/wiki/target.md')?.isDirty).toBe(false)
+
+      // Deleting untracked.md closes dirty tabs in both win1 and win2 without prompt
+      await win1.client.prepareWorkspacePathsForDiscard(['C:/wiki/untracked.md'])
+      files.delete('C:/wiki/untracked.md')
+      await win1.client.finishWorkspacePathsDiscard(['C:/wiki/untracked.md'], true)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      expect(win1.tabStore.getBufferKeys()).not.toContain('c:/wiki/untracked.md')
+      expect(win2.tabStore.getBufferKeys()).not.toContain('c:/wiki/untracked.md')
+      expect(win1.bufferStore.getBuffer('c:/wiki/other.md')?.isDirty).toBe(true)
     } finally {
       stop1()
       stop2()

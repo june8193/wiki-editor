@@ -67,6 +67,7 @@ export class SharedDocumentBufferHub {
   private readonly listeners = new Set<(event: SharedBufferHubEvent) => void>()
   private readonly inFlightOpens = new Map<string, InFlightOpenEntry>()
   private readonly inFlightSaves = new Map<string, InFlightSaveEntry>()
+  private readonly discardingRefCounts = new Map<string, number>()
   private readonly autoSaveScheduler: BufferAutoSaveScheduler
   private readonly storage: SharedDocumentBufferStorage
   private readonly logError?: (message: string, details?: Record<string, unknown>) => void
@@ -160,11 +161,27 @@ export class SharedDocumentBufferHub {
     this.emit({ type: 'state-changed', snapshot: this.getSnapshot() })
   }
 
+  private isKeyDiscarding(key: string): boolean {
+    return (this.discardingRefCounts.get(key) ?? 0) > 0
+  }
+
+  private normalizeTargetPathKeys(targetPaths: readonly string[]): string[] {
+    const unique = new Set<string>()
+    for (const targetPath of targetPaths) {
+      const key = getWorkspacePathKey(targetPath)
+      if (key) {
+        unique.add(key)
+      }
+    }
+    return [...unique]
+  }
+
   private reconcileAutoSaveTimers(): void {
     if (this.disposed) return
     this.autoSaveScheduler.reconcile({
       buffers: this.store.getSnapshot(),
       isSaveInFlight: (key) => this.inFlightSaves.has(key),
+      isSuppressed: (key) => this.isKeyDiscarding(key),
       getLatestBuffer: (key) => this.store.getBuffer(key),
       onTriggerSave: (buffer) => {
         void this.executeSave(buffer)
@@ -373,6 +390,9 @@ export class SharedDocumentBufferHub {
   updateContent(pathOrKey: string, nextContent: string): DocumentBuffer | null {
     const resolved = this.store.getBuffer(pathOrKey)
     if (!resolved) return null
+    if (this.isKeyDiscarding(resolved.key)) {
+      return { ...resolved }
+    }
 
     const changed = this.store.updateContent(resolved.key, nextContent)
     const updated = this.store.getBuffer(resolved.key)
@@ -622,8 +642,214 @@ export class SharedDocumentBufferHub {
   private getReconcilableWorkspaceBuffer(key: string): DocumentBuffer | undefined {
     const current = this.store.getBuffer(key)
     if (!current || current.kind !== 'workspace') return undefined
-    if (current.isSaving || this.inFlightSaves.has(current.key)) return undefined
+    if (current.isSaving || this.inFlightSaves.has(current.key) || this.isKeyDiscarding(current.key)) {
+      return undefined
+    }
     return current
+  }
+
+  private async resolveImageBufferExistence(
+    imageBuffers: readonly DocumentBuffer[]
+  ): Promise<Map<string, 'exists' | 'missing' | 'error'>> {
+    const existenceByKey = new Map<string, 'exists' | 'missing' | 'error'>()
+    if (imageBuffers.length === 0) {
+      return existenceByKey
+    }
+    if (!this.storage.readWorkspaceDirectory) {
+      for (const buffer of imageBuffers) {
+        existenceByKey.set(buffer.key, 'exists')
+      }
+      return existenceByKey
+    }
+
+    const readDir = this.storage.readWorkspaceDirectory
+    const parentDirByKey = new Map<string, string>()
+    for (const buffer of imageBuffers) {
+      const parentDir = getParentDirectory(buffer.path)
+      const parentKey = getWorkspacePathKey(parentDir)
+      if (!parentDirByKey.has(parentKey)) {
+        parentDirByKey.set(parentKey, parentDir)
+      }
+    }
+
+    type ImageParentDirResult =
+      | { status: 'ok'; entries: readonly WorkspaceEntry[] }
+      | { status: 'missing' }
+      | { status: 'error' }
+
+    const dirResults = new Map<string, ImageParentDirResult>()
+    await Promise.all(
+      [...parentDirByKey.entries()].map(async ([parentKey, parentDir]) => {
+        try {
+          const entries = await readDir(parentDir)
+          dirResults.set(parentKey, { status: 'ok', entries })
+        } catch (error: unknown) {
+          dirResults.set(
+            parentKey,
+            isMissingWorkspaceFileError(error) ? { status: 'missing' } : { status: 'error' }
+          )
+        }
+      })
+    )
+
+    for (const buffer of imageBuffers) {
+      const parentKey = getWorkspacePathKey(getParentDirectory(buffer.path))
+      const dirResult = dirResults.get(parentKey)
+      if (!dirResult || dirResult.status === 'error') {
+        existenceByKey.set(buffer.key, 'error')
+      } else if (dirResult.status === 'missing') {
+        existenceByKey.set(buffer.key, 'missing')
+      } else {
+        const exists = dirResult.entries.some(
+          (entry) => entry.kind === 'file' && isSameWorkspacePath(entry.path, buffer.path)
+        )
+        existenceByKey.set(buffer.key, exists ? 'exists' : 'missing')
+      }
+    }
+    return existenceByKey
+  }
+
+  /**
+   * Cancels pending auto-saves/opens and awaits in-flight saves for target workspace paths before Git discard.
+   */
+  async prepareWorkspacePathsForDiscard(targetPaths: readonly string[]): Promise<void> {
+    const targetKeys = this.normalizeTargetPathKeys(targetPaths)
+    if (targetKeys.length === 0) return
+
+    for (const key of targetKeys) {
+      this.discardingRefCounts.set(key, (this.discardingRefCounts.get(key) ?? 0) + 1)
+    }
+    const targetKeySet = new Set(targetKeys)
+    this.autoSaveScheduler.clearForKeys(targetKeys)
+    this.cancelInFlightOpens(
+      [],
+      (entryKey, entry) => entry.currentInput.kind === 'workspace' && targetKeySet.has(entryKey)
+    )
+
+    const inFlightSavePromises: Array<Promise<unknown>> = []
+    for (const key of targetKeys) {
+      const inFlight = this.inFlightSaves.get(key)
+      if (inFlight) {
+        inFlightSavePromises.push(inFlight.promise.catch(() => undefined))
+      }
+    }
+    if (inFlightSavePromises.length > 0) {
+      await Promise.all(inFlightSavePromises)
+    }
+  }
+
+  /**
+   * Releases the discard lock for target paths and, when `forceSync` is true, forcibly resets open
+   * buffers to disk content (`isDirty: false`) or closes tabs for files removed on disk.
+   */
+  async finishWorkspacePathsDiscard(
+    targetPaths: readonly string[],
+    forceSync: boolean
+  ): Promise<string[]> {
+    const targetKeys = this.normalizeTargetPathKeys(targetPaths)
+    if (targetKeys.length === 0) return []
+
+    let released = false
+    const ensureReleased = (): void => {
+      if (released) return
+      released = true
+      for (const key of targetKeys) {
+        const count = this.discardingRefCounts.get(key) ?? 0
+        if (count <= 1) {
+          this.discardingRefCounts.delete(key)
+        } else {
+          this.discardingRefCounts.set(key, count - 1)
+        }
+      }
+    }
+
+    try {
+      if (!forceSync || this.disposed) {
+        ensureReleased()
+        return []
+      }
+
+      const targetKeySet = new Set(targetKeys)
+      const matchingBuffers = this.store
+        .getAllBuffers()
+        .filter((buffer) => buffer.kind === 'workspace' && targetKeySet.has(buffer.key))
+
+      const closedKeys: string[] = []
+      const syncedKeys: string[] = []
+
+      this.cancelInFlightOpens(
+        [],
+        (entryKey, entry) => entry.currentInput.kind === 'workspace' && targetKeySet.has(entryKey)
+      )
+
+      const textBuffers = matchingBuffers.filter((buffer) => buffer.contentKind !== 'image')
+      const imageBuffers = matchingBuffers.filter((buffer) => buffer.contentKind === 'image')
+
+      await Promise.all([
+        Promise.all(
+          textBuffers.map(async (buffer) => {
+            try {
+              const diskContent = await this.storage.readWorkspaceFile(buffer.path)
+              if (this.disposed) return
+              const current = this.store.getBuffer(buffer.key)
+              if (!current || current.kind !== 'workspace' || current.contentKind === 'image') {
+                return
+              }
+              this.store.forceSyncContent(current.key, diskContent)
+              syncedKeys.push(current.key)
+            } catch (error: unknown) {
+              if (this.disposed || !isMissingWorkspaceFileError(error)) return
+              if (this.store.removeBuffer(buffer.key)) {
+                closedKeys.push(buffer.key)
+              }
+            }
+          })
+        ),
+        (async () => {
+          if (imageBuffers.length === 0) return
+          const imageExistence = await this.resolveImageBufferExistence(imageBuffers)
+          if (this.disposed) return
+          for (const buffer of imageBuffers) {
+            const status = imageExistence.get(buffer.key) ?? 'exists'
+            if (status === 'missing') {
+              if (this.store.removeBuffer(buffer.key)) {
+                closedKeys.push(buffer.key)
+              }
+            } else if (status === 'exists') {
+              this.store.refreshImageAsset(buffer.key)
+              syncedKeys.push(buffer.key)
+            }
+          }
+        })()
+      ])
+
+      if (this.disposed) {
+        ensureReleased()
+        return []
+      }
+
+      this.autoSaveScheduler.clearForKeys(targetKeys)
+      ensureReleased()
+
+      if (closedKeys.length > 0) {
+        this.closeRemovedKeys(closedKeys)
+      }
+      if (syncedKeys.length > 0) {
+        this.revision += 1
+        this.emit({
+          type: 'buffers-force-synced',
+          snapshot: this.getSnapshot(),
+          syncedKeys
+        })
+      }
+
+      return closedKeys
+    } finally {
+      ensureReleased()
+      if (!this.disposed) {
+        this.reconcileAutoSaveTimers()
+      }
+    }
   }
 
   async reconcileWorkspaceBuffersWithDisk(
@@ -683,53 +909,15 @@ export class SharedDocumentBufferHub {
       imageBuffers.length === 0 || !this.storage.readWorkspaceDirectory
         ? Promise.resolve()
         : (async () => {
-            const readDir = this.storage.readWorkspaceDirectory!
-            const parentDirByKey = new Map<string, string>()
-            for (const buffer of imageBuffers) {
-              const parentDir = getParentDirectory(buffer.path)
-              const parentKey = getWorkspacePathKey(parentDir)
-              if (!parentDirByKey.has(parentKey)) {
-                parentDirByKey.set(parentKey, parentDir)
-              }
-            }
-
-            type ImageParentDirResult =
-              | { status: 'ok'; entries: readonly WorkspaceEntry[] }
-              | { status: 'missing' }
-              | { status: 'error' }
-
-            const dirResults = new Map<string, ImageParentDirResult>()
-            await Promise.all(
-              [...parentDirByKey.entries()].map(async ([parentKey, parentDir]) => {
-                try {
-                  const entries = await readDir(parentDir)
-                  dirResults.set(parentKey, { status: 'ok', entries })
-                } catch (error: unknown) {
-                  dirResults.set(
-                    parentKey,
-                    isMissingWorkspaceFileError(error) ? { status: 'missing' } : { status: 'error' }
-                  )
-                }
-              })
-            )
-
+            const imageExistence = await this.resolveImageBufferExistence(imageBuffers)
             if (this.disposed) return
             for (const buffer of imageBuffers) {
               const current = this.getReconcilableWorkspaceBuffer(buffer.key)
               if (!current || current.contentKind !== 'image') continue
 
-              const parentKey = getWorkspacePathKey(getParentDirectory(current.path))
-              const dirResult = dirResults.get(parentKey)
-              if (!dirResult || dirResult.status === 'error') continue
-              if (dirResult.status === 'missing') {
-                cleanMissingKeys.push(current.key)
-                continue
-              }
-
-              const exists = dirResult.entries.some(
-                (entry) => entry.kind === 'file' && isSameWorkspacePath(entry.path, current.path)
-              )
-              if (!exists) {
+              const status = imageExistence.get(current.key)
+              if (!status || status === 'error') continue
+              if (status === 'missing') {
                 cleanMissingKeys.push(current.key)
               } else if (
                 isWorkspaceChangeAffectingPath(current.path, changeEvent) &&
@@ -785,5 +973,6 @@ export class SharedDocumentBufferHub {
     this.tabTracker.clear()
     this.inFlightOpens.clear()
     this.inFlightSaves.clear()
+    this.discardingRefCounts.clear()
   }
 }

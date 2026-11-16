@@ -211,6 +211,12 @@ export function createHubBufferApi(
     async reconcileWorkspaceBuffersWithDisk(changeEvent) {
       return hub.reconcileWorkspaceBuffersWithDisk(changeEvent)
     },
+    async prepareDiscardPaths(targetPaths) {
+      return hub.prepareWorkspacePathsForDiscard(targetPaths)
+    },
+    async finishDiscardPaths(targetPaths, forceSync) {
+      return hub.finishWorkspacePathsDiscard(targetPaths, forceSync)
+    },
     async clearWorkspaceBuffers() {
       return hub.clearWorkspaceBuffers()
     },
@@ -873,6 +879,8 @@ export function createMultiWindowWikiHarness(
         stageAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         unstage: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         unstageAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+        discard: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+        discardAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         commit: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         branches: async () => ({ current: null, isDetached: false, branches: [] }),
         checkout: async (workspacePath) => createEmptyGitStatus(true, workspacePath),

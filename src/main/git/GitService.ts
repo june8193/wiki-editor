@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
-import { realpath, stat } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { lstat, realpath, rm, stat } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
   createEmptyGitStatus,
@@ -18,6 +18,7 @@ import {
 import {
   hasBlockedPathSegment,
   isErrnoCode,
+  isMissingPathError,
   isPathInsideRoot,
   resolveRealPathWithAncestor
 } from '../fs/pathSecurity'
@@ -44,12 +45,14 @@ const execFileAsync = promisify(execFile)
 const DEFAULT_LOCAL_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_BUFFER_BYTES = 10 * 1024 * 1024
 const GIT_METADATA_NAMES: ReadonlySet<string> = new Set(['.git'])
+const OUTSIDE_REPO_PATH_MESSAGE = '워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.'
 
 export interface GitServiceOptions {
   env?: NodeJS.ProcessEnv
   localTimeoutMs?: number
   networkTimeoutMs?: number
   logService?: LogService
+  trashItem?: (targetPath: string) => Promise<void>
 }
 
 interface PublishableBranchContext {
@@ -67,6 +70,7 @@ export class GitService {
   private readonly localTimeoutMs: number
   private readonly networkTimeoutMs: number
   private readonly logService?: LogService
+  private readonly trashItem?: (targetPath: string) => Promise<void>
   private readonly failedExecMeta = new WeakMap<object, { cwd: string; args: readonly string[] }>()
 
   constructor(options: GitServiceOptions = {}) {
@@ -74,6 +78,7 @@ export class GitService {
     this.localTimeoutMs = options.localTimeoutMs ?? DEFAULT_LOCAL_TIMEOUT_MS
     this.networkTimeoutMs = options.networkTimeoutMs ?? DEFAULT_LOCAL_TIMEOUT_MS * 2
     this.logService = options.logService
+    this.trashItem = options.trashItem
   }
 
   async status(workspacePath: string): Promise<GitStatus> {
@@ -126,6 +131,160 @@ export class GitService {
     const repoRoot = await this.requireRepoRoot(workspacePath)
     await this.execUnstageTargets(repoRoot, ['.'])
     return this.statusForRepo(repoRoot)
+  }
+
+  async discard(workspacePath: string, paths: readonly string[]): Promise<GitStatus> {
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const validatedPaths = await this.validateRepoRelativePaths(repoRoot, paths, {
+      followLeafSymlink: false
+    })
+    const currentStatus = await this.statusForRepo(repoRoot)
+    const targets = this.classifyDiscardTargets(currentStatus, validatedPaths)
+
+    await this.executeDiscardTargets(repoRoot, 'discard', targets)
+    return this.statusForRepo(repoRoot)
+  }
+
+  async discardAll(workspacePath: string): Promise<GitStatus> {
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const currentStatus = await this.statusForRepo(repoRoot)
+    const targets = this.classifyDiscardTargets(currentStatus)
+
+    if (
+      targets.trackedRestorePaths.length === 0 &&
+      targets.conflictPaths.length === 0 &&
+      targets.untrackedPaths.length === 0
+    ) {
+      return currentStatus
+    }
+
+    await this.executeDiscardTargets(repoRoot, 'discardAll', targets)
+    return this.statusForRepo(repoRoot)
+  }
+
+  private classifyDiscardTargets(
+    currentStatus: GitStatus,
+    targetPaths?: readonly string[]
+  ): {
+    trackedRestorePaths: string[]
+    conflictPaths: string[]
+    untrackedPaths: string[]
+  } {
+    const targetSet = targetPaths ? new Set(targetPaths) : null
+    const trackedRestorePaths: string[] = []
+    const conflictPaths: string[] = []
+    for (const item of currentStatus.unstaged) {
+      if (targetSet && !targetSet.has(item.path)) continue
+      if (item.status === 'M' || item.status === 'D') {
+        trackedRestorePaths.push(item.path)
+      } else if (item.status === 'U') {
+        conflictPaths.push(item.path)
+      }
+    }
+    const untrackedPaths = currentStatus.untracked
+      .filter((item) => !targetSet || targetSet.has(item.path))
+      .map((item) => item.path)
+    return { trackedRestorePaths, conflictPaths, untrackedPaths }
+  }
+
+  private async executeDiscardTargets(
+    repoRoot: string,
+    operation: 'discard' | 'discardAll',
+    targets: {
+      trackedRestorePaths: readonly string[]
+      conflictPaths: readonly string[]
+      untrackedPaths: readonly string[]
+    }
+  ): Promise<void> {
+    try {
+      if (targets.trackedRestorePaths.length > 0) {
+        await this.execGit(repoRoot, ['checkout', '-f', '--', ...targets.trackedRestorePaths])
+      }
+      if (targets.conflictPaths.length > 0) {
+        await this.discardConflictPaths(repoRoot, targets.conflictPaths)
+      }
+    } catch (error) {
+      throw await this.formatAndLogGitError(operation, error)
+    }
+
+    for (const relPath of targets.untrackedPaths) {
+      await this.discardUntrackedPath(repoRoot, relPath)
+    }
+  }
+
+  private async discardUntrackedPath(repoRoot: string, relPath: string): Promise<void> {
+    const segments = relPath.split('/').filter(Boolean)
+    const targetPath = resolve(repoRoot, ...segments)
+    this.assertRepoCandidatePath(repoRoot, targetPath)
+    try {
+      await lstat(targetPath)
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        return
+      }
+      throw error
+    }
+
+    if (this.trashItem) {
+      try {
+        await this.trashItem(targetPath)
+      } catch (error) {
+        if (isMissingPathError(error)) {
+          return
+        }
+        await this.logService?.error('git', 'Git discard trashItem failed', {
+          data: { targetPath },
+          error
+        })
+        throw error
+      }
+      return
+    }
+
+    await rm(targetPath, { recursive: true, force: true })
+  }
+
+  private async discardConflictPaths(
+    repoRoot: string,
+    conflictPaths: readonly string[]
+  ): Promise<void> {
+    const hasHead = await this.hasHeadCommit(repoRoot)
+    const headPathSet = new Set<string>()
+    if (hasHead) {
+      const lsRaw = await this.execGit(repoRoot, [
+        '-c',
+        'core.quotePath=false',
+        'ls-tree',
+        '-r',
+        '-z',
+        '--name-only',
+        'HEAD',
+        '--',
+        ...conflictPaths
+      ])
+      for (const entry of lsRaw.split('\0')) {
+        if (entry) {
+          headPathSet.add(entry)
+        }
+      }
+    }
+
+    const restoreFromHead: string[] = []
+    const removeFromIndexAndTree: string[] = []
+    for (const relPath of conflictPaths) {
+      if (headPathSet.has(relPath)) {
+        restoreFromHead.push(relPath)
+      } else {
+        removeFromIndexAndTree.push(relPath)
+      }
+    }
+
+    if (restoreFromHead.length > 0) {
+      await this.execGit(repoRoot, ['checkout', '-f', 'HEAD', '--', ...restoreFromHead])
+    }
+    if (removeFromIndexAndTree.length > 0) {
+      await this.execGit(repoRoot, ['rm', '-f', '--ignore-unmatch', '--', ...removeFromIndexAndTree])
+    }
   }
 
   async commit(workspacePath: string, message: string): Promise<GitStatus> {
@@ -585,15 +744,25 @@ export class GitService {
     }
   }
 
+  private assertRepoCandidatePath(repoRoot: string, candidatePath: string): void {
+    if (!isPathInsideRoot(repoRoot, candidatePath) || candidatePath === repoRoot) {
+      throw new Error(OUTSIDE_REPO_PATH_MESSAGE)
+    }
+    if (hasBlockedPathSegment(relative(repoRoot, candidatePath), GIT_METADATA_NAMES)) {
+      throw new Error('시스템 .git 경로에는 접근할 수 없습니다.')
+    }
+  }
+
   private async validateRepoRelativePaths(
     repoRoot: string,
-    paths: readonly string[]
+    paths: readonly string[],
+    options: { followLeafSymlink?: boolean } = {}
   ): Promise<string[]> {
     if (!Array.isArray(paths) || paths.length === 0) {
       throw new Error('대상 파일 경로가 지정되지 않았습니다.')
     }
 
-    const outsideMessage = '워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.'
+    const followLeafSymlink = options.followLeafSymlink ?? true
     const validated: string[] = []
     for (const rawPath of paths) {
       if (typeof rawPath !== 'string' || rawPath.trim().length === 0 || rawPath.includes('\0')) {
@@ -601,21 +770,24 @@ export class GitService {
       }
 
       const candidate = isAbsolute(rawPath) ? resolve(rawPath) : resolve(repoRoot, rawPath)
-      if (!isPathInsideRoot(repoRoot, candidate) || candidate === repoRoot) {
-        throw new Error(outsideMessage)
-      }
-      if (hasBlockedPathSegment(relative(repoRoot, candidate), GIT_METADATA_NAMES)) {
-        throw new Error('시스템 .git 경로에는 접근할 수 없습니다.')
-      }
+      this.assertRepoCandidatePath(repoRoot, candidate)
 
-      const { resolvedReal } = await resolveRealPathWithAncestor(candidate, {
-        outsideMessage,
-        assertResolved: (resolved) => {
-          if (!isPathInsideRoot(repoRoot, resolved)) {
-            throw new Error(outsideMessage)
-          }
+      const assertResolvedInsideRepo = (resolved: string): void => {
+        if (!isPathInsideRoot(repoRoot, resolved)) {
+          throw new Error(OUTSIDE_REPO_PATH_MESSAGE)
         }
+      }
+      const targetToResolve = followLeafSymlink ? candidate : dirname(candidate)
+      const { resolvedReal: resolvedTarget } = await resolveRealPathWithAncestor(targetToResolve, {
+        outsideMessage: OUTSIDE_REPO_PATH_MESSAGE,
+        assertResolved: assertResolvedInsideRepo
       })
+      const resolvedReal = followLeafSymlink
+        ? resolvedTarget
+        : join(resolvedTarget, basename(candidate))
+      if (!followLeafSymlink) {
+        assertResolvedInsideRepo(resolvedReal)
+      }
       if (hasBlockedPathSegment(relative(repoRoot, resolvedReal), GIT_METADATA_NAMES)) {
         throw new Error('시스템 .git 경로에는 접근할 수 없습니다.')
       }
