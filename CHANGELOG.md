@@ -5,6 +5,17 @@
 
 ---
 
+## [1.4.0] - 2026-11-17
+
+### Added
+- Git 패널 `Changes` 섹션의 `변경 사항` 목록에 개별 파일 즉시 롤백(`↶`) 및 위험 강조(`danger`) 확인 다이얼로그 기반 전체 롤백(`전체 ↶`) 추가: 추적 수정·삭제(`M`, `D`) 파일의 Index 기준 복원(Staged 변경 보존), 병합 충돌(`U`) 파일의 현재 브랜치(`HEAD`) 강제 복원, 미추적(`?`) 파일의 OS 휴지통 이동, 롤백 대상 한정 미저장 확인 및 다중 창 문서 버퍼·`unstaged` Diff 탭 자동 동기화 지원 ([상세 스펙](.backlog/done/git-discard-changes/spec.md), [티켓 01](.backlog/done/git-discard-changes/issues/01-single-file-discard-and-tab-sync.md), [티켓 02](.backlog/done/git-discard-changes/issues/02-discard-all-and-danger-confirm-dialog.md))
+- 탐색기 폴더 트리에서 `Ctrl`(`Cmd`)·`Shift`+클릭 다중 항목 선택, 일괄 상대·절대 경로 복사(줄바꿈 구분) 및 일괄 삭제, 드래그 앤 드롭을 통한 파일·폴더 위치 이동(폴더 500ms 호버 자동 펼침, 다중 이미지 에디터 본문 드래그 삽입, 열린 문서 버퍼·탭 경로 자동 갱신) 지원
+- 위지윅(WYSIWYG)·Preview·Split 모드의 마크다운 코드 블록에 헤더 컨트롤 바(위지윅 인터랙티브 언어 선택 콤보박스 및 `mermaid` 블록 즉시 전환, Preview·Split 언어 배지, 원클릭 `코드 복사` 버튼) 및 다중 언어 Lezer 구문 강조(Syntax Highlighting) 추가
+- Mermaid 다이어그램 블록에 배율 확대·축소(`25%`~`400%` 버튼, `Ctrl`/`Cmd`+마우스 휠 커서 기준 줌, 배율 초기화), 마우스 드래그 패닝(Pan), 하단 리사이즈 핸들 드래그·키보드·더블클릭 기반 뷰포트 높이 조절(`120px`~`1200px`) 지원
+
+### Fixed
+- 위지윅(WYSIWYG) 마크다운 에디터에서 브라우저 네이티브 맞춤법 검사(`spellcheck`) 밑줄이 표시되던 문제를 비활성화하여 수정
+
 ## [1.3.0] - 2026-11-16
 
 ### Added
