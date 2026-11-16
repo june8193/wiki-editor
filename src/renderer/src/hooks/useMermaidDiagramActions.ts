@@ -9,9 +9,10 @@ import {
 import { logRendererError } from '../logging/rendererLogger'
 import { toErrorMessage } from '@shared/errors'
 import type { WikiApi } from '@shared/ipc'
+import { ACTION_FEEDBACK_DURATION_MS, useTimedFeedback } from './useTimedFeedback'
 import { useOptionalWikiApi } from './useWikiApi'
 
-export const MERMAID_ACTION_FEEDBACK_DURATION_MS = 1500
+export const MERMAID_ACTION_FEEDBACK_DURATION_MS = ACTION_FEEDBACK_DURATION_MS
 
 export type MermaidActionId = 'copy-image' | 'copy-code' | 'save-png' | 'save-svg'
 
@@ -77,45 +78,28 @@ export function useMermaidDiagramActions({
 }: UseMermaidDiagramActionsOptions): MermaidDiagramActionsState {
   const contextWikiApi = useOptionalWikiApi()
   const [activeAction, setActiveAction] = useState<MermaidActionId | null>(null)
-  const [completedAction, setCompletedAction] = useState<MermaidActionId | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const isMountedRef = useRef(true)
+  const {
+    completedKey: completedAction,
+    triggerFeedback,
+    beginExecution,
+    isExecutionActive
+  } = useTimedFeedback<MermaidActionId>([theme, code], MERMAID_ACTION_FEEDBACK_DURATION_MS)
   const isBusyRef = useRef(false)
-  const feedbackTimerRef = useRef<number | null>(null)
-  const executionTokenRef = useRef(0)
   const previousContextRef = useRef({ code, theme })
 
   const canCopyCode = code.trim().length > 0
   const canExport = canCopyCode && confirmedSvg !== null
-
-  const clearFeedbackTimer = useCallback(() => {
-    if (feedbackTimerRef.current !== null) {
-      window.clearTimeout(feedbackTimerRef.current)
-      feedbackTimerRef.current = null
-    }
-  }, [])
-
-  useEffect(() => {
-    isMountedRef.current = true
-    return () => {
-      isMountedRef.current = false
-      executionTokenRef.current += 1
-      clearFeedbackTimer()
-    }
-  }, [clearFeedbackTimer])
 
   useEffect(() => {
     if (previousContextRef.current.code === code && previousContextRef.current.theme === theme) {
       return
     }
     previousContextRef.current = { code, theme }
-    executionTokenRef.current += 1
-    clearFeedbackTimer()
     isBusyRef.current = false
     setActiveAction(null)
-    setCompletedAction(null)
     setErrorMessage(null)
-  }, [clearFeedbackTimer, code, theme])
+  }, [code, theme])
 
   const executeAction = useCallback(
     async (
@@ -128,47 +112,36 @@ export function useMermaidDiagramActions({
         return
       }
 
-      const token = ++executionTokenRef.current
-      clearFeedbackTimer()
+      const token = beginExecution()
       isBusyRef.current = true
       setActiveAction(actionId)
-      setCompletedAction(null)
       setErrorMessage(null)
 
       try {
         const completed = await run(token)
-        if (!isMountedRef.current || executionTokenRef.current !== token || completed === false) {
+        if (!isExecutionActive(token) || completed === false) {
           return
         }
 
-        setCompletedAction(actionId)
-        feedbackTimerRef.current = window.setTimeout(() => {
-          feedbackTimerRef.current = null
-          if (!isMountedRef.current || executionTokenRef.current !== token) {
-            return
-          }
-          setCompletedAction(null)
-        }, MERMAID_ACTION_FEEDBACK_DURATION_MS)
+        triggerFeedback(actionId)
       } catch (error) {
         logRendererError('ui', failureContext.event, {
           data: failureContext.buildData(),
           error
         })
-        if (!isMountedRef.current || executionTokenRef.current !== token) {
+        if (!isExecutionActive(token)) {
           return
         }
         const message = toErrorMessage(error, failureContext.fallbackMessage)
         setErrorMessage(message.trim().length > 0 ? message : failureContext.fallbackMessage)
       } finally {
-        if (executionTokenRef.current === token) {
+        if (isExecutionActive(token)) {
           isBusyRef.current = false
-          if (isMountedRef.current) {
-            setActiveAction(null)
-          }
+          setActiveAction(null)
         }
       }
     },
-    [clearFeedbackTimer]
+    [beginExecution, isExecutionActive, triggerFeedback]
   )
 
   const executePngExportAction = useCallback(
@@ -196,7 +169,7 @@ export function useMermaidDiagramActions({
           const sendPng = resolveSender()
 
           const pngBytes = await rasterizeMermaidSvgToPng(confirmedSvg, theme)
-          if (!isMountedRef.current || executionTokenRef.current !== token) {
+          if (!isExecutionActive(token)) {
             return false
           }
           if (pngBytes.byteLength === 0) {

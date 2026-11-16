@@ -11,11 +11,13 @@ import { isSafeImageUri } from '@shared/urlSecurity'
 import type { Mark, Schema } from '@tiptap/pm/model'
 import {
   type EditorState,
+  Plugin,
   PluginKey,
   TextSelection,
   type Transaction
 } from '@tiptap/pm/state'
 import { deleteRow as pmDeleteRow, isInTable } from '@tiptap/pm/tables'
+import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { ReactNodeViewRenderer } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import rehypeParse from 'rehype-parse'
@@ -24,7 +26,8 @@ import rehypeStringify from 'rehype-stringify'
 import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
-import { MermaidCodeBlockNodeView } from '../components/MermaidCodeBlockNodeView'
+import { CodeBlockNodeView } from '../components/CodeBlockNodeView'
+import { getCodeBlockHighlightSpans, isMermaidLanguage } from './codeBlockHighlight'
 import {
   detectLinkQueryFromSegments,
   getLinkCandidateAutoLabel,
@@ -51,10 +54,77 @@ export interface WysiwygExtensionOptions {
 }
 
 export const linkInsertPluginKey = new PluginKey<boolean>('wysiwygLinkInsert')
+const codeBlockHighlightPluginKey = new PluginKey<DecorationSet>('wysiwygCodeBlockHighlight')
 
-const MermaidAwareCodeBlock = CodeBlock.extend({
+function buildCodeBlockHighlightDecorations(doc: EditorState['doc']): DecorationSet {
+  const decorations: Decoration[] = []
+
+  doc.descendants((node, pos) => {
+    if (node.type.name !== 'codeBlock') {
+      return true
+    }
+
+    const language = typeof node.attrs.language === 'string' ? node.attrs.language : ''
+    if (!language || isMermaidLanguage(language)) {
+      return false
+    }
+
+    const code = node.textContent
+    const spans = getCodeBlockHighlightSpans(code, language)
+    const contentStart = pos + 1
+    for (const span of spans) {
+      if (span.from < 0 || span.to <= span.from || span.to > code.length) {
+        continue
+      }
+      decorations.push(
+        Decoration.inline(contentStart + span.from, contentStart + span.to, {
+          class: span.className
+        })
+      )
+    }
+
+    return false
+  })
+
+  return DecorationSet.create(doc, decorations)
+}
+
+const HighlightedCodeBlock = CodeBlock.extend({
   addNodeView() {
-    return ReactNodeViewRenderer(MermaidCodeBlockNodeView)
+    return ReactNodeViewRenderer(CodeBlockNodeView, {
+      stopEvent: ({ event }) => {
+        const target = event.target
+        if (!(target instanceof Element)) {
+          return false
+        }
+        if (event.type.startsWith('drag') || event.type === 'drop') {
+          return false
+        }
+        if (target.closest('.code-block-header, .mermaid-node-header, .mermaid-node-preview')) {
+          return true
+        }
+        return ['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA'].includes(target.tagName)
+      }
+    })
+  },
+  addProseMirrorPlugins() {
+    const parentPlugins = this.parent?.() ?? []
+    return [
+      ...parentPlugins,
+      new Plugin<DecorationSet>({
+        key: codeBlockHighlightPluginKey,
+        state: {
+          init: (_config, state) => buildCodeBlockHighlightDecorations(state.doc),
+          apply: (tr, oldSet) =>
+            tr.docChanged ? buildCodeBlockHighlightDecorations(tr.doc) : oldSet
+        },
+        props: {
+          decorations(state) {
+            return codeBlockHighlightPluginKey.getState(state) ?? DecorationSet.empty
+          }
+        }
+      })
+    ]
   }
 })
 
@@ -404,7 +474,7 @@ export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): 
       protocols: [],
       isAllowedUri: (url) => isSafeMarkdownUrl(url)
     }),
-    MermaidAwareCodeBlock,
+    HighlightedCodeBlock,
     WikiAssetImage.configure({
       getDocumentPath: options.getDocumentPath
     }),
