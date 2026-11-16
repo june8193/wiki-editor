@@ -838,6 +838,9 @@ describe('WysiwygMarkdownEditor', () => {
 
       const toolbar = within(validBlock).getByRole('toolbar', { name: 'Mermaid 다이어그램 작업' })
       expect(within(toolbar).getAllByRole('button').map((btn) => btn.getAttribute('aria-label'))).toEqual([
+        '축소',
+        '배율 초기화',
+        '확대',
         '이미지 복사',
         '코드 복사',
         'PNG 저장',
@@ -1093,6 +1096,89 @@ describe('WysiwygMarkdownEditor', () => {
     } finally {
       canvasStub.restore()
     }
+  })
+
+  it('supports inline zoom, pan, Ctrl+wheel, and bottom height resize in WYSIWYG without mutating markdown', async () => {
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+      }))
+    }
+    const mermaidRenderer = createMermaidRenderer(driver)
+    const onChangeContent = vi.fn()
+    const markdown = ['```mermaid', 'graph TD\n  WYS_A --> WYS_B', '```'].join('\n')
+
+    render(
+      <WysiwygMarkdownEditor
+        content={markdown}
+        scrollTop={0}
+        theme="light"
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const block = await screen.findByTestId('wysiwyg-mermaid-block')
+    const viewport = await within(block).findByTestId('mermaid-svg')
+    const stage = within(viewport).getByTestId('mermaid-svg-stage')
+    const header = block.querySelector('.mermaid-node-header') as HTMLElement
+    const handle = within(block).getByTestId('mermaid-resize-handle')
+
+    vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 400,
+      bottom: 200,
+      width: 400,
+      height: 200,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+
+    // Header inline zoom buttons
+    const zoomInBtn = within(header).getByRole('button', { name: '확대' })
+    const resetBtn = within(header).getByRole('button', { name: '배율 초기화' })
+    fireEvent.click(zoomInBtn)
+    expect(resetBtn).toHaveTextContent('125%')
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\.25\)$/)
+
+    // Ctrl+wheel adjusts zoom by +10% in WYSIWYG preview viewport
+    const ctrlWheel = new WheelEvent('wheel', {
+      deltaY: -100,
+      ctrlKey: true,
+      clientX: 200,
+      clientY: 100,
+      bubbles: true,
+      cancelable: true
+    })
+    act(() => {
+      viewport.dispatchEvent(ctrlWheel)
+    })
+    expect(ctrlWheel.defaultPrevented).toBe(true)
+    expect(resetBtn).toHaveTextContent('135%')
+
+    // Pan inside preview viewport
+    fireEvent.pointerDown(viewport, { button: 0, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 120 })
+    expect(stage.style.transform).toBe('translate(30px, 20px) scale(1.35)')
+    fireEvent.pointerUp(window)
+
+    // Bottom handle resize + double click reset
+    fireEvent.pointerDown(handle, { button: 0, clientY: 200 })
+    fireEvent.pointerMove(window, { clientY: 340 })
+    expect(viewport.style.height).toBe('340px')
+    fireEvent.pointerUp(window)
+
+    fireEvent.click(resetBtn)
+    expect(resetBtn).toHaveTextContent('100%')
+    expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+    expect(viewport.style.height).toBe('340px')
+
+    fireEvent.doubleClick(handle)
+    expect(viewport.style.height).toBe('')
+    expect(onChangeContent).not.toHaveBeenCalled()
   })
 })
 

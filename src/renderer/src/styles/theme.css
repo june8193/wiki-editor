@@ -1782,9 +1782,28 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .mermaid-svg-container {
+  position: relative;
   display: flex;
   justify-content: center;
-  overflow-x: auto;
+  align-items: center;
+  overflow: hidden;
+}
+
+.mermaid-svg-container.is-interactive {
+  cursor: grab;
+  user-select: none;
+}
+
+.mermaid-svg-container.is-interactive.is-panning {
+  cursor: grabbing;
+}
+
+.mermaid-svg-stage {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  transform-origin: center center;
 }
 
 .mermaid-action-bar {
@@ -1852,6 +1871,70 @@ body.is-resizing-sidebar .pane-workspace {
   font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
+}
+
+.mermaid-zoom-reset-btn {
+  min-width: 42px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.mermaid-action-divider {
+  width: 1px;
+  height: 14px;
+  margin: 0 2px;
+  background-color: var(--border-color);
+}
+
+.mermaid-resize-handle {
+  position: relative;
+  height: 10px;
+  margin-top: 6px;
+  cursor: row-resize;
+}
+
+.mermaid-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 36px;
+  height: 3px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  background-color: var(--border-color);
+  transition: background-color 0.12s ease, width 0.12s ease;
+}
+
+.mermaid-resize-handle:hover::after,
+.mermaid-resize-handle:focus-visible::after,
+.mermaid-resize-handle.is-dragging::after {
+  width: 48px;
+  background-color: var(--accent-color);
+}
+
+.mermaid-resize-handle:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+body.is-panning-mermaid,
+body.is-panning-mermaid *,
+body.is-resizing-mermaid,
+body.is-resizing-mermaid * {
+  user-select: none !important;
+}
+
+body.is-panning-mermaid,
+body.is-panning-mermaid * {
+  cursor: grabbing !important;
+}
+
+body.is-resizing-mermaid,
+body.is-resizing-mermaid * {
+  cursor: row-resize !important;
 }
 
 .mermaid-action-error {

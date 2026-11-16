@@ -12,7 +12,7 @@ export interface PointerDragStartEvent {
 
 export interface PointerDragSessionOptions {
   bodyClassName: string
-  cursor: 'col-resize' | 'row-resize'
+  cursor: 'col-resize' | 'row-resize' | 'grabbing'
   onDragStart?: (event: PointerDragStartEvent) => void
   onDragMove: (event: MouseEvent) => void
   onDragEnd?: () => void
