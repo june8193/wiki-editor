@@ -78,6 +78,7 @@ export const GIT_IPC_CHANNELS = {
   unstage: 'git:unstage',
   unstageAll: 'git:unstage-all',
   discard: 'git:discard',
+  discardAll: 'git:discard-all',
   commit: 'git:commit',
   branches: 'git:branches',
   checkout: 'git:checkout',
@@ -193,6 +194,7 @@ export interface WikiGitApi {
   unstage(workspacePath: string, paths: string[]): Promise<GitStatus>
   unstageAll(workspacePath: string): Promise<GitStatus>
   discard(workspacePath: string, paths: string[]): Promise<GitStatus>
+  discardAll(workspacePath: string): Promise<GitStatus>
   commit(workspacePath: string, message: string): Promise<GitStatus>
   branches(workspacePath: string): Promise<GitBranchList>
   checkout(workspacePath: string, branchName: string): Promise<GitStatus>

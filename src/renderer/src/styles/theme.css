@@ -10,6 +10,8 @@
   --accent-hover: #0550ae;
   --accent-contrast: #ffffff;
   --danger-color: #cf222e;
+  --danger-hover: #a40e26;
+  --danger-contrast: #ffffff;
   --code-bg: #f6f8fa;
   --cm-heading: #0550ae;
   --cm-link: #0969da;
@@ -43,6 +45,8 @@
   --accent-hover: #58a6ff;
   --accent-contrast: #0d1117;
   --danger-color: #f85149;
+  --danger-hover: #ff7b72;
+  --danger-contrast: #0d1117;
   --code-bg: #161b22;
   --cm-heading: #79c0ff;
   --cm-link: #58a6ff;
@@ -126,6 +130,17 @@ body,
 
 .btn-primary:hover:not(:disabled) {
   background-color: var(--accent-hover);
+}
+
+.btn-danger {
+  background-color: var(--danger-color);
+  border-color: var(--danger-color);
+  color: var(--danger-contrast);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background-color: var(--danger-hover);
+  border-color: var(--danger-hover);
 }
 
 .icon-btn {
@@ -2117,6 +2132,12 @@ body.is-resizing-git-sections * {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+}
+
+.git-section-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .git-section-title {

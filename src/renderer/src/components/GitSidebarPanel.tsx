@@ -42,6 +42,7 @@ export interface GitSidebarPanelProps {
   onUnstageFile: (path: string, origPath?: string) => void
   onUnstageAll: () => void
   onDiscardFile: (path: string) => void
+  onDiscardAll: () => void
   onCommit: (message: string) => Promise<boolean> | boolean
   onCheckoutBranch: (branchName: string) => void
   onPull: () => void
@@ -67,6 +68,7 @@ interface GitFileSectionProps {
   itemActionTitle: 'Stage' | 'Unstage'
   isBusy: boolean
   onBulkAction: () => void
+  onBulkDiscard?: () => void
   onSelectFile: (file: GitChangedFile) => void
   onItemAction: (file: GitChangedFile) => void
   onDiscardFile?: (file: GitChangedFile) => void
@@ -82,6 +84,7 @@ function GitFileSection({
   itemActionTitle,
   isBusy,
   onBulkAction,
+  onBulkDiscard,
   onSelectFile,
   onItemAction,
   onDiscardFile
@@ -92,16 +95,30 @@ function GitFileSection({
         <span className="git-section-title">
           {title} ({files.length})
         </span>
-        <button
-          type="button"
-          className="git-section-action-btn"
-          aria-label={bulkAriaLabel}
-          title={bulkAriaLabel}
-          disabled={isBusy || files.length === 0}
-          onClick={onBulkAction}
-        >
-          {bulkButtonText}
-        </button>
+        <div className="git-section-actions">
+          {onBulkDiscard && (
+            <button
+              type="button"
+              className="git-section-action-btn"
+              aria-label="전체 변경 사항 롤백"
+              title="전체 변경 사항 롤백"
+              disabled={isBusy || files.length === 0}
+              onClick={onBulkDiscard}
+            >
+              전체 ↶
+            </button>
+          )}
+          <button
+            type="button"
+            className="git-section-action-btn"
+            aria-label={bulkAriaLabel}
+            title={bulkAriaLabel}
+            disabled={isBusy || files.length === 0}
+            onClick={onBulkAction}
+          >
+            {bulkButtonText}
+          </button>
+        </div>
       </div>
       {files.length === 0 ? (
         <p className="git-empty-subtext">{emptyText}</p>
@@ -239,6 +256,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onUnstageFile,
   onUnstageAll,
   onDiscardFile,
+  onDiscardAll,
   onCommit,
   onCheckoutBranch,
   onPull,
@@ -484,6 +502,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 itemActionTitle="Stage"
                 isBusy={isBusy}
                 onBulkAction={onStageAll}
+                onBulkDiscard={onDiscardAll}
                 onSelectFile={(file) => onOpenFileDiff(toGitDiffRequest('unstaged', file))}
                 onItemAction={(file) => onStageFile(file.path)}
                 onDiscardFile={(file) => onDiscardFile(file.path)}

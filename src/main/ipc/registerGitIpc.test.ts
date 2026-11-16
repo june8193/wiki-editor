@@ -88,6 +88,7 @@ describe('registerGitIpc', () => {
       | 'unstage'
       | 'unstageAll'
       | 'discard'
+      | 'discardAll'
       | 'commit'
       | 'branches'
       | 'checkout'
@@ -105,6 +106,7 @@ describe('registerGitIpc', () => {
       unstage: vi.fn(async () => sampleStatus),
       unstageAll: vi.fn(async () => sampleStatus),
       discard: vi.fn(async () => sampleStatus),
+      discardAll: vi.fn(async () => sampleStatus),
       commit: vi.fn(async () => sampleStatus),
       branches: vi.fn(async () => ({
         current: 'main',
@@ -133,6 +135,9 @@ describe('registerGitIpc', () => {
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.discard, workspaceDir, ['a.md'])).rejects.toThrow(
       /열린 워크스페이스/
     )
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.discardAll, workspaceDir)).rejects.toThrow(
+      /열린 워크스페이스/
+    )
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.log, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.commitDetail, workspaceDir, 'abc1234')).rejects.toThrow(
       /열린 워크스페이스/
@@ -145,6 +150,9 @@ describe('registerGitIpc', () => {
 
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, otherDir)).rejects.toThrow(/일치하지 않습니다/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.discard, otherDir, ['a.md'])).rejects.toThrow(
+      /일치하지 않습니다/
+    )
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.discardAll, otherDir)).rejects.toThrow(
       /일치하지 않습니다/
     )
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.log, otherDir)).rejects.toThrow(/일치하지 않습니다/)
@@ -175,6 +183,9 @@ describe('registerGitIpc', () => {
 
     await ipcMain.invoke(GIT_IPC_CHANNELS.discard, workspaceDir, ['a.md', 'b.md'])
     expect(fakeGitService.discard).toHaveBeenCalledWith(opened.rootPath, ['a.md', 'b.md'])
+
+    await ipcMain.invoke(GIT_IPC_CHANNELS.discardAll, workspaceDir)
+    expect(fakeGitService.discardAll).toHaveBeenCalledWith(opened.rootPath)
 
     await ipcMain.invoke(GIT_IPC_CHANNELS.commit, workspaceDir, 'init commit')
     expect(fakeGitService.commit).toHaveBeenCalledWith(opened.rootPath, 'init commit')
@@ -229,6 +240,7 @@ describe('registerGitIpc', () => {
       | 'unstage'
       | 'unstageAll'
       | 'discard'
+      | 'discardAll'
       | 'commit'
       | 'branches'
       | 'checkout'
@@ -246,6 +258,7 @@ describe('registerGitIpc', () => {
       unstage: vi.fn(async () => sampleStatus),
       unstageAll: vi.fn(async () => sampleStatus),
       discard: vi.fn(async () => sampleStatus),
+      discardAll: vi.fn(async () => sampleStatus),
       commit: vi.fn(async () => sampleStatus),
       branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
       checkout: vi.fn(async () => sampleStatus),

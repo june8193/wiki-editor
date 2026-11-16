@@ -2686,4 +2686,497 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     })
     expect(within(auxDraftRendered.container).queryByRole('alertdialog')).toBeNull()
   })
+
+  it('disables 전체 ↶ when 변경 사항 is empty or busy, distinguishes tracked/untracked counts in danger dialog, and cancels cleanly', async () => {
+    const user = userEvent.setup()
+    const workspaceRoot = 'C:/wiki'
+    let resolvePendingPull: ((value: GitStatus) => void) | null = null
+    let gitState: GitStatus = {
+      isRepo: true,
+      repoRoot: workspaceRoot,
+      branch: 'main',
+      isDetached: false,
+      isUnborn: false,
+      ahead: 0,
+      behind: 0,
+      hasUpstream: true,
+      hasConflicts: false,
+      staged: [{ path: 'staged.md', status: 'M' }],
+      unstaged: [],
+      untracked: []
+    }
+
+    const discardAllSpy = vi.fn(async () => gitState)
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki',
+        workspaces: {
+          'C:\\wiki': {
+            'staged.md': '# Staged',
+            'a.md': '# A',
+            'u.md': '<<<<<<< HEAD\na\n=======\nb\n>>>>>>> other',
+            'd1.md': '# Draft 1',
+            'd2.md': '# Draft 2',
+            'd3.md': '# Draft 3'
+          }
+        },
+        git: {
+          status: async () => gitState,
+          discardAll: discardAllSpy,
+          pull: () =>
+            new Promise<GitStatus>((resolve) => {
+              resolvePendingPull = resolve
+            })
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const rendered = render(<App wikiApi={mainWin.api} />)
+    activeDisposers.push(() => rendered.unmount())
+
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+    await within(rendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(within(rendered.container).getByRole('button', { name: 'Git' }))
+    const gitPanel = await within(rendered.container).findByLabelText('Git 소스 제어')
+
+    // 1. 0 unstaged/untracked changes (even with staged files) -> 전체 ↶ disabled & absent from 스테이지됨
+    const stagedSection = within(gitPanel)
+      .getByText('스테이지됨 (1)')
+      .closest('.git-section') as HTMLElement
+    expect(within(stagedSection).queryByRole('button', { name: '전체 변경 사항 롤백' })).toBeNull()
+
+    const discardAllBtn = within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' })
+    const stageAllBtn = within(gitPanel).getByRole('button', { name: '전체 Stage' })
+    expect(discardAllBtn).toHaveAttribute('title', '전체 변경 사항 롤백')
+    expect(discardAllBtn).toHaveTextContent('전체 ↶')
+    expect(discardAllBtn).toBeDisabled()
+    expect(
+      Boolean(discardAllBtn.compareDocumentPosition(stageAllBtn) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ).toBe(true)
+
+    // 2. Tracked-only (M + U = 2) -> danger dialog shows tracked count & irreversible warning without trash text
+    gitState = {
+      ...gitState,
+      hasConflicts: true,
+      unstaged: [
+        { path: 'a.md', status: 'M' },
+        { path: 'u.md', status: 'U' }
+      ],
+      untracked: []
+    }
+    await user.click(within(gitPanel).getByRole('button', { name: 'Git 상태 새로고침' }))
+    await waitFor(() => {
+      expect(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' })).toBeEnabled()
+    })
+
+    await user.click(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' }))
+    let dialog = await within(rendered.container).findByRole('alertdialog')
+    expect(within(dialog).getAllByRole('button')).toHaveLength(2)
+    expect(dialog).toHaveTextContent('2')
+    expect(dialog).toHaveTextContent(/복구/)
+    expect(dialog).not.toHaveTextContent(/휴지통/)
+    let confirmBtn = within(dialog).getByRole('button', { name: '전체 롤백' })
+    expect(confirmBtn).toHaveClass('btn-danger')
+    expect(confirmBtn).not.toHaveClass('btn-primary')
+    await user.click(within(dialog).getByRole('button', { name: '취소' }))
+    expect(within(rendered.container).queryByRole('alertdialog')).toBeNull()
+    expect(discardAllSpy).not.toHaveBeenCalled()
+
+    // 3. Untracked-only (3) -> danger dialog shows untracked count & OS trash notice without irreversible warning
+    gitState = {
+      ...gitState,
+      hasConflicts: false,
+      unstaged: [],
+      untracked: [
+        { path: 'd1.md', status: '?' },
+        { path: 'd2.md', status: '?' },
+        { path: 'd3.md', status: '?' }
+      ]
+    }
+    await user.click(within(gitPanel).getByRole('button', { name: 'Git 상태 새로고침' }))
+    await waitFor(() => {
+      expect(within(gitPanel).getByText('변경 사항 (3)')).toBeInTheDocument()
+    })
+
+    await user.click(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' }))
+    dialog = await within(rendered.container).findByRole('alertdialog')
+    expect(within(dialog).getAllByRole('button')).toHaveLength(2)
+    expect(dialog).toHaveTextContent('3')
+    expect(dialog).toHaveTextContent(/휴지통/)
+    expect(dialog).not.toHaveTextContent(/복구/)
+    confirmBtn = within(dialog).getByRole('button', { name: '전체 롤백' })
+    expect(confirmBtn).toHaveClass('btn-danger')
+    await user.click(within(dialog).getByRole('button', { name: '취소' }))
+    expect(discardAllSpy).not.toHaveBeenCalled()
+
+    // 4. Mixed tracked (2) + untracked (3) = total 5 -> shows total 5, tracked 2 (복구 불가), untracked 3 (휴지통)
+    gitState = {
+      ...gitState,
+      hasConflicts: true,
+      unstaged: [
+        { path: 'a.md', status: 'M' },
+        { path: 'u.md', status: 'U' }
+      ],
+      untracked: [
+        { path: 'd1.md', status: '?' },
+        { path: 'd2.md', status: '?' },
+        { path: 'd3.md', status: '?' }
+      ]
+    }
+    await user.click(within(gitPanel).getByRole('button', { name: 'Git 상태 새로고침' }))
+    await waitFor(() => {
+      expect(within(gitPanel).getByText('변경 사항 (5)')).toBeInTheDocument()
+    })
+
+    await user.click(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' }))
+    dialog = await within(rendered.container).findByRole('alertdialog')
+    expect(within(dialog).getAllByRole('button')).toHaveLength(2)
+    expect(dialog).toHaveTextContent('5')
+    expect(dialog).toHaveTextContent('2')
+    expect(dialog).toHaveTextContent('3')
+    expect(dialog).toHaveTextContent(/복구/)
+    expect(dialog).toHaveTextContent(/휴지통/)
+    expect(within(dialog).getByRole('button', { name: '전체 롤백' })).toHaveClass('btn-danger')
+    await user.click(within(dialog).getByRole('button', { name: '취소' }))
+    expect(discardAllSpy).not.toHaveBeenCalled()
+
+    // 5. Disabled while another Git action is running
+    await user.click(within(gitPanel).getByRole('button', { name: 'Pull' }))
+    await waitFor(() => {
+      expect(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' })).toBeDisabled()
+    })
+    resolvePendingPull!(gitState)
+    await waitFor(() => {
+      expect(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' })).toBeEnabled()
+    })
+  })
+
+  it('executes discardAll with target-only dirty prompts, cross-window sync/tab-closing, closing all unstaged diffs across panes while preserving staged/commit diffs, and updating tree & badge', async () => {
+    const user = userEvent.setup()
+    const repoRoot = 'C:/repo'
+    const workspaceRoot = 'C:/repo/wiki'
+    let mainWorkspaceApi: InMemoryWindowHandle['api']['workspace'] | null = null
+    let emitWsChange: ((event: WorkspaceChangeEvent) => void) | null = null
+    let discardAllDelayMs = 0
+
+    const headContents: Record<string, string> = {
+      'wiki/notes.md': '# Head Notes',
+      'wiki/deleted.md': '# Head Deleted',
+      'wiki/conflict.md': '# Head Conflict'
+    }
+    let gitState: GitStatus = {
+      isRepo: true,
+      repoRoot,
+      branch: 'main',
+      isDetached: false,
+      isUnborn: false,
+      ahead: 0,
+      behind: 0,
+      hasUpstream: false,
+      hasConflicts: true,
+      staged: [{ path: 'wiki/staged.md', status: 'M' }],
+      unstaged: [
+        { path: 'wiki/notes.md', status: 'M' },
+        { path: 'wiki/deleted.md', status: 'D' },
+        { path: 'wiki/conflict.md', status: 'U' }
+      ],
+      untracked: [{ path: 'wiki/draft.md', status: '?' }]
+    }
+
+    const discardAllSpy = vi.fn(async () => {
+      if (discardAllDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, discardAllDelayMs))
+      }
+      for (const item of gitState.unstaged) {
+        const absPath = `${repoRoot}/${item.path}`
+        if (item.path in headContents) {
+          await mainWorkspaceApi?.writeFile(absPath, headContents[item.path])
+        } else {
+          await mainWorkspaceApi?.deleteEntry(absPath).catch(() => undefined)
+        }
+        const wsRel = item.path.startsWith('wiki/') ? item.path.slice('wiki/'.length) : item.path
+        emitWsChange?.({ rootPath: workspaceRoot, eventType: 'change', relativePath: wsRel })
+      }
+      for (const item of gitState.untracked) {
+        const absPath = `${repoRoot}/${item.path}`
+        await mainWorkspaceApi?.deleteEntry(absPath).catch(() => undefined)
+        const wsRel = item.path.startsWith('wiki/') ? item.path.slice('wiki/'.length) : item.path
+        emitWsChange?.({ rootPath: workspaceRoot, eventType: 'unlink', relativePath: wsRel })
+      }
+      gitState = {
+        ...gitState,
+        hasConflicts: false,
+        unstaged: [],
+        untracked: []
+      }
+      return gitState
+    })
+
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, autoSaveDelayMs: 500, theme: 'light' },
+      {
+        selectedFolder: 'C:\\repo\\wiki',
+        workspaces: {
+          'C:\\repo\\wiki': {
+            'notes.md': '# Worktree Notes',
+            'conflict.md': '<<<<<<< HEAD\n# Head Conflict\n=======\n# Theirs\n>>>>>>> other',
+            'draft.md': '# Untracked Draft',
+            'other.md': '# Clean Other',
+            'staged.md': '# Staged Doc'
+          }
+        },
+        git: {
+          status: async () => gitState,
+          discardAll: discardAllSpy,
+          log: async () => ({
+            commits: [
+              {
+                hash: 'abcdef1234567890',
+                shortHash: 'abcdef1',
+                parents: [],
+                refs: [],
+                subject: 'Initial commit',
+                authorName: 'Tester',
+                committedAt: '2026-11-16T00:00:00Z'
+              }
+            ],
+            hasMore: false
+          }),
+          commitDetail: async () => ({
+            hash: 'abcdef1234567890',
+            shortHash: 'abcdef1',
+            parents: [],
+            subject: 'Initial commit',
+            body: '',
+            authorName: 'Tester',
+            authorEmail: 'test@example.com',
+            committedAt: '2026-11-16T00:00:00Z',
+            files: [{ path: 'wiki/notes.md', status: 'M' }]
+          }),
+          diff: async (_wsPath: string, request: GitDiffRequest) => ({
+            path: request.path,
+            status: request.status,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: `diff --git a/${request.path} b/${request.path}\n@@ -1 +1 @@\n-old\n+new`
+          })
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+    emitWsChange = harness.emitWorkspaceChange
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    mainWorkspaceApi = mainWin.api.workspace
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    activeDisposers.push(() => mainRendered.unmount())
+
+    // Open notes.md (also detached to Aux1), draft.md (detached to Aux2), staged.md (dirty non-target), other.md (dirty non-target), config.json (dirty non-target)
+    await openFolderAndNoteInWindow(
+      user,
+      mainRendered.container,
+      mainWin.emitMenuCommand,
+      'notes.md'
+    )
+    await detachTabViaContextMenu(user, mainRendered.container, /notes\.md/)
+    const explorer = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('notes.md'))
+    await user.click(await within(explorer).findByText('draft.md'))
+    await detachTabViaContextMenu(user, mainRendered.container, /draft\.md/)
+    await user.click(await within(explorer).findByText('draft.md'))
+
+    for (const [fileName, dirtyText] of [
+      ['other.md', '# Dirty Other'],
+      ['staged.md', '# Dirty Staged Only']
+    ] as const) {
+      await user.click(await within(explorer).findByText(fileName))
+      await waitFor(() => {
+        expect(within(mainRendered.container).getByRole('tab', { name: new RegExp(fileName) })).toHaveAttribute(
+          'aria-selected',
+          'true'
+        )
+      })
+      setRawEditorText(within(mainRendered.container).getByTestId('document-editor'), dirtyText)
+    }
+
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'toggle-settings')
+    await user.click(
+      await within(mainRendered.container).findByRole('button', { name: '설정 파일 직접 열기' })
+    )
+    await within(mainRendered.container).findByRole('tab', { name: /config\.json/ })
+    await waitFor(() => {
+      expect(getRawEditorText(within(mainRendered.container).getByTestId('document-editor'))).toContain(
+        '"autoSave"'
+      )
+    })
+    setRawEditorText(
+      within(mainRendered.container).getByTestId('document-editor'),
+      '{"autoSave":false,"theme":"dark"}'
+    )
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+    })
+    const [auxNotes, auxDraft] = harness.getAuxiliaryWindows()
+    const auxNotesRendered = render(<App wikiApi={auxNotes.api} />)
+    const auxDraftRendered = render(<App wikiApi={auxDraft.api} />)
+    activeDisposers.push(
+      () => auxNotesRendered.unmount(),
+      () => auxDraftRendered.unmount()
+    )
+
+    // Phase 1: Target notes.md is dirty; Primary has unstaged(wiki/notes.md), Secondary has staged(wiki/staged.md) + unstaged(wiki/draft.md)
+    setRawEditorText(
+      await within(auxNotesRendered.container).findByTestId('document-editor'),
+      '# Aux Dirty Notes For Save'
+    )
+
+    await user.click(within(mainRendered.container).getByRole('button', { name: 'Git' }))
+    const gitPanel = await within(mainRendered.container).findByLabelText('Git 소스 제어')
+    expect(within(mainRendered.container).getByRole('button', { name: 'Git' })).toHaveTextContent('5')
+
+    const stagedSection = within(gitPanel)
+      .getByText('스테이지됨 (1)')
+      .closest('.git-section') as HTMLElement
+    const changesSection = within(gitPanel)
+      .getByText('변경 사항 (4)')
+      .closest('.git-section') as HTMLElement
+
+    // Open staged(wiki/staged.md) in Primary and move to Secondary, then open unstaged(wiki/draft.md) in Primary and duplicate to Secondary, then open unstaged(wiki/notes.md) in Primary
+    await user.click(within(stagedSection).getByText('wiki/staged.md'))
+    const primaryPane = within(mainRendered.container).getByTestId('pane-primary')
+    await within(primaryPane).findByText('Staged')
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { selected: true }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
+        'menuitem',
+        { name: '분할 영역으로 이동' }
+      )
+    )
+    const secondaryPane = await within(mainRendered.container).findByTestId('pane-secondary')
+
+    fireEvent.mouseDown(primaryPane)
+    await user.click(within(changesSection).getByText('wiki/draft.md'))
+    await within(primaryPane).findByText('Working Tree')
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { selected: true }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
+        'menuitem',
+        { name: '분할 영역에 복제 열기' }
+      )
+    )
+    expect(within(secondaryPane).getByRole('tab', { name: /draft\.md/ })).toBeInTheDocument()
+    expect(within(secondaryPane).getByRole('tab', { name: /staged\.md/ })).toBeInTheDocument()
+
+    fireEvent.mouseDown(primaryPane)
+    await user.click(within(changesSection).getByText('wiki/notes.md'))
+    await within(primaryPane).findByText('Working Tree')
+
+    // Canceling at target-only dirty prompt aborts discardAll and keeps dirty edits intact
+    await user.click(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('alertdialog')).getByRole('button', {
+        name: '전체 롤백'
+      })
+    )
+    const dirtyCancelDialog = await within(mainRendered.container).findByRole('alertdialog')
+    expect(dirtyCancelDialog).toHaveTextContent(/notes\.md/)
+    expect(dirtyCancelDialog).not.toHaveTextContent(/other\.md|staged\.md|config\.json/)
+    await user.click(within(dirtyCancelDialog).getByRole('button', { name: '취소' }))
+    expect(discardAllSpy).not.toHaveBeenCalled()
+    expect(getRawEditorText(within(auxNotesRendered.container).getByTestId('document-editor'))).toBe(
+      '# Aux Dirty Notes For Save'
+    )
+
+    // Click 전체 ↶ -> danger confirm -> 전체 롤백 -> target-only dirty prompt (only notes.md, NOT other.md/staged.md/config.json) -> 저장 후 진행
+    await user.click(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' }))
+    const confirmDangerDialog = await within(mainRendered.container).findByRole('alertdialog')
+    expect(within(confirmDangerDialog).getByRole('button', { name: '전체 롤백' })).toHaveClass(
+      'btn-danger'
+    )
+    await user.click(within(confirmDangerDialog).getByRole('button', { name: '전체 롤백' }))
+
+    const dirtySaveDialog = await within(mainRendered.container).findByRole('alertdialog')
+    expect(dirtySaveDialog).toHaveTextContent(/notes\.md/)
+    expect(dirtySaveDialog).not.toHaveTextContent(/other\.md|staged\.md|config\.json/)
+    await user.click(within(dirtySaveDialog).getByRole('button', { name: '저장 후 진행' }))
+
+    await waitFor(() => {
+      expect(discardAllSpy).toHaveBeenCalledTimes(1)
+      expect(auxDraft.isClosed()).toBe(true)
+    })
+    // Both unstaged diffs across primary & secondary closed; staged diff in secondary remained open
+    expect(within(primaryPane).queryByText('Working Tree')).toBeNull()
+    expect(within(secondaryPane).queryByRole('tab', { name: /draft\.md/ })).toBeNull()
+    expect(within(secondaryPane).getByRole('tab', { name: /staged\.md/ })).toBeInTheDocument()
+    // Restored notes.md synced cleanly across Main and Aux1; non-target dirty buffers preserved unsaved on disk
+    expect(getRawEditorText(within(auxNotesRendered.container).getByTestId('document-editor'))).toBe(
+      '# Head Notes'
+    )
+    expect(harness.getFilesSnapshot().get('C:/repo/wiki/other.md')).toBe('# Clean Other')
+    expect(harness.getFilesSnapshot().get('C:/repo/wiki/staged.md')).toBe('# Staged Doc')
+    expect(within(mainRendered.container).getByRole('button', { name: 'Git' })).toHaveTextContent('1')
+
+    // Phase 2: Re-enable autoSave + slow discardAll (650ms > 500ms) with 저장 없이 진행; commit diff in Primary & sole unstaged diff in Secondary
+    await mainWin.api.config.update({ autoSave: true, autoSaveDelayMs: 500 })
+    discardAllDelayMs = 650
+    gitState = {
+      ...gitState,
+      unstaged: [{ path: 'wiki/notes.md', status: 'M' }]
+    }
+    await user.click(within(gitPanel).getByRole('button', { name: 'Git 상태 새로고침' }))
+    await waitFor(() => {
+      expect(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' })).toBeEnabled()
+    })
+
+    // Replace secondary staged diff with unstaged(wiki/notes.md), and open commit diff in primary
+    fireEvent.mouseDown(secondaryPane)
+    await user.click(within(changesSection).getByText('wiki/notes.md'))
+    expect(await within(secondaryPane).findByText('Working Tree')).toBeInTheDocument()
+
+    fireEvent.mouseDown(primaryPane)
+    const graphSection = within(gitPanel).getByRole('region', { name: 'Graph' })
+    await user.click(within(graphSection).getByRole('button', { name: /Initial commit/ }))
+    await user.click(await within(graphSection).findByRole('button', { name: /wiki\/notes\.md/ }))
+    expect(await within(primaryPane).findByText('Commit abcdef1')).toBeInTheDocument()
+
+    // Re-dirty notes.md in Aux1 -> 전체 ↶ -> 전체 롤백 -> 저장 없이 진행
+    setRawEditorText(
+      within(auxNotesRendered.container).getByTestId('document-editor'),
+      '# Aux Dirty Discard Skip'
+    )
+    await waitFor(() => {
+      expect(within(auxNotesRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+
+    await user.click(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' }))
+    const phase2Danger = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(phase2Danger).getByRole('button', { name: '전체 롤백' }))
+    const phase2Dirty = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(phase2Dirty).getByRole('button', { name: '저장 없이 진행' }))
+
+    await waitFor(() => {
+      expect(discardAllSpy).toHaveBeenCalledTimes(2)
+      expect(within(mainRendered.container).queryByTestId('pane-secondary')).toBeNull()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 550))
+    expect(harness.getFilesSnapshot().get('C:/repo/wiki/notes.md')).toBe('# Head Notes')
+    expect(getRawEditorText(within(auxNotesRendered.container).getByTestId('document-editor'))).toBe(
+      '# Head Notes'
+    )
+    expect(within(auxNotesRendered.container).queryByTestId('dirty-indicator')).toBeNull()
+    expect(within(auxNotesRendered.container).queryByText(/외부에서 변경/)).not.toBeInTheDocument()
+    expect(within(primaryPane).getByRole('tab', { name: /notes\.md \(abcdef1\)/ })).toBeInTheDocument()
+    expect(within(mainRendered.container).getByRole('button', { name: 'Git' })).toHaveTextContent('1')
+
+    // Explorer tree reflects restored deleted.md and removed draft.md
+    await user.click(within(mainRendered.container).getByRole('button', { name: '탐색기' }))
+    const refreshedExplorer = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
+    expect(within(refreshedExplorer).getByText('deleted.md')).toBeInTheDocument()
+    expect(within(refreshedExplorer).queryByText('draft.md')).toBeNull()
+  })
 })

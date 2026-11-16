@@ -577,4 +577,49 @@ describe('PaneTabStore', () => {
     expect(afterSecond.panes.secondary.tabs).toHaveLength(0)
     expect(afterSecond.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id, commitTab.id])
   })
+
+  it('closeAllUnstagedDiffTabs closes all unstaged diff tabs across both panes while preserving staged, commit, and document tabs', () => {
+    const store = new PaneTabStore()
+    const docTab = store.openTab('c:/wiki/docs/a.md')
+    const primaryUnstaged = store.openDiffTab({ kind: 'unstaged', path: 'docs/a.md', status: 'M' })
+    const secondaryUnstaged = store.openDiffTab(
+      { kind: 'unstaged', path: 'docs/b.md', status: '?' },
+      { paneId: 'secondary' }
+    )
+    const stagedTab = store.openDiffTab(
+      { kind: 'staged', path: 'docs/a.md', status: 'M' },
+      { paneId: 'secondary' }
+    )
+    expect(store.getSnapshot().splitMode).toBe('horizontal')
+    expect(primaryUnstaged.id).not.toBe(secondaryUnstaged.id)
+
+    store.closeAllUnstagedDiffTabs()
+
+    const afterFirst = store.getSnapshot()
+    expect(afterFirst.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id])
+    expect(afterFirst.panes.secondary.tabs.map((t) => t.id)).toEqual([stagedTab.id])
+    expect(afterFirst.splitMode).toBe('horizontal')
+
+    // Reopen an unstaged diff in secondary after closing stagedTab, and keep commit tab in primary
+    store.closeTab('secondary', stagedTab.id)
+    const commitTab = store.openDiffTab(
+      {
+        kind: 'commit',
+        commitHash: '1234567890abcdef',
+        shortHash: '1234567',
+        path: 'docs/c.md',
+        status: 'M'
+      },
+      { paneId: 'primary' }
+    )
+    store.openDiffTab({ kind: 'unstaged', path: 'docs/c.md', status: 'D' }, { paneId: 'secondary' })
+    expect(store.getSnapshot().splitMode).toBe('horizontal')
+
+    store.closeAllUnstagedDiffTabs()
+
+    const afterSecond = store.getSnapshot()
+    expect(afterSecond.splitMode).toBe('single')
+    expect(afterSecond.panes.secondary.tabs).toHaveLength(0)
+    expect(afterSecond.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id, commitTab.id])
+  })
 })

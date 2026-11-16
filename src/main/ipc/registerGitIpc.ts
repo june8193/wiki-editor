@@ -70,6 +70,7 @@ export function registerGitIpc({
         gitService.discard(rootPath, paths)
       )
     ],
+    [GIT_IPC_CHANNELS.discardAll, withWorkspace((rootPath) => gitService.discardAll(rootPath))],
     [
       GIT_IPC_CHANNELS.commit,
       withWorkspace<[string], Awaited<ReturnType<GitService['commit']>>>((rootPath, message) =>

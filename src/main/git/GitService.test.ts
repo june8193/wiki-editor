@@ -1383,6 +1383,130 @@ describe('GitService integration (isolated temp repos)', () => {
       expect(await readFile(linkTargetPath, 'utf8')).toBe('# Keep Target\n')
     }
   }, 30_000)
+
+  it('discardsAll across M/D, U (HEAD/--ours), and ? (via trashItem/fallback) while preserving staged changes and remaining idempotent when clean', async () => {
+    await expect(service.discardAll(nonGitDir)).rejects.toThrow(/Git 저장소가 아닙니다/)
+
+    await service.init(repoDir)
+    await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
+    await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
+    const realRepoDir = await realpath(repoDir)
+
+    // 1. Clean unborn repo is idempotent
+    let status = await service.discardAll(repoDir)
+    expect(status.isUnborn).toBe(true)
+    expect(status.unstaged).toEqual([])
+    expect(status.untracked).toEqual([])
+
+    // Seed unborn staged file + unstaged modification -> discardAll restores from Index while preserving staged A
+    await writeFile(join(repoDir, 'unborn-staged.md'), '# Unborn staged\n', 'utf8')
+    await service.stage(repoDir, ['unborn-staged.md'])
+    await writeFile(join(repoDir, 'unborn-staged.md'), '# Unborn unstaged edit\n', 'utf8')
+    status = await service.discardAll(repoDir)
+    expect(status.unstaged).toEqual([])
+    expect(status.staged).toEqual([{ path: 'unborn-staged.md', status: 'A' }])
+    expect(await readFile(join(repoDir, 'unborn-staged.md'), 'utf8')).toBe('# Unborn staged\n')
+
+    // 2. Clean staged-only repo (with commit history) is idempotent
+    await writeFile(join(repoDir, 'mod.md'), '# Mod v1\n', 'utf8')
+    await writeFile(join(repoDir, 'nested', 'del.md'), '# Del v1\n', 'utf8').catch(async () => {
+      await mkdir(join(repoDir, 'nested'), { recursive: true })
+      await writeFile(join(repoDir, 'nested', 'del.md'), '# Del v1\n', 'utf8')
+    })
+    await writeFile(join(repoDir, 'mm.md'), '# MM v1\n', 'utf8')
+    await writeFile(join(repoDir, 'conflict-both.md'), 'base\n', 'utf8')
+    await writeFile(join(repoDir, 'base-ua.md'), 'ua line 1\nua line 2\nua line 3\n', 'utf8')
+    await writeFile(join(repoDir, 'staged-clean.md'), '# Staged clean v1\n', 'utf8')
+    await mkdir(join(repoDir, 'subws'), { recursive: true })
+    await writeFile(join(repoDir, 'subws', 'sub-mod.md'), '# Sub v1\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'base commit')
+
+    // Branch with UA conflict candidate and UU conflict candidate
+    await runGit(repoDir, ['checkout', '-b', 'theirs'])
+    await writeFile(join(repoDir, 'conflict-both.md'), 'theirs conflict\n', 'utf8')
+    await runGit(repoDir, ['mv', 'base-ua.md', 'theirs-ua.md'])
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'theirs commit')
+
+    await runGit(repoDir, ['checkout', 'main'])
+    await writeFile(join(repoDir, 'conflict-both.md'), 'ours conflict\n', 'utf8')
+    await runGit(repoDir, ['mv', 'base-ua.md', 'ours-au.md'])
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'ours commit')
+
+    // Staged-only clean check before creating conflicts
+    await writeFile(join(repoDir, 'staged-clean.md'), '# Staged clean v2\n', 'utf8')
+    await service.stage(repoDir, ['staged-clean.md'])
+    status = await service.discardAll(repoDir)
+    expect(status.staged).toEqual([{ path: 'staged-clean.md', status: 'M' }])
+    expect(status.unstaged).toEqual([])
+    expect(status.untracked).toEqual([])
+    expect(await readFile(join(repoDir, 'staged-clean.md'), 'utf8')).toBe('# Staged clean v2\n')
+
+    // Commit staged-clean first so merge can start cleanly, then stage it again post-conflict
+    await service.commit(repoDir, 'commit staged clean')
+    await expect(runGit(repoDir, ['merge', 'theirs'])).rejects.toThrow()
+
+    // Now mix U (UU + UA), M, D (deleted directory), MM (staged + unstaged), staged-only, and ? (in subws + nested)
+    await writeFile(join(repoDir, 'staged-clean.md'), '# Staged clean v3\n', 'utf8')
+    await writeFile(join(repoDir, 'mm.md'), '# MM staged v2\n', 'utf8')
+    await service.stage(repoDir, ['staged-clean.md', 'mm.md'])
+    await writeFile(join(repoDir, 'mm.md'), '# MM unstaged v3\n', 'utf8')
+    await writeFile(join(repoDir, 'mod.md'), '# Mod dirty\n', 'utf8')
+    await rm(join(repoDir, 'nested'), { recursive: true, force: true })
+    await writeFile(join(repoDir, 'subws', 'sub-mod.md'), '# Sub dirty\n', 'utf8')
+    await writeFile(join(repoDir, 'subws', 'untracked.md'), '# Sub untracked\n', 'utf8')
+    await mkdir(join(repoDir, 'untracked-dir'), { recursive: true })
+    await writeFile(join(repoDir, 'untracked-dir', 'draft.md'), '# Draft\n', 'utf8')
+
+    const trashedPaths: string[] = []
+    const trashService = new GitService({
+      trashItem: async (targetPath: string) => {
+        trashedPaths.push(targetPath)
+        await rm(targetPath, { recursive: true, force: true })
+      },
+      env: {
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: gitConfigFile
+      }
+    })
+
+    status = await trashService.discardAll(join(repoDir, 'subws'))
+    expect(status.hasConflicts).toBe(false)
+    expect(status.unstaged).toEqual([])
+    expect(status.untracked).toEqual([])
+    expect(status.staged.map((f) => `${f.status}:${f.path}`).sort()).toEqual([
+      'M:mm.md',
+      'M:staged-clean.md'
+    ])
+
+    expect(await readFile(join(repoDir, 'mod.md'), 'utf8')).toBe('# Mod v1\n')
+    expect(await readFile(join(repoDir, 'nested', 'del.md'), 'utf8')).toBe('# Del v1\n')
+    expect(await readFile(join(repoDir, 'mm.md'), 'utf8')).toBe('# MM staged v2\n')
+    expect(await readFile(join(repoDir, 'staged-clean.md'), 'utf8')).toBe('# Staged clean v3\n')
+    expect(await readFile(join(repoDir, 'subws', 'sub-mod.md'), 'utf8')).toBe('# Sub v1\n')
+    expect(await readFile(join(repoDir, 'conflict-both.md'), 'utf8')).toBe('ours conflict\n')
+    expect(await readFile(join(repoDir, 'ours-au.md'), 'utf8')).toBe(
+      'ua line 1\nua line 2\nua line 3\n'
+    )
+    await expect(lstat(join(repoDir, 'theirs-ua.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(lstat(join(repoDir, 'base-ua.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(trashedPaths.sort()).toEqual(
+      [join(realRepoDir, 'subws', 'untracked.md'), join(realRepoDir, 'untracked-dir', 'draft.md')].sort()
+    )
+
+    // 3. Fallback deletion without trashItem + idempotent second call
+    await writeFile(join(repoDir, 'fallback.md'), '# Fallback\n', 'utf8')
+    status = await service.discardAll(repoDir)
+    expect(status.unstaged).toEqual([])
+    expect(status.untracked).toEqual([])
+    await expect(lstat(join(repoDir, 'fallback.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const idempotent = await service.discardAll(repoDir)
+    expect(idempotent.unstaged).toEqual([])
+    expect(idempotent.untracked).toEqual([])
+  }, 30_000)
 })
 
 describe('GitService helpers (unit)', () => {

@@ -207,6 +207,7 @@ export function EditorWindowFrame({
           title={pendingDialog.title}
           message={pendingDialog.message}
           confirmLabel={pendingDialog.confirmLabel}
+          confirmTone={pendingDialog.confirmTone}
           secondaryLabel={pendingDialog.secondaryLabel}
           onConfirm={() => void pendingDialog.onConfirm()}
           onSecondary={

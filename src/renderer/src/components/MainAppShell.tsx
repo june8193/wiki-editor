@@ -21,7 +21,7 @@ import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
 import { useWindowWidth } from '../hooks/useWindowWidth'
 import { useWorkspaceTree } from '../hooks/useWorkspaceTree'
-import { getGitFileBaseName } from '../utils/gitFilePresentation'
+import { buildDiscardAllConfirmMessage, getGitFileBaseName } from '../utils/gitFilePresentation'
 import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
@@ -267,6 +267,7 @@ export function MainAppShell() {
     ensureAllWorkspaceBuffersSaved,
     getDirtyWorkspaceSummary,
     closeUnstagedDiffTabsForPaths,
+    closeAllUnstagedDiffTabs,
     prepareWorkspacePathsForDiscard,
     finishWorkspacePathsDiscard
   } = editor
@@ -344,7 +345,11 @@ export function MainAppShell() {
   )
 
   const handleAfterWorkspaceDiscard = useCallback(
-    async (targetRepoPaths: readonly string[], succeeded: boolean): Promise<void> => {
+    async (
+      targetRepoPaths: readonly string[],
+      succeeded: boolean,
+      isDiscardAll = false
+    ): Promise<void> => {
       const targetPaths =
         activeDiscardTargetPathsRef.current ?? resolveTargetWorkspacePaths(targetRepoPaths)
       activeDiscardTargetPathsRef.current = null
@@ -352,11 +357,16 @@ export function MainAppShell() {
         await finishWorkspacePathsDiscard(targetPaths, succeeded)
       }
       if (succeeded) {
-        closeUnstagedDiffTabsForPaths(targetRepoPaths)
+        if (isDiscardAll) {
+          closeAllUnstagedDiffTabs()
+        } else {
+          closeUnstagedDiffTabsForPaths(targetRepoPaths)
+        }
         await refreshTree()
       }
     },
     [
+      closeAllUnstagedDiffTabs,
       closeUnstagedDiffTabsForPaths,
       finishWorkspacePathsDiscard,
       refreshTree,
@@ -379,6 +389,27 @@ export function MainAppShell() {
   })
   activeGitRepoRootRef.current = git.status?.repoRoot ?? null
   refreshGitStatusRef.current = git.refreshStatus
+
+  const handleRequestDiscardAll = useCallback((): void => {
+    if (isDialogOpenRef.current || git.pendingAction !== null || !git.status?.isRepo) {
+      return
+    }
+    const trackedCount = git.status.unstaged.length
+    const untrackedCount = git.status.untracked.length
+    if (trackedCount === 0 && untrackedCount === 0) {
+      return
+    }
+    setPendingDialog({
+      title: '전체 변경 사항 롤백',
+      message: buildDiscardAllConfirmMessage(trackedCount, untrackedCount),
+      confirmLabel: '전체 롤백',
+      confirmTone: 'danger',
+      onConfirm: () => {
+        setPendingDialog(null)
+        void git.discardAll()
+      }
+    })
+  }, [git.discardAll, git.pendingAction, git.status, isDialogOpenRef, setPendingDialog])
 
   const guardUnsavedWorkspaceChanges = useCallback(
     (proceed: () => Promise<unknown>): void => {
@@ -614,6 +645,7 @@ export function MainAppShell() {
                 onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
                 onUnstageAll={() => void git.unstageAll()}
                 onDiscardFile={(path) => void git.discardFile(path)}
+                onDiscardAll={handleRequestDiscardAll}
                 onCommit={git.commit}
                 onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
                 onPull={() => void git.pull()}

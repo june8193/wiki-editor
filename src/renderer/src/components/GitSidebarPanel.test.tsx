@@ -56,6 +56,7 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onUnstageFile: vi.fn(),
     onUnstageAll: vi.fn(),
     onDiscardFile: vi.fn(),
+    onDiscardAll: vi.fn(),
     onCommit: vi.fn(),
     onCheckoutBranch: vi.fn(),
     onPull: vi.fn(),
@@ -994,5 +995,72 @@ describe('GitSidebarPanel', () => {
     expect(
       within(region).getByRole('button', { name: 'notes.md 변경 사항 롤백' })
     ).toBeDisabled()
+  })
+
+  it('renders permanent 전체 ↶ button left of 전체 + only in 변경 사항 header, disables when empty or busy, and triggers onDiscardAll', async () => {
+    const user = userEvent.setup()
+    const onDiscardAll = vi.fn()
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [{ path: 'staged.md', status: 'M' }],
+            unstaged: [{ path: 'modified.md', status: 'M' }],
+            untracked: [{ path: 'draft.md', status: '?' }]
+          }),
+          onDiscardAll
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const discardAllButtons = within(region).getAllByRole('button', {
+      name: '전체 변경 사항 롤백'
+    })
+    expect(discardAllButtons).toHaveLength(1)
+
+    const discardAllBtn = discardAllButtons[0]
+    const stageAllBtn = within(region).getByRole('button', { name: '전체 Stage' })
+    const stagedSection = within(region).getByText('스테이지됨 (1)').closest('.git-section') as HTMLElement
+    expect(
+      within(stagedSection).queryByRole('button', { name: '전체 변경 사항 롤백' })
+    ).not.toBeInTheDocument()
+
+    expect(discardAllBtn).toHaveAttribute('title', '전체 변경 사항 롤백')
+    expect(discardAllBtn).toHaveTextContent('전체 ↶')
+    expect(discardAllBtn).toBeEnabled()
+    expect(
+      discardAllBtn.compareDocumentPosition(stageAllBtn) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    await user.click(discardAllBtn)
+    expect(onDiscardAll).toHaveBeenCalledTimes(1)
+
+    // Disabled when 변경 사항 has 0 files even if 스테이지됨 is non-empty
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [{ path: 'staged.md', status: 'M' }],
+            unstaged: [],
+            untracked: []
+          }),
+          onDiscardAll
+        })}
+      />
+    )
+    expect(within(region).getByRole('button', { name: '전체 변경 사항 롤백' })).toBeDisabled()
+
+    // Disabled when busy
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          pendingAction: '전체 변경 사항 롤백',
+          onDiscardAll
+        })}
+      />
+    )
+    expect(within(region).getByRole('button', { name: '전체 변경 사항 롤백' })).toBeDisabled()
   })
 })

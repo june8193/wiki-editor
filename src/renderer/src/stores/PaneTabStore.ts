@@ -985,6 +985,10 @@ export class PaneTabStore {
     )
   }
 
+  closeAllUnstagedDiffTabs = (): void => {
+    this.removeTabsWhere((tab) => tab.kind === 'diff' && tab.diff.request.kind === 'unstaged')
+  }
+
   private removeTabsWhere(shouldRemove: (tab: TabItem) => boolean): void {
     const hadSecondaryTabs = this.state.panes.secondary.tabs.length > 0
 

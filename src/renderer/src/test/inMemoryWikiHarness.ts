@@ -804,6 +804,7 @@ export function createMultiWindowWikiHarness(
         unstage: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         unstageAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         discard: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+        discardAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         commit: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         branches: async () => ({ current: null, isDetached: false, branches: [] }),
         checkout: async (workspacePath) => createEmptyGitStatus(true, workspacePath),

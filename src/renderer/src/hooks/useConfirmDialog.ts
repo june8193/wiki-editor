@@ -1,10 +1,13 @@
 import { useCallback, useRef, useState } from 'react'
 import type { DirtyTabCloseRequest } from './useEditorWorkspace'
 
+export type ConfirmDialogTone = 'primary' | 'danger'
+
 export interface ConfirmDialogState {
   title: string
   message: string
   confirmLabel: string
+  confirmTone?: ConfirmDialogTone
   secondaryLabel?: string
   onConfirm: () => Promise<void> | void
   onSecondary?: () => Promise<void> | void

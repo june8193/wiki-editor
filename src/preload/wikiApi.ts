@@ -179,6 +179,8 @@ export function createWikiApi(
         ipcRenderer.invoke(GIT_IPC_CHANNELS.unstageAll, workspacePath) as Promise<GitStatus>,
       discard: (workspacePath, paths) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.discard, workspacePath, paths) as Promise<GitStatus>,
+      discardAll: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.discardAll, workspacePath) as Promise<GitStatus>,
       commit: (workspacePath, message) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.commit, workspacePath, message) as Promise<GitStatus>,
       branches: (workspacePath) =>

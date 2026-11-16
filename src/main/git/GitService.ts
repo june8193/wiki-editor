@@ -157,26 +157,81 @@ export class GitService {
       }
     }
 
-    try {
-      if (trackedRestorePaths.length > 0) {
-        await this.execGit(repoRoot, ['checkout', '-f', '--', ...trackedRestorePaths])
-      }
-      if (conflictPaths.length > 0) {
-        await this.discardConflictPaths(repoRoot, conflictPaths)
-      }
-    } catch (error) {
-      throw await this.formatAndLogGitError('discard', error)
-    }
-
-    for (const relPath of untrackedPaths) {
-      await this.discardUntrackedPath(repoRoot, relPath)
-    }
+    await this.executeDiscardTargets(repoRoot, 'discard', {
+      trackedRestorePaths,
+      conflictPaths,
+      untrackedPaths
+    })
 
     return this.statusForRepo(repoRoot)
   }
 
+  async discardAll(workspacePath: string): Promise<GitStatus> {
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const currentStatus = await this.statusForRepo(repoRoot)
+
+    const trackedRestorePaths: string[] = []
+    const conflictPaths: string[] = []
+    for (const item of currentStatus.unstaged) {
+      if (item.status === 'M' || item.status === 'D') {
+        trackedRestorePaths.push(item.path)
+      } else if (item.status === 'U') {
+        conflictPaths.push(item.path)
+      }
+    }
+    const untrackedPaths = currentStatus.untracked.map((item) => item.path)
+
+    if (
+      trackedRestorePaths.length === 0 &&
+      conflictPaths.length === 0 &&
+      untrackedPaths.length === 0
+    ) {
+      return currentStatus
+    }
+
+    await this.executeDiscardTargets(repoRoot, 'discardAll', {
+      trackedRestorePaths,
+      conflictPaths,
+      untrackedPaths
+    })
+
+    return this.statusForRepo(repoRoot)
+  }
+
+  private async executeDiscardTargets(
+    repoRoot: string,
+    operation: 'discard' | 'discardAll',
+    targets: {
+      trackedRestorePaths: readonly string[]
+      conflictPaths: readonly string[]
+      untrackedPaths: readonly string[]
+    }
+  ): Promise<void> {
+    try {
+      if (targets.trackedRestorePaths.length > 0) {
+        await this.execGit(repoRoot, ['checkout', '-f', '--', ...targets.trackedRestorePaths])
+      }
+      if (targets.conflictPaths.length > 0) {
+        await this.discardConflictPaths(repoRoot, targets.conflictPaths)
+      }
+    } catch (error) {
+      throw await this.formatAndLogGitError(operation, error)
+    }
+
+    for (const relPath of targets.untrackedPaths) {
+      await this.discardUntrackedPath(repoRoot, relPath)
+    }
+  }
+
   private async discardUntrackedPath(repoRoot: string, relPath: string): Promise<void> {
-    const targetPath = join(repoRoot, ...relPath.split('/'))
+    const segments = relPath.split('/').filter(Boolean)
+    const targetPath = resolve(repoRoot, ...segments)
+    if (!isPathInsideRoot(repoRoot, targetPath) || targetPath === repoRoot) {
+      throw new Error('워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.')
+    }
+    if (hasBlockedPathSegment(relative(repoRoot, targetPath), GIT_METADATA_NAMES)) {
+      throw new Error('시스템 .git 경로에는 접근할 수 없습니다.')
+    }
     try {
       await lstat(targetPath)
     } catch (error) {
