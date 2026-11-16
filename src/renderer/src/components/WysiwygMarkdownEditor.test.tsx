@@ -61,6 +61,18 @@ describe('WysiwygMarkdownEditor', () => {
     expect(onChangeContent).not.toHaveBeenCalled()
   })
 
+  it('disables native browser spellcheck on the WYSIWYG editor surface', () => {
+    render(
+      <WysiwygMarkdownEditor
+        content={'# Spellcheck Test\n\nSome identifierLikeText'}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+      />
+    )
+
+    expect(screen.getByTestId('document-editor')).toHaveAttribute('spellcheck', 'false')
+  })
+
   it('provides formatting toolbar actions and contextual table toolbar for row/column operations', async () => {
     const user = userEvent.setup()
     const onChangeContent = vi.fn()

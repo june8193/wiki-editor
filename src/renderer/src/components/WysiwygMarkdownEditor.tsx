@@ -309,7 +309,8 @@ export function WysiwygMarkdownEditor({
         attributes: {
           class: 'wysiwyg-prosemirror',
           'data-testid': 'document-editor',
-          'aria-label': '위지윅 문서 에디터'
+          'aria-label': '위지윅 문서 에디터',
+          spellcheck: 'false'
         },
         transformPastedHTML: sanitizeHtmlWithRehype,
         handlePaste: (view, event) => handleImagePaste(event, view),
