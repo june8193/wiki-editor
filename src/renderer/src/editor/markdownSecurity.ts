@@ -11,6 +11,10 @@ export function isSafeMarkdownUrl(url: string): boolean {
   return hasAllowedUriScheme(url, ALLOWED_URI_SCHEME_SET)
 }
 
+const baseCodeAttributes = (defaultSchema.attributes?.code ?? []).filter(
+  (attr) => attr !== 'className' && !(Array.isArray(attr) && attr[0] === 'className')
+)
+
 /**
  * Shared HTML sanitization policy for both Preview rendering and WYSIWYG HTML sanitization.
  */
@@ -19,7 +23,7 @@ export const MARKDOWN_SANITIZE_SCHEMA: SanitizeSchema = {
   strip: [...(defaultSchema.strip ?? ['script']), 'style', 'iframe', 'object', 'embed'],
   attributes: {
     ...defaultSchema.attributes,
-    code: [...(defaultSchema.attributes?.code ?? []), ['className', /^language-[\w-]+$/]],
+    code: [...baseCodeAttributes, ['className', /^language-[\w+#.-]+$/]],
     th: [...(defaultSchema.attributes?.th ?? []), 'align'],
     td: [...(defaultSchema.attributes?.td ?? []), 'align'],
     input: ['disabled', 'checked', ['type', 'checkbox']]

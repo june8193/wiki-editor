@@ -1,4 +1,7 @@
+import { createElement } from 'react'
+import { render, waitFor } from '@testing-library/react'
 import { Editor } from '@tiptap/core'
+import { EditorContent } from '@tiptap/react'
 import { buildWikiAssetUrl } from '@shared/assets'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -259,6 +262,78 @@ describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
     expect(exported).toContain('# Architecture')
     expect(exported).toContain('```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```')
     expect(exported).toContain('After diagram')
+  })
+
+  it('decorates code blocks with live syntax highlight spans, preserves untouched alias/custom fences, and updates decorations on language or code edits', async () => {
+    const sample = [
+      '```c',
+      'int main() {',
+      '  return 0;',
+      '}',
+      '```',
+      '',
+      '```py',
+      'def greet():',
+      '    return "hi"',
+      '```',
+      '',
+      '```kotlin',
+      'val answer = 42',
+      '```',
+      '',
+      '```ts',
+      'const value = 42',
+      '```'
+    ].join('\n')
+
+    const editor = createTestWysiwygEditor(sample)
+    render(createElement(EditorContent, { editor }))
+
+    await waitFor(() => {
+      expect(editor.view.dom.querySelectorAll('pre code')).toHaveLength(4)
+    })
+
+    // Alias and custom fence identifiers remain untouched on mount/roundtrip
+    const initialRoundtrip = editor.getMarkdown()
+    expect(initialRoundtrip).toContain('```py\ndef greet():\n    return "hi"\n```')
+    expect(initialRoundtrip).toContain('```kotlin\nval answer = 42\n```')
+
+    const codeEls = Array.from(editor.view.dom.querySelectorAll('pre code'))
+    expect(codeEls[0].querySelector('span.tok-type')).toHaveTextContent('int')
+    expect(codeEls[0].querySelector('span.tok-keyword')).toHaveTextContent('return')
+    expect(codeEls[1].querySelector('span.tok-keyword')).toHaveTextContent('def')
+    expect(codeEls[3].querySelector('span.tok-keyword')).toHaveTextContent('const')
+    expect(codeEls[3].querySelector('span.tok-number')).toHaveTextContent('42')
+
+    // Language attribute mutation to another non-null language updates highlight decorations
+    editor.commands.setTextSelection(findTextPos(editor, 'const value'))
+    expect(editor.commands.updateAttributes('codeBlock', { language: 'python' })).toBe(true)
+
+    await waitFor(() => {
+      const updatedCodeEls = Array.from(editor.view.dom.querySelectorAll('pre code'))
+      expect(updatedCodeEls[3].querySelector('span.tok-keyword')).toBeNull()
+    })
+
+    // Editing code text inside the python block dynamically applies Python syntax highlighting
+    const pythonTargetPos = findTextPos(editor, 'const value')
+    editor.commands.insertContentAt(pythonTargetPos - 1, 'def f(): return ')
+
+    await waitFor(() => {
+      const editedCodeEls = Array.from(editor.view.dom.querySelectorAll('pre code'))
+      expect(editedCodeEls[3].querySelector('span.tok-keyword')).toHaveTextContent('def')
+    })
+
+    // Clearing language removes decorations and serializes fence without info string
+    editor.commands.setTextSelection(findTextPos(editor, 'def f():'))
+    expect(editor.commands.updateAttributes('codeBlock', { language: null })).toBe(true)
+
+    await waitFor(() => {
+      const clearedCodeEls = Array.from(editor.view.dom.querySelectorAll('pre code'))
+      expect(clearedCodeEls[3].querySelectorAll('span')).toHaveLength(0)
+    })
+    expect(editor.getMarkdown()).toContain('```\ndef f(): return const value = 42\n```')
+
+    editor.destroy()
   })
 })
 

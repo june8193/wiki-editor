@@ -1,13 +1,20 @@
 import { RefObject, useEffect } from 'react'
 
+export interface UseDismissableOptions {
+  capture?: boolean
+}
+
 /**
  * Dismisses a floating popover or context menu on outside mousedown or Escape key.
  */
 export function useDismissable(
   isOpen: boolean,
   containerRef: RefObject<HTMLElement | null>,
-  onDismiss: () => void
+  onDismiss: () => void,
+  options?: UseDismissableOptions
 ): void {
+  const capture = options?.capture ?? false
+
   useEffect(() => {
     if (!isOpen) return
 
@@ -23,11 +30,11 @@ export function useDismissable(
       }
     }
 
-    document.addEventListener('mousedown', handleOutsideMouseDown)
+    document.addEventListener('mousedown', handleOutsideMouseDown, capture)
     document.addEventListener('keydown', handleEscape)
     return () => {
-      document.removeEventListener('mousedown', handleOutsideMouseDown)
+      document.removeEventListener('mousedown', handleOutsideMouseDown, capture)
       document.removeEventListener('keydown', handleEscape)
     }
-  }, [isOpen, containerRef, onDismiss])
+  }, [capture, containerRef, isOpen, onDismiss])
 }

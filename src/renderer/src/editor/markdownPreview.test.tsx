@@ -5,7 +5,7 @@ import { MarkdownPreview } from '../components/MarkdownPreview'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { createMermaidRenderer, type MermaidDriver } from './mermaidRenderer'
 import { buildWikiAssetUrl } from '@shared/assets'
-import { renderMarkdownToReact } from './markdownPreview'
+import { renderHighlightedCodeNodes, renderMarkdownToReact } from './markdownPreview'
 
 describe('markdownPreview pipeline and XSS sanitization', () => {
   const originalWikiApi = (window as { wikiApi?: WikiApi }).wikiApi
@@ -348,9 +348,11 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
     expect(tableWrapper).toHaveAttribute('data-source-end-line', '14')
     expect(tableWrapper?.querySelector('table')).not.toHaveAttribute('data-source-line')
 
-    const codePre = container.querySelector('pre')
-    expect(codePre).toHaveAttribute('data-source-line', '16')
-    expect(codePre).toHaveAttribute('data-source-end-line', '18')
+    const codeBlockWrapper = container.querySelector('.md-code-block')
+    expect(codeBlockWrapper).toHaveAttribute('data-source-line', '16')
+    expect(codeBlockWrapper).toHaveAttribute('data-source-end-line', '18')
+    expect(codeBlockWrapper?.querySelector('pre')).not.toHaveAttribute('data-source-line')
+    expect(codeBlockWrapper?.querySelector('pre')).not.toHaveAttribute('data-source-end-line')
 
     const mermaidBlock = screen.getByTestId('mermaid-diagram')
     expect(mermaidBlock).toHaveAttribute('data-source-line', '20')
@@ -442,6 +444,170 @@ describe('markdownPreview pipeline and XSS sanitization', () => {
     } finally {
       canvasStub.restore()
     }
+  })
+
+  it('renders code block headers with formatted language labels, Plain Text fallback, copy button, and syntax highlighting', async () => {
+    const copyText = vi.fn(async () => {})
+    window.wikiApi = {
+      diagram: {
+        copyText,
+        copyImage: vi.fn(async () => {}),
+        saveFile: vi.fn(async () => ({ canceled: true }))
+      }
+    } as unknown as WikiApi
+
+    const md = [
+      'Inline `const notHighlighted = 1` remains inline.',
+      '',
+      '```c',
+      'int main() {',
+      '  return 0; // ok',
+      '}',
+      '```',
+      '',
+      '```c++',
+      'std::string msg = "<script>alert(1)</script>";',
+      '```',
+      '',
+      '```python',
+      'def greet():',
+      '    return "hi"',
+      '```',
+      '',
+      '```',
+      'plain block',
+      '```',
+      '',
+      '```bash',
+      '   ',
+      '```',
+      '',
+      '```c',
+      '```',
+      '',
+      '```c#',
+      'var x = 1;',
+      '```',
+      '',
+      '```node.js',
+      'console.log(1)',
+      '```',
+      '',
+      '<pre>\n  <code class="language-python">def hi(): return "ok"</code>\n</pre>',
+      '',
+      '<pre><code class="language-bad:evil">plain</code></pre>'
+    ].join('\n')
+
+    const { container } = render(<MarkdownPreview content={md} scrollTop={0} />)
+
+    const blocks = screen.getAllByTestId('preview-code-block')
+    expect(blocks).toHaveLength(10)
+
+    const labels = blocks.map((block) =>
+      block.querySelector('[data-testid="code-block-language-label"]')?.textContent
+    )
+    expect(labels).toEqual([
+      'C',
+      'C++',
+      'Python',
+      'Plain Text',
+      'Bash',
+      'C',
+      'c#',
+      'node.js',
+      'Python',
+      'Plain Text'
+    ])
+
+    // C block highlights keywords, types, numbers, and comments
+    expect(blocks[0].querySelector('code')).toHaveClass('language-c')
+    expect(blocks[0].querySelector('span.tok-type')).toHaveTextContent('int')
+    expect(blocks[0].querySelector('span.tok-keyword')).toHaveTextContent('return')
+    expect(blocks[0].querySelector('span.tok-comment')).toHaveTextContent('// ok')
+    expect(blocks[0].querySelector('code')?.textContent).toBe('int main() {\n  return 0; // ok\n}')
+
+    // C++ class survives sanitization and script text inside code stays escaped text
+    expect(blocks[1].querySelector('code')).toHaveClass('language-c++')
+    expect(container.querySelector('script')).toBeNull()
+    expect(blocks[1].querySelector('span.tok-string')).toHaveTextContent('"<script>alert(1)</script>"')
+
+    // Python block highlights def/return and strings
+    expect(blocks[2].querySelector('span.tok-keyword')).toHaveTextContent('def')
+    expect(blocks[2].querySelector('span.tok-string')).toHaveTextContent('"hi"')
+
+    // Plain Text block renders no token spans
+    expect(blocks[3].querySelectorAll('code span')).toHaveLength(0)
+    expect(blocks[3].querySelector('code')?.textContent).toBe('plain block')
+
+    // Inline code does not get wrapped in a code block header
+    expect(container.querySelectorAll('p code')).toHaveLength(1)
+
+    // Copy button copies block code and shows timed feedback; whitespace-only or empty blocks disable copy
+    const cCopyBtn = blocks[0].querySelector('button[aria-label="코드 복사"]') as HTMLButtonElement
+    const blankCopyBtn = blocks[4].querySelector('button[aria-label="코드 복사"]') as HTMLButtonElement
+    const emptyCopyBtn = blocks[5].querySelector('button[aria-label="코드 복사"]') as HTMLButtonElement
+    expect(blankCopyBtn).toBeDisabled()
+    expect(emptyCopyBtn).toBeDisabled()
+
+    // c# / node.js classes survive sanitization while invalid suffixes like language-bad:evil are stripped
+    expect(blocks[6].querySelector('code')).toHaveClass('language-c#')
+    expect(blocks[7].querySelector('code')).toHaveClass('language-node.js')
+    expect(blocks[8].querySelector('span.tok-keyword')).toHaveTextContent('def')
+    expect(blocks[9].querySelector('code')).not.toHaveAttribute('class')
+
+    vi.useFakeTimers()
+    try {
+      await act(async () => {
+        fireEvent.click(cCopyBtn)
+        await Promise.resolve()
+      })
+      expect(copyText).toHaveBeenCalledWith('int main() {\n  return 0; // ok\n}')
+      expect(cCopyBtn).toHaveTextContent('복사됨')
+
+      // Copy failure clears stale feedback immediately
+      copyText.mockRejectedValueOnce(new Error('clipboard unavailable'))
+      await act(async () => {
+        fireEvent.click(cCopyBtn)
+        await Promise.resolve()
+      })
+      expect(cCopyBtn).toHaveTextContent('코드 복사')
+
+      // Subsequent copy succeeds and resets after 1500ms
+      await act(async () => {
+        fireEvent.click(cCopyBtn)
+        await Promise.resolve()
+      })
+      expect(cCopyBtn).toHaveTextContent('복사됨')
+
+      act(() => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(cCopyBtn).toHaveTextContent('코드 복사')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('renders highlighted React code nodes preserving exact characters and line breaks', () => {
+    const code = 'def add(a, b):\n    # sum\n    return a + b < 10'
+    const { container } = render(
+      <pre>
+        <code>{renderHighlightedCodeNodes(code, 'python')}</code>
+      </pre>
+    )
+
+    const codeEl = container.querySelector('code')!
+    expect(codeEl.textContent).toBe(code)
+    expect(codeEl.querySelector('span.tok-keyword')).toHaveTextContent('def')
+    expect(codeEl.querySelector('span.tok-comment')).toHaveTextContent('# sum')
+
+    const { container: plainContainer } = render(
+      <pre>
+        <code>{renderHighlightedCodeNodes('raw <text>', '')}</code>
+      </pre>
+    )
+    expect(plainContainer.querySelector('code')?.textContent).toBe('raw <text>')
+    expect(plainContainer.querySelectorAll('span')).toHaveLength(0)
   })
 })
 

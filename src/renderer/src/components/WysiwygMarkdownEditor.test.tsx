@@ -1317,6 +1317,472 @@ describe('WysiwygMarkdownEditor link autocomplete & Ctrl+K', () => {
   })
 })
 
+describe('WysiwygMarkdownEditor code block language selector and highlighting', () => {
+  const originalWikiApi = (window as { wikiApi?: WikiApi }).wikiApi
+
+  afterEach(() => {
+    vi.useRealTimers()
+    if (originalWikiApi === undefined) {
+      delete (window as { wikiApi?: WikiApi }).wikiApi
+    } else {
+      window.wikiApi = originalWikiApi
+    }
+  })
+
+  it('supports preset/custom language selection, keyboard navigation, outside-click dismissal, copy feedback, syntax highlighting, and mermaid conversion', async () => {
+    const user = userEvent.setup()
+    const copyText = vi.fn(async () => {})
+    window.wikiApi = {
+      diagram: {
+        copyText,
+        copyImage: vi.fn(async () => {}),
+        saveFile: vi.fn(async () => ({ canceled: true }))
+      }
+    } as unknown as WikiApi
+
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => ({
+        svg: `<svg><text>${text.trim()}</text></svg>`
+      }))
+    }
+    const renderer = createMermaidRenderer(driver)
+    const onChangeContent = vi.fn()
+
+    const initial = [
+      '```c',
+      'int main() {',
+      '  return 0;',
+      '}',
+      '```',
+      '',
+      '```',
+      'def greet():',
+      '    return "hi"',
+      '```',
+      '',
+      '```bash',
+      '   ',
+      '```'
+    ].join('\n')
+
+    render(
+      <WysiwygMarkdownEditor
+        content={initial}
+        scrollTop={0}
+        mermaidRenderer={renderer}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const codeBlocks = await screen.findAllByTestId('wysiwyg-code-block')
+    expect(codeBlocks).toHaveLength(3)
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // First block displays 'C' and has live C syntax highlighting; re-selecting 'C' does not emit redundant update
+    const firstTrigger = within(codeBlocks[0]).getByRole('button', { name: '코드 블록 언어 선택' })
+    expect(firstTrigger).toHaveTextContent('C')
+    expect(codeBlocks[0].querySelector('span.tok-type')).toHaveTextContent('int')
+    expect(codeBlocks[0].querySelector('span.tok-keyword')).toHaveTextContent('return')
+
+    await user.click(firstTrigger)
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: 'C'
+      })
+    )
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Clicking padding inside the popover keeps focus on input so Escape dismisses and restores trigger focus
+    await user.click(firstTrigger)
+    const popover = document.querySelector('.code-block-language-popover') as HTMLElement
+    fireEvent.mouseDown(popover)
+    expect(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('listbox', { name: '코드 블록 언어 목록' })).not.toBeInTheDocument()
+    expect(firstTrigger).toHaveFocus()
+
+    // Copy button in whitespace-only third block is disabled
+    const blankCopyBtn = within(codeBlocks[2]).getByRole('button', { name: '코드 복사' })
+    expect(blankCopyBtn).toBeDisabled()
+
+    // Escape on trigger dismisses open popover and keeps focus on trigger
+    await user.click(firstTrigger)
+    expect(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).toBeInTheDocument()
+    firstTrigger.focus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('listbox', { name: '코드 블록 언어 목록' })).not.toBeInTheDocument()
+    expect(firstTrigger).toHaveFocus()
+
+    // Outside-click inside the same header (clicking copy button) and across code blocks dismisses open popovers
+    await user.click(firstTrigger)
+    expect(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).toBeInTheDocument()
+
+    const firstCopyBtn = within(codeBlocks[0]).getByRole('button', { name: '코드 복사' })
+    await user.click(firstCopyBtn)
+    expect(screen.queryByRole('listbox', { name: '코드 블록 언어 목록' })).not.toBeInTheDocument()
+
+    // Tabbing/moving focus out of the combobox onto a sibling button dismisses open popover
+    await user.click(firstTrigger)
+    expect(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).toBeInTheDocument()
+    await act(async () => {
+      firstCopyBtn.focus()
+    })
+    expect(screen.queryByRole('listbox', { name: '코드 블록 언어 목록' })).not.toBeInTheDocument()
+
+    // Clicking trigger on second block while first is open closes first and keeps only one listbox open
+    await user.click(firstTrigger)
+    expect(screen.getAllByRole('listbox', { name: '코드 블록 언어 목록' })).toHaveLength(1)
+    const secondTrigger = within(codeBlocks[1]).getByRole('button', { name: '코드 블록 언어 선택' })
+    await user.click(secondTrigger)
+    expect(screen.getAllByRole('listbox', { name: '코드 블록 언어 목록' })).toHaveLength(1)
+
+    // Keyboard Escape from an option button inside the listbox dismisses popover and restores focus to trigger
+    const secondListbox = screen.getByRole('listbox', { name: '코드 블록 언어 목록' })
+    const pythonOption = within(secondListbox).getByRole('option', { name: 'Python' })
+    pythonOption.focus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('listbox', { name: '코드 블록 언어 목록' })).not.toBeInTheDocument()
+    expect(secondTrigger).toHaveFocus()
+
+    // Second block defaults to 'Plain Text' with no highlight spans
+    expect(secondTrigger).toHaveTextContent('Plain Text')
+    expect(codeBlocks[1].querySelectorAll('code span')).toHaveLength(0)
+
+    // Open language combobox on second block -> lists 12 presets and supports ArrowDown/ArrowUp + Enter with focus restore
+    await user.click(secondTrigger)
+    const listbox = screen.getByRole('listbox', { name: '코드 블록 언어 목록' })
+    const presetLabels = within(listbox)
+      .getAllByRole('option')
+      .map((opt) => opt.textContent)
+    expect(presetLabels).toEqual([
+      'Plain Text',
+      'C',
+      'C++',
+      'Python',
+      'JavaScript',
+      'TypeScript',
+      'JSON',
+      'HTML',
+      'CSS',
+      'YAML',
+      'Markdown',
+      'Mermaid'
+    ])
+
+    await user.keyboard('{ArrowDown}{ArrowDown}{ArrowUp}{Enter}')
+    expect(secondTrigger).toHaveTextContent('Plain Text')
+    expect(secondTrigger).toHaveFocus()
+
+    // aria-activedescendant tracks highlighted option from input and ArrowDown/ArrowUp also works after Tab-focusing an option button
+    await user.click(secondTrigger)
+    const activeInput = screen.getByRole('textbox', { name: '언어 검색 또는 직접 입력' })
+    expect(activeInput).not.toHaveAttribute('aria-activedescendant')
+    await user.keyboard('{ArrowDown}')
+    const firstOpt = within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+      name: 'Plain Text'
+    })
+    expect(firstOpt.id).not.toBe('')
+    expect(activeInput).toHaveAttribute('aria-activedescendant', firstOpt.id)
+    await user.tab()
+    expect(firstOpt).toHaveFocus()
+    await user.keyboard('{ArrowDown}{Enter}')
+    expect(secondTrigger).toHaveTextContent('C')
+    expect(secondTrigger).toHaveFocus()
+
+    // Backticks alone do not offer a broken custom option; backticks around custom input are stripped
+    await user.click(secondTrigger)
+    const backtickInput = screen.getByRole('textbox', { name: '언어 검색 또는 직접 입력' })
+    await user.type(backtickInput, '```')
+    expect(screen.queryByRole('option', { name: /직접 지정/ })).not.toBeInTheDocument()
+    await user.clear(backtickInput)
+    await user.type(backtickInput, 'my`lang{Enter}')
+    expect(secondTrigger).toHaveTextContent('mylang')
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```mylang\ndef greet():\n    return "hi"\n```')
+
+    // Selecting 'Python' highlights Python code and emits markdown
+    await user.click(secondTrigger)
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: 'Python'
+      })
+    )
+    expect(secondTrigger).toHaveTextContent('Python')
+    expect(secondTrigger).toHaveFocus()
+    expect(codeBlocks[1].querySelector('span.tok-keyword')).toHaveTextContent('def')
+    expect(codeBlocks[1].querySelector('span.tok-string')).toHaveTextContent('"hi"')
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```python\ndef greet():\n    return "hi"\n```')
+
+    // Clicking custom option "직접 지정: tsx" and "직접 지정: scss" preserves exact custom identifiers
+    await user.click(secondTrigger)
+    const searchInput = screen.getByRole('textbox', { name: '언어 검색 또는 직접 입력' })
+    await user.type(searchInput, 'tsx')
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: '직접 지정: tsx'
+      })
+    )
+    expect(secondTrigger).toHaveTextContent('TSX')
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```tsx\ndef greet():\n    return "hi"\n```')
+
+    await user.click(secondTrigger)
+    await user.type(screen.getByRole('textbox', { name: '언어 검색 또는 직접 입력' }), 'scss')
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: '직접 지정: scss'
+      })
+    )
+    expect(secondTrigger).toHaveTextContent('SCSS')
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```scss\ndef greet():\n    return "hi"\n```')
+
+    // Resetting tagged first block ('C') back to 'Plain Text' emits bare fence
+    await user.click(firstTrigger)
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: 'Plain Text'
+      })
+    )
+    expect(firstTrigger).toHaveTextContent('Plain Text')
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```\nint main() {\n  return 0;\n}\n```')
+
+    // Typing a custom language (bash) + Enter updates fence language, label, and restores trigger focus
+    await user.click(secondTrigger)
+    await user.type(screen.getByRole('textbox', { name: '언어 검색 또는 직접 입력' }), 'bash{Enter}')
+    expect(secondTrigger).toHaveTextContent('Bash')
+    expect(secondTrigger).toHaveFocus()
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```bash\ndef greet():\n    return "hi"\n```')
+
+    // Selecting Mermaid converts code block into WysiwygMermaidBlock and keeps focus on its trigger, and changing back restores code block + focus
+    await user.click(secondTrigger)
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: 'Mermaid'
+      })
+    )
+
+    const mermaidBlock = await screen.findByTestId('wysiwyg-mermaid-block')
+    expect(screen.getAllByTestId('wysiwyg-code-block')).toHaveLength(2)
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```mermaid\ndef greet():\n    return "hi"\n```')
+    const mermaidTrigger = within(mermaidBlock).getByRole('button', { name: '코드 블록 언어 선택' })
+    expect(mermaidTrigger).toHaveFocus()
+
+    await user.click(mermaidTrigger)
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: 'Python'
+      })
+    )
+    expect(screen.queryByTestId('wysiwyg-mermaid-block')).not.toBeInTheDocument()
+    const restoredBlocks = screen.getAllByTestId('wysiwyg-code-block')
+    expect(restoredBlocks).toHaveLength(3)
+    expect(within(restoredBlocks[1]).getByRole('button', { name: '코드 블록 언어 선택' })).toHaveFocus()
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```python\ndef greet():\n    return "hi"\n```')
+
+    // Copy button in WYSIWYG code block copies code, clears stale feedback on failure, supports navigator.clipboard fallback, and resets after 1500ms
+    vi.useFakeTimers()
+    await act(async () => {
+      fireEvent.click(firstCopyBtn)
+      await Promise.resolve()
+    })
+    expect(copyText).toHaveBeenLastCalledWith('int main() {\n  return 0;\n}')
+    expect(firstCopyBtn).toHaveTextContent('복사됨')
+
+    copyText.mockRejectedValueOnce(new Error('clipboard unavailable'))
+    await act(async () => {
+      fireEvent.click(firstCopyBtn)
+      await Promise.resolve()
+    })
+    expect(firstCopyBtn).toHaveTextContent('코드 복사')
+
+    await act(async () => {
+      fireEvent.click(firstCopyBtn)
+      await Promise.resolve()
+    })
+    expect(firstCopyBtn).toHaveTextContent('복사됨')
+    act(() => {
+      vi.advanceTimersByTime(1500)
+    })
+    expect(firstCopyBtn).toHaveTextContent('코드 복사')
+
+    // Async race guard: slow first copy resolving after a newer failed copy must NOT display stale '복사됨'
+    let resolveSlowCopy!: () => void
+    copyText.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSlowCopy = resolve
+        })
+    )
+    fireEvent.click(firstCopyBtn)
+    copyText.mockRejectedValueOnce(new Error('second failed'))
+    await act(async () => {
+      fireEvent.click(firstCopyBtn)
+      await Promise.resolve()
+    })
+    await act(async () => {
+      resolveSlowCopy()
+      await Promise.resolve()
+    })
+    expect(firstCopyBtn).toHaveTextContent('코드 복사')
+  })
+
+  it('uses navigator.clipboard.writeText fallback when window.wikiApi is unavailable', async () => {
+    delete (window as { wikiApi?: WikiApi }).wikiApi
+    const writeText = vi.fn(async () => {})
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    })
+
+    try {
+      render(
+        <WysiwygMarkdownEditor
+          content={'```python\nprint(1)\n```'}
+          scrollTop={0}
+          onChangeContent={vi.fn()}
+        />
+      )
+
+      const block = await screen.findByTestId('wysiwyg-code-block')
+      const copyBtn = within(block).getByRole('button', { name: '코드 복사' })
+      await act(async () => {
+        fireEvent.click(copyBtn)
+        await Promise.resolve()
+      })
+      expect(writeText).toHaveBeenCalledWith('print(1)')
+      expect(copyBtn).toHaveTextContent('복사됨')
+    } finally {
+      if (originalClipboard) {
+        Object.defineProperty(navigator, 'clipboard', originalClipboard)
+      } else {
+        delete (navigator as { clipboard?: Clipboard }).clipboard
+      }
+    }
+  })
+
+  it('uses wikiApi.clipboard.writeText fallback when wikiApi.diagram is unavailable', async () => {
+    const writeText = vi.fn(async () => {})
+    window.wikiApi = {
+      clipboard: { writeText }
+    } as unknown as WikiApi
+
+    render(
+      <WysiwygMarkdownEditor
+        content={'```python\nprint(2)\n```'}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+      />
+    )
+
+    const block = await screen.findByTestId('wysiwyg-code-block')
+    const copyBtn = within(block).getByRole('button', { name: '코드 복사' })
+    await act(async () => {
+      fireEvent.click(copyBtn)
+      await Promise.resolve()
+    })
+    expect(writeText).toHaveBeenCalledWith('print(2)')
+    expect(copyBtn).toHaveTextContent('복사됨')
+  })
+
+  it('preserves untouched alias/custom/mixed-case Mermaid fences on no-op reselect and supports keyboard Mermaid conversion', async () => {
+    const user = userEvent.setup()
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => ({
+        svg: `<svg><text>${text.trim()}</text></svg>`
+      }))
+    }
+    const renderer = createMermaidRenderer(driver)
+    const onChangeContent = vi.fn()
+
+    const initial = [
+      '```py',
+      'print("alias")',
+      '```',
+      '',
+      '```rust',
+      'fn main() {}',
+      '```',
+      '',
+      '```Mermaid',
+      'graph TD',
+      '  A --> B',
+      '```'
+    ].join('\n')
+
+    render(
+      <WysiwygMarkdownEditor
+        content={initial}
+        scrollTop={0}
+        mermaidRenderer={renderer}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const codeBlocks = await screen.findAllByTestId('wysiwyg-code-block')
+    expect(codeBlocks).toHaveLength(2)
+    const mermaidBlock = await screen.findByTestId('wysiwyg-mermaid-block')
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    const pyTrigger = within(codeBlocks[0]).getByRole('button', { name: '코드 블록 언어 선택' })
+    const rustTrigger = within(codeBlocks[1]).getByRole('button', { name: '코드 블록 언어 선택' })
+    const mermaidTrigger = within(mermaidBlock).getByRole('button', { name: '코드 블록 언어 선택' })
+
+    expect(pyTrigger).toHaveTextContent('Python')
+    expect(rustTrigger).toHaveTextContent('Rust')
+    expect(mermaidTrigger).toHaveTextContent('Mermaid')
+
+    // Re-selecting already-active options on alias, custom, and mixed-case Mermaid blocks emits no update
+    await user.click(pyTrigger)
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: 'Python'
+      })
+    )
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    await user.click(rustTrigger)
+    await user.type(screen.getByRole('textbox', { name: '언어 검색 또는 직접 입력' }), 'rust{Enter}')
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    await user.click(mermaidTrigger)
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: 'Mermaid'
+      })
+    )
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Converting code block to Mermaid and back via keyboard Enter preserves focus and updates Markdown
+    await user.click(pyTrigger)
+    await user.type(screen.getByRole('textbox', { name: '언어 검색 또는 직접 입력' }), 'mermaid{Enter}')
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(2)
+    })
+    expect(screen.getAllByTestId('wysiwyg-code-block')).toHaveLength(1)
+    const convertedMermaidTrigger = within(screen.getAllByTestId('wysiwyg-mermaid-block')[0]).getByRole(
+      'button',
+      { name: '코드 블록 언어 선택' }
+    )
+    expect(convertedMermaidTrigger).toHaveFocus()
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```mermaid\nprint("alias")\n```')
+
+    await user.click(convertedMermaidTrigger)
+    await user.type(screen.getByRole('textbox', { name: '언어 검색 또는 직접 입력' }), 'python{Enter}')
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(1)
+    })
+    const restoredPyBlocks = screen.getAllByTestId('wysiwyg-code-block')
+    expect(restoredPyBlocks).toHaveLength(2)
+    expect(
+      within(restoredPyBlocks[0]).getByRole('button', { name: '코드 블록 언어 선택' })
+    ).toHaveFocus()
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```python\nprint("alias")\n```')
+  })
+})
+
 describe('WysiwygMarkdownEditor local image rendering and path sync', () => {
   it('renders local relative images with wiki-asset URLs, updates live DOM on documentPath change, and roundtrips without wiki-asset leak', async () => {
     const onChangeContent = vi.fn()

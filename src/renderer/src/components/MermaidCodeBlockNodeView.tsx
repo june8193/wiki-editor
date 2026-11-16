@@ -1,9 +1,10 @@
 import { createContext, useContext, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
-import { NodeViewContent, type NodeViewProps, NodeViewWrapper } from '@tiptap/react'
+import { NodeViewContent, NodeViewWrapper } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { useMermaidRenderState } from '../hooks/useMermaidRenderState'
+import { CodeBlockLanguageCombobox } from './CodeBlockHeaderControls'
 import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
 import { MermaidDiagramView } from './MermaidDiagram'
 
@@ -17,7 +18,23 @@ export const WysiwygMermaidContext = createContext<WysiwygMermaidContextValue>({
   theme: 'light'
 })
 
-function WysiwygMermaidBlock({ code }: { code: string }) {
+export interface WysiwygMermaidBlockProps {
+  language: string
+  code: string
+  autoFocusTriggerOnMount: boolean
+  onSelectLanguage: (nextLanguage: string) => void
+}
+
+/**
+ * Interactive WYSIWYG Mermaid block view with inline export/copy toolbar,
+ * collapsible source editor, and language switcher.
+ */
+export function WysiwygMermaidBlock({
+  language,
+  code,
+  autoFocusTriggerOnMount,
+  onSelectLanguage
+}: WysiwygMermaidBlockProps) {
   const { theme, mermaidRenderer, documentTitle } = useContext(WysiwygMermaidContext)
   const [showSource, setShowSource] = useState(false)
 
@@ -40,12 +57,12 @@ function WysiwygMermaidBlock({ code }: { code: string }) {
       className="wysiwyg-mermaid-node"
       data-testid="wysiwyg-mermaid-block"
     >
-      <div
-        className="mermaid-node-header"
-        contentEditable={false}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <span className="mermaid-node-badge">Mermaid</span>
+      <div className="mermaid-node-header" contentEditable={false}>
+        <CodeBlockLanguageCombobox
+          language={language}
+          autoFocusTriggerOnMount={autoFocusTriggerOnMount}
+          onSelectLanguage={onSelectLanguage}
+        />
         <div className="mermaid-node-header-actions">
           <MermaidActionBar variant="inline" actions={actions} />
           <button
@@ -67,11 +84,7 @@ function WysiwygMermaidBlock({ code }: { code: string }) {
         </pre>
       </div>
 
-      <div
-        className="mermaid-node-preview"
-        contentEditable={false}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
+      <div className="mermaid-node-preview" contentEditable={false}>
         <MermaidDiagramView
           code={code}
           mermaidTheme={mermaidTheme}
@@ -83,17 +96,4 @@ function WysiwygMermaidBlock({ code }: { code: string }) {
       <MermaidActionErrorAlert message={actions.errorMessage} />
     </NodeViewWrapper>
   )
-}
-
-export function MermaidCodeBlockNodeView({ node }: NodeViewProps) {
-  const language = typeof node.attrs.language === 'string' ? node.attrs.language : ''
-  if (language !== 'mermaid') {
-    return (
-      <NodeViewWrapper as="pre" className="wysiwyg-code-block">
-        <NodeViewContent<'code'> as="code" className={language ? `language-${language}` : undefined} />
-      </NodeViewWrapper>
-    )
-  }
-
-  return <WysiwygMermaidBlock code={node.textContent} />
 }
