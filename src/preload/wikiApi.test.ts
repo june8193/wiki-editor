@@ -123,7 +123,8 @@ describe('createWikiApi', () => {
     await api.workspace.writeFile('C:\\wiki\\readme.md', '# Hi')
     await api.workspace.createEntry('C:\\wiki', 'note.md', 'file', '')
     await api.workspace.renameEntry('C:\\wiki\\note.md', 'guide.md')
-    await api.workspace.deleteEntry('C:\\wiki\\guide.md')
+    await api.workspace.moveEntries(['C:\\wiki\\guide.md'], 'C:\\wiki\\docs')
+    await api.workspace.deleteEntry('C:\\wiki\\docs\\guide.md')
     await api.workspace.watch()
     const unsubWs = api.workspace.onChanged((event) => wsEvents.push(event))
     ipc.emit(WORKSPACE_IPC_CHANNELS.changed, {
@@ -148,6 +149,7 @@ describe('createWikiApi', () => {
       WORKSPACE_IPC_CHANNELS.writeFile,
       WORKSPACE_IPC_CHANNELS.createEntry,
       WORKSPACE_IPC_CHANNELS.renameEntry,
+      WORKSPACE_IPC_CHANNELS.moveEntries,
       WORKSPACE_IPC_CHANNELS.deleteEntry,
       WORKSPACE_IPC_CHANNELS.watch,
       WORKSPACE_IPC_CHANNELS.unwatch

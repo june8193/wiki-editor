@@ -7601,7 +7601,7 @@ describe('Split editor mode and bidirectional scroll sync', () => {
     await user.click(within(sharedTreeItem).getByText('shared'))
     const archTreeItem = await within(explorer).findByRole('treeitem', { name: 'arch (1).png' })
     expect(archTreeItem).toHaveAttribute('draggable', 'true')
-    expect(guideItem).toHaveAttribute('draggable', 'false')
+    expect(guideItem).toHaveAttribute('draggable', 'true')
 
     // 1. FolderTree drag -> drop onto Raw editor references ../shared/arch%20%281%29.png without copying to assets/
     const dragTransferStore = new Map<string, string>()
@@ -7697,7 +7697,7 @@ describe('Split editor mode and bidirectional scroll sync', () => {
     const splitRawEditor = screen.getByTestId('document-editor')
     expect(getRawEditorText(splitRawEditor)).not.toContain('wiki-asset:')
 
-    // Split left Raw editor falls back to ImageTransferContext.draggingWorkspaceImagePath when getData() is empty
+    // Split left Raw editor falls back to ImageTransferContext.draggingWorkspaceImagePaths when getData() is empty
     appendRawEditorText(splitRawEditor, '\n\n')
     const splitIngestsBefore = ingestSpy.mock.calls.length
     fireEvent.dragStart(archTreeItem, {
@@ -9001,6 +9001,358 @@ describe('Markdown link navigation and missing target banner', () => {
     const missingTargetSlugAlert = await screen.findByRole('alert')
     expect(missingTargetSlugAlert).toHaveTextContent(/missing-sec/)
     expect(getFilesSnapshot()).toEqual(initialSnapshot)
+  })
+})
+
+describe('Folder tree multi-select and drag-and-drop move', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  function createTreeDataTransfer() {
+    const store = new Map<string, string>()
+    let dropEffect = 'none'
+    let effectAllowed = 'none'
+    return {
+      get effectAllowed() {
+        return effectAllowed
+      },
+      set effectAllowed(val: string) {
+        effectAllowed = val
+      },
+      get dropEffect() {
+        return dropEffect
+      },
+      set dropEffect(val: string) {
+        dropEffect = val
+      },
+      get types() {
+        return [...store.keys()]
+      },
+      files: [] as unknown as FileList,
+      setData(type: string, value: string) {
+        store.set(type, value)
+      },
+      getData(type: string) {
+        return store.get(type) ?? ''
+      }
+    }
+  }
+
+  it('supports Ctrl/Cmd+click toggle, Shift+click visible range selection, multi-select context menu, F2 guard, and batch Delete', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, copiedTexts, getFilesSnapshot } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:/wiki/multi',
+        workspaces: {
+          'C:/wiki/multi': {
+            'alpha/a1.md': '# A1',
+            'alpha/a2.md': '# A2',
+            'beta/b1.md': '# B1',
+            'note-1.md': '# Note 1',
+            'note-2.md': '# Note 2',
+            'note-3.md': '# Note 3'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    const alphaItem = await within(explorer).findByRole('treeitem', { name: 'alpha' })
+    const betaItem = within(explorer).getByRole('treeitem', { name: 'beta' })
+    const note1Item = within(explorer).getByRole('treeitem', { name: 'note-1.md' })
+    const note2Item = within(explorer).getByRole('treeitem', { name: 'note-2.md' })
+    const note3Item = within(explorer).getByRole('treeitem', { name: 'note-3.md' })
+
+    // Normal click expands 'alpha' and selects only 'alpha'
+    await user.click(within(alphaItem).getByText('alpha'))
+    const a1Item = await within(explorer).findByRole('treeitem', { name: 'a1.md' })
+    const a2Item = await within(explorer).findByRole('treeitem', { name: 'a2.md' })
+    expect(alphaItem).toHaveAttribute('aria-selected', 'true')
+
+    // Ctrl+click on collapsed 'beta' and 'note-2.md' toggles selection WITHOUT expanding beta or opening note-2.md
+    fireEvent.click(within(betaItem).getByText('beta'), { ctrlKey: true })
+    expect(betaItem).toHaveAttribute('aria-expanded', 'false')
+    expect(alphaItem).toHaveAttribute('aria-selected', 'true')
+    expect(betaItem).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+
+    // Meta+click (macOS Cmd) also toggles selection
+    fireEvent.click(within(note2Item).getByText('note-2.md'), { metaKey: true })
+    expect(note2Item).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+
+    // Ctrl+click again on 'alpha' deselects it
+    fireEvent.click(within(alphaItem).getByText('alpha'), { ctrlKey: true })
+    expect(alphaItem).toHaveAttribute('aria-selected', 'false')
+    expect(alphaItem).toHaveAttribute('aria-expanded', 'true')
+
+    // Normal click on 'a2.md' selects only 'a2.md' and opens tab
+    await user.click(within(a2Item).getByText('a2.md'))
+    expect(await screen.findByRole('tab', { name: /a2\.md/i })).toBeInTheDocument()
+    expect(a2Item).toHaveAttribute('aria-selected', 'true')
+    expect(betaItem).toHaveAttribute('aria-selected', 'false')
+    expect(note2Item).toHaveAttribute('aria-selected', 'false')
+
+    // Shift+click on 'note-2.md' selects visible range: a2.md, beta (collapsed, so b1.md skipped), note-1.md, note-2.md
+    fireEvent.click(within(note2Item).getByText('note-2.md'), { shiftKey: true })
+    expect(a1Item).toHaveAttribute('aria-selected', 'false')
+    expect(a2Item).toHaveAttribute('aria-selected', 'true')
+    expect(betaItem).toHaveAttribute('aria-selected', 'true')
+    expect(note1Item).toHaveAttribute('aria-selected', 'true')
+    expect(note2Item).toHaveAttribute('aria-selected', 'true')
+    expect(note3Item).toHaveAttribute('aria-selected', 'false')
+    expect(betaItem).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('tab', { name: /note-2\.md/i })).not.toBeInTheDocument()
+
+    // F2 is ignored while 2+ entries are selected
+    note2Item.focus()
+    fireEvent.keyDown(note2Item, { key: 'F2' })
+    expect(within(explorer).queryByLabelText('새 이름 입력')).not.toBeInTheDocument()
+
+    // Right-click on already-selected item preserves multi-selection and disables single-only items
+    fireEvent.contextMenu(within(note1Item).getByText('note-1.md'))
+    const multiMenu = await screen.findByRole('menu')
+    expect(within(multiMenu).getByRole('menuitem', { name: '열기' })).toBeDisabled()
+    expect(within(multiMenu).getByRole('menuitem', { name: '이름 변경 (F2)' })).toBeDisabled()
+    expect(within(multiMenu).getByRole('menuitem', { name: '상대 경로 복사' })).toBeEnabled()
+    expect(within(multiMenu).getByRole('menuitem', { name: '절대 경로 복사' })).toBeEnabled()
+    expect(within(multiMenu).getByRole('menuitem', { name: '삭제' })).toBeEnabled()
+
+    // Multi-copy relative paths joins visible selected paths with newline
+    await user.click(within(multiMenu).getByRole('menuitem', { name: '상대 경로 복사' }))
+    expect(copiedTexts.at(-1)).toBe('alpha/a2.md\nbeta\nnote-1.md\nnote-2.md')
+
+    // Multi-copy absolute paths joins formatted absolute paths with newline
+    fireEvent.contextMenu(within(betaItem).getByText('beta'))
+    const multiDirMenu = await screen.findByRole('menu')
+    expect(within(multiDirMenu).getByRole('menuitem', { name: '새 파일' })).toBeDisabled()
+    expect(within(multiDirMenu).getByRole('menuitem', { name: '새 폴더' })).toBeDisabled()
+    expect(within(multiDirMenu).getByRole('menuitem', { name: '이름 변경 (F2)' })).toBeDisabled()
+    await user.click(within(multiDirMenu).getByRole('menuitem', { name: '절대 경로 복사' }))
+    expect(copiedTexts.at(-1)).toBe(
+      [
+        'C:\\wiki\\multi\\alpha\\a2.md',
+        'C:\\wiki\\multi\\beta',
+        'C:\\wiki\\multi\\note-1.md',
+        'C:\\wiki\\multi\\note-2.md'
+      ].join('\n')
+    )
+
+    // Right-click on unselected 'note-3.md' switches to single selection
+    fireEvent.contextMenu(within(note3Item).getByText('note-3.md'))
+    const singleMenu = await screen.findByRole('menu')
+    expect(note3Item).toHaveAttribute('aria-selected', 'true')
+    expect(note1Item).toHaveAttribute('aria-selected', 'false')
+    expect(within(singleMenu).getByRole('menuitem', { name: '열기' })).toBeEnabled()
+    expect(within(singleMenu).getByRole('menuitem', { name: '이름 변경 (F2)' })).toBeEnabled()
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    // Empty tree background click clears selection
+    const treeEl = within(explorer).getByRole('tree')
+    await user.click(treeEl)
+    expect(note3Item).toHaveAttribute('aria-selected', 'false')
+
+    // Multi-select a2.md, note-1.md, note-2.md, then Ctrl+click note-2.md to deselect it (focus moves to deselected note-2.md),
+    // and press Delete -> deletes active selection [a2.md, note-1.md] and keeps deselected note-2.md
+    await user.click(within(a2Item).getByText('a2.md'))
+    fireEvent.click(within(note1Item).getByText('note-1.md'), { ctrlKey: true })
+    fireEvent.click(within(note2Item).getByText('note-2.md'), { ctrlKey: true })
+    fireEvent.click(within(note2Item).getByText('note-2.md'), { ctrlKey: true })
+    expect(note2Item).toHaveAttribute('aria-selected', 'false')
+    note2Item.focus()
+    fireEvent.keyDown(note2Item, { key: 'Delete' })
+
+    const deleteDialog = await screen.findByRole('alertdialog')
+    expect(deleteDialog).toHaveTextContent('선택한 2개 항목을 삭제하시겠습니까?')
+    await user.click(within(deleteDialog).getByRole('button', { name: /삭제 확인/i }))
+
+    await waitFor(() => {
+      expect(within(explorer).queryByRole('treeitem', { name: 'a2.md' })).not.toBeInTheDocument()
+      expect(within(explorer).queryByRole('treeitem', { name: 'note-1.md' })).not.toBeInTheDocument()
+    })
+    expect(within(explorer).getByRole('treeitem', { name: 'note-2.md' })).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /a2\.md/i })).not.toBeInTheDocument()
+    expect(getFilesSnapshot().has('C:/wiki/multi/alpha/a2.md')).toBe(false)
+    expect(getFilesSnapshot().has('C:/wiki/multi/note-1.md')).toBe(false)
+    expect(getFilesSnapshot().has('C:/wiki/multi/note-2.md')).toBe(true)
+  })
+
+  it('moves single/multi entries via drag-and-drop onto folder rows, file parent folders, and tree root, updates open tabs, auto-expands after 500ms, handles conflicts all-or-nothing, and drops multiple images into editor', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, getFilesSnapshot } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:/wiki/dnd',
+        workspaces: {
+          'C:/wiki/dnd': {
+            'dest/existing.md': '# Existing in dest',
+            'dest/nested/deep.md': '# Deep',
+            'src/doc.md': '# Doc',
+            'src/pic1.png': '<png1>',
+            'src/pic2.webp': '<webp2>',
+            'conflict/existing.md': '# Conflicting',
+            'conflict/clean.md': '# Clean',
+            'root-note.md': '# Root Note'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    const treeEl = within(explorer).getByRole('tree')
+    const srcFolder = await within(explorer).findByRole('treeitem', { name: 'src' })
+    const destFolder = within(explorer).getByRole('treeitem', { name: 'dest' })
+    const conflictFolder = within(explorer).getByRole('treeitem', { name: 'conflict' })
+    const rootNoteItem = within(explorer).getByRole('treeitem', { name: 'root-note.md' })
+
+    // Open src/doc.md in editor before moving it
+    await user.click(within(srcFolder).getByText('src'))
+    const docItem = await within(explorer).findByRole('treeitem', { name: 'doc.md' })
+    const pic1Item = within(explorer).getByRole('treeitem', { name: 'pic1.png' })
+    const pic2Item = within(explorer).getByRole('treeitem', { name: 'pic2.webp' })
+    await user.click(within(docItem).getByText('doc.md'))
+    const rawEditor = await screen.findByTestId('document-editor')
+
+    // Dragging 'src' folder over itself must NOT highlight as a valid target
+    const dtSelfFolder = createTreeDataTransfer()
+    fireEvent.dragStart(srcFolder, { dataTransfer: dtSelfFolder })
+    fireEvent.dragOver(srcFolder, { dataTransfer: dtSelfFolder })
+    expect(srcFolder.querySelector('.tree-row')).not.toHaveClass('is-drop-target')
+    fireEvent.dragEnd(srcFolder, { dataTransfer: dtSelfFolder })
+
+    // Dragging only 'src/doc.md' over its own parent 'src' must NOT highlight (no-op)
+    await user.click(within(docItem).getByText('doc.md'))
+    const dtSameParent = createTreeDataTransfer()
+    fireEvent.dragStart(docItem, { dataTransfer: dtSameParent })
+    fireEvent.dragOver(srcFolder, { dataTransfer: dtSameParent })
+    expect(srcFolder.querySelector('.tree-row')).not.toHaveClass('is-drop-target')
+    fireEvent.dragEnd(docItem, { dataTransfer: dtSameParent })
+
+    // 1. Multi-select doc.md + root-note.md and drag onto collapsed dest folder -> highlight & move
+    await user.click(within(docItem).getByText('doc.md'))
+    fireEvent.click(within(rootNoteItem).getByText('root-note.md'), { ctrlKey: true })
+    const dtMove = createTreeDataTransfer()
+    fireEvent.dragStart(docItem, { dataTransfer: dtMove })
+    fireEvent.dragOver(destFolder, { dataTransfer: dtMove })
+    expect(destFolder.querySelector('.tree-row')).toHaveClass('is-drop-target')
+    expect(destFolder.querySelector('.tree-row')).toHaveAttribute('data-drop-target', 'true')
+    expect(dtMove.dropEffect).toBe('move')
+    fireEvent.drop(destFolder, { dataTransfer: dtMove })
+    fireEvent.dragEnd(docItem, { dataTransfer: dtMove })
+
+    await waitFor(() => {
+      expect(getFilesSnapshot().has('C:/wiki/dnd/dest/doc.md')).toBe(true)
+      expect(getFilesSnapshot().has('C:/wiki/dnd/dest/root-note.md')).toBe(true)
+    })
+    expect(getFilesSnapshot().has('C:/wiki/dnd/src/doc.md')).toBe(false)
+    expect(getFilesSnapshot().has('C:/wiki/dnd/root-note.md')).toBe(false)
+
+    // Verify open doc.md buffer/tab path synced to new location
+    expect(screen.getByText('C:/wiki/dnd/dest/doc.md')).toBeInTheDocument()
+
+    // 2. Hovering collapsed 'dest' folder with dragged 'pic1.png' auto-expands after 500ms
+    fireEvent.click(within(pic1Item).getByText('pic1.png'), { ctrlKey: true })
+    // Select pic1.png alone via Ctrl+click toggle or drag directly without opening image preview tab
+    await user.click(treeEl)
+    fireEvent.click(within(pic1Item).getByText('pic1.png'), { ctrlKey: true })
+    vi.useFakeTimers()
+    try {
+      const dtAutoExpand = createTreeDataTransfer()
+      fireEvent.dragStart(pic1Item, { dataTransfer: dtAutoExpand })
+      fireEvent.dragOver(destFolder, { dataTransfer: dtAutoExpand })
+      expect(destFolder).toHaveAttribute('aria-expanded', 'false')
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500)
+      })
+      expect(destFolder).toHaveAttribute('aria-expanded', 'true')
+      fireEvent.dragEnd(pic1Item, { dataTransfer: dtAutoExpand })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // 3. Dropping onto a file row inside 'dest' ('dest/existing.md') moves into 'dest',
+    // and dropping onto empty tree area moves back to workspace root
+    const movedDocItem = await within(destFolder).findByRole('treeitem', { name: 'doc.md' })
+    const destExistingItem = within(destFolder).getByRole('treeitem', { name: 'existing.md' })
+
+    const dtToFileParent = createTreeDataTransfer()
+    fireEvent.dragStart(pic1Item, { dataTransfer: dtToFileParent })
+    fireEvent.dragOver(destExistingItem, { dataTransfer: dtToFileParent })
+    expect(destFolder.querySelector('.tree-row')).toHaveClass('is-drop-target')
+    fireEvent.drop(destExistingItem, { dataTransfer: dtToFileParent })
+    fireEvent.dragEnd(pic1Item, { dataTransfer: dtToFileParent })
+    await waitFor(() => {
+      expect(getFilesSnapshot().has('C:/wiki/dnd/dest/pic1.png')).toBe(true)
+    })
+
+    // Move movedDocItem back to workspace root by dropping on ul.folder-tree
+    const dtToRoot = createTreeDataTransfer()
+    fireEvent.dragStart(movedDocItem, { dataTransfer: dtToRoot })
+    fireEvent.dragOver(treeEl, { dataTransfer: dtToRoot })
+    expect(treeEl).toHaveClass('is-root-drop-target')
+    expect(treeEl).toHaveAttribute('data-drop-target', 'root')
+    fireEvent.drop(treeEl, { dataTransfer: dtToRoot })
+    fireEvent.dragEnd(movedDocItem, { dataTransfer: dtToRoot })
+    await waitFor(() => {
+      expect(getFilesSnapshot().has('C:/wiki/dnd/doc.md')).toBe(true)
+    })
+    expect(screen.getByText('C:/wiki/dnd/doc.md')).toBeInTheDocument()
+
+    // 4. All-or-Nothing conflict check when moving multiple items into 'dest' where 'existing.md' collides
+    await user.click(within(conflictFolder).getByText('conflict'))
+    const conflictExistingInConflict = await within(conflictFolder).findByRole('treeitem', {
+      name: 'existing.md'
+    })
+    const conflictClean = within(conflictFolder).getByRole('treeitem', { name: 'clean.md' })
+    await user.click(treeEl)
+    fireEvent.click(within(conflictExistingInConflict).getByText('existing.md'), { ctrlKey: true })
+    fireEvent.click(within(conflictClean).getByText('clean.md'), { ctrlKey: true })
+
+    const dtConflict = createTreeDataTransfer()
+    fireEvent.dragStart(conflictExistingInConflict, { dataTransfer: dtConflict })
+    fireEvent.dragOver(destFolder, { dataTransfer: dtConflict })
+    fireEvent.drop(destFolder, { dataTransfer: dtConflict })
+    fireEvent.dragEnd(conflictExistingInConflict, { dataTransfer: dtConflict })
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/이미 존재/)
+    expect(getFilesSnapshot().has('C:/wiki/dnd/conflict/clean.md')).toBe(true)
+    expect(getFilesSnapshot().has('C:/wiki/dnd/dest/clean.md')).toBe(false)
+    expect(conflictExistingInConflict).toBeInTheDocument()
+
+    // 5. Multi-selecting multiple images (pic1.png in dest + pic2.webp in src) and dropping into Raw editor inserts all images
+    const movedPic1 = within(destFolder).getByRole('treeitem', { name: 'pic1.png' })
+    await user.click(treeEl)
+    fireEvent.click(within(movedPic1).getByText('pic1.png'), { ctrlKey: true })
+    fireEvent.click(within(pic2Item).getByText('pic2.webp'), { ctrlKey: true })
+
+    const dtImages = createTreeDataTransfer()
+    fireEvent.dragStart(movedPic1, { dataTransfer: dtImages })
+    fireEvent.drop(rawEditor, { dataTransfer: dtImages })
+    fireEvent.dragEnd(movedPic1, { dataTransfer: dtImages })
+
+    await waitFor(() => {
+      const text = getRawEditorText(rawEditor)
+      expect(text).toContain('![pic1](./dest/pic1.png)')
+      expect(text).toContain('![pic2](./src/pic2.webp)')
+    })
+  })
+
+  it('includes drop target highlight styles in theme.css', () => {
+    expect(themeCss).toContain('.tree-row.is-drop-target')
+    expect(themeCss).toContain('.folder-tree.is-root-drop-target')
   })
 })
 

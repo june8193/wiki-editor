@@ -620,7 +620,7 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     )
 
     const transferContextValue = {
-      draggingWorkspaceImagePath: 'C:\\vault\\img\\tree pic.png',
+      draggingWorkspaceImagePaths: ['C:\\vault\\img\\tree pic.png'],
       clearDraggingWorkspaceImage: onClearDraggingWorkspaceImage,
       reportImageError: onReportError,
       ingestImage,
@@ -691,7 +691,7 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     const afterDrop = onChangeContent.mock.calls.at(-1)?.[0] as string
     expect(afterDrop).toContain('![tree pic](../img/tree%20pic.png)\n\n![extra](./assets/extra.webp)')
 
-    // 3b. Empty getData() falls back to ImageTransferContext.draggingWorkspaceImagePath without null-shadowing
+    // 3b. Empty getData() falls back to ImageTransferContext.draggingWorkspaceImagePaths without null-shadowing
     fireEvent.drop(editorEl, {
       dataTransfer: {
         types: ['application/x-wiki-workspace-image'],

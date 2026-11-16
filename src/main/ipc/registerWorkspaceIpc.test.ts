@@ -90,6 +90,21 @@ describe('registerWorkspaceIpc', () => {
     )) as { path: string; name: string }
     expect(renamed.name).toBe('start.md')
 
+    const destFolder = (await ipcMain.invoke(
+      WORKSPACE_IPC_CHANNELS.createEntry,
+      '.',
+      'archive',
+      'directory'
+    )) as { path: string }
+    const moved = (await ipcMain.invoke(
+      WORKSPACE_IPC_CHANNELS.moveEntries,
+      [renamed.path],
+      destFolder.path
+    )) as Array<{ oldPath: string; entry: { path: string; relativePath: string } }>
+    expect(moved).toHaveLength(1)
+    expect(moved[0].oldPath).toBe(renamed.path)
+    expect(moved[0].entry.relativePath).toBe('archive/start.md')
+
     await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.watch)
     await writeFile(join(workspaceDir, 'external.md'), 'hi', 'utf8')
     await vi.waitFor(() => {
@@ -97,8 +112,8 @@ describe('registerWorkspaceIpc', () => {
     })
 
     await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.unwatch)
-    await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.deleteEntry, renamed.path)
-    expect(await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.readDir, folder.path)).toEqual([])
+    await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.deleteEntry, moved[0].entry.path)
+    expect(await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.readDir, destFolder.path)).toEqual([])
 
     dispose()
     expect(ipcMain.hasHandler(WORKSPACE_IPC_CHANNELS.open)).toBe(false)

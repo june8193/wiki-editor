@@ -3,6 +3,7 @@ import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand, WikiApi } from '@shared/ipc'
 import { getGitChangedCount, type GitDiffRequest } from '@shared/git'
 import {
+  filterTopLevelWorkspaceEntries,
   formatAbsoluteEntryPath,
   formatRelativeEntryPath,
   isFavoriteWorkspacePath,
@@ -180,6 +181,8 @@ export function MainAppShell() {
     treeState,
     markdownFiles,
     setSelectedTreePath,
+    toggleSelectTreePath,
+    selectTreePathRange,
     resolveCreateParentDir,
     openWorkspace,
     refreshTree,
@@ -187,7 +190,8 @@ export function MainAppShell() {
     ensureExpanded,
     createEntry,
     renameEntry,
-    deleteEntry
+    moveEntries,
+    deleteEntries
   } = useWorkspaceTree({
     onError: reportErrorBanner,
     onWorkspaceOpened: () => {
@@ -419,27 +423,39 @@ export function MainAppShell() {
   }, [isDialogOpenRef, wikiApi])
 
   const handleRequestDelete = useCallback(
-    (entry: WorkspaceEntry): void => {
+    (entries: readonly WorkspaceEntry[]): void => {
+      const targets = filterTopLevelWorkspaceEntries(entries)
+      if (targets.length === 0) return
+
+      const message =
+        targets.length === 1
+          ? `"${targets[0].name}"을(를) 삭제하시겠습니까?`
+          : `선택한 ${targets.length}개 항목을 삭제하시겠습니까?`
+
       setPendingDialog({
         title: '항목 삭제',
-        message: `"${entry.name}"을(를) 삭제하시겠습니까?`,
+        message,
         confirmLabel: '삭제 확인',
         onConfirm: async () => {
           setPendingDialog(null)
-          await deleteEntry(entry)
+          await deleteEntries(targets)
         }
       })
     },
-    [deleteEntry, setPendingDialog]
+    [deleteEntries, setPendingDialog]
   )
 
   const handleCopyEntryPath = useCallback(
-    (entry: WorkspaceEntry, mode: EntryPathCopyMode): void => {
+    (entries: readonly WorkspaceEntry[], mode: EntryPathCopyMode): void => {
+      if (entries.length === 0) return
       reportErrorBanner(null)
-      const textToCopy =
-        mode === 'relative'
-          ? formatRelativeEntryPath(entry, workspace?.rootPath)
-          : formatAbsoluteEntryPath(entry)
+      const textToCopy = entries
+        .map((entry) =>
+          mode === 'relative'
+            ? formatRelativeEntryPath(entry, workspace?.rootPath)
+            : formatAbsoluteEntryPath(entry)
+        )
+        .join('\n')
 
       void writeTextToClipboard(wikiApi, textToCopy).catch((error: unknown) => {
         reportErrorBanner(toErrorMessage(error, '경로를 클립보드에 복사하지 못했습니다.'), error)
@@ -457,7 +473,7 @@ export function MainAppShell() {
   )
 
   const {
-    setDraggingWorkspaceImagePath,
+    setDraggingWorkspaceImagePaths,
     clearDraggingWorkspaceImage,
     imageTransferContextValue
   } = useWorkspaceImageTransfer(handleReportImageError)
@@ -512,6 +528,8 @@ export function MainAppShell() {
                 tree={treeState}
                 activeFilePath={editor.activeFilePath}
                 onSelectPath={setSelectedTreePath}
+                onToggleSelectPath={toggleSelectTreePath}
+                onSelectPathRange={selectTreePathRange}
                 onToggleDirectory={toggleDirectory}
                 onEnsureExpanded={ensureExpanded}
                 onResolveCreateParentDir={resolveCreateParentDir}
@@ -519,9 +537,10 @@ export function MainAppShell() {
                 onRefreshTree={() => void refreshTree()}
                 onCreateEntry={createEntry}
                 onRenameEntry={renameEntry}
+                onMoveEntries={moveEntries}
                 onRequestDelete={handleRequestDelete}
                 onCopyEntryPath={handleCopyEntryPath}
-                onDragStartWorkspaceImage={setDraggingWorkspaceImagePath}
+                onDragStartWorkspaceImages={setDraggingWorkspaceImagePaths}
                 onDragEndWorkspaceImage={clearDraggingWorkspaceImage}
               />
             )}

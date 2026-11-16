@@ -581,6 +581,18 @@ body.is-resizing-sidebar .pane-workspace {
   background-color: var(--bg-elevated);
 }
 
+.tree-row.is-drop-target {
+  background-color: var(--cm-active-line);
+  outline: 1px solid var(--accent-color);
+  outline-offset: -1px;
+}
+
+.folder-tree.is-root-drop-target {
+  outline: 1px dashed var(--accent-color);
+  outline-offset: -2px;
+  background-color: var(--cm-active-line);
+}
+
 .tree-row.is-active-file {
   font-weight: 600;
   color: var(--accent-color);

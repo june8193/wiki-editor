@@ -84,6 +84,11 @@ export function registerWorkspaceIpc({
         workspaceService.renameEntry(targetPath as string, newName as string)
     ],
     [
+      WORKSPACE_IPC_CHANNELS.moveEntries,
+      (_event, sourcePaths, targetDirPath) =>
+        workspaceService.moveEntries(sourcePaths as string[], targetDirPath as string)
+    ],
+    [
       WORKSPACE_IPC_CHANNELS.deleteEntry,
       (_event, targetPath) => workspaceService.deleteEntry(targetPath as string)
     ],
