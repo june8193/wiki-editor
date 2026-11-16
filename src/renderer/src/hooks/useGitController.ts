@@ -5,11 +5,6 @@ import { toErrorMessage } from '@shared/errors'
 import { useGitGraphLog } from './useGitGraphLog'
 import { useWikiApi } from './useWikiApi'
 
-export interface GitWorkspaceMutationResult {
-  discardTargetPaths?: readonly string[]
-  discardSucceeded?: boolean
-}
-
 interface UseGitControllerOptions {
   workspaceRootPath: string | null
   confirmBeforeWorkspaceMutation?: (
@@ -17,7 +12,11 @@ interface UseGitControllerOptions {
     targetRepoPaths?: readonly string[]
   ) => Promise<boolean>
   onBeforeWorkspaceDiscard?: (targetRepoPaths: readonly string[]) => Promise<void>
-  onWorkspaceMutated?: (context?: GitWorkspaceMutationResult) => Promise<readonly string[]>
+  onAfterWorkspaceDiscard?: (
+    targetRepoPaths: readonly string[],
+    succeeded: boolean
+  ) => Promise<void>
+  onWorkspaceMutated?: () => Promise<readonly string[]>
   onWorkspaceMutationActiveChange?: (active: boolean) => void
 }
 
@@ -28,6 +27,7 @@ export function useGitController({
   workspaceRootPath,
   confirmBeforeWorkspaceMutation,
   onBeforeWorkspaceDiscard,
+  onAfterWorkspaceDiscard,
   onWorkspaceMutated,
   onWorkspaceMutationActiveChange
 }: UseGitControllerOptions) {
@@ -46,6 +46,7 @@ export function useGitController({
   const callbacksRef = useRef({
     confirmBeforeWorkspaceMutation,
     onBeforeWorkspaceDiscard,
+    onAfterWorkspaceDiscard,
     onWorkspaceMutated,
     onWorkspaceMutationActiveChange
   })
@@ -54,6 +55,7 @@ export function useGitController({
   callbacksRef.current = {
     confirmBeforeWorkspaceMutation,
     onBeforeWorkspaceDiscard,
+    onAfterWorkspaceDiscard,
     onWorkspaceMutated,
     onWorkspaceMutationActiveChange
   }
@@ -201,29 +203,36 @@ export function useGitController({
       callbacksRef.current.onWorkspaceMutationActiveChange?.(true)
       setErrorMessage(null)
       let preparedDiscard = false
-      let discardCompleted = false
+      let workspaceEffectsCompleted = false
 
-      const finishDiscardSafely = async (succeeded: boolean): Promise<readonly string[]> => {
-        if (!options.discardTargetPaths || discardCompleted) return []
-        discardCompleted = true
-        return (
-          (await callbacksRef.current
-            .onWorkspaceMutated?.({
-              discardTargetPaths: options.discardTargetPaths,
-              discardSucceeded: succeeded
-            })
-            .catch(() => [])) ?? []
-        )
+      const completeWorkspaceEffects = async (succeeded: boolean): Promise<void> => {
+        if (!options.affectsWorkspaceFiles || workspaceEffectsCompleted) return
+        workspaceEffectsCompleted = true
+        if (options.discardTargetPaths) {
+          if (succeeded || preparedDiscard) {
+            await callbacksRef.current.onAfterWorkspaceDiscard?.(
+              options.discardTargetPaths,
+              succeeded
+            )
+          }
+          return
+        }
+        const warnings = (await callbacksRef.current.onWorkspaceMutated?.()) ?? []
+        if (succeeded && warnings.length > 0 && isCurrentRequest(rootPath, epoch)) {
+          const message = warnings.join(' ')
+          setErrorMessage(message)
+          logRendererWarn('git', 'Git workspace mutation completed with warnings', {
+            data: { action: actionLabel, workspaceRootPath: rootPath, warningMessage: message }
+          })
+        }
       }
 
       try {
         if (options.affectsWorkspaceFiles && callbacksRef.current.confirmBeforeWorkspaceMutation) {
-          const confirmed = options.discardTargetPaths
-            ? await callbacksRef.current.confirmBeforeWorkspaceMutation(
-                actionLabel,
-                options.discardTargetPaths
-              )
-            : await callbacksRef.current.confirmBeforeWorkspaceMutation(actionLabel)
+          const confirmed = await callbacksRef.current.confirmBeforeWorkspaceMutation(
+            actionLabel,
+            options.discardTargetPaths
+          )
           if (!confirmed || !isCurrentRequest(rootPath, epoch)) {
             return false
           }
@@ -244,21 +253,8 @@ export function useGitController({
         const nextStatus = await options.run(rootPath)
         await applyWorkspaceGitState(rootPath, epoch, nextStatus, options.fetchRepoMetadata ?? false)
 
-        if (
-          options.affectsWorkspaceFiles &&
-          isCurrentRequest(rootPath, epoch) &&
-          callbacksRef.current.onWorkspaceMutated
-        ) {
-          const warnings = options.discardTargetPaths
-            ? await finishDiscardSafely(true)
-            : await callbacksRef.current.onWorkspaceMutated()
-          if (isCurrentRequest(rootPath, epoch) && warnings.length > 0) {
-            const message = warnings.join(' ')
-            setErrorMessage(message)
-            logRendererWarn('git', 'Git workspace mutation completed with warnings', {
-              data: { action: actionLabel, workspaceRootPath: rootPath, warningMessage: message }
-            })
-          }
+        if (isCurrentRequest(rootPath, epoch)) {
+          await completeWorkspaceEffects(true)
         }
 
         return true
@@ -275,19 +271,13 @@ export function useGitController({
               .status(rootPath)
               .then((fresh) => applyWorkspaceGitState(rootPath, epoch, fresh, true))
               .catch(() => undefined)
-            if (options.discardTargetPaths) {
-              if (preparedDiscard) {
-                await finishDiscardSafely(false)
-              }
-            } else {
-              await callbacksRef.current.onWorkspaceMutated?.().catch(() => [])
-            }
+            await completeWorkspaceEffects(false).catch(() => undefined)
           }
         }
         return false
       } finally {
-        if (preparedDiscard && !discardCompleted && options.discardTargetPaths) {
-          await finishDiscardSafely(false)
+        if (preparedDiscard && !workspaceEffectsCompleted) {
+          await completeWorkspaceEffects(false).catch(() => undefined)
         }
         if (mutationTokenRef.current === token) {
           mutationTokenRef.current = null

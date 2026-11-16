@@ -735,23 +735,15 @@ export class GitService {
           throw new Error(outsideMessage)
         }
       }
-      let resolvedReal: string
-      if (followLeafSymlink) {
-        resolvedReal = (
-          await resolveRealPathWithAncestor(candidate, {
-            outsideMessage,
-            assertResolved: assertResolvedInsideRepo
-          })
-        ).resolvedReal
-      } else {
-        const { resolvedReal: resolvedParent } = await resolveRealPathWithAncestor(
-          dirname(candidate),
-          {
-            outsideMessage,
-            assertResolved: assertResolvedInsideRepo
-          }
-        )
-        resolvedReal = join(resolvedParent, basename(candidate))
+      const targetToResolve = followLeafSymlink ? candidate : dirname(candidate)
+      const { resolvedReal: resolvedTarget } = await resolveRealPathWithAncestor(targetToResolve, {
+        outsideMessage,
+        assertResolved: assertResolvedInsideRepo
+      })
+      const resolvedReal = followLeafSymlink
+        ? resolvedTarget
+        : join(resolvedTarget, basename(candidate))
+      if (!followLeafSymlink) {
         assertResolvedInsideRepo(resolvedReal)
       }
       if (hasBlockedPathSegment(relative(repoRoot, resolvedReal), GIT_METADATA_NAMES)) {

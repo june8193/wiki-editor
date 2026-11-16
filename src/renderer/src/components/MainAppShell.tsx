@@ -15,7 +15,7 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
-import { type GitWorkspaceMutationResult, useGitController } from '../hooks/useGitController'
+import { useGitController } from '../hooks/useGitController'
 import { useGitDiffTabs } from '../hooks/useGitDiffTabs'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
@@ -343,25 +343,18 @@ export function MainAppShell() {
     [prepareWorkspacePathsForDiscard, resolveTargetWorkspacePaths]
   )
 
-  const handleGitWorkspaceMutated = useCallback(
-    async (context?: GitWorkspaceMutationResult): Promise<readonly string[]> => {
-      if (context?.discardTargetPaths) {
-        const targetPaths =
-          activeDiscardTargetPathsRef.current ??
-          resolveTargetWorkspacePaths(context.discardTargetPaths)
-        activeDiscardTargetPathsRef.current = null
-        const discardSucceeded = context.discardSucceeded ?? false
-        if (targetPaths.length > 0) {
-          await finishWorkspacePathsDiscard(targetPaths, discardSucceeded)
-        }
-        if (discardSucceeded) {
-          closeUnstagedDiffTabsForPaths(context.discardTargetPaths)
-          await refreshTree()
-        }
-        return []
+  const handleAfterWorkspaceDiscard = useCallback(
+    async (targetRepoPaths: readonly string[], succeeded: boolean): Promise<void> => {
+      const targetPaths =
+        activeDiscardTargetPathsRef.current ?? resolveTargetWorkspacePaths(targetRepoPaths)
+      activeDiscardTargetPathsRef.current = null
+      if (targetPaths.length > 0) {
+        await finishWorkspacePathsDiscard(targetPaths, succeeded)
       }
-      await refreshTree()
-      return await reconcileBuffersRef.current()
+      if (succeeded) {
+        closeUnstagedDiffTabsForPaths(targetRepoPaths)
+        await refreshTree()
+      }
     },
     [
       closeUnstagedDiffTabsForPaths,
@@ -371,10 +364,16 @@ export function MainAppShell() {
     ]
   )
 
+  const handleGitWorkspaceMutated = useCallback(async (): Promise<readonly string[]> => {
+    await refreshTree()
+    return await reconcileBuffersRef.current()
+  }, [refreshTree])
+
   const git = useGitController({
     workspaceRootPath: workspace?.rootPath ?? null,
     confirmBeforeWorkspaceMutation: confirmDirtyBuffersBeforeGitMutation,
     onBeforeWorkspaceDiscard: handleBeforeWorkspaceDiscard,
+    onAfterWorkspaceDiscard: handleAfterWorkspaceDiscard,
     onWorkspaceMutated: handleGitWorkspaceMutated,
     onWorkspaceMutationActiveChange: setIsGitWorkspaceMutating
   })

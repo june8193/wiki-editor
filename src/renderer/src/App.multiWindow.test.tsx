@@ -2524,9 +2524,9 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     })
     expect(harness.getFilesSnapshot().get('C:/wiki/other.md')).toBe('# Other Dirty')
 
-    // 3. Enable autoSave (120ms delay), re-dirty notes.md, then slow discard (220ms > 120ms) with 저장 없이 진행 must suppress auto-save
-    await mainWin.api.config.update({ autoSave: true, autoSaveDelayMs: 120 })
-    discardDelayMs = 220
+    // 3. Enable autoSave (500ms delay), re-dirty notes.md, then slow discard (650ms > 500ms) with 저장 없이 진행 must suppress auto-save
+    await mainWin.api.config.update({ autoSave: true, autoSaveDelayMs: 500 })
+    discardDelayMs = 650
     gitState = {
       ...gitState,
       unstaged: [{ path: 'notes.md', status: 'M' }]
@@ -2549,7 +2549,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
       expect(within(notesTab).queryByTestId('tab-dirty-indicator')).toBeNull()
     })
     // Wait past another auto-save delay cycle to verify no late flush overwrote disk
-    await new Promise((resolve) => setTimeout(resolve, 180))
+    await new Promise((resolve) => setTimeout(resolve, 550))
     expect(harness.getFilesSnapshot().get('C:/wiki/notes.md')).toBe('# Clean Head Notes')
     expect(getRawEditorText(within(rendered.container).getByTestId('document-editor'))).toBe(
       '# Clean Head Notes'

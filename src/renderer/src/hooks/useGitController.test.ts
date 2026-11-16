@@ -703,6 +703,7 @@ describe('useGitController', () => {
     let confirmDecision = false
     const confirmBeforeWorkspaceMutation = vi.fn(async () => confirmDecision)
     const onBeforeWorkspaceDiscard = vi.fn(async () => undefined)
+    const onAfterWorkspaceDiscard = vi.fn(async () => undefined)
     const onWorkspaceMutated = vi.fn(async () => [])
     const activeTransitions: boolean[] = []
 
@@ -711,6 +712,7 @@ describe('useGitController', () => {
         workspaceRootPath: 'C:/wiki',
         confirmBeforeWorkspaceMutation,
         onBeforeWorkspaceDiscard,
+        onAfterWorkspaceDiscard,
         onWorkspaceMutated,
         onWorkspaceMutationActiveChange: (active) => activeTransitions.push(active)
       })
@@ -728,6 +730,7 @@ describe('useGitController', () => {
     expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledWith('변경 사항 롤백', ['notes.md'])
     expect(onBeforeWorkspaceDiscard).not.toHaveBeenCalled()
     expect(discardMock).not.toHaveBeenCalled()
+    expect(onAfterWorkspaceDiscard).not.toHaveBeenCalled()
     expect(onWorkspaceMutated).not.toHaveBeenCalled()
     expect(activeTransitions).toEqual([true, false])
 
@@ -738,21 +741,16 @@ describe('useGitController', () => {
     })
     expect(onBeforeWorkspaceDiscard).toHaveBeenCalledWith(['notes.md'])
     expect(discardMock).toHaveBeenCalledWith('C:/wiki', ['notes.md'])
-    expect(onWorkspaceMutated).toHaveBeenCalledWith({
-      discardTargetPaths: ['notes.md'],
-      discardSucceeded: true
-    })
+    expect(onAfterWorkspaceDiscard).toHaveBeenCalledWith(['notes.md'], true)
+    expect(onWorkspaceMutated).not.toHaveBeenCalled()
     expect(result.current.status?.unstaged).toEqual([])
     expect(logMock).toHaveBeenCalledTimes(logCallsBeforeDiscard)
 
-    // 3. Failure releases discard lock with discardSucceeded=false and reports error
+    // 3. Failure releases discard lock with succeeded=false and reports error
     await act(async () => {
       await result.current.discardFile('notes.md')
     })
-    expect(onWorkspaceMutated).toHaveBeenLastCalledWith({
-      discardTargetPaths: ['notes.md'],
-      discardSucceeded: false
-    })
+    expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith(['notes.md'], false)
     expect(result.current.errorMessage).toBe('discard failed')
   })
 })
