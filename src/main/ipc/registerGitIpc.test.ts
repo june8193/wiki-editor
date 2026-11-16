@@ -87,6 +87,7 @@ describe('registerGitIpc', () => {
       | 'stageAll'
       | 'unstage'
       | 'unstageAll'
+      | 'discard'
       | 'commit'
       | 'branches'
       | 'checkout'
@@ -103,6 +104,7 @@ describe('registerGitIpc', () => {
       stageAll: vi.fn(async () => sampleStatus),
       unstage: vi.fn(async () => sampleStatus),
       unstageAll: vi.fn(async () => sampleStatus),
+      discard: vi.fn(async () => sampleStatus),
       commit: vi.fn(async () => sampleStatus),
       branches: vi.fn(async () => ({
         current: 'main',
@@ -128,6 +130,9 @@ describe('registerGitIpc', () => {
     const diffRequest = { kind: 'staged' as const, path: 'README.md', status: 'M' as const }
 
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.discard, workspaceDir, ['a.md'])).rejects.toThrow(
+      /열린 워크스페이스/
+    )
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.log, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.commitDetail, workspaceDir, 'abc1234')).rejects.toThrow(
       /열린 워크스페이스/
@@ -139,6 +144,9 @@ describe('registerGitIpc', () => {
     const opened = await workspaceService.openWorkspace(workspaceDir)
 
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, otherDir)).rejects.toThrow(/일치하지 않습니다/)
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.discard, otherDir, ['a.md'])).rejects.toThrow(
+      /일치하지 않습니다/
+    )
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.log, otherDir)).rejects.toThrow(/일치하지 않습니다/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.commitDetail, otherDir, 'abc1234')).rejects.toThrow(
       /일치하지 않습니다/
@@ -164,6 +172,9 @@ describe('registerGitIpc', () => {
 
     await ipcMain.invoke(GIT_IPC_CHANNELS.unstageAll, workspaceDir)
     expect(fakeGitService.unstageAll).toHaveBeenCalledWith(opened.rootPath)
+
+    await ipcMain.invoke(GIT_IPC_CHANNELS.discard, workspaceDir, ['a.md', 'b.md'])
+    expect(fakeGitService.discard).toHaveBeenCalledWith(opened.rootPath, ['a.md', 'b.md'])
 
     await ipcMain.invoke(GIT_IPC_CHANNELS.commit, workspaceDir, 'init commit')
     expect(fakeGitService.commit).toHaveBeenCalledWith(opened.rootPath, 'init commit')
@@ -217,6 +228,7 @@ describe('registerGitIpc', () => {
       | 'stageAll'
       | 'unstage'
       | 'unstageAll'
+      | 'discard'
       | 'commit'
       | 'branches'
       | 'checkout'
@@ -233,6 +245,7 @@ describe('registerGitIpc', () => {
       stageAll: vi.fn(async () => sampleStatus),
       unstage: vi.fn(async () => sampleStatus),
       unstageAll: vi.fn(async () => sampleStatus),
+      discard: vi.fn(async () => sampleStatus),
       commit: vi.fn(async () => sampleStatus),
       branches: vi.fn(async () => ({ current: 'main', isDetached: false, branches: [] })),
       checkout: vi.fn(async () => sampleStatus),

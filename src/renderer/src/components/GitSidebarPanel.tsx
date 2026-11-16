@@ -41,6 +41,7 @@ export interface GitSidebarPanelProps {
   onStageAll: () => void
   onUnstageFile: (path: string, origPath?: string) => void
   onUnstageAll: () => void
+  onDiscardFile: (path: string) => void
   onCommit: (message: string) => Promise<boolean> | boolean
   onCheckoutBranch: (branchName: string) => void
   onPull: () => void
@@ -68,6 +69,7 @@ interface GitFileSectionProps {
   onBulkAction: () => void
   onSelectFile: (file: GitChangedFile) => void
   onItemAction: (file: GitChangedFile) => void
+  onDiscardFile?: (file: GitChangedFile) => void
 }
 
 function GitFileSection({
@@ -81,7 +83,8 @@ function GitFileSection({
   isBusy,
   onBulkAction,
   onSelectFile,
-  onItemAction
+  onItemAction,
+  onDiscardFile
 }: GitFileSectionProps) {
   return (
     <div className="git-section">
@@ -107,6 +110,18 @@ function GitFileSection({
           {files.map((file) => (
             <li key={`${itemActionTitle}:${file.status}:${file.path}`} className="git-file-item">
               <GitFileTriggerButton file={file} onClick={() => onSelectFile(file)} />
+              {onDiscardFile && (
+                <button
+                  type="button"
+                  className="git-file-action-btn"
+                  aria-label={`${file.path} 변경 사항 롤백`}
+                  title="변경 사항 롤백"
+                  disabled={isBusy}
+                  onClick={() => onDiscardFile(file)}
+                >
+                  ↶
+                </button>
+              )}
               <button
                 type="button"
                 className="git-file-action-btn"
@@ -223,6 +238,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onStageAll,
   onUnstageFile,
   onUnstageAll,
+  onDiscardFile,
   onCommit,
   onCheckoutBranch,
   onPull,
@@ -470,6 +486,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 onBulkAction={onStageAll}
                 onSelectFile={(file) => onOpenFileDiff(toGitDiffRequest('unstaged', file))}
                 onItemAction={(file) => onStageFile(file.path)}
+                onDiscardFile={(file) => onDiscardFile(file.path)}
               />
             </GitAccordionSection>
 

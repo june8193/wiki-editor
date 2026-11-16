@@ -375,6 +375,10 @@ export class RendererBufferSyncClient {
         this.tabStore.closeTabsByBufferKeys(event.closedKeys)
         this.applyHubSnapshot(event.snapshot)
         return
+      case 'buffers-force-synced':
+        this.clearTrackingForKeys(event.syncedKeys)
+        this.applyHubSnapshot(event.snapshot)
+        return
       case 'workspace-saved':
         this.onWorkspaceSaved?.()
         return
@@ -735,9 +739,24 @@ export class RendererBufferSyncClient {
     return this.hasLocalPendingState(key) || this.hasPendingUpdatesForKey(key)
   }
 
+  private toTargetKeySet(targetPaths?: readonly string[]): Set<string> | null {
+    if (targetPaths === undefined) return null
+    const keys = new Set<string>()
+    for (const targetPath of targetPaths) {
+      const key = getWorkspacePathKey(targetPath)
+      if (!key) continue
+      keys.add(this.resolveLatestKey(key))
+    }
+    return keys
+  }
+
   private getScopeCandidates(
-    scope: DirtyBufferScope
+    scope: DirtyBufferScope,
+    targetKeys: Set<string> | null = null
   ): Array<{ key: string; buffer: DocumentBuffer }> {
+    if (targetKeys && targetKeys.size === 0) {
+      return []
+    }
     const localSnapshot = this.bufferStore.getSnapshot()
     const candidateKeys = new Set<string>()
     for (const rawKey of [
@@ -750,6 +769,7 @@ export class RendererBufferSyncClient {
 
     const candidates: Array<{ key: string; buffer: DocumentBuffer }> = []
     for (const key of candidateKeys) {
+      if (targetKeys && !targetKeys.has(key)) continue
       const localBuf = localSnapshot[key]
       const hubBuf = this.latestHubBuffers[key]
       const buffer = this.hasPendingLocalOrFlush(key) && localBuf ? localBuf : (hubBuf ?? localBuf)
@@ -768,8 +788,11 @@ export class RendererBufferSyncClient {
     return candidates
   }
 
-  private getDirtySummaryForScope(scope: DirtyBufferScope): string | null {
-    const dirty = this.getScopeCandidates(scope)
+  private getDirtySummaryForScope(
+    scope: DirtyBufferScope,
+    targetKeys: Set<string> | null = null
+  ): string | null {
+    const dirty = this.getScopeCandidates(scope, targetKeys)
       .filter(({ key, buffer }) => buffer.isDirty || this.hasLocalPendingState(key))
       .map(({ buffer }) => buffer)
     if (dirty.length === 0) return null
@@ -777,25 +800,28 @@ export class RendererBufferSyncClient {
     return `${dirty[0].name} 외 ${dirty.length - 1}개`
   }
 
-  private async ensureScopeBuffersSaved(scope: DirtyBufferScope): Promise<boolean> {
-    const targetKeys = this.getScopeCandidates(scope)
+  private async ensureScopeBuffersSaved(
+    scope: DirtyBufferScope,
+    targetKeys: Set<string> | null = null
+  ): Promise<boolean> {
+    const targetKeysToSave = this.getScopeCandidates(scope, targetKeys)
       .filter(({ key }) => this.needsBufferSave(key))
       .map(({ key }) => key)
-    if (targetKeys.length === 0) return true
+    if (targetKeysToSave.length === 0) return true
 
     this.onError(null)
-    for (const key of targetKeys) {
+    for (const key of targetKeysToSave) {
       if (!(await this.ensureSavedBuffer(key))) return false
     }
     return true
   }
 
-  ensureAllWorkspaceBuffersSaved = async (): Promise<boolean> => {
-    return this.ensureScopeBuffersSaved('workspace-all')
+  ensureAllWorkspaceBuffersSaved = async (targetPaths?: readonly string[]): Promise<boolean> => {
+    return this.ensureScopeBuffersSaved('workspace-all', this.toTargetKeySet(targetPaths))
   }
 
-  getDirtyWorkspaceSummary = (): string | null => {
-    return this.getDirtySummaryForScope('workspace-all')
+  getDirtyWorkspaceSummary = (targetPaths?: readonly string[]): string | null => {
+    return this.getDirtySummaryForScope('workspace-all', this.toTargetKeySet(targetPaths))
   }
 
   getDirtyCloseSummary = (): string | null => {
@@ -974,5 +1000,24 @@ export class RendererBufferSyncClient {
   ): Promise<readonly string[]> => {
     const result = await this.bufferApi.reconcileWorkspaceBuffersWithDisk(changeEvent)
     return result.warnings
+  }
+
+  prepareWorkspacePathsForDiscard = async (targetPaths: readonly string[]): Promise<void> => {
+    if (targetPaths.length === 0) return
+    await this.bufferApi.prepareDiscardPaths(targetPaths)
+  }
+
+  finishWorkspacePathsDiscard = async (
+    targetPaths: readonly string[],
+    forceSync: boolean
+  ): Promise<void> => {
+    if (targetPaths.length === 0) return
+    if (forceSync) {
+      const targetKeys = this.toTargetKeySet(targetPaths)
+      if (targetKeys && targetKeys.size > 0) {
+        this.clearTrackingForKeys(targetKeys)
+      }
+    }
+    await this.bufferApi.finishDiscardPaths(targetPaths, forceSync)
   }
 }

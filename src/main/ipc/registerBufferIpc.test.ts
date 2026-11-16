@@ -510,4 +510,47 @@ describe('registerBufferIpc', () => {
 
     dispose()
   })
+
+  it('routes buffer:prepare-discard-paths and buffer:finish-discard-paths through the hub', async () => {
+    const workspaceInfo = await workspaceService.openWorkspace(workspaceDir)
+    const configService = new ConfigService(configPath)
+    await configService.get()
+
+    const notePath = join(workspaceInfo.rootPath, 'discard.md')
+    const noteKey = getWorkspacePathKey(notePath)
+    await writeFile(notePath, '# Original', 'utf8')
+
+    const ipcMain = createFakeIpcMain()
+    const win1 = createFakeWindowWebContents(501)
+    const dispose = registerBufferIpc({
+      ipcMain,
+      configService,
+      hub: createSharedDocumentBufferHub({ workspaceService, configService }),
+      getTargets: () => [win1]
+    })
+
+    await ipcMain.invokeFrom(win1, BUFFER_IPC_CHANNELS.openWorkspaceFile, notePath, 'discard.md')
+    await ipcMain.invokeFrom(win1, BUFFER_IPC_CHANNELS.syncWindowTabs, [noteKey])
+    await ipcMain.invokeFrom(win1, BUFFER_IPC_CHANNELS.updateContent, noteKey, '# Dirty')
+
+    await ipcMain.invokeFrom(win1, BUFFER_IPC_CHANNELS.prepareDiscardPaths, [notePath])
+    await writeFile(notePath, '# Restored', 'utf8')
+    const closed = await ipcMain.invokeFrom<string[]>(
+      win1,
+      BUFFER_IPC_CHANNELS.finishDiscardPaths,
+      [notePath],
+      true
+    )
+    expect(closed).toEqual([])
+    expect(win1.events.some((event) => event.type === 'buffers-force-synced')).toBe(true)
+
+    const snap = await ipcMain.invokeFrom<SharedBufferStateSnapshot>(
+      win1,
+      BUFFER_IPC_CHANNELS.getSnapshot
+    )
+    expect(snap.buffers[noteKey]?.content).toBe('# Restored')
+    expect(snap.buffers[noteKey]?.isDirty).toBe(false)
+
+    dispose()
+  })
 })

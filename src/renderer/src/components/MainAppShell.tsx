@@ -15,7 +15,7 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
-import { useGitController } from '../hooks/useGitController'
+import { type GitWorkspaceMutationResult, useGitController } from '../hooks/useGitController'
 import { useGitDiffTabs } from '../hooks/useGitDiffTabs'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
@@ -96,9 +96,13 @@ export function MainAppShell() {
   const [gitPanelSplit, setGitPanelSplit] = useState<GitPanelSplitState>(
     createDefaultGitPanelSplitState
   )
+  const [isGitWorkspaceMutating, setIsGitWorkspaceMutating] = useState(false)
 
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
+  const activeWorkspaceRootRef = useRef<string | null>(null)
+  const activeGitRepoRootRef = useRef<string | null>(null)
+  const activeDiscardTargetPathsRef = useRef<readonly string[] | null>(null)
   const onInitialConfigLoadedRef = useRef<(loadedConfig: AppConfig) => void>(() => undefined)
 
   const {
@@ -118,7 +122,7 @@ export function MainAppShell() {
 
   const isEditorShortcutDisabled = pendingDialog !== null || isSettingsOpen
   const editor = useEditorWorkspace({
-    isAutoSavePaused: pendingDialog !== null,
+    isAutoSavePaused: pendingDialog !== null || isGitWorkspaceMutating,
     isShortcutDisabled: isEditorShortcutDisabled,
     onWorkspaceSaved: () => void refreshGitStatusRef.current(),
     onError: reportErrorBanner,
@@ -257,14 +261,38 @@ export function MainAppShell() {
     onBeforeShowDialog: () => pendingGitConfirmCancelRef.current?.()
   })
 
-  const { ensureAllWorkspaceBuffersSaved, getDirtyWorkspaceSummary } = editor
+  activeWorkspaceRootRef.current = workspace?.rootPath ?? null
+
+  const {
+    ensureAllWorkspaceBuffersSaved,
+    getDirtyWorkspaceSummary,
+    closeUnstagedDiffTabsForPaths,
+    prepareWorkspacePathsForDiscard,
+    finishWorkspacePathsDiscard
+  } = editor
+
+  const resolveTargetWorkspacePaths = useCallback((targetRepoPaths: readonly string[]): string[] => {
+    const workspaceRoot = activeWorkspaceRootRef.current
+    if (!workspaceRoot) return []
+    const repoRoot = activeGitRepoRootRef.current ?? workspaceRoot
+    const resolved: string[] = []
+    for (const repoRelativePath of targetRepoPaths) {
+      const resolvedEntry = resolveRepoFileInWorkspace(repoRoot, workspaceRoot, repoRelativePath)
+      if (resolvedEntry) {
+        resolved.push(resolvedEntry.path)
+      }
+    }
+    return resolved
+  }, [])
+
   const promptUnsavedWorkspaceChanges = useCallback(
     (options: {
+      targetPaths?: readonly string[]
       message: (dirtySummary: string) => string
       confirmLabel: string
       secondaryLabel: string
     }): Promise<boolean> => {
-      const dirtySummary = getDirtyWorkspaceSummary()
+      const dirtySummary = getDirtyWorkspaceSummary(options.targetPaths)
       if (!dirtySummary) {
         return Promise.resolve(true)
       }
@@ -274,7 +302,7 @@ export function MainAppShell() {
           message: options.message(dirtySummary),
           confirmLabel: options.confirmLabel,
           secondaryLabel: options.secondaryLabel,
-          onSave: ensureAllWorkspaceBuffersSaved,
+          onSave: () => ensureAllWorkspaceBuffersSaved(options.targetPaths),
           onResolve: (accepted) => {
             pendingGitConfirmCancelRef.current = null
             resolve(accepted)
@@ -290,26 +318,67 @@ export function MainAppShell() {
   )
 
   const confirmDirtyBuffersBeforeGitMutation = useCallback(
-    (actionLabel: string): Promise<boolean> =>
-      promptUnsavedWorkspaceChanges({
+    (actionLabel: string, targetRepoPaths?: readonly string[]): Promise<boolean> => {
+      const targetPaths = targetRepoPaths
+        ? resolveTargetWorkspacePaths(targetRepoPaths)
+        : undefined
+      return promptUnsavedWorkspaceChanges({
+        targetPaths,
         message: (dirtySummary) =>
           `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. ${actionLabel} 전에 어떻게 할까요?`,
         confirmLabel: '저장 후 진행',
         secondaryLabel: '저장 없이 진행'
-      }),
-    [promptUnsavedWorkspaceChanges]
+      })
+    },
+    [promptUnsavedWorkspaceChanges, resolveTargetWorkspacePaths]
   )
 
-  const handleGitWorkspaceMutated = useCallback(async (): Promise<readonly string[]> => {
-    await refreshTree()
-    return await reconcileBuffersRef.current()
-  }, [refreshTree])
+  const handleBeforeWorkspaceDiscard = useCallback(
+    async (targetRepoPaths: readonly string[]): Promise<void> => {
+      const targetPaths = resolveTargetWorkspacePaths(targetRepoPaths)
+      activeDiscardTargetPathsRef.current = targetPaths
+      if (targetPaths.length === 0) return
+      await prepareWorkspacePathsForDiscard(targetPaths)
+    },
+    [prepareWorkspacePathsForDiscard, resolveTargetWorkspacePaths]
+  )
+
+  const handleGitWorkspaceMutated = useCallback(
+    async (context?: GitWorkspaceMutationResult): Promise<readonly string[]> => {
+      if (context?.discardTargetPaths) {
+        const targetPaths =
+          activeDiscardTargetPathsRef.current ??
+          resolveTargetWorkspacePaths(context.discardTargetPaths)
+        activeDiscardTargetPathsRef.current = null
+        const discardSucceeded = context.discardSucceeded ?? false
+        if (targetPaths.length > 0) {
+          await finishWorkspacePathsDiscard(targetPaths, discardSucceeded)
+        }
+        if (discardSucceeded) {
+          closeUnstagedDiffTabsForPaths(context.discardTargetPaths)
+          await refreshTree()
+        }
+        return []
+      }
+      await refreshTree()
+      return await reconcileBuffersRef.current()
+    },
+    [
+      closeUnstagedDiffTabsForPaths,
+      finishWorkspacePathsDiscard,
+      refreshTree,
+      resolveTargetWorkspacePaths
+    ]
+  )
 
   const git = useGitController({
     workspaceRootPath: workspace?.rootPath ?? null,
     confirmBeforeWorkspaceMutation: confirmDirtyBuffersBeforeGitMutation,
-    onWorkspaceMutated: handleGitWorkspaceMutated
+    onBeforeWorkspaceDiscard: handleBeforeWorkspaceDiscard,
+    onWorkspaceMutated: handleGitWorkspaceMutated,
+    onWorkspaceMutationActiveChange: setIsGitWorkspaceMutating
   })
+  activeGitRepoRootRef.current = git.status?.repoRoot ?? null
   refreshGitStatusRef.current = git.refreshStatus
 
   const guardUnsavedWorkspaceChanges = useCallback(
@@ -545,6 +614,7 @@ export function MainAppShell() {
                 onStageAll={() => void git.stageAll()}
                 onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
                 onUnstageAll={() => void git.unstageAll()}
+                onDiscardFile={(path) => void git.discardFile(path)}
                 onCommit={git.commit}
                 onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
                 onPull={() => void git.pull()}

@@ -65,6 +65,12 @@ export function registerGitIpc({
     ],
     [GIT_IPC_CHANNELS.unstageAll, withWorkspace((rootPath) => gitService.unstageAll(rootPath))],
     [
+      GIT_IPC_CHANNELS.discard,
+      withWorkspace<[string[]], Awaited<ReturnType<GitService['discard']>>>((rootPath, paths) =>
+        gitService.discard(rootPath, paths)
+      )
+    ],
+    [
       GIT_IPC_CHANNELS.commit,
       withWorkspace<[string], Awaited<ReturnType<GitService['commit']>>>((rootPath, message) =>
         gitService.commit(rootPath, message)

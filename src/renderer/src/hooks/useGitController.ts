@@ -5,10 +5,20 @@ import { toErrorMessage } from '@shared/errors'
 import { useGitGraphLog } from './useGitGraphLog'
 import { useWikiApi } from './useWikiApi'
 
+export interface GitWorkspaceMutationResult {
+  discardTargetPaths?: readonly string[]
+  discardSucceeded?: boolean
+}
+
 interface UseGitControllerOptions {
   workspaceRootPath: string | null
-  confirmBeforeWorkspaceMutation?: (actionLabel: string) => Promise<boolean>
-  onWorkspaceMutated?: () => Promise<readonly string[]>
+  confirmBeforeWorkspaceMutation?: (
+    actionLabel: string,
+    targetRepoPaths?: readonly string[]
+  ) => Promise<boolean>
+  onBeforeWorkspaceDiscard?: (targetRepoPaths: readonly string[]) => Promise<void>
+  onWorkspaceMutated?: (context?: GitWorkspaceMutationResult) => Promise<readonly string[]>
+  onWorkspaceMutationActiveChange?: (active: boolean) => void
 }
 
 /**
@@ -17,7 +27,9 @@ interface UseGitControllerOptions {
 export function useGitController({
   workspaceRootPath,
   confirmBeforeWorkspaceMutation,
-  onWorkspaceMutated
+  onBeforeWorkspaceDiscard,
+  onWorkspaceMutated,
+  onWorkspaceMutationActiveChange
 }: UseGitControllerOptions) {
   const wikiApi = useWikiApi()
   const [status, setStatus] = useState<GitStatus | null>(null)
@@ -31,10 +43,20 @@ export function useGitController({
   const requestSeqRef = useRef(0)
   const mutationTokenRef = useRef<number | null>(null)
   const mutationCounterRef = useRef(0)
-  const callbacksRef = useRef({ confirmBeforeWorkspaceMutation, onWorkspaceMutated })
+  const callbacksRef = useRef({
+    confirmBeforeWorkspaceMutation,
+    onBeforeWorkspaceDiscard,
+    onWorkspaceMutated,
+    onWorkspaceMutationActiveChange
+  })
 
   activeWorkspaceRef.current = workspaceRootPath
-  callbacksRef.current = { confirmBeforeWorkspaceMutation, onWorkspaceMutated }
+  callbacksRef.current = {
+    confirmBeforeWorkspaceMutation,
+    onBeforeWorkspaceDiscard,
+    onWorkspaceMutated,
+    onWorkspaceMutationActiveChange
+  }
 
   const isCurrentRequest = useCallback((rootPath: string, epoch: number): boolean => {
     return (
@@ -142,8 +164,12 @@ export function useGitController({
   }, [applyWorkspaceGitState, isCurrentRequest, resetGraph, wikiApi])
 
   useEffect(() => {
+    const wasMutating = mutationTokenRef.current !== null
     workspaceEpochRef.current += 1
     mutationTokenRef.current = null
+    if (wasMutating) {
+      callbacksRef.current.onWorkspaceMutationActiveChange?.(false)
+    }
     setErrorMessage(null)
     setStatus(null)
     setBranchList(null)
@@ -161,6 +187,7 @@ export function useGitController({
       options: {
         affectsWorkspaceFiles?: boolean
         fetchRepoMetadata?: boolean
+        discardTargetPaths?: readonly string[]
         fallbackError: string
         run: (rootPath: string) => Promise<GitStatus>
       }
@@ -171,11 +198,32 @@ export function useGitController({
       const epoch = workspaceEpochRef.current
       const token = ++mutationCounterRef.current
       mutationTokenRef.current = token
+      callbacksRef.current.onWorkspaceMutationActiveChange?.(true)
       setErrorMessage(null)
+      let preparedDiscard = false
+      let discardCompleted = false
+
+      const finishDiscardSafely = async (succeeded: boolean): Promise<readonly string[]> => {
+        if (!options.discardTargetPaths || discardCompleted) return []
+        discardCompleted = true
+        return (
+          (await callbacksRef.current
+            .onWorkspaceMutated?.({
+              discardTargetPaths: options.discardTargetPaths,
+              discardSucceeded: succeeded
+            })
+            .catch(() => [])) ?? []
+        )
+      }
 
       try {
         if (options.affectsWorkspaceFiles && callbacksRef.current.confirmBeforeWorkspaceMutation) {
-          const confirmed = await callbacksRef.current.confirmBeforeWorkspaceMutation(actionLabel)
+          const confirmed = options.discardTargetPaths
+            ? await callbacksRef.current.confirmBeforeWorkspaceMutation(
+                actionLabel,
+                options.discardTargetPaths
+              )
+            : await callbacksRef.current.confirmBeforeWorkspaceMutation(actionLabel)
           if (!confirmed || !isCurrentRequest(rootPath, epoch)) {
             return false
           }
@@ -183,6 +231,14 @@ export function useGitController({
 
         if (mountedRef.current) {
           setPendingAction(actionLabel)
+        }
+
+        if (options.discardTargetPaths && callbacksRef.current.onBeforeWorkspaceDiscard) {
+          preparedDiscard = true
+          await callbacksRef.current.onBeforeWorkspaceDiscard(options.discardTargetPaths)
+          if (!isCurrentRequest(rootPath, epoch)) {
+            return false
+          }
         }
 
         const nextStatus = await options.run(rootPath)
@@ -193,7 +249,9 @@ export function useGitController({
           isCurrentRequest(rootPath, epoch) &&
           callbacksRef.current.onWorkspaceMutated
         ) {
-          const warnings = await callbacksRef.current.onWorkspaceMutated()
+          const warnings = options.discardTargetPaths
+            ? await finishDiscardSafely(true)
+            : await callbacksRef.current.onWorkspaceMutated()
           if (isCurrentRequest(rootPath, epoch) && warnings.length > 0) {
             const message = warnings.join(' ')
             setErrorMessage(message)
@@ -217,13 +275,23 @@ export function useGitController({
               .status(rootPath)
               .then((fresh) => applyWorkspaceGitState(rootPath, epoch, fresh, true))
               .catch(() => undefined)
-            await callbacksRef.current.onWorkspaceMutated?.().catch(() => [])
+            if (options.discardTargetPaths) {
+              if (preparedDiscard) {
+                await finishDiscardSafely(false)
+              }
+            } else {
+              await callbacksRef.current.onWorkspaceMutated?.().catch(() => [])
+            }
           }
         }
         return false
       } finally {
+        if (preparedDiscard && !discardCompleted && options.discardTargetPaths) {
+          await finishDiscardSafely(false)
+        }
         if (mutationTokenRef.current === token) {
           mutationTokenRef.current = null
+          callbacksRef.current.onWorkspaceMutationActiveChange?.(false)
           if (mountedRef.current) {
             setPendingAction(null)
           }
@@ -275,6 +343,19 @@ export function useGitController({
       run: (rootPath) => wikiApi.git.unstageAll(rootPath)
     })
   }, [runGitAction, wikiApi])
+
+  const discardFile = useCallback(
+    async (filePath: string): Promise<void> => {
+      await runGitAction('변경 사항 롤백', {
+        affectsWorkspaceFiles: true,
+        fetchRepoMetadata: false,
+        discardTargetPaths: [filePath],
+        fallbackError: '변경 사항을 롤백하지 못했습니다.',
+        run: (rootPath) => wikiApi.git.discard(rootPath, [filePath])
+      })
+    },
+    [runGitAction, wikiApi]
+  )
 
   const commit = useCallback(
     async (message: string): Promise<boolean> => {
@@ -345,6 +426,7 @@ export function useGitController({
     stageAll,
     unstageFile,
     unstageAll,
+    discardFile,
     commit,
     checkoutBranch,
     pull,

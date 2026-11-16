@@ -18,6 +18,7 @@ export interface BufferAutoSaveSchedulerOptions {
 export interface ReconcileAutoSaveInput {
   buffers: DocumentBufferSnapshot
   isSaveInFlight: (key: string) => boolean
+  isSuppressed?: (key: string) => boolean
   getLatestBuffer: (key: string) => DocumentBuffer | undefined
   onTriggerSave: (buffer: DocumentBuffer) => void
 }
@@ -111,6 +112,7 @@ export class BufferAutoSaveScheduler {
   reconcile({
     buffers,
     isSaveInFlight,
+    isSuppressed,
     getLatestBuffer,
     onTriggerSave
   }: ReconcileAutoSaveInput): void {
@@ -121,7 +123,7 @@ export class BufferAutoSaveScheduler {
 
     for (const [key, entry] of this.timers.entries()) {
       const buf = buffers[key]
-      if (!this.isAutoSaveCandidate(buf) || buf.version !== entry.version) {
+      if (!this.isAutoSaveCandidate(buf) || buf.version !== entry.version || isSuppressed?.(key)) {
         clearTimeout(entry.timerId)
         this.timers.delete(key)
       }
@@ -136,6 +138,7 @@ export class BufferAutoSaveScheduler {
 
     for (const buf of Object.values(buffers)) {
       if (!this.isAutoSaveCandidate(buf)) continue
+      if (isSuppressed?.(buf.key)) continue
       if (this.lastAttemptVersion.get(buf.key) === buf.version) continue
       if (this.timers.has(buf.key)) continue
 
@@ -148,7 +151,8 @@ export class BufferAutoSaveScheduler {
         if (
           !this.isAutoSaveCandidate(latest) ||
           latest.version !== scheduledVersion ||
-          isSaveInFlight(latest.key)
+          isSaveInFlight(latest.key) ||
+          isSuppressed?.(latest.key)
         ) {
           return
         }

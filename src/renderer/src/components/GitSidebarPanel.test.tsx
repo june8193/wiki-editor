@@ -55,6 +55,7 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onStageAll: vi.fn(),
     onUnstageFile: vi.fn(),
     onUnstageAll: vi.fn(),
+    onDiscardFile: vi.fn(),
     onCommit: vi.fn(),
     onCheckoutBranch: vi.fn(),
     onPull: vi.fn(),
@@ -930,5 +931,68 @@ describe('GitSidebarPanel', () => {
     for (const button of within(region).getAllByRole('button')) {
       expect(button).not.toHaveAttribute('aria-expanded')
     }
+  })
+
+  it('renders permanent ↶ button left of + only on 변경 사항 rows, disables it when busy, and does not open diff on click', async () => {
+    const user = userEvent.setup()
+    const onDiscardFile = vi.fn()
+    const onOpenFileDiff = vi.fn()
+    const onStageFile = vi.fn()
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [{ path: 'staged-only.md', status: 'M' }],
+            unstaged: [
+              { path: 'modified.md', status: 'M' },
+              { path: 'conflict.md', status: 'U' }
+            ],
+            untracked: [{ path: 'draft.md', status: '?' }]
+          }),
+          onDiscardFile,
+          onOpenFileDiff,
+          onStageFile
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(
+      within(region).queryByRole('button', { name: 'staged-only.md 변경 사항 롤백' })
+    ).not.toBeInTheDocument()
+
+    for (const filePath of ['modified.md', 'conflict.md', 'draft.md']) {
+      const discardBtn = within(region).getByRole('button', { name: `${filePath} 변경 사항 롤백` })
+      const stageBtn = within(region).getByRole('button', { name: `${filePath} Stage` })
+      expect(discardBtn).toHaveAttribute('title', '변경 사항 롤백')
+      expect(discardBtn).toHaveTextContent('↶')
+      expect(discardBtn).toBeEnabled()
+      expect(
+        discardBtn.compareDocumentPosition(stageBtn) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+    }
+
+    await user.click(within(region).getByRole('button', { name: 'modified.md 변경 사항 롤백' }))
+    await user.click(within(region).getByRole('button', { name: 'conflict.md 변경 사항 롤백' }))
+    await user.click(within(region).getByRole('button', { name: 'draft.md 변경 사항 롤백' }))
+    expect(onDiscardFile.mock.calls).toEqual([['modified.md'], ['conflict.md'], ['draft.md']])
+    expect(onOpenFileDiff).not.toHaveBeenCalled()
+    expect(onStageFile).not.toHaveBeenCalled()
+
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          pendingAction: '변경 사항 롤백',
+          onDiscardFile
+        })}
+      />
+    )
+    expect(
+      within(region).getByRole('button', { name: 'README.md 변경 사항 롤백' })
+    ).toBeDisabled()
+    expect(
+      within(region).getByRole('button', { name: 'notes.md 변경 사항 롤백' })
+    ).toBeDisabled()
   })
 })

@@ -177,6 +177,8 @@ export function createWikiApi(
         ipcRenderer.invoke(GIT_IPC_CHANNELS.unstage, workspacePath, paths) as Promise<GitStatus>,
       unstageAll: (workspacePath) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.unstageAll, workspacePath) as Promise<GitStatus>,
+      discard: (workspacePath, paths) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.discard, workspacePath, paths) as Promise<GitStatus>,
       commit: (workspacePath, message) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.commit, workspacePath, message) as Promise<GitStatus>,
       branches: (workspacePath) =>
@@ -251,6 +253,14 @@ export function createWikiApi(
           BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk,
           ...(changeEvent !== undefined ? [changeEvent] : [])
         ) as Promise<ReconcileBuffersResult>,
+      prepareDiscardPaths: (targetPaths) =>
+        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.prepareDiscardPaths, targetPaths) as Promise<void>,
+      finishDiscardPaths: (targetPaths, forceSync) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.finishDiscardPaths,
+          targetPaths,
+          forceSync
+        ) as Promise<string[]>,
       clearWorkspaceBuffers: () =>
         ipcRenderer.invoke(BUFFER_IPC_CHANNELS.clearWorkspaceBuffers) as Promise<string[]>,
       onEvent: (listener) =>
