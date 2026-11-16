@@ -216,18 +216,11 @@ export function useGitController({
         workspaceEffectsCompleted = true
         if (options.discardTargetPaths) {
           if (succeeded || preparedDiscard) {
-            if (options.isDiscardAll) {
-              await callbacksRef.current.onAfterWorkspaceDiscard?.(
-                options.discardTargetPaths,
-                succeeded,
-                true
-              )
-            } else {
-              await callbacksRef.current.onAfterWorkspaceDiscard?.(
-                options.discardTargetPaths,
-                succeeded
-              )
-            }
+            await callbacksRef.current.onAfterWorkspaceDiscard?.(
+              options.discardTargetPaths,
+              succeeded,
+              ...(options.isDiscardAll ? ([true] as const) : ([] as const))
+            )
           }
           return
         }
