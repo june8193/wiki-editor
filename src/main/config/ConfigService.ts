@@ -1,5 +1,4 @@
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { readFile } from 'node:fs/promises'
 import {
   AppConfig,
   cloneAppConfig,
@@ -15,32 +14,13 @@ import {
   toggleFavoriteWorkspace
 } from '@shared/workspace'
 import { createAsyncQueue } from '../asyncQueue'
+import { nextUniqueSuffix, writeFileAtomic } from '../fs/atomicFile'
 import type { LogService } from '../logging/LogService'
 
 export type ConfigChangeListener = (config: AppConfig) => void
 
 export interface ConfigServiceOptions {
   logService?: LogService
-}
-
-let uniqueSuffixCounter = 0
-
-function nextUniqueSuffix(): string {
-  uniqueSuffixCounter += 1
-  return `${process.pid}.${Date.now()}-${uniqueSuffixCounter}`
-}
-
-async function writeFileAtomic(filePath: string, content: string): Promise<void> {
-  const dir = dirname(filePath)
-  await mkdir(dir, { recursive: true })
-  const tempPath = join(dir, `.${basename(filePath)}.${nextUniqueSuffix()}.tmp`)
-  try {
-    await writeFile(tempPath, content, 'utf8')
-    await rename(tempPath, filePath)
-  } catch (error) {
-    await unlink(tempPath).catch(() => undefined)
-    throw error
-  }
 }
 
 function serializeConfig(config: AppConfig): string {

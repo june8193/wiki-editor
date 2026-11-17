@@ -7,6 +7,7 @@ import {
   formatAbsoluteEntryPath,
   formatRelativeEntryPath,
   isFavoriteWorkspacePath,
+  isSameWorkspacePath,
   resolveRepoFileInWorkspace,
   type WorkspaceChangeEvent,
   type WorkspaceEntry
@@ -21,7 +22,8 @@ import { useGitDiffTabs } from '../hooks/useGitDiffTabs'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
 import { useWindowWidth } from '../hooks/useWindowWidth'
-import { useWorkspaceTree } from '../hooks/useWorkspaceTree'
+import { useWorkspaceStatePersistence } from '../hooks/useWorkspaceStatePersistence'
+import { type RestoredWorkspaceContext, useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import { buildDiscardAllConfirmMessage, getGitFileBaseName } from '../utils/gitFilePresentation'
 import {
   createDefaultGitPanelSplitState,
@@ -59,6 +61,12 @@ function selectLeftSidebarView(
     return { ...prev, isCollapsed: true }
   }
   return { ...prev, activeView: view, isCollapsed: false }
+}
+
+function transitionWorkspaceSidebarToExplorer(prev: LeftSidebarState): LeftSidebarState {
+  return prev.activeView === 'workspace' && !prev.isCollapsed
+    ? { ...prev, activeView: 'explorer', isCollapsed: false }
+    : prev
 }
 
 async function writeTextToClipboard(wikiApi: WikiApi, text: string): Promise<void> {
@@ -105,6 +113,7 @@ export function MainAppShell() {
   const activeGitRepoRootRef = useRef<string | null>(null)
   const activeDiscardTargetPathsRef = useRef<readonly string[] | null>(null)
   const onInitialConfigLoadedRef = useRef<(loadedConfig: AppConfig) => void>(() => undefined)
+  const onWorkspaceRestoredRef = useRef<(context: RestoredWorkspaceContext) => void>(() => undefined)
 
   const {
     config,
@@ -209,12 +218,9 @@ export function MainAppShell() {
         }
         return
       }
-      setLeftSidebar((prev) =>
-        prev.activeView === 'workspace' && !prev.isCollapsed
-          ? { ...prev, activeView: 'explorer', isCollapsed: false }
-          : prev
-      )
+      setLeftSidebar(transitionWorkspaceSidebarToExplorer)
     },
+    onWorkspaceRestored: (context) => onWorkspaceRestoredRef.current(context),
     onWorkspaceChanged: (event) => {
       void reconcileBuffersRef.current(event).then((warnings) => {
         if (warnings.length > 0) {
@@ -228,6 +234,12 @@ export function MainAppShell() {
     onEntryDeleted: editor.syncDeletedPath
   })
   hadOpenWorkspaceRef.current = workspace !== null
+
+  const workspaceStatePersistence = useWorkspaceStatePersistence({
+    workspaceRootPath: workspace?.rootPath ?? null,
+    expandedDirs: treeState.expandedDirs
+  })
+  onWorkspaceRestoredRef.current = workspaceStatePersistence.markRestored
 
   onInitialConfigLoadedRef.current = (loadedConfig) => {
     if (
@@ -262,7 +274,8 @@ export function MainAppShell() {
     getDirtySummary: editor.getDirtyCloseSummary,
     saveDirtyBuffers: editor.ensureCloseBuffersSaved,
     confirmUnsavedChanges,
-    onBeforeShowDialog: () => pendingGitConfirmCancelRef.current?.()
+    onBeforeShowDialog: () => pendingGitConfirmCancelRef.current?.(),
+    onBeforeApproveClose: workspaceStatePersistence.flush
   })
 
   activeWorkspaceRootRef.current = workspace?.rootPath ?? null
@@ -431,13 +444,24 @@ export function MainAppShell() {
     (targetPath: string): void => {
       hasWorkspaceInteractionRef.current = true
       isStartupRestoreRef.current = false
+      const currentRoot = activeWorkspaceRootRef.current
+      if (currentRoot && isSameWorkspacePath(currentRoot, targetPath)) {
+        setLeftSidebar(transitionWorkspaceSidebarToExplorer)
+        return
+      }
       if (!hadOpenWorkspaceRef.current) {
         void openWorkspace(targetPath)
         return
       }
-      guardUnsavedWorkspaceChanges(() => openWorkspace(targetPath))
+      guardUnsavedWorkspaceChanges(async () => {
+        await workspaceStatePersistence.suspendAndFlush()
+        const opened = await openWorkspace(targetPath)
+        if (!opened && activeWorkspaceRootRef.current) {
+          workspaceStatePersistence.resumeForWorkspace(activeWorkspaceRootRef.current)
+        }
+      })
     },
-    [guardUnsavedWorkspaceChanges, openWorkspace]
+    [guardUnsavedWorkspaceChanges, openWorkspace, workspaceStatePersistence]
   )
 
   const handleSelectFolder = useCallback((): void => {

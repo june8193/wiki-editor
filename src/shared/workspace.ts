@@ -428,6 +428,76 @@ function isStrictDescendantSegments(
   return true
 }
 
+function parseResolvedAbsolutePath(
+  rawPath: string
+): (NormalizedPathParts & { formattedPath: string }) | null {
+  if (typeof rawPath !== 'string' || rawPath.includes('\0')) return null
+  const normalized = normalizeWorkspacePath(rawPath)
+  const parsed = splitNormalizedRootAndSegments(normalized)
+  if (!parsed) return null
+
+  const resolvedSegments: string[] = []
+  for (const seg of parsed.segments) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') {
+      if (resolvedSegments.length === 0) {
+        return null
+      }
+      resolvedSegments.pop()
+      continue
+    }
+    resolvedSegments.push(seg)
+  }
+
+  let formattedPath: string
+  if (parsed.rootPrefix === '/') {
+    formattedPath = `/${resolvedSegments.join('/')}`
+  } else if (resolvedSegments.length > 0) {
+    formattedPath = `${parsed.rootPrefix}${parsed.sep}${resolvedSegments.join(parsed.sep)}`
+  } else if (parsed.rootPrefix.startsWith('\\\\')) {
+    formattedPath = parsed.rootPrefix
+  } else {
+    formattedPath = `${parsed.rootPrefix}${parsed.sep}`
+  }
+
+  return {
+    ...parsed,
+    segments: resolvedSegments,
+    formattedPath
+  }
+}
+
+/**
+ * Resolves and normalizes an absolute workspace root path (rejecting relative paths, null bytes,
+ * and `..` traversal past the filesystem root).
+ */
+export function resolveNormalizedWorkspacePath(rawPath: string): string | null {
+  return parseResolvedAbsolutePath(rawPath)?.formattedPath ?? null
+}
+
+/**
+ * Resolves `candidatePath` and verifies it is a strict lexical descendant of `rootPath`.
+ * Returns `null` for relative paths, root-escaping `..` traversal, mismatched roots, or `rootPath` itself.
+ */
+export function resolveWorkspaceChildPath(rootPath: string, candidatePath: string): string | null {
+  const parsedRoot = parseResolvedAbsolutePath(rootPath)
+  const parsedCandidate = parseResolvedAbsolutePath(candidatePath)
+  if (!parsedRoot || !parsedCandidate) return null
+
+  const caseInsensitive = parsedRoot.caseInsensitive || parsedCandidate.caseInsensitive
+  const sameRoot = caseInsensitive
+    ? parsedRoot.rootPrefix.toLowerCase() === parsedCandidate.rootPrefix.toLowerCase()
+    : parsedRoot.rootPrefix === parsedCandidate.rootPrefix
+  if (!sameRoot) {
+    return null
+  }
+
+  if (!isStrictDescendantSegments(parsedCandidate.segments, parsedRoot.segments, caseInsensitive)) {
+    return null
+  }
+  return parsedCandidate.formattedPath
+}
+
 /**
  * Resolves a relative file reference against `baseFilePath` inside `workspaceRootPath`,
  * preventing escapes outside the workspace root without Node path dependencies.

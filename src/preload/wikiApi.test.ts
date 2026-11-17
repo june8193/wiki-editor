@@ -12,7 +12,8 @@ import {
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
   WINDOW_IPC_CHANNELS,
-  WORKSPACE_IPC_CHANNELS
+  WORKSPACE_IPC_CHANNELS,
+  WORKSPACE_STATE_IPC_CHANNELS
 } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import type { ActiveTabDragSession } from '@shared/window'
@@ -450,6 +451,20 @@ describe('createWikiApi', () => {
       },
       { channel: WINDOW_IPC_CHANNELS.closeCurrent, args: [] },
       { channel: WINDOW_IPC_CHANNELS.resolveCloseRequest, args: [false] }
+    ])
+  })
+
+  it('routes workspaceState.get and workspaceState.save through expected IPC channels', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+    const update = { expandedDirs: ['C:\\wiki\\docs'] }
+
+    await api.workspaceState.get('C:\\wiki')
+    await api.workspaceState.save('C:\\wiki', update)
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: WORKSPACE_STATE_IPC_CHANNELS.get, args: ['C:\\wiki'] },
+      { channel: WORKSPACE_STATE_IPC_CHANNELS.save, args: ['C:\\wiki', update] }
     ])
   })
 })

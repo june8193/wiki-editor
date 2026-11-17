@@ -30,6 +30,7 @@ import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerLogIpc } from './ipc/registerLogIpc'
 import { registerWindowIpc } from './ipc/registerWindowIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
+import { registerWorkspaceStateIpc } from './ipc/registerWorkspaceStateIpc'
 import type { AppEnvironmentInfo } from './logging/formatBugReport'
 import { createHelpMenuActions } from './logging/helpMenuActions'
 import { LogService } from './logging/LogService'
@@ -37,6 +38,7 @@ import { registerProcessLifecycleLogging } from './logging/processLifecycleLoggi
 import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
 import { WindowManager } from './windowManager'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
+import { WorkspaceStateService } from './workspace/WorkspaceStateService'
 import { registerWindowNavigationGuard } from './window'
 
 function getActiveWindow(): BrowserWindow | undefined {
@@ -60,6 +62,7 @@ let disposeBufferIpc: (() => void) | undefined
 let disposeConfigIpc: (() => void) | undefined
 let disposeDiagramIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
+let disposeWorkspaceStateIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
 let disposeWindowIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
@@ -67,8 +70,11 @@ let disposeClipboardIpc: (() => void) | undefined
 let disposeWikiAssetProtocol: (() => void) | undefined
 let windowManager: WindowManager | undefined
 let workspaceService: WorkspaceFsService | undefined
+let workspaceStateService: WorkspaceStateService | undefined
 
-function disposeMainResources(): void {
+function disposeMainResources(): Promise<void> | undefined {
+  const flushWorkspaceState = workspaceStateService?.flush()
+  workspaceStateService = undefined
   disposeWikiAssetProtocol?.()
   disposeWikiAssetProtocol = undefined
   disposeWindowIpc?.()
@@ -83,6 +89,8 @@ function disposeMainResources(): void {
   disposeBufferIpc = undefined
   disposeGitIpc?.()
   disposeGitIpc = undefined
+  disposeWorkspaceStateIpc?.()
+  disposeWorkspaceStateIpc = undefined
   disposeWorkspaceIpc?.()
   disposeWorkspaceIpc = undefined
   disposeConfigIpc?.()
@@ -91,6 +99,7 @@ function disposeMainResources(): void {
   windowManager = undefined
   workspaceService?.dispose()
   workspaceService = undefined
+  return flushWorkspaceState
 }
 
 registerProcessLifecycleLogging({
@@ -109,6 +118,9 @@ void app.whenReady().then(async () => {
   const configPath = join(app.getPath('userData'), 'config.json')
   const configService = new ConfigService(configPath, { logService })
   const initialConfig = await configService.get()
+  const workspaceStatePath = join(app.getPath('userData'), 'workspace-state.json')
+  const activeWorkspaceStateService = new WorkspaceStateService(workspaceStatePath, { logService })
+  workspaceStateService = activeWorkspaceStateService
 
   const activeWorkspaceService = new WorkspaceFsService({
     trashItem: (targetPath) => shell.trashItem(targetPath)
@@ -211,6 +223,12 @@ void app.whenReady().then(async () => {
         : await dialog.showOpenDialog(options)
       return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
     }
+  })
+  disposeWorkspaceStateIpc = registerWorkspaceStateIpc({
+    ipcMain,
+    workspaceStateService: activeWorkspaceStateService,
+    isMainWindowSender: (sender) => windowManager?.isMainWebContents(sender) ?? false,
+    logService
   })
 
   const environment: AppEnvironmentInfo = {

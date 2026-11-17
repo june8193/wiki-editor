@@ -9,7 +9,8 @@ import {
   type DiagramSaveResult,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
-  WORKSPACE_IPC_CHANNELS
+  WORKSPACE_IPC_CHANNELS,
+  WORKSPACE_STATE_IPC_CHANNELS
 } from '@shared/ipc'
 import type { LogService } from '../logging/LogService'
 
@@ -106,7 +107,34 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
   }),
   [BUFFER_IPC_CHANNELS.syncWindowTabs]: ([bufferKeys]) => ({
     tabCount: Array.isArray(bufferKeys) ? bufferKeys.length : 0
-  })
+  }),
+  [WORKSPACE_STATE_IPC_CHANNELS.get]: ([rootPath]) => ({
+    rootPath
+  }),
+  [WORKSPACE_STATE_IPC_CHANNELS.save]: ([rootPath, update]) => {
+    const payload =
+      update && typeof update === 'object' ? (update as Record<string, unknown>) : {}
+    const layout =
+      payload.layout && typeof payload.layout === 'object'
+        ? (payload.layout as Record<string, unknown>)
+        : null
+    const panes =
+      layout?.panes && typeof layout.panes === 'object'
+        ? (layout.panes as Record<string, unknown>)
+        : null
+    const countPaneTabs = (pane: unknown): number =>
+      pane && typeof pane === 'object' && Array.isArray((pane as { tabs?: unknown }).tabs)
+        ? ((pane as { tabs: unknown[] }).tabs).length
+        : 0
+    return {
+      rootPath,
+      ...(Array.isArray(payload.expandedDirs)
+        ? { expandedDirCount: payload.expandedDirs.length }
+        : {}),
+      hasLayout: layout !== null,
+      ...(panes ? { tabCount: countPaneTabs(panes.primary) + countPaneTabs(panes.secondary) } : {})
+    }
+  }
 }
 
 const CHANNEL_RESULT_METADATA_EXTRACTORS: Record<

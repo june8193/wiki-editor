@@ -50,7 +50,7 @@ export interface RegisterProcessLifecycleLoggingOptions {
   processTarget: ProcessEventTargetLike
   appTarget: AppEventTargetLike
   getReadyData?: () => Record<string, unknown>
-  onWillQuit?: () => void
+  onWillQuit?: () => void | Promise<unknown>
 }
 
 /**
@@ -104,15 +104,16 @@ export function registerProcessLifecycleLogging({
       return
     }
     quitFlushed = true
-    onWillQuit?.()
+    const quitResult = onWillQuit?.()
 
     if (event && typeof event.preventDefault === 'function' && typeof appTarget.quit === 'function') {
       event.preventDefault()
       const logPromise = logService.info('app', 'Application will quit')
+      const flushAll = Promise.allSettled([logPromise, quitResult].filter(Boolean))
       const timeoutPromise = new Promise<void>((resolve) => {
         setTimeout(resolve, QUIT_FLUSH_TIMEOUT_MS)
       })
-      void Promise.race([logPromise, timeoutPromise]).finally(() => {
+      void Promise.race([flushAll, timeoutPromise]).finally(() => {
         appTarget.quit?.()
       })
       return

@@ -26,6 +26,15 @@ import type {
   WikiLogApi,
   WikiWorkspaceApi
 } from '@shared/ipc'
+import {
+  applyWorkspaceStateUpdate,
+  clonePersistedWorkspaceState,
+  createDefaultWorkspaceStateDocument,
+  createEmptyPersistedWorkspaceLayout,
+  normalizeWorkspaceStateDocument,
+  type PersistedWorkspaceState,
+  type WorkspaceStateDocument
+} from '@shared/workspaceState'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
   TabDragCoordinator,
@@ -53,6 +62,7 @@ import {
   isNestedOrSameWorkspacePath,
   recordRecentWorkspace,
   removeFavoriteWorkspace,
+  resolveNormalizedWorkspacePath,
   toggleFavoriteWorkspace,
   type WorkspaceChangeEvent,
   type WorkspaceEntry,
@@ -62,6 +72,7 @@ import {
 
 export interface VirtualFsOptions {
   workspaces?: Record<string, Record<string, string | null>>
+  workspaceStates?: Record<string, Partial<PersistedWorkspaceState>>
   selectedFolder?: string | null
   git?: Partial<WikiGitApi>
   diagram?: Partial<WikiDiagramApi>
@@ -273,6 +284,19 @@ export function createMultiWindowWikiHarness(
   const readDirCalls: string[] = []
   const copiedTexts: string[] = []
   let activeRoot: string | null = null
+  const seededWorkspaces: Record<string, PersistedWorkspaceState> = {}
+  for (const [rawKey, partial] of Object.entries(fsOptions.workspaceStates ?? {})) {
+    const rootPath = partial.rootPath ?? rawKey
+    seededWorkspaces[rawKey] = {
+      rootPath,
+      updatedAt: partial.updatedAt ?? new Date().toISOString(),
+      expandedDirs: partial.expandedDirs ?? [],
+      layout: partial.layout ?? createEmptyPersistedWorkspaceLayout()
+    }
+  }
+  let workspaceStateDoc: WorkspaceStateDocument = fsOptions.workspaceStates
+    ? normalizeWorkspaceStateDocument({ version: 1, workspaces: seededWorkspaces })
+    : createDefaultWorkspaceStateDocument()
   const selectedFolder: string | null = fsOptions.selectedFolder ?? null
   let nextWindowId = 1
   let watchActive = false
@@ -866,6 +890,29 @@ export function createMultiWindowWikiHarness(
             workspaceListeners.delete(listener)
             windowWorkspaceListeners.delete(listener)
           }
+        }
+      },
+      workspaceState: {
+        async get(rootPath) {
+          if (role !== 'main') {
+            throw new Error('Only the main window can access workspace state')
+          }
+          const normalizedRoot = resolveNormalizedWorkspacePath(rootPath)
+          if (!normalizedRoot) return null
+          const found = workspaceStateDoc.workspaces[getWorkspacePathKey(normalizedRoot)]
+          return found ? clonePersistedWorkspaceState(found) : null
+        },
+        async save(rootPath, update) {
+          if (role !== 'main') {
+            throw new Error('Only the main window can access workspace state')
+          }
+          const { document: nextDoc, workspaceState } = applyWorkspaceStateUpdate(
+            workspaceStateDoc,
+            rootPath,
+            update
+          )
+          workspaceStateDoc = nextDoc
+          return clonePersistedWorkspaceState(workspaceState)
         }
       },
       git: {

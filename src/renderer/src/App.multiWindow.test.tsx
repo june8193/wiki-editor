@@ -3179,4 +3179,71 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     expect(within(refreshedExplorer).getByText('deleted.md')).toBeInTheDocument()
     expect(within(refreshedExplorer).queryByText('draft.md')).toBeNull()
   })
+
+  it('excludes auxiliary windows from workspaceState access and flushes main window expandedDirs before resolving dirty close', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, recentWorkspaces: ['C:\\wiki\\docs'] },
+      {
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'note.md': '# Note',
+            'extra.md': '# Extra',
+            'sub/deep.md': '# Deep'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainGetSpy = vi.spyOn(mainWin.api.workspaceState!, 'get')
+    const mainSaveSpy = vi.spyOn(mainWin.api.workspaceState!, 'save')
+
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    const explorer = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('note.md')).toBeInTheDocument()
+    expect(mainGetSpy).toHaveBeenCalledTimes(1)
+
+    // Open two tabs and detach note.md into an auxiliary window -> aux window never touches workspaceState
+    await user.click(within(explorer).getByText('note.md'))
+    await user.click(within(explorer).getByText('extra.md'))
+    const noteTab = within(mainRendered.container).getByRole('tab', { name: /note\.md/ })
+    fireEvent.contextMenu(noteTab)
+    const tabMenu = await within(mainRendered.container).findByRole('menu')
+    await user.click(within(tabMenu).getByRole('menuitem', { name: '새 창으로 이동' }))
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(1)
+    })
+    const auxWin = harness.getAuxiliaryWindows()[0]
+    const auxGetSpy = vi.spyOn(auxWin.api.workspaceState!, 'get')
+    const auxSaveSpy = vi.spyOn(auxWin.api.workspaceState!, 'save')
+    const auxRendered = render(<App wikiApi={auxWin.api} />)
+    expect(await within(auxRendered.container).findByTestId('document-editor')).toBeInTheDocument()
+    expect(auxGetSpy).not.toHaveBeenCalled()
+    expect(auxSaveSpy).not.toHaveBeenCalled()
+
+    // Make main window dirty, expand sub right before closing, and discard on close prompt -> flushed before close resolves
+    const mainEditor = within(mainRendered.container).getByTestId('document-editor')
+    setRawEditorText(mainEditor, '# Dirty before close')
+    await user.click(within(explorer).getByText('sub'))
+    expect(await within(explorer).findByText('deep.md')).toBeInTheDocument()
+    expect(mainSaveSpy).not.toHaveBeenCalled()
+
+    act(() => {
+      mainWin.requestClose()
+    })
+    const closeDialog = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(closeDialog).getByRole('button', { name: '버리고 닫기' }))
+
+    await waitFor(() => {
+      expect(mainWin.isClosed()).toBe(true)
+    })
+    expect(mainSaveSpy).toHaveBeenCalledTimes(1)
+    const saved = await mainWin.api.workspaceState!.get('C:/wiki/docs')
+    expect(saved?.expandedDirs).toEqual(['C:\\wiki\\docs\\sub'])
+    expect(auxGetSpy).not.toHaveBeenCalled()
+    expect(auxSaveSpy).not.toHaveBeenCalled()
+  })
 })

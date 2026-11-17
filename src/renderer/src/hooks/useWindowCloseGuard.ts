@@ -8,6 +8,7 @@ export interface UseWindowCloseGuardOptions {
   saveDirtyBuffers: () => Promise<boolean>
   confirmUnsavedChanges: (request: UnsavedChangesDialogRequest) => () => void
   onBeforeShowDialog?: () => void
+  onBeforeApproveClose?: () => Promise<void> | void
 }
 
 /**
@@ -19,17 +20,20 @@ export function useWindowCloseGuard({
   getDirtySummary,
   saveDirtyBuffers,
   confirmUnsavedChanges,
-  onBeforeShowDialog
+  onBeforeShowDialog,
+  onBeforeApproveClose
 }: UseWindowCloseGuardOptions): void {
   const callbacksRef = useRef({
     getDirtySummary,
     saveDirtyBuffers,
-    onBeforeShowDialog
+    onBeforeShowDialog,
+    onBeforeApproveClose
   })
   callbacksRef.current = {
     getDirtySummary,
     saveDirtyBuffers,
-    onBeforeShowDialog
+    onBeforeShowDialog,
+    onBeforeApproveClose
   }
 
   const activeCancelRef = useRef<(() => void) | null>(null)
@@ -38,11 +42,18 @@ export function useWindowCloseGuard({
     const windowApi = wikiApi.window
     if (!windowApi) return
 
+    const resolveApprovedClose = (): void => {
+      void Promise.resolve(callbacksRef.current.onBeforeApproveClose?.())
+        .catch(() => undefined)
+        .then(() => windowApi.resolveCloseRequest(true))
+        .catch(() => undefined)
+    }
+
     const unsubscribe = windowApi.onCloseRequested(() => {
       const dirtySummary = callbacksRef.current.getDirtySummary()
       if (!dirtySummary) {
         activeCancelRef.current?.()
-        void windowApi.resolveCloseRequest(true).catch(() => undefined)
+        resolveApprovedClose()
         return
       }
 
@@ -56,7 +67,11 @@ export function useWindowCloseGuard({
         onSave: () => callbacksRef.current.saveDirtyBuffers(),
         onResolve: (approved) => {
           activeCancelRef.current = null
-          void windowApi.resolveCloseRequest(approved).catch(() => undefined)
+          if (!approved) {
+            void windowApi.resolveCloseRequest(false).catch(() => undefined)
+            return
+          }
+          resolveApprovedClose()
         }
       })
     })

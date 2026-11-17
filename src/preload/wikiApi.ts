@@ -32,7 +32,8 @@ import {
   MENU_IPC_CHANNELS,
   WikiApi,
   WINDOW_IPC_CHANNELS,
-  WORKSPACE_IPC_CHANNELS
+  WORKSPACE_IPC_CHANNELS,
+  WORKSPACE_STATE_IPC_CHANNELS
 } from '@shared/ipc'
 import {
   resolveWindowRole,
@@ -50,6 +51,10 @@ import type {
   WorkspaceInfo,
   WorkspaceMovedEntry
 } from '@shared/workspace'
+import type {
+  PersistedWorkspaceState,
+  WorkspaceStateUpdate
+} from '@shared/workspaceState'
 
 export interface IpcRendererLike {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>
@@ -170,6 +175,19 @@ export function createWikiApi(
           WORKSPACE_IPC_CHANNELS.changed,
           listener
         )
+    },
+    workspaceState: {
+      get: (rootPath) =>
+        ipcRenderer.invoke(
+          WORKSPACE_STATE_IPC_CHANNELS.get,
+          rootPath
+        ) as Promise<PersistedWorkspaceState | null>,
+      save: (rootPath, update: WorkspaceStateUpdate) =>
+        ipcRenderer.invoke(
+          WORKSPACE_STATE_IPC_CHANNELS.save,
+          rootPath,
+          update
+        ) as Promise<PersistedWorkspaceState>
     },
     git: {
       status: (workspacePath) =>

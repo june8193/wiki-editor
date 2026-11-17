@@ -6,14 +6,18 @@ import {
   isMarkdownFileName,
   isNestedOrSameWorkspacePath,
   isSameWorkspacePath,
+  joinWorkspacePath,
   remapPathPrefix,
+  resolveWorkspaceChildPath,
   toWorkspaceRelativePath,
   WorkspaceChangeEvent,
   WorkspaceEntry,
   WorkspaceEntryKind,
+  WorkspaceInfo,
   WorkspaceMovedEntry,
   WorkspaceSummary
 } from '@shared/workspace'
+import type { PersistedWorkspaceState } from '@shared/workspaceState'
 import { logRendererInfo } from '../logging/rendererLogger'
 import { toErrorMessage } from '@shared/errors'
 import { useWikiApi } from './useWikiApi'
@@ -43,9 +47,47 @@ export interface OpenWorkspaceOptions {
   onSilentError?: () => void
 }
 
+export interface RestoredWorkspaceContext {
+  rootPath: string
+  persistedState: PersistedWorkspaceState | null
+  restoredExpandedDirs: readonly string[]
+  hadPrunedExpandedDirs: boolean
+}
+
+function resolveExpandedCandidatePaths(
+  info: WorkspaceInfo,
+  persistedState: PersistedWorkspaceState | null
+): { candidates: string[]; hadInvalidEntries: boolean } {
+  if (!persistedState || persistedState.expandedDirs.length === 0) {
+    return { candidates: [], hadInvalidEntries: false }
+  }
+  const seen = new Set<string>()
+  const candidates: string[] = []
+  let hadInvalidEntries = false
+
+  for (const rawDir of persistedState.expandedDirs) {
+    const validDir = resolveWorkspaceChildPath(info.rootPath, rawDir)
+    if (!validDir) {
+      hadInvalidEntries = true
+      continue
+    }
+    const rel = toWorkspaceRelativePath(info.rootPath, validDir)
+    const targetDir = rel ? joinWorkspacePath(info.rootPath, rel) : validDir
+    const key = getWorkspacePathKey(targetDir)
+    if (!key || seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    candidates.push(targetDir)
+  }
+
+  return { candidates, hadInvalidEntries }
+}
+
 interface UseWorkspaceTreeOptions {
   onError: (message: string | null, error?: unknown) => void
   onWorkspaceOpened?: () => void
+  onWorkspaceRestored?: (context: RestoredWorkspaceContext) => void
   onWorkspaceChanged?: (event: WorkspaceChangeEvent) => void
   onEntryRenamed?: (oldPath: string, renamed: WorkspaceEntry) => void
   onEntryDeleted?: (deletedPath: string) => void
@@ -58,6 +100,7 @@ interface UseWorkspaceTreeOptions {
 export function useWorkspaceTree({
   onError,
   onWorkspaceOpened,
+  onWorkspaceRestored,
   onWorkspaceChanged,
   onEntryRenamed,
   onEntryDeleted,
@@ -83,6 +126,7 @@ export function useWorkspaceTree({
   const callbacksRef = useRef({
     onError,
     onWorkspaceOpened,
+    onWorkspaceRestored,
     onWorkspaceChanged,
     onEntryRenamed,
     onEntryDeleted,
@@ -95,6 +139,7 @@ export function useWorkspaceTree({
   callbacksRef.current = {
     onError,
     onWorkspaceOpened,
+    onWorkspaceRestored,
     onWorkspaceChanged,
     onEntryRenamed,
     onEntryDeleted,
@@ -235,21 +280,72 @@ export function useWorkspaceTree({
       try {
         const info = await wikiApi.workspace.open(targetPath)
         if (!mountedRef.current || seq !== openRequestSeqRef.current) return false
-        const initialMarkdownFiles = await wikiApi.workspace
-          .listMarkdownFiles()
-          .catch(() => [] as WorkspaceEntry[])
+        const [initialMarkdownFiles, persistedState] = await Promise.all([
+          wikiApi.workspace.listMarkdownFiles().catch(() => [] as WorkspaceEntry[]),
+          wikiApi.workspaceState?.get(info.rootPath).catch(() => null) ?? Promise.resolve(null)
+        ])
         if (!mountedRef.current || seq !== openRequestSeqRef.current) {
           return false
         }
+
+        const { candidates, hadInvalidEntries } = resolveExpandedCandidatePaths(info, persistedState)
+        const dirResults =
+          candidates.length > 0
+            ? await Promise.allSettled(
+                candidates.map(async (dirPath) => ({
+                  dirPath,
+                  entries: await wikiApi.workspace.readDir(dirPath)
+                }))
+              )
+            : []
+        if (!mountedRef.current || seq !== openRequestSeqRef.current) {
+          return false
+        }
+
+        const entryPathByKey = new Map<string, string>()
+        const indexDirEntries = (entries: readonly WorkspaceEntry[]): void => {
+          for (const entry of entries) {
+            if (entry.kind === 'directory') {
+              entryPathByKey.set(getWorkspacePathKey(entry.path), entry.path)
+            }
+          }
+        }
+        indexDirEntries(info.entries)
+        for (const result of dirResults) {
+          if (result.status === 'fulfilled') {
+            indexDirEntries(result.value.entries)
+          }
+        }
+
+        const restoredExpandedDirs = new Set<string>()
+        const restoredChildrenByDir: Record<string, WorkspaceEntry[]> = {}
+        let hadMissingDirs = false
+        for (const result of dirResults) {
+          if (result.status !== 'fulfilled') {
+            hadMissingDirs = true
+            continue
+          }
+          const canonicalDirPath =
+            entryPathByKey.get(getWorkspacePathKey(result.value.dirPath)) ?? result.value.dirPath
+          restoredExpandedDirs.add(canonicalDirPath)
+          restoredChildrenByDir[canonicalDirPath] = result.value.entries
+        }
+
         markdownFilesSeqRef.current += 1
         setWorkspace({ rootPath: info.rootPath, name: info.name })
         setRootEntries(info.entries)
-        setChildrenByDir({})
+        setChildrenByDir(restoredChildrenByDir)
         setMarkdownFiles(initialMarkdownFiles)
-        setExpandedDirs(new Set())
+        setExpandedDirs(restoredExpandedDirs)
         setSelectedTreePath(null)
         logRendererInfo('ui', 'Workspace opened', { rootPath: info.rootPath, name: info.name })
         callbacksRef.current.onWorkspaceOpened?.()
+        callbacksRef.current.onWorkspaceRestored?.({
+          rootPath: info.rootPath,
+          persistedState,
+          restoredExpandedDirs: [...restoredExpandedDirs],
+          hadPrunedExpandedDirs: hadInvalidEntries || hadMissingDirs
+        })
         await wikiApi.workspace.watch().catch(() => undefined)
         return true
       } catch (error: unknown) {

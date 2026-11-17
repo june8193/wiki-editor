@@ -96,4 +96,35 @@ describe('registerProcessLifecycleLogging', () => {
 
     dispose()
   })
+
+  it('awaits async onWillQuit flush work before calling app.quit()', async () => {
+    const processTarget = new EventEmitter()
+    const appTarget = new FakeAppEmitter()
+    let flushed = false
+    let flushedAtQuit = false
+    appTarget.quit = vi.fn(() => {
+      flushedAtQuit = flushed
+      appTarget.emit('will-quit', { preventDefault: vi.fn() })
+    })
+
+    const dispose = registerProcessLifecycleLogging({
+      logService,
+      processTarget,
+      appTarget,
+      onWillQuit: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        flushed = true
+      }
+    })
+
+    const preventDefault = vi.fn()
+    appTarget.emit('will-quit', { preventDefault })
+
+    await vi.waitFor(() => {
+      expect(appTarget.quit).toHaveBeenCalledTimes(1)
+    })
+    expect(flushedAtQuit).toBe(true)
+
+    dispose()
+  })
 })

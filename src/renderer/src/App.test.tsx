@@ -9357,3 +9357,477 @@ describe('Folder tree multi-select and drag-and-drop move', () => {
   })
 })
 
+describe('Workspace state persistence, folder tree restore, and same-workspace reselection', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('keeps open tabs, unsaved buffers, and expanded folder tree intact when reselecting the active workspace from Workspace View or open-folder', async () => {
+    const user = userEvent.setup()
+    const favoriteAlpha = addFavoriteWorkspace(
+      [],
+      'C:/wiki/alpha',
+      'alpha',
+      '2026-11-14T00:00:00.000Z'
+    )
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {
+        autoSave: false,
+        favoriteWorkspaces: favoriteAlpha,
+        recentWorkspaces: ['C:/wiki/alpha']
+      },
+      {
+        selectedFolder: 'c:\\wiki\\alpha\\',
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'alpha.md': '# Alpha',
+            'docs/sub.md': '# Sub'
+          }
+        }
+      }
+    )
+    const openSpy = vi.spyOn(api.workspace, 'open')
+    const clearSpy = vi.spyOn(api.buffer, 'clearWorkspaceBuffers')
+    window.wikiApi = api
+
+    render(<App />)
+
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('alpha.md')).toBeInTheDocument()
+    expect(openSpy).toHaveBeenCalledTimes(1)
+
+    // Expand docs folder, open both files, and make a dirty edit in alpha.md
+    await user.click(within(explorer).getByText('docs'))
+    expect(await within(explorer).findByText('sub.md')).toBeInTheDocument()
+    await user.click(within(explorer).getByText('sub.md'))
+    await user.click(within(explorer).getByText('alpha.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), ' unsaved')
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    // 1. Reselect active workspace from Recent list in Workspace View
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView1 = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(workspaceView1).getByRole('button', { name: /^alpha$/i }))
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    const explorerAfterRecent = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(within(explorerAfterRecent).getByText('sub.md')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /alpha\.md/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /sub\.md/ })).toBeInTheDocument()
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Alpha unsaved')
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(clearSpy).not.toHaveBeenCalled()
+
+    // 2. Reselect active workspace from Favorites list in Workspace View
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView2 = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(workspaceView2).getByRole('button', { name: /★\s*alpha/i }))
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    const explorerAfterFav = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(within(explorerAfterFav).getByText('sub.md')).toBeInTheDocument()
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Alpha unsaved')
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(clearSpy).not.toHaveBeenCalled()
+
+    // 3. Reselect active workspace via '폴더 열기...' button in Workspace View (case/slash variant)
+    await clickActivityBarButton(user, '워크스페이스')
+    const workspaceView3 = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(workspaceView3).getByRole('button', { name: '폴더 열기...' }))
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    const explorerAfterOpenBtn = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(within(explorerAfterOpenBtn).getByText('sub.md')).toBeInTheDocument()
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Alpha unsaved')
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(clearSpy).not.toHaveBeenCalled()
+
+    // 4. Reselect active workspace via menu 'open-folder' while in Git View -> stays in Git View without prompt or reset
+    await clickActivityBarButton(user, 'Git')
+    expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Git 소스 제어' })).toBeInTheDocument()
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Alpha unsaved')
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(clearSpy).not.toHaveBeenCalled()
+  })
+
+  it('restores persisted expandedDirs with nested children on startup and across workspace switches', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'docs/sub/deep.md': '# Deep',
+            'collapsed/hidden.md': '# Hidden',
+            'alpha.md': '# Alpha'
+          },
+          'C:\\wiki\\beta': {
+            'guides/guide.md': '# Guide',
+            'beta.md': '# Beta'
+          }
+        },
+        workspaceStates: {
+          'C:\\wiki\\alpha': {
+            expandedDirs: ['C:\\wiki\\alpha\\docs', 'C:\\wiki\\alpha\\docs\\sub']
+          },
+          'C:\\wiki\\beta': {
+            expandedDirs: ['C:\\wiki\\beta\\guides']
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('deep.md')).toBeInTheDocument()
+    expect(within(explorer).getByRole('treeitem', { name: 'docs' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(explorer).getByRole('treeitem', { name: 'sub' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(explorer).getByRole('treeitem', { name: 'collapsed' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+    expect(within(explorer).queryByText('hidden.md')).not.toBeInTheDocument()
+
+    // Switch to beta -> beta's expandedDirs restore independently
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^beta$/i
+      })
+    )
+
+    const betaExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(betaExplorer).findByText('guide.md')).toBeInTheDocument()
+    expect(within(betaExplorer).getByRole('treeitem', { name: 'guides' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(betaExplorer).queryByText('deep.md')).not.toBeInTheDocument()
+
+    // Switch back to alpha -> alpha's expandedDirs restore again
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^alpha$/i
+      })
+    )
+
+    const alphaExplorerAgain = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(alphaExplorerAgain).findByText('deep.md')).toBeInTheDocument()
+  })
+
+  it('silently skips missing or outside-root expandedDirs without error banner and ignores stale restore on rapid switch', async () => {
+    const user = userEvent.setup()
+    const { api, readDirCalls } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta', 'C:/wiki/gamma']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'docs/intro.md': '# Intro',
+            'alpha.md': '# Alpha'
+          },
+          'C:\\wiki\\beta': {
+            'beta-dir/beta.md': '# Beta'
+          },
+          'C:\\wiki\\gamma': {
+            'gamma-dir/gamma.md': '# Gamma'
+          }
+        },
+        workspaceStates: {
+          'C:\\wiki\\beta': {
+            expandedDirs: ['C:\\wiki\\beta\\beta-dir']
+          },
+          'C:\\wiki\\gamma': {
+            expandedDirs: ['C:\\wiki\\gamma\\gamma-dir']
+          }
+        }
+      }
+    )
+    const defaultGetState = api.workspaceState!.get.bind(api.workspaceState)
+    let resolveDelayedBetaState!: (
+      value: Awaited<ReturnType<NonNullable<typeof api.workspaceState>['get']>>
+    ) => void
+    const delayedBetaStatePromise = new Promise<
+      Awaited<ReturnType<NonNullable<typeof api.workspaceState>['get']>>
+    >((resolve) => {
+      resolveDelayedBetaState = resolve
+    })
+    let getStateCallCount = 0
+    vi.spyOn(api.workspaceState!, 'get').mockImplementation(async (rootPath) => {
+      getStateCallCount += 1
+      if (rootPath.toLowerCase().includes('alpha')) {
+        return {
+          rootPath: 'C:\\wiki\\alpha',
+          updatedAt: '2026-11-18T00:00:00.000Z',
+          expandedDirs: [
+            'C:\\wiki\\alpha\\docs',
+            'C:\\wiki\\alpha\\deleted-dir',
+            'C:\\outside-secret',
+            'C:\\wiki\\alpha\\..\\escape-dir'
+          ],
+          layout: {
+            splitMode: 'single',
+            splitRatio: 0.5,
+            activePaneId: 'primary',
+            panes: {
+              primary: { tabs: [], activeTabPath: null },
+              secondary: { tabs: [], activeTabPath: null }
+            }
+          }
+        }
+      }
+      if (rootPath.toLowerCase().includes('beta') && getStateCallCount === 2) {
+        return await delayedBetaStatePromise
+      }
+      return await defaultGetState(rootPath)
+    })
+    window.wikiApi = api
+
+    render(<App />)
+
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('intro.md')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(readDirCalls.some((path) => path.toLowerCase().includes('outside-secret'))).toBe(false)
+    expect(readDirCalls.some((path) => path.toLowerCase().includes('escape-dir'))).toBe(false)
+
+    // Rapid switch: start switching to beta (deferred state lookup), immediately switch to gamma
+    await clickActivityBarButton(user, '워크스페이스')
+    const wsView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(wsView).getByRole('button', { name: /^beta$/i }))
+    await waitFor(() => {
+      expect(getStateCallCount).toBe(2)
+    })
+
+    await user.click(within(wsView).getByRole('button', { name: /^gamma$/i }))
+
+    const gammaExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(gammaExplorer).findByText('gamma.md')).toBeInTheDocument()
+
+    // Resolving stale beta restore afterwards must not overwrite gamma
+    const realBetaState = await defaultGetState('C:/wiki/beta')
+    await act(async () => {
+      resolveDelayedBetaState(realBetaState)
+    })
+
+    expect(within(gammaExplorer).getByText('gamma.md')).toBeInTheDocument()
+    expect(within(gammaExplorer).queryByText('beta.md')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('persists expandedDirs on expand, collapse, rename, drag-and-drop move, delete, immediate workspace switch, and app restart', async () => {
+    const user = userEvent.setup()
+    const createDnDTransfer = () => {
+      const store = new Map<string, string>()
+      return {
+        effectAllowed: 'none',
+        dropEffect: 'none',
+        get types() {
+          return [...store.keys()]
+        },
+        files: [] as unknown as FileList,
+        setData(type: string, value: string) {
+          store.set(type, value)
+        },
+        getData(type: string) {
+          return store.get(type) ?? ''
+        }
+      }
+    }
+
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'docs/sub/leaf.md': '# Leaf',
+            'archive/keep.md': '# Keep',
+            'temp/gone.md': '# Gone',
+            'extra/note.md': '# Note',
+            'alpha.md': '# Alpha'
+          },
+          'C:\\wiki\\beta': {
+            'beta.md': '# Beta'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const firstMount = render(<App />)
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('alpha.md')).toBeInTheDocument()
+
+    // Expand docs -> docs/sub -> temp -> archive, then collapse archive
+    await user.click(within(explorer).getByText('docs'))
+    expect(await within(explorer).findByText('sub')).toBeInTheDocument()
+    await user.click(within(explorer).getByText('sub'))
+    expect(await within(explorer).findByText('leaf.md')).toBeInTheDocument()
+    await user.click(within(explorer).getByText('temp'))
+    expect(await within(explorer).findByText('gone.md')).toBeInTheDocument()
+    await user.click(within(explorer).getByText('archive'))
+    expect(await within(explorer).findByText('keep.md')).toBeInTheDocument()
+    await user.click(within(explorer).getByText('archive'))
+    expect(within(explorer).queryByText('keep.md')).not.toBeInTheDocument()
+
+    // Rename docs -> guides via F2
+    const docsItem = within(explorer).getByRole('treeitem', { name: 'docs' })
+    docsItem.focus()
+    fireEvent.keyDown(docsItem, { key: 'F2' })
+    const renameInput = await within(explorer).findByLabelText('새 이름 입력')
+    await user.clear(renameInput)
+    await user.type(renameInput, 'guides{Enter}')
+    const guidesItem = await within(explorer).findByRole('treeitem', { name: 'guides' })
+    expect(within(explorer).getByText('leaf.md')).toBeInTheDocument()
+
+    // Move guides into archive via drag-and-drop and expand archive
+    const archiveItem = within(explorer).getByRole('treeitem', { name: 'archive' })
+    const dtMove = createDnDTransfer()
+    fireEvent.dragStart(guidesItem, { dataTransfer: dtMove })
+    fireEvent.dragOver(archiveItem, { dataTransfer: dtMove })
+    fireEvent.drop(archiveItem, { dataTransfer: dtMove })
+    fireEvent.dragEnd(guidesItem, { dataTransfer: dtMove })
+
+    await waitFor(() => {
+      expect(within(archiveItem).queryByText('guides')).toBeNull()
+    })
+    await user.click(within(explorer).getByText('archive'))
+    expect(await within(explorer).findByText('leaf.md')).toBeInTheDocument()
+
+    // Delete temp folder via context menu -> confirm
+    fireEvent.contextMenu(within(explorer).getByText('temp'))
+    const menu = await screen.findByRole('menu')
+    await user.click(within(menu).getByRole('menuitem', { name: /삭제/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: /삭제 확인/i }))
+    await waitFor(() => {
+      expect(within(explorer).queryByText('temp')).not.toBeInTheDocument()
+    })
+
+    // Immediately switch to beta before 250ms debounce fires -> alpha's state flushes immediately
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^beta$/i
+      })
+    )
+    const betaExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(betaExplorer).findByText('beta.md')).toBeInTheDocument()
+
+    const savedAlpha = await api.workspaceState!.get('C:/wiki/alpha')
+    expect(savedAlpha?.expandedDirs).toEqual([
+      'C:\\wiki\\alpha\\archive\\guides',
+      'C:\\wiki\\alpha\\archive\\guides\\sub',
+      'C:\\wiki\\alpha\\archive'
+    ])
+
+    // Switch back to alpha -> archive/guides/sub restored expanded
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^alpha$/i
+      })
+    )
+    const alphaRestored = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(alphaRestored).findByText('leaf.md')).toBeInTheDocument()
+
+    // Expand extra and unmount immediately -> flushed on unmount and restored on next mount
+    await user.click(within(alphaRestored).getByText('extra'))
+    expect(await within(alphaRestored).findByText('note.md')).toBeInTheDocument()
+    firstMount.unmount()
+
+    render(<App />)
+    const restartedExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(restartedExplorer).findByText('leaf.md')).toBeInTheDocument()
+    expect(within(restartedExplorer).getByText('note.md')).toBeInTheDocument()
+  })
+
+  it('debounces expandedDirs persistence and resumes tracking when switching to a failing workspace', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta', 'C:/wiki/broken-ws']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'docs/sub/leaf.md': '# Leaf',
+            'alpha.md': '# Alpha'
+          },
+          'C:\\wiki\\beta': {
+            'beta.md': '# Beta'
+          }
+        }
+      }
+    )
+    const defaultOpen = api.workspace.open.bind(api.workspace)
+    api.workspace.open = async (rootPath) => {
+      if (rootPath.replace(/\\/g, '/') === 'C:/wiki/broken-ws') {
+        throw new Error('Workspace open failed')
+      }
+      return defaultOpen(rootPath)
+    }
+    const saveSpy = vi.spyOn(api.workspaceState!, 'save')
+    window.wikiApi = api
+
+    render(<App />)
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('alpha.md')).toBeInTheDocument()
+
+    await user.click(within(explorer).getByText('docs'))
+    expect(await within(explorer).findByText('sub')).toBeInTheDocument()
+    // Debounced: not saved immediately upon click, saved after debounce delay
+    expect(saveSpy).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(saveSpy).toHaveBeenCalledTimes(1)
+    })
+
+    // Attempt switching to failing workspace -> error banner shown, alpha stays active
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /broken-ws/i
+      })
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent('Workspace open failed')
+
+    // Return to Explorer, expand sub, switch to beta -> sub expansion is still tracked & persisted
+    await clickActivityBarButton(user, '탐색기')
+    const resumedExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(within(resumedExplorer).getByText('sub'))
+    expect(await within(resumedExplorer).findByText('leaf.md')).toBeInTheDocument()
+
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^beta$/i
+      })
+    )
+    expect(await within(await screen.findByLabelText('워크스페이스 탐색기')).findByText('beta.md')).toBeInTheDocument()
+
+    const savedAlpha = await api.workspaceState!.get('C:/wiki/alpha')
+    expect(savedAlpha?.expandedDirs).toEqual([
+      'C:\\wiki\\alpha\\docs',
+      'C:\\wiki\\alpha\\docs\\sub'
+    ])
+  })
+})
+

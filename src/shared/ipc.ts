@@ -43,6 +43,10 @@ import type {
   WorkspaceInfo,
   WorkspaceMovedEntry
 } from './workspace'
+import type {
+  PersistedWorkspaceState,
+  WorkspaceStateUpdate
+} from './workspaceState'
 
 export const CONFIG_IPC_CHANNELS = {
   get: 'config:get',
@@ -70,6 +74,11 @@ export const WORKSPACE_IPC_CHANNELS = {
   watch: 'workspace:watch',
   unwatch: 'workspace:unwatch',
   changed: 'workspace:changed'
+} as const
+
+export const WORKSPACE_STATE_IPC_CHANNELS = {
+  get: 'workspace-state:get',
+  save: 'workspace-state:save'
 } as const
 
 export const GIT_IPC_CHANNELS = {
@@ -271,9 +280,15 @@ export interface WikiWindowApi {
   resolveCloseRequest(approved: boolean): Promise<void>
 }
 
+export interface WikiWorkspaceStateApi {
+  get(rootPath: string): Promise<PersistedWorkspaceState | null>
+  save(rootPath: string, update: WorkspaceStateUpdate): Promise<PersistedWorkspaceState>
+}
+
 export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
+  workspaceState?: WikiWorkspaceStateApi
   git: WikiGitApi
   menu: WikiMenuApi
   buffer: WikiBufferApi

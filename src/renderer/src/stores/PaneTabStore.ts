@@ -1,17 +1,31 @@
 import type { BufferKeyRemap } from '@shared/documentBuffer'
 import type { GitDiffRequest } from '@shared/git'
-import type {
-  CursorPosition,
-  EditorMode,
-  PaneId,
-  TabTransferPayload,
-  TabViewState
+import {
+  clampSplitRatio,
+  type CursorPosition,
+  DEFAULT_SPLIT_RATIO,
+  type EditorMode,
+  MAX_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
+  normalizeSplitRatio,
+  type PaneId,
+  roundSplitRatio,
+  type SplitDirection,
+  type SplitMode,
+  type TabTransferPayload,
+  type TabViewState
 } from '@shared/window'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 
-export type { CursorPosition, EditorMode, PaneId, TabViewState }
-export type SplitMode = 'single' | 'horizontal' | 'vertical'
-export type SplitDirection = Exclude<SplitMode, 'single'>
+export type { CursorPosition, EditorMode, PaneId, SplitDirection, SplitMode, TabViewState }
+export {
+  clampSplitRatio,
+  DEFAULT_SPLIT_RATIO,
+  MAX_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
+  normalizeSplitRatio,
+  roundSplitRatio
+}
 export type GitDiffViewMode = 'side-by-side' | 'inline'
 
 export interface DiffTabState {
@@ -98,29 +112,6 @@ export type PaneTabTransition =
 
 export interface PaneTabStoreOptions {
   onTransition?: (transition: PaneTabTransition) => void
-}
-
-export const DEFAULT_SPLIT_RATIO = 0.5
-export const MIN_SPLIT_RATIO = 0.15
-export const MAX_SPLIT_RATIO = 0.85
-
-export function clampSplitRatio(ratio: number): number {
-  if (!Number.isFinite(ratio)) return DEFAULT_SPLIT_RATIO
-  return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio))
-}
-
-/**
- * Rounds split ratios to 4 decimals so repeated steps avoid IEEE-754 float drift.
- */
-export function roundSplitRatio(ratio: number): number {
-  return Math.round(ratio * 10000) / 10000
-}
-
-/**
- * Clamps and rounds a split ratio to the allowed `[0.15, 0.85]` interval.
- */
-export function normalizeSplitRatio(ratio: number): number {
-  return roundSplitRatio(clampSplitRatio(ratio))
 }
 
 function createInitialState(): PaneLayoutState {
