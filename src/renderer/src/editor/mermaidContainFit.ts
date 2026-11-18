@@ -1,7 +1,7 @@
 import type { MermaidIntrinsicBounds } from './mermaidSvgBounds'
 
-export const MERMAID_MIN_HEIGHT_PX = 64
-export const MERMAID_MAX_HEIGHT_PX = 1600
+const MERMAID_MIN_HEIGHT_PX = 64
+const MERMAID_MAX_HEIGHT_PX = 1600
 export const MERMAID_DEFAULT_FALLBACK_HEIGHT_PX = 240
 
 export interface MermaidHeightBounds {
@@ -9,14 +9,14 @@ export interface MermaidHeightBounds {
   max: number
 }
 
-export const DEFAULT_MERMAID_HEIGHT_BOUNDS: MermaidHeightBounds = {
+const DEFAULT_MERMAID_HEIGHT_BOUNDS: MermaidHeightBounds = {
   min: MERMAID_MIN_HEIGHT_PX,
   max: MERMAID_MAX_HEIGHT_PX
 }
 
 export interface MeasuredViewportBox {
   availableWidth: number
-  verticalPadding: number
+  verticalInset: number
 }
 
 export interface MermaidContainFitMetrics {
@@ -40,14 +40,6 @@ interface SvgInlineStyleSnapshot {
 
 const originalSvgInlineStyles = new WeakMap<SVGSVGElement, SvgInlineStyleSnapshot>()
 
-function normalizeZero(value: number): number {
-  return value === 0 ? 0 : value
-}
-
-export function roundTwoDecimals(value: number): number {
-  return normalizeZero(Math.round(value * 100) / 100)
-}
-
 /**
  * Clamps Mermaid viewport container height to `[bounds.min, bounds.max]` integer pixels.
  */
@@ -62,20 +54,15 @@ export function clampMermaidHeight(
   return Math.round(clamped)
 }
 
-/**
- * Computes Contain-fitting SVG dimensions and dynamic `[min(64, auto), max(1600, auto)]`
- * viewport height bounds from natural SVG dimensions and container space.
- */
-export function computeMermaidContainFitMetrics(
+function computeContainFitMetrics(
   bounds: MermaidIntrinsicBounds,
-  availableWidth: number,
-  verticalPadding: number,
+  box: MeasuredViewportBox,
   customHeightPx: number | null
 ): MermaidContainFitMetrics {
-  const safeWidth = Math.max(1, availableWidth)
-  const safePadding = Math.max(0, verticalPadding)
+  const safeWidth = Math.max(1, box.availableWidth)
+  const safeInset = Math.max(0, box.verticalInset)
   const initialScale = Math.min(1, safeWidth / bounds.naturalWidth)
-  const autoViewportHeightPx = Math.round(bounds.naturalHeight * initialScale + safePadding)
+  const autoViewportHeightPx = Math.round(bounds.naturalHeight * initialScale + safeInset)
   const heightBounds: MermaidHeightBounds = {
     min: Math.min(MERMAID_MIN_HEIGHT_PX, autoViewportHeightPx),
     max: Math.max(MERMAID_MAX_HEIGHT_PX, autoViewportHeightPx)
@@ -84,15 +71,15 @@ export function computeMermaidContainFitMetrics(
   let scale = initialScale
   if (customHeightPx !== null) {
     const clampedHeight = clampMermaidHeight(customHeightPx, heightBounds)
-    const availableHeight = Math.max(1, clampedHeight - safePadding)
+    const availableHeight = Math.max(1, clampedHeight - safeInset)
     scale = Math.min(safeWidth / bounds.naturalWidth, availableHeight / bounds.naturalHeight)
   }
 
   return {
     autoViewportHeightPx,
     heightBounds,
-    fittedSvgWidthPx: Math.min(safeWidth, roundTwoDecimals(bounds.naturalWidth * scale)),
-    fittedSvgHeightPx: roundTwoDecimals(bounds.naturalHeight * scale)
+    fittedSvgWidthPx: Math.min(safeWidth, Math.round(bounds.naturalWidth * scale * 100) / 100),
+    fittedSvgHeightPx: Math.round(bounds.naturalHeight * scale * 100) / 100
   }
 }
 
@@ -112,12 +99,7 @@ export function computeFitMetricsOrFallback(
       heightBounds: DEFAULT_MERMAID_HEIGHT_BOUNDS
     }
   }
-  const fitMetrics = computeMermaidContainFitMetrics(
-    bounds,
-    box.availableWidth,
-    box.verticalPadding,
-    customHeightPx
-  )
+  const fitMetrics = computeContainFitMetrics(bounds, box, customHeightPx)
   return {
     fitMetrics,
     autoViewportHeightPx: fitMetrics.autoViewportHeightPx,
@@ -151,7 +133,7 @@ function sumCssPx(
  */
 export function readViewportBox(el: HTMLDivElement | null): MeasuredViewportBox {
   if (!el) {
-    return { availableWidth: 0, verticalPadding: 0 }
+    return { availableWidth: 0, verticalInset: 0 }
   }
   const rect = el.getBoundingClientRect()
   const style = typeof window !== 'undefined' ? window.getComputedStyle(el) : null
@@ -161,7 +143,7 @@ export function readViewportBox(el: HTMLDivElement | null): MeasuredViewportBox 
     'borderLeftWidth',
     'borderRightWidth'
   ])
-  const verticalPadding = sumCssPx(style, [
+  const verticalInset = sumCssPx(style, [
     'paddingTop',
     'paddingBottom',
     'borderTopWidth',
@@ -171,7 +153,7 @@ export function readViewportBox(el: HTMLDivElement | null): MeasuredViewportBox 
 
   return {
     availableWidth: rawWidth > 0 ? Math.max(1, rawWidth - horizontalInset) : 0,
-    verticalPadding
+    verticalInset
   }
 }
 

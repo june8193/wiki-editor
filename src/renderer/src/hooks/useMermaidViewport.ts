@@ -14,8 +14,7 @@ import {
   applySvgContainFitStyles,
   clampMermaidHeight,
   computeFitMetricsOrFallback,
-  readViewportBox,
-  roundTwoDecimals
+  readViewportBox
 } from '../editor/mermaidContainFit'
 import { extractMermaidIntrinsicBounds } from '../editor/mermaidSvgBounds'
 import { type PointerDragStartEvent, usePointerDragSession } from './usePointerDragSession'
@@ -26,6 +25,11 @@ export const MERMAID_DEFAULT_ZOOM = 1
 export const MERMAID_ZOOM_STEP = 0.25
 export const MERMAID_WHEEL_ZOOM_STEP = 0.1
 export const MERMAID_KEYBOARD_HEIGHT_STEP_PX = 24
+
+function roundTwoDecimals(value: number): number {
+  const rounded = Math.round(value * 100) / 100
+  return rounded === 0 ? 0 : rounded
+}
 
 export interface MermaidViewportState {
   viewportRef: RefObject<HTMLDivElement | null>
@@ -99,7 +103,7 @@ export function useMermaidViewport({
   })
   const [measuredBox, setMeasuredBox] = useState<MeasuredViewportBox>({
     availableWidth: 0,
-    verticalPadding: 0
+    verticalInset: 0
   })
   const [dragStartHeightPx, setDragStartHeightPx] = useState<number | null>(null)
 
@@ -121,7 +125,7 @@ export function useMermaidViewport({
     const nextBox = readViewportBox(viewportRef.current)
     setMeasuredBox((prev) =>
       prev.availableWidth === nextBox.availableWidth &&
-      prev.verticalPadding === nextBox.verticalPadding
+      prev.verticalInset === nextBox.verticalInset
         ? prev
         : nextBox
     )

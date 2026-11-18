@@ -6,7 +6,7 @@ import type { WikiApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import themeCss from '../styles/theme.css?raw'
-import { installResizeObserverStub, mockElementBoundingRect } from '../test/resizeObserverStub'
+import { installResizeObserverStub, mockElementBoundingRect } from '../test/domLayoutStub'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { MermaidDiagram } from './MermaidDiagram'
 

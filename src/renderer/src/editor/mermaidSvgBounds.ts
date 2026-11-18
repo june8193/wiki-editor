@@ -1,4 +1,4 @@
-export interface SvgBounds {
+interface SvgBounds {
   minX: number
   minY: number
   width: number
@@ -44,21 +44,7 @@ function parseSvgPixelLength(rawLength: string | null): number | null {
   return Number.isFinite(value) && value > 0 ? value : null
 }
 
-/**
- * Parses sanitized SVG markup into an `SVGSVGElement`, returning `null` if absent or empty.
- */
-export function parseSvgElement(svgMarkup: string): SVGSVGElement | null {
-  if (typeof svgMarkup !== 'string' || svgMarkup.trim().length === 0) {
-    return null
-  }
-  const doc = new DOMParser().parseFromString(svgMarkup, 'text/html')
-  return (doc.body.querySelector('svg') as SVGSVGElement | null) ?? null
-}
-
-/**
- * Attempts to read SVG bounds from `viewBox` or numeric `width`/`height` attributes.
- */
-export function tryExtractSvgBounds(svgElement: SVGSVGElement): SvgBounds | null {
+function tryExtractSvgBounds(svgElement: SVGSVGElement): SvgBounds | null {
   const fromViewBox = parseViewBox(svgElement.getAttribute('viewBox'))
   if (fromViewBox) {
     return fromViewBox
@@ -71,6 +57,17 @@ export function tryExtractSvgBounds(svgElement: SVGSVGElement): SvgBounds | null
   }
 
   return null
+}
+
+/**
+ * Parses sanitized SVG markup into an `SVGSVGElement`, returning `null` if absent or empty.
+ */
+export function parseSvgElement(svgMarkup: string): SVGSVGElement | null {
+  if (typeof svgMarkup !== 'string' || svgMarkup.trim().length === 0) {
+    return null
+  }
+  const doc = new DOMParser().parseFromString(svgMarkup, 'text/html')
+  return (doc.body.querySelector('svg') as SVGSVGElement | null) ?? null
 }
 
 /**
