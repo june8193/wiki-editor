@@ -1,6 +1,7 @@
 import type { ThemeMode } from '@shared/config'
 import { sanitizeDiagramFileNamePart } from '@shared/diagram'
 import type { DiagramExportFormat } from '@shared/ipc'
+import { extractSvgBounds, parseSvgElement } from './mermaidSvgBounds'
 
 export const MERMAID_EXPORT_PADDING_PX = 16
 export const DEFAULT_PNG_EXPORT_SCALE = 2
@@ -18,67 +19,11 @@ export interface NormalizedMermaidSvg {
   height: number
 }
 
-interface SvgBounds {
-  minX: number
-  minY: number
-  width: number
-  height: number
-}
-
 const SVG_NS = 'http://www.w3.org/2000/svg'
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
 
 function formatSvgNumber(value: number): string {
   return String(Number(value.toFixed(4)))
-}
-
-function parseViewBox(rawViewBox: string | null): SvgBounds | null {
-  if (!rawViewBox) {
-    return null
-  }
-  const parts = rawViewBox.trim().split(/[\s,]+/)
-  if (parts.length !== 4) {
-    return null
-  }
-  const [minX, minY, width, height] = parts.map((part) => Number(part))
-  if (
-    !Number.isFinite(minX) ||
-    !Number.isFinite(minY) ||
-    !Number.isFinite(width) ||
-    !Number.isFinite(height) ||
-    width <= 0 ||
-    height <= 0
-  ) {
-    return null
-  }
-  return { minX, minY, width, height }
-}
-
-function parseSvgPixelLength(rawLength: string | null): number | null {
-  if (!rawLength) {
-    return null
-  }
-  const match = rawLength.trim().match(/^(\d+(?:\.\d+)?|\.\d+)(?:px)?$/i)
-  if (!match) {
-    return null
-  }
-  const value = Number(match[1])
-  return Number.isFinite(value) && value > 0 ? value : null
-}
-
-function extractSvgBounds(svgElement: SVGSVGElement): SvgBounds {
-  const fromViewBox = parseViewBox(svgElement.getAttribute('viewBox'))
-  if (fromViewBox) {
-    return fromViewBox
-  }
-
-  const width = parseSvgPixelLength(svgElement.getAttribute('width'))
-  const height = parseSvgPixelLength(svgElement.getAttribute('height'))
-  if (width !== null && height !== null) {
-    return { minX: 0, minY: 0, width, height }
-  }
-
-  throw new Error('Mermaid SVG 크기를 확인할 수 없습니다.')
 }
 
 function ensureXmlNamespaces(svgElement: SVGSVGElement): void {
@@ -116,13 +61,13 @@ export function normalizeMermaidSvg(svgMarkup: string, theme: ThemeMode): Normal
     throw new Error('내보낼 Mermaid SVG 마크업이 비어 있습니다.')
   }
 
-  const doc = new DOMParser().parseFromString(svgMarkup, 'text/html')
-  const svgElement = doc.body.querySelector('svg')
+  const svgElement = parseSvgElement(svgMarkup)
   if (!svgElement) {
     throw new Error('내보낼 Mermaid SVG 요소를 찾을 수 없습니다.')
   }
+  const doc = svgElement.ownerDocument
 
-  const bounds = extractSvgBounds(svgElement as unknown as SVGSVGElement)
+  const bounds = extractSvgBounds(svgElement)
   const paddedMinX = bounds.minX - MERMAID_EXPORT_PADDING_PX
   const paddedMinY = bounds.minY - MERMAID_EXPORT_PADDING_PX
   const paddedWidth = Number((bounds.width + MERMAID_EXPORT_PADDING_PX * 2).toFixed(4))

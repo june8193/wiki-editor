@@ -28,6 +28,7 @@ import {
   type WorkspaceImageIngestResult
 } from '@shared/assets'
 import { installSvgCanvasStub } from './test/svgCanvasStub'
+import { mockElementBoundingRect } from './test/domLayoutStub'
 import { App } from './App'
 import themeCss from './styles/theme.css?raw'
 import {
@@ -2598,7 +2599,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         within(previewValidToolbar)
           .getAllByRole('button')
           .map((button) => button.getAttribute('aria-label'))
-      ).toEqual(['축소', '배율 초기화', '확대', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
+      ).toEqual(['축소', '배율 초기화', '확대', '뷰 초기화', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
 
       const previewValidImageBtn = within(previewValidToolbar).getByRole('button', {
         name: '이미지 복사'
@@ -2720,7 +2721,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         within(wysiwygValidToolbar)
           .getAllByRole('button')
           .map((button) => button.getAttribute('aria-label'))
-      ).toEqual(['축소', '배율 초기화', '확대', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
+      ).toEqual(['축소', '배율 초기화', '확대', '뷰 초기화', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
       expect(
         within(wysiwygBlocks[1]).getByRole('button', { name: '이미지 복사' })
       ).toBeDisabled()
@@ -2867,7 +2868,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         within(previewValidToolbar)
           .getAllByRole('button')
           .map((button) => button.getAttribute('aria-label'))
-      ).toEqual(['축소', '배율 초기화', '확대', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
+      ).toEqual(['축소', '배율 초기화', '확대', '뷰 초기화', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
 
       const previewSavePngBtn = within(previewValidToolbar).getByRole('button', {
         name: 'PNG 저장'
@@ -3001,7 +3002,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         within(wysiwygValidToolbar)
           .getAllByRole('button')
           .map((button) => button.getAttribute('aria-label'))
-      ).toEqual(['축소', '배율 초기화', '확대', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
+      ).toEqual(['축소', '배율 초기화', '확대', '뷰 초기화', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
       expect(within(wysiwygBlocks[1]).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
       expect(within(wysiwygBlocks[1]).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
       expect(within(wysiwygBlocks[2]).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
@@ -10537,6 +10538,203 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
       expect(within(screen.getByTestId('pane-secondary')).getByRole('tab', { name: /side\.md/ })).toBeInTheDocument()
     })
     expect(screen.queryByRole('tab', { name: /config\.json/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('Mermaid tab-session height persistence and workspaceState exclusion', () => {
+  beforeEach(() => {
+    defaultMermaidRenderer.clearCache()
+    mermaidMockState.reset()
+  })
+
+  it('preserves per-tab 0-based Mermaid heights across mode switches, tab switches, and live Split edits, clears on reset, and excludes them from dirty state and workspace-state.json', async () => {
+    const user = userEvent.setup()
+    const duplicateCode = 'graph TD\n  A --> B'
+    const docAContent = [
+      '# Doc A',
+      '',
+      '```ts',
+      'const value = 42',
+      '```',
+      '',
+      '```mermaid',
+      duplicateCode,
+      '```',
+      '',
+      '```mermaid',
+      duplicateCode,
+      '```'
+    ].join('\n')
+    const docBContent = ['# Doc B', '', '```mermaid', 'graph TD\n  X --> Y', '```'].join('\n')
+
+    const { api, getFilesSnapshot } = createInMemoryWikiApi(
+      {
+        autoSave: false,
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'doc-a.md': docAContent,
+            'doc-b.md': docBContent
+          },
+          'C:\\wiki\\beta': {
+            'beta.md': '# Beta'
+          }
+        }
+      }
+    )
+    const saveWorkspaceStateSpy = vi.spyOn(api.workspaceState!, 'save')
+    window.wikiApi = api
+
+    render(<App />)
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('doc-a.md'))
+    await user.click(within(explorer).getByText('doc-b.md'))
+    await user.click(screen.getByRole('tab', { name: /doc-a\.md/ }))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    await switchPaneEditorMode(user, primaryPane, '위지윅')
+    await waitFor(() => {
+      expect(within(primaryPane).getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(2)
+      expect(within(primaryPane).getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+
+    const wysViewports = within(primaryPane).getAllByTestId('mermaid-svg')
+    const wysHandles = within(primaryPane).getAllByTestId('mermaid-resize-handle')
+    mockElementBoundingRect(wysViewports[0], { width: 400, height: 180 })
+    mockElementBoundingRect(wysViewports[1], { width: 400, height: 180 })
+
+    // 1. Resize identical-code blocks independently in 위지윅 without dirtying buffer or triggering workspaceState.save
+    saveWorkspaceStateSpy.mockClear()
+    fireEvent.pointerDown(wysHandles[0], { button: 0, clientY: 180 })
+    fireEvent.pointerMove(window, { clientY: 260 })
+    fireEvent.pointerUp(window)
+
+    fireEvent.pointerDown(wysHandles[1], { button: 0, clientY: 180 })
+    fireEvent.pointerMove(window, { clientY: 420 })
+    fireEvent.pointerUp(window)
+
+    expect(wysViewports[0].style.height).toBe('260px')
+    expect(wysViewports[1].style.height).toBe('420px')
+    expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    expect(getFilesSnapshot().get('C:/wiki/alpha/doc-a.md')).toBe(docAContent)
+
+    // 2. Switch 위지윅 -> Preview -> Split and verify both heights stay 260px and 420px
+    await switchPaneEditorMode(user, primaryPane, 'Preview')
+    await waitFor(() => {
+      expect(within(primaryPane).getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+    expect(within(primaryPane).getAllByTestId('mermaid-svg')[0].style.height).toBe('260px')
+    expect(within(primaryPane).getAllByTestId('mermaid-svg')[1].style.height).toBe('420px')
+
+    await switchPaneEditorMode(user, primaryPane, 'Split')
+    const splitPreview = await within(primaryPane).findByTestId('split-markdown-preview')
+    await waitFor(() => {
+      expect(within(splitPreview).getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[0].style.height).toBe('260px')
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[1].style.height).toBe('420px')
+
+    // 3. Live edit first Mermaid block in Split Raw editor -> heights stay 260px and 420px, then save cleanly
+    const splitRawEditor = primaryPane.querySelector('.editor-split-region.is-raw') as HTMLElement
+    const editedDocA = docAContent.replace(duplicateCode, 'graph TD\n  A --> LIVE_SPLIT')
+    setRawEditorText(splitRawEditor, editedDocA)
+    await waitFor(() => {
+      expect(mermaidMockState.render).toHaveBeenCalledWith(
+        expect.any(String),
+        'graph TD\n  A --> LIVE_SPLIT'
+      )
+      expect(within(splitPreview).getAllByTestId('mermaid-svg')[0].querySelector('svg')).not.toBeNull()
+    })
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[0].style.height).toBe('260px')
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[1].style.height).toBe('420px')
+
+    await user.click(within(primaryPane).getByRole('button', { name: '저장' }))
+    await waitFor(() => {
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    })
+
+    // 4. Switch to doc-b.md, resize its diagram independently, then switch back to doc-a.md
+    await user.click(screen.getByRole('tab', { name: /doc-b\.md/ }))
+    await switchPaneEditorMode(user, primaryPane, 'Preview')
+    await waitFor(() => {
+      expect(within(primaryPane).getByTestId('mermaid-svg')).toBeInTheDocument()
+    })
+    const docBViewport = within(primaryPane).getByTestId('mermaid-svg')
+    const docBHandle = within(primaryPane).getByTestId('mermaid-resize-handle')
+    mockElementBoundingRect(docBViewport, { width: 400, height: 180 })
+
+    fireEvent.pointerDown(docBHandle, { button: 0, clientY: 180 })
+    fireEvent.pointerMove(window, { clientY: 310 })
+    fireEvent.pointerUp(window)
+    expect(docBViewport.style.height).toBe('310px')
+    expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /doc-a\.md/ }))
+    const restoredSplitPreview = await within(primaryPane).findByTestId('split-markdown-preview')
+    await waitFor(() => {
+      expect(within(restoredSplitPreview).getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+    expect(within(restoredSplitPreview).getAllByTestId('mermaid-svg')[0].style.height).toBe('260px')
+    expect(within(restoredSplitPreview).getAllByTestId('mermaid-svg')[1].style.height).toBe('420px')
+
+    // 5. Reset doc-a.md block 0 by handle double-click and block 1 by 뷰 초기화
+    const docABlocks = within(restoredSplitPreview).getAllByTestId('mermaid-diagram')
+    fireEvent.doubleClick(within(docABlocks[0]).getByTestId('mermaid-resize-handle'))
+    expect(within(restoredSplitPreview).getAllByTestId('mermaid-svg')[0].style.height).toBe('')
+    expect(within(restoredSplitPreview).getAllByTestId('mermaid-svg')[1].style.height).toBe('420px')
+
+    await user.hover(docABlocks[1])
+    await user.click(within(docABlocks[1]).getByRole('button', { name: '뷰 초기화' }))
+    expect(within(restoredSplitPreview).getAllByTestId('mermaid-svg')[1].style.height).toBe('')
+
+    await switchPaneEditorMode(user, primaryPane, '위지윅')
+    await waitFor(() => {
+      expect(within(primaryPane).getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+    expect(within(primaryPane).getAllByTestId('mermaid-svg')[0].style.height).toBe('')
+    expect(within(primaryPane).getAllByTestId('mermaid-svg')[1].style.height).toBe('')
+
+    // Switch to doc-b.md -> still 310px; wait for any mode debounce, then clear spy & resize doc-b.md to 390px
+    await user.click(screen.getByRole('tab', { name: /doc-b\.md/ }))
+    await waitFor(() => {
+      expect(within(primaryPane).getByTestId('mermaid-svg').style.height).toBe('310px')
+    })
+
+    // 6. Height-only change does NOT trigger workspaceState.save, and switching workspace flushes layout without mermaidHeights
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    saveWorkspaceStateSpy.mockClear()
+
+    const docBHandleReloaded = within(primaryPane).getByTestId('mermaid-resize-handle')
+    fireEvent.pointerDown(docBHandleReloaded, { button: 0, clientY: 310 })
+    fireEvent.pointerMove(window, { clientY: 390 })
+    fireEvent.pointerUp(window)
+    expect(within(primaryPane).getByTestId('mermaid-svg').style.height).toBe('390px')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(saveWorkspaceStateSpy).not.toHaveBeenCalled()
+
+    await switchWorkspaceFromView(user, /^beta$/i)
+    await waitFor(() => {
+      expect(
+        within(screen.getByLabelText('워크스페이스 탐색기')).getByText('beta.md')
+      ).toBeInTheDocument()
+    })
+
+    const savedAlpha = await api.workspaceState!.get('C:/wiki/alpha')
+    expect(savedAlpha).not.toBeNull()
+    expect(JSON.stringify(savedAlpha)).not.toContain('mermaidHeights')
+    expect(savedAlpha!.layout.panes.primary.tabs.map((tab) => tab.path)).toEqual([
+      'C:\\wiki\\alpha\\doc-a.md',
+      'C:\\wiki\\alpha\\doc-b.md'
+    ])
+
+    // Reopening alpha restores doc-b.md with auto height (proving in-memory-only session lifecycle)
+    await switchWorkspaceFromView(user, /^alpha$/i)
+    await waitFor(() => {
+      expect(within(screen.getByTestId('pane-primary')).getByTestId('mermaid-svg')).toBeInTheDocument()
+    })
+    expect(within(screen.getByTestId('pane-primary')).getByTestId('mermaid-svg').style.height).toBe('')
   })
 })
 

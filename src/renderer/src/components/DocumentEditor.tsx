@@ -8,6 +8,7 @@ import {
   resolveEffectiveEditorMode
 } from '../editor/editorModes'
 import { deriveDocumentTitle } from '../editor/mermaidExport'
+import { updateMermaidHeightMap } from '../editor/mermaidHeightSession'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import type { DocumentBuffer } from '@shared/documentBuffer'
 import type {
@@ -140,6 +141,25 @@ export function DocumentEditor({
   const handleScrollTopChange = useCallback(
     (scrollTop: number): void => {
       onUpdateViewState({ scrollTop })
+    },
+    [onUpdateViewState]
+  )
+
+  const lastTabRef = useRef(tab)
+  const mermaidHeightsRef = useRef(tab.mermaidHeights)
+  if (lastTabRef.current !== tab) {
+    lastTabRef.current = tab
+    mermaidHeightsRef.current = tab.mermaidHeights
+  }
+
+  const handleMermaidHeightChange = useCallback(
+    (blockIndex: number, nextHeightPx: number | null): void => {
+      const nextHeights = updateMermaidHeightMap(mermaidHeightsRef.current, blockIndex, nextHeightPx)
+      if (nextHeights === mermaidHeightsRef.current) {
+        return
+      }
+      mermaidHeightsRef.current = nextHeights
+      onUpdateViewState({ mermaidHeights: nextHeights })
     },
     [onUpdateViewState]
   )
@@ -289,6 +309,8 @@ export function DocumentEditor({
           documentPath={documentPath}
           enableImageInsertion={allowRichModes && Boolean(documentPath)}
           mermaidRenderer={mermaidRenderer}
+          mermaidHeights={tab.mermaidHeights}
+          onMermaidHeightChange={handleMermaidHeightChange}
           scrollRequest={
             matchedScrollRequest
               ? { index: matchedScrollRequest.index, nonce: matchedScrollRequest.nonce }
@@ -310,6 +332,8 @@ export function DocumentEditor({
           documentPath={documentPath}
           mermaidRenderer={mermaidRenderer}
           documentTitle={documentTitle}
+          mermaidHeights={tab.mermaidHeights}
+          onMermaidHeightChange={handleMermaidHeightChange}
           scrollRequest={previewScrollRequest}
           isActive={isActive}
           onScrollTopChange={handleScrollTopChange}
@@ -343,6 +367,8 @@ export function DocumentEditor({
               documentPath={documentPath}
               mermaidRenderer={mermaidRenderer}
               documentTitle={documentTitle}
+              mermaidHeights={tab.mermaidHeights}
+              onMermaidHeightChange={handleMermaidHeightChange}
               scrollRequest={previewScrollRequest}
               isActive={isActive}
               onScrollTopChange={handleSplitPreviewScroll}

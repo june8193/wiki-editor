@@ -1,9 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 
-const MOVE_EVENTS = ['pointermove', 'mousemove'] as const
-const END_EVENTS = ['pointerup', 'pointercancel', 'mouseup', 'blur'] as const
+type DragInputMode = 'pointer' | 'mouse'
+
+const DRAG_EVENTS_BY_MODE: Record<
+  DragInputMode,
+  { move: readonly string[]; end: readonly string[] }
+> = {
+  pointer: {
+    move: ['pointermove'],
+    end: ['pointerup', 'pointercancel', 'blur']
+  },
+  mouse: {
+    move: ['mousemove'],
+    end: ['mouseup', 'blur']
+  }
+}
 
 export interface PointerDragStartEvent {
+  type?: string
   button?: number
   clientX: number
   clientY: number
@@ -35,6 +49,7 @@ export function usePointerDragSession({
 }: PointerDragSessionOptions): PointerDragSession {
   const [isDragging, setIsDragging] = useState(false)
   const isDraggingRef = useRef(false)
+  const dragInputModeRef = useRef<DragInputMode>('pointer')
   const latestRef = useRef({ bodyClassName, cursor, onDragStart, onDragMove, onDragEnd })
   latestRef.current = { bodyClassName, cursor, onDragStart, onDragMove, onDragEnd }
 
@@ -42,6 +57,7 @@ export function usePointerDragSession({
     if (!isDragging) return
 
     const { bodyClassName: activeBodyClass, cursor: activeCursor } = latestRef.current
+    const { move: moveEvents, end: endEvents } = DRAG_EVENTS_BY_MODE[dragInputModeRef.current]
     const prevCursor = document.body.style.cursor
     const prevUserSelect = document.body.style.userSelect
     document.body.classList.add(activeBodyClass)
@@ -58,28 +74,32 @@ export function usePointerDragSession({
     }
 
     const handleEnd = (): void => {
+      if (!isDraggingRef.current) return
       isDraggingRef.current = false
       latestRef.current.onDragEnd?.()
       setIsDragging(false)
     }
 
-    for (const name of MOVE_EVENTS) {
+    for (const name of moveEvents) {
       window.addEventListener(name, handleMove)
     }
-    for (const name of END_EVENTS) {
+    for (const name of endEvents) {
       window.addEventListener(name, handleEnd)
     }
 
     return () => {
+      const wasDragging = isDraggingRef.current
       isDraggingRef.current = false
-      latestRef.current.onDragEnd?.()
+      if (wasDragging) {
+        latestRef.current.onDragEnd?.()
+      }
       document.body.classList.remove(activeBodyClass)
       document.body.style.cursor = prevCursor
       document.body.style.userSelect = prevUserSelect
-      for (const name of MOVE_EVENTS) {
+      for (const name of moveEvents) {
         window.removeEventListener(name, handleMove)
       }
-      for (const name of END_EVENTS) {
+      for (const name of endEvents) {
         window.removeEventListener(name, handleEnd)
       }
     }
@@ -91,6 +111,7 @@ export function usePointerDragSession({
     // Real browsers fire pointerdown before mousedown; avoid restarting the same drag session.
     if (!isDraggingRef.current) {
       isDraggingRef.current = true
+      dragInputModeRef.current = event.type === 'mousedown' ? 'mouse' : 'pointer'
       latestRef.current.onDragStart?.(event)
       setIsDragging(true)
     }

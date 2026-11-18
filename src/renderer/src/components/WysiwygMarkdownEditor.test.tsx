@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { buildWikiAssetUrl } from '@shared/assets'
 import { ImageTransferContext } from '../hooks/useEditorImageTransfer'
+import { installResizeObserverStub, mockElementBoundingRect } from '../test/domLayoutStub'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
+import themeCss from '../styles/theme.css?raw'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
 function placeCaretInProseMirror(editorEl: HTMLElement, targetEl: Element): void {
@@ -841,6 +843,7 @@ describe('WysiwygMarkdownEditor', () => {
         '축소',
         '배율 초기화',
         '확대',
+        '뷰 초기화',
         '이미지 복사',
         '코드 복사',
         'PNG 저장',
@@ -1243,6 +1246,121 @@ describe('WysiwygMarkdownEditor', () => {
     const latestAfterCodePaste = onChangeContent.mock.calls.at(-1)?.[0] as string
     expect(latestAfterCodePaste).toMatch(/```ts[\s\S]*# raw heading[\s\S]*```/)
     expect(latestAfterCodePaste).not.toContain('```python')
+  })
+
+  it('unifies WYSIWYG Mermaid block into a single card without nested borders, applies Contain scaling and live height badge on drag, and supports unified 뷰 초기화 without mutating markdown', async () => {
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    const resizeObserver = installResizeObserverStub()
+
+    try {
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async () => ({
+          svg: '<svg viewBox="0 0 100 50" width="100%" style="max-width: 100px;"><rect width="100" height="50"/></svg>'
+        }))
+      }
+      const mermaidRenderer = createMermaidRenderer(driver)
+      const onChangeContent = vi.fn()
+      const markdown = ['```mermaid', 'graph LR\n  SingleCard --> Fit', '```'].join('\n')
+
+      render(
+        <WysiwygMarkdownEditor
+          content={markdown}
+          scrollTop={0}
+          theme="light"
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={onChangeContent}
+        />
+      )
+
+      const outerCard = await screen.findByTestId('wysiwyg-mermaid-block')
+      const embeddedBlock = within(outerCard).getByTestId('mermaid-diagram')
+      const viewport = await within(outerCard).findByTestId('mermaid-svg')
+      const stage = within(viewport).getByTestId('mermaid-svg-stage')
+      const header = outerCard.querySelector('.mermaid-node-header') as HTMLElement
+      const handle = within(outerCard).getByTestId('mermaid-resize-handle')
+
+      // Single card structure: outer card has 1px border & 0px padding; inner diagram block has 0px border & 0px margin
+      const outerStyle = getComputedStyle(outerCard)
+      const embeddedStyle = getComputedStyle(embeddedBlock)
+      const headerStyle = getComputedStyle(header)
+      expect(outerStyle.borderTopWidth).toBe('1px')
+      expect(outerStyle.paddingTop).toBe('0px')
+      expect(headerStyle.borderBottomWidth).toBe('1px')
+      expect(embeddedBlock).toHaveClass('is-embedded')
+      expect(embeddedStyle.borderTopWidth).toBe('0px')
+      expect(embeddedStyle.borderBottomWidth).toBe('0px')
+      expect(embeddedStyle.marginTop).toBe('0px')
+      expect(embeddedStyle.marginBottom).toBe('0px')
+
+      // Toggling optional inline source open stays unified with zero inner border or duplicate margin/padding on <pre>
+      const toggleSourceBtn = within(header).getByRole('button', { name: '코드 편집' })
+      fireEvent.click(toggleSourceBtn)
+      const sourceWrapper = outerCard.querySelector('.mermaid-node-source-wrapper') as HTMLElement
+      const sourcePre = outerCard.querySelector('pre.mermaid-node-source') as HTMLElement
+      const sourceWrapperStyle = getComputedStyle(sourceWrapper)
+      const sourcePreStyle = getComputedStyle(sourcePre)
+      expect(sourceWrapper.style.display).toBe('')
+      expect(sourceWrapperStyle.borderBottomWidth).toBe('1px')
+      expect(sourcePreStyle.borderTopWidth).toBe('0px')
+      expect(sourcePreStyle.borderBottomWidth).toBe('0px')
+      expect(sourcePreStyle.marginTop).toBe('0px')
+      expect(sourcePreStyle.marginBottom).toBe('0px')
+      expect(sourcePreStyle.paddingTop).toBe('0px')
+      expect(sourcePreStyle.paddingLeft).toBe('0px')
+      fireEvent.click(within(header).getByRole('button', { name: '코드 숨기기' }))
+
+      // Viewport has 12px padding (24px horizontal & 24px vertical); 424px outer rect -> 400px availableWidth, 74px auto height
+      mockElementBoundingRect(viewport, { width: 424, height: 74 })
+      resizeObserver.trigger()
+
+      const resetViewBtn = within(header).getByRole('button', { name: '뷰 초기화' })
+      const zoomInBtn = within(header).getByRole('button', { name: '확대' })
+      const resetZoomBtn = within(header).getByRole('button', { name: '배율 초기화' })
+      expect(resetViewBtn).toBeDisabled()
+
+      const svgEl = viewport.querySelector('svg') as SVGSVGElement
+      expect(svgEl.style.width).toBe('100px')
+      expect(svgEl.style.height).toBe('50px')
+
+      // Drag bottom handle +100px -> height 174px (availableHeight=150px), removes max-width, scales SVG to 300x150, shows badge
+      fireEvent.pointerDown(handle, { button: 0, clientY: 74 })
+      expect(within(viewport).getByTestId('mermaid-height-badge')).toHaveTextContent('74px')
+      fireEvent.pointerMove(window, { clientY: 174 })
+      expect(viewport.style.height).toBe('174px')
+      expect(within(viewport).getByTestId('mermaid-height-badge')).toHaveTextContent('174px')
+      expect(svgEl.style.maxWidth).toBe('')
+      expect(svgEl.style.width).toBe('300px')
+      expect(svgEl.style.height).toBe('150px')
+      fireEvent.pointerUp(window)
+      expect(within(viewport).queryByTestId('mermaid-height-badge')).not.toBeInTheDocument()
+
+      // Keyboard ArrowDown (+24px) & ArrowUp (-24px)
+      fireEvent.keyDown(handle, { key: 'ArrowDown' })
+      expect(viewport.style.height).toBe('198px')
+      fireEvent.keyDown(handle, { key: 'ArrowUp' })
+      expect(viewport.style.height).toBe('174px')
+
+      // Zoom + pan + unified 뷰 초기화 resets all three without mutating markdown
+      fireEvent.click(zoomInBtn)
+      expect(resetZoomBtn).toHaveTextContent('125%')
+      expect(resetViewBtn).toBeEnabled()
+
+      fireEvent.click(resetViewBtn)
+      expect(resetZoomBtn).toHaveTextContent('100%')
+      expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+      expect(viewport.style.height).toBe('')
+      expect(svgEl.style.width).toBe('100px')
+      expect(svgEl.style.height).toBe('50px')
+      expect(resetViewBtn).toBeDisabled()
+      expect(onChangeContent).not.toHaveBeenCalled()
+    } finally {
+      resizeObserver.restore()
+      styleEl.remove()
+    }
   })
 })
 

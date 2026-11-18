@@ -1,6 +1,7 @@
 import { createContext, useContext, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
 import { NodeViewContent, NodeViewWrapper } from '@tiptap/react'
+import { useMermaidSessionHeight } from '../editor/mermaidHeightSession'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { useMermaidRenderState } from '../hooks/useMermaidRenderState'
@@ -13,6 +14,7 @@ export interface WysiwygMermaidContextValue {
   theme: ThemeMode
   mermaidRenderer?: MermaidRenderer
   documentTitle?: string
+  mermaidPositions?: readonly number[]
 }
 
 export const WysiwygMermaidContext = createContext<WysiwygMermaidContextValue>({
@@ -22,6 +24,7 @@ export const WysiwygMermaidContext = createContext<WysiwygMermaidContextValue>({
 export interface WysiwygMermaidBlockProps {
   language: string
   code: string
+  getBlockPos?: () => number | undefined
   autoFocusTriggerOnMount: boolean
   onSelectLanguage: (nextLanguage: string) => void
 }
@@ -33,11 +36,18 @@ export interface WysiwygMermaidBlockProps {
 export function WysiwygMermaidBlock({
   language,
   code,
+  getBlockPos,
   autoFocusTriggerOnMount,
   onSelectLanguage
 }: WysiwygMermaidBlockProps) {
-  const { theme, mermaidRenderer, documentTitle } = useContext(WysiwygMermaidContext)
+  const { theme, mermaidRenderer, documentTitle, mermaidPositions } =
+    useContext(WysiwygMermaidContext)
   const [showSource, setShowSource] = useState(false)
+  const blockPos = getBlockPos?.()
+  const rawBlockIndex =
+    typeof blockPos === 'number' && mermaidPositions ? mermaidPositions.indexOf(blockPos) : -1
+  const blockIndex = rawBlockIndex >= 0 ? rawBlockIndex : undefined
+  const sessionHeight = useMermaidSessionHeight(blockIndex)
 
   const { mermaidTheme, displaySvg, confirmedSvg, displayError } = useMermaidRenderState({
     code,
@@ -53,7 +63,9 @@ export function WysiwygMermaidBlock({
   })
 
   const viewport = useMermaidViewport({
-    hasSvg: displaySvg !== null
+    hasSvg: displaySvg !== null,
+    svgMarkup: displaySvg,
+    sessionHeight
   })
 
   return (
@@ -101,10 +113,11 @@ export function WysiwygMermaidBlock({
           displaySvg={displaySvg}
           displayError={displayError}
           viewport={viewport}
-        />
+          className="is-embedded"
+        >
+          <MermaidActionErrorAlert message={actions.errorMessage} />
+        </MermaidDiagramView>
       </div>
-
-      <MermaidActionErrorAlert message={actions.errorMessage} />
     </NodeViewWrapper>
   )
 }

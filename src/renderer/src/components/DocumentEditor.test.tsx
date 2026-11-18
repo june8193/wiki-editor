@@ -1,15 +1,17 @@
 import { EditorView } from '@codemirror/view'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { WikiApi } from '@shared/ipc'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { buildWikiAssetUrl } from '@shared/assets'
+import themeCss from '../styles/theme.css?raw'
+import { installScrollContainerStub, mockElementBoundingRect } from '../test/domLayoutStub'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { DocumentEditor } from './DocumentEditor'
 import type { DocumentBuffer } from '@shared/documentBuffer'
-import type { DocumentTabItem, EditorMode } from '../stores/PaneTabStore'
+import type { DocumentTabItem, EditorMode, TabViewPatch } from '../stores/PaneTabStore'
 
 function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
   return {
@@ -42,12 +44,24 @@ function createTab(mode: EditorMode = 'raw', splitPreviewRatio = 0.5): DocumentT
 function mockScrollElementRect(
   scrollContainer: HTMLElement,
   el: HTMLElement,
-  docTop: number,
-  height: number
+  docTop: number | (() => number),
+  height: number | (() => number)
 ): void {
   el.getBoundingClientRect = () => {
-    const y = docTop - scrollContainer.scrollTop
-    return { top: y, left: 0, right: 500, bottom: y + height, width: 500, height, x: 0, y, toJSON: () => ({}) }
+    const resolvedTop = typeof docTop === 'function' ? docTop() : docTop
+    const resolvedHeight = typeof height === 'function' ? height() : height
+    const y = resolvedTop - scrollContainer.scrollTop
+    return {
+      top: y,
+      left: 0,
+      right: 500,
+      bottom: y + resolvedHeight,
+      width: 500,
+      height: resolvedHeight,
+      x: 0,
+      y,
+      toJSON: () => ({})
+    }
   }
 }
 
@@ -1445,5 +1459,545 @@ describe('DocumentEditor local markdown image rendering across modes', () => {
     const refreshedImg = within(screen.getByTestId('image-preview')).getByRole('img', { name: 'architecture.png' })
     expect(refreshedImg).toHaveAttribute('src', buildWikiAssetUrl('C:/wiki/assets/architecture.png', 2))
     expect(screen.queryByText('이미지를 불러올 수 없습니다.')).not.toBeInTheDocument()
+  })
+})
+
+describe('DocumentEditor Mermaid scroll coordinates, 120px bottom padding, and edge auto-scroll', () => {
+  let installedStyleEl: HTMLStyleElement | null = null
+
+  const mountThemeStyles = (): void => {
+    installedStyleEl = document.createElement('style')
+    installedStyleEl.textContent = themeCss
+    document.head.appendChild(installedStyleEl)
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+    installedStyleEl?.remove()
+    installedStyleEl = null
+  })
+
+  it('applies 120px bottom padding in WYSIWYG, Preview, and Split preview containers and resizes Mermaid via scroll coordinates and edge auto-scroll without mutating markdown', async () => {
+    mountThemeStyles()
+    vi.useFakeTimers()
+
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+      }))
+    }
+    const mermaidRenderer = createMermaidRenderer(driver)
+    const markdown = ['# Arch', '', 'Intro', '', '```mermaid', 'flowchart LR', '  A --> B', '```'].join('\n')
+    const doc = createDoc({ content: markdown, savedContent: markdown })
+    const onChangeContent = vi.fn()
+
+    const renderEditor = (mode: EditorMode) => (
+      <DocumentEditor
+        document={doc}
+        tab={createTab(mode)}
+        theme="light"
+        autoSave={false}
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={onChangeContent}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const { container, rerender } = render(renderEditor('wysiwyg'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // 1. WYSIWYG scroll container has 120px bottom padding and supports doc-coord + edge auto-scroll resize
+    const wysiwygScroller = container.querySelector('.wysiwyg-scroll-container') as HTMLElement
+    expect(getComputedStyle(wysiwygScroller).paddingBottom).toBe('120px')
+
+    const wysiwygViewport = within(wysiwygScroller).getByTestId('mermaid-svg')
+    const wysiwygHandle = within(wysiwygScroller).getByTestId('mermaid-resize-handle')
+    mockElementBoundingRect(wysiwygViewport, { width: 400, height: 400 })
+    const wysScroll = installScrollContainerStub(wysiwygScroller, {
+      top: 40,
+      clientHeight: 360,
+      initialScrollTop: 500,
+      getScrollHeight: () => 660 + (Number.parseFloat(wysiwygViewport.style.height) || 400)
+    })
+
+    // Drag down into bottom 36px zone (bottom = 400 -> threshold 364) -> expands height + scrollTop together
+    fireEvent.pointerDown(wysiwygHandle, { button: 0, clientY: 260 })
+    fireEvent.pointerMove(window, { clientY: 380 })
+    expect(Number.parseFloat(wysiwygViewport.style.height)).toBe(520)
+
+    act(() => {
+      vi.advanceTimersByTime(32)
+    })
+    const heightAfterDownAuto = Number.parseFloat(wysiwygViewport.style.height)
+    expect(heightAfterDownAuto).toBeGreaterThan(520)
+    expect(wysScroll.getScrollTop()).toBe(500 + (heightAfterDownAuto - 520))
+
+    // Drag up into top 36px zone (top = 40 -> threshold 76) -> contracts smoothly with upward scroll
+    fireEvent.pointerMove(window, { clientY: 60 })
+    const heightBeforeUpAuto = Number.parseFloat(wysiwygViewport.style.height)
+    const scrollBeforeUpAuto = wysScroll.getScrollTop()
+    act(() => {
+      vi.advanceTimersByTime(16)
+    })
+    expect(wysScroll.getScrollTop()).toBeLessThan(scrollBeforeUpAuto)
+    expect(Number.parseFloat(wysiwygViewport.style.height)).toBe(
+      heightBeforeUpAuto - (scrollBeforeUpAuto - wysScroll.getScrollTop())
+    )
+    fireEvent.pointerUp(window)
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // 2. Standalone Preview scroll container has 120px bottom padding and supports bottom-edge auto-scroll
+    rerender(renderEditor('preview'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    const previewScroller = screen.getByTestId('document-editor')
+    expect(getComputedStyle(previewScroller).paddingBottom).toBe('120px')
+
+    const previewViewport = within(previewScroller).getByTestId('mermaid-svg')
+    const previewHandle = within(previewScroller).getByTestId('mermaid-resize-handle')
+    mockElementBoundingRect(previewViewport, { width: 400, height: 180 })
+    const previewScroll = installScrollContainerStub(previewScroller, {
+      clientHeight: 320,
+      initialScrollTop: 400,
+      getScrollHeight: () => 540 + (Number.parseFloat(previewViewport.style.height) || 180)
+    })
+
+    fireEvent.pointerDown(previewHandle, { button: 0, clientY: 200 })
+    fireEvent.pointerMove(window, { clientY: 310 })
+    act(() => {
+      vi.advanceTimersByTime(16)
+    })
+    expect(Number.parseFloat(previewViewport.style.height)).toBeGreaterThan(290)
+    expect(previewScroll.getScrollTop()).toBeGreaterThan(400)
+    fireEvent.pointerUp(window)
+
+    // 3. Split right Preview scroll container also has 120px bottom padding
+    rerender(renderEditor('split'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    const splitPreview = screen.getByTestId('split-markdown-preview')
+    expect(getComputedStyle(splitPreview).paddingBottom).toBe('120px')
+    expect(onChangeContent).not.toHaveBeenCalled()
+  })
+
+  it('keeps Split mode bidirectional scroll sync loop-free during Mermaid edge auto-scroll and cleans up rAF on unmount', async () => {
+    mountThemeStyles()
+    vi.useFakeTimers()
+
+    const mermaidLines = [
+      '```mermaid',
+      'flowchart LR',
+      '  A --> B',
+      '  B --> C',
+      '  C --> D',
+      '  D --> E',
+      '```'
+    ]
+    const trailingLines = Array.from({ length: 40 }, (_, i) => `- Trailing item ${i + 1}`)
+    const content = ['# Top', '', ...mermaidLines, '', ...trailingLines].join('\n')
+    const doc = createDoc({ content, savedContent: content })
+    let latestTab = createTab('split', 0.5)
+    const onUpdateViewState = vi.fn((patch: Partial<DocumentTabItem>) => {
+      latestTab = { ...latestTab, ...patch }
+    })
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+      }))
+    }
+
+    const { container, unmount } = render(
+      <DocumentEditor
+        document={doc}
+        tab={latestTab}
+        theme="light"
+        autoSave={false}
+        mermaidRenderer={createMermaidRenderer(driver)}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    const rawScroller = container.querySelector('.cm-scroller') as HTMLElement
+    const splitPreview = screen.getByTestId('split-markdown-preview') as HTMLElement
+    const cmView = EditorView.findFromDOM(rawScroller)!
+    expect(cmView).not.toBeNull()
+
+    Object.defineProperty(rawScroller, 'clientHeight', { configurable: true, value: 240 })
+    Object.defineProperty(rawScroller, 'scrollHeight', {
+      configurable: true,
+      get: () => cmView.contentHeight
+    })
+
+    const previewViewport = within(splitPreview).getByTestId('mermaid-svg')
+    const previewHandle = within(splitPreview).getByTestId('mermaid-resize-handle')
+    const h1 = splitPreview.querySelector('h1[data-source-line="1"]') as HTMLElement
+    const mermaidBlock = within(splitPreview).getByTestId('mermaid-diagram')
+    const ulEl = splitPreview.querySelector('ul[data-source-line]') as HTMLElement
+
+    const currentDiagramHeight = () => Number.parseFloat(previewViewport.style.height) || 200
+    mockElementBoundingRect(previewViewport, { width: 400, height: 200 })
+    const previewScroll = installScrollContainerStub(splitPreview, {
+      clientHeight: 240,
+      initialScrollTop: 180,
+      getScrollHeight: () => 900 + currentDiagramHeight()
+    })
+
+    mockScrollElementRect(splitPreview, h1, 0, 40)
+    mockScrollElementRect(splitPreview, mermaidBlock, 60, currentDiagramHeight)
+    mockScrollElementRect(splitPreview, ulEl, () => 80 + currentDiagramHeight(), 600)
+
+    // Drag Mermaid handle into Split preview bottom 36px edge zone -> triggers rAF auto-scroll
+    fireEvent.pointerDown(previewHandle, { button: 0, clientY: 160 })
+    fireEvent.pointerMove(window, { clientY: 230 })
+    act(() => {
+      vi.advanceTimersByTime(16)
+    })
+    expect(previewScroll.getScrollTop()).toBeGreaterThan(180)
+    const syncedPreviewTop = previewScroll.getScrollTop()
+
+    // Browser scroll event on Split preview syncs Raw editor without echo ping-pong back to Split preview
+    onUpdateViewState.mockClear()
+    fireEvent.scroll(splitPreview)
+    expect(rawScroller.scrollTop).toBeGreaterThan(0)
+    expect(onUpdateViewState).toHaveBeenCalledTimes(1)
+    expect(onUpdateViewState).toHaveBeenCalledWith({ scrollTop: rawScroller.scrollTop })
+
+    // Immediate echo scroll from Raw is ignored by ScrollSyncLoopGuard (Split preview scrollTop stays untouched)
+    previewScroll.clearScrollWrites()
+    const syncedRawTop = rawScroller.scrollTop
+    fireEvent.scroll(rawScroller)
+    expect(previewScroll.getScrollTop()).toBe(syncedPreviewTop)
+    expect(rawScroller.scrollTop).toBe(syncedRawTop)
+    expect(previewScroll.getScrollWrites()).toHaveLength(0)
+
+    // Unmounting while edge auto-scroll is active cancels rAF cleanly
+    const cancelRafSpy = vi.spyOn(window, 'cancelAnimationFrame')
+    unmount()
+    expect(cancelRafSpy).toHaveBeenCalled()
+    const scrollAtUnmount = previewScroll.getScrollTop()
+    act(() => {
+      vi.advanceTimersByTime(64)
+    })
+    expect(previewScroll.getScrollTop()).toBe(scrollAtUnmount)
+    cancelRafSpy.mockRestore()
+  })
+})
+
+describe('DocumentEditor Mermaid tab-session height persistence', () => {
+  function mountMermaidSessionEditor(initialMarkdown: string, initialMode: EditorMode) {
+    let doc = createDoc({ content: initialMarkdown, savedContent: initialMarkdown })
+    let tab: DocumentTabItem = createTab(initialMode)
+
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async (_id, text) => {
+        if (text.includes('BROKEN')) {
+          throw new Error('Syntax error')
+        }
+        return {
+          svg: `<svg viewBox="0 0 100 50"><g><text>${text.trim()}</text></g></svg>`
+        }
+      })
+    }
+    const mermaidRenderer = createMermaidRenderer(driver)
+
+    let rerenderEditor!: () => void
+    const onChangeContent = vi.fn((nextContent: string) => {
+      doc = { ...doc, content: nextContent, isDirty: nextContent !== doc.savedContent }
+      rerenderEditor()
+    })
+    const onUpdateViewState = vi.fn((patch: TabViewPatch) => {
+      const next = { ...tab, ...patch }
+      if ('mermaidHeights' in patch && patch.mermaidHeights === undefined) {
+        delete next.mermaidHeights
+      }
+      tab = next
+      rerenderEditor()
+    })
+
+    const renderView = () => (
+      <DocumentEditor
+        document={doc}
+        tab={tab}
+        theme="light"
+        autoSave={false}
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={onChangeContent}
+        onSave={vi.fn()}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    const result = render(renderView())
+    rerenderEditor = () => result.rerender(renderView())
+
+    return {
+      getTab: () => tab,
+      onChangeContent,
+      updateContentProp: (nextContent: string) => {
+        doc = { ...doc, content: nextContent, isDirty: true }
+        rerenderEditor()
+      }
+    }
+  }
+
+  it('persists independent heights by 0-based Mermaid block index across Preview <-> Split, live Split edits, and clears on double-click and 뷰 초기화 without mutating markdown', async () => {
+    const duplicateDiagram = 'flowchart LR\n  A --> B'
+    const initialMarkdown = [
+      '# Diagrams',
+      '',
+      '```ts',
+      'const ignored = true',
+      '```',
+      '',
+      '```mermaid',
+      duplicateDiagram,
+      '```',
+      '',
+      '```mermaid',
+      duplicateDiagram,
+      '```'
+    ].join('\n')
+
+    const { getTab, onChangeContent, updateContentProp } = mountMermaidSessionEditor(
+      initialMarkdown,
+      'preview'
+    )
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+
+    const previewBlocks = screen.getAllByTestId('mermaid-diagram')
+    const previewViewports = screen.getAllByTestId('mermaid-svg')
+    const previewHandles = screen.getAllByTestId('mermaid-resize-handle')
+    mockElementBoundingRect(previewViewports[0], { width: 400, height: 180 })
+    mockElementBoundingRect(previewViewports[1], { width: 400, height: 180 })
+
+    // Resize two identical-code Mermaid blocks independently in Preview
+    fireEvent.pointerDown(previewHandles[0], { button: 0, clientY: 180 })
+    fireEvent.pointerMove(window, { clientY: 280 })
+    fireEvent.pointerUp(window)
+
+    fireEvent.pointerDown(previewHandles[1], { button: 0, clientY: 180 })
+    fireEvent.pointerMove(window, { clientY: 420 })
+    fireEvent.pointerUp(window)
+
+    expect(previewViewports[0].style.height).toBe('280px')
+    expect(previewViewports[1].style.height).toBe('420px')
+    expect(getTab().mermaidHeights).toEqual({ '0': 280, '1': 420 })
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Switch Preview -> Split: both heights match by occurrence index and 뷰 초기화 is enabled
+    fireEvent.click(within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', { name: 'Split' }))
+    const splitPreview = await screen.findByTestId('split-markdown-preview')
+    await waitFor(() => {
+      expect(within(splitPreview).getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+    const splitViewports = within(splitPreview).getAllByTestId('mermaid-svg')
+    expect(splitViewports[0].style.height).toBe('280px')
+    expect(splitViewports[1].style.height).toBe('420px')
+
+    const splitBlocks = within(splitPreview).getAllByTestId('mermaid-diagram')
+    expect(within(splitBlocks[0]).getByRole('button', { name: '뷰 초기화' })).toBeEnabled()
+    expect(within(splitBlocks[1]).getByRole('button', { name: '뷰 초기화' })).toBeEnabled()
+
+    // Live edit block 0 in Split (valid -> BROKEN -> valid) preserves height 280px and 420px
+    updateContentProp(initialMarkdown.replace('A --> B', 'A --> LIVE_EDIT'))
+    await waitFor(() => {
+      expect(within(splitPreview).getAllByTestId('mermaid-svg')[0]).toHaveTextContent('A --> LIVE_EDIT')
+    })
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[0].style.height).toBe('280px')
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[1].style.height).toBe('420px')
+
+    updateContentProp(initialMarkdown.replace('A --> B', 'BROKEN'))
+    await waitFor(() => {
+      expect(within(splitBlocks[0]).getByText('Mermaid 문법 오류')).toBeInTheDocument()
+    })
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[0].style.height).toBe('280px')
+
+    updateContentProp(initialMarkdown.replace('A --> B', 'A --> RECOVERED'))
+    await waitFor(() => {
+      expect(within(splitPreview).getAllByTestId('mermaid-svg')[0]).toHaveTextContent('A --> RECOVERED')
+    })
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[0].style.height).toBe('280px')
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[1].style.height).toBe('420px')
+
+    // Zoom + 100% reset preserves custom height 280px
+    fireEvent.click(within(splitBlocks[0]).getByRole('button', { name: '확대' }))
+    fireEvent.click(within(splitBlocks[0]).getByRole('button', { name: '배율 초기화' }))
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[0].style.height).toBe('280px')
+    expect(getTab().mermaidHeights).toEqual({ '0': 280, '1': 420 })
+
+    // Double-clicking handle of block 0 clears only index '0'
+    fireEvent.doubleClick(within(splitBlocks[0]).getByTestId('mermaid-resize-handle'))
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[0].style.height).toBe('')
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[1].style.height).toBe('420px')
+    expect(getTab().mermaidHeights).toEqual({ '1': 420 })
+
+    // Clicking unified 뷰 초기화 on block 1 clears index '1' as well
+    fireEvent.click(within(splitBlocks[1]).getByRole('button', { name: '뷰 초기화' }))
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[1].style.height).toBe('')
+    expect(getTab().mermaidHeights).toBeUndefined()
+
+    // Switching back to Preview keeps both blocks at auto height
+    fireEvent.click(within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', { name: 'Preview' }))
+    await waitFor(() => {
+      expect(screen.getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+    expect(screen.getAllByTestId('mermaid-svg')[0].style.height).toBe('')
+    expect(screen.getAllByTestId('mermaid-svg')[1].style.height).toBe('')
+    expect(previewBlocks).toHaveLength(2)
+  })
+
+  it('persists independent heights across 위지윅 <-> Preview <-> Split <-> Raw, survives live 위지윅 edits and code-block conversion, and clears on reset', async () => {
+    const user = userEvent.setup()
+    const duplicateDiagram = 'flowchart LR\n  A --> B'
+    const initialMarkdown = [
+      '# Editor Modes',
+      '',
+      '```ts',
+      'const keep = 1',
+      '```',
+      '',
+      '```mermaid',
+      duplicateDiagram,
+      '```',
+      '',
+      '```mermaid',
+      duplicateDiagram,
+      '```'
+    ].join('\n')
+
+    const { getTab, onChangeContent, updateContentProp } = mountMermaidSessionEditor(
+      initialMarkdown,
+      'wysiwyg'
+    )
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(2)
+      expect(screen.getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+
+    const wysiwygBlocks = screen.getAllByTestId('wysiwyg-mermaid-block')
+    const wysViewports = screen.getAllByTestId('mermaid-svg')
+    const wysHandles = screen.getAllByTestId('mermaid-resize-handle')
+    mockElementBoundingRect(wysViewports[0], { width: 400, height: 180 })
+    mockElementBoundingRect(wysViewports[1], { width: 400, height: 180 })
+
+    // Resize both duplicate blocks independently in 위지윅
+    fireEvent.pointerDown(wysHandles[0], { button: 0, clientY: 180 })
+    fireEvent.pointerMove(window, { clientY: 260 })
+    fireEvent.pointerUp(window)
+
+    fireEvent.pointerDown(wysHandles[1], { button: 0, clientY: 180 })
+    fireEvent.pointerMove(window, { clientY: 380 })
+    fireEvent.pointerUp(window)
+
+    expect(wysViewports[0].style.height).toBe('260px')
+    expect(wysViewports[1].style.height).toBe('380px')
+    expect(getTab().mermaidHeights).toEqual({ '0': 260, '1': 380 })
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Live edit inside 위지윅 (external sync & direct edit of block 0) preserves both heights
+    updateContentProp(initialMarkdown.replace('A --> B', 'A --> LIVE_WYS'))
+    await waitFor(() => {
+      expect(screen.getAllByTestId('mermaid-svg')[0]).toHaveTextContent('A --> LIVE_WYS')
+    })
+    expect(screen.getAllByTestId('mermaid-svg')[0].style.height).toBe('260px')
+    expect(screen.getAllByTestId('mermaid-svg')[1].style.height).toBe('380px')
+
+    // Converting preceding ts block to Mermaid shifts indices dynamically, and restoring ts brings '0' & '1' back cleanly
+    const tsBlock = screen.getByTestId('wysiwyg-code-block')
+    await user.click(within(tsBlock).getByRole('button', { name: '코드 블록 언어 선택' }))
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: 'Mermaid'
+      })
+    )
+    await waitFor(() => {
+      expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
+      expect(screen.getAllByTestId('mermaid-svg')).toHaveLength(3)
+    })
+    const shiftedViewports = screen.getAllByTestId('mermaid-svg')
+    expect(shiftedViewports[0].style.height).toBe('260px')
+    expect(shiftedViewports[1].style.height).toBe('380px')
+    expect(shiftedViewports[2].style.height).toBe('')
+
+    const convertedBlockTrigger = within(screen.getAllByTestId('wysiwyg-mermaid-block')[0]).getByRole(
+      'button',
+      { name: '코드 블록 언어 선택' }
+    )
+    await user.click(convertedBlockTrigger)
+    await user.click(
+      within(screen.getByRole('listbox', { name: '코드 블록 언어 목록' })).getByRole('option', {
+        name: 'TypeScript'
+      })
+    )
+    await waitFor(() => {
+      expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(2)
+    })
+    expect(screen.getAllByTestId('mermaid-svg')[0].style.height).toBe('260px')
+    expect(screen.getAllByTestId('mermaid-svg')[1].style.height).toBe('380px')
+
+    // Mode roundtrip: 위지윅 -> Preview -> Split -> Raw -> 위지윅 preserves heights
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+    await waitFor(() => {
+      expect(screen.getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+    expect(screen.getAllByTestId('mermaid-svg')[0].style.height).toBe('260px')
+    expect(screen.getAllByTestId('mermaid-svg')[1].style.height).toBe('380px')
+
+    await user.click(within(modeGroup).getByRole('button', { name: 'Split' }))
+    const splitPreview = await screen.findByTestId('split-markdown-preview')
+    await waitFor(() => {
+      expect(within(splitPreview).getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[0].style.height).toBe('260px')
+    expect(within(splitPreview).getAllByTestId('mermaid-svg')[1].style.height).toBe('380px')
+
+    await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+    expect(getTab().mermaidHeights).toEqual({ '0': 260, '1': 380 })
+
+    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+    await waitFor(() => {
+      expect(screen.getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+    expect(screen.getAllByTestId('mermaid-svg')[0].style.height).toBe('260px')
+    expect(screen.getAllByTestId('mermaid-svg')[1].style.height).toBe('380px')
+    expect(within(wysiwygBlocks[0]).getByRole('button', { name: '뷰 초기화' })).toBeEnabled()
+    expect(within(wysiwygBlocks[1]).getByRole('button', { name: '뷰 초기화' })).toBeEnabled()
+
+    // Reset block 0 via double-click and block 1 via 뷰 초기화 in 위지윅 -> removed from tab.mermaidHeights
+    fireEvent.doubleClick(screen.getAllByTestId('mermaid-resize-handle')[0])
+    expect(screen.getAllByTestId('mermaid-svg')[0].style.height).toBe('')
+    expect(screen.getAllByTestId('mermaid-svg')[1].style.height).toBe('380px')
+    expect(getTab().mermaidHeights).toEqual({ '1': 380 })
+
+    fireEvent.click(within(screen.getAllByTestId('wysiwyg-mermaid-block')[1]).getByRole('button', { name: '뷰 초기화' }))
+    expect(screen.getAllByTestId('mermaid-svg')[1].style.height).toBe('')
+    expect(getTab().mermaidHeights).toBeUndefined()
+
+    // Switching back to Preview keeps both auto height
+    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+    await waitFor(() => {
+      expect(screen.getAllByTestId('mermaid-svg')).toHaveLength(2)
+    })
+    expect(screen.getAllByTestId('mermaid-svg')[0].style.height).toBe('')
+    expect(screen.getAllByTestId('mermaid-svg')[1].style.height).toBe('')
   })
 })

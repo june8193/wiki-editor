@@ -1,4 +1,13 @@
-import { Check, Copy, FileCode, Image as ImageIcon, ImageDown, ZoomIn, ZoomOut } from 'lucide-react'
+import {
+  Check,
+  Copy,
+  FileCode,
+  Image as ImageIcon,
+  ImageDown,
+  RotateCcw,
+  ZoomIn,
+  ZoomOut
+} from 'lucide-react'
 import type { MermaidActionId, MermaidDiagramActionsState } from '../hooks/useMermaidDiagramActions'
 import type { MermaidViewportState } from '../hooks/useMermaidViewport'
 
@@ -107,6 +116,16 @@ export function MermaidActionBar({ variant, isVisible = false, actions, viewport
         onClick={viewport.handleZoomIn}
       >
         <ZoomIn size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="mermaid-action-btn"
+        aria-label="뷰 초기화"
+        title="뷰 초기화"
+        disabled={!viewport.canResetView}
+        onClick={viewport.handleResetView}
+      >
+        <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
       </button>
       <span className="mermaid-action-divider" aria-hidden="true" />
       {actionItems.map(({ id, label, feedbackLabel, completedClass, Icon, canExecute, onTrigger }) => {

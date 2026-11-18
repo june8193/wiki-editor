@@ -693,4 +693,62 @@ describe('PaneTabStore', () => {
     })
     expect(bTab.id).not.toBe(restored.panes.secondary.tabs[0].id)
   })
+
+  it('stores per-tab in-memory mermaidHeights by occurrence index across mode, split, move, and rename while deleting cleared keys', () => {
+    const transitions: PaneTabTransition[] = []
+    const store = new PaneTabStore({
+      onTransition: (transition) => transitions.push(transition)
+    })
+
+    const docTabA = store.openTab('c:/wiki/a.md', { mode: 'wysiwyg' })
+    const docTabB = store.openTab('c:/wiki/b.md', { mode: 'preview' })
+    expect(docTabA.mermaidHeights).toBeUndefined()
+
+    const transitionCountBefore = transitions.length
+
+    // Set heights for two Mermaid blocks in tab A and one in tab B
+    store.updateTabViewState('primary', docTabA.id, {
+      mermaidHeights: { '0': 280, '1': 420 }
+    })
+    store.updateTabViewState('primary', docTabB.id, {
+      mermaidHeights: { '0': 190, '1': 0.2, '2': -10, '3': Number.NaN }
+    })
+
+    // No spurious mode/tab transition emitted for height updates
+    expect(transitions).toHaveLength(transitionCountBefore)
+
+    const getDocTab = (paneId: 'primary' | 'secondary', tabId: string) => {
+      const tab = store.getTab(paneId, tabId)
+      if (tab?.kind !== 'document') {
+        throw new Error(`Expected document tab ${tabId}`)
+      }
+      return tab
+    }
+
+    expect(getDocTab('primary', docTabA.id).mermaidHeights).toEqual({ '0': 280, '1': 420 })
+    expect(getDocTab('primary', docTabB.id).mermaidHeights).toEqual({ '0': 190 })
+
+    // Mode switching, split move, rename, and collapse preserve mermaidHeights per tab
+    store.updateTabViewState('primary', docTabA.id, { mode: 'preview' })
+    store.updateTabViewState('primary', docTabA.id, { mode: 'split' })
+    store.splitWithTab('primary', docTabA.id, 'horizontal')
+    store.remapBufferKeys([{ oldKey: 'c:/wiki/a.md', newKey: 'c:/wiki/a-renamed.md' }])
+    expect(getDocTab('secondary', docTabA.id).mermaidHeights).toEqual({ '0': 280, '1': 420 })
+
+    store.setSplitMode('single')
+    expect(getDocTab('primary', docTabA.id).mermaidHeights).toEqual({ '0': 280, '1': 420 })
+    expect(getDocTab('primary', docTabB.id).mermaidHeights).toEqual({ '0': 190 })
+
+    // Removing one key preserves remaining key; removing all keys clears mermaidHeights
+    store.updateTabViewState('primary', docTabA.id, {
+      mermaidHeights: { '1': 420 }
+    })
+    expect(getDocTab('primary', docTabA.id).mermaidHeights).toEqual({ '1': 420 })
+
+    store.updateTabViewState('primary', docTabA.id, {
+      mermaidHeights: {}
+    })
+    expect(getDocTab('primary', docTabA.id).mermaidHeights).toBeUndefined()
+    expect(getDocTab('primary', docTabB.id).mermaidHeights).toEqual({ '0': 190 })
+  })
 })
