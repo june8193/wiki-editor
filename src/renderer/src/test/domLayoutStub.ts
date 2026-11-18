@@ -54,3 +54,52 @@ export function mockElementBoundingRect(
     toJSON: () => ({})
   })
 }
+
+/**
+ * Installs a reactive JSDOM scroll-container stub with clamping `scrollTop` setter
+ * and bounding rect geometry for scroll-coordinate and edge auto-scroll tests.
+ */
+export function installScrollContainerStub(
+  container: HTMLElement,
+  options: {
+    top?: number
+    clientHeight: number
+    initialScrollTop: number
+    getScrollHeight: () => number
+    getMaxScrollCeiling?: () => number | null
+  }
+) {
+  let currentScrollTop = options.initialScrollTop
+  const scrollWrites: number[] = []
+  mockElementBoundingRect(container, {
+    top: options.top ?? 0,
+    width: 500,
+    height: options.clientHeight
+  })
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, value: options.clientHeight },
+    scrollHeight: { configurable: true, get: options.getScrollHeight },
+    scrollTop: {
+      configurable: true,
+      get: () => currentScrollTop,
+      set: (value: number) => {
+        const rawMax = Math.max(0, container.scrollHeight - container.clientHeight)
+        const ceiling = options.getMaxScrollCeiling?.() ?? null
+        const effectiveMax = ceiling === null ? rawMax : Math.min(rawMax, ceiling)
+        currentScrollTop = Math.max(0, Math.min(effectiveMax, value))
+        scrollWrites.push(currentScrollTop)
+      }
+    }
+  })
+
+  return {
+    getScrollTop: () => currentScrollTop,
+    setScrollTop: (value: number) => {
+      currentScrollTop = value
+    },
+    getScrollWrites: () => scrollWrites,
+    clearScrollWrites: () => {
+      scrollWrites.length = 0
+    }
+  }
+}

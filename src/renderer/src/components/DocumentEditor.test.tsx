@@ -7,7 +7,7 @@ import type { WorkspaceEntry } from '@shared/workspace'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { buildWikiAssetUrl } from '@shared/assets'
 import themeCss from '../styles/theme.css?raw'
-import { mockElementBoundingRect } from '../test/domLayoutStub'
+import { installScrollContainerStub, mockElementBoundingRect } from '../test/domLayoutStub'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { DocumentEditor } from './DocumentEditor'
 import type { DocumentBuffer } from '@shared/documentBuffer'
@@ -1471,44 +1471,6 @@ describe('DocumentEditor Mermaid scroll coordinates, 120px bottom padding, and e
     document.head.appendChild(installedStyleEl)
   }
 
-  const installScrollableContainer = (
-    container: HTMLElement,
-    options: {
-      top?: number
-      clientHeight: number
-      initialScrollTop: number
-      getScrollHeight: () => number
-    }
-  ) => {
-    let scrollTopValue = options.initialScrollTop
-    const scrollWrites: number[] = []
-    mockElementBoundingRect(container, {
-      top: options.top ?? 0,
-      width: 500,
-      height: options.clientHeight
-    })
-    Object.defineProperties(container, {
-      clientHeight: { configurable: true, value: options.clientHeight },
-      scrollHeight: { configurable: true, get: options.getScrollHeight },
-      scrollTop: {
-        configurable: true,
-        get: () => scrollTopValue,
-        set: (val: number) => {
-          const max = Math.max(0, container.scrollHeight - container.clientHeight)
-          scrollTopValue = Math.max(0, Math.min(max, val))
-          scrollWrites.push(scrollTopValue)
-        }
-      }
-    })
-    return {
-      getScrollTop: () => scrollTopValue,
-      clearScrollWrites: () => {
-        scrollWrites.length = 0
-      },
-      getScrollWrites: () => scrollWrites
-    }
-  }
-
   afterEach(() => {
     vi.useRealTimers()
     installedStyleEl?.remove()
@@ -1555,7 +1517,7 @@ describe('DocumentEditor Mermaid scroll coordinates, 120px bottom padding, and e
     const wysiwygViewport = within(wysiwygScroller).getByTestId('mermaid-svg')
     const wysiwygHandle = within(wysiwygScroller).getByTestId('mermaid-resize-handle')
     mockElementBoundingRect(wysiwygViewport, { width: 400, height: 400 })
-    const wysScroll = installScrollableContainer(wysiwygScroller, {
+    const wysScroll = installScrollContainerStub(wysiwygScroller, {
       top: 40,
       clientHeight: 360,
       initialScrollTop: 500,
@@ -1599,7 +1561,7 @@ describe('DocumentEditor Mermaid scroll coordinates, 120px bottom padding, and e
     const previewViewport = within(previewScroller).getByTestId('mermaid-svg')
     const previewHandle = within(previewScroller).getByTestId('mermaid-resize-handle')
     mockElementBoundingRect(previewViewport, { width: 400, height: 180 })
-    const previewScroll = installScrollableContainer(previewScroller, {
+    const previewScroll = installScrollContainerStub(previewScroller, {
       clientHeight: 320,
       initialScrollTop: 400,
       getScrollHeight: () => 540 + (Number.parseFloat(previewViewport.style.height) || 180)
@@ -1687,7 +1649,7 @@ describe('DocumentEditor Mermaid scroll coordinates, 120px bottom padding, and e
 
     const currentDiagramHeight = () => Number.parseFloat(previewViewport.style.height) || 200
     mockElementBoundingRect(previewViewport, { width: 400, height: 200 })
-    const previewScroll = installScrollableContainer(splitPreview, {
+    const previewScroll = installScrollContainerStub(splitPreview, {
       clientHeight: 240,
       initialScrollTop: 180,
       getScrollHeight: () => 900 + currentDiagramHeight()

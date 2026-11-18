@@ -6,7 +6,11 @@ import type { WikiApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import themeCss from '../styles/theme.css?raw'
-import { installResizeObserverStub, mockElementBoundingRect } from '../test/domLayoutStub'
+import {
+  installResizeObserverStub,
+  installScrollContainerStub,
+  mockElementBoundingRect
+} from '../test/domLayoutStub'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { MermaidDiagram } from './MermaidDiagram'
 
@@ -2317,45 +2321,6 @@ describe('MermaidDiagram', () => {
   })
 })
 
-function installScrollContainerMock(
-  scrollContainer: HTMLElement,
-  options: {
-    top?: number
-    clientHeight: number
-    initialScrollTop: number
-    getScrollHeight: () => number
-    getMaxScrollCeiling?: () => number | null
-  }
-) {
-  let currentScrollTop = options.initialScrollTop
-  mockElementBoundingRect(scrollContainer, {
-    top: options.top ?? 0,
-    width: 500,
-    height: options.clientHeight
-  })
-  Object.defineProperties(scrollContainer, {
-    clientHeight: { configurable: true, value: options.clientHeight },
-    scrollHeight: { configurable: true, get: options.getScrollHeight },
-    scrollTop: {
-      configurable: true,
-      get: () => currentScrollTop,
-      set: (value: number) => {
-        const rawMax = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight)
-        const ceiling = options.getMaxScrollCeiling?.() ?? null
-        const effectiveMax = ceiling === null ? rawMax : Math.min(rawMax, ceiling)
-        currentScrollTop = Math.max(0, Math.min(effectiveMax, value))
-      }
-    }
-  })
-
-  return {
-    getScrollTop: () => currentScrollTop,
-    setScrollTop: (value: number) => {
-      currentScrollTop = value
-    }
-  }
-}
-
 describe('MermaidDiagram scroll-coordinate resize & edge auto-scroll', () => {
   afterEach(() => {
     vi.useRealTimers()
@@ -2380,7 +2345,7 @@ describe('MermaidDiagram scroll-coordinate resize & edge auto-scroll', () => {
     const viewport = await screen.findByTestId('mermaid-svg')
     const handle = screen.getByTestId('mermaid-resize-handle')
 
-    const scrollMock = installScrollContainerMock(scrollContainer, {
+    const scrollMock = installScrollContainerStub(scrollContainer, {
       top: 50,
       clientHeight: 400,
       initialScrollTop: 200,
@@ -2444,7 +2409,7 @@ describe('MermaidDiagram scroll-coordinate resize & edge auto-scroll', () => {
     mockElementBoundingRect(viewport, { width: 400, height: 200 })
 
     let maxScrollCeiling: number | null = null
-    const scrollMock = installScrollContainerMock(scrollContainer, {
+    const scrollMock = installScrollContainerStub(scrollContainer, {
       clientHeight: 400,
       initialScrollTop: 600,
       getScrollHeight: () => 800 + (Number.parseFloat(viewport.style.height) || 200),
@@ -2556,7 +2521,7 @@ describe('MermaidDiagram scroll-coordinate resize & edge auto-scroll', () => {
 
     mockElementBoundingRect(viewport, { width: 400, height: 700 })
 
-    const scrollMock = installScrollContainerMock(scrollContainer, {
+    const scrollMock = installScrollContainerStub(scrollContainer, {
       top: 40,
       clientHeight: 400,
       initialScrollTop: 200,
