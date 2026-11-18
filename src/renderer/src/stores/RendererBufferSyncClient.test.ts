@@ -68,6 +68,30 @@ function createHubClientHarness(windowId = 1, windowApi?: WikiWindowApi) {
   return { hub, files, ...attachWindowClient(hub, windowId, windowApi) }
 }
 
+function createNormalizedFileHub(
+  initialFiles: ReadonlyArray<[string, string]>,
+  readConfigRaw: () => Promise<string> = async () => '{}'
+) {
+  const files = new Map<string, string>(initialFiles)
+  const hub = new SharedDocumentBufferHub({
+    initialAutoSaveConfig: { autoSave: false },
+    storage: {
+      readWorkspaceFile: async (filePath) => {
+        const val = files.get(filePath.replace(/\\/g, '/'))
+        if (val === undefined) throw new Error(`ENOENT: ${filePath}`)
+        return val
+      },
+      writeWorkspaceFile: async (filePath, content) => {
+        files.set(filePath.replace(/\\/g, '/'), content)
+      },
+      getConfigPath: async () => 'C:/Users/test/config.json',
+      readConfigRaw,
+      saveConfigRaw: async () => ({})
+    }
+  })
+  return { files, hub }
+}
+
 function createMockWindowApi(
   role: 'main' | 'auxiliary' = 'main',
   overrides: Partial<WikiWindowApi> = {}
@@ -601,27 +625,11 @@ describe('RendererBufferSyncClient race guards', () => {
   })
 
   it('scopes dirty summary/save to targetPaths and force-syncs or closes discarded buffers across windows without flushing stale local edits', async () => {
-    const files = new Map<string, string>([
+    const { files, hub } = createNormalizedFileHub([
       ['C:/wiki/target.md', '# Target Disk'],
       ['C:/wiki/other.md', '# Other Disk'],
       ['C:/wiki/untracked.md', '# Untracked Disk']
     ])
-    const hub = new SharedDocumentBufferHub({
-      initialAutoSaveConfig: { autoSave: false },
-      storage: {
-        readWorkspaceFile: async (filePath) => {
-          const val = files.get(filePath.replace(/\\/g, '/'))
-          if (val === undefined) throw new Error(`ENOENT: ${filePath}`)
-          return val
-        },
-        writeWorkspaceFile: async (filePath, content) => {
-          files.set(filePath.replace(/\\/g, '/'), content)
-        },
-        getConfigPath: async () => 'C:/Users/test/config.json',
-        readConfigRaw: async () => '{}',
-        saveConfigRaw: async () => ({})
-      }
-    })
 
     const win1 = attachWindowClient(hub, 1, createMockWindowApi('main'))
     const win2 = attachWindowClient(hub, 2, createMockWindowApi('auxiliary'))
@@ -723,23 +731,10 @@ describe('RendererBufferSyncClient race guards', () => {
   })
 
   it('opens files silently without raising errors and commits restored layouts while preserving config tabs', async () => {
-    const files = new Map<string, string>([['C:/wiki/sec.md', '# Secondary']])
-    const hub = new SharedDocumentBufferHub({
-      initialAutoSaveConfig: { autoSave: false },
-      storage: {
-        readWorkspaceFile: async (filePath) => {
-          const val = files.get(filePath.replace(/\\/g, '/'))
-          if (val === undefined) throw new Error(`ENOENT: ${filePath}`)
-          return val
-        },
-        writeWorkspaceFile: async (filePath, content) => {
-          files.set(filePath.replace(/\\/g, '/'), content)
-        },
-        getConfigPath: async () => 'C:/Users/test/config.json',
-        readConfigRaw: async () => '{"theme":"light"}',
-        saveConfigRaw: async () => ({})
-      }
-    })
+    const { hub } = createNormalizedFileHub(
+      [['C:/wiki/sec.md', '# Secondary']],
+      async () => '{"theme":"light"}'
+    )
     const win1 = attachWindowClient(hub, 1, createMockWindowApi('main'))
     const stop1 = win1.client.start()
 
