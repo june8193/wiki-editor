@@ -26,6 +26,7 @@ import {
   isMarkdownFileName,
   isNestedOrSameWorkspacePath,
   isSameWorkspacePath,
+  normalizeWorkspacePath,
   WorkspaceChangeEvent,
   WorkspaceEntry,
   WorkspaceEntryKind,
@@ -35,6 +36,7 @@ import {
 import {
   hasBlockedPathSegment,
   isErrnoCode,
+  isMissingPathError,
   isPathInsideRoot,
   resolveRealPathWithAncestor
 } from '../fs/pathSecurity'
@@ -124,6 +126,54 @@ function validateWritableEntryName(name: string): string {
 }
 
 /**
+ * Validates that `rootPath` resolves via `realpath` to an existing directory and returns its canonical path.
+ */
+export async function resolveValidWorkspaceDirectory(rootPath: string): Promise<string> {
+  const trimmed = rootPath.trim()
+  if (!trimmed) {
+    throw new Error('워크스페이스 경로가 비어 있습니다.')
+  }
+
+  const resolvedInput = resolve(trimmed)
+  let realRoot: string
+  try {
+    realRoot = await realpath(resolvedInput)
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      throw new Error(`워크스페이스 폴더를 찾을 수 없습니다: ${resolvedInput}`)
+    }
+    throw error
+  }
+
+  const rootStats = await stat(realRoot)
+  if (!rootStats.isDirectory()) {
+    throw new Error('선택한 경로는 폴더가 아닙니다.')
+  }
+
+  return realRoot
+}
+
+/**
+ * Resolves `rootPath` via `realpath` when present on disk, falling back to normalized path comparison
+ * when absent so non-throwing lookups can still match open workspaces safely.
+ */
+export async function tryResolveRealWorkspacePath(rootPath: string): Promise<string | null> {
+  const trimmed = rootPath.trim()
+  if (!trimmed) {
+    return null
+  }
+  const resolvedInput = resolve(trimmed)
+  try {
+    return await realpath(resolvedInput)
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return normalizeWorkspacePath(resolvedInput) || null
+    }
+    throw error
+  }
+}
+
+/**
  * Manages asynchronous workspace filesystem traversal, CRUD, path security, and watching.
  */
 export class WorkspaceFsService {
@@ -141,26 +191,7 @@ export class WorkspaceFsService {
   }
 
   async openWorkspace(rootPath: string): Promise<WorkspaceInfo> {
-    const trimmed = rootPath.trim()
-    if (!trimmed) {
-      throw new Error('워크스페이스 경로가 비어 있습니다.')
-    }
-
-    const resolvedInput = resolve(trimmed)
-    let realRoot: string
-    try {
-      realRoot = await realpath(resolvedInput)
-    } catch (error) {
-      if (isErrnoCode(error, 'ENOENT')) {
-        throw new Error(`워크스페이스 폴더를 찾을 수 없습니다: ${resolvedInput}`)
-      }
-      throw error
-    }
-
-    const rootStats = await stat(realRoot)
-    if (!rootStats.isDirectory()) {
-      throw new Error('선택한 경로는 폴더가 아닙니다.')
-    }
+    const realRoot = await resolveValidWorkspaceDirectory(rootPath)
 
     this.unwatch()
     this.workspaceRoot = realRoot

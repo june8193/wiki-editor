@@ -375,6 +375,9 @@ export class SharedDocumentBufferHub {
     }
 
     const freshRaw = await this.storage.readConfigRaw()
+    if (this.disposed) {
+      return null
+    }
     const latest = this.store.getBuffer(existing.key)
     if (!latest || latest.isDirty) {
       return latest ? { ...latest } : null

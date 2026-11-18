@@ -2,12 +2,19 @@ import type { DocumentBuffer } from './documentBuffer'
 
 export type WindowRole = 'main' | 'auxiliary'
 
+export const MAIN_WINDOW_DEFAULT_WIDTH = 1280
+export const MAIN_WINDOW_DEFAULT_HEIGHT = 820
+export const MAIN_WINDOW_MIN_WIDTH = 900
+export const MAIN_WINDOW_MIN_HEIGHT = 600
+
 export const AUXILIARY_WINDOW_DEFAULT_WIDTH = 960
 export const AUXILIARY_WINDOW_DEFAULT_HEIGHT = 760
 export const AUXILIARY_WINDOW_MIN_WIDTH = 520
 export const AUXILIARY_WINDOW_MIN_HEIGHT = 420
-export const AUXILIARY_WINDOW_OFFSET_X = 40
-export const AUXILIARY_WINDOW_OFFSET_Y = 40
+export const WINDOW_OFFSET_X = 40
+export const WINDOW_OFFSET_Y = 40
+export const AUXILIARY_WINDOW_OFFSET_X = WINDOW_OFFSET_X
+export const AUXILIARY_WINDOW_OFFSET_Y = WINDOW_OFFSET_Y
 
 export interface WindowBounds {
   x: number
@@ -46,20 +53,18 @@ export function clampWindowBoundsToWorkArea(
   }
 }
 
-/**
- * Computes auxiliary window bounds anchored at the drop cursor position and clamped to target display workArea.
- */
-export function computeCursorAuxiliaryBounds(
-  cursorPoint: ScreenPoint,
+function computeAnchoredWindowBounds(
+  anchorPoint: ScreenPoint,
+  size: { width: number; height: number },
   screenLike?: ScreenLike
 ): WindowBounds {
-  const x = Math.round(cursorPoint.x)
-  const y = Math.round(cursorPoint.y)
+  const x = Math.round(anchorPoint.x)
+  const y = Math.round(anchorPoint.y)
   const candidate: WindowBounds = {
     x,
     y,
-    width: AUXILIARY_WINDOW_DEFAULT_WIDTH,
-    height: AUXILIARY_WINDOW_DEFAULT_HEIGHT
+    width: size.width,
+    height: size.height
   }
 
   if (!screenLike) {
@@ -70,6 +75,35 @@ export function computeCursorAuxiliaryBounds(
   return clampWindowBoundsToWorkArea(candidate, workArea)
 }
 
+function computeOffsetWindowBounds(
+  sourceBounds: WindowBounds,
+  size: { width: number; height: number },
+  screenLike?: ScreenLike
+): WindowBounds {
+  return computeAnchoredWindowBounds(
+    {
+      x: sourceBounds.x + WINDOW_OFFSET_X,
+      y: sourceBounds.y + WINDOW_OFFSET_Y
+    },
+    size,
+    screenLike
+  )
+}
+
+/**
+ * Computes auxiliary window bounds anchored at the drop cursor position and clamped to target display workArea.
+ */
+export function computeCursorAuxiliaryBounds(
+  cursorPoint: ScreenPoint,
+  screenLike?: ScreenLike
+): WindowBounds {
+  return computeAnchoredWindowBounds(
+    cursorPoint,
+    { width: AUXILIARY_WINDOW_DEFAULT_WIDTH, height: AUXILIARY_WINDOW_DEFAULT_HEIGHT },
+    screenLike
+  )
+}
+
 /**
  * Computes auxiliary window bounds offset by (+40, +40) from source window and clamped to display workArea.
  */
@@ -77,11 +111,23 @@ export function computeOffsetAuxiliaryBounds(
   sourceBounds: WindowBounds,
   screenLike?: ScreenLike
 ): WindowBounds {
-  return computeCursorAuxiliaryBounds(
-    {
-      x: sourceBounds.x + AUXILIARY_WINDOW_OFFSET_X,
-      y: sourceBounds.y + AUXILIARY_WINDOW_OFFSET_Y
-    },
+  return computeOffsetWindowBounds(
+    sourceBounds,
+    { width: AUXILIARY_WINDOW_DEFAULT_WIDTH, height: AUXILIARY_WINDOW_DEFAULT_HEIGHT },
+    screenLike
+  )
+}
+
+/**
+ * Computes main window bounds offset by (+40, +40) from source window at default 1280x820 and clamped to display workArea.
+ */
+export function computeOffsetMainBounds(
+  sourceBounds: WindowBounds,
+  screenLike?: ScreenLike
+): WindowBounds {
+  return computeOffsetWindowBounds(
+    sourceBounds,
+    { width: MAIN_WINDOW_DEFAULT_WIDTH, height: MAIN_WINDOW_DEFAULT_HEIGHT },
     screenLike
   )
 }
@@ -207,6 +253,7 @@ export function cloneTabTransferPayloads(
 export interface WindowInitContext {
   role: WindowRole
   initialTabs: TabTransferPayload[]
+  initialWorkspacePath?: string | null
 }
 
 export interface DetachTabToNewWindowResult {
@@ -245,6 +292,7 @@ export type AcceptTabDragDropRejectReason =
   | 'no-active-drag'
   | 'drag-not-pending'
   | 'session-mismatch'
+  | 'different-workspace-session'
   | 'same-window'
   | 'unknown-buffer'
 

@@ -1,10 +1,21 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { BrowserWindowConstructorOptions } from 'electron'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DocumentBuffer, SharedBufferStateSnapshot } from '@shared/documentBuffer'
-import { BUFFER_IPC_CHANNELS, WINDOW_IPC_CHANNELS, WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import {
+  BUFFER_IPC_CHANNELS,
+  CONFIG_IPC_CHANNELS,
+  GIT_IPC_CHANNELS,
+  MENU_IPC_CHANNELS,
+  WINDOW_IPC_CHANNELS,
+  WORKSPACE_IPC_CHANNELS,
+  WORKSPACE_STATE_IPC_CHANNELS,
+  type ActivateOrOpenWorkspaceResult,
+  type FocusOpenWorkspaceResult,
+  type OpenWorkspaceInNewWindowResult
+} from '@shared/ipc'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
   WINDOW_BASE_TITLE,
@@ -18,12 +29,18 @@ import {
   type WindowInitContext
 } from '@shared/window'
 import { ConfigService } from './config/ConfigService'
+import { GitService } from './git/GitService'
 import { createFakeIpcMain, type FakeIpcMain } from './ipc/ipcTestHelpers'
 import { createSharedDocumentBufferHub, registerBufferIpc, type BufferWebContentsLike } from './ipc/registerBufferIpc'
+import { registerConfigIpc } from './ipc/registerConfigIpc'
+import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerWindowIpc } from './ipc/registerWindowIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
+import { registerWorkspaceStateIpc } from './ipc/registerWorkspaceStateIpc'
+import { createApplicationMenuTemplate } from './menu'
 import { WindowManager, type BrowserWindowLike } from './windowManager'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
+import { WorkspaceStateService } from './workspace/WorkspaceStateService'
 import { TabDragCoordinator } from '@shared/tabDragSession'
 
 interface FakeWindowInstance extends BrowserWindowLike {
@@ -33,8 +50,13 @@ interface FakeWindowInstance extends BrowserWindowLike {
   removedMenu: boolean
   shown: boolean
   closedCount: number
+  restoreCount: number
+  focusCount: number
   sentMessages: Array<{ channel: string; payload: unknown }>
   emitReadyToShow: () => void
+  emitFocus: () => void
+  setMinimized: (minimized: boolean) => void
+  setFocused: (focused: boolean) => void
   emitBeforeInput: (input: { type?: string; key?: string; code?: string }) => void
   getBeforeInputListenerCount: () => number
   simulateUserClose: () => void
@@ -50,10 +72,15 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
     const webContentsId = nextWebContentsId++
     let destroyed = false
     let closedCount = 0
+    let minimized = false
+    let focused = false
+    let restoreCount = 0
+    let focusCount = 0
     const windowListeners = {
       'ready-to-show': [] as Array<() => void>,
       closed: [] as Array<() => void>,
-      close: new Set<(event: { preventDefault: () => void }) => void>()
+      close: new Set<(event: { preventDefault: () => void }) => void>(),
+      focus: new Set<() => void>()
     }
     const webContentsDestroyedListeners: Array<() => void> = []
     const beforeInputListeners = new Set<
@@ -106,6 +133,12 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
       get closedCount() {
         return closedCount
       },
+      get restoreCount() {
+        return restoreCount
+      },
+      get focusCount() {
+        return focusCount
+      },
       sentMessages,
       webContents: {
         id: webContentsId,
@@ -138,6 +171,19 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
         }
       },
       getBounds: () => ({ ...bounds }),
+      isMinimized: () => minimized,
+      isFocused: () => focused,
+      restore: () => {
+        restoreCount += 1
+        minimized = false
+      },
+      focus: () => {
+        focusCount += 1
+        focused = true
+        for (const listener of [...windowListeners.focus]) {
+          listener()
+        }
+      },
       removeMenu: () => {
         fakeWin.removedMenu = true
       },
@@ -149,17 +195,24 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
         fireCloseAndDestroyIfAllowed()
       },
       isDestroyed: () => destroyed,
-      on: (eventName: 'close', listener: (event: { preventDefault: () => void }) => void) => {
+      on: (
+        eventName: 'close' | 'focus',
+        listener: ((event: { preventDefault: () => void }) => void) | (() => void)
+      ) => {
         if (eventName === 'close') {
-          windowListeners.close.add(listener)
+          windowListeners.close.add(listener as (event: { preventDefault: () => void }) => void)
+        } else if (eventName === 'focus') {
+          windowListeners.focus.add(listener as () => void)
         }
       },
       removeListener: (
-        eventName: 'close',
-        listener: (event: { preventDefault: () => void }) => void
+        eventName: 'close' | 'focus',
+        listener: ((event: { preventDefault: () => void }) => void) | (() => void)
       ) => {
         if (eventName === 'close') {
-          windowListeners.close.delete(listener)
+          windowListeners.close.delete(listener as (event: { preventDefault: () => void }) => void)
+        } else if (eventName === 'focus') {
+          windowListeners.focus.delete(listener as () => void)
         }
       },
       once: (eventName: 'ready-to-show' | 'closed', listener: () => void) => {
@@ -175,6 +228,18 @@ function createFakeBrowserWindowFactory(defaultBounds: WindowBounds = { x: 100, 
         for (const listener of windowListeners['ready-to-show'].splice(0)) {
           listener()
         }
+      },
+      emitFocus: () => {
+        focused = true
+        for (const listener of [...windowListeners.focus]) {
+          listener()
+        }
+      },
+      setMinimized: (next: boolean) => {
+        minimized = next
+      },
+      setFocused: (next: boolean) => {
+        focused = next
       },
       emitBeforeInput: (input) => {
         for (const listener of beforeInputListeners) {
@@ -1522,5 +1587,1005 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
 
     await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.resolveCloseRequest, true)
     expect(mainWin.isDestroyed()).toBe(true)
+  })
+})
+
+describe('Multi-Main-Window Workspace Session Coordinator', () => {
+  let tempDir: string
+  let wsAlpha: string
+  let wsBeta: string
+  let wsGamma: string
+  let configPath: string
+  let statePath: string
+  let configService: ConfigService
+  let workspaceStateService: WorkspaceStateService
+  let gitService: GitService
+  let factory: ReturnType<typeof createFakeBrowserWindowFactory>
+  let manager: WindowManager
+  let ipc: FakeIpcMain
+  let disposeFns: Array<() => void>
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'wiki-editor-multi-main-'))
+    wsAlpha = join(tempDir, 'alpha')
+    wsBeta = join(tempDir, 'beta')
+    wsGamma = join(tempDir, 'gamma')
+    configPath = join(tempDir, 'config.json')
+    statePath = join(tempDir, 'workspace-state.json')
+    await mkdir(wsAlpha, { recursive: true })
+    await mkdir(wsBeta, { recursive: true })
+    await mkdir(wsGamma, { recursive: true })
+    await writeFile(join(wsAlpha, 'a.md'), '# Alpha', 'utf8')
+    await writeFile(join(wsBeta, 'b.md'), '# Beta', 'utf8')
+    await writeFile(join(wsGamma, 'c.md'), '# Gamma', 'utf8')
+
+    configService = new ConfigService(configPath)
+    await configService.get()
+    workspaceStateService = new WorkspaceStateService(statePath)
+    gitService = new GitService()
+    factory = createFakeBrowserWindowFactory({ x: 100, y: 100, width: 1280, height: 820 })
+    ipc = createFakeIpcMain()
+
+    manager = new WindowManager({
+      preloadPath: 'C:\\app\\out\\preload\\index.js',
+      rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
+      configService,
+      initialAutoSaveConfig: { autoSave: false, autoSaveDelayMs: 1000 },
+      createWindow: factory.createWindow,
+      screen: {
+        getDisplayNearestPoint: () => ({
+          workArea: { x: 0, y: 0, width: 1920, height: 1080 }
+        })
+      }
+    })
+
+    disposeFns = [
+      registerConfigIpc(ipc, configService, () => manager.getWebContentsTargets()),
+      registerBufferIpc({
+        ipcMain: ipc,
+        configService,
+        sessionSource: manager
+      }),
+      registerWorkspaceIpc({
+        ipcMain: ipc,
+        configService,
+        coordinator: manager,
+        selectDirectory: async () => wsAlpha
+      }),
+      registerWorkspaceStateIpc({
+        ipcMain: ipc,
+        workspaceStateService,
+        isMainWindowSender: (sender) => manager.isMainWebContents(sender)
+      }),
+      registerGitIpc({
+        ipcMain: ipc,
+        gitService,
+        resolveWorkspaceService: (sender) => manager.getWorkspaceServiceForSender(sender)
+      }),
+      registerWindowIpc({
+        ipcMain: ipc,
+        windowManager: manager
+      })
+    ]
+  })
+
+  afterEach(async () => {
+    for (const dispose of disposeFns.reverse()) {
+      dispose()
+    }
+    manager.dispose()
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 })
+  })
+
+  it('validates target directory before creating a new main window, positions offset (+40,+40) clamped to workArea, and injects initialWorkspacePath', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+
+    const main1InitCtx = await ipc.invokeFrom<WindowInitContext>(
+      main1.webContents,
+      WINDOW_IPC_CHANNELS.getInitContext
+    )
+    expect(main1InitCtx).toEqual({ role: 'main', initialTabs: [] })
+
+    // Invalid paths must reject BEFORE creating a new BrowserWindow
+    const filePath = join(wsAlpha, 'a.md')
+    const missingPath = join(tempDir, 'missing-workspace')
+    for (const invalidPath of ['', '   ', missingPath, filePath]) {
+      await expect(
+        ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, invalidPath)
+      ).rejects.toThrow()
+    }
+    expect(factory.createdWindows).toHaveLength(1)
+
+    // Valid unopened path creates a new main window with offset (+40, +40), 1280x820, min 900x600, and initialWorkspacePath
+    const openNewRes = await ipc.invokeFrom<OpenWorkspaceInNewWindowResult>(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsBeta
+    )
+    const realBeta = await realpath(wsBeta)
+    expect(factory.createdWindows).toHaveLength(2)
+
+    const main2 = factory.createdWindows[1]
+    expect(openNewRes).toEqual({
+      status: 'opened',
+      windowId: main2.webContents.id,
+      rootPath: realBeta
+    })
+    expect(main2.removedMenu).toBe(false)
+    expect(main2.options).toMatchObject({
+      width: 1280,
+      height: 820,
+      minWidth: 900,
+      minHeight: 600,
+      x: 140,
+      y: 140,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
+    })
+    expect(main2.getBounds()).toEqual({ x: 140, y: 140, width: 1280, height: 820 })
+
+    // Repeatable init context reads return initialWorkspacePath
+    expect(
+      await ipc.invokeFrom<WindowInitContext>(main2.webContents, WINDOW_IPC_CHANNELS.getInitContext)
+    ).toEqual({
+      role: 'main',
+      initialTabs: [],
+      initialWorkspacePath: realBeta
+    })
+    expect(
+      await ipc.invokeFrom<WindowInitContext>(main2.webContents, WINDOW_IPC_CHANNELS.getInitContext)
+    ).toEqual({
+      role: 'main',
+      initialTabs: [],
+      initialWorkspacePath: realBeta
+    })
+
+    // Clamping near workArea edge: source near bottom-right clamps inside 1920x1080
+    const edgeFactory = createFakeBrowserWindowFactory({ x: 620, y: 240, width: 1280, height: 820 })
+    const edgeManager = new WindowManager({
+      preloadPath: 'C:\\app\\out\\preload\\index.js',
+      rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
+      configService,
+      createWindow: edgeFactory.createWindow,
+      screen: {
+        getDisplayNearestPoint: () => ({
+          workArea: { x: 0, y: 0, width: 1920, height: 1080 }
+        })
+      }
+    })
+    try {
+      const edgeSource = edgeManager.createMainWindow() as FakeWindowInstance
+      await edgeManager.openWorkspaceInNewWindow(edgeSource.webContents, wsGamma)
+      expect(edgeFactory.createdWindows[1].getBounds()).toEqual({
+        x: 640,
+        y: 260,
+        width: 1280,
+        height: 820
+      })
+    } finally {
+      edgeManager.dispose()
+    }
+  })
+
+  it('prevents duplicate main-window opening across openInNewWindow, activateOrOpen, focusIfOpen, and open (including symlinks and casing) and restores/focuses existing window', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    const realAlpha = await realpath(wsAlpha)
+
+    const main2Res = await ipc.invokeFrom<OpenWorkspaceInNewWindowResult>(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsBeta
+    )
+    expect(main2Res.status).toBe('opened')
+    const main2 = factory.createdWindows[1]
+    const realBeta = await realpath(wsBeta)
+
+    // Before main2 has finished calling workspace:open, openInNewWindow(wsBeta) must still focus main2 without creating a 3rd window
+    main2.setMinimized(true)
+    const duplicatePendingRes = await ipc.invokeFrom<OpenWorkspaceInNewWindowResult>(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      `${wsBeta}/`
+    )
+    expect(duplicatePendingRes).toEqual({
+      status: 'focused-existing',
+      windowId: main2.webContents.id,
+      rootPath: realBeta
+    })
+    expect(factory.createdWindows).toHaveLength(2)
+    expect(main2.restoreCount).toBe(1)
+    expect(main2.focusCount).toBe(1)
+    expect(main2.isMinimized?.()).toBe(false)
+
+    // Now main2 activates Beta via activateOrOpen
+    const activateBeta = await ipc.invokeFrom<ActivateOrOpenWorkspaceResult>(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      realBeta
+    )
+    expect(activateBeta.status).toBe('opened')
+
+    // Minimize main1 and test activateOrOpen + focusIfOpen + openInNewWindow + raw open from main2 targeting wsAlpha (including case/slash variant)
+    main1.setMinimized(true)
+    const alphaVariant =
+      process.platform === 'win32' ? `${realAlpha.toUpperCase()}\\` : `${realAlpha}/`
+    const dupNewWin = await ipc.invokeFrom<OpenWorkspaceInNewWindowResult>(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      alphaVariant
+    )
+    expect(dupNewWin).toEqual({
+      status: 'focused-existing',
+      windowId: main1.webContents.id,
+      rootPath: realAlpha
+    })
+    expect(factory.createdWindows).toHaveLength(2)
+    expect(main1.restoreCount).toBe(1)
+    expect(main1.focusCount).toBe(1)
+
+    // focusIfOpen returns focused: false for unopened workspace and restores+focuses for another open main window
+    expect(
+      await ipc.invokeFrom<FocusOpenWorkspaceResult>(
+        main2.webContents,
+        WORKSPACE_IPC_CHANNELS.focusIfOpen,
+        wsGamma
+      )
+    ).toEqual({ focused: false })
+    main1.setMinimized(true)
+    expect(
+      await ipc.invokeFrom<FocusOpenWorkspaceResult>(
+        main2.webContents,
+        WORKSPACE_IPC_CHANNELS.focusIfOpen,
+        alphaVariant
+      )
+    ).toEqual({
+      focused: true,
+      windowId: main1.webContents.id,
+      rootPath: realAlpha
+    })
+    expect(main1.restoreCount).toBe(2)
+    expect(main1.focusCount).toBe(2)
+    expect(main1.isMinimized?.()).toBe(false)
+
+    // activateOrOpen targeting Alpha from main2 focuses main1 and preserves Beta on main2
+    main1.setMinimized(true)
+    const dupActivate = await ipc.invokeFrom<ActivateOrOpenWorkspaceResult>(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      alphaVariant
+    )
+    expect(dupActivate).toEqual({
+      status: 'focused-existing',
+      windowId: main1.webContents.id,
+      rootPath: realAlpha
+    })
+    expect(main1.restoreCount).toBe(3)
+    expect(main1.focusCount).toBe(3)
+    expect(
+      await ipc.invokeFrom<Array<{ name: string }>>(
+        main2.webContents,
+        WORKSPACE_IPC_CHANNELS.readDir
+      )
+    ).toEqual([expect.objectContaining({ name: 'b.md' })])
+
+    // Raw workspace:open targeting Alpha from main2 ALSO focuses main1 and rejects duplicate open
+    main1.setMinimized(true)
+    await expect(
+      ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, alphaVariant)
+    ).rejects.toThrow(/이미 다른 창/)
+    expect(main1.restoreCount).toBe(4)
+    expect(main1.focusCount).toBe(4)
+
+    // Symlink / junction pointing to Alpha also resolves to existing main1 across openInNewWindow and focusIfOpen
+    const alphaLink = join(tempDir, 'alpha-link')
+    let symlinkCreated = false
+    try {
+      await symlink(wsAlpha, alphaLink, process.platform === 'win32' ? 'junction' : 'dir')
+      symlinkCreated = true
+    } catch {
+      symlinkCreated = false
+    }
+    if (symlinkCreated) {
+      main1.setMinimized(true)
+      const symlinkOpen = await ipc.invokeFrom<OpenWorkspaceInNewWindowResult>(
+        main2.webContents,
+        WORKSPACE_IPC_CHANNELS.openInNewWindow,
+        alphaLink
+      )
+      expect(symlinkOpen).toEqual({
+        status: 'focused-existing',
+        windowId: main1.webContents.id,
+        rootPath: realAlpha
+      })
+      expect(main1.restoreCount).toBe(5)
+      expect(main1.focusCount).toBe(5)
+      expect(factory.createdWindows).toHaveLength(2)
+
+      main1.setMinimized(true)
+      const symlinkFocus = await ipc.invokeFrom<FocusOpenWorkspaceResult>(
+        main2.webContents,
+        WORKSPACE_IPC_CHANNELS.focusIfOpen,
+        alphaLink
+      )
+      expect(symlinkFocus).toEqual({
+        focused: true,
+        windowId: main1.webContents.id,
+        rootPath: realAlpha
+      })
+      expect(main1.restoreCount).toBe(6)
+      expect(main1.focusCount).toBe(6)
+    }
+  })
+
+  it('isolates workspace watch, buffer hub, git IPC, workspace-state guard, and broadcasts config changes with clean config buffer sync across sessions', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.watch)
+
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
+    const main2 = factory.createdWindows[1]
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.watch)
+
+    // Each session has its own workspace root & watch broadcasts
+    await writeFile(join(wsAlpha, 'alpha-new.md'), '# Alpha New', 'utf8')
+    await vi.waitFor(() => {
+      expect(main1.sentMessages.some((m) => m.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(true)
+    })
+    expect(main2.sentMessages.some((m) => m.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(false)
+
+    main1.sentMessages.length = 0
+    main2.sentMessages.length = 0
+
+    // Unwatching session 1 does NOT stop session 2's watcher
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.unwatch)
+    await writeFile(join(wsBeta, 'beta-new.md'), '# Beta New', 'utf8')
+    await vi.waitFor(() => {
+      expect(main2.sentMessages.some((m) => m.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(true)
+    })
+    expect(main1.sentMessages.some((m) => m.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(false)
+
+    // Buffer isolation: opening/editing a.md in Session 1 does NOT leak into Session 2
+    const bufA = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, 'a.md'),
+      'a.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.updateContent, bufA.key, '# Dirty A')
+
+    const bufB = (await ipc.invokeFrom(
+      main2.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsBeta, 'b.md'),
+      'b.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufB.key])
+
+    const snap1 = await ipc.invokeFrom<SharedBufferStateSnapshot>(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.getSnapshot
+    )
+    const snap2 = await ipc.invokeFrom<SharedBufferStateSnapshot>(
+      main2.webContents,
+      BUFFER_IPC_CHANNELS.getSnapshot
+    )
+    expect(Object.keys(snap1.buffers)).toEqual([bufA.key])
+    expect(Object.keys(snap2.buffers)).toEqual([bufB.key])
+
+    // Detach tab from main1 -> auxiliary belongs ONLY to Session 1 and receives Session 1 buffer & watch events
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufA.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux1 = factory.createdWindows[2]
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+
+    main2.sentMessages.length = 0
+    aux1.sentMessages.length = 0
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.updateContent, bufA.key, '# Edited in Aux1')
+    expect(aux1.sentMessages.some((m) => m.channel === BUFFER_IPC_CHANNELS.event)).toBe(true)
+    expect(main2.sentMessages.some((m) => m.channel === BUFFER_IPC_CHANNELS.event)).toBe(false)
+
+    // clearWorkspaceBuffers in Session 1 closes workspace buffers in Session 1 while keeping Session 2 buffers intact
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.clearWorkspaceBuffers)
+    expect(aux1.isDestroyed()).toBe(true)
+    const snap2AfterClear1 = await ipc.invokeFrom<SharedBufferStateSnapshot>(
+      main2.webContents,
+      BUFFER_IPC_CHANNELS.getSnapshot
+    )
+    expect(snap2AfterClear1.buffers[bufB.key]).toBeDefined()
+
+    // Git IPC routes per session and rejects cross-session workspace paths
+    await ipc.invokeFrom(main1.webContents, GIT_IPC_CHANNELS.init, wsAlpha)
+    const gitStatus1 = await ipc.invokeFrom<{ isRepo: boolean }>(
+      main1.webContents,
+      GIT_IPC_CHANNELS.status,
+      wsAlpha
+    )
+    const gitStatus2 = await ipc.invokeFrom<{ isRepo: boolean }>(
+      main2.webContents,
+      GIT_IPC_CHANNELS.status,
+      wsBeta
+    )
+    expect(gitStatus1.isRepo).toBe(true)
+    expect(gitStatus2.isRepo).toBe(false)
+    await expect(
+      ipc.invokeFrom(main1.webContents, GIT_IPC_CHANNELS.status, wsBeta)
+    ).rejects.toThrow(/일치하지 않습니다/)
+
+    // WorkspaceState IPC succeeds from both main1 and main2, while auxiliary windows are rejected
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_STATE_IPC_CHANNELS.save, wsAlpha, {
+      expandedDirs: [join(wsAlpha, 'sub')]
+    })
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_STATE_IPC_CHANNELS.save, wsBeta, {
+      expandedDirs: [join(wsBeta, 'docs')]
+    })
+    expect(
+      await ipc.invokeFrom(main2.webContents, WORKSPACE_STATE_IPC_CHANNELS.get, wsBeta)
+    ).toMatchObject({ expandedDirs: [join(wsBeta, 'docs')] })
+
+    // Global config change broadcasts to ALL live windows (main1, main2, aux2) and refreshes clean config.json buffers
+    const cfgBuf1 = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openConfigDocument
+    )) as DocumentBuffer
+    const cfgBuf2 = (await ipc.invokeFrom(
+      main2.webContents,
+      BUFFER_IPC_CHANNELS.openConfigDocument
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [cfgBuf1.key])
+    await ipc.invokeFrom(main2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufB.key, cfgBuf2.key])
+
+    await ipc.invokeFrom(main2.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufB.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux2 = factory.createdWindows[3]
+    await ipc.invokeFrom(aux2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufB.key])
+    await expect(
+      ipc.invokeFrom(aux2.webContents, WORKSPACE_STATE_IPC_CHANNELS.get, wsBeta)
+    ).rejects.toThrow(/main window/i)
+
+    main1.sentMessages.length = 0
+    main2.sentMessages.length = 0
+    aux2.sentMessages.length = 0
+    await ipc.invokeFrom(main1.webContents, CONFIG_IPC_CHANNELS.update, { theme: 'dark' })
+
+    expect(main1.sentMessages.some((m) => m.channel === CONFIG_IPC_CHANNELS.changed)).toBe(true)
+    expect(main2.sentMessages.some((m) => m.channel === CONFIG_IPC_CHANNELS.changed)).toBe(true)
+    expect(aux2.sentMessages.some((m) => m.channel === CONFIG_IPC_CHANNELS.changed)).toBe(true)
+
+    const favoriteBroadcastCases = [
+      {
+        sender: main1.webContents,
+        channel: CONFIG_IPC_CHANNELS.toggleFavoriteWorkspace,
+        args: [wsAlpha, 'Alpha'],
+        expectedCount: 1
+      },
+      {
+        sender: main2.webContents,
+        channel: CONFIG_IPC_CHANNELS.removeFavoriteWorkspace,
+        args: [wsAlpha],
+        expectedCount: 0
+      }
+    ]
+    for (const testCase of favoriteBroadcastCases) {
+      for (const targetWin of [main1, main2, aux2]) {
+        targetWin.sentMessages.length = 0
+      }
+      await ipc.invokeFrom(testCase.sender, testCase.channel, ...testCase.args)
+      for (const targetWin of [main1, main2, aux2]) {
+        expect(
+          targetWin.sentMessages.some(
+            (m) =>
+              m.channel === CONFIG_IPC_CHANNELS.changed &&
+              (m.payload as { favoriteWorkspaces: Array<{ path: string }> }).favoriteWorkspaces
+                .length === testCase.expectedCount
+          )
+        ).toBe(true)
+      }
+    }
+
+    await vi.waitFor(async () => {
+      const snapCfg2 = await ipc.invokeFrom<SharedBufferStateSnapshot>(
+        main2.webContents,
+        BUFFER_IPC_CHANNELS.getSnapshot
+      )
+      expect(JSON.parse(snapCfg2.buffers[cfgBuf2.key]!.content).theme).toBe('dark')
+    })
+
+    // Saving config.json document buffer in Session 1 updates clean config.json in Session 2 while preserving dirty edits if dirty
+    const parsedCfg1 = JSON.parse(cfgBuf1.content)
+    await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      cfgBuf1.key,
+      JSON.stringify({ ...parsedCfg1, autoSave: true }, null, 2)
+    )
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.saveBuffer, cfgBuf1.key)
+    await vi.waitFor(async () => {
+      const snapCfg2 = await ipc.invokeFrom<SharedBufferStateSnapshot>(
+        main2.webContents,
+        BUFFER_IPC_CHANNELS.getSnapshot
+      )
+      expect(JSON.parse(snapCfg2.buffers[cfgBuf2.key]!.content).autoSave).toBe(true)
+    })
+
+    // Auxiliary windows cannot open or activate workspaces directly
+    await expect(
+      ipc.invokeFrom(aux2.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsGamma)
+    ).rejects.toThrow(/main window/i)
+    await expect(
+      ipc.invokeFrom(aux2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsGamma)
+    ).rejects.toThrow(/main window/i)
+  })
+
+  it('scopes drag-state-changed broadcasts to owning session and rejects cross-session acceptTabDragDrop while accepting same-session drops', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
+    const main2 = factory.createdWindows[1]
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+
+    const bufA = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, 'a.md'),
+      'a.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+    const payloadA: TabTransferPayload = {
+      bufferKey: bufA.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    }
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, payloadA)
+    const aux1 = factory.createdWindows[2]
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+
+    const bufB = (await ipc.invokeFrom(
+      main2.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsBeta, 'b.md'),
+      'b.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufB.key])
+    await ipc.invokeFrom(main2.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufB.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux2 = factory.createdWindows[3]
+    await ipc.invokeFrom(aux2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufB.key])
+
+    main1.sentMessages.length = 0
+    aux1.sentMessages.length = 0
+    main2.sentMessages.length = 0
+    aux2.sentMessages.length = 0
+
+    // Start drag in Session 1 (aux1) -> ONLY Session 1 windows (main1, aux1) receive drag-state-changed
+    const drag1 = await ipc.invokeFrom<ActiveTabDragSession>(
+      aux1.webContents,
+      WINDOW_IPC_CHANNELS.startTabDrag,
+      { paneId: 'primary', tabId: 'tab-a', payload: payloadA }
+    )
+    expect(main1.sentMessages.some((m) => m.channel === WINDOW_IPC_CHANNELS.dragStateChanged)).toBe(true)
+    expect(aux1.sentMessages.some((m) => m.channel === WINDOW_IPC_CHANNELS.dragStateChanged)).toBe(true)
+    expect(main2.sentMessages.some((m) => m.channel === WINDOW_IPC_CHANNELS.dragStateChanged)).toBe(false)
+    expect(aux2.sentMessages.some((m) => m.channel === WINDOW_IPC_CHANNELS.dragStateChanged)).toBe(false)
+
+    // Cross-session drop onto main2 or aux2 MUST be rejected without mutating Session 1 drag
+    const rejectMain2 = await ipc.invokeFrom<AcceptTabDragDropResult>(
+      main2.webContents,
+      WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+      { dragSessionId: drag1.dragSessionId }
+    )
+    expect(rejectMain2).toEqual({ accepted: false, reason: 'different-workspace-session' })
+
+    const rejectAux2NoId = await ipc.invokeFrom<AcceptTabDragDropResult>(
+      aux2.webContents,
+      WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+      {}
+    )
+    expect(rejectAux2NoId).toEqual({ accepted: false, reason: 'different-workspace-session' })
+
+    // Dropping Session 1's tab over Session 2's window bounds does NOT spawn a new auxiliary window
+    const crossBoundsEnd = await ipc.invokeFrom<TabDragEndResult>(
+      aux1.webContents,
+      WINDOW_IPC_CHANNELS.endTabDrag,
+      {
+        dragSessionId: drag1.dragSessionId,
+        screenPoint: { x: main2.getBounds().x + 50, y: main2.getBounds().y + 50 }
+      }
+    )
+    expect(crossBoundsEnd).toEqual({ detached: false, outcome: 'cancelled' })
+    expect(factory.createdWindows).toHaveLength(4)
+
+    // Re-start drag in Session 1 for same-session drop onto main1
+    const drag1b = await ipc.invokeFrom<ActiveTabDragSession>(
+      aux1.webContents,
+      WINDOW_IPC_CHANNELS.startTabDrag,
+      { paneId: 'primary', tabId: 'tab-a', payload: payloadA }
+    )
+
+    // Same-session drop onto main1 MUST still succeed
+    const acceptMain1 = await ipc.invokeFrom<AcceptTabDragDropResult>(
+      main1.webContents,
+      WINDOW_IPC_CHANNELS.acceptTabDragDrop,
+      { dragSessionId: drag1b.dragSessionId }
+    )
+    expect(acceptMain1).toMatchObject({
+      accepted: true,
+      dragSessionId: drag1b.dragSessionId,
+      sourceWindowId: aux1.webContents.id,
+      targetWindowId: main1.webContents.id
+    })
+  })
+
+  it('closes only the target main window and its owned auxiliary windows after session-scoped unsaved/flush checks, leaving other sessions intact', async () => {
+    await writeFile(join(wsAlpha, 'a2.md'), '# Alpha 2', 'utf8')
+    await writeFile(join(wsBeta, 'b2.md'), '# Beta 2', 'utf8')
+
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.watch)
+
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
+    const main2 = factory.createdWindows[1]
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.watch)
+
+    const bufA1 = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, 'a.md'),
+      'a.md'
+    )) as DocumentBuffer
+    const bufA2 = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, 'a2.md'),
+      'a2.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      bufA1.key,
+      bufA2.key
+    ])
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufA2.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux1 = factory.createdWindows[2]
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA2.key])
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA1.key])
+
+    const bufB1 = (await ipc.invokeFrom(
+      main2.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsBeta, 'b.md'),
+      'b.md'
+    )) as DocumentBuffer
+    const bufB2 = (await ipc.invokeFrom(
+      main2.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsBeta, 'b2.md'),
+      'b2.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      bufB1.key,
+      bufB2.key
+    ])
+    await ipc.invokeFrom(main2.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufB2.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux2 = factory.createdWindows[3]
+    await ipc.invokeFrom(aux2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufB2.key])
+    await ipc.invokeFrom(main2.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufB1.key])
+
+    // Make Session 2 (aux2) dirty while Session 1 is dirty in aux1 -> closing main1 prompts ONLY main1
+    await ipc.invokeFrom(aux2.webContents, BUFFER_IPC_CHANNELS.updateContent, bufB2.key, '# Dirty B2')
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.updateContent, bufA2.key, '# Dirty A2')
+
+    main1.sentMessages.length = 0
+    aux1.sentMessages.length = 0
+    main2.sentMessages.length = 0
+    aux2.sentMessages.length = 0
+
+    main1.simulateUserClose()
+    expect(main1.isDestroyed()).toBe(false)
+    expect(aux1.isDestroyed()).toBe(false)
+    expect(main1.sentMessages.filter((m) => m.channel === WINDOW_IPC_CHANNELS.closeRequested)).toHaveLength(1)
+    expect(aux1.sentMessages.some((m) => m.channel === WINDOW_IPC_CHANNELS.closeRequested)).toBe(false)
+    expect(main2.sentMessages.some((m) => m.channel === WINDOW_IPC_CHANNELS.closeRequested)).toBe(false)
+    expect(aux2.sentMessages.some((m) => m.channel === WINDOW_IPC_CHANNELS.closeRequested)).toBe(false)
+
+    // Cancel main1 close -> all windows stay alive
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.resolveCloseRequest, false)
+    expect(main1.isDestroyed()).toBe(false)
+    expect(aux1.isDestroyed()).toBe(false)
+
+    // Save aux1 so Session 1 is clean, enable close-flush on main1, and confirm Session 2 dirty buffer does NOT block clean main1 flush/close
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.saveBuffer, bufA2.key)
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.setCloseFlushEnabled, true)
+
+    main1.sentMessages.length = 0
+    main1.simulateUserClose()
+    expect(main1.isDestroyed()).toBe(false)
+    expect(main1.sentMessages.filter((m) => m.channel === WINDOW_IPC_CHANNELS.closeRequested)).toHaveLength(1)
+
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.resolveCloseRequest, true)
+    expect(aux1.isDestroyed()).toBe(true)
+    expect(main1.isDestroyed()).toBe(true)
+
+    // Session 2 (main2 + aux2) MUST remain completely intact and functional
+    expect(main2.isDestroyed()).toBe(false)
+    expect(aux2.isDestroyed()).toBe(false)
+    const snap2 = await ipc.invokeFrom<SharedBufferStateSnapshot>(
+      main2.webContents,
+      BUFFER_IPC_CHANNELS.getSnapshot
+    )
+    expect(snap2.buffers[bufB2.key]?.content).toBe('# Dirty B2')
+
+    // Since Session 1 closed, wsAlpha can now be opened again in a new window from main2
+    const reopenAlpha = await ipc.invokeFrom<OpenWorkspaceInNewWindowResult>(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsAlpha
+    )
+    expect(reopenAlpha.status).toBe('opened')
+    expect(factory.createdWindows).toHaveLength(5)
+
+    // Clean close without closeFlushEnabled closes main3 and any aux immediately without prompting while main2 stays open
+    const main3 = factory.createdWindows[4]
+    main3.sentMessages.length = 0
+    main3.simulateUserClose()
+    expect(main3.isDestroyed()).toBe(true)
+    expect(main3.sentMessages.some((m) => m.channel === WINDOW_IPC_CHANNELS.closeRequested)).toBe(false)
+    expect(main2.isDestroyed()).toBe(false)
+    expect(aux2.isDestroyed()).toBe(false)
+  })
+
+  it('routes application menu bar commands to target main window or auxiliary owning main window, and tracks workspace services for wiki-asset protocol', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
+    const main2 = factory.createdWindows[1]
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+
+    const bufA = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, 'a.md'),
+      'a.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufA.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux1 = factory.createdWindows[2]
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+
+    const menuTemplate = createApplicationMenuTemplate({
+      getTargetWebContents: (targetWindow) => manager.getMenuTargetWebContents(targetWindow)
+    })
+    const fileSubmenu = menuTemplate.find((item) => item.label === 'File')?.submenu as Array<{
+      click?: (item: unknown, win: unknown, event: unknown) => void
+    }>
+    const settingsSubmenu = menuTemplate.find((item) => item.label === 'Settings')?.submenu as Array<{
+      click?: (item: unknown, win: unknown, event: unknown) => void
+    }>
+
+    main1.sentMessages.length = 0
+    main2.sentMessages.length = 0
+    aux1.sentMessages.length = 0
+
+    // Menu command triggered with explicit targetWindow = aux1 routes to aux1's owning main1 (not aux1, not main2)
+    fileSubmenu[0].click?.(undefined, aux1, undefined)
+    expect(main1.sentMessages.filter((m) => m.channel === MENU_IPC_CHANNELS.command)).toEqual([
+      { channel: MENU_IPC_CHANNELS.command, payload: 'open-folder' }
+    ])
+    expect(aux1.sentMessages.some((m) => m.channel === MENU_IPC_CHANNELS.command)).toBe(false)
+    expect(main2.sentMessages.some((m) => m.channel === MENU_IPC_CHANNELS.command)).toBe(false)
+
+    // Menu command triggered with explicit targetWindow = main2 routes to main2
+    settingsSubmenu[0].click?.(undefined, main2, undefined)
+    expect(main2.sentMessages.filter((m) => m.channel === MENU_IPC_CHANNELS.command)).toEqual([
+      { channel: MENU_IPC_CHANNELS.command, payload: 'toggle-settings' }
+    ])
+
+    // Menu command with undefined targetWindow falls back to focused/last-active window's main window
+    main1.emitFocus()
+    settingsSubmenu[1].click?.(undefined, undefined, undefined)
+    expect(main1.sentMessages.filter((m) => m.channel === MENU_IPC_CHANNELS.command)).toHaveLength(2)
+
+    // getWorkspaceServices exposes all active sessions' workspace services and drops closed ones
+    expect(manager.getWorkspaceServices()).toHaveLength(2)
+    main1.simulateUserClose()
+    expect(manager.getWorkspaceServices()).toHaveLength(1)
+  })
+
+  it('prevents duplicate open of both incoming and outgoing workspaces during concurrent switch, clears stale pendingInitialWorkspacePath on validation failure, and guards post-await disposal', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsGamma)
+    const main2 = factory.createdWindows[1]
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsGamma)
+
+    // 1. Delay main1's workspaceService.openWorkspace to simulate in-flight A -> B switch
+    const main1Service = manager.getWorkspaceServices()[0]
+    const originalOpen = main1Service.openWorkspace.bind(main1Service)
+    let releaseOpen!: () => void
+    const openBarrier = new Promise<void>((resolve) => {
+      releaseOpen = resolve
+    })
+    let openStarted!: () => void
+    const openStartedPromise = new Promise<void>((resolve) => {
+      openStarted = resolve
+    })
+    vi.spyOn(main1Service, 'openWorkspace').mockImplementationOnce(async (targetPath: string) => {
+      openStarted()
+      await openBarrier
+      return originalOpen(targetPath)
+    })
+
+    const switchPromise = ipc.invokeFrom(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      wsBeta
+    ) as Promise<ActivateOrOpenWorkspaceResult>
+    await openStartedPromise
+
+    // Both incoming wsBeta and outgoing wsAlpha should resolve to main1 while switch is in flight
+    const dupBetaResult = (await ipc.invokeFrom(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsBeta
+    )) as OpenWorkspaceInNewWindowResult
+    expect(dupBetaResult).toMatchObject({
+      status: 'focused-existing',
+      windowId: main1.webContents.id
+    })
+
+    const dupAlphaResult = (await ipc.invokeFrom(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsAlpha
+    )) as OpenWorkspaceInNewWindowResult
+    expect(dupAlphaResult).toMatchObject({
+      status: 'focused-existing',
+      windowId: main1.webContents.id
+    })
+    expect(factory.createdWindows).toHaveLength(2)
+
+    releaseOpen()
+    const switchResult = await switchPromise
+    expect(switchResult.status).toBe('opened')
+
+    // 2. Deleted unmounted initialWorkspacePath clears stale reservation when activateOrOpen fails validation
+    const wsDelta = join(tempDir, 'delta')
+    await mkdir(wsDelta, { recursive: true })
+    await writeFile(join(wsDelta, 'd.md'), '# Delta', 'utf8')
+    const deltaWinRes = (await ipc.invokeFrom(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsDelta
+    )) as OpenWorkspaceInNewWindowResult
+    expect(deltaWinRes.status).toBe('opened')
+    const main3 = factory.createdWindows[2]
+
+    await rm(wsDelta, { recursive: true, force: true })
+    await expect(
+      ipc.invokeFrom(main3.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, deltaWinRes.rootPath)
+    ).rejects.toThrow()
+
+    await mkdir(wsDelta, { recursive: true })
+    const reopenDelta = (await ipc.invokeFrom(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsDelta
+    )) as OpenWorkspaceInNewWindowResult
+    expect(reopenDelta.status).toBe('opened')
+    expect(factory.createdWindows).toHaveLength(4)
+
+    // 2b. Overlapping workspace switches on the same main window preserve the newer pendingOpenWorkspacePath when the earlier open settles
+    const wsZeta = join(tempDir, 'zeta')
+    const wsEta = join(tempDir, 'eta')
+    await mkdir(wsZeta, { recursive: true })
+    await mkdir(wsEta, { recursive: true })
+    await writeFile(join(wsZeta, 'z.md'), '# Zeta', 'utf8')
+    await writeFile(join(wsEta, 'e.md'), '# Eta', 'utf8')
+
+    let releaseZeta!: () => void
+    const zetaBarrier = new Promise<void>((resolve) => {
+      releaseZeta = resolve
+    })
+    let zetaStarted!: () => void
+    const zetaStartedPromise = new Promise<void>((resolve) => {
+      zetaStarted = resolve
+    })
+    let releaseEta!: () => void
+    const etaBarrier = new Promise<void>((resolve) => {
+      releaseEta = resolve
+    })
+
+    const openSpy = vi.spyOn(main1Service, 'openWorkspace').mockImplementation(async (targetPath: string) => {
+      if (targetPath.endsWith('zeta')) {
+        zetaStarted()
+        await zetaBarrier
+      } else if (targetPath.endsWith('eta')) {
+        await etaBarrier
+      }
+      return originalOpen(targetPath)
+    })
+
+    const switchZetaPromise = ipc.invokeFrom(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      wsZeta
+    ) as Promise<ActivateOrOpenWorkspaceResult>
+    await zetaStartedPromise
+
+    const switchEtaPromise = ipc.invokeFrom(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      wsEta
+    ) as Promise<ActivateOrOpenWorkspaceResult>
+    // Wait until activateOrOpen(wsEta) finishes directory validation and queues/registers wsEta
+    await new Promise((resolve) => setTimeout(resolve, 15))
+
+    // Earlier open settles while wsEta is still pending
+    releaseZeta()
+    expect((await switchZetaPromise).status).toBe('opened')
+
+    const dupEtaResult = (await ipc.invokeFrom(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsEta
+    )) as OpenWorkspaceInNewWindowResult
+    expect(dupEtaResult).toMatchObject({
+      status: 'focused-existing',
+      windowId: main1.webContents.id
+    })
+    expect(factory.createdWindows).toHaveLength(4)
+
+    releaseEta()
+    expect((await switchEtaPromise).status).toBe('opened')
+    openSpy.mockRestore()
+
+    // 3. Disposing WindowManager while openWorkspaceInNewWindow resolves does not spawn orphaned window, and clears sender lookup
+    const wsEpsilon = join(tempDir, 'epsilon')
+    await mkdir(wsEpsilon, { recursive: true })
+    const windowsBeforeDispose = factory.createdWindows.length
+    const pendingPostDispose = manager.openWorkspaceInNewWindow(main1.webContents, wsEpsilon)
+    manager.dispose()
+    await expect(pendingPostDispose).rejects.toThrow(/disposed/i)
+    expect(factory.createdWindows).toHaveLength(windowsBeforeDispose)
+    expect(manager.isMainWebContents(main1.webContents)).toBe(false)
+    expect(manager.getWindowForSender(main1.webContents)).toBeUndefined()
+    expect(manager.getWindowInitContext(main1.webContents)).toEqual({
+      role: 'main',
+      initialTabs: []
+    })
   })
 })

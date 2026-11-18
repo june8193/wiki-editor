@@ -113,6 +113,16 @@ export function MainAppShell() {
   const activeGitRepoRootRef = useRef<string | null>(null)
   const activeDiscardTargetPathsRef = useRef<readonly string[] | null>(null)
   const onInitialConfigLoadedRef = useRef<(loadedConfig: AppConfig) => void>(() => undefined)
+  const tryStartupWorkspaceOpenRef = useRef<() => void>(() => undefined)
+  const startupInitRef = useRef<{
+    initResolved: boolean
+    initialWorkspacePath: string | null
+    loadedConfig: AppConfig | null
+  }>({
+    initResolved: !wikiApi.window?.getInitContext,
+    initialWorkspacePath: null,
+    loadedConfig: null
+  })
   const onWorkspaceRestoredRef = useRef<
     (context: RestoredWorkspaceContext) => Promise<void> | void
   >(() => undefined)
@@ -180,6 +190,8 @@ export function MainAppShell() {
   const hasWorkspaceInteractionRef = useRef<boolean>(false)
   const isStartupRestoreRef = useRef<boolean>(false)
   const hadOpenWorkspaceRef = useRef<boolean>(false)
+  const isMountedRef = useRef<boolean>(true)
+  const switchWorkspaceSeqRef = useRef<number>(0)
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const reconcileBuffersRef = useRef<
     (changeEvent?: WorkspaceChangeEvent) => Promise<readonly string[]>
@@ -269,30 +281,81 @@ export function MainAppShell() {
       })
   }
 
-  onInitialConfigLoadedRef.current = (loadedConfig) => {
+  tryStartupWorkspaceOpenRef.current = () => {
     if (
       hasWorkspaceInteractionRef.current ||
       isSelectingFolderRef.current ||
-      workspace !== null
+      activeWorkspaceRootRef.current !== null
     ) {
       return
     }
-    const lastWorkspacePath = loadedConfig.recentWorkspaces[0]
+    const { initResolved, initialWorkspacePath, loadedConfig } = startupInitRef.current
+    if (!initResolved) {
+      return
+    }
+
+    const startStartupWorkspaceOpen = (
+      targetPath: string,
+      options?: { silentError?: boolean; onSilentError?: () => void }
+    ): void => {
+      hasWorkspaceInteractionRef.current = true
+      isStartupRestoreRef.current = true
+      void openWorkspace(targetPath, options).finally(() => {
+        isStartupRestoreRef.current = false
+      })
+    }
+
+    if (initialWorkspacePath) {
+      startStartupWorkspaceOpen(initialWorkspacePath)
+      return
+    }
+
+    const lastWorkspacePath = loadedConfig?.recentWorkspaces[0]
     if (!lastWorkspacePath) {
       return
     }
-    hasWorkspaceInteractionRef.current = true
-    isStartupRestoreRef.current = true
-    void openWorkspace(lastWorkspacePath, {
+    startStartupWorkspaceOpen(lastWorkspacePath, {
       silentError: true,
       onSilentError: () => removeRecentWorkspace(lastWorkspacePath)
-    }).finally(() => {
-      isStartupRestoreRef.current = false
     })
   }
 
+  onInitialConfigLoadedRef.current = (loadedConfig) => {
+    startupInitRef.current.loadedConfig = loadedConfig
+    tryStartupWorkspaceOpenRef.current()
+  }
+
   useEffect(() => {
+    let cancelled = false
+    const finalizeInitContext = (initialPath: string | null): void => {
+      if (cancelled) return
+      startupInitRef.current.initResolved = true
+      startupInitRef.current.initialWorkspacePath = initialPath
+      tryStartupWorkspaceOpenRef.current()
+    }
+
+    const getInitContext = wikiApi.window?.getInitContext
+    if (!getInitContext) {
+      finalizeInitContext(null)
+      return
+    }
+
+    startupInitRef.current.initResolved = false
+    startupInitRef.current.initialWorkspacePath = null
+    void getInitContext()
+      .then((context) => context?.initialWorkspacePath?.trim() || null)
+      .catch(() => null)
+      .then(finalizeInitContext)
+
     return () => {
+      cancelled = true
+    }
+  }, [wikiApi])
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
       pendingGitConfirmCancelRef.current?.()
     }
   }, [])
@@ -468,13 +531,37 @@ export function MainAppShell() {
     [promptUnsavedWorkspaceChanges]
   )
 
-  const handleSwitchWorkspace = useCallback(
-    (targetPath: string): void => {
-      hasWorkspaceInteractionRef.current = true
-      isStartupRestoreRef.current = false
-      const currentRoot = activeWorkspaceRootRef.current
-      if (currentRoot && isSameWorkspacePath(currentRoot, targetPath)) {
-        setLeftSidebar(transitionWorkspaceSidebarToExplorer)
+  /**
+   * Attempts to focus an existing main window holding `targetPath` and returns
+   * whether the current window should proceed with a local workspace switch.
+   */
+  const focusExistingAndCheckProceed = useCallback(
+    async (targetPath: string, switchSeq: number): Promise<boolean> => {
+      const focusIfOpen = wikiApi.workspace.focusIfOpen
+      if (!focusIfOpen) {
+        return true
+      }
+      let focused = false
+      try {
+        focused = (await focusIfOpen(targetPath)).focused
+      } catch {
+        focused = false
+      }
+      if (!isMountedRef.current || switchSeq !== switchWorkspaceSeqRef.current) {
+        return false
+      }
+      if (focused) {
+        reportErrorBanner(null)
+        return false
+      }
+      return true
+    },
+    [reportErrorBanner, wikiApi]
+  )
+
+  const proceedSwitchAfterFocusCheck = useCallback(
+    (targetPath: string, switchSeq: number): void => {
+      if (isDialogOpenRef.current) {
         return
       }
       if (!hadOpenWorkspaceRef.current) {
@@ -482,6 +569,9 @@ export function MainAppShell() {
         return
       }
       guardUnsavedWorkspaceChanges(async () => {
+        if (!(await focusExistingAndCheckProceed(targetPath, switchSeq))) {
+          return
+        }
         const prevRoot = activeWorkspaceRootRef.current
         await workspaceStatePersistence.suspendAndFlush()
         const openResult = await openWorkspace(targetPath)
@@ -495,7 +585,55 @@ export function MainAppShell() {
         }
       })
     },
-    [guardUnsavedWorkspaceChanges, openWorkspace, workspaceStatePersistence]
+    [
+      focusExistingAndCheckProceed,
+      guardUnsavedWorkspaceChanges,
+      isDialogOpenRef,
+      openWorkspace,
+      workspaceStatePersistence
+    ]
+  )
+
+  const handleSwitchWorkspace = useCallback(
+    (targetPath: string): void => {
+      hasWorkspaceInteractionRef.current = true
+      isStartupRestoreRef.current = false
+      const currentRoot = activeWorkspaceRootRef.current
+      if (currentRoot && isSameWorkspacePath(currentRoot, targetPath)) {
+        switchWorkspaceSeqRef.current += 1
+        setLeftSidebar(transitionWorkspaceSidebarToExplorer)
+        return
+      }
+      const switchSeq = ++switchWorkspaceSeqRef.current
+      if (!wikiApi.workspace.focusIfOpen) {
+        proceedSwitchAfterFocusCheck(targetPath, switchSeq)
+        return
+      }
+      void focusExistingAndCheckProceed(targetPath, switchSeq).then((shouldProceed) => {
+        if (shouldProceed) {
+          proceedSwitchAfterFocusCheck(targetPath, switchSeq)
+        }
+      })
+    },
+    [focusExistingAndCheckProceed, proceedSwitchAfterFocusCheck, wikiApi]
+  )
+
+  const handleOpenWorkspaceInNewWindow = useCallback(
+    (targetPath: string): void => {
+      const openInNewWindow = wikiApi.workspace.openInNewWindow
+      if (!openInNewWindow) {
+        reportErrorBanner('새 창에서 워크스페이스를 열 수 없습니다.')
+        return
+      }
+      reportErrorBanner(null)
+      void openInNewWindow(targetPath).catch((error: unknown) => {
+        reportErrorBanner(
+          toErrorMessage(error, '새 창에서 워크스페이스를 열지 못했습니다.'),
+          error
+        )
+      })
+    },
+    [reportErrorBanner, wikiApi]
   )
 
   const handleSelectFolder = useCallback((): void => {
@@ -667,6 +805,7 @@ export function MainAppShell() {
                 recentWorkspaces={config.recentWorkspaces}
                 onOpenFolder={handleSelectFolder}
                 onSwitchWorkspace={handleSwitchWorkspace}
+                onOpenInNewWindow={handleOpenWorkspaceInNewWindow}
                 onToggleFavorite={() => {
                   if (workspace) {
                     toggleFavoriteWorkspace(workspace.rootPath, workspace.name)

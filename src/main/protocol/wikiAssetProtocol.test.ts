@@ -165,4 +165,61 @@ describe('wikiAssetProtocol', () => {
     )
     expect(dirRes.status).toBe(404)
   })
+
+  it('resolves wiki-asset requests across multiple open main-window workspace services while keeping outside and blocked paths forbidden', async () => {
+    const secondWorkspaceDir = path.join(tempRoot, 'vault-second')
+    await mkdir(path.join(secondWorkspaceDir, 'images'), { recursive: true })
+    await mkdir(path.join(secondWorkspaceDir, '.git', 'assets'), { recursive: true })
+    const secondPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01, 0x02, 0x03])
+    await writeFile(path.join(secondWorkspaceDir, 'images', 'chart.png'), secondPng)
+    await writeFile(path.join(secondWorkspaceDir, '.git', 'assets', 'git-secret.png'), PNG_BYTES)
+
+    const secondService = new WorkspaceFsService({ trashItem: async () => undefined })
+    try {
+      await service.openWorkspace(workspaceDir)
+      await secondService.openWorkspace(secondWorkspaceDir)
+      const getServices = () => [service, secondService]
+
+      const firstRes = await handleWikiAssetRequest(
+        new Request(buildWikiAssetUrl(path.join(workspaceDir, 'assets', 'diagram (1).png'))),
+        getServices
+      )
+      expect(firstRes.status).toBe(200)
+      expect(Buffer.from(await firstRes.arrayBuffer())).toEqual(PNG_BYTES)
+
+      const secondRes = await handleWikiAssetRequest(
+        new Request(buildWikiAssetUrl(path.join(secondWorkspaceDir, 'images', 'chart.png'))),
+        getServices
+      )
+      expect(secondRes.status).toBe(200)
+      expect(Buffer.from(await secondRes.arrayBuffer())).toEqual(secondPng)
+
+      const missingInSecond = await handleWikiAssetRequest(
+        new Request(buildWikiAssetUrl(path.join(secondWorkspaceDir, 'images', 'missing.png'))),
+        getServices
+      )
+      expect(missingInSecond.status).toBe(404)
+
+      const blockedGitInSecond = await handleWikiAssetRequest(
+        new Request(buildWikiAssetUrl(path.join(secondWorkspaceDir, '.git', 'assets', 'git-secret.png'))),
+        getServices
+      )
+      expect(blockedGitInSecond.status).toBe(403)
+
+      const outsideRes = await handleWikiAssetRequest(
+        new Request(buildWikiAssetUrl(path.join(outsideDir, 'secret.png'))),
+        getServices
+      )
+      expect(outsideRes.status).toBe(403)
+
+      // Closed workspace service no longer resolves once removed from active list
+      const closedSecondRes = await handleWikiAssetRequest(
+        new Request(buildWikiAssetUrl(path.join(secondWorkspaceDir, 'images', 'chart.png'))),
+        () => [service]
+      )
+      expect(closedSecondRes.status).toBe(403)
+    } finally {
+      secondService.dispose()
+    }
+  })
 })

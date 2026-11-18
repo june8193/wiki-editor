@@ -8,6 +8,7 @@ import type { GitService } from '../git/GitService'
 import { LogService } from '../logging/LogService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import type { IpcMainLike } from './ipcHelpers'
+import { createFakeIpcMain as createSessionAwareFakeIpcMain } from './ipcTestHelpers'
 import { registerGitIpc } from './registerGitIpc'
 
 type Handler = (_event: unknown, ...args: unknown[]) => unknown
@@ -317,5 +318,44 @@ describe('registerGitIpc', () => {
     expect(typeof entries[1].data?.durationMs).toBe('number')
 
     dispose()
+  })
+
+  it('routes git:* IPC calls to the sender session workspaceService and rejects mismatched session paths', async () => {
+    const wsA = new WorkspaceFsService()
+    const wsB = new WorkspaceFsService()
+    await wsA.openWorkspace(workspaceDir)
+    await wsB.openWorkspace(otherDir)
+
+    const senderA = { isDestroyed: () => false, send: () => undefined }
+    const senderB = { isDestroyed: () => false, send: () => undefined }
+    const unknownSender = { isDestroyed: () => false, send: () => undefined }
+    const fakeGitService = {
+      status: vi.fn(async (rootPath: string) => createEmptyGitStatus(true, rootPath))
+    } as unknown as GitService
+
+    const ipcMain = createSessionAwareFakeIpcMain()
+    const dispose = registerGitIpc({
+      ipcMain,
+      gitService: fakeGitService,
+      resolveWorkspaceService: (sender) =>
+        sender === senderA ? wsA : sender === senderB ? wsB : undefined
+    })
+
+    const statusA = await ipcMain.invokeFrom(senderA, GIT_IPC_CHANNELS.status, workspaceDir)
+    expect(statusA).toMatchObject({ repoRoot: workspaceDir })
+
+    const statusB = await ipcMain.invokeFrom(senderB, GIT_IPC_CHANNELS.status, otherDir)
+    expect(statusB).toMatchObject({ repoRoot: otherDir })
+
+    await expect(ipcMain.invokeFrom(senderA, GIT_IPC_CHANNELS.status, otherDir)).rejects.toThrow(
+      /일치하지 않습니다/
+    )
+    await expect(
+      ipcMain.invokeFrom(unknownSender, GIT_IPC_CHANNELS.status, workspaceDir)
+    ).rejects.toThrow(/열린 워크스페이스/)
+
+    dispose()
+    wsA.dispose()
+    wsB.dispose()
   })
 })

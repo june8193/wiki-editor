@@ -22,7 +22,7 @@ import {
 } from 'electron'
 import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
-import { createSharedDocumentBufferHub, registerBufferIpc } from './ipc/registerBufferIpc'
+import { registerBufferIpc } from './ipc/registerBufferIpc'
 import { registerClipboardIpc } from './ipc/registerClipboardIpc'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerDiagramIpc } from './ipc/registerDiagramIpc'
@@ -37,7 +37,6 @@ import { LogService } from './logging/LogService'
 import { registerProcessLifecycleLogging } from './logging/processLifecycleLogging'
 import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
 import { WindowManager } from './windowManager'
-import { WorkspaceFsService } from './workspace/WorkspaceFsService'
 import { WorkspaceStateService } from './workspace/WorkspaceStateService'
 import { registerWindowNavigationGuard } from './window'
 
@@ -69,7 +68,6 @@ let disposeLogIpc: (() => void) | undefined
 let disposeClipboardIpc: (() => void) | undefined
 let disposeWikiAssetProtocol: (() => void) | undefined
 let windowManager: WindowManager | undefined
-let workspaceService: WorkspaceFsService | undefined
 let workspaceStateService: WorkspaceStateService | undefined
 
 function disposeMainResources(): Promise<void> | undefined {
@@ -97,8 +95,6 @@ function disposeMainResources(): Promise<void> | undefined {
   disposeConfigIpc = undefined
   windowManager?.dispose()
   windowManager = undefined
-  workspaceService?.dispose()
-  workspaceService = undefined
   return flushWorkspaceState
 }
 
@@ -122,12 +118,8 @@ void app.whenReady().then(async () => {
   const activeWorkspaceStateService = new WorkspaceStateService(workspaceStatePath, { logService })
   workspaceStateService = activeWorkspaceStateService
 
-  const activeWorkspaceService = new WorkspaceFsService({
-    trashItem: (targetPath) => shell.trashItem(targetPath)
-  })
-  workspaceService = activeWorkspaceService
   protocol.handle(WIKI_ASSET_SCHEME, (request) =>
-    handleWikiAssetRequest(request, activeWorkspaceService)
+    handleWikiAssetRequest(request, () => windowManager?.getWorkspaceServices() ?? [])
   )
   disposeWikiAssetProtocol = () => {
     protocol.unhandle(WIKI_ASSET_SCHEME)
@@ -137,31 +129,29 @@ void app.whenReady().then(async () => {
     trashItem: (targetPath) => shell.trashItem(targetPath)
   })
 
-  const bufferHub = createSharedDocumentBufferHub({
-    workspaceService,
-    configService,
-    logService,
-    initialAutoSaveConfig: {
-      autoSave: initialConfig.autoSave,
-      autoSaveDelayMs: initialConfig.autoSaveDelayMs
-    }
-  })
-
   windowManager = new WindowManager({
     preloadPath: join(__dirname, '../preload/index.js'),
     rendererUrl: process.env.ELECTRON_RENDERER_URL,
     rendererFilePath: join(__dirname, '../renderer/index.html'),
-    bufferHub,
+    configService,
+    logService,
+    trashItem: (targetPath) => shell.trashItem(targetPath),
+    initialAutoSaveConfig: {
+      autoSave: initialConfig.autoSave,
+      autoSaveDelayMs: initialConfig.autoSaveDelayMs
+    },
     createWindow: (options) => {
       const win = new BrowserWindow(options)
       registerWindowNavigationGuard(win.webContents)
       return win
     },
-    screen
+    screen,
+    getFocusedWindow: () => BrowserWindow.getFocusedWindow() ?? undefined
   })
 
   const getTargets = () => windowManager?.getWebContentsTargets() ?? []
-  const getMenuTargetWebContents = () => windowManager?.getMenuTargetWebContents()
+  const getMenuTargetWebContents = (targetWindow?: unknown) =>
+    windowManager?.getMenuTargetWebContents(targetWindow)
 
   disposeLogIpc = registerLogIpc(ipcMain, logService)
   disposeClipboardIpc = registerClipboardIpc({
@@ -193,8 +183,7 @@ void app.whenReady().then(async () => {
   disposeBufferIpc = registerBufferIpc({
     ipcMain,
     configService,
-    hub: bufferHub,
-    getTargets,
+    sessionSource: windowManager,
     logService
   })
   disposeWindowIpc = registerWindowIpc({
@@ -205,18 +194,19 @@ void app.whenReady().then(async () => {
   disposeGitIpc = registerGitIpc({
     ipcMain,
     gitService,
-    workspaceService,
+    resolveWorkspaceService: (sender) => windowManager?.getWorkspaceServiceForSender(sender),
     logService
   })
   disposeWorkspaceIpc = registerWorkspaceIpc({
     ipcMain,
-    workspaceService,
     configService,
-    getTargets,
-    isMainWindowSender: (sender) => windowManager?.isMainWebContents(sender) ?? false,
+    coordinator: windowManager,
     logService,
-    selectDirectory: async () => {
-      const targetWindow = getActiveWindow()
+    selectDirectory: async (sender) => {
+      const senderWindow = windowManager?.getWindowForSender(sender)
+      const targetWindow =
+        (senderWindow && senderWindow instanceof BrowserWindow ? senderWindow : undefined) ??
+        getActiveWindow()
       const options = { properties: ['openDirectory'] as Array<'openDirectory'> }
       const result = targetWindow
         ? await dialog.showOpenDialog(targetWindow, options)

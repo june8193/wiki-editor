@@ -795,7 +795,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
       within(workspaceView).queryByRole('button', { name: /^(?:즐겨찾기 추가|즐겨찾기 해제)$/ })
     ).not.toBeInTheDocument()
     expect(within(workspaceView).getByRole('button', { name: /★\s*alpha/i })).toBeInTheDocument()
-    expect(within(workspaceView).getByRole('button', { name: /gamma/i })).toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: /^gamma$/i })).toBeInTheDocument()
     expect(within(workspaceView).queryByRole('button', { name: /deleted-ws/i })).not.toBeInTheDocument()
 
     // Clicking '폴더 열기...' triggers the same folder selection handler as File > Open Folder
@@ -807,7 +807,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     // Return to Workspace View and click recent workspace directly -> opens gamma and transitions to Explorer
     await clickActivityBarButton(user, '워크스페이스')
     const reopenedWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
-    await user.click(within(reopenedWorkspaceView).getByRole('button', { name: /gamma/i }))
+    await user.click(within(reopenedWorkspaceView).getByRole('button', { name: /^gamma$/i }))
 
     const sidebar = await screen.findByLabelText('워크스페이스 탐색기')
     expect(await within(sidebar).findByText('gamma.md')).toBeInTheDocument()
@@ -866,7 +866,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
 
     // Switch failure keeps Workspace View active and displays error banner
     const initialWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
-    await user.click(within(initialWorkspaceView).getByRole('button', { name: /broken-ws/i }))
+    await user.click(within(initialWorkspaceView).getByRole('button', { name: /^broken-ws$/i }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Workspace open failed')
     expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
 
@@ -893,14 +893,14 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     expect(activeAlphaBtn).toHaveClass('is-active')
 
     // Switch to recent workspace -> triggers unsaved confirmation dialog; cancel keeps Workspace View & current workspace
-    await user.click(within(workspaceView).getByRole('button', { name: /recent-ws/i }))
+    await user.click(within(workspaceView).getByRole('button', { name: /^recent-ws$/i }))
     const cancelDialog = await screen.findByRole('alertdialog')
     await user.click(within(cancelDialog).getByRole('button', { name: '취소' }))
     expect(screen.getByRole('region', { name: '워크스페이스 뷰' })).toBeInTheDocument()
     expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Alpha unsaved')
 
     // Retry switching to recent workspace and discard unsaved changes -> transitions to Explorer
-    await user.click(within(workspaceView).getByRole('button', { name: /recent-ws/i }))
+    await user.click(within(workspaceView).getByRole('button', { name: /^recent-ws$/i }))
     const discardDialog = await screen.findByRole('alertdialog')
     await user.click(within(discardDialog).getByRole('button', { name: /버리고 이동/i }))
 
@@ -4674,7 +4674,7 @@ describe('Renderer error logging & UI breadcrumbs', () => {
     })
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(within(workspaceView).getByRole('button', { name: /gamma/i })).toBeInTheDocument()
+    expect(within(workspaceView).getByRole('button', { name: /^gamma$/i })).toBeInTheDocument()
     expect(within(workspaceView).queryByRole('button', { name: /missing/i })).not.toBeInTheDocument()
   })
 })
@@ -9830,7 +9830,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     await clickActivityBarButton(user, '워크스페이스')
     await user.click(
       within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /broken-ws/i
+        name: /^broken-ws$/i
       })
     )
     expect(await screen.findByRole('alert')).toHaveTextContent('Workspace open failed')

@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { Star } from 'lucide-react'
+import { ExternalLink, Star } from 'lucide-react'
 import { FavoriteWorkspace } from '@shared/config'
 import {
   getWorkspaceDisplayName,
@@ -10,6 +10,7 @@ import {
 interface WorkspaceOption {
   path: string
   label: string
+  openInNewWindowAriaLabel: string
   removeAriaLabel?: string
   onRemove?: () => void
 }
@@ -20,6 +21,7 @@ interface WorkspaceSectionProps {
   options: readonly WorkspaceOption[]
   activeWorkspaceRootPath: string | null
   onSelect: (path: string) => void
+  onOpenInNewWindow: (path: string) => void
 }
 
 function WorkspaceSection({
@@ -27,7 +29,8 @@ function WorkspaceSection({
   emptyMessage,
   options,
   activeWorkspaceRootPath,
-  onSelect
+  onSelect,
+  onOpenInNewWindow
 }: WorkspaceSectionProps): ReactElement {
   return (
     <div className="workspace-view-section">
@@ -53,6 +56,16 @@ function WorkspaceSection({
                   onClick={() => onSelect(option.path)}
                 >
                   <span className="workspace-view-item-label">{option.label}</span>
+                </button>
+                <button
+                  type="button"
+                  className="workspace-view-new-window-btn"
+                  aria-label={option.openInNewWindowAriaLabel}
+                  title={option.openInNewWindowAriaLabel}
+                  disabled={active}
+                  onClick={() => onOpenInNewWindow(option.path)}
+                >
+                  <ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />
                 </button>
                 {option.onRemove && (
                   <button
@@ -81,6 +94,7 @@ interface WorkspaceViewProps {
   recentWorkspaces: readonly string[]
   onOpenFolder: () => void
   onSwitchWorkspace: (path: string) => void
+  onOpenInNewWindow: (path: string) => void
   onToggleFavorite: () => void
   onRemoveFavorite: (path: string) => void
 }
@@ -95,23 +109,32 @@ export function WorkspaceView({
   recentWorkspaces,
   onOpenFolder,
   onSwitchWorkspace,
+  onOpenInNewWindow,
   onToggleFavorite,
   onRemoveFavorite
 }: WorkspaceViewProps): ReactElement {
   const activeRootPath = workspace?.rootPath ?? null
   const favoriteLabel = isFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'
 
-  const favoriteOptions: WorkspaceOption[] = favoriteWorkspaces.map((fav) => ({
-    path: fav.path,
-    label: `★ ${fav.name}`,
-    removeAriaLabel: `${fav.name} 즐겨찾기 해제`,
-    onRemove: () => onRemoveFavorite(fav.path)
-  }))
+  const favoriteOptions: WorkspaceOption[] = favoriteWorkspaces.map((fav) => {
+    const displayName = fav.name.trim() || getWorkspaceDisplayName(fav.path) || fav.path
+    return {
+      path: fav.path,
+      label: `★ ${fav.name}`,
+      openInNewWindowAriaLabel: `${displayName} 새 창에서 열기`,
+      removeAriaLabel: `${fav.name} 즐겨찾기 해제`,
+      onRemove: () => onRemoveFavorite(fav.path)
+    }
+  })
 
-  const recentOptions: WorkspaceOption[] = recentWorkspaces.map((recentPath) => ({
-    path: recentPath,
-    label: getWorkspaceDisplayName(recentPath)
-  }))
+  const recentOptions: WorkspaceOption[] = recentWorkspaces.map((recentPath) => {
+    const displayName = getWorkspaceDisplayName(recentPath) || recentPath
+    return {
+      path: recentPath,
+      label: displayName,
+      openInNewWindowAriaLabel: `${displayName} 새 창에서 열기`
+    }
+  })
 
   return (
     <section className="workspace-view" aria-label="워크스페이스 뷰">
@@ -170,6 +193,7 @@ export function WorkspaceView({
           options={favoriteOptions}
           activeWorkspaceRootPath={activeRootPath}
           onSelect={onSwitchWorkspace}
+          onOpenInNewWindow={onOpenInNewWindow}
         />
 
         <WorkspaceSection
@@ -178,6 +202,7 @@ export function WorkspaceView({
           options={recentOptions}
           activeWorkspaceRootPath={activeRootPath}
           onSelect={onSwitchWorkspace}
+          onOpenInNewWindow={onOpenInNewWindow}
         />
       </div>
     </section>

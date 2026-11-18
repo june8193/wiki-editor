@@ -30,9 +30,9 @@ export function registerWindowIpc({
   windowManager,
   logService
 }: RegisterWindowIpcOptions): () => void {
-  const unsubscribeDragState = windowManager.onTabDragStateChanged((session) => {
+  const unsubscribeDragState = windowManager.onTabDragStateChanged((session, targets) => {
     broadcastIpcEvent(
-      () => windowManager.getWebContentsTargets(),
+      () => targets ?? windowManager.getWebContentsTargets(),
       WINDOW_IPC_CHANNELS.dragStateChanged,
       session
     )

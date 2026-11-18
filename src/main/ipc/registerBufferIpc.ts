@@ -1,5 +1,6 @@
 import type { AutoSaveConfig } from '@shared/bufferAutoSaveScheduler'
 import { BUFFER_IPC_CHANNELS } from '@shared/ipc'
+import type { SharedBufferStateSnapshot } from '@shared/documentBuffer'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import type { WorkspaceChangeEvent } from '@shared/workspace'
 import type { ConfigService } from '../config/ConfigService'
@@ -25,11 +26,24 @@ export interface CreateSharedDocumentBufferHubDependencies {
   initialAutoSaveConfig?: AutoSaveConfig
 }
 
+export interface BufferIpcSession {
+  hub: SharedDocumentBufferHub
+  getTargets: () => BufferWebContentsLike[]
+  resolveWindowId?: (sender: BufferWebContentsLike | undefined) => number | undefined
+}
+
+export interface BufferIpcSessionSource {
+  resolveSession: (sender: BufferWebContentsLike | undefined) => BufferIpcSession | undefined
+  forEachSession: (visitor: (session: BufferIpcSession) => void) => void
+  onSessionCreated?: (listener: (session: BufferIpcSession) => (() => void) | void) => () => void
+}
+
 export interface RegisterBufferIpcDependencies {
   ipcMain: IpcMainLike
   configService: ConfigService
-  hub: SharedDocumentBufferHub
-  getTargets: () => BufferWebContentsLike[]
+  hub?: SharedDocumentBufferHub
+  getTargets?: () => BufferWebContentsLike[]
+  sessionSource?: BufferIpcSessionSource
   logService?: LogService
 }
 
@@ -98,121 +112,244 @@ export function createSharedDocumentBufferHub({
   })
 }
 
+const EMPTY_BUFFER_SNAPSHOT: SharedBufferStateSnapshot = {
+  buffers: {},
+  tabCounts: {},
+  windowTabCounts: {},
+  revision: 0
+}
+
 /**
  * Registers main-process IPC handlers for shared document buffers and broadcasts hub updates
- * to all active renderer BrowserWindow targets.
+ * to each session's active renderer BrowserWindow targets.
  */
 export function registerBufferIpc({
   ipcMain,
   configService,
   hub,
   getTargets,
+  sessionSource,
   logService
 }: RegisterBufferIpcDependencies): () => void {
-  const resolveWindowId = (event: unknown): number | undefined => {
-    const sender = resolveSenderWebContents<BufferWebContentsLike>(event)
-    return sender ? trackHubWindowWebContents(hub, sender) : undefined
+  const ownsSingleHub = !sessionSource
+  let source: BufferIpcSessionSource
+  if (sessionSource) {
+    source = sessionSource
+  } else {
+    if (!hub || !getTargets) {
+      throw new Error('registerBufferIpc requires either sessionSource or hub and getTargets')
+    }
+    const singleSession: BufferIpcSession = { hub, getTargets }
+    source = {
+      resolveSession: () => singleSession,
+      forEachSession: (visitor) => visitor(singleSession)
+    }
   }
 
-  const unsubscribeConfig = configService.onChanged((config) => {
-    hub.setAutoSaveConfig({
-      autoSave: config.autoSave,
-      autoSaveDelayMs: config.autoSaveDelayMs
+  const resolveContext = (
+    event: unknown
+  ): { session: BufferIpcSession; windowId: number | undefined } | undefined => {
+    const sender = resolveSenderWebContents<BufferWebContentsLike>(event)
+    const session = source.resolveSession(sender)
+    if (!session) return undefined
+    const windowId = session.resolveWindowId
+      ? session.resolveWindowId(sender)
+      : sender
+        ? trackHubWindowWebContents(session.hub, sender)
+        : undefined
+    return { session, windowId }
+  }
+
+  const requireContext = (
+    event: unknown
+  ): { session: BufferIpcSession; windowId: number | undefined } => {
+    const ctx = resolveContext(event)
+    if (!ctx) {
+      throw new Error('Unknown window session')
+    }
+    return ctx
+  }
+
+  const hubUnsubscribers = new Map<SharedDocumentBufferHub, () => void>()
+  const attachSession = (session: BufferIpcSession): (() => void) | undefined => {
+    if (hubUnsubscribers.has(session.hub)) {
+      return undefined
+    }
+    const unsubscribeHub = session.hub.subscribe((hubEvent) => {
+      broadcastIpcEvent(session.getTargets, BUFFER_IPC_CHANNELS.event, hubEvent)
     })
+    hubUnsubscribers.set(session.hub, unsubscribeHub)
+    return () => {
+      hubUnsubscribers.get(session.hub)?.()
+      hubUnsubscribers.delete(session.hub)
+    }
+  }
+
+  const unsubscribeSessionCreated = source.onSessionCreated?.((session) => attachSession(session))
+  source.forEachSession((session) => {
+    attachSession(session)
   })
 
-  const unsubscribeHub = hub.subscribe((hubEvent) => {
-    broadcastIpcEvent(getTargets, BUFFER_IPC_CHANNELS.event, hubEvent)
+  const unsubscribeConfig = configService.onChanged((config) => {
+    source.forEachSession((session) => {
+      session.hub.setAutoSaveConfig({
+        autoSave: config.autoSave,
+        autoSaveDelayMs: config.autoSaveDelayMs
+      })
+      void session.hub.refreshCleanConfig().catch(() => undefined)
+    })
   })
 
   const unregisterHandlers = registerIpcHandlers(
     ipcMain,
     [
-      [BUFFER_IPC_CHANNELS.getSnapshot, (event) => hub.getSnapshot(resolveWindowId(event))],
+      [
+        BUFFER_IPC_CHANNELS.getSnapshot,
+        (event) => {
+          const ctx = resolveContext(event)
+          return ctx ? ctx.session.hub.getSnapshot(ctx.windowId) : EMPTY_BUFFER_SNAPSHOT
+        }
+      ],
       [
         BUFFER_IPC_CHANNELS.openWorkspaceFile,
-        (event, filePath, name, initialContent) =>
-          hub.openWorkspaceFile(
+        (event, filePath, name, initialContent) => {
+          const ctx = requireContext(event)
+          return ctx.session.hub.openWorkspaceFile(
             filePath as string,
             name as string | undefined,
             initialContent as string | undefined,
-            resolveWindowId(event)
+            ctx.windowId
           )
+        }
       ],
       [
         BUFFER_IPC_CHANNELS.openConfigDocument,
-        (event) => hub.openConfigDocument(resolveWindowId(event))
+        (event) => {
+          const ctx = requireContext(event)
+          return ctx.session.hub.openConfigDocument(ctx.windowId)
+        }
       ],
-      [BUFFER_IPC_CHANNELS.refreshCleanConfig, () => hub.refreshCleanConfig()],
+      [
+        BUFFER_IPC_CHANNELS.refreshCleanConfig,
+        (event) => {
+          const ctx = resolveContext(event)
+          return ctx ? ctx.session.hub.refreshCleanConfig() : null
+        }
+      ],
       [
         BUFFER_IPC_CHANNELS.updateContent,
-        (_event, key, nextContent) => hub.updateContent(key as string, nextContent as string)
+        (event, key, nextContent) => {
+          const ctx = resolveContext(event)
+          return ctx ? ctx.session.hub.updateContent(key as string, nextContent as string) : null
+        }
       ],
-      [BUFFER_IPC_CHANNELS.saveBuffer, (_event, key) => hub.saveBuffer(key as string)],
+      [
+        BUFFER_IPC_CHANNELS.saveBuffer,
+        (event, key) => {
+          const ctx = resolveContext(event)
+          return ctx
+            ? ctx.session.hub.saveBuffer(key as string)
+            : { ok: false, buffer: null }
+        }
+      ],
       [
         BUFFER_IPC_CHANNELS.syncWindowTabs,
         (event, bufferKeys, options) => {
-          const windowId = resolveWindowId(event)
+          const ctx = resolveContext(event)
+          if (!ctx) {
+            return EMPTY_BUFFER_SNAPSHOT
+          }
           const releasePending = Boolean(
             options &&
               typeof options === 'object' &&
               (options as { releasePending?: unknown }).releasePending
           )
-          return windowId !== undefined
-            ? hub.syncWindowTabs(
-                windowId,
+          return ctx.windowId !== undefined
+            ? ctx.session.hub.syncWindowTabs(
+                ctx.windowId,
                 Array.isArray(bufferKeys) ? (bufferKeys as string[]) : [],
                 releasePending ? { releasePending: true } : undefined
               )
-            : hub.getSnapshot()
+            : ctx.session.hub.getSnapshot()
         }
       ],
       [
         BUFFER_IPC_CHANNELS.setAutoSavePaused,
         (event, paused) => {
-          const windowId = resolveWindowId(event)
-          if (windowId !== undefined) {
-            hub.setAutoSavePaused(windowId, Boolean(paused))
+          const ctx = resolveContext(event)
+          if (ctx && ctx.windowId !== undefined) {
+            ctx.session.hub.setAutoSavePaused(ctx.windowId, Boolean(paused))
           }
         }
       ],
       [
         BUFFER_IPC_CHANNELS.syncRenamedPath,
-        (_event, oldPath, newPath) => hub.syncRenamedPath(oldPath as string, newPath as string)
+        (event, oldPath, newPath) => {
+          const ctx = resolveContext(event)
+          return ctx ? ctx.session.hub.syncRenamedPath(oldPath as string, newPath as string) : []
+        }
       ],
       [
         BUFFER_IPC_CHANNELS.syncDeletedPath,
-        (_event, targetPath) => hub.syncDeletedPath(targetPath as string)
+        (event, targetPath) => {
+          const ctx = resolveContext(event)
+          return ctx ? ctx.session.hub.syncDeletedPath(targetPath as string) : []
+        }
       ],
       [
         BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk,
-        (_event, changeEvent) =>
-          hub.reconcileWorkspaceBuffersWithDisk(changeEvent as WorkspaceChangeEvent | undefined)
+        (event, changeEvent) => {
+          const ctx = resolveContext(event)
+          return ctx
+            ? ctx.session.hub.reconcileWorkspaceBuffersWithDisk(
+                changeEvent as WorkspaceChangeEvent | undefined
+              )
+            : { warnings: [], closedKeys: [] }
+        }
       ],
       [
         BUFFER_IPC_CHANNELS.prepareDiscardPaths,
-        (_event, targetPaths) =>
-          hub.prepareWorkspacePathsForDiscard(
+        (event, targetPaths) => {
+          const ctx = resolveContext(event)
+          if (!ctx) return undefined
+          return ctx.session.hub.prepareWorkspacePathsForDiscard(
             Array.isArray(targetPaths) ? (targetPaths as string[]) : []
           )
+        }
       ],
       [
         BUFFER_IPC_CHANNELS.finishDiscardPaths,
-        (_event, targetPaths, forceSync) =>
-          hub.finishWorkspacePathsDiscard(
-            Array.isArray(targetPaths) ? (targetPaths as string[]) : [],
-            Boolean(forceSync)
-          )
+        (event, targetPaths, forceSync) => {
+          const ctx = resolveContext(event)
+          return ctx
+            ? ctx.session.hub.finishWorkspacePathsDiscard(
+                Array.isArray(targetPaths) ? (targetPaths as string[]) : [],
+                Boolean(forceSync)
+              )
+            : []
+        }
       ],
-      [BUFFER_IPC_CHANNELS.clearWorkspaceBuffers, () => hub.clearWorkspaceBuffers()]
+      [
+        BUFFER_IPC_CHANNELS.clearWorkspaceBuffers,
+        (event) => {
+          const ctx = resolveContext(event)
+          return ctx ? ctx.session.hub.clearWorkspaceBuffers() : []
+        }
+      ]
     ],
     { logService }
   )
 
   return () => {
-    unsubscribeHub()
+    unsubscribeSessionCreated?.()
+    for (const unsubscribeHub of hubUnsubscribers.values()) {
+      unsubscribeHub()
+    }
+    hubUnsubscribers.clear()
     unsubscribeConfig()
-    hub.dispose()
+    if (ownsSingleHub) {
+      hub?.dispose()
+    }
     unregisterHandlers()
   }
 }

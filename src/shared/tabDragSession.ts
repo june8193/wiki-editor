@@ -61,6 +61,7 @@ export function isEscapeBeforeInput(input: BeforeInputKeyEventLike): boolean {
 export interface TabDragCoordinatorOptions {
   now?: () => number
   crossWindowReclaimGraceMs?: number
+  nextDragSessionId?: () => string
 }
 
 const DEFAULT_CROSS_WINDOW_RECLAIM_GRACE_MS = 500
@@ -72,6 +73,7 @@ const DEFAULT_CROSS_WINDOW_RECLAIM_GRACE_MS = 500
 export class TabDragCoordinator {
   private readonly now: () => number
   private readonly crossWindowReclaimGraceMs: number
+  private readonly nextDragSessionId: () => string
   private activeSession: ActiveTabDragSession | null = null
   private reclaimableEndedSession: {
     session: ActiveTabDragSession
@@ -84,6 +86,7 @@ export class TabDragCoordinator {
     this.now = options.now ?? (() => Date.now())
     this.crossWindowReclaimGraceMs =
       options.crossWindowReclaimGraceMs ?? DEFAULT_CROSS_WINDOW_RECLAIM_GRACE_MS
+    this.nextDragSessionId = options.nextDragSessionId ?? (() => `drag-${++this.sessionCounter}`)
   }
 
   /**
@@ -97,13 +100,20 @@ export class TabDragCoordinator {
   }
 
   /**
+   * Returns true when a pending active or reclaimable cross-window drag is currently held.
+   */
+  hasPendingDrag(): boolean {
+    const session = this.activeSession ?? this.getValidReclaimableSession()
+    return session !== null && session.outcome === 'pending'
+  }
+
+  /**
    * Begins a new drag session owned by `sourceWindowId`, replacing any stale prior session.
    */
   start(sourceWindowId: number, input: TabDragStartInput): ActiveTabDragSession {
     this.reclaimableEndedSession = null
-    this.sessionCounter += 1
     this.activeSession = {
-      dragSessionId: `drag-${this.sessionCounter}`,
+      dragSessionId: this.nextDragSessionId(),
       sourceWindowId,
       paneId: input.paneId,
       tabId: input.tabId,
