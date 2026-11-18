@@ -101,7 +101,6 @@ export interface WindowManagerDependencies {
   trashItem?: (targetPath: string) => Promise<void>
   initialAutoSaveConfig?: AutoSaveConfig
   bufferHub?: SharedDocumentBufferHub
-  workspaceService?: WorkspaceFsService
   createWindow: (options: BrowserWindowConstructorOptions) => BrowserWindowLike
   screen?: ScreenLike
   getFocusedWindow?: () => BrowserWindowLike | undefined
@@ -139,9 +138,10 @@ interface WorkspaceSession {
   bufferHub: SharedDocumentBufferHub
   dragCoordinator: TabDragCoordinator
   ownsBufferHub: boolean
-  ownsWorkspaceService: boolean
   pendingInitialWorkspacePath: string | null
   pendingOpenWorkspacePath: string | null
+  pendingOpenToken: number
+  openWorkspaceQueue: Promise<unknown>
   windowIds: Set<number>
   disposed: boolean
   unsubscribeHub: () => void
@@ -180,7 +180,6 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   private readonly logService?: LogService
   private readonly trashItem?: (targetPath: string) => Promise<void>
   private readonly injectedBufferHub?: SharedDocumentBufferHub
-  private readonly injectedWorkspaceService?: WorkspaceFsService
   private readonly createBrowserWindow: (options: BrowserWindowConstructorOptions) => BrowserWindowLike
   private readonly screen?: ScreenLike
   private readonly getFocusedWindow?: () => BrowserWindowLike | undefined
@@ -213,7 +212,6 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     trashItem,
     initialAutoSaveConfig,
     bufferHub,
-    workspaceService,
     createWindow,
     screen,
     getFocusedWindow
@@ -226,7 +224,6 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     this.trashItem = trashItem
     this.latestAutoSaveConfig = initialAutoSaveConfig
     this.injectedBufferHub = bufferHub
-    this.injectedWorkspaceService = workspaceService
     this.createBrowserWindow = createWindow
     this.screen = screen
     this.getFocusedWindow = getFocusedWindow
@@ -273,17 +270,13 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   private createSessionServices(): {
     workspaceService: WorkspaceFsService
     bufferHub: SharedDocumentBufferHub
-    ownsWorkspaceService: boolean
     ownsBufferHub: boolean
   } {
     if (this.injectedBufferHub && !this.usedInjectedHub) {
       this.usedInjectedHub = true
-      const workspaceService =
-        this.injectedWorkspaceService ?? new WorkspaceFsService({ trashItem: this.trashItem })
       return {
-        workspaceService,
+        workspaceService: new WorkspaceFsService({ trashItem: this.trashItem }),
         bufferHub: this.injectedBufferHub,
-        ownsWorkspaceService: !this.injectedWorkspaceService,
         ownsBufferHub: false
       }
     }
@@ -302,7 +295,6 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     return {
       workspaceService,
       bufferHub,
-      ownsWorkspaceService: true,
       ownsBufferHub: true
     }
   }
@@ -311,8 +303,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     initialWorkspacePath: string | null
   ): WorkspaceSession {
     const sessionId = this.nextSessionId++
-    const { workspaceService, bufferHub, ownsWorkspaceService, ownsBufferHub } =
-      this.createSessionServices()
+    const { workspaceService, bufferHub, ownsBufferHub } = this.createSessionServices()
     const dragCoordinator = new TabDragCoordinator({
       nextDragSessionId: () => `drag-${++this.dragSessionCounter}`
     })
@@ -326,9 +317,10 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
       bufferHub,
       dragCoordinator,
       ownsBufferHub,
-      ownsWorkspaceService,
       pendingInitialWorkspacePath: initialWorkspacePath,
       pendingOpenWorkspacePath: null,
+      pendingOpenToken: 0,
+      openWorkspaceQueue: Promise.resolve(),
       windowIds: new Set<number>(),
       disposed: false,
       unsubscribeHub: () => undefined,
@@ -480,9 +472,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     if (session.ownsBufferHub) {
       session.bufferHub.dispose()
     }
-    if (session.ownsWorkspaceService) {
-      session.workspaceService.dispose()
-    }
+    session.workspaceService.dispose()
 
     this.sessions.delete(session.sessionId)
     if (this.lastActiveSessionId === session.sessionId) {
@@ -574,13 +564,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     )
     const initialWorkspacePath = options?.initialWorkspacePath ?? null
     const session = this.createWorkspaceSession(initialWorkspacePath)
-    this.registerWindow(
-      session,
-      win,
-      'main',
-      [],
-      options?.initialWorkspacePath !== undefined ? options.initialWorkspacePath : undefined
-    )
+    this.registerWindow(session, win, 'main', [], options?.initialWorkspacePath)
     this.notifySessionCreated(session)
     this.loadRendererContent(win, 'main')
     return win
@@ -731,26 +715,38 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     }
   }
 
-  private async openValidatedDirectoryInSession(
+  private openValidatedDirectoryInSession(
     session: WorkspaceSession,
     realRoot: string
   ): Promise<WorkspaceInfo> {
+    const openToken = ++session.pendingOpenToken
     session.pendingOpenWorkspacePath = realRoot
-    try {
-      const info = await session.workspaceService.openWorkspace(realRoot)
-      session.pendingInitialWorkspacePath = null
+
+    const run = session.openWorkspaceQueue.then(async () => {
       if (!this.getLiveMainRecord(session)) {
         throw new Error('Only the main window can open a workspace')
       }
-      return info
-    } catch (error) {
-      if (!session.workspaceService.getWorkspaceRoot()) {
+      try {
+        const info = await session.workspaceService.openWorkspace(realRoot)
         session.pendingInitialWorkspacePath = null
+        if (!this.getLiveMainRecord(session)) {
+          throw new Error('Only the main window can open a workspace')
+        }
+        return info
+      } catch (error) {
+        if (!session.workspaceService.getWorkspaceRoot() && session.pendingOpenToken === openToken) {
+          session.pendingInitialWorkspacePath = null
+        }
+        throw error
+      } finally {
+        if (session.pendingOpenToken === openToken) {
+          session.pendingOpenWorkspacePath = null
+        }
       }
-      throw error
-    } finally {
-      session.pendingOpenWorkspacePath = null
-    }
+    })
+
+    session.openWorkspaceQueue = run.catch(() => undefined)
+    return run
   }
 
   /**

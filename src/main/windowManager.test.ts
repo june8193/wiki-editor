@@ -2457,6 +2457,71 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     expect(reopenDelta.status).toBe('opened')
     expect(factory.createdWindows).toHaveLength(4)
 
+    // 2b. Overlapping workspace switches on the same main window preserve the newer pendingOpenWorkspacePath when the earlier open settles
+    const wsZeta = join(tempDir, 'zeta')
+    const wsEta = join(tempDir, 'eta')
+    await mkdir(wsZeta, { recursive: true })
+    await mkdir(wsEta, { recursive: true })
+    await writeFile(join(wsZeta, 'z.md'), '# Zeta', 'utf8')
+    await writeFile(join(wsEta, 'e.md'), '# Eta', 'utf8')
+
+    let releaseZeta!: () => void
+    const zetaBarrier = new Promise<void>((resolve) => {
+      releaseZeta = resolve
+    })
+    let zetaStarted!: () => void
+    const zetaStartedPromise = new Promise<void>((resolve) => {
+      zetaStarted = resolve
+    })
+    let releaseEta!: () => void
+    const etaBarrier = new Promise<void>((resolve) => {
+      releaseEta = resolve
+    })
+
+    const openSpy = vi.spyOn(main1Service, 'openWorkspace').mockImplementation(async (targetPath: string) => {
+      if (targetPath.endsWith('zeta')) {
+        zetaStarted()
+        await zetaBarrier
+      } else if (targetPath.endsWith('eta')) {
+        await etaBarrier
+      }
+      return originalOpen(targetPath)
+    })
+
+    const switchZetaPromise = ipc.invokeFrom(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      wsZeta
+    ) as Promise<ActivateOrOpenWorkspaceResult>
+    await zetaStartedPromise
+
+    const switchEtaPromise = ipc.invokeFrom(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      wsEta
+    ) as Promise<ActivateOrOpenWorkspaceResult>
+    // Wait until activateOrOpen(wsEta) finishes directory validation and queues/registers wsEta
+    await new Promise((resolve) => setTimeout(resolve, 15))
+
+    // Earlier open settles while wsEta is still pending
+    releaseZeta()
+    expect((await switchZetaPromise).status).toBe('opened')
+
+    const dupEtaResult = (await ipc.invokeFrom(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsEta
+    )) as OpenWorkspaceInNewWindowResult
+    expect(dupEtaResult).toMatchObject({
+      status: 'focused-existing',
+      windowId: main1.webContents.id
+    })
+    expect(factory.createdWindows).toHaveLength(4)
+
+    releaseEta()
+    expect((await switchEtaPromise).status).toBe('opened')
+    openSpy.mockRestore()
+
     // 3. Disposing WindowManager while openWorkspaceInNewWindow resolves does not spawn orphaned window, and clears sender lookup
     const wsEpsilon = join(tempDir, 'epsilon')
     await mkdir(wsEpsilon, { recursive: true })
