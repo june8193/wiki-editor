@@ -1775,10 +1775,11 @@ body.is-resizing-sidebar .pane-workspace {
   position: relative;
   min-height: 44px;
   margin: 12px 0;
-  padding: 12px;
+  padding: 0;
   border: 1px solid var(--border-color);
   border-radius: 6px;
   background-color: var(--bg-surface);
+  overflow: visible;
 }
 
 .mermaid-svg-container {
@@ -1786,6 +1787,7 @@ body.is-resizing-sidebar .pane-workspace {
   display: flex;
   justify-content: center;
   align-items: center;
+  padding: 12px;
   overflow: hidden;
 }
 
@@ -1888,10 +1890,25 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .mermaid-resize-handle {
-  position: relative;
-  height: 10px;
-  margin-top: 6px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -7px;
+  height: 14px;
   cursor: row-resize;
+  z-index: 3;
+}
+
+.mermaid-resize-handle::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  background-color: transparent;
+  transition: background-color 0.12s ease;
 }
 
 .mermaid-resize-handle::after {
@@ -1907,6 +1924,12 @@ body.is-resizing-sidebar .pane-workspace {
   transition: background-color 0.12s ease, width 0.12s ease;
 }
 
+.mermaid-resize-handle:hover::before,
+.mermaid-resize-handle:focus-visible::before,
+.mermaid-resize-handle.is-dragging::before {
+  background-color: var(--accent-color);
+}
+
 .mermaid-resize-handle:hover::after,
 .mermaid-resize-handle:focus-visible::after,
 .mermaid-resize-handle.is-dragging::after {
@@ -1918,6 +1941,25 @@ body.is-resizing-sidebar .pane-workspace {
   outline: 2px solid var(--accent-color);
   outline-offset: 1px;
   border-radius: 4px;
+}
+
+.mermaid-height-badge {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 4;
+  padding: 2px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14);
 }
 
 body.is-panning-mermaid,
@@ -1938,7 +1980,7 @@ body.is-resizing-mermaid * {
 }
 
 .mermaid-action-error {
-  margin-top: 8px;
+  margin: 0 12px 12px;
   padding: 6px 10px;
   border: 1px solid var(--danger-color);
   border-radius: 4px;
@@ -1952,12 +1994,18 @@ body.is-resizing-mermaid * {
   height: auto;
 }
 
+.mermaid-svg-container.is-custom-height svg {
+  max-width: none;
+}
+
 .mermaid-loading {
+  padding: 12px;
   font-size: 12px;
   color: var(--text-secondary);
 }
 
 .mermaid-error-box {
+  margin: 12px;
   border: 1px solid var(--danger-color);
   border-radius: 6px;
   padding: 10px 12px;
@@ -1993,7 +2041,7 @@ body.is-resizing-mermaid * {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
-  margin-bottom: 8px;
+  margin: 12px 12px 0;
   padding: 6px 10px;
   border: 1px solid var(--danger-color);
   border-radius: 6px;
@@ -2014,11 +2062,13 @@ body.is-resizing-mermaid * {
 }
 
 .wysiwyg-mermaid-node {
+  position: relative;
   margin: 12px 0;
+  padding: 0;
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  padding: 8px 10px;
   background-color: var(--bg-surface);
+  overflow: visible;
 }
 
 .mermaid-node-header {
@@ -2026,7 +2076,12 @@ body.is-resizing-mermaid * {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 6px;
+  margin: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color);
+  border-top-left-radius: 5px;
+  border-top-right-radius: 5px;
+  user-select: none;
 }
 
 .mermaid-node-header-actions {
@@ -2036,14 +2091,17 @@ body.is-resizing-mermaid * {
 }
 
 .mermaid-node-source-wrapper {
-  margin-bottom: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--code-bg);
 }
 
 .mermaid-node-source {
   margin: 0;
   border-radius: 4px;
-  background-color: var(--code-bg);
-  padding: 8px;
+  background-color: transparent;
+  padding: 0;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   overflow-x: auto;
@@ -2051,6 +2109,14 @@ body.is-resizing-mermaid * {
 
 .mermaid-node-preview {
   display: block;
+}
+
+.mermaid-diagram-block.is-embedded {
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0 0 5px 5px;
+  background-color: transparent;
 }
 
 .link-autocomplete-menu {

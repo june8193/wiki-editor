@@ -3,12 +3,7 @@ import type { ThemeMode } from '@shared/config'
 import { defaultMermaidRenderer, type MermaidRenderer, type MermaidTheme } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { DEFAULT_MERMAID_DEBOUNCE_MS, useMermaidRenderState } from '../hooks/useMermaidRenderState'
-import {
-  MERMAID_MAX_HEIGHT_PX,
-  MERMAID_MIN_HEIGHT_PX,
-  type MermaidViewportState,
-  useMermaidViewport
-} from '../hooks/useMermaidViewport'
+import { type MermaidViewportState, useMermaidViewport } from '../hooks/useMermaidViewport'
 import { MermaidActionBar, MermaidActionErrorAlert } from './MermaidActionBar'
 
 export interface MermaidDiagramViewProps {
@@ -74,7 +69,7 @@ export function MermaidDiagramView({
             <div
               key="mermaid-svg"
               ref={viewport.viewportRef}
-              className={`mermaid-svg-container is-interactive${viewport.isPanning ? ' is-panning' : ''}`}
+              className={`mermaid-svg-container is-interactive${viewport.isPanning ? ' is-panning' : ''}${viewport.isCustomHeight ? ' is-custom-height' : ''}`}
               data-testid="mermaid-svg"
               style={
                 viewport.effectiveHeightPx !== null
@@ -85,6 +80,7 @@ export function MermaidDiagramView({
               onMouseDown={viewport.handlePanStart}
             >
               <div
+                ref={viewport.stageRef}
                 className="mermaid-svg-stage"
                 data-testid="mermaid-svg-stage"
                 style={{
@@ -92,6 +88,15 @@ export function MermaidDiagramView({
                 }}
                 dangerouslySetInnerHTML={{ __html: displaySvg }}
               />
+              {viewport.isResizingHeight && viewport.activeResizeHeightPx !== null && (
+                <div
+                  className="mermaid-height-badge"
+                  data-testid="mermaid-height-badge"
+                  aria-hidden="true"
+                >
+                  {viewport.activeResizeHeightPx}px
+                </div>
+              )}
             </div>
           ) : (
             <div key="mermaid-loading" className="mermaid-loading">
@@ -107,13 +112,19 @@ export function MermaidDiagramView({
           tabIndex={0}
           aria-label="Mermaid 다이어그램 높이 조절"
           aria-orientation="horizontal"
-          aria-valuemin={MERMAID_MIN_HEIGHT_PX}
-          aria-valuemax={MERMAID_MAX_HEIGHT_PX}
-          aria-valuenow={viewport.effectiveHeightPx ?? undefined}
+          aria-valuemin={viewport.minHeightPx}
+          aria-valuemax={viewport.maxHeightPx}
+          aria-valuenow={viewport.effectiveHeightPx ?? viewport.autoViewportHeightPx ?? undefined}
           data-testid="mermaid-resize-handle"
           className={`mermaid-resize-handle${viewport.isResizingHeight ? ' is-dragging' : ''}`}
-          onPointerDown={viewport.handleResizeStart}
-          onMouseDown={viewport.handleResizeStart}
+          onPointerDown={(event) => {
+            event.stopPropagation()
+            viewport.handleResizeStart(event)
+          }}
+          onMouseDown={(event) => {
+            event.stopPropagation()
+            viewport.handleResizeStart(event)
+          }}
           onKeyDown={viewport.handleResizeKeyDown}
           onDoubleClick={viewport.handleResizeDoubleClick}
         />
@@ -164,7 +175,8 @@ export function MermaidDiagram({
   })
 
   const viewport = useMermaidViewport({
-    hasSvg: displaySvg !== null
+    hasSvg: displaySvg !== null,
+    svgMarkup: displaySvg
   })
 
   return (

@@ -2598,7 +2598,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         within(previewValidToolbar)
           .getAllByRole('button')
           .map((button) => button.getAttribute('aria-label'))
-      ).toEqual(['축소', '배율 초기화', '확대', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
+      ).toEqual(['축소', '배율 초기화', '확대', '뷰 초기화', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
 
       const previewValidImageBtn = within(previewValidToolbar).getByRole('button', {
         name: '이미지 복사'
@@ -2720,7 +2720,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         within(wysiwygValidToolbar)
           .getAllByRole('button')
           .map((button) => button.getAttribute('aria-label'))
-      ).toEqual(['축소', '배율 초기화', '확대', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
+      ).toEqual(['축소', '배율 초기화', '확대', '뷰 초기화', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
       expect(
         within(wysiwygBlocks[1]).getByRole('button', { name: '이미지 복사' })
       ).toBeDisabled()
@@ -2867,7 +2867,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         within(previewValidToolbar)
           .getAllByRole('button')
           .map((button) => button.getAttribute('aria-label'))
-      ).toEqual(['축소', '배율 초기화', '확대', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
+      ).toEqual(['축소', '배율 초기화', '확대', '뷰 초기화', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
 
       const previewSavePngBtn = within(previewValidToolbar).getByRole('button', {
         name: 'PNG 저장'
@@ -3001,7 +3001,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
         within(wysiwygValidToolbar)
           .getAllByRole('button')
           .map((button) => button.getAttribute('aria-label'))
-      ).toEqual(['축소', '배율 초기화', '확대', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
+      ).toEqual(['축소', '배율 초기화', '확대', '뷰 초기화', '이미지 복사', '코드 복사', 'PNG 저장', 'SVG 저장'])
       expect(within(wysiwygBlocks[1]).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()
       expect(within(wysiwygBlocks[1]).getByRole('button', { name: 'SVG 저장' })).toBeDisabled()
       expect(within(wysiwygBlocks[2]).getByRole('button', { name: 'PNG 저장' })).toBeDisabled()

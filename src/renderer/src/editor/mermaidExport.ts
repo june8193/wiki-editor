@@ -18,6 +18,11 @@ export interface NormalizedMermaidSvg {
   height: number
 }
 
+export interface MermaidIntrinsicBounds {
+  naturalWidth: number
+  naturalHeight: number
+}
+
 interface SvgBounds {
   minX: number
   minY: number
@@ -66,7 +71,7 @@ function parseSvgPixelLength(rawLength: string | null): number | null {
   return Number.isFinite(value) && value > 0 ? value : null
 }
 
-function extractSvgBounds(svgElement: SVGSVGElement): SvgBounds {
+function tryExtractSvgBounds(svgElement: SVGSVGElement): SvgBounds | null {
   const fromViewBox = parseViewBox(svgElement.getAttribute('viewBox'))
   if (fromViewBox) {
     return fromViewBox
@@ -78,7 +83,42 @@ function extractSvgBounds(svgElement: SVGSVGElement): SvgBounds {
     return { minX: 0, minY: 0, width, height }
   }
 
+  return null
+}
+
+function extractSvgBounds(svgElement: SVGSVGElement): SvgBounds {
+  const bounds = tryExtractSvgBounds(svgElement)
+  if (bounds) {
+    return bounds
+  }
   throw new Error('Mermaid SVG 크기를 확인할 수 없습니다.')
+}
+
+function parseSvgElement(svgMarkup: string): SVGSVGElement | null {
+  if (typeof svgMarkup !== 'string' || svgMarkup.trim().length === 0) {
+    return null
+  }
+  const doc = new DOMParser().parseFromString(svgMarkup, 'text/html')
+  return (doc.body.querySelector('svg') as SVGSVGElement | null) ?? null
+}
+
+/**
+ * Extracts natural SVG logical dimensions from `viewBox` or numeric `width`/`height`
+ * attributes, returning `null` when valid intrinsic dimensions cannot be determined.
+ */
+export function extractMermaidIntrinsicBounds(svgMarkup: string): MermaidIntrinsicBounds | null {
+  const svgElement = parseSvgElement(svgMarkup)
+  if (!svgElement) {
+    return null
+  }
+  const bounds = tryExtractSvgBounds(svgElement)
+  if (!bounds) {
+    return null
+  }
+  return {
+    naturalWidth: bounds.width,
+    naturalHeight: bounds.height
+  }
 }
 
 function ensureXmlNamespaces(svgElement: SVGSVGElement): void {
@@ -116,13 +156,13 @@ export function normalizeMermaidSvg(svgMarkup: string, theme: ThemeMode): Normal
     throw new Error('내보낼 Mermaid SVG 마크업이 비어 있습니다.')
   }
 
-  const doc = new DOMParser().parseFromString(svgMarkup, 'text/html')
-  const svgElement = doc.body.querySelector('svg')
+  const svgElement = parseSvgElement(svgMarkup)
   if (!svgElement) {
     throw new Error('내보낼 Mermaid SVG 요소를 찾을 수 없습니다.')
   }
+  const doc = svgElement.ownerDocument
 
-  const bounds = extractSvgBounds(svgElement as unknown as SVGSVGElement)
+  const bounds = extractSvgBounds(svgElement)
   const paddedMinX = bounds.minX - MERMAID_EXPORT_PADDING_PX
   const paddedMinY = bounds.minY - MERMAID_EXPORT_PADDING_PX
   const paddedWidth = Number((bounds.width + MERMAID_EXPORT_PADDING_PX * 2).toFixed(4))

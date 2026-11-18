@@ -1,4 +1,16 @@
-import { type KeyboardEvent as ReactKeyboardEvent, type RefObject, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import {
+  extractMermaidIntrinsicBounds,
+  type MermaidIntrinsicBounds
+} from '../editor/mermaidExport'
 import { type PointerDragStartEvent, usePointerDragSession } from './usePointerDragSession'
 
 export const MERMAID_MIN_ZOOM = 0.25
@@ -6,25 +18,41 @@ export const MERMAID_MAX_ZOOM = 4
 export const MERMAID_DEFAULT_ZOOM = 1
 export const MERMAID_ZOOM_STEP = 0.25
 export const MERMAID_WHEEL_ZOOM_STEP = 0.1
-export const MERMAID_MIN_HEIGHT_PX = 120
-export const MERMAID_MAX_HEIGHT_PX = 1200
+export const MERMAID_MIN_HEIGHT_PX = 64
+export const MERMAID_MAX_HEIGHT_PX = 1600
 export const MERMAID_DEFAULT_FALLBACK_HEIGHT_PX = 240
 export const MERMAID_KEYBOARD_HEIGHT_STEP_PX = 24
 
+export interface MermaidContainFitMetrics {
+  autoViewportHeightPx: number
+  minHeightPx: number
+  maxHeightPx: number
+  fittedSvgWidthPx: number
+  fittedSvgHeightPx: number
+}
+
 export interface MermaidViewportState {
   viewportRef: RefObject<HTMLDivElement | null>
+  stageRef: RefObject<HTMLDivElement | null>
   zoom: number
   zoomPercent: number
   pan: { x: number; y: number }
   effectiveHeightPx: number | null
+  autoViewportHeightPx: number | null
+  activeResizeHeightPx: number | null
+  minHeightPx: number
+  maxHeightPx: number
+  isCustomHeight: boolean
   hasSvg: boolean
   canZoomIn: boolean
   canZoomOut: boolean
+  canResetView: boolean
   isPanning: boolean
   isResizingHeight: boolean
   handleZoomIn: () => void
   handleZoomOut: () => void
   handleResetZoom: () => void
+  handleResetView: () => void
   handlePanStart: (event: PointerDragStartEvent) => void
   handleResizeStart: (event: PointerDragStartEvent) => void
   handleResizeKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void
@@ -33,6 +61,7 @@ export interface MermaidViewportState {
 
 export interface UseMermaidViewportOptions {
   hasSvg: boolean
+  svgMarkup?: string | null
 }
 
 interface ViewportInternalState {
@@ -40,6 +69,11 @@ interface ViewportInternalState {
   pan: { x: number; y: number }
   customHeightPx: number | null
   lockedAutoHeightPx: number | null
+}
+
+interface MeasuredViewportBox {
+  availableWidth: number
+  verticalPadding: number
 }
 
 function normalizeZero(value: number): number {
@@ -62,13 +96,17 @@ export function clampMermaidZoom(value: number): number {
 }
 
 /**
- * Clamps Mermaid viewport container height to `[120, 1200]` integer pixels.
+ * Clamps Mermaid viewport container height to `[minHeightPx, maxHeightPx]` integer pixels.
  */
-export function clampMermaidHeight(value: number): number {
+export function clampMermaidHeight(
+  value: number,
+  minHeightPx = MERMAID_MIN_HEIGHT_PX,
+  maxHeightPx = MERMAID_MAX_HEIGHT_PX
+): number {
   if (!Number.isFinite(value)) {
     return MERMAID_DEFAULT_FALLBACK_HEIGHT_PX
   }
-  const clamped = Math.min(MERMAID_MAX_HEIGHT_PX, Math.max(MERMAID_MIN_HEIGHT_PX, value))
+  const clamped = Math.min(maxHeightPx, Math.max(minHeightPx, value))
   return Math.round(clamped)
 }
 
@@ -76,24 +114,179 @@ function isIdentityViewport(zoom: number, pan: { x: number; y: number }): boolea
   return zoom === MERMAID_DEFAULT_ZOOM && pan.x === 0 && pan.y === 0
 }
 
+function sumCssPx(
+  style: CSSStyleDeclaration | null,
+  properties: ReadonlyArray<
+    | 'paddingLeft'
+    | 'paddingRight'
+    | 'paddingTop'
+    | 'paddingBottom'
+    | 'borderLeftWidth'
+    | 'borderRightWidth'
+    | 'borderTopWidth'
+    | 'borderBottomWidth'
+  >
+): number {
+  if (!style) return 0
+  let total = 0
+  for (const prop of properties) {
+    total += Number.parseFloat(style[prop]) || 0
+  }
+  return total
+}
+
+function readViewportBox(el: HTMLDivElement | null): MeasuredViewportBox {
+  if (!el) {
+    return { availableWidth: 0, verticalPadding: 0 }
+  }
+  const rect = el.getBoundingClientRect()
+  const style = typeof window !== 'undefined' ? window.getComputedStyle(el) : null
+  const horizontalInset = sumCssPx(style, [
+    'paddingLeft',
+    'paddingRight',
+    'borderLeftWidth',
+    'borderRightWidth'
+  ])
+  const verticalPadding = sumCssPx(style, [
+    'paddingTop',
+    'paddingBottom',
+    'borderTopWidth',
+    'borderBottomWidth'
+  ])
+  const rawWidth = rect.width > 0 ? rect.width : el.clientWidth
+
+  return {
+    availableWidth: rawWidth > 0 ? Math.max(1, rawWidth - horizontalInset) : 0,
+    verticalPadding
+  }
+}
+
+interface SvgInlineStyleSnapshot {
+  width: string
+  height: string
+  maxWidth: string
+}
+
+const originalSvgInlineStyles = new WeakMap<SVGSVGElement, SvgInlineStyleSnapshot>()
+
+/**
+ * Computes Contain-fitting SVG dimensions and dynamic `[min(64, auto), max(1600, auto)]`
+ * viewport height bounds from natural SVG dimensions and container space.
+ */
+export function computeMermaidContainFitMetrics(
+  bounds: MermaidIntrinsicBounds,
+  availableWidth: number,
+  verticalPadding: number,
+  customHeightPx: number | null
+): MermaidContainFitMetrics {
+  const safeWidth = Math.max(1, availableWidth)
+  const safePadding = Math.max(0, verticalPadding)
+  const initialScale = Math.min(1, safeWidth / bounds.naturalWidth)
+  const autoViewportHeightPx = Math.round(bounds.naturalHeight * initialScale + safePadding)
+  const minHeightPx = Math.min(MERMAID_MIN_HEIGHT_PX, autoViewportHeightPx)
+  const maxHeightPx = Math.max(MERMAID_MAX_HEIGHT_PX, autoViewportHeightPx)
+
+  if (customHeightPx === null) {
+    return {
+      autoViewportHeightPx,
+      minHeightPx,
+      maxHeightPx,
+      fittedSvgWidthPx: Math.min(safeWidth, roundTwoDecimals(bounds.naturalWidth * initialScale)),
+      fittedSvgHeightPx: roundTwoDecimals(bounds.naturalHeight * initialScale)
+    }
+  }
+
+  const clampedHeight = clampMermaidHeight(customHeightPx, minHeightPx, maxHeightPx)
+  const availableHeight = Math.max(1, clampedHeight - safePadding)
+  const fitScale = Math.min(safeWidth / bounds.naturalWidth, availableHeight / bounds.naturalHeight)
+
+  return {
+    autoViewportHeightPx,
+    minHeightPx,
+    maxHeightPx,
+    fittedSvgWidthPx: Math.min(safeWidth, roundTwoDecimals(bounds.naturalWidth * fitScale)),
+    fittedSvgHeightPx: roundTwoDecimals(bounds.naturalHeight * fitScale)
+  }
+}
+
+function computeFitMetricsOrFallback(
+  bounds: MermaidIntrinsicBounds | null,
+  box: MeasuredViewportBox,
+  customHeightPx: number | null
+): {
+  fitMetrics: MermaidContainFitMetrics | null
+  autoViewportHeightPx: number | null
+  minHeightPx: number
+  maxHeightPx: number
+} {
+  if (!bounds || box.availableWidth <= 0) {
+    return {
+      fitMetrics: null,
+      autoViewportHeightPx: null,
+      minHeightPx: MERMAID_MIN_HEIGHT_PX,
+      maxHeightPx: MERMAID_MAX_HEIGHT_PX
+    }
+  }
+  const fitMetrics = computeMermaidContainFitMetrics(
+    bounds,
+    box.availableWidth,
+    box.verticalPadding,
+    customHeightPx
+  )
+  return {
+    fitMetrics,
+    autoViewportHeightPx: fitMetrics.autoViewportHeightPx,
+    minHeightPx: fitMetrics.minHeightPx,
+    maxHeightPx: fitMetrics.maxHeightPx
+  }
+}
+
 /**
  * Manages view-only zoom (`25%`–`400%`), drag panning, `Ctrl`/`Cmd`+wheel cursor-centered zooming,
- * and bottom-handle height resizing (`120px`–`1200px`) for a Mermaid diagram viewport.
+ * Contain-fitted SVG scaling, and dynamic-range bottom-handle height resizing.
  */
-export function useMermaidViewport({ hasSvg }: UseMermaidViewportOptions): MermaidViewportState {
+export function useMermaidViewport({
+  hasSvg,
+  svgMarkup = null
+}: UseMermaidViewportOptions): MermaidViewportState {
   const viewportRef = useRef<HTMLDivElement | null>(null)
+  const stageRef = useRef<HTMLDivElement | null>(null)
   const [state, setState] = useState<ViewportInternalState>({
     zoom: MERMAID_DEFAULT_ZOOM,
     pan: { x: 0, y: 0 },
     customHeightPx: null,
     lockedAutoHeightPx: null
   })
+  const [measuredBox, setMeasuredBox] = useState<MeasuredViewportBox>({
+    availableWidth: 0,
+    verticalPadding: 0
+  })
+  const [dragStartHeightPx, setDragStartHeightPx] = useState<number | null>(null)
+
+  const intrinsicBounds = useMemo(
+    () => (svgMarkup ? extractMermaidIntrinsicBounds(svgMarkup) : null),
+    [svgMarkup]
+  )
 
   const stateRef = useRef(state)
   stateRef.current = state
 
   const hasSvgRef = useRef(hasSvg)
   hasSvgRef.current = hasSvg
+
+  const intrinsicBoundsRef = useRef(intrinsicBounds)
+  intrinsicBoundsRef.current = intrinsicBounds
+
+  const syncMeasuredViewport = useCallback((): MeasuredViewportBox => {
+    const nextBox = readViewportBox(viewportRef.current)
+    setMeasuredBox((prev) =>
+      prev.availableWidth === nextBox.availableWidth &&
+      prev.verticalPadding === nextBox.verticalPadding
+        ? prev
+        : nextBox
+    )
+    return nextBox
+  }, [])
 
   const panOriginRef = useRef<{
     startX: number
@@ -105,6 +298,8 @@ export function useMermaidViewport({ hasSvg }: UseMermaidViewportOptions): Merma
   const resizeOriginRef = useRef<{
     startY: number
     startHeight: number
+    minHeightPx: number
+    maxHeightPx: number
   } | null>(null)
 
   const measureViewportHeight = useCallback((): number | null => {
@@ -113,6 +308,25 @@ export function useMermaidViewport({ hasSvg }: UseMermaidViewportOptions): Merma
     const rect = el.getBoundingClientRect()
     return rect.height > 0 ? Math.round(rect.height) : null
   }, [])
+
+  useLayoutEffect(() => {
+    const viewportEl = viewportRef.current
+    if (!hasSvg || !viewportEl) {
+      return
+    }
+    syncMeasuredViewport()
+
+    if (typeof ResizeObserver === 'undefined') {
+      return
+    }
+    const observer = new ResizeObserver(() => {
+      syncMeasuredViewport()
+    })
+    observer.observe(viewportEl)
+    return () => {
+      observer.disconnect()
+    }
+  }, [hasSvg, svgMarkup, syncMeasuredViewport])
 
   const applyZoomTransition = useCallback(
     (
@@ -170,7 +384,26 @@ export function useMermaidViewport({ hasSvg }: UseMermaidViewportOptions): Merma
     })
   }, [])
 
-  useEffect(() => {
+  const handleResetView = useCallback(() => {
+    if (!hasSvgRef.current) return
+    setState((prev) => {
+      if (
+        isIdentityViewport(prev.zoom, prev.pan) &&
+        prev.customHeightPx === null &&
+        prev.lockedAutoHeightPx === null
+      ) {
+        return prev
+      }
+      return {
+        zoom: MERMAID_DEFAULT_ZOOM,
+        pan: { x: 0, y: 0 },
+        customHeightPx: null,
+        lockedAutoHeightPx: null
+      }
+    })
+  }, [])
+
+  useLayoutEffect(() => {
     const viewportEl = viewportRef.current
     if (!hasSvg || !viewportEl) {
       return
@@ -269,43 +502,73 @@ export function useMermaidViewport({ hasSvg }: UseMermaidViewportOptions): Merma
     [panSession]
   )
 
-  const resolveResizeBaseHeight = useCallback((): number => {
-    const current = stateRef.current
-    return (
-      current.customHeightPx ??
-      current.lockedAutoHeightPx ??
-      measureViewportHeight() ??
-      MERMAID_DEFAULT_FALLBACK_HEIGHT_PX
-    )
-  }, [measureViewportHeight])
+  const resolveResizeBaseHeight = useCallback(
+    (autoViewportHeightPx: number | null): number => {
+      const current = stateRef.current
+      return (
+        current.customHeightPx ??
+        current.lockedAutoHeightPx ??
+        measureViewportHeight() ??
+        autoViewportHeightPx ??
+        MERMAID_DEFAULT_FALLBACK_HEIGHT_PX
+      )
+    },
+    [measureViewportHeight]
+  )
 
-  const commitCustomHeight = useCallback((rawHeightPx: number) => {
-    const nextHeight = clampMermaidHeight(rawHeightPx)
-    setState((prev) =>
-      prev.customHeightPx === nextHeight
-        ? prev
-        : { ...prev, customHeightPx: nextHeight, lockedAutoHeightPx: null }
+  const commitCustomHeight = useCallback(
+    (rawHeightPx: number, minHeightPx: number, maxHeightPx: number) => {
+      const nextHeight = clampMermaidHeight(rawHeightPx, minHeightPx, maxHeightPx)
+      setState((prev) =>
+        prev.customHeightPx === nextHeight
+          ? prev
+          : { ...prev, customHeightPx: nextHeight, lockedAutoHeightPx: null }
+      )
+    },
+    []
+  )
+
+  const resolveLiveResizeContext = useCallback(() => {
+    const box = syncMeasuredViewport()
+    const { autoViewportHeightPx, minHeightPx, maxHeightPx } = computeFitMetricsOrFallback(
+      intrinsicBoundsRef.current,
+      box,
+      stateRef.current.customHeightPx
     )
-  }, [])
+    return {
+      startHeight: resolveResizeBaseHeight(autoViewportHeightPx),
+      minHeightPx,
+      maxHeightPx
+    }
+  }, [resolveResizeBaseHeight, syncMeasuredViewport])
 
   const resizeSession = usePointerDragSession({
     bodyClassName: 'is-resizing-mermaid',
     cursor: 'row-resize',
     onDragStart: (event) => {
+      const { startHeight, minHeightPx, maxHeightPx } = resolveLiveResizeContext()
       resizeOriginRef.current = {
         startY: event.clientY,
-        startHeight: resolveResizeBaseHeight()
+        startHeight,
+        minHeightPx,
+        maxHeightPx
       }
+      setDragStartHeightPx(startHeight)
     },
     onDragMove: (event) => {
       const origin = resizeOriginRef.current
       if (!origin || typeof event.clientY !== 'number') {
         return
       }
-      commitCustomHeight(origin.startHeight + (event.clientY - origin.startY))
+      commitCustomHeight(
+        origin.startHeight + (event.clientY - origin.startY),
+        origin.minHeightPx,
+        origin.maxHeightPx
+      )
     },
     onDragEnd: () => {
       resizeOriginRef.current = null
+      setDragStartHeightPx(null)
     }
   })
 
@@ -324,9 +587,14 @@ export function useMermaidViewport({ hasSvg }: UseMermaidViewportOptions): Merma
       if (keySign === 0) return
       event.preventDefault()
 
-      commitCustomHeight(resolveResizeBaseHeight() + keySign * MERMAID_KEYBOARD_HEIGHT_STEP_PX)
+      const { startHeight, minHeightPx, maxHeightPx } = resolveLiveResizeContext()
+      commitCustomHeight(
+        startHeight + keySign * MERMAID_KEYBOARD_HEIGHT_STEP_PX,
+        minHeightPx,
+        maxHeightPx
+      )
     },
-    [commitCustomHeight, resolveResizeBaseHeight]
+    [commitCustomHeight, resolveLiveResizeContext]
   )
 
   const handleResizeDoubleClick = useCallback(() => {
@@ -338,22 +606,78 @@ export function useMermaidViewport({ hasSvg }: UseMermaidViewportOptions): Merma
     }))
   }, [])
 
-  const effectiveHeightPx = state.customHeightPx ?? state.lockedAutoHeightPx
+  const { fitMetrics, autoViewportHeightPx, minHeightPx, maxHeightPx } = useMemo(
+    () => computeFitMetricsOrFallback(intrinsicBounds, measuredBox, state.customHeightPx),
+    [intrinsicBounds, measuredBox, state.customHeightPx]
+  )
+
+  const isCustomHeight = state.customHeightPx !== null
+
+  useLayoutEffect(() => {
+    if (!hasSvg) return
+    const svgEl = stageRef.current?.querySelector('svg')
+    if (!svgEl) return
+
+    let original = originalSvgInlineStyles.get(svgEl)
+    if (!original) {
+      original = {
+        width: svgEl.style.width,
+        height: svgEl.style.height,
+        maxWidth: svgEl.style.maxWidth
+      }
+      originalSvgInlineStyles.set(svgEl, original)
+    }
+
+    if (!fitMetrics) {
+      svgEl.style.width = original.width
+      svgEl.style.height = original.height
+      svgEl.style.maxWidth = original.maxWidth
+      return
+    }
+
+    svgEl.style.width = `${fitMetrics.fittedSvgWidthPx}px`
+    svgEl.style.height = `${fitMetrics.fittedSvgHeightPx}px`
+    if (isCustomHeight) {
+      svgEl.style.removeProperty('max-width')
+    } else {
+      svgEl.style.maxWidth = original.maxWidth
+    }
+  }, [fitMetrics, hasSvg, isCustomHeight, svgMarkup])
+
+  const effectiveHeightPx =
+    state.customHeightPx !== null
+      ? clampMermaidHeight(state.customHeightPx, minHeightPx, maxHeightPx)
+      : state.lockedAutoHeightPx
+
+  const activeResizeHeightPx = resizeSession.isDragging
+    ? (effectiveHeightPx ?? dragStartHeightPx ?? autoViewportHeightPx)
+    : null
+
+  const canResetView =
+    hasSvg && (!isIdentityViewport(state.zoom, state.pan) || state.customHeightPx !== null)
 
   return {
     viewportRef,
+    stageRef,
     zoom: state.zoom,
     zoomPercent: Math.round(state.zoom * 100),
     pan: state.pan,
     effectiveHeightPx,
+    autoViewportHeightPx,
+    activeResizeHeightPx,
+    minHeightPx,
+    maxHeightPx,
+    isCustomHeight,
     hasSvg,
     canZoomIn: hasSvg && state.zoom < MERMAID_MAX_ZOOM,
     canZoomOut: hasSvg && state.zoom > MERMAID_MIN_ZOOM,
+    canResetView,
     isPanning: panSession.isDragging,
     isResizingHeight: resizeSession.isDragging,
     handleZoomIn,
     handleZoomOut,
     handleResetZoom,
+    handleResetView,
     handlePanStart,
     handleResizeStart,
     handleResizeKeyDown,

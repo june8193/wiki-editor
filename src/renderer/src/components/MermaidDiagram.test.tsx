@@ -26,6 +26,33 @@ function mockViewportRect(
   })
 }
 
+function installMockResizeObserver(): {
+  trigger: () => void
+  restore: () => void
+} {
+  const OriginalResizeObserver = globalThis.ResizeObserver
+  const observerCallbacks: Array<() => void> = []
+  globalThis.ResizeObserver = class MockResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      observerCallbacks.push(() => callback([], this as unknown as ResizeObserver))
+    }
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  } as unknown as typeof ResizeObserver
+
+  return {
+    trigger: () => {
+      act(() => {
+        observerCallbacks.forEach((cb) => cb())
+      })
+    },
+    restore: () => {
+      globalThis.ResizeObserver = OriginalResizeObserver
+    }
+  }
+}
+
 describe('MermaidDiagram', () => {
   const originalWikiApi = (window as { wikiApi?: WikiApi }).wikiApi
 
@@ -851,6 +878,7 @@ describe('MermaidDiagram', () => {
         '축소',
         '배율 초기화',
         '확대',
+        '뷰 초기화',
         '이미지 복사',
         '코드 복사',
         'PNG 저장',
@@ -1795,7 +1823,7 @@ describe('MermaidDiagram', () => {
     expect(viewport.style.height).toBe('')
   })
 
-  it('resizes viewport height via bottom handle drag/keyboard (clamped 120~1200px), preserves height on zoom reset, restores auto on double-click, and exports unscaled SVG/PNG', async () => {
+  it('resizes viewport height via bottom handle drag/keyboard within dynamic bounds, preserves height on zoom reset, restores auto on double-click, and exports unscaled SVG/PNG', async () => {
     const canvasStub = installSvgCanvasStub()
     try {
       const saveFile = vi.fn(
@@ -1825,23 +1853,23 @@ describe('MermaidDiagram', () => {
 
       expect(handle).toHaveAttribute('role', 'separator')
       expect(handle).toHaveAttribute('aria-orientation', 'horizontal')
-      expect(handle).toHaveAttribute('aria-valuemin', '120')
-      expect(handle).toHaveAttribute('aria-valuemax', '1200')
 
-      // Pointer drag increases height and clamps to 120..1200
+      // Pointer drag increases height and clamps dynamically to [min(64, 50), max(1600, 50)] = [50, 1600]
       fireEvent.mouseDown(handle, { button: 0, clientY: 200 })
       expect(handle).toHaveClass('is-dragging')
       expect(document.body).toHaveClass('is-resizing-mermaid')
+      expect(handle).toHaveAttribute('aria-valuemin', '50')
+      expect(handle).toHaveAttribute('aria-valuemax', '1600')
 
       fireEvent.mouseMove(window, { clientY: 350 })
       expect(viewport.style.height).toBe('350px')
       expect(handle).toHaveAttribute('aria-valuenow', '350')
 
       fireEvent.mouseMove(window, { clientY: 2000 })
-      expect(viewport.style.height).toBe('1200px')
+      expect(viewport.style.height).toBe('1600px')
 
       fireEvent.mouseMove(window, { clientY: 10 })
-      expect(viewport.style.height).toBe('120px')
+      expect(viewport.style.height).toBe('50px')
 
       fireEvent.mouseMove(window, { clientY: 300 })
       expect(viewport.style.height).toBe('300px')
@@ -1874,6 +1902,445 @@ describe('MermaidDiagram', () => {
       // Double click on handle resets custom height back to auto
       fireEvent.doubleClick(handle)
       expect(viewport.style.height).toBe('')
+    } finally {
+      canvasStub.restore()
+    }
+  })
+
+  it('computes dynamic [min(64, auto), max(1600, auto)] height bounds without first-1px jump on short (<120px) and giant (>1200px) diagrams', async () => {
+    const resizeObserver = installMockResizeObserver()
+
+    try {
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => {
+          if (text.includes('short')) {
+            return { svg: '<svg viewBox="0 0 200 48"><rect width="200" height="48"/></svg>' }
+          }
+          if (text.includes('giant')) {
+            return { svg: '<svg viewBox="0 0 400 1800"><rect width="400" height="1800"/></svg>' }
+          }
+          return { svg: '<svg viewBox="0 0 200 200"><rect width="200" height="200"/></svg>' }
+        })
+      }
+      const renderer = createMermaidRenderer(driver)
+
+      // 1. Short diagram (natural 200x48 on 400px width -> autoViewportHeightPx=48, bounds [48, 1600])
+      const { rerender } = render(
+        <MermaidDiagram code={'graph LR\n  short'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      const viewport = await screen.findByTestId('mermaid-svg')
+      const handle = screen.getByTestId('mermaid-resize-handle')
+
+      mockViewportRect(viewport, { width: 400, height: 48 })
+      resizeObserver.trigger()
+
+      expect(handle).toHaveAttribute('aria-valuemin', '48')
+      expect(handle).toHaveAttribute('aria-valuemax', '1600')
+
+      // First 1px drag down from 48 -> 49px (no jump to 64 or 120)
+      fireEvent.pointerDown(handle, { button: 0, clientY: 48 })
+      fireEvent.pointerMove(window, { clientY: 49 })
+      expect(viewport.style.height).toBe('49px')
+      fireEvent.pointerMove(window, { clientY: 10 })
+      expect(viewport.style.height).toBe('48px')
+      fireEvent.pointerUp(window)
+      fireEvent.doubleClick(handle)
+
+      // 2. Medium diagram (natural 200x200 -> bounds [64, 1600])
+      rerender(
+        <MermaidDiagram code={'graph TD\n  medium'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('mermaid-svg').innerHTML).toContain('200')
+      })
+      mockViewportRect(viewport, { width: 400, height: 200 })
+      resizeObserver.trigger()
+      expect(handle).toHaveAttribute('aria-valuemin', '64')
+      expect(handle).toHaveAttribute('aria-valuemax', '1600')
+
+      // 3. Giant diagram (natural 400x1800 on 400px width -> autoViewportHeightPx=1800, bounds [64, 1800])
+      rerender(
+        <MermaidDiagram code={'graph TD\n  giant'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('mermaid-svg').innerHTML).toContain('1800')
+      })
+      mockViewportRect(viewport, { width: 400, height: 1800 })
+      resizeObserver.trigger()
+
+      expect(handle).toHaveAttribute('aria-valuemin', '64')
+      expect(handle).toHaveAttribute('aria-valuemax', '1800')
+
+      // First 1px drag up from 1800 -> 1799px (no jump down to 1200 or 1600)
+      fireEvent.pointerDown(handle, { button: 0, clientY: 1800 })
+      fireEvent.pointerMove(window, { clientY: 1799 })
+      expect(viewport.style.height).toBe('1799px')
+      fireEvent.pointerMove(window, { clientY: 2100 })
+      expect(viewport.style.height).toBe('1800px')
+      fireEvent.pointerMove(window, { clientY: 30 })
+      expect(viewport.style.height).toBe('64px')
+      fireEvent.pointerUp(window)
+    } finally {
+      resizeObserver.restore()
+    }
+  })
+
+  it('subscribes exclusively to pointer* events on pointerdown sessions and mouse* events on legacy mousedown sessions without duplicate drag updates', async () => {
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+      }))
+    }
+    const renderer = createMermaidRenderer(driver)
+
+    render(<MermaidDiagram code={'graph TD\n  A-->B'} theme="light" renderer={renderer} debounceMs={0} />)
+    const viewport = await screen.findByTestId('mermaid-svg')
+    const handle = screen.getByTestId('mermaid-resize-handle')
+
+    mockViewportRect(viewport, { width: 400, height: 200 })
+
+    // 1. pointerdown session (including browser-emitted trailing mousedown): ignores mousemove/mouseup
+    fireEvent.pointerDown(handle, { button: 0, clientY: 200 })
+    fireEvent.mouseDown(handle, { button: 0, clientY: 200 })
+
+    fireEvent.pointerMove(window, { clientY: 260 })
+    expect(viewport.style.height).toBe('260px')
+
+    fireEvent.mouseMove(window, { clientY: 500 })
+    expect(viewport.style.height).toBe('260px')
+
+    fireEvent.mouseUp(window)
+    expect(handle).toHaveClass('is-dragging')
+
+    fireEvent.pointerUp(window)
+    expect(handle).not.toHaveClass('is-dragging')
+
+    // 2. Legacy mousedown-only session: responds to mousemove/mouseup and ignores pointermove/pointerup
+    fireEvent.mouseDown(handle, { button: 0, clientY: 260 })
+    expect(handle).toHaveClass('is-dragging')
+
+    fireEvent.pointerMove(window, { clientY: 600 })
+    expect(viewport.style.height).toBe('260px')
+
+    fireEvent.mouseMove(window, { clientY: 310 })
+    expect(viewport.style.height).toBe('310px')
+
+    fireEvent.pointerUp(window)
+    expect(handle).toHaveClass('is-dragging')
+
+    fireEvent.mouseUp(window)
+    expect(handle).not.toHaveClass('is-dragging')
+  })
+
+  it('applies Contain ratio-preserving SVG scaling, removes inline max-width on manual resize, caps at 100% width before expanding viewport, updates on ResizeObserver, and falls back safely without bounds', async () => {
+    const resizeObserver = installMockResizeObserver()
+
+    try {
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => {
+          if (text.includes('wide')) {
+            return {
+              svg: '<svg viewBox="0 0 800 400" width="100%" style="max-width: 800px;"><rect width="800" height="400"/></svg>'
+            }
+          }
+          if (text.includes('square')) {
+            return {
+              svg: '<svg viewBox="0 0 200 200" width="100%" style="max-width: 200px;"><rect width="200" height="200"/></svg>'
+            }
+          }
+          if (text.includes('nobounds')) {
+            return {
+              svg: '<svg><rect width="20" height="20"/></svg>'
+            }
+          }
+          return {
+            svg: '<svg viewBox="0 0 100 50" width="100%" style="max-width: 100px;"><rect width="100" height="50"/></svg>'
+          }
+        })
+      }
+      const renderer = createMermaidRenderer(driver)
+
+      // 1. Narrow diagram (100x50) in 400px container: auto keeps 100x50, drag grows & caps at 400x200 while viewport expands to 300px
+      const { rerender } = render(
+        <MermaidDiagram code={'graph LR\n  narrow'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      const viewport = await screen.findByTestId('mermaid-svg')
+      const handle = screen.getByTestId('mermaid-resize-handle')
+      const getSvg = () => viewport.querySelector('svg') as SVGSVGElement
+
+      mockViewportRect(viewport, { width: 400, height: 50 })
+      resizeObserver.trigger()
+
+      expect(getSvg().style.width).toBe('100px')
+      expect(getSvg().style.height).toBe('50px')
+
+      // Drag to 150px -> inline max-width removed, SVG grows proportionally to 300x150
+      fireEvent.pointerDown(handle, { button: 0, clientY: 50 })
+      fireEvent.pointerMove(window, { clientY: 150 })
+      expect(viewport.style.height).toBe('150px')
+      expect(getSvg().style.maxWidth).toBe('')
+      expect(getSvg().style.width).toBe('300px')
+      expect(getSvg().style.height).toBe('150px')
+
+      // Drag further to 300px -> SVG stops at 100% width (400x200) while viewport height reaches 300px
+      fireEvent.pointerMove(window, { clientY: 300 })
+      expect(viewport.style.height).toBe('300px')
+      expect(getSvg().style.width).toBe('400px')
+      expect(getSvg().style.height).toBe('200px')
+      fireEvent.pointerUp(window)
+
+      // Container narrows to 200px -> ResizeObserver immediately updates fitted SVG to 200x100
+      mockViewportRect(viewport, { width: 200, height: 300 })
+      resizeObserver.trigger()
+      expect(getSvg().style.width).toBe('200px')
+      expect(getSvg().style.height).toBe('100px')
+
+      // Double-click restores auto height & auto size (100x50 on 200px container)
+      fireEvent.doubleClick(handle)
+      expect(viewport.style.height).toBe('')
+      expect(getSvg().style.width).toBe('100px')
+      expect(getSvg().style.height).toBe('50px')
+
+      // 2. Wide diagram (800x400) on 400px container -> auto fits down to 400x200
+      mockViewportRect(viewport, { width: 400, height: 200 })
+      rerender(
+        <MermaidDiagram code={'graph LR\n  wide'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      await waitFor(() => {
+        expect(getSvg().getAttribute('viewBox')).toBe('0 0 800 400')
+      })
+      expect(getSvg().style.width).toBe('400px')
+      expect(getSvg().style.height).toBe('200px')
+
+      // 3. Square diagram (200x200) shrunk to 100px -> scales down to 100x100 without clipping
+      rerender(
+        <MermaidDiagram code={'graph TD\n  square'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      await waitFor(() => {
+        expect(getSvg().getAttribute('viewBox')).toBe('0 0 200 200')
+      })
+      mockViewportRect(viewport, { width: 400, height: 200 })
+      resizeObserver.trigger()
+      fireEvent.pointerDown(handle, { button: 0, clientY: 200 })
+      fireEvent.pointerMove(window, { clientY: 100 })
+      expect(viewport.style.height).toBe('100px')
+      expect(getSvg().style.width).toBe('100px')
+      expect(getSvg().style.height).toBe('100px')
+      fireEvent.pointerUp(window)
+      fireEvent.doubleClick(handle)
+
+      // 4. SVG without viewBox or numeric width/height -> safe CSS fallback with [64, 1600] bounds
+      rerender(
+        <MermaidDiagram code={'graph TD\n  nobounds'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      await waitFor(() => {
+        expect(getSvg().getAttribute('viewBox')).toBeNull()
+      })
+      expect(getSvg().style.width).toBe('')
+      expect(getSvg().style.height).toBe('')
+      expect(handle).toHaveAttribute('aria-valuemin', '64')
+      expect(handle).toHaveAttribute('aria-valuemax', '1600')
+    } finally {
+      resizeObserver.restore()
+    }
+  })
+
+  it('positions resize handle across full bottom border, stops pointer/mouse propagation, and shows live height badge during drag only', async () => {
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    try {
+      const parentPointerDown = vi.fn()
+      const parentMouseDown = vi.fn()
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async () => ({
+          svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+        }))
+      }
+      const renderer = createMermaidRenderer(driver)
+
+      render(
+        <div onPointerDown={parentPointerDown} onMouseDown={parentMouseDown}>
+          <MermaidDiagram code={'graph TD\n  A-->B'} theme="light" renderer={renderer} debounceMs={0} />
+        </div>
+      )
+
+      const viewport = await screen.findByTestId('mermaid-svg')
+      const handle = screen.getByTestId('mermaid-resize-handle')
+      mockViewportRect(viewport, { width: 400, height: 200 })
+
+      const handleStyle = getComputedStyle(handle)
+      expect(handleStyle.position).toBe('absolute')
+      expect(handleStyle.left).toBe('0px')
+      expect(handleStyle.right).toBe('0px')
+      expect(handleStyle.bottom).toBe('-7px')
+      expect(handleStyle.height).toBe('14px')
+
+      expect(screen.queryByTestId('mermaid-height-badge')).not.toBeInTheDocument()
+
+      // Pointer drag shows real-time badge and stops propagation to ancestors
+      fireEvent.pointerDown(handle, { button: 0, clientY: 200 })
+      expect(parentPointerDown).not.toHaveBeenCalled()
+      expect(screen.getByTestId('mermaid-height-badge')).toHaveTextContent('200px')
+
+      fireEvent.pointerMove(window, { clientY: 320 })
+      expect(screen.getByTestId('mermaid-height-badge')).toHaveTextContent('320px')
+
+      fireEvent.pointerUp(window)
+      expect(screen.queryByTestId('mermaid-height-badge')).not.toBeInTheDocument()
+
+      // Legacy mouse drag also stops propagation, displays badge, and hides on blur
+      fireEvent.mouseDown(handle, { button: 0, clientY: 320 })
+      expect(parentMouseDown).not.toHaveBeenCalled()
+      expect(screen.getByTestId('mermaid-height-badge')).toHaveTextContent('320px')
+
+      fireEvent.mouseMove(window, { clientY: 280 })
+      expect(screen.getByTestId('mermaid-height-badge')).toHaveTextContent('280px')
+
+      fireEvent(window, new Event('blur'))
+      expect(screen.queryByTestId('mermaid-height-badge')).not.toBeInTheDocument()
+    } finally {
+      styleEl.remove()
+    }
+  })
+
+  it('provides unified 뷰 초기화 button distinct from 배율 초기화 and double-click, while keeping PNG/SVG exports unscaled', async () => {
+    const canvasStub = installSvgCanvasStub()
+    try {
+      const saveFile = vi.fn(
+        async (_req: { format: 'png' | 'svg'; suggestedName: string; data: Uint8Array | string }) => ({
+          canceled: false,
+          filePath: 'C:\\exports\\out.png'
+        })
+      )
+      window.wikiApi = {
+        diagram: { copyText: vi.fn(async () => {}), copyImage: vi.fn(async () => {}), saveFile }
+      } as unknown as WikiApi
+
+      let resolvePending!: (res: { svg: string }) => void
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async (_id, text) => {
+          if (text.includes('pending_view_reset')) {
+            return new Promise<{ svg: string }>((resolve) => {
+              resolvePending = resolve
+            })
+          }
+          return {
+            svg: '<svg viewBox="0 0 100 50" width="100%" style="max-width: 100px;"><rect width="100" height="50"/></svg>'
+          }
+        })
+      }
+      const renderer = createMermaidRenderer(driver)
+
+      const { rerender } = render(
+        <MermaidDiagram code={'graph TD\n  pending_view_reset'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      const resetViewBtn = screen.getByRole('button', { name: '뷰 초기화' })
+      expect(resetViewBtn).toHaveAttribute('title', '뷰 초기화')
+      expect(resetViewBtn).toBeDisabled()
+
+      await act(async () => {
+        resolvePending({
+          svg: '<svg viewBox="0 0 100 50" width="100%" style="max-width: 100px;"><rect width="100" height="50"/></svg>'
+        })
+        await Promise.resolve()
+      })
+      rerender(<MermaidDiagram code={'graph TD\n  ready'} theme="light" renderer={renderer} debounceMs={0} />)
+
+      const viewport = await screen.findByTestId('mermaid-svg')
+      const stage = within(viewport).getByTestId('mermaid-svg-stage')
+      const handle = screen.getByTestId('mermaid-resize-handle')
+      const zoomInBtn = screen.getByRole('button', { name: '확대' })
+      const resetZoomBtn = screen.getByRole('button', { name: '배율 초기화' })
+      mockViewportRect(viewport, { width: 400, height: 50 })
+
+      // Identity state -> 뷰 초기화 disabled
+      expect(resetViewBtn).toBeDisabled()
+
+      // 1. Zoom change enables 뷰 초기화; clicking resets zoom
+      fireEvent.click(zoomInBtn)
+      expect(resetZoomBtn).toHaveTextContent('125%')
+      expect(resetViewBtn).toBeEnabled()
+      fireEvent.click(resetViewBtn)
+      expect(resetZoomBtn).toHaveTextContent('100%')
+      expect(resetViewBtn).toBeDisabled()
+
+      // 2. Pan change enables 뷰 초기화; clicking resets pan and unlocks auto height
+      fireEvent.pointerDown(viewport, { button: 0, clientX: 50, clientY: 20 })
+      fireEvent.pointerMove(window, { clientX: 80, clientY: 35 })
+      fireEvent.pointerUp(window)
+      expect(stage.style.transform).toBe('translate(30px, 15px) scale(1)')
+      expect(resetViewBtn).toBeEnabled()
+      fireEvent.click(resetViewBtn)
+      expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+      expect(viewport.style.height).toBe('')
+      expect(resetViewBtn).toBeDisabled()
+
+      // 3. Manual height resize enables 뷰 초기화; clicking resets custom height & SVG scaling
+      fireEvent.pointerDown(handle, { button: 0, clientY: 50 })
+      fireEvent.pointerMove(window, { clientY: 150 })
+      fireEvent.pointerUp(window)
+      expect(viewport.style.height).toBe('150px')
+      expect((viewport.querySelector('svg') as SVGSVGElement).style.width).toBe('300px')
+      expect(resetViewBtn).toBeEnabled()
+      fireEvent.click(resetViewBtn)
+      expect(viewport.style.height).toBe('')
+      expect(resetViewBtn).toBeDisabled()
+
+      // 4. Combined zoom + pan + custom height:
+      fireEvent.pointerDown(handle, { button: 0, clientY: 50 })
+      fireEvent.pointerMove(window, { clientY: 150 })
+      fireEvent.pointerUp(window)
+      fireEvent.click(zoomInBtn)
+      fireEvent.click(zoomInBtn) // 150%
+      fireEvent.pointerDown(viewport, { button: 0, clientX: 50, clientY: 50 })
+      fireEvent.pointerMove(window, { clientX: 70, clientY: 60 })
+      fireEvent.pointerUp(window)
+
+      // PNG and SVG export remain unscaled original dimensions
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'PNG 저장' }))
+        await Promise.resolve()
+      })
+      expect(canvasStub.calls[0]).toMatchObject({ pixelWidth: 264, pixelHeight: 164 })
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'SVG 저장' }))
+        await Promise.resolve()
+      })
+      expect(saveFile.mock.calls[1][0].data).toContain('width="132"')
+      expect(saveFile.mock.calls[1][0].data).toContain('height="82"')
+
+      // 100% button resets zoom & pan ONLY while keeping manual height (뷰 초기화 stays enabled)
+      fireEvent.click(resetZoomBtn)
+      expect(resetZoomBtn).toHaveTextContent('100%')
+      expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+      expect(viewport.style.height).toBe('150px')
+      expect(resetViewBtn).toBeEnabled()
+
+      // Double-click handle resets custom height ONLY while preserving zoom & pan (뷰 초기화 stays enabled)
+      fireEvent.click(zoomInBtn)
+      fireEvent.pointerDown(viewport, { button: 0, clientX: 50, clientY: 50 })
+      fireEvent.pointerMove(window, { clientX: 65, clientY: 60 })
+      fireEvent.pointerUp(window)
+      fireEvent.doubleClick(handle)
+      expect(viewport.style.height).toBe('')
+      expect(resetZoomBtn).toHaveTextContent('125%')
+      expect(stage.style.transform).toBe('translate(15px, 10px) scale(1.25)')
+      expect(resetViewBtn).toBeEnabled()
+
+      // Unified 뷰 초기화 resets remaining zoom & pan too
+      fireEvent.click(resetViewBtn)
+      expect(resetZoomBtn).toHaveTextContent('100%')
+      expect(stage.style.transform).toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/)
+      expect(viewport.style.height).toBe('')
+      expect(resetViewBtn).toBeDisabled()
     } finally {
       canvasStub.restore()
     }

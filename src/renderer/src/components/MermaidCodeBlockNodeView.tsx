@@ -53,7 +53,8 @@ export function WysiwygMermaidBlock({
   })
 
   const viewport = useMermaidViewport({
-    hasSvg: displaySvg !== null
+    hasSvg: displaySvg !== null,
+    svgMarkup: displaySvg
   })
 
   return (
@@ -101,10 +102,11 @@ export function WysiwygMermaidBlock({
           displaySvg={displaySvg}
           displayError={displayError}
           viewport={viewport}
-        />
+          className="is-embedded"
+        >
+          <MermaidActionErrorAlert message={actions.errorMessage} />
+        </MermaidDiagramView>
       </div>
-
-      <MermaidActionErrorAlert message={actions.errorMessage} />
     </NodeViewWrapper>
   )
 }
