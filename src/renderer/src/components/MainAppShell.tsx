@@ -190,6 +190,8 @@ export function MainAppShell() {
   const hasWorkspaceInteractionRef = useRef<boolean>(false)
   const isStartupRestoreRef = useRef<boolean>(false)
   const hadOpenWorkspaceRef = useRef<boolean>(false)
+  const isMountedRef = useRef<boolean>(true)
+  const switchWorkspaceSeqRef = useRef<number>(0)
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const reconcileBuffersRef = useRef<
     (changeEvent?: WorkspaceChangeEvent) => Promise<readonly string[]>
@@ -351,7 +353,9 @@ export function MainAppShell() {
   }, [wikiApi])
 
   useEffect(() => {
+    isMountedRef.current = true
     return () => {
+      isMountedRef.current = false
       pendingGitConfirmCancelRef.current?.()
     }
   }, [])
@@ -527,13 +531,37 @@ export function MainAppShell() {
     [promptUnsavedWorkspaceChanges]
   )
 
-  const handleSwitchWorkspace = useCallback(
-    (targetPath: string): void => {
-      hasWorkspaceInteractionRef.current = true
-      isStartupRestoreRef.current = false
-      const currentRoot = activeWorkspaceRootRef.current
-      if (currentRoot && isSameWorkspacePath(currentRoot, targetPath)) {
-        setLeftSidebar(transitionWorkspaceSidebarToExplorer)
+  const tryFocusOpenWorkspace = useCallback(
+    async (
+      targetPath: string,
+      isCancelled?: () => boolean
+    ): Promise<'focused' | 'not-focused' | 'cancelled'> => {
+      const focusIfOpen = wikiApi.workspace.focusIfOpen
+      if (!focusIfOpen) {
+        return 'not-focused'
+      }
+      try {
+        const result = await focusIfOpen(targetPath)
+        if (!isMountedRef.current || isCancelled?.()) {
+          return 'cancelled'
+        }
+        if (result.focused) {
+          reportErrorBanner(null)
+          return 'focused'
+        }
+      } catch {
+        if (!isMountedRef.current || isCancelled?.()) {
+          return 'cancelled'
+        }
+      }
+      return 'not-focused'
+    },
+    [reportErrorBanner, wikiApi]
+  )
+
+  const proceedSwitchAfterFocusCheck = useCallback(
+    (targetPath: string, switchSeq: number): void => {
+      if (isDialogOpenRef.current) {
         return
       }
       if (!hadOpenWorkspaceRef.current) {
@@ -541,6 +569,14 @@ export function MainAppShell() {
         return
       }
       guardUnsavedWorkspaceChanges(async () => {
+        if (
+          (await tryFocusOpenWorkspace(
+            targetPath,
+            () => switchSeq !== switchWorkspaceSeqRef.current
+          )) !== 'not-focused'
+        ) {
+          return
+        }
         const prevRoot = activeWorkspaceRootRef.current
         await workspaceStatePersistence.suspendAndFlush()
         const openResult = await openWorkspace(targetPath)
@@ -554,7 +590,40 @@ export function MainAppShell() {
         }
       })
     },
-    [guardUnsavedWorkspaceChanges, openWorkspace, workspaceStatePersistence]
+    [
+      guardUnsavedWorkspaceChanges,
+      isDialogOpenRef,
+      openWorkspace,
+      tryFocusOpenWorkspace,
+      workspaceStatePersistence
+    ]
+  )
+
+  const handleSwitchWorkspace = useCallback(
+    (targetPath: string): void => {
+      hasWorkspaceInteractionRef.current = true
+      isStartupRestoreRef.current = false
+      const currentRoot = activeWorkspaceRootRef.current
+      if (currentRoot && isSameWorkspacePath(currentRoot, targetPath)) {
+        switchWorkspaceSeqRef.current += 1
+        setLeftSidebar(transitionWorkspaceSidebarToExplorer)
+        return
+      }
+      const switchSeq = ++switchWorkspaceSeqRef.current
+      if (!wikiApi.workspace.focusIfOpen) {
+        proceedSwitchAfterFocusCheck(targetPath, switchSeq)
+        return
+      }
+      void tryFocusOpenWorkspace(
+        targetPath,
+        () => switchSeq !== switchWorkspaceSeqRef.current
+      ).then((focusState) => {
+        if (focusState === 'not-focused') {
+          proceedSwitchAfterFocusCheck(targetPath, switchSeq)
+        }
+      })
+    },
+    [proceedSwitchAfterFocusCheck, tryFocusOpenWorkspace, wikiApi]
   )
 
   const handleOpenWorkspaceInNewWindow = useCallback(

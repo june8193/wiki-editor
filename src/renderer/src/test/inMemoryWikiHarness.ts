@@ -186,6 +186,10 @@ export interface InMemoryWindowHandle {
   requestClose: () => void
   getBounds: () => WindowBounds
   getMenuListenerCount: () => number
+  getFocusCount: () => number
+  getRestoreCount: () => number
+  isMinimized: () => boolean
+  setMinimized: (minimized: boolean) => void
   isClosed: () => boolean
   getInitContext: () => WindowInitContext
   destroy: () => void
@@ -278,6 +282,9 @@ interface SessionWindowRecord {
   role: WindowRole
   isDestroyed: () => boolean
   getBounds: () => WindowBounds
+  isMinimized: () => boolean
+  restore: () => void
+  focus: () => void
   forceClose: () => void
 }
 
@@ -468,6 +475,7 @@ export function createMultiWindowWikiHarness(
         autoSave: state.autoSave,
         autoSaveDelayMs: state.autoSaveDelayMs
       })
+      void session.hub.refreshCleanConfig().catch(() => undefined)
     }
     const snapshot = cloneAppConfig(state)
     for (const listener of configListeners) {
@@ -477,20 +485,36 @@ export function createMultiWindowWikiHarness(
   }
 
   const findOpenSessionByWorkspacePath = (
-    targetPath: string
-  ): { session: HarnessSession; mainWindowId: number } | undefined => {
+    targetPath: string,
+    excludeSessionId?: number
+  ): { session: HarnessSession; mainWindow: SessionWindowRecord; mainWindowId: number } | undefined => {
     for (const session of sessions.values()) {
+      if (session.sessionId === excludeSessionId) continue
       const candidatePath = session.activeRoot ?? session.pendingInitialWorkspacePath
       if (!candidatePath || !isSameWorkspacePath(candidatePath, targetPath)) {
         continue
       }
       for (const [winId, winRecord] of session.openWindows.entries()) {
         if (winRecord.role === 'main' && !winRecord.isDestroyed()) {
-          return { session, mainWindowId: winId }
+          return { session, mainWindow: winRecord, mainWindowId: winId }
         }
       }
     }
     return undefined
+  }
+
+  const focusExistingMainWindow = (
+    target: { session: HarnessSession; mainWindow: SessionWindowRecord; mainWindowId: number },
+    fallbackRoot: string
+  ): { windowId: number; rootPath: string } => {
+    if (target.mainWindow.isMinimized()) {
+      target.mainWindow.restore()
+    }
+    target.mainWindow.focus()
+    return {
+      windowId: target.mainWindowId,
+      rootPath: target.session.activeRoot ?? fallbackRoot
+    }
   }
 
   const hasOtherSessionPendingDrag = (excludeSessionId: number): boolean => {
@@ -506,7 +530,7 @@ export function createMultiWindowWikiHarness(
     const bounds: WindowBounds[] = []
     for (const session of sessions.values()) {
       for (const win of session.openWindows.values()) {
-        if (!win.isDestroyed()) {
+        if (!win.isDestroyed() && !win.isMinimized()) {
           bounds.push(win.getBounds())
         }
       }
@@ -546,6 +570,9 @@ export function createMultiWindowWikiHarness(
     let closePromptPending = false
     let closeFlushEnabled = false
     let hasSyncedNonEmptyTabs = false
+    let minimized = false
+    let focusCount = 0
+    let restoreCount = 0
     const menuListeners = new Set<(command: AppMenuCommand) => void>()
     const bufferListeners = new Set<(event: SharedBufferHubEvent) => void>()
     const dragListeners = new Set<(session: ActiveTabDragSession | null) => void>()
@@ -599,6 +626,18 @@ export function createMultiWindowWikiHarness(
       role,
       isDestroyed: () => destroyed,
       getBounds: () => ({ ...windowBounds }),
+      isMinimized: () => minimized,
+      restore: () => {
+        if (minimized) {
+          minimized = false
+          restoreCount += 1
+        }
+      },
+      focus: () => {
+        if (!destroyed) {
+          focusCount += 1
+        }
+      },
       forceClose: forceCloseWindow
     })
 
@@ -733,6 +772,11 @@ export function createMultiWindowWikiHarness(
           if (!dirs.has(normalized)) {
             throw new Error(`워크스페이스 폴더를 찾을 수 없습니다: ${rootPath}`)
           }
+          const existing = findOpenSessionByWorkspacePath(normalized, session.sessionId)
+          if (existing) {
+            focusExistingMainWindow(existing, normalized)
+            throw new Error('이미 다른 창에 열려 있는 워크스페이스입니다.')
+          }
           session.activeRoot = normalized
           session.pendingInitialWorkspacePath = null
           applyAndBroadcast({
@@ -765,8 +809,7 @@ export function createMultiWindowWikiHarness(
           if (existing) {
             return {
               status: 'focused-existing',
-              windowId: existing.mainWindowId,
-              rootPath: existing.session.activeRoot ?? normalized
+              ...focusExistingMainWindow(existing, normalized)
             }
           }
 
@@ -780,6 +823,24 @@ export function createMultiWindowWikiHarness(
             status: 'opened',
             windowId: newMainWin.windowId,
             rootPath: normalized
+          }
+        },
+        async focusIfOpen(rootPath) {
+          if (role !== 'main') {
+            throw new Error('Only the main window can open a workspace')
+          }
+          const trimmed = rootPath.trim()
+          if (!trimmed) {
+            return { focused: false }
+          }
+          const normalized = normalizePosix(trimmed)
+          const existing = findOpenSessionByWorkspacePath(normalized, session.sessionId)
+          if (!existing) {
+            return { focused: false }
+          }
+          return {
+            focused: true,
+            ...focusExistingMainWindow(existing, normalized)
           }
         },
         async readDir(dirPath) {
@@ -1274,6 +1335,12 @@ export function createMultiWindowWikiHarness(
       requestClose: requestCloseWindow,
       getBounds: () => ({ ...windowBounds }),
       getMenuListenerCount: () => menuListeners.size,
+      getFocusCount: () => focusCount,
+      getRestoreCount: () => restoreCount,
+      isMinimized: () => minimized,
+      setMinimized: (nextMinimized) => {
+        minimized = nextMinimized
+      },
       isClosed: () => destroyed,
       getInitContext: buildInitContext,
       destroy: destroyWindow

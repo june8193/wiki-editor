@@ -1828,7 +1828,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     expect(main1.restoreCount).toBe(1)
     expect(main1.focusCount).toBe(1)
 
-    // focusIfOpen returns focused: false for unopened workspace and focused: true for another open main window
+    // focusIfOpen returns focused: false for unopened workspace and restores+focuses for another open main window
     expect(
       await ipc.invokeFrom<FocusOpenWorkspaceResult>(
         main2.webContents,
@@ -1836,6 +1836,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
         wsGamma
       )
     ).toEqual({ focused: false })
+    main1.setMinimized(true)
     expect(
       await ipc.invokeFrom<FocusOpenWorkspaceResult>(
         main2.webContents,
@@ -1847,7 +1848,9 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       windowId: main1.webContents.id,
       rootPath: realAlpha
     })
+    expect(main1.restoreCount).toBe(2)
     expect(main1.focusCount).toBe(2)
+    expect(main1.isMinimized?.()).toBe(false)
 
     // activateOrOpen targeting Alpha from main2 focuses main1 and preserves Beta on main2
     main1.setMinimized(true)
@@ -1861,7 +1864,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       windowId: main1.webContents.id,
       rootPath: realAlpha
     })
-    expect(main1.restoreCount).toBe(2)
+    expect(main1.restoreCount).toBe(3)
     expect(main1.focusCount).toBe(3)
     expect(
       await ipc.invokeFrom<Array<{ name: string }>>(
@@ -1875,10 +1878,10 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     await expect(
       ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, alphaVariant)
     ).rejects.toThrow(/이미 다른 창/)
-    expect(main1.restoreCount).toBe(3)
+    expect(main1.restoreCount).toBe(4)
     expect(main1.focusCount).toBe(4)
 
-    // Symlink / junction pointing to Alpha also resolves to existing main1
+    // Symlink / junction pointing to Alpha also resolves to existing main1 across openInNewWindow and focusIfOpen
     const alphaLink = join(tempDir, 'alpha-link')
     let symlinkCreated = false
     try {
@@ -1888,6 +1891,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       symlinkCreated = false
     }
     if (symlinkCreated) {
+      main1.setMinimized(true)
       const symlinkOpen = await ipc.invokeFrom<OpenWorkspaceInNewWindowResult>(
         main2.webContents,
         WORKSPACE_IPC_CHANNELS.openInNewWindow,
@@ -1898,7 +1902,23 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
         windowId: main1.webContents.id,
         rootPath: realAlpha
       })
+      expect(main1.restoreCount).toBe(5)
+      expect(main1.focusCount).toBe(5)
       expect(factory.createdWindows).toHaveLength(2)
+
+      main1.setMinimized(true)
+      const symlinkFocus = await ipc.invokeFrom<FocusOpenWorkspaceResult>(
+        main2.webContents,
+        WORKSPACE_IPC_CHANNELS.focusIfOpen,
+        alphaLink
+      )
+      expect(symlinkFocus).toEqual({
+        focused: true,
+        windowId: main1.webContents.id,
+        rootPath: realAlpha
+      })
+      expect(main1.restoreCount).toBe(6)
+      expect(main1.focusCount).toBe(6)
     }
   })
 
@@ -2045,6 +2065,41 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     expect(main1.sentMessages.some((m) => m.channel === CONFIG_IPC_CHANNELS.changed)).toBe(true)
     expect(main2.sentMessages.some((m) => m.channel === CONFIG_IPC_CHANNELS.changed)).toBe(true)
     expect(aux2.sentMessages.some((m) => m.channel === CONFIG_IPC_CHANNELS.changed)).toBe(true)
+
+    main1.sentMessages.length = 0
+    main2.sentMessages.length = 0
+    aux2.sentMessages.length = 0
+    await ipc.invokeFrom(
+      main1.webContents,
+      CONFIG_IPC_CHANNELS.toggleFavoriteWorkspace,
+      wsAlpha,
+      'Alpha'
+    )
+    for (const targetWin of [main1, main2, aux2]) {
+      expect(
+        targetWin.sentMessages.some(
+          (m) =>
+            m.channel === CONFIG_IPC_CHANNELS.changed &&
+            (m.payload as { favoriteWorkspaces: Array<{ path: string }> }).favoriteWorkspaces.length ===
+              1
+        )
+      ).toBe(true)
+    }
+
+    main1.sentMessages.length = 0
+    main2.sentMessages.length = 0
+    aux2.sentMessages.length = 0
+    await ipc.invokeFrom(main2.webContents, CONFIG_IPC_CHANNELS.removeFavoriteWorkspace, wsAlpha)
+    for (const targetWin of [main1, main2, aux2]) {
+      expect(
+        targetWin.sentMessages.some(
+          (m) =>
+            m.channel === CONFIG_IPC_CHANNELS.changed &&
+            (m.payload as { favoriteWorkspaces: Array<{ path: string }> }).favoriteWorkspaces.length ===
+              0
+        )
+      ).toBe(true)
+    }
 
     await vi.waitFor(async () => {
       const snapCfg2 = await ipc.invokeFrom<SharedBufferStateSnapshot>(

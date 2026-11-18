@@ -4000,4 +4000,445 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     expect(main2.isClosed()).toBe(false)
     expect(aux2.isClosed()).toBe(false)
   })
+
+  it('restores and focuses the existing main window without creating a duplicate when open-in-new-window targets an already-open workspace', async () => {
+    const user = userEvent.setup()
+    const favorites = addFavoriteWorkspace([], 'C:/wiki/beta', 'beta', '2026-11-14T00:00:00.000Z')
+    const harness = createMultiWindowWikiHarness(
+      {
+        autoSave: false,
+        theme: 'light',
+        favoriteWorkspaces: favorites,
+        recentWorkspaces: ['C:/wiki/alpha', 'C:\\wiki\\beta\\']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
+          'C:\\wiki\\beta': { 'beta.md': '# Beta' }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const main1 = harness.createWindow({ role: 'main' })
+    const rendered1 = render(<App wikiApi={main1.api} />)
+    activeDisposers.push(() => rendered1.unmount())
+
+    const explorer1 = await within(rendered1.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer1).findByText('alpha.md'))
+    setRawEditorText(
+      await within(rendered1.container).findByTestId('document-editor'),
+      '# Alpha unsaved draft'
+    )
+
+    // Open Beta in Main 2 via open-in-new-window from Favorites
+    const activityBar1 = within(rendered1.container).getByRole('navigation', { name: '액티비티 바' })
+    await user.click(within(activityBar1).getByRole('button', { name: '워크스페이스' }))
+    const workspaceView1 = within(rendered1.container).getByRole('region', {
+      name: '워크스페이스 뷰'
+    })
+    await user.click(
+      within(workspaceView1).getAllByRole('button', { name: 'beta 새 창에서 열기' })[0]
+    )
+
+    await waitFor(() => {
+      expect(harness.getMainWindows()).toHaveLength(2)
+    })
+    const main2 = harness.getMainWindows()[1]
+    const rendered2 = render(<App wikiApi={main2.api} />)
+    activeDisposers.push(() => rendered2.unmount())
+    await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
+
+    // Minimize Main 2, then click open-in-new-window for Beta again (both Favorites and Recent slash-variant) -> focuses/restores Main 2 without creating a 3rd window
+    main2.setMinimized(true)
+    const betaNewWinBtn = within(workspaceView1).getAllByRole('button', {
+      name: 'beta 새 창에서 열기'
+    })[1]
+    await user.click(betaNewWinBtn)
+
+    await waitFor(() => {
+      expect(main2.getRestoreCount()).toBe(1)
+      expect(main2.getFocusCount()).toBe(1)
+    })
+    expect(main2.isMinimized()).toBe(false)
+    expect(harness.getMainWindows()).toHaveLength(2)
+    expect(within(rendered1.container).queryByRole('alertdialog')).toBeNull()
+    expect(within(rendered1.container).queryByRole('alert')).toBeNull()
+    expect(within(workspaceView1).getByText('C:/wiki/alpha')).toBeInTheDocument()
+    expect(getRawEditorText(within(rendered1.container).getByTestId('document-editor'))).toBe(
+      '# Alpha unsaved draft'
+    )
+  })
+
+  it('restores and focuses the existing main window without showing ConfirmDialog or replacing the current workspace when switching via row click, 폴더 열기..., or menu open-folder while dirty', async () => {
+    const user = userEvent.setup()
+    const favorites = addFavoriteWorkspace([], 'C:/wiki/beta', 'beta', '2026-11-14T00:00:00.000Z')
+    const harness = createMultiWindowWikiHarness(
+      {
+        autoSave: false,
+        theme: 'light',
+        favoriteWorkspaces: favorites,
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/gamma']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': { 'alpha.md': '# Alpha' },
+          'C:\\wiki\\beta': { 'beta.md': '# Beta' },
+          'C:\\wiki\\gamma': { 'gamma.md': '# Gamma' }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const main1 = harness.createWindow({ role: 'main' })
+    const rendered1 = render(<App wikiApi={main1.api} />)
+    activeDisposers.push(() => rendered1.unmount())
+
+    const explorer1 = await within(rendered1.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer1).findByText('alpha.md'))
+    setRawEditorText(
+      await within(rendered1.container).findByTestId('document-editor'),
+      '# Alpha unsaved'
+    )
+    await waitFor(() => {
+      expect(within(rendered1.container).getByTestId('dirty-indicator')).toBeInTheDocument()
+    })
+
+    // Open Beta in Main 2
+    const activityBar1 = within(rendered1.container).getByRole('navigation', { name: '액티비티 바' })
+    await user.click(within(activityBar1).getByRole('button', { name: '워크스페이스' }))
+    const workspaceView1 = within(rendered1.container).getByRole('region', {
+      name: '워크스페이스 뷰'
+    })
+    await user.click(within(workspaceView1).getByRole('button', { name: 'beta 새 창에서 열기' }))
+
+    await waitFor(() => {
+      expect(harness.getMainWindows()).toHaveLength(2)
+    })
+    const main2 = harness.getMainWindows()[1]
+    const rendered2 = render(<App wikiApi={main2.api} />)
+    activeDisposers.push(() => rendered2.unmount())
+    const explorer2 = await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer2).findByText('beta.md')).toBeInTheDocument()
+
+    // 1. Clicking Beta row body in Main 1 while Alpha is dirty -> focuses/restores Main 2 without ConfirmDialog or workspace replacement
+    main2.setMinimized(true)
+    await user.click(within(workspaceView1).getByRole('button', { name: /★\s*beta/i }))
+
+    await waitFor(() => {
+      expect(main2.getRestoreCount()).toBe(1)
+      expect(main2.getFocusCount()).toBe(1)
+    })
+    expect(main2.isMinimized()).toBe(false)
+    expect(within(rendered1.container).queryByRole('alertdialog')).toBeNull()
+    expect(within(rendered1.container).queryByRole('alert')).toBeNull()
+    expect(within(workspaceView1).getByText('C:/wiki/alpha')).toBeInTheDocument()
+    expect(getRawEditorText(within(rendered1.container).getByTestId('document-editor'))).toBe(
+      '# Alpha unsaved'
+    )
+
+    // 2. Clicking '폴더 열기...' and choosing Beta (case + backslash + trailing slash) -> focuses/restores Main 2 without ConfirmDialog
+    main2.setMinimized(true)
+    main1.api.workspace.selectFolder = async () => 'C:\\wiki\\BETA\\'
+    await user.click(within(workspaceView1).getByRole('button', { name: '폴더 열기...' }))
+
+    await waitFor(() => {
+      expect(main2.getRestoreCount()).toBe(2)
+      expect(main2.getFocusCount()).toBe(2)
+    })
+    expect(main2.isMinimized()).toBe(false)
+    expect(within(rendered1.container).queryByRole('alertdialog')).toBeNull()
+    expect(within(workspaceView1).getByText('C:/wiki/alpha')).toBeInTheDocument()
+    expect(getRawEditorText(within(rendered1.container).getByTestId('document-editor'))).toBe(
+      '# Alpha unsaved'
+    )
+
+    // 3. Triggering Application Menu 'open-folder' -> focuses/restores Main 2 without ConfirmDialog
+    await user.click(within(activityBar1).getByRole('button', { name: '탐색기' }))
+    main2.setMinimized(true)
+    main1.api.workspace.selectFolder = async () => 'C:/wiki/beta'
+    await triggerMenuCommand(main1.emitMenuCommand, 'open-folder')
+
+    await waitFor(() => {
+      expect(main2.getRestoreCount()).toBe(3)
+      expect(main2.getFocusCount()).toBe(3)
+    })
+    expect(main2.isMinimized()).toBe(false)
+    expect(within(rendered1.container).queryByRole('alertdialog')).toBeNull()
+    const resumedExplorer1 = await within(rendered1.container).findByLabelText('워크스페이스 탐색기')
+    expect(within(resumedExplorer1).getByText('alpha.md')).toBeInTheDocument()
+    expect(getRawEditorText(within(rendered1.container).getByTestId('document-editor'))).toBe(
+      '# Alpha unsaved'
+    )
+
+    // 4. Selecting an unopened workspace (Gamma) still triggers unsaved ConfirmDialog, and if Gamma opens in Main 2 while dialog is open, confirming focuses Main 2 without replacing Alpha
+    await user.click(within(activityBar1).getByRole('button', { name: '워크스페이스' }))
+    await user.click(
+      within(within(rendered1.container).getByRole('region', { name: '워크스페이스 뷰' })).getByRole(
+        'button',
+        { name: /^gamma$/i }
+      )
+    )
+    const confirmDialog = await within(rendered1.container).findByRole('alertdialog')
+    await main2.api.workspace.open('C:/wiki/gamma')
+    main2.setMinimized(true)
+    await user.click(within(confirmDialog).getByRole('button', { name: '저장 후 이동' }))
+
+    await waitFor(() => {
+      expect(main2.getRestoreCount()).toBe(4)
+      expect(main2.getFocusCount()).toBe(4)
+    })
+    expect(within(rendered1.container).queryByRole('alert')).toBeNull()
+    expect(
+      within(within(rendered1.container).getByRole('region', { name: '워크스페이스 뷰' })).getByText(
+        'C:/wiki/alpha'
+      )
+    ).toBeInTheDocument()
+    expect(harness.getFilesSnapshot().get('C:/wiki/alpha/alpha.md')).toBe('# Alpha unsaved')
+    expect(harness.getMainWindows()).toHaveLength(2)
+  })
+
+  it('syncs global config mutations (theme, autoSave, favorites, recent workspaces, direct config.json edits) across all main and auxiliary windows while keeping each main window Workspace View active state independent', async () => {
+    const user = userEvent.setup()
+    const favorites = addFavoriteWorkspace([], 'C:/wiki/beta', 'beta', '2026-11-14T00:00:00.000Z')
+    const harness = createMultiWindowWikiHarness(
+      {
+        autoSave: false,
+        autoSaveDelayMs: 50,
+        theme: 'light',
+        favoriteWorkspaces: favorites,
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': { 'a1.md': '# Alpha 1', 'a2.md': '# Alpha 2' },
+          'C:\\wiki\\beta': { 'b1.md': '# Beta 1', 'b2.md': '# Beta 2' },
+          'C:\\wiki\\gamma': { 'g1.md': '# Gamma 1' }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const main1 = harness.createWindow({ role: 'main' })
+    const rendered1 = render(<App wikiApi={main1.api} />)
+    activeDisposers.push(() => rendered1.unmount())
+
+    const explorer1 = await within(rendered1.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer1).findByText('a1.md'))
+    await user.click(within(explorer1).getByText('a2.md'))
+    await detachTabViaContextMenu(user, rendered1.container, /a1\.md/)
+
+    const activityBar1 = within(rendered1.container).getByRole('navigation', { name: '액티비티 바' })
+    await user.click(within(activityBar1).getByRole('button', { name: '워크스페이스' }))
+    const workspaceView1 = within(rendered1.container).getByRole('region', {
+      name: '워크스페이스 뷰'
+    })
+    await user.click(
+      within(workspaceView1).getAllByRole('button', { name: 'beta 새 창에서 열기' })[0]
+    )
+
+    await waitFor(() => {
+      expect(harness.getMainWindows()).toHaveLength(2)
+    })
+    const main2 = harness.getMainWindows()[1]
+    const rendered2 = render(<App wikiApi={main2.api} />)
+    activeDisposers.push(() => rendered2.unmount())
+
+    const explorer2 = await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer2).findByText('b1.md'))
+    await user.click(within(explorer2).getByText('b2.md'))
+    await detachTabViaContextMenu(user, rendered2.container, /b1\.md/)
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows(main1.windowId)).toHaveLength(1)
+      expect(harness.getAuxiliaryWindows(main2.windowId)).toHaveLength(1)
+    })
+    const aux1 = harness.getAuxiliaryWindows(main1.windowId)[0]
+    const aux2 = harness.getAuxiliaryWindows(main2.windowId)[0]
+    const auxRendered1 = render(<App wikiApi={aux1.api} />)
+    const auxRendered2 = render(<App wikiApi={aux2.api} />)
+    activeDisposers.push(() => auxRendered1.unmount(), () => auxRendered2.unmount())
+
+    const auxEditor2 = await within(auxRendered2.container).findByTestId('document-editor')
+    await within(auxRendered1.container).findByTestId('document-editor')
+
+    // Switch Main 2 to Workspace View and verify independent active row & open-in-new-window disabled state
+    const activityBar2 = within(rendered2.container).getByRole('navigation', { name: '액티비티 바' })
+    await user.click(within(activityBar2).getByRole('button', { name: '워크스페이스' }))
+    const workspaceView2 = within(rendered2.container).getByRole('region', {
+      name: '워크스페이스 뷰'
+    })
+
+    expect(within(workspaceView1).getByRole('button', { name: /^alpha$/i })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
+    expect(within(workspaceView1).getByRole('button', { name: 'alpha 새 창에서 열기' })).toBeDisabled()
+    expect(
+      within(workspaceView1).getAllByRole('button', { name: 'beta 새 창에서 열기' })[0]
+    ).toBeEnabled()
+
+    expect(within(workspaceView2).getByRole('button', { name: /★\s*beta/i })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
+    for (const btn of within(workspaceView2).getAllByRole('button', { name: 'beta 새 창에서 열기' })) {
+      expect(btn).toBeDisabled()
+    }
+    expect(within(workspaceView2).getByRole('button', { name: 'alpha 새 창에서 열기' })).toBeEnabled()
+
+    // 1. Theme toggle in Main 1 propagates in real time to Main 1, Main 2, Aux 1, Aux 2
+    await triggerMenuCommand(main1.emitMenuCommand, 'toggle-theme')
+    await waitFor(() => {
+      for (const viewContainer of [
+        rendered1.container,
+        rendered2.container,
+        auxRendered1.container,
+        auxRendered2.container
+      ]) {
+        expect(viewContainer.querySelector('.app-shell')).toHaveAttribute('data-theme', 'dark')
+      }
+    })
+
+    // 2. Auto-save toggle in Main 1 Settings Panel propagates to Main 2 and triggers auto-save in Aux 2
+    await triggerMenuCommand(main1.emitMenuCommand, 'toggle-settings')
+    await triggerMenuCommand(main2.emitMenuCommand, 'toggle-settings')
+    const settings1 = await within(rendered1.container).findByRole('dialog', {
+      name: '전역 설정 패널'
+    })
+    const settings2 = await within(rendered2.container).findByRole('dialog', {
+      name: '전역 설정 패널'
+    })
+    const autoSaveCheck1 = within(settings1).getByRole('checkbox', { name: /자동 저장/i })
+    const autoSaveCheck2 = within(settings2).getByRole('checkbox', { name: /자동 저장/i })
+    expect(autoSaveCheck1).not.toBeChecked()
+    expect(autoSaveCheck2).not.toBeChecked()
+
+    await user.click(autoSaveCheck1)
+    await waitFor(() => {
+      expect(autoSaveCheck2).toBeChecked()
+    })
+
+    setRawEditorText(auxEditor2, '# Beta 1 synced autoSave')
+    await waitFor(
+      () => {
+        expect(harness.getFilesSnapshot().get('C:/wiki/beta/b1.md')).toBe(
+          '# Beta 1 synced autoSave'
+        )
+        expect(within(auxRendered2.container).getByText('저장됨')).toBeInTheDocument()
+      },
+      { timeout: 2000 }
+    )
+
+    // Close settings panels before testing Workspace View favorites
+    await user.click(within(settings1).getByRole('button', { name: '닫기' }))
+    await user.click(within(settings2).getByRole('button', { name: '닫기' }))
+
+    // 3. Favorite add in Main 1 and favorite remove in Main 2 sync across both windows while keeping active/disabled per window
+    await user.click(within(workspaceView1).getByRole('button', { name: '즐겨찾기 추가' }))
+    await waitFor(() => {
+      expect(within(workspaceView2).getByRole('button', { name: /★\s*alpha/i })).toBeInTheDocument()
+    })
+    expect(within(workspaceView1).getAllByRole('button', { name: 'alpha 새 창에서 열기' })).toSatisfy(
+      (btns: HTMLElement[]) => btns.length === 2 && btns.every((btn) => btn.hasAttribute('disabled'))
+    )
+    expect(within(workspaceView2).getAllByRole('button', { name: 'alpha 새 창에서 열기' })).toSatisfy(
+      (btns: HTMLElement[]) =>
+        btns.length === 2 && btns.every((btn) => !btn.hasAttribute('disabled'))
+    )
+
+    await user.click(within(workspaceView2).getByRole('button', { name: 'alpha 즐겨찾기 해제' }))
+    await waitFor(() => {
+      expect(within(workspaceView1).queryByRole('button', { name: /★\s*alpha/i })).toBeNull()
+      expect(within(workspaceView1).getByRole('button', { name: '즐겨찾기 추가' })).toHaveAttribute(
+        'aria-pressed',
+        'false'
+      )
+    })
+
+    // 4. Direct config.json edit & save in Main 1 updates clean config.json buffer and theme/autoSave in Main 1, Main 2, Aux 1, Aux 2
+    await triggerMenuCommand(main1.emitMenuCommand, 'toggle-settings')
+    await user.click(
+      await within(rendered1.container).findByRole('button', { name: '설정 파일 직접 열기' })
+    )
+    await waitFor(() => {
+      expect(within(rendered1.container).getByRole('tab', { name: /config\.json/ })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    })
+
+    await triggerMenuCommand(main2.emitMenuCommand, 'toggle-settings')
+    await user.click(
+      await within(rendered2.container).findByRole('button', { name: '설정 파일 직접 열기' })
+    )
+    await waitFor(() => {
+      expect(within(rendered2.container).getByRole('tab', { name: /config\.json/ })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    })
+
+    const getActivePaneEditor = (container: HTMLElement): HTMLElement => {
+      const editors = within(container).getAllByTestId('document-editor')
+      return editors[editors.length - 1]
+    }
+    const configEditor1 = getActivePaneEditor(rendered1.container)
+    const configEditor2 = getActivePaneEditor(rendered2.container)
+    await waitFor(() => {
+      expect(getRawEditorText(configEditor1)).toContain('"theme": "dark"')
+      expect(getRawEditorText(configEditor2)).toContain('"theme": "dark"')
+    })
+
+    const editedRaw = JSON.stringify(
+      {
+        ...(await main1.api.config.get()),
+        theme: 'light',
+        autoSave: false
+      },
+      null,
+      2
+    )
+    setRawEditorText(configEditor1, editedRaw)
+    fireEvent.keyDown(configEditor1, { key: 's', ctrlKey: true })
+
+    await waitFor(() => {
+      for (const viewContainer of [
+        rendered1.container,
+        rendered2.container,
+        auxRendered1.container,
+        auxRendered2.container
+      ]) {
+        expect(viewContainer.querySelector('.app-shell')).toHaveAttribute('data-theme', 'light')
+      }
+      expect(getRawEditorText(configEditor2)).toContain('"theme": "light"')
+      expect(getRawEditorText(configEditor2)).toContain('"autoSave": false')
+    })
+
+    // 5. Opening Gamma in Main 2 via '폴더 열기...' updates recentWorkspaces in Main 1 and shifts Main 2's active/disabled row independently
+    main2.api.workspace.selectFolder = async () => 'C:/wiki/gamma'
+    await user.click(within(workspaceView2).getByRole('button', { name: '폴더 열기...' }))
+    await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
+
+    await waitFor(() => {
+      expect(within(workspaceView1).getByRole('button', { name: /^gamma$/i })).toBeInTheDocument()
+    })
+    expect(within(workspaceView1).getByRole('button', { name: 'alpha 새 창에서 열기' })).toBeDisabled()
+    expect(within(workspaceView1).getByRole('button', { name: 'gamma 새 창에서 열기' })).toBeEnabled()
+
+    await user.click(within(activityBar2).getByRole('button', { name: '워크스페이스' }))
+    const updatedWorkspaceView2 = within(rendered2.container).getByRole('region', {
+      name: '워크스페이스 뷰'
+    })
+    expect(within(updatedWorkspaceView2).getByRole('button', { name: /^gamma$/i })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
+    expect(
+      within(updatedWorkspaceView2).getByRole('button', { name: 'gamma 새 창에서 열기' })
+    ).toBeDisabled()
+    expect(
+      within(updatedWorkspaceView2).getAllByRole('button', { name: 'beta 새 창에서 열기' })[0]
+    ).toBeEnabled()
+  })
 })
