@@ -113,9 +113,6 @@ export interface CreateMainWindowOptions {
 }
 
 export interface WorkspaceSessionHandle extends BufferIpcSession, WorkspaceIpcSession {
-  readonly sessionId: number
-  readonly mainWebContentsId: number
-  readonly bufferHub: SharedDocumentBufferHub
   readonly workspaceService: WorkspaceFsService
   getTargets: () => WindowWebContentsLike[]
 }
@@ -311,13 +308,11 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   }
 
   private createWorkspaceSession(
-    mainWin: BrowserWindowLike,
     initialWorkspacePath: string | null
   ): WorkspaceSession {
     const sessionId = this.nextSessionId++
     const { workspaceService, bufferHub, ownsWorkspaceService, ownsBufferHub } =
       this.createSessionServices()
-    const mainWebContentsId = trackHubWindowWebContents(bufferHub, mainWin.webContents, mainWin.id)
     const dragCoordinator = new TabDragCoordinator({
       nextDragSessionId: () => `drag-${++this.dragSessionCounter}`
     })
@@ -326,7 +321,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
 
     const session: WorkspaceSession = {
       sessionId,
-      mainWebContentsId,
+      mainWebContentsId: 0,
       workspaceService,
       bufferHub,
       dragCoordinator,
@@ -340,23 +335,19 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
       unsubscribeDrag: () => undefined,
       disposeCleanups: [],
       handle: {
-        sessionId,
-        mainWebContentsId,
         hub: bufferHub,
-        bufferHub,
         workspaceService,
         getTargets,
         resolveWindowId: (sender) => {
-          const record = this.resolveRecordFromSender(sender)
-          return record && record.sessionId === sessionId ? record.webContentsId : undefined
+          const live = this.resolveLiveWindowSession(sender)
+          return live && live.session.sessionId === sessionId ? live.record.webContentsId : undefined
         },
         isMainWindow: (sender) => {
-          const record = this.resolveRecordFromSender(sender)
+          const live = this.resolveLiveWindowSession(sender)
           return (
-            record !== undefined &&
-            record.sessionId === sessionId &&
-            record.role === 'main' &&
-            !record.window.isDestroyed()
+            live !== undefined &&
+            live.session.sessionId === sessionId &&
+            live.record.role === 'main'
           )
         }
       }
@@ -460,6 +451,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
       if (!session.disposed) {
         session.dragCoordinator.clearForWindow(webContentsId)
       }
+      this.recordsByWebContents.delete(win.webContents)
       this.windowsByWebContentsId.delete(webContentsId)
       session.windowIds.delete(webContentsId)
       if (role === 'main') {
@@ -498,10 +490,15 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     }
   }
 
+  private getLiveMainRecord(session: WorkspaceSession | undefined): WindowRecord | undefined {
+    if (this.disposed || !session || session.disposed) return undefined
+    const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
+    return mainRecord && !mainRecord.window.isDestroyed() ? mainRecord : undefined
+  }
+
   private findFallbackActiveSessionId(): number | null {
     for (const session of this.sessions.values()) {
-      const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
-      if (mainRecord && !mainRecord.window.isDestroyed()) {
+      if (this.getLiveMainRecord(session)) {
         return session.sessionId
       }
     }
@@ -510,10 +507,24 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
 
   private getSessionEffectiveWorkspaceRoot(session: WorkspaceSession): string | null {
     return (
-      session.workspaceService.getWorkspaceRoot() ??
       session.pendingOpenWorkspacePath ??
+      session.workspaceService.getWorkspaceRoot() ??
       session.pendingInitialWorkspacePath
     )
+  }
+
+  private getSessionCandidateWorkspacePaths(session: WorkspaceSession): string[] {
+    const candidates: string[] = []
+    for (const candidate of [
+      session.pendingOpenWorkspacePath,
+      session.workspaceService.getWorkspaceRoot(),
+      session.pendingInitialWorkspacePath
+    ]) {
+      if (candidate && !candidates.includes(candidate)) {
+        candidates.push(candidate)
+      }
+    }
+    return candidates
   }
 
   private findSessionByWorkspacePath(
@@ -521,20 +532,19 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     excludeSessionId?: number
   ): WorkspaceSession | undefined {
     for (const session of this.sessions.values()) {
-      if (session.disposed || session.sessionId === excludeSessionId) continue
-      const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
-      if (!mainRecord || mainRecord.window.isDestroyed()) continue
-      const sessionRoot = this.getSessionEffectiveWorkspaceRoot(session)
-      if (sessionRoot && isSameWorkspacePath(sessionRoot, targetPath)) {
-        return session
+      if (session.sessionId === excludeSessionId || !this.getLiveMainRecord(session)) continue
+      for (const candidate of this.getSessionCandidateWorkspacePaths(session)) {
+        if (isSameWorkspacePath(candidate, targetPath)) {
+          return session
+        }
       }
     }
     return undefined
   }
 
   private focusSessionMainWindow(session: WorkspaceSession): void {
-    const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
-    if (!mainRecord || mainRecord.window.isDestroyed()) return
+    const mainRecord = this.getLiveMainRecord(session)
+    if (!mainRecord) return
     const win = mainRecord.window
     if (win.isMinimized?.()) {
       win.restore?.()
@@ -547,12 +557,23 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     this.lastActiveSessionId = session.sessionId
   }
 
+  private focusExistingSessionTarget(
+    session: WorkspaceSession,
+    fallbackRoot: string
+  ): { windowId: number; rootPath: string } {
+    this.focusSessionMainWindow(session)
+    return {
+      windowId: session.mainWebContentsId,
+      rootPath: this.getSessionEffectiveWorkspaceRoot(session) ?? fallbackRoot
+    }
+  }
+
   createMainWindow(options?: CreateMainWindowOptions): BrowserWindowLike {
     const win = this.createBrowserWindow(
       createMainWindowOptions(this.preloadPath, { bounds: options?.bounds })
     )
     const initialWorkspacePath = options?.initialWorkspacePath ?? null
-    const session = this.createWorkspaceSession(win, initialWorkspacePath)
+    const session = this.createWorkspaceSession(initialWorkspacePath)
     this.registerWindow(
       session,
       win,
@@ -572,15 +593,14 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   ): BrowserWindowLike {
     const session = this.resolveTargetSessionForAuxCreation(sourceSender)
     const bounds = sourceBounds ? computeOffsetAuxiliaryBounds(sourceBounds, this.screen) : undefined
-    return this.openAuxiliaryWindowWithBounds(session, initialTabs, bounds)
+    return this.openAuxiliaryWindowWithBounds(session, initialTabs, bounds).window
   }
 
   private resolveTargetSessionForAuxCreation(sourceSender?: unknown): WorkspaceSession {
     if (sourceSender !== undefined) {
-      const sourceRecord = this.resolveRecordFromSender(sourceSender)
-      const sourceSession = sourceRecord ? this.sessions.get(sourceRecord.sessionId) : undefined
-      if (sourceSession && !sourceSession.disposed) {
-        return sourceSession
+      const live = this.resolveLiveWindowSession(sourceSender)
+      if (live) {
+        return live.session
       }
     }
     const activeSession = this.getActiveSession()
@@ -594,7 +614,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     session: WorkspaceSession,
     initialTabs: readonly TabTransferPayload[],
     bounds?: WindowBounds
-  ): BrowserWindowLike {
+  ): WindowRecord {
     if (initialTabs.length === 0) {
       throw new Error('Auxiliary window requires at least one initial tab')
     }
@@ -606,9 +626,9 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     })
 
     const win = this.createBrowserWindow(options)
-    this.registerWindow(session, win, 'auxiliary', initialTabs)
+    const record = this.registerWindow(session, win, 'auxiliary', initialTabs)
     this.loadRendererContent(win, 'auxiliary')
-    return win
+    return record
   }
 
   private createDetachedAuxiliaryWindow(
@@ -616,9 +636,9 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     payload: TabTransferPayload,
     bounds?: WindowBounds
   ): DetachTabToNewWindowResult {
-    const auxWindow = this.openAuxiliaryWindowWithBounds(session, [payload], bounds)
+    const record = this.openAuxiliaryWindowWithBounds(session, [payload], bounds)
     return {
-      windowId: trackHubWindowWebContents(session.bufferHub, auxWindow.webContents, auxWindow.id)
+      windowId: record.webContentsId
     }
   }
 
@@ -631,16 +651,26 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     return numericId !== undefined ? this.windowsByWebContentsId.get(numericId) : undefined
   }
 
+  private resolveLiveWindowSession(
+    sender: unknown
+  ): { record: WindowRecord; session: WorkspaceSession } | undefined {
+    if (this.disposed) return undefined
+    const record = this.resolveRecordFromSender(sender)
+    if (!record || record.window.isDestroyed()) return undefined
+    const session = this.sessions.get(record.sessionId)
+    if (!session || session.disposed) return undefined
+    return { record, session }
+  }
+
   private requireSourceWindow(
     sender: unknown,
     action: string
   ): { record: WindowRecord; session: WorkspaceSession } {
-    const sourceRecord = this.resolveRecordFromSender(sender)
-    const session = sourceRecord ? this.sessions.get(sourceRecord.sessionId) : undefined
-    if (!sourceRecord || sourceRecord.window.isDestroyed() || !session || session.disposed) {
+    const live = this.resolveLiveWindowSession(sender)
+    if (!live) {
       throw new Error(`Cannot ${action} from an unknown source window`)
     }
-    return { record: sourceRecord, session }
+    return live
   }
 
   private assertKnownBuffer(
@@ -670,8 +700,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   private getActiveSession(): WorkspaceSession | undefined {
     if (this.lastActiveSessionId !== null) {
       const candidate = this.sessions.get(this.lastActiveSessionId)
-      const mainRecord = candidate ? this.windowsByWebContentsId.get(candidate.mainWebContentsId) : undefined
-      if (candidate && !candidate.disposed && mainRecord && !mainRecord.window.isDestroyed()) {
+      if (this.getLiveMainRecord(candidate)) {
         return candidate
       }
     }
@@ -680,12 +709,26 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   }
 
   private requireMainSenderSession(sender: unknown): WorkspaceSession {
-    const record = this.resolveRecordFromSender(sender)
-    const session = record ? this.sessions.get(record.sessionId) : undefined
-    if (!record || record.role !== 'main' || record.window.isDestroyed() || !session || session.disposed) {
+    const live = this.resolveLiveWindowSession(sender)
+    if (!live || live.record.role !== 'main') {
       throw new Error('Only the main window can open a workspace')
     }
-    return session
+    return live.session
+  }
+
+  private clearMatchingPendingInitialWorkspace(
+    session: WorkspaceSession,
+    requestedPath: string
+  ): void {
+    if (this.disposed || session.disposed || session.workspaceService.getWorkspaceRoot()) {
+      return
+    }
+    if (
+      session.pendingInitialWorkspacePath &&
+      isSameWorkspacePath(session.pendingInitialWorkspacePath, requestedPath)
+    ) {
+      session.pendingInitialWorkspacePath = null
+    }
   }
 
   private async openValidatedDirectoryInSession(
@@ -696,6 +739,9 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     try {
       const info = await session.workspaceService.openWorkspace(realRoot)
       session.pendingInitialWorkspacePath = null
+      if (!this.getLiveMainRecord(session)) {
+        throw new Error('Only the main window can open a workspace')
+      }
       return info
     } catch (error) {
       if (!session.workspaceService.getWorkspaceRoot()) {
@@ -720,26 +766,23 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     }
 
     const realRoot = await resolveValidWorkspaceDirectory(rootPath)
+    if (this.disposed) {
+      throw new Error('WindowManager is disposed')
+    }
+
     const existingSession = this.findSessionByWorkspacePath(realRoot)
     if (existingSession) {
-      this.focusSessionMainWindow(existingSession)
       return {
         status: 'focused-existing',
-        windowId: existingSession.mainWebContentsId,
-        rootPath: this.getSessionEffectiveWorkspaceRoot(existingSession) ?? realRoot
+        ...this.focusExistingSessionTarget(existingSession, realRoot)
       }
     }
 
     const sourceRecord =
-      this.resolveRecordFromSender(sender) ??
-      (() => {
-        const active = this.getActiveSession()
-        return active ? this.windowsByWebContentsId.get(active.mainWebContentsId) : undefined
-      })()
-    const bounds =
-      sourceRecord && !sourceRecord.window.isDestroyed()
-        ? computeOffsetMainBounds(sourceRecord.window.getBounds(), this.screen)
-        : undefined
+      this.resolveLiveWindowSession(sender)?.record ?? this.getLiveMainRecord(this.getActiveSession())
+    const bounds = sourceRecord
+      ? computeOffsetMainBounds(sourceRecord.window.getBounds(), this.screen)
+      : undefined
 
     const newWin = this.createMainWindow({
       bounds,
@@ -765,7 +808,16 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     existingSession: WorkspaceSession | undefined
   }> {
     const senderSession = this.requireMainSenderSession(sender)
-    const realRoot = await resolveValidWorkspaceDirectory(rootPath)
+    let realRoot: string
+    try {
+      realRoot = await resolveValidWorkspaceDirectory(rootPath)
+    } catch (error) {
+      this.clearMatchingPendingInitialWorkspace(senderSession, rootPath)
+      throw error
+    }
+    if (!this.getLiveMainRecord(senderSession)) {
+      throw new Error('Only the main window can open a workspace')
+    }
     const existingSession = this.findSessionByWorkspacePath(realRoot, senderSession.sessionId)
     return { senderSession, realRoot, existingSession }
   }
@@ -783,11 +835,9 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
       rootPath
     )
     if (existingSession) {
-      this.focusSessionMainWindow(existingSession)
       return {
         status: 'focused-existing',
-        windowId: existingSession.mainWebContentsId,
-        rootPath: this.getSessionEffectiveWorkspaceRoot(existingSession) ?? realRoot
+        ...this.focusExistingSessionTarget(existingSession, realRoot)
       }
     }
 
@@ -824,7 +874,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   ): Promise<FocusOpenWorkspaceResult> {
     const senderSession = this.requireMainSenderSession(sender)
     const resolvedCandidate = await tryResolveRealWorkspacePath(rootPath)
-    if (!resolvedCandidate) {
+    if (!resolvedCandidate || !this.getLiveMainRecord(senderSession)) {
       return { focused: false }
     }
 
@@ -836,11 +886,9 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
       return { focused: false }
     }
 
-    this.focusSessionMainWindow(existingSession)
     return {
       focused: true,
-      windowId: existingSession.mainWebContentsId,
-      rootPath: this.getSessionEffectiveWorkspaceRoot(existingSession) ?? resolvedCandidate
+      ...this.focusExistingSessionTarget(existingSession, resolvedCandidate)
     }
   }
 
@@ -887,12 +935,15 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     dragSessionId: string,
     outcome: TabDragResolution
   ): ActiveTabDragSession | null {
-    const sourceRecord = this.resolveRecordFromSender(sender)
-    const session = sourceRecord ? this.sessions.get(sourceRecord.sessionId) : undefined
-    if (!sourceRecord || sourceRecord.window.isDestroyed() || !session || session.disposed) {
+    const live = this.resolveLiveWindowSession(sender)
+    if (!live) {
       return null
     }
-    return session.dragCoordinator.updateOutcome(sourceRecord.webContentsId, dragSessionId, outcome)
+    return live.session.dragCoordinator.updateOutcome(
+      live.record.webContentsId,
+      dragSessionId,
+      outcome
+    )
   }
 
   /**
@@ -900,16 +951,11 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
    * in the same main-window workspace session, reserving shared buffer ownership before broadcast.
    */
   acceptTabDragDrop(sender: unknown, input?: AcceptTabDragDropInput): AcceptTabDragDropResult {
-    const targetRecord = this.resolveRecordFromSender(sender)
-    const targetSession = targetRecord ? this.sessions.get(targetRecord.sessionId) : undefined
-    if (
-      !targetRecord ||
-      targetRecord.window.isDestroyed() ||
-      !targetSession ||
-      targetSession.disposed
-    ) {
+    const live = this.resolveLiveWindowSession(sender)
+    if (!live) {
       return { accepted: false, reason: 'invalid-target-window' }
     }
+    const { record: targetRecord, session: targetSession } = live
 
     const result = targetSession.dragCoordinator.acceptCrossWindowDrop({
       targetWindowId: targetRecord.webContentsId,
@@ -940,11 +986,11 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   }
 
   endTabDrag(sender: unknown, input: TabDragEndInput): TabDragEndResult {
-    const sourceRecord = this.resolveRecordFromSender(sender)
-    const session = sourceRecord ? this.sessions.get(sourceRecord.sessionId) : undefined
-    if (!sourceRecord || sourceRecord.window.isDestroyed() || !session || session.disposed) {
+    const live = this.resolveLiveWindowSession(sender)
+    if (!live) {
       return { detached: false, outcome: 'cancelled' }
     }
+    const { record: sourceRecord, session } = live
 
     const canDetach = canDetachTabFromWindow(
       sourceRecord.role,
@@ -968,10 +1014,11 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   }
 
   getWindowInitContext(sender: unknown): WindowInitContext {
-    const record = this.resolveRecordFromSender(sender)
-    if (!record) {
+    const live = this.resolveLiveWindowSession(sender)
+    if (!live) {
       return { role: 'main', initialTabs: [] }
     }
+    const { record } = live
     return {
       role: record.role,
       initialTabs: cloneTabTransferPayloads(record.initialTabs),
@@ -989,9 +1036,9 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   }
 
   setCloseFlushEnabled(sender: unknown, enabled: boolean): void {
-    const record = this.resolveRecordFromSender(sender)
-    if (!record || record.window.isDestroyed() || record.role !== 'main') return
-    record.closeFlushEnabled = Boolean(enabled)
+    const live = this.resolveLiveWindowSession(sender)
+    if (!live || live.record.role !== 'main') return
+    live.record.closeFlushEnabled = Boolean(enabled)
   }
 
   private handleWindowClose(record: WindowRecord, event: WindowCloseEventLike): void {
@@ -1052,22 +1099,20 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   }
 
   closeCurrentWindow(sender: unknown): void {
-    const record = this.resolveRecordFromSender(sender)
-    if (!record || record.role !== 'auxiliary') return
-    this.closeRecord(record)
+    const live = this.resolveLiveWindowSession(sender)
+    if (!live || live.record.role !== 'auxiliary') return
+    this.closeRecord(live.record)
   }
 
   resolveCloseRequest(sender: unknown, approved: boolean): void {
-    const record = this.resolveRecordFromSender(sender)
-    if (!record || record.window.isDestroyed() || !record.closePromptPending) return
+    const live = this.resolveLiveWindowSession(sender)
+    if (!live || !live.record.closePromptPending) return
+    const { record, session } = live
     this.clearCleanCloseFlushTimer(record)
     record.closePromptPending = false
     if (!approved) return
     if (record.role === 'main') {
-      const session = this.sessions.get(record.sessionId)
-      if (session) {
-        this.closeSessionAuxiliaryWindows(session)
-      }
+      this.closeSessionAuxiliaryWindows(session)
     }
     this.closeRecord(record)
   }
@@ -1127,10 +1172,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   }
 
   resolveSession(sender: WebContentsLike | undefined): WorkspaceSessionHandle | undefined {
-    const record = this.resolveRecordFromSender(sender)
-    if (!record || record.window.isDestroyed()) return undefined
-    const session = this.sessions.get(record.sessionId)
-    return session && !session.disposed ? session.handle : undefined
+    return this.resolveLiveWindowSession(sender)?.session.handle
   }
 
   forEachSession(visitor: (session: BufferIpcSession) => void): void {
@@ -1177,9 +1219,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   getWorkspaceServices(): WorkspaceFsService[] {
     const services: WorkspaceFsService[] = []
     for (const session of this.sessions.values()) {
-      if (session.disposed) continue
-      const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
-      if (mainRecord && !mainRecord.window.isDestroyed()) {
+      if (this.getLiveMainRecord(session)) {
         services.push(session.workspaceService)
       }
     }
@@ -1187,27 +1227,23 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   }
 
   getWindowForSender(sender: unknown): BrowserWindowLike | undefined {
-    const record = this.resolveRecordFromSender(sender)
-    if (!record || record.window.isDestroyed()) return undefined
-    return record.window
+    return this.resolveLiveWindowSession(sender)?.record.window
   }
 
   isMainWebContents(sender: unknown): boolean {
-    const record = this.resolveRecordFromSender(sender)
-    return record?.role === 'main' && !record.window.isDestroyed()
+    return this.resolveLiveWindowSession(sender)?.record.role === 'main'
   }
 
   private getSessionMainWebContentsIfLive(session: WorkspaceSession | undefined): BufferWebContentsLike | undefined {
-    if (!session || session.disposed) return undefined
-    const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
-    if (!mainRecord || mainRecord.window.isDestroyed() || mainRecord.window.webContents.isDestroyed()) {
+    const mainRecord = this.getLiveMainRecord(session)
+    if (!mainRecord || mainRecord.window.webContents.isDestroyed()) {
       return undefined
     }
     return mainRecord.window.webContents
   }
 
   private resolveRecordForTargetWindow(targetWindow: unknown): WindowRecord | undefined {
-    if (targetWindow === undefined) return undefined
+    if (this.disposed || targetWindow === undefined) return undefined
     for (const record of this.windowsByWebContentsId.values()) {
       if (!record.window.isDestroyed() && matchesTargetWindow(record, targetWindow)) {
         return record
@@ -1218,7 +1254,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
 
   /**
    * Resolves the target main window's webContents for application menu bar commands, mapping an
-   * invoked or focused auxiliary window back to its parent main window.
+   * invoked or focused auxiliary window back to its owning main window.
    */
   getMenuTargetWebContents(targetWindow?: unknown): BufferWebContentsLike | undefined {
     const targetRecord =
@@ -1271,6 +1307,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     for (const record of this.windowsByWebContentsId.values()) {
       this.clearCleanCloseFlushTimer(record)
       record.cleanupListeners?.()
+      this.recordsByWebContents.delete(record.window.webContents)
     }
     for (const session of [...this.sessions.values()]) {
       this.disposeSession(session)

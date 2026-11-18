@@ -116,15 +116,33 @@ export function registerWorkspaceIpc({
     return session
   }
 
-  const requireMainSession = (
+  const resolveMainSession = (
     event: unknown
-  ): { sender: WebContentsLike | undefined; session: WorkspaceIpcSession } => {
+  ): { sender: WebContentsLike | undefined; session: WorkspaceIpcSession } | undefined => {
     const sender = resolveSenderWebContents(event)
     const session = activeCoordinator.resolveSession(sender)
     if (!session || !session.isMainWindow(sender)) {
-      throw new Error('Only the main window can open a workspace')
+      return undefined
     }
     return { sender, session }
+  }
+
+  const requireMainSession = (
+    event: unknown
+  ): { sender: WebContentsLike | undefined; session: WorkspaceIpcSession } => {
+    const resolved = resolveMainSession(event)
+    if (!resolved) {
+      throw new Error('Only the main window can open a workspace')
+    }
+    return resolved
+  }
+
+  const finalizeOpenedWorkspace = async (
+    session: WorkspaceIpcSession,
+    info: WorkspaceInfo
+  ): Promise<void> => {
+    watchersByService.delete(session.workspaceService)
+    await configService.recordRecentWorkspace(info.rootPath)
   }
 
   const handlers: readonly IpcHandlerTuple[] = [
@@ -136,8 +154,7 @@ export function registerWorkspaceIpc({
         const info = activeCoordinator.openWorkspaceInSession
           ? await activeCoordinator.openWorkspaceInSession(sender, rootPath as string)
           : await session.workspaceService.openWorkspace(rootPath as string)
-        watchersByService.delete(session.workspaceService)
-        await configService.recordRecentWorkspace(info.rootPath)
+        await finalizeOpenedWorkspace(session, info)
         return info
       }
     ],
@@ -152,8 +169,7 @@ export function registerWorkspaceIpc({
               info: await session.workspaceService.openWorkspace(rootPath as string)
             }
         if (result.status === 'opened') {
-          watchersByService.delete(session.workspaceService)
-          await configService.recordRecentWorkspace(result.info.rootPath)
+          await finalizeOpenedWorkspace(session, result.info)
         }
         return result
       }
@@ -233,11 +249,11 @@ export function registerWorkspaceIpc({
     [
       WORKSPACE_IPC_CHANNELS.watch,
       (event) => {
-        const sender = resolveSenderWebContents(event)
-        const session = activeCoordinator.resolveSession(sender)
-        if (!session || !session.isMainWindow(sender)) {
+        const resolved = resolveMainSession(event)
+        if (!resolved) {
           return
         }
+        const { session } = resolved
         if (!watchersByService.has(session.workspaceService)) {
           const stop = session.workspaceService.watch((changeEvent) => {
             broadcastIpcEvent(session.getTargets, WORKSPACE_IPC_CHANNELS.changed, changeEvent)
@@ -249,12 +265,11 @@ export function registerWorkspaceIpc({
     [
       WORKSPACE_IPC_CHANNELS.unwatch,
       (event) => {
-        const sender = resolveSenderWebContents(event)
-        const session = activeCoordinator.resolveSession(sender)
-        if (!session || !session.isMainWindow(sender)) {
+        const resolved = resolveMainSession(event)
+        if (!resolved) {
           return
         }
-        clearWatcher(session.workspaceService)
+        clearWatcher(resolved.session.workspaceService)
       }
     ]
   ]

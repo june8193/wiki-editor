@@ -2312,7 +2312,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     expect(aux2.isDestroyed()).toBe(false)
   })
 
-  it('routes application menu bar commands to target main window or auxiliary parent main window, and tracks workspace services for wiki-asset protocol', async () => {
+  it('routes application menu bar commands to target main window or auxiliary owning main window, and tracks workspace services for wiki-asset protocol', async () => {
     const main1 = manager.createMainWindow() as FakeWindowInstance
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
@@ -2349,7 +2349,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     main2.sentMessages.length = 0
     aux1.sentMessages.length = 0
 
-    // Menu command triggered with explicit targetWindow = aux1 routes to aux1's parent main1 (not aux1, not main2)
+    // Menu command triggered with explicit targetWindow = aux1 routes to aux1's owning main1 (not aux1, not main2)
     fileSubmenu[0].click?.(undefined, aux1, undefined)
     expect(main1.sentMessages.filter((m) => m.channel === MENU_IPC_CHANNELS.command)).toEqual([
       { channel: MENU_IPC_CHANNELS.command, payload: 'open-folder' }
@@ -2372,5 +2372,104 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     expect(manager.getWorkspaceServices()).toHaveLength(2)
     main1.simulateUserClose()
     expect(manager.getWorkspaceServices()).toHaveLength(1)
+  })
+
+  it('prevents duplicate open of both incoming and outgoing workspaces during concurrent switch, clears stale pendingInitialWorkspacePath on validation failure, and guards post-await disposal', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsGamma)
+    const main2 = factory.createdWindows[1]
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsGamma)
+
+    // 1. Delay main1's workspaceService.openWorkspace to simulate in-flight A -> B switch
+    const main1Service = manager.getWorkspaceServices()[0]
+    const originalOpen = main1Service.openWorkspace.bind(main1Service)
+    let releaseOpen!: () => void
+    const openBarrier = new Promise<void>((resolve) => {
+      releaseOpen = resolve
+    })
+    let openStarted!: () => void
+    const openStartedPromise = new Promise<void>((resolve) => {
+      openStarted = resolve
+    })
+    vi.spyOn(main1Service, 'openWorkspace').mockImplementationOnce(async (targetPath: string) => {
+      openStarted()
+      await openBarrier
+      return originalOpen(targetPath)
+    })
+
+    const switchPromise = ipc.invokeFrom(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      wsBeta
+    ) as Promise<ActivateOrOpenWorkspaceResult>
+    await openStartedPromise
+
+    // Both incoming wsBeta and outgoing wsAlpha should resolve to main1 while switch is in flight
+    const dupBetaResult = (await ipc.invokeFrom(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsBeta
+    )) as OpenWorkspaceInNewWindowResult
+    expect(dupBetaResult).toMatchObject({
+      status: 'focused-existing',
+      windowId: main1.webContents.id
+    })
+
+    const dupAlphaResult = (await ipc.invokeFrom(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsAlpha
+    )) as OpenWorkspaceInNewWindowResult
+    expect(dupAlphaResult).toMatchObject({
+      status: 'focused-existing',
+      windowId: main1.webContents.id
+    })
+    expect(factory.createdWindows).toHaveLength(2)
+
+    releaseOpen()
+    const switchResult = await switchPromise
+    expect(switchResult.status).toBe('opened')
+
+    // 2. Deleted unmounted initialWorkspacePath clears stale reservation when activateOrOpen fails validation
+    const wsDelta = join(tempDir, 'delta')
+    await mkdir(wsDelta, { recursive: true })
+    await writeFile(join(wsDelta, 'd.md'), '# Delta', 'utf8')
+    const deltaWinRes = (await ipc.invokeFrom(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsDelta
+    )) as OpenWorkspaceInNewWindowResult
+    expect(deltaWinRes.status).toBe('opened')
+    const main3 = factory.createdWindows[2]
+
+    await rm(wsDelta, { recursive: true, force: true })
+    await expect(
+      ipc.invokeFrom(main3.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, deltaWinRes.rootPath)
+    ).rejects.toThrow()
+
+    await mkdir(wsDelta, { recursive: true })
+    const reopenDelta = (await ipc.invokeFrom(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.openInNewWindow,
+      wsDelta
+    )) as OpenWorkspaceInNewWindowResult
+    expect(reopenDelta.status).toBe('opened')
+    expect(factory.createdWindows).toHaveLength(4)
+
+    // 3. Disposing WindowManager while openWorkspaceInNewWindow resolves does not spawn orphaned window, and clears sender lookup
+    const wsEpsilon = join(tempDir, 'epsilon')
+    await mkdir(wsEpsilon, { recursive: true })
+    const windowsBeforeDispose = factory.createdWindows.length
+    const pendingPostDispose = manager.openWorkspaceInNewWindow(main1.webContents, wsEpsilon)
+    manager.dispose()
+    await expect(pendingPostDispose).rejects.toThrow(/disposed/i)
+    expect(factory.createdWindows).toHaveLength(windowsBeforeDispose)
+    expect(manager.isMainWebContents(main1.webContents)).toBe(false)
+    expect(manager.getWindowForSender(main1.webContents)).toBeUndefined()
+    expect(manager.getWindowInitContext(main1.webContents)).toEqual({
+      role: 'main',
+      initialTabs: []
+    })
   })
 })
