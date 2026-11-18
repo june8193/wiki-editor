@@ -1,4 +1,4 @@
-import { AnyExtension, Editor, InputRule, mergeAttributes } from '@tiptap/core'
+import { AnyExtension, Editor, Extension, InputRule, mergeAttributes } from '@tiptap/core'
 import Code from '@tiptap/extension-code'
 import CodeBlock from '@tiptap/extension-code-block'
 import Image, { type ImageOptions } from '@tiptap/extension-image'
@@ -8,11 +8,12 @@ import { TableKit } from '@tiptap/extension-table'
 import { Markdown } from '@tiptap/markdown'
 import { resolveImageDisplaySrc, type WorkspaceImageIngestResult } from '@shared/assets'
 import { isSafeImageUri } from '@shared/urlSecurity'
-import type { Mark, Schema } from '@tiptap/pm/model'
+import { type Mark, type Schema, Slice } from '@tiptap/pm/model'
 import {
   type EditorState,
   Plugin,
   PluginKey,
+  Selection,
   TextSelection,
   type Transaction
 } from '@tiptap/pm/state'
@@ -55,6 +56,7 @@ export interface WysiwygExtensionOptions {
 
 export const linkInsertPluginKey = new PluginKey<boolean>('wysiwygLinkInsert')
 const codeBlockHighlightPluginKey = new PluginKey<DecorationSet>('wysiwygCodeBlockHighlight')
+const wysiwygExternalTextPastePluginKey = new PluginKey('wysiwygExternalTextPaste')
 
 function buildCodeBlockHighlightDecorations(doc: EditorState['doc']): DecorationSet {
   const decorations: Decoration[] = []
@@ -89,7 +91,50 @@ function buildCodeBlockHighlightDecorations(doc: EditorState['doc']): Decoration
   return DecorationSet.create(doc, decorations)
 }
 
+function sanitizeIndentedMarkdownParagraph(paragraphText: string): string {
+  const sanitizedLines = paragraphText.split('\n').map((line) => {
+    const [, indent = '', rest = ''] = line.match(/^([ \t]*)(.*)$/) ?? []
+    const cleanRest = prepareMarkdownForTiptap(rest).replace(/\n$/, '')
+    return { indent, rest: cleanRest }
+  })
+  const joinedRest = sanitizedLines.map((line) => line.rest).join('\n')
+  const cleanJoined = prepareMarkdownForTiptap(joinedRest)
+  if (cleanJoined !== normalizeMarkdownForTiptap(joinedRest)) {
+    return `${sanitizedLines[0]?.indent ?? ''}${cleanJoined.replace(/\n$/, '')}`
+  }
+  return sanitizedLines
+    .map((line) => (line.rest ? `${line.indent}${line.rest}` : ''))
+    .join('\n')
+}
+
 const HighlightedCodeBlock = CodeBlock.extend({
+  parseMarkdown: (token, helpers) => {
+    const raw = typeof token.raw === 'string' ? token.raw : ''
+    const trimmedRaw = raw.trimStart()
+    const isFenced =
+      token.codeBlockStyle !== 'indented' &&
+      (trimmedRaw.startsWith('```') || trimmedRaw.startsWith('~~~'))
+    if (!isFenced) {
+      const source = (raw || token.text || '').replace(/\r\n?/g, '\n').replace(/\n+$/, '')
+      if (!source) {
+        return []
+      }
+      return source.split(/\n(?:[^\S\n]*\n)+/).map((paragraphText) => {
+        const sanitized = sanitizeIndentedMarkdownParagraph(paragraphText)
+        const inlineContent = sanitized
+          ? helpers.tokenizeInline
+            ? helpers.parseInline(helpers.tokenizeInline(sanitized))
+            : [helpers.createTextNode(sanitized)]
+          : []
+        return helpers.createNode('paragraph', undefined, inlineContent)
+      })
+    }
+    return helpers.createNode(
+      'codeBlock',
+      { language: token.lang || null },
+      token.text ? [helpers.createTextNode(token.text)] : []
+    )
+  },
   addNodeView() {
     return ReactNodeViewRenderer(CodeBlockNodeView, {
       stopEvent: ({ event }) => {
@@ -108,9 +153,7 @@ const HighlightedCodeBlock = CodeBlock.extend({
     })
   },
   addProseMirrorPlugins() {
-    const parentPlugins = this.parent?.() ?? []
     return [
-      ...parentPlugins,
       new Plugin<DecorationSet>({
         key: codeBlockHighlightPluginKey,
         state: {
@@ -160,26 +203,21 @@ function extractPlainText(node: MdastPositionNode): string {
   return node.children.map(extractPlainText).join('')
 }
 
-/**
- * Normalizes trailing newlines and strips unsafe HTML/URI payloads via `rehype-sanitize` before TipTap parses Markdown.
- */
-export function prepareMarkdownForTiptap(markdown: string): string {
-  const normalized = normalizeMarkdownForTiptap(markdown)
-  if (!normalized) return ''
-
-  const tree = markdownAstParser.parse(normalized) as unknown as MdastPositionNode
-  const patches: Array<{ start: number; end: number; replacement: string }> = []
+function sanitizeMarkdownPass(markdown: string): { next: string; hadHtmlChange: boolean } {
+  const tree = markdownAstParser.parse(markdown) as unknown as MdastPositionNode
+  const patches: Array<{ start: number; end: number; replacement: string; isHtml?: boolean }> = []
 
   const visit = (node: MdastPositionNode): void => {
     const start = node.position?.start?.offset
     const end = node.position?.end?.offset
     if (typeof start === 'number' && typeof end === 'number') {
       if (node.type === 'html') {
-        const rawHtml = normalized.slice(start, end)
+        const rawHtml = markdown.slice(start, end)
         patches.push({
           start,
           end,
-          replacement: sanitizeHtmlWithRehype(rawHtml)
+          replacement: sanitizeHtmlWithRehype(rawHtml),
+          isHtml: true
         })
         return
       }
@@ -215,18 +253,41 @@ export function prepareMarkdownForTiptap(markdown: string): string {
 
   visit(tree)
   if (patches.length === 0) {
-    return normalized
+    return { next: markdown, hadHtmlChange: false }
   }
 
   patches.sort((a, b) => b.start - a.start)
-  let sanitized = normalized
+  let sanitized = markdown
   let lastAppliedStart = Number.POSITIVE_INFINITY
+  let hadHtmlChange = false
   for (const patch of patches) {
     if (patch.end > lastAppliedStart) continue
+    const original = sanitized.slice(patch.start, patch.end)
+    if (patch.isHtml && patch.replacement !== original) {
+      hadHtmlChange = true
+    }
     sanitized = sanitized.slice(0, patch.start) + patch.replacement + sanitized.slice(patch.end)
     lastAppliedStart = patch.start
   }
-  return sanitized
+  return { next: sanitized, hadHtmlChange }
+}
+
+/**
+ * Normalizes trailing newlines and strips unsafe HTML/URI payloads via `rehype-sanitize` before TipTap parses Markdown.
+ */
+export function prepareMarkdownForTiptap(markdown: string): string {
+  const normalized = normalizeMarkdownForTiptap(markdown)
+  if (!normalized) return ''
+
+  let current = normalized
+  for (let pass = 0; pass < 3; pass += 1) {
+    const { next, hadHtmlChange } = sanitizeMarkdownPass(current)
+    current = next
+    if (!hadHtmlChange) {
+      break
+    }
+  }
+  return current
 }
 
 function promoteFirstRowToHeaderIfMissing(tr: Transaction, schema: Schema): void {
@@ -461,6 +522,122 @@ const WikiAssetImage = Image.extend<WikiAssetImageOptions>({
   }
 })
 
+function isCodeBlockParent(node: EditorState['selection']['$from']['parent']): boolean {
+  return Boolean(node.type.spec.code) || node.type.name === 'mermaidBlock'
+}
+
+function dispatchPasteTransaction(view: Editor['view'], tr: Transaction): true {
+  view.dispatch(tr.scrollIntoView().setMeta('paste', true))
+  return true
+}
+
+/**
+ * Handles external clipboard paste in WYSIWYG mode by ignoring external HTML and VS Code
+ * metadata and inserting sanitized `text/plain` (parsed as Markdown in normal blocks, or as
+ * literal text inside code blocks/inline code), while leaving internal `data-pm-slice` pastes intact.
+ */
+export function handleWysiwygExternalTextPaste(
+  editor: Editor,
+  event: ClipboardEvent
+): boolean {
+  const clipboardData = event.clipboardData
+  if (!clipboardData || editor.isDestroyed || !editor.isEditable) {
+    return false
+  }
+
+  const rawHtml = clipboardData.getData('text/html')
+  if (rawHtml && /\bdata-pm-slice\s*=/.test(rawHtml)) {
+    return false
+  }
+
+  const rawText = clipboardData.getData('text/plain') || clipboardData.getData('Text')
+  if (!rawText) {
+    return Boolean(rawHtml)
+  }
+
+  const normalizedText = rawText.replace(/\r\n?/g, '\n')
+  const { view } = editor
+  const { state } = view
+  const { from, to, empty, $from, $to } = state.selection
+  const inCodeBlock = isCodeBlockParent($from.parent) || isCodeBlockParent($to.parent)
+  const inInlineCode = !inCodeBlock && editor.isActive('code')
+
+  if (inCodeBlock || inInlineCode) {
+    const codeMarkType = state.schema.marks.code
+    const activeMarks = state.storedMarks ?? $from.marks()
+    const tr =
+      inInlineCode && codeMarkType
+        ? state.tr.replaceWith(
+            from,
+            to,
+            state.schema.text(
+              normalizedText,
+              activeMarks.some((mark) => mark.type === codeMarkType)
+                ? activeMarks
+                : [codeMarkType.create()]
+            )
+          )
+        : state.tr.insertText(normalizedText, from, to)
+    return dispatchPasteTransaction(view, tr)
+  }
+
+  if (!normalizedText.trim()) {
+    return dispatchPasteTransaction(view, state.tr.insertText(normalizedText, from, to))
+  }
+
+  if (!editor.markdown) {
+    return false
+  }
+
+  const prepared = prepareMarkdownForTiptap(normalizedText)
+  if (!prepared.trim()) {
+    return true
+  }
+
+  const parsedJson = editor.markdown.parse(prepared)
+  const docNode = state.schema.nodeFromJSON(parsedJson)
+  if (docNode.childCount === 0) {
+    return true
+  }
+
+  const tr = state.tr
+  if (docNode.childCount === 1 && docNode.firstChild?.type.name === 'paragraph') {
+    tr.replaceSelection(new Slice(docNode.firstChild.content, 0, 0))
+  } else if (
+    empty &&
+    $from.depth === 1 &&
+    $from.parent.isTextblock &&
+    $from.parent.content.size === 0
+  ) {
+    tr.replaceRange(from - 1, to + 1, new Slice(docNode.content, 0, 0))
+    const mappedEnd = Math.min(tr.doc.content.size, Math.max(0, tr.mapping.map(to + 1) - 1))
+    tr.setSelection(Selection.near(tr.doc.resolve(mappedEnd), -1))
+  } else if (docNode.childCount === 1 && docNode.firstChild) {
+    tr.replaceSelectionWith(docNode.firstChild, false)
+  } else {
+    const openStart = docNode.firstChild?.type.name === 'paragraph' ? 1 : 0
+    const openEnd = docNode.lastChild?.type.name === 'paragraph' ? 1 : 0
+    tr.replaceSelection(new Slice(docNode.content, openStart, openEnd))
+  }
+
+  return dispatchPasteTransaction(view, tr)
+}
+
+const WysiwygExternalTextPaste = Extension.create({
+  name: 'wysiwygExternalTextPaste',
+  priority: 1100,
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: wysiwygExternalTextPastePluginKey,
+        props: {
+          handlePaste: (_view, event) => handleWysiwygExternalTextPaste(this.editor, event)
+        }
+      })
+    ]
+  }
+})
+
 export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): AnyExtension[] {
   return [
     StarterKit.configure({
@@ -492,14 +669,15 @@ export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): 
     TaskList,
     TaskItem.configure({
       nested: true
-    })
+    }),
+    WysiwygExternalTextPaste
   ]
 }
 
 export type ProseMirrorLinkQueryMatch = InlineLinkSegmentMatch
 
 function isCodeOnlyBlockParent(node: EditorState['selection']['$from']['parent']): boolean {
-  return !node.isTextblock || Boolean(node.type.spec.code) || node.type.name === 'mermaidBlock'
+  return !node.isTextblock || isCodeBlockParent(node)
 }
 
 /**

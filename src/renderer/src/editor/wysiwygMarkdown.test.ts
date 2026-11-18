@@ -1,5 +1,5 @@
 import { createElement } from 'react'
-import { render, waitFor } from '@testing-library/react'
+import { fireEvent, render, waitFor } from '@testing-library/react'
 import { Editor } from '@tiptap/core'
 import { EditorContent } from '@tiptap/react'
 import { buildWikiAssetUrl } from '@shared/assets'
@@ -15,6 +15,15 @@ import {
 } from './wysiwygMarkdown'
 
 const createdEditors: Editor[] = []
+
+afterEach(() => {
+  while (createdEditors.length > 0) {
+    const editor = createdEditors.pop()!
+    if (!editor.isDestroyed) {
+      editor.destroy()
+    }
+  }
+})
 
 function createTestWysiwygEditor(markdown: string): Editor {
   const editor = new Editor({
@@ -39,15 +48,6 @@ function findTextPos(editor: Editor, snippet: string): number {
 }
 
 describe('wysiwygMarkdown (TipTap v3 + @tiptap/markdown)', () => {
-  afterEach(() => {
-    while (createdEditors.length > 0) {
-      const editor = createdEditors.pop()!
-      if (!editor.isDestroyed) {
-        editor.destroy()
-      }
-    }
-  })
-
   it('roundtrips headings, formatting, code blocks, blockquotes, links, lists, task lists, and tables', () => {
     const sample = [
       '# Title',
@@ -354,15 +354,6 @@ function createImageTestEditor(
 }
 
 describe('wysiwygMarkdown local image rendering and roundtrip', () => {
-  afterEach(() => {
-    while (createdEditors.length > 0) {
-      const editor = createdEditors.pop()!
-      if (!editor.isDestroyed) {
-        editor.destroy()
-      }
-    }
-  })
-
   it('renders relative images with wiki-asset display URLs while preserving original relative paths on getMarkdown and heading extraction', () => {
     const documentPath = 'C:\\vault\\docs\\guide\\intro.md'
     const markdown = [
@@ -533,5 +524,271 @@ describe('wysiwygMarkdown local image rendering and roundtrip', () => {
       markdown.indexOf('![b](../shared/b.svg)')
     )
     expect(markdown).not.toContain('wiki-asset:')
+  })
+})
+
+function createClipboardData(entries: Record<string, string>) {
+  return {
+    types: Object.keys(entries),
+    files: [] as File[],
+    items: [] as DataTransferItem[],
+    getData: (type: string) => entries[type] ?? ''
+  }
+}
+
+describe('wysiwygMarkdown external plain-text Markdown paste and indented block handling', () => {
+  it('parses 4-space and tab indented blocks as sanitized paragraphs while preserving explicit fenced code blocks', () => {
+    const sample = [
+      '    const a = 1;',
+      '    const b = 2;',
+      '',
+      '\tconst c = 3;',
+      '',
+      '    ```ts',
+      '    const indentedFence = true',
+      '    ```',
+      '',
+      '    <script>alert(1)</script>[bad](javascript:alert(2)) **bold**',
+      '',
+      '    [multiline](\n    javascript:alert(3))',
+      '',
+      '```ts',
+      'const fenced = true',
+      '```',
+      '',
+      '~~~py',
+      'print(1)',
+      '~~~'
+    ].join('\n')
+
+    const editor = createTestWysiwygEditor(sample)
+    const codeBlockLanguages: Array<string | null> = []
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === 'codeBlock') {
+        codeBlockLanguages.push((node.attrs.language as string | null) ?? null)
+      }
+      return true
+    })
+
+    expect(codeBlockLanguages).toEqual(['ts', 'py'])
+
+    const markdown = editor.getMarkdown()
+    expect(markdown).toContain('const a = 1;')
+    expect(markdown).toContain('const b = 2;')
+    expect(markdown).toContain('const c = 3;')
+    expect(markdown).toContain('const indentedFence = true')
+    expect(markdown).toContain('bad **bold**')
+    expect(markdown).toContain('multiline')
+    expect(markdown).not.toContain('<script')
+    expect(markdown).not.toContain('javascript:')
+    expect(markdown).toContain('```ts\nconst fenced = true\n```')
+    expect(markdown).toContain('```py\nprint(1)\n```')
+  })
+
+  it('ignores vscode-editor-data and external text/html on paste and parses text/plain as Markdown without creating indented code blocks', () => {
+    const vsCodeEditor = createTestWysiwygEditor('')
+    vsCodeEditor.commands.setTextSelection(1)
+    fireEvent.paste(vsCodeEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'vscode-editor-data': JSON.stringify({ version: 1, mode: 'typescript' }),
+        'text/html': '<div style="white-space:pre"><span>const a = 1;</span></div>',
+        'text/plain': '    if (ok) {\n        run();\n    }'
+      })
+    })
+
+    let vsCodeBlockCount = 0
+    vsCodeEditor.state.doc.descendants((node) => {
+      if (node.type.name === 'codeBlock') vsCodeBlockCount += 1
+      return true
+    })
+    expect(vsCodeBlockCount).toBe(0)
+    expect(vsCodeEditor.state.doc.textContent).toContain('if (ok) {')
+    expect(vsCodeEditor.state.doc.textContent).toContain('run();')
+    expect(vsCodeEditor.getMarkdown()).not.toContain('```')
+
+    const mdPasteEditor = createTestWysiwygEditor('')
+    mdPasteEditor.commands.setTextSelection(1)
+    fireEvent.paste(mdPasteEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/html': '<b>ignored external html</b><p>different content</p>',
+        'text/plain': '## Section\n\n- item 1\n- item 2'
+      })
+    })
+
+    const mdOutput = mdPasteEditor.getMarkdown()
+    expect(mdOutput).toContain('## Section')
+    expect(mdOutput).toContain('- item 1')
+    expect(mdOutput).toContain('- item 2')
+    expect(mdOutput).not.toContain('ignored external html')
+    expect(mdOutput).not.toContain('different content')
+
+    const fencedPasteEditor = createTestWysiwygEditor('')
+    fencedPasteEditor.commands.setTextSelection(1)
+    fireEvent.paste(fencedPasteEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/plain': '```ts\nconst x = 1\n```'
+      })
+    })
+    let fencedCodeLang: string | null = null
+    fencedPasteEditor.state.doc.descendants((node) => {
+      if (node.type.name === 'codeBlock') {
+        fencedCodeLang = (node.attrs.language as string | null) ?? null
+      }
+      return true
+    })
+    expect(fencedCodeLang).toBe('ts')
+  })
+
+  it('merges single-line Markdown paste inline inside a paragraph and preserves internal data-pm-slice paste', () => {
+    const inlineEditor = createTestWysiwygEditor('Hello world')
+    const helloStart = findTextPos(inlineEditor, 'Hello') - 1
+    inlineEditor.commands.setTextSelection(helloStart + 'Hello '.length)
+
+    fireEvent.paste(inlineEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/html': '<i>ignored</i>',
+        'text/plain': '**bold** snippet'
+      })
+    })
+
+    expect(inlineEditor.state.doc.childCount).toBe(1)
+    expect(inlineEditor.getMarkdown()).toBe('Hello **bold** snippetworld')
+
+    const internalEditor = createTestWysiwygEditor('Prefix ')
+    const prefixStart = findTextPos(internalEditor, 'Prefix') - 1
+    internalEditor.commands.setTextSelection(prefixStart + 'Prefix '.length)
+
+    fireEvent.paste(internalEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/html': '<p data-pm-slice="1 1 []"><strong>rich</strong> copy</p>',
+        'text/plain': 'rich copy'
+      })
+    })
+
+    expect(internalEditor.getMarkdown()).toContain('**rich** copy')
+  })
+
+  it('inserts literal text/plain without Markdown parsing when cursor is inside a codeBlock or inline code mark', () => {
+    const codeBlockEditor = createTestWysiwygEditor('```ts\nconst x = 1;\n```')
+    codeBlockEditor.commands.setTextSelection(findTextPos(codeBlockEditor, 'const x = 1;'))
+    fireEvent.paste(codeBlockEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'vscode-editor-data': JSON.stringify({ version: 1, mode: 'markdown' }),
+        'text/html': '<h1>Ignored</h1>',
+        'text/plain': '# Not a heading\n- Not a list'
+      })
+    })
+
+    const nonEmptyBlockTypes: string[] = []
+    codeBlockEditor.state.doc.forEach((node) => {
+      if (node.type.name !== 'paragraph' || node.textContent.length > 0) {
+        nonEmptyBlockTypes.push(node.type.name)
+      }
+    })
+    expect(nonEmptyBlockTypes).toEqual(['codeBlock'])
+    expect(codeBlockEditor.state.doc.firstChild?.textContent).toContain('# Not a heading')
+    expect(codeBlockEditor.state.doc.firstChild?.textContent).toContain('- Not a list')
+    expect(codeBlockEditor.getMarkdown()).toContain('```ts')
+    expect(codeBlockEditor.getMarkdown()).toContain('# Not a heading')
+    expect(codeBlockEditor.getMarkdown()).toContain('- Not a list')
+
+    const inlineCodeEditor = createTestWysiwygEditor('Use `foo` here')
+    inlineCodeEditor.commands.setTextSelection(findTextPos(inlineCodeEditor, 'foo'))
+    fireEvent.paste(inlineCodeEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/html': '<b>IgnoredHtml</b>',
+        'text/plain': '**notBold** # notHeading'
+      })
+    })
+
+    let hasHeadingOrBold = false
+    inlineCodeEditor.state.doc.descendants((node) => {
+      if (node.type.name === 'heading' || node.marks.some((mark) => mark.type.name === 'bold')) {
+        hasHeadingOrBold = true
+      }
+      return true
+    })
+    expect(hasHeadingOrBold).toBe(false)
+    expect(inlineCodeEditor.getMarkdown()).toContain('`f**notBold** # notHeadingoo`')
+    expect(inlineCodeEditor.getMarkdown()).not.toContain('IgnoredHtml')
+
+    const inlineCodePasteRulesEditor = createTestWysiwygEditor('Use `foo` here')
+    const fooStart = findTextPos(inlineCodePasteRulesEditor, 'foo') - 1
+    inlineCodePasteRulesEditor.commands.setTextSelection({
+      from: fooStart,
+      to: fooStart + 'foo'.length
+    })
+    fireEvent.paste(inlineCodePasteRulesEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/html': '<a href="https://evil.example">https://example.com</a>',
+        'text/plain': '`bar` https://example.com'
+      })
+    })
+
+    let hasLinkMark = false
+    inlineCodePasteRulesEditor.state.doc.descendants((node) => {
+      if (node.marks.some((mark) => mark.type.name === 'link')) {
+        hasLinkMark = true
+      }
+      return true
+    })
+    expect(hasLinkMark).toBe(false)
+    expect(inlineCodePasteRulesEditor.getMarkdown()).toContain('`` `bar` https://example.com ``')
+  })
+
+  it('ignores HTML-only external clipboards, strips unsafe-only payloads, preserves escaped Markdown, and handles block NodeSelections', () => {
+    const htmlOnlyEditor = createTestWysiwygEditor('Keep')
+    htmlOnlyEditor.commands.focus('end')
+    fireEvent.paste(htmlOnlyEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/html': '<b>Should be ignored</b>'
+      })
+    })
+    expect(htmlOnlyEditor.getMarkdown()).toBe('Keep')
+
+    const unsafeOnlyEditor = createTestWysiwygEditor('Safe')
+    unsafeOnlyEditor.commands.focus('end')
+    fireEvent.paste(unsafeOnlyEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/plain': '<script>alert(1)</script>'
+      })
+    })
+    expect(unsafeOnlyEditor.getMarkdown()).toBe('Safe')
+    expect(unsafeOnlyEditor.state.doc.textContent).toBe('Safe')
+
+    const escapedEditor = createTestWysiwygEditor('')
+    escapedEditor.commands.setTextSelection(1)
+    fireEvent.paste(escapedEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/plain': '\\*literal\\*'
+      })
+    })
+    expect(escapedEditor.getMarkdown()).toBe('\\*literal\\*')
+
+    const hrEditor = createTestWysiwygEditor('---\n\nAfter')
+    hrEditor.commands.setNodeSelection(0)
+    fireEvent.paste(hrEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/plain': '## Replaced'
+      })
+    })
+    expect(hrEditor.state.doc.firstChild?.type.name).toBe('heading')
+    expect(hrEditor.getMarkdown()).toContain('## Replaced')
+
+    const selectionLinkEditor = createTestWysiwygEditor('Replace me')
+    const replaceStart = findTextPos(selectionLinkEditor, 'Replace me') - 1
+    selectionLinkEditor.commands.setTextSelection({
+      from: replaceStart,
+      to: replaceStart + 'Replace me'.length
+    })
+    fireEvent.paste(selectionLinkEditor.view.dom, {
+      clipboardData: createClipboardData({
+        'text/html': 'https://evil.example',
+        'text/plain': 'https://example.com'
+      })
+    })
+    expect(selectionLinkEditor.getMarkdown()).toBe('[https://example.com](https://example.com)')
+    expect(selectionLinkEditor.getMarkdown()).not.toContain('Replace me')
+    expect(selectionLinkEditor.getMarkdown()).not.toContain('evil.example')
   })
 })
