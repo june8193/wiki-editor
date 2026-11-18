@@ -15,6 +15,7 @@ import {
   type TabTransferPayload,
   type TabViewState
 } from '@shared/window'
+import { normalizeMermaidHeightPx } from '../editor/mermaidContainFit'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 
 export type { CursorPosition, EditorMode, PaneId, SplitDirection, SplitMode, TabViewState }
@@ -147,8 +148,9 @@ function normalizeMermaidHeightMap(
   const normalized: Record<string, number> = {}
   let count = 0
   for (const [key, height] of Object.entries(raw)) {
-    if (typeof height === 'number' && Number.isFinite(height) && height > 0) {
-      normalized[key] = Math.round(height)
+    const normalizedHeight = normalizeMermaidHeightPx(height)
+    if (normalizedHeight !== null) {
+      normalized[key] = normalizedHeight
       count += 1
     }
   }

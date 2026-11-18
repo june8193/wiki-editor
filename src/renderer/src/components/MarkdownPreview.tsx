@@ -3,7 +3,7 @@ import type { ThemeMode } from '@shared/config'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
 import {
   type MermaidHeightChangeHandler,
-  MermaidHeightSessionContext
+  MermaidHeightSessionProvider
 } from '../editor/mermaidHeightSession'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
@@ -108,13 +108,11 @@ export function MarkdownPreview({
     [content, documentPath, documentTitle, handleAnchorNavigate, mermaidRenderer, onLinkNavigate, theme]
   )
 
-  const mermaidHeightSessionValue = useMemo(
-    () => ({ mermaidHeights, onMermaidHeightChange }),
-    [mermaidHeights, onMermaidHeightChange]
-  )
-
   return (
-    <MermaidHeightSessionContext.Provider value={mermaidHeightSessionValue}>
+    <MermaidHeightSessionProvider
+      mermaidHeights={mermaidHeights}
+      onMermaidHeightChange={onMermaidHeightChange}
+    >
       <div
         ref={(el) => {
           containerRef.current = el
@@ -133,6 +131,6 @@ export function MarkdownPreview({
           rendered
         )}
       </div>
-    </MermaidHeightSessionContext.Provider>
+    </MermaidHeightSessionProvider>
   )
 }

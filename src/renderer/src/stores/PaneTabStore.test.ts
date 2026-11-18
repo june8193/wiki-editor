@@ -711,7 +711,7 @@ describe('PaneTabStore', () => {
       mermaidHeights: { '0': 280, '1': 420 }
     })
     store.updateTabViewState('primary', docTabB.id, {
-      mermaidHeights: { '0': 190 }
+      mermaidHeights: { '0': 190, '1': 0.2, '2': -10, '3': Number.NaN }
     })
 
     // No spurious mode/tab transition emitted for height updates

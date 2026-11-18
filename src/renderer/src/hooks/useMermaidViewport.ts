@@ -15,6 +15,7 @@ import {
   applySvgContainFitStyles,
   clampMermaidHeight,
   computeFitMetricsOrFallback,
+  normalizeMermaidHeightPx,
   readViewportBox
 } from '../editor/mermaidContainFit'
 import {
@@ -104,10 +105,7 @@ export function useMermaidViewport({
   heightSyncKey,
   onCustomHeightChange
 }: UseMermaidViewportOptions): MermaidViewportState {
-  const normalizedPersistedHeight =
-    typeof persistedHeightPx === 'number' && Number.isFinite(persistedHeightPx) && persistedHeightPx > 0
-      ? Math.round(persistedHeightPx)
-      : null
+  const normalizedPersistedHeight = normalizeMermaidHeightPx(persistedHeightPx)
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)

@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext } from 'react'
+import { createContext, createElement, type ReactElement, type ReactNode, useCallback, useContext, useMemo } from 'react'
 import type { MermaidDiagramHeightMap } from '../stores/PaneTabStore'
+import { normalizeMermaidHeightPx } from './mermaidContainFit'
 
 export type MermaidHeightChangeHandler = (blockIndex: number, heightPx: number | null) => void
 
@@ -8,7 +9,30 @@ export interface MermaidHeightSessionContextValue {
   onMermaidHeightChange?: MermaidHeightChangeHandler
 }
 
-export const MermaidHeightSessionContext = createContext<MermaidHeightSessionContextValue>({})
+export interface MermaidHeightSessionProviderProps extends MermaidHeightSessionContextValue {
+  children: ReactNode
+}
+
+const MermaidHeightSessionContext = createContext<MermaidHeightSessionContextValue>({})
+
+/**
+ * Provides tab-session Mermaid diagram height state and change notification to descendant blocks.
+ */
+export function MermaidHeightSessionProvider({
+  mermaidHeights,
+  onMermaidHeightChange,
+  children
+}: MermaidHeightSessionProviderProps): ReactElement {
+  const value = useMemo(
+    () => ({ mermaidHeights, onMermaidHeightChange }),
+    [mermaidHeights, onMermaidHeightChange]
+  )
+  return createElement(MermaidHeightSessionContext.Provider, { value }, children)
+}
+
+function isValidMermaidBlockIndex(blockIndex: number | undefined): blockIndex is number {
+  return blockIndex !== undefined && Number.isInteger(blockIndex) && blockIndex >= 0
+}
 
 /**
  * Updates or deletes a 0-based Mermaid block height entry in an immutable map,
@@ -19,12 +43,13 @@ export function updateMermaidHeightMap(
   blockIndex: number,
   heightPx: number | null
 ): MermaidDiagramHeightMap | undefined {
-  if (!Number.isInteger(blockIndex) || blockIndex < 0) {
+  if (!isValidMermaidBlockIndex(blockIndex)) {
     return current
   }
   const key = String(blockIndex)
+  const normalizedHeight = normalizeMermaidHeightPx(heightPx)
 
-  if (heightPx === null || !Number.isFinite(heightPx) || heightPx <= 0) {
+  if (normalizedHeight === null) {
     if (!current || !(key in current)) {
       return current
     }
@@ -39,13 +64,12 @@ export function updateMermaidHeightMap(
     return count > 0 ? next : undefined
   }
 
-  const rounded = Math.round(heightPx)
-  if (current?.[key] === rounded) {
+  if (current?.[key] === normalizedHeight) {
     return current
   }
   return {
     ...(current ?? {}),
-    [key]: rounded
+    [key]: normalizedHeight
   }
 }
 
@@ -57,11 +81,10 @@ export function getPersistedMermaidHeight(
   mermaidHeights: MermaidDiagramHeightMap | undefined,
   blockIndex: number | undefined
 ): number | null {
-  if (blockIndex === undefined || !Number.isInteger(blockIndex) || blockIndex < 0) {
+  if (!isValidMermaidBlockIndex(blockIndex)) {
     return null
   }
-  const raw = mermaidHeights?.[String(blockIndex)]
-  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? Math.round(raw) : null
+  return normalizeMermaidHeightPx(mermaidHeights?.[String(blockIndex)])
 }
 
 /**
@@ -73,11 +96,11 @@ export function useMermaidSessionHeight(blockIndex: number | undefined): {
 } {
   const { mermaidHeights, onMermaidHeightChange } = useContext(MermaidHeightSessionContext)
   const persistedHeightPx = getPersistedMermaidHeight(mermaidHeights, blockIndex)
-  const hasValidIndex = blockIndex !== undefined && Number.isInteger(blockIndex) && blockIndex >= 0
+  const hasValidIndex = isValidMermaidBlockIndex(blockIndex)
 
   const handleCustomHeightChange = useCallback(
     (nextHeightPx: number | null) => {
-      if (!hasValidIndex || blockIndex === undefined) return
+      if (!hasValidIndex) return
       onMermaidHeightChange?.(blockIndex, nextHeightPx)
     },
     [blockIndex, hasValidIndex, onMermaidHeightChange]

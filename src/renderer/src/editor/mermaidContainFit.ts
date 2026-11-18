@@ -41,6 +41,18 @@ interface SvgInlineStyleSnapshot {
 const originalSvgInlineStyles = new WeakMap<SVGSVGElement, SvgInlineStyleSnapshot>()
 
 /**
+ * Validates and rounds a pixel height to a positive integer, returning `null`
+ * for non-finite, non-positive, or sub-pixel values that round to `0`.
+ */
+export function normalizeMermaidHeightPx(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null
+  }
+  const rounded = Math.round(value)
+  return rounded > 0 ? rounded : null
+}
+
+/**
  * Clamps Mermaid viewport container height to `[bounds.min, bounds.max]` integer pixels.
  */
 export function clampMermaidHeight(

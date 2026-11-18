@@ -6,7 +6,7 @@ import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import {
   type MermaidHeightChangeHandler,
-  MermaidHeightSessionContext
+  MermaidHeightSessionProvider
 } from '../editor/mermaidHeightSession'
 import { isLinkNavigationClick } from '../editor/editorModes'
 import {
@@ -501,11 +501,6 @@ export function WysiwygMarkdownEditor({
     [documentTitle, mermaidPositionsKey, mermaidRenderer, theme]
   )
 
-  const mermaidHeightSessionValue = useMemo(
-    () => ({ mermaidHeights, onMermaidHeightChange }),
-    [mermaidHeights, onMermaidHeightChange]
-  )
-
   return (
     <div ref={shellRef} className="wysiwyg-shell">
       <div className="editor-toolbar" role="toolbar" aria-label="위지윅 서식 툴바">
@@ -599,11 +594,14 @@ export function WysiwygMarkdownEditor({
           </div>
         )}
 
-        <MermaidHeightSessionContext.Provider value={mermaidHeightSessionValue}>
+        <MermaidHeightSessionProvider
+          mermaidHeights={mermaidHeights}
+          onMermaidHeightChange={onMermaidHeightChange}
+        >
           <WysiwygMermaidContext.Provider value={mermaidContextValue}>
             <EditorContent editor={editor} className="wysiwyg-editor-content" />
           </WysiwygMermaidContext.Provider>
-        </MermaidHeightSessionContext.Provider>
+        </MermaidHeightSessionProvider>
       </div>
 
       {cellMenuPos && (
