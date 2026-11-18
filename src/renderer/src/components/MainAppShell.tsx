@@ -531,30 +531,26 @@ export function MainAppShell() {
     [promptUnsavedWorkspaceChanges]
   )
 
-  const tryFocusOpenWorkspace = useCallback(
-    async (
-      targetPath: string,
-      isCancelled?: () => boolean
-    ): Promise<'focused' | 'not-focused' | 'cancelled'> => {
+  const shouldProceedAfterFocusCheck = useCallback(
+    async (targetPath: string, switchSeq: number): Promise<boolean> => {
       const focusIfOpen = wikiApi.workspace.focusIfOpen
       if (!focusIfOpen) {
-        return 'not-focused'
+        return true
       }
+      let focused = false
       try {
-        const result = await focusIfOpen(targetPath)
-        if (!isMountedRef.current || isCancelled?.()) {
-          return 'cancelled'
-        }
-        if (result.focused) {
-          reportErrorBanner(null)
-          return 'focused'
-        }
+        focused = (await focusIfOpen(targetPath)).focused
       } catch {
-        if (!isMountedRef.current || isCancelled?.()) {
-          return 'cancelled'
-        }
+        focused = false
       }
-      return 'not-focused'
+      if (!isMountedRef.current || switchSeq !== switchWorkspaceSeqRef.current) {
+        return false
+      }
+      if (focused) {
+        reportErrorBanner(null)
+        return false
+      }
+      return true
     },
     [reportErrorBanner, wikiApi]
   )
@@ -569,12 +565,7 @@ export function MainAppShell() {
         return
       }
       guardUnsavedWorkspaceChanges(async () => {
-        if (
-          (await tryFocusOpenWorkspace(
-            targetPath,
-            () => switchSeq !== switchWorkspaceSeqRef.current
-          )) !== 'not-focused'
-        ) {
+        if (!(await shouldProceedAfterFocusCheck(targetPath, switchSeq))) {
           return
         }
         const prevRoot = activeWorkspaceRootRef.current
@@ -594,7 +585,7 @@ export function MainAppShell() {
       guardUnsavedWorkspaceChanges,
       isDialogOpenRef,
       openWorkspace,
-      tryFocusOpenWorkspace,
+      shouldProceedAfterFocusCheck,
       workspaceStatePersistence
     ]
   )
@@ -614,16 +605,13 @@ export function MainAppShell() {
         proceedSwitchAfterFocusCheck(targetPath, switchSeq)
         return
       }
-      void tryFocusOpenWorkspace(
-        targetPath,
-        () => switchSeq !== switchWorkspaceSeqRef.current
-      ).then((focusState) => {
-        if (focusState === 'not-focused') {
+      void shouldProceedAfterFocusCheck(targetPath, switchSeq).then((proceed) => {
+        if (proceed) {
           proceedSwitchAfterFocusCheck(targetPath, switchSeq)
         }
       })
     },
-    [proceedSwitchAfterFocusCheck, tryFocusOpenWorkspace, wikiApi]
+    [proceedSwitchAfterFocusCheck, shouldProceedAfterFocusCheck, wikiApi]
   )
 
   const handleOpenWorkspaceInNewWindow = useCallback(

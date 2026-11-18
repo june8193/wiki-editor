@@ -2066,39 +2066,35 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     expect(main2.sentMessages.some((m) => m.channel === CONFIG_IPC_CHANNELS.changed)).toBe(true)
     expect(aux2.sentMessages.some((m) => m.channel === CONFIG_IPC_CHANNELS.changed)).toBe(true)
 
-    main1.sentMessages.length = 0
-    main2.sentMessages.length = 0
-    aux2.sentMessages.length = 0
-    await ipc.invokeFrom(
-      main1.webContents,
-      CONFIG_IPC_CHANNELS.toggleFavoriteWorkspace,
-      wsAlpha,
-      'Alpha'
-    )
-    for (const targetWin of [main1, main2, aux2]) {
-      expect(
-        targetWin.sentMessages.some(
-          (m) =>
-            m.channel === CONFIG_IPC_CHANNELS.changed &&
-            (m.payload as { favoriteWorkspaces: Array<{ path: string }> }).favoriteWorkspaces.length ===
-              1
-        )
-      ).toBe(true)
-    }
-
-    main1.sentMessages.length = 0
-    main2.sentMessages.length = 0
-    aux2.sentMessages.length = 0
-    await ipc.invokeFrom(main2.webContents, CONFIG_IPC_CHANNELS.removeFavoriteWorkspace, wsAlpha)
-    for (const targetWin of [main1, main2, aux2]) {
-      expect(
-        targetWin.sentMessages.some(
-          (m) =>
-            m.channel === CONFIG_IPC_CHANNELS.changed &&
-            (m.payload as { favoriteWorkspaces: Array<{ path: string }> }).favoriteWorkspaces.length ===
-              0
-        )
-      ).toBe(true)
+    const favoriteBroadcastCases = [
+      {
+        sender: main1.webContents,
+        channel: CONFIG_IPC_CHANNELS.toggleFavoriteWorkspace,
+        args: [wsAlpha, 'Alpha'],
+        expectedCount: 1
+      },
+      {
+        sender: main2.webContents,
+        channel: CONFIG_IPC_CHANNELS.removeFavoriteWorkspace,
+        args: [wsAlpha],
+        expectedCount: 0
+      }
+    ]
+    for (const testCase of favoriteBroadcastCases) {
+      for (const targetWin of [main1, main2, aux2]) {
+        targetWin.sentMessages.length = 0
+      }
+      await ipc.invokeFrom(testCase.sender, testCase.channel, ...testCase.args)
+      for (const targetWin of [main1, main2, aux2]) {
+        expect(
+          targetWin.sentMessages.some(
+            (m) =>
+              m.channel === CONFIG_IPC_CHANNELS.changed &&
+              (m.payload as { favoriteWorkspaces: Array<{ path: string }> }).favoriteWorkspaces
+                .length === testCase.expectedCount
+          )
+        ).toBe(true)
+      }
     }
 
     await vi.waitFor(async () => {

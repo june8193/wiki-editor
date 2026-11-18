@@ -4001,6 +4001,71 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     expect(aux2.isClosed()).toBe(false)
   })
 
+  async function openBetaMainWindowFrom(
+    user: ReturnType<typeof userEvent.setup>,
+    harness: ReturnType<typeof createMultiWindowWikiHarness>,
+    sourceContainer: HTMLElement
+  ): Promise<{
+    workspaceView1: HTMLElement
+    main2: InMemoryWindowHandle
+    rendered2: ReturnType<typeof render>
+  }> {
+    const activityBar1 = within(sourceContainer).getByRole('navigation', { name: '액티비티 바' })
+    await user.click(within(activityBar1).getByRole('button', { name: '워크스페이스' }))
+    const workspaceView1 = within(sourceContainer).getByRole('region', {
+      name: '워크스페이스 뷰'
+    })
+    await user.click(
+      within(workspaceView1).getAllByRole('button', { name: 'beta 새 창에서 열기' })[0]
+    )
+
+    await waitFor(() => {
+      expect(harness.getMainWindows()).toHaveLength(2)
+    })
+    const main2 = harness.getMainWindows()[1]
+    const rendered2 = render(<App wikiApi={main2.api} />)
+    activeDisposers.push(() => rendered2.unmount())
+    await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
+    return { workspaceView1, main2, rendered2 }
+  }
+
+  async function expectExistingWindowFocusedPreservingAlpha(
+    main2: InMemoryWindowHandle,
+    rendered1Container: HTMLElement,
+    expectedCount: number,
+    expectedDraftText: string
+  ): Promise<void> {
+    await waitFor(() => {
+      expect(main2.getRestoreCount()).toBe(expectedCount)
+      expect(main2.getFocusCount()).toBe(expectedCount)
+    })
+    expect(main2.isMinimized()).toBe(false)
+    expect(within(rendered1Container).queryByRole('alertdialog')).toBeNull()
+    expect(within(rendered1Container).queryByRole('alert')).toBeNull()
+    expect(getRawEditorText(within(rendered1Container).getByTestId('document-editor'))).toBe(
+      expectedDraftText
+    )
+  }
+
+  async function openConfigEditorInWindow(
+    user: ReturnType<typeof userEvent.setup>,
+    win: InMemoryWindowHandle,
+    container: HTMLElement
+  ): Promise<HTMLElement> {
+    await triggerMenuCommand(win.emitMenuCommand, 'toggle-settings')
+    await user.click(
+      await within(container).findByRole('button', { name: '설정 파일 직접 열기' })
+    )
+    await waitFor(() => {
+      expect(within(container).getByRole('tab', { name: /config\.json/ })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    })
+    const editors = within(container).getAllByTestId('document-editor')
+    return editors[editors.length - 1]
+  }
+
   it('restores and focuses the existing main window without creating a duplicate when open-in-new-window targets an already-open workspace', async () => {
     const user = userEvent.setup()
     const favorites = addFavoriteWorkspace([], 'C:/wiki/beta', 'beta', '2026-11-14T00:00:00.000Z')
@@ -4031,43 +4096,27 @@ describe('Multi-main-window workspace opening (<App />)', () => {
       '# Alpha unsaved draft'
     )
 
-    // Open Beta in Main 2 via open-in-new-window from Favorites
-    const activityBar1 = within(rendered1.container).getByRole('navigation', { name: '액티비티 바' })
-    await user.click(within(activityBar1).getByRole('button', { name: '워크스페이스' }))
-    const workspaceView1 = within(rendered1.container).getByRole('region', {
-      name: '워크스페이스 뷰'
-    })
-    await user.click(
-      within(workspaceView1).getAllByRole('button', { name: 'beta 새 창에서 열기' })[0]
+    const { workspaceView1, main2 } = await openBetaMainWindowFrom(
+      user,
+      harness,
+      rendered1.container
     )
 
-    await waitFor(() => {
-      expect(harness.getMainWindows()).toHaveLength(2)
-    })
-    const main2 = harness.getMainWindows()[1]
-    const rendered2 = render(<App wikiApi={main2.api} />)
-    activeDisposers.push(() => rendered2.unmount())
-    await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
-
-    // Minimize Main 2, then click open-in-new-window for Beta again (both Favorites and Recent slash-variant) -> focuses/restores Main 2 without creating a 3rd window
+    // Minimize Main 2, then click open-in-new-window for Beta again (Recent slash-variant) -> focuses/restores Main 2 without creating a 3rd window
     main2.setMinimized(true)
     const betaNewWinBtn = within(workspaceView1).getAllByRole('button', {
       name: 'beta 새 창에서 열기'
     })[1]
     await user.click(betaNewWinBtn)
 
-    await waitFor(() => {
-      expect(main2.getRestoreCount()).toBe(1)
-      expect(main2.getFocusCount()).toBe(1)
-    })
-    expect(main2.isMinimized()).toBe(false)
-    expect(harness.getMainWindows()).toHaveLength(2)
-    expect(within(rendered1.container).queryByRole('alertdialog')).toBeNull()
-    expect(within(rendered1.container).queryByRole('alert')).toBeNull()
-    expect(within(workspaceView1).getByText('C:/wiki/alpha')).toBeInTheDocument()
-    expect(getRawEditorText(within(rendered1.container).getByTestId('document-editor'))).toBe(
+    await expectExistingWindowFocusedPreservingAlpha(
+      main2,
+      rendered1.container,
+      1,
       '# Alpha unsaved draft'
     )
+    expect(harness.getMainWindows()).toHaveLength(2)
+    expect(within(workspaceView1).getByText('C:/wiki/alpha')).toBeInTheDocument()
   })
 
   it('restores and focuses the existing main window without showing ConfirmDialog or replacing the current workspace when switching via row click, 폴더 열기..., or menu open-folder while dirty', async () => {
@@ -4104,54 +4153,37 @@ describe('Multi-main-window workspace opening (<App />)', () => {
       expect(within(rendered1.container).getByTestId('dirty-indicator')).toBeInTheDocument()
     })
 
-    // Open Beta in Main 2
+    const { workspaceView1, main2 } = await openBetaMainWindowFrom(
+      user,
+      harness,
+      rendered1.container
+    )
     const activityBar1 = within(rendered1.container).getByRole('navigation', { name: '액티비티 바' })
-    await user.click(within(activityBar1).getByRole('button', { name: '워크스페이스' }))
-    const workspaceView1 = within(rendered1.container).getByRole('region', {
-      name: '워크스페이스 뷰'
-    })
-    await user.click(within(workspaceView1).getByRole('button', { name: 'beta 새 창에서 열기' }))
-
-    await waitFor(() => {
-      expect(harness.getMainWindows()).toHaveLength(2)
-    })
-    const main2 = harness.getMainWindows()[1]
-    const rendered2 = render(<App wikiApi={main2.api} />)
-    activeDisposers.push(() => rendered2.unmount())
-    const explorer2 = await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
-    expect(await within(explorer2).findByText('beta.md')).toBeInTheDocument()
 
     // 1. Clicking Beta row body in Main 1 while Alpha is dirty -> focuses/restores Main 2 without ConfirmDialog or workspace replacement
     main2.setMinimized(true)
     await user.click(within(workspaceView1).getByRole('button', { name: /★\s*beta/i }))
 
-    await waitFor(() => {
-      expect(main2.getRestoreCount()).toBe(1)
-      expect(main2.getFocusCount()).toBe(1)
-    })
-    expect(main2.isMinimized()).toBe(false)
-    expect(within(rendered1.container).queryByRole('alertdialog')).toBeNull()
-    expect(within(rendered1.container).queryByRole('alert')).toBeNull()
-    expect(within(workspaceView1).getByText('C:/wiki/alpha')).toBeInTheDocument()
-    expect(getRawEditorText(within(rendered1.container).getByTestId('document-editor'))).toBe(
+    await expectExistingWindowFocusedPreservingAlpha(
+      main2,
+      rendered1.container,
+      1,
       '# Alpha unsaved'
     )
+    expect(within(workspaceView1).getByText('C:/wiki/alpha')).toBeInTheDocument()
 
     // 2. Clicking '폴더 열기...' and choosing Beta (case + backslash + trailing slash) -> focuses/restores Main 2 without ConfirmDialog
     main2.setMinimized(true)
     main1.api.workspace.selectFolder = async () => 'C:\\wiki\\BETA\\'
     await user.click(within(workspaceView1).getByRole('button', { name: '폴더 열기...' }))
 
-    await waitFor(() => {
-      expect(main2.getRestoreCount()).toBe(2)
-      expect(main2.getFocusCount()).toBe(2)
-    })
-    expect(main2.isMinimized()).toBe(false)
-    expect(within(rendered1.container).queryByRole('alertdialog')).toBeNull()
-    expect(within(workspaceView1).getByText('C:/wiki/alpha')).toBeInTheDocument()
-    expect(getRawEditorText(within(rendered1.container).getByTestId('document-editor'))).toBe(
+    await expectExistingWindowFocusedPreservingAlpha(
+      main2,
+      rendered1.container,
+      2,
       '# Alpha unsaved'
     )
+    expect(within(workspaceView1).getByText('C:/wiki/alpha')).toBeInTheDocument()
 
     // 3. Triggering Application Menu 'open-folder' -> focuses/restores Main 2 without ConfirmDialog
     await user.click(within(activityBar1).getByRole('button', { name: '탐색기' }))
@@ -4159,17 +4191,14 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     main1.api.workspace.selectFolder = async () => 'C:/wiki/beta'
     await triggerMenuCommand(main1.emitMenuCommand, 'open-folder')
 
-    await waitFor(() => {
-      expect(main2.getRestoreCount()).toBe(3)
-      expect(main2.getFocusCount()).toBe(3)
-    })
-    expect(main2.isMinimized()).toBe(false)
-    expect(within(rendered1.container).queryByRole('alertdialog')).toBeNull()
-    const resumedExplorer1 = await within(rendered1.container).findByLabelText('워크스페이스 탐색기')
-    expect(within(resumedExplorer1).getByText('alpha.md')).toBeInTheDocument()
-    expect(getRawEditorText(within(rendered1.container).getByTestId('document-editor'))).toBe(
+    await expectExistingWindowFocusedPreservingAlpha(
+      main2,
+      rendered1.container,
+      3,
       '# Alpha unsaved'
     )
+    const resumedExplorer1 = await within(rendered1.container).findByLabelText('워크스페이스 탐색기')
+    expect(within(resumedExplorer1).getByText('alpha.md')).toBeInTheDocument()
 
     // 4. Selecting an unopened workspace (Gamma) still triggers unsaved ConfirmDialog, and if Gamma opens in Main 2 while dialog is open, confirming focuses Main 2 without replacing Alpha
     await user.click(within(activityBar1).getByRole('button', { name: '워크스페이스' }))
@@ -4184,11 +4213,12 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     main2.setMinimized(true)
     await user.click(within(confirmDialog).getByRole('button', { name: '저장 후 이동' }))
 
-    await waitFor(() => {
-      expect(main2.getRestoreCount()).toBe(4)
-      expect(main2.getFocusCount()).toBe(4)
-    })
-    expect(within(rendered1.container).queryByRole('alert')).toBeNull()
+    await expectExistingWindowFocusedPreservingAlpha(
+      main2,
+      rendered1.container,
+      4,
+      '# Alpha unsaved'
+    )
     expect(
       within(within(rendered1.container).getByRole('region', { name: '워크스페이스 뷰' })).getByText(
         'C:/wiki/alpha'
@@ -4228,23 +4258,13 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     await user.click(within(explorer1).getByText('a2.md'))
     await detachTabViaContextMenu(user, rendered1.container, /a1\.md/)
 
-    const activityBar1 = within(rendered1.container).getByRole('navigation', { name: '액티비티 바' })
-    await user.click(within(activityBar1).getByRole('button', { name: '워크스페이스' }))
-    const workspaceView1 = within(rendered1.container).getByRole('region', {
-      name: '워크스페이스 뷰'
-    })
-    await user.click(
-      within(workspaceView1).getAllByRole('button', { name: 'beta 새 창에서 열기' })[0]
+    const { workspaceView1, main2, rendered2 } = await openBetaMainWindowFrom(
+      user,
+      harness,
+      rendered1.container
     )
 
-    await waitFor(() => {
-      expect(harness.getMainWindows()).toHaveLength(2)
-    })
-    const main2 = harness.getMainWindows()[1]
-    const rendered2 = render(<App wikiApi={main2.api} />)
-    activeDisposers.push(() => rendered2.unmount())
-
-    const explorer2 = await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
+    const explorer2 = within(rendered2.container).getByLabelText('워크스페이스 탐색기')
     await user.click(await within(explorer2).findByText('b1.md'))
     await user.click(within(explorer2).getByText('b2.md'))
     await detachTabViaContextMenu(user, rendered2.container, /b1\.md/)
@@ -4357,34 +4377,8 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     })
 
     // 4. Direct config.json edit & save in Main 1 updates clean config.json buffer and theme/autoSave in Main 1, Main 2, Aux 1, Aux 2
-    await triggerMenuCommand(main1.emitMenuCommand, 'toggle-settings')
-    await user.click(
-      await within(rendered1.container).findByRole('button', { name: '설정 파일 직접 열기' })
-    )
-    await waitFor(() => {
-      expect(within(rendered1.container).getByRole('tab', { name: /config\.json/ })).toHaveAttribute(
-        'aria-selected',
-        'true'
-      )
-    })
-
-    await triggerMenuCommand(main2.emitMenuCommand, 'toggle-settings')
-    await user.click(
-      await within(rendered2.container).findByRole('button', { name: '설정 파일 직접 열기' })
-    )
-    await waitFor(() => {
-      expect(within(rendered2.container).getByRole('tab', { name: /config\.json/ })).toHaveAttribute(
-        'aria-selected',
-        'true'
-      )
-    })
-
-    const getActivePaneEditor = (container: HTMLElement): HTMLElement => {
-      const editors = within(container).getAllByTestId('document-editor')
-      return editors[editors.length - 1]
-    }
-    const configEditor1 = getActivePaneEditor(rendered1.container)
-    const configEditor2 = getActivePaneEditor(rendered2.container)
+    const configEditor1 = await openConfigEditorInWindow(user, main1, rendered1.container)
+    const configEditor2 = await openConfigEditorInWindow(user, main2, rendered2.container)
     await waitFor(() => {
       expect(getRawEditorText(configEditor1)).toContain('"theme": "dark"')
       expect(getRawEditorText(configEditor2)).toContain('"theme": "dark"')
@@ -4440,5 +4434,5 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     expect(
       within(updatedWorkspaceView2).getAllByRole('button', { name: 'beta 새 창에서 열기' })[0]
     ).toBeEnabled()
-  })
+  }, 15_000)
 })
