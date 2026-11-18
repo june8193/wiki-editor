@@ -18,6 +18,7 @@ import {
   normalizeMermaidHeightPx,
   readViewportBox
 } from '../editor/mermaidContainFit'
+import type { MermaidSessionHeightBinding } from '../editor/mermaidHeightSession'
 import {
   type MermaidScrollResizeSession,
   startMermaidScrollResizeSession
@@ -67,9 +68,7 @@ export interface MermaidViewportState {
 export interface UseMermaidViewportOptions {
   hasSvg: boolean
   svgMarkup?: string | null
-  persistedHeightPx?: number | null
-  heightSyncKey?: string | number
-  onCustomHeightChange?: (nextHeightPx: number | null) => void
+  sessionHeight?: MermaidSessionHeightBinding
 }
 
 interface ViewportInternalState {
@@ -101,11 +100,11 @@ function isIdentityViewport(zoom: number, pan: { x: number; y: number }): boolea
 export function useMermaidViewport({
   hasSvg,
   svgMarkup = null,
-  persistedHeightPx = null,
-  heightSyncKey,
-  onCustomHeightChange
+  sessionHeight
 }: UseMermaidViewportOptions): MermaidViewportState {
-  const normalizedPersistedHeight = normalizeMermaidHeightPx(persistedHeightPx)
+  const normalizedPersistedHeight = normalizeMermaidHeightPx(sessionHeight?.persistedHeightPx)
+  const heightSyncKey = sessionHeight?.heightSyncKey
+  const onCustomHeightChange = sessionHeight?.onCustomHeightChange
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)

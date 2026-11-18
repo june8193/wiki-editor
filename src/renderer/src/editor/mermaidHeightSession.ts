@@ -87,13 +87,18 @@ export function getPersistedMermaidHeight(
   return normalizeMermaidHeightPx(mermaidHeights?.[String(blockIndex)])
 }
 
-/**
- * Resolves the tab-session persisted height and change callback for a single Mermaid block index.
- */
-export function useMermaidSessionHeight(blockIndex: number | undefined): {
+export interface MermaidSessionHeightBinding {
   persistedHeightPx: number | null
+  heightSyncKey: number | undefined
   onCustomHeightChange: ((nextHeightPx: number | null) => void) | undefined
-} {
+}
+
+/**
+ * Resolves the tab-session persisted height binding for a single Mermaid block index.
+ */
+export function useMermaidSessionHeight(
+  blockIndex: number | undefined
+): MermaidSessionHeightBinding {
   const { mermaidHeights, onMermaidHeightChange } = useContext(MermaidHeightSessionContext)
   const persistedHeightPx = getPersistedMermaidHeight(mermaidHeights, blockIndex)
   const hasValidIndex = isValidMermaidBlockIndex(blockIndex)
@@ -108,6 +113,7 @@ export function useMermaidSessionHeight(blockIndex: number | undefined): {
 
   return {
     persistedHeightPx,
+    heightSyncKey: hasValidIndex ? blockIndex : undefined,
     onCustomHeightChange: hasValidIndex && onMermaidHeightChange ? handleCustomHeightChange : undefined
   }
 }

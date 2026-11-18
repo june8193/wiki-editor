@@ -755,20 +755,6 @@ export function collectWysiwygMermaidPositions(doc: Editor['state']['doc']): num
 }
 
 /**
- * Resolves the 0-based Mermaid block occurrence index for a ProseMirror `codeBlock` position,
- * or `-1` when not found.
- */
-export function resolveWysiwygMermaidIndex(
-  doc: Editor['state']['doc'],
-  targetPos: number | undefined
-): number {
-  if (typeof targetPos !== 'number') {
-    return -1
-  }
-  return collectWysiwygMermaidPositions(doc).indexOf(targetPos)
-}
-
-/**
  * Inserts ingested images at the given range (or current selection), placing multi-image
  * batches into ordered paragraphs while preserving clean relative Markdown URLs.
  */

@@ -162,7 +162,7 @@ export function MermaidDiagram({
   sourceEndLine
 }: MermaidDiagramProps) {
   const [isHovered, setIsHovered] = useState(false)
-  const { persistedHeightPx, onCustomHeightChange } = useMermaidSessionHeight(blockIndex)
+  const sessionHeight = useMermaidSessionHeight(blockIndex)
 
   const { mermaidTheme, displaySvg, confirmedSvg, displayError } = useMermaidRenderState({
     code,
@@ -181,9 +181,7 @@ export function MermaidDiagram({
   const viewport = useMermaidViewport({
     hasSvg: displaySvg !== null,
     svgMarkup: displaySvg,
-    persistedHeightPx,
-    heightSyncKey: blockIndex,
-    onCustomHeightChange
+    sessionHeight
   })
 
   return (

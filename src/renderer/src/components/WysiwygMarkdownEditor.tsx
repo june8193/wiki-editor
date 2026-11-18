@@ -490,15 +490,19 @@ export function WysiwygMarkdownEditor({
     })
   })
 
-  const mermaidPositionsKey = useEditorState({
+  const mermaidPositions = useEditorState({
     editor,
-    selector: ({ editor: instance }): string =>
-      collectWysiwygMermaidPositions(instance.state.doc).join(',')
+    selector: ({ editor: instance }): readonly number[] =>
+      collectWysiwygMermaidPositions(instance.state.doc),
+    equalityFn: (prev, next) =>
+      next !== null &&
+      prev.length === next.length &&
+      prev.every((pos, index) => pos === next[index])
   })
 
   const mermaidContextValue = useMemo(
-    () => ({ theme, mermaidRenderer, documentTitle, mermaidPositionsKey }),
-    [documentTitle, mermaidPositionsKey, mermaidRenderer, theme]
+    () => ({ theme, mermaidRenderer, documentTitle, mermaidPositions }),
+    [documentTitle, mermaidPositions, mermaidRenderer, theme]
   )
 
   return (
