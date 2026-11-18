@@ -8,7 +8,7 @@ import type {
 import {
   serializePaneLayoutForWorkspace,
   type WorkspaceLayoutSnapshot
-} from '../stores/PaneTabStore'
+} from '../stores/workspaceLayoutPersistence'
 import { useWikiApi } from './useWikiApi'
 
 export const DEFAULT_WORKSPACE_STATE_SAVE_DEBOUNCE_MS = 250

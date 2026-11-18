@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SharedBufferHubEvent } from '@shared/documentBuffer'
-import { DocumentBufferStore } from '@shared/documentBufferStore'
+import { createDocumentBuffer, DocumentBufferStore } from '@shared/documentBufferStore'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import { createHubBufferApi } from '../test/inMemoryWikiHarness'
 import { PaneTabStore } from './PaneTabStore'
 import { RendererBufferSyncClient } from './RendererBufferSyncClient'
-import { restoreWorkspacePaneLayout } from './workspaceLayoutRestore'
+import {
+  restoreWorkspacePaneLayout,
+  serializePaneLayoutForWorkspace
+} from './workspaceLayoutPersistence'
 
 function createRestoreTestHarness(initialFiles: ReadonlyArray<[string, string]>) {
   const files = new Map<string, string>(initialFiles)
@@ -56,7 +59,89 @@ function createRestoreTestHarness(initialFiles: ReadonlyArray<[string, string]>)
   }
 }
 
-describe('restoreWorkspacePaneLayout', () => {
+describe('workspaceLayoutPersistence', () => {
+  it('serializes main pane layout excluding diff, config, and outside-root entries', () => {
+    const store = new PaneTabStore()
+    const aTab = store.openTab('c:/wiki/alpha/a.md', {
+      mode: 'wysiwyg',
+      cursor: { selectionStart: 2, selectionEnd: 6 },
+      scrollTop: 140,
+      splitPreviewRatio: 0.35
+    })
+    store.openTab('c:/wiki/alpha/b.md', {
+      paneId: 'secondary',
+      mode: 'split',
+      splitPreviewRatio: 0.7
+    })
+    store.openDiffTab({ kind: 'unstaged', path: 'a.md', status: 'M' }, { paneId: 'secondary' })
+    store.openTab('c:/users/test/config.json', { paneId: 'primary' })
+    store.openTab('c:/outside/secret.md', { paneId: 'secondary' })
+    store.setSplitMode('vertical')
+    store.setSplitRatio(0.62)
+    store.activateTab('primary', aTab.id)
+    store.focusPane('secondary')
+
+    const buffers = {
+      'c:/wiki/alpha/a.md': createDocumentBuffer({
+        kind: 'workspace',
+        path: 'C:\\wiki\\alpha\\a.md',
+        content: '# A'
+      }),
+      'c:/wiki/alpha/b.md': createDocumentBuffer({
+        kind: 'workspace',
+        path: 'C:\\wiki\\alpha\\b.md',
+        content: '# B'
+      }),
+      'c:/users/test/config.json': createDocumentBuffer({
+        kind: 'config',
+        path: 'C:\\Users\\test\\config.json',
+        content: '{}'
+      }),
+      'c:/outside/secret.md': createDocumentBuffer({
+        kind: 'workspace',
+        path: 'C:\\outside\\secret.md',
+        content: '# Secret'
+      })
+    }
+
+    expect(
+      serializePaneLayoutForWorkspace('C:\\wiki\\alpha', {
+        layout: store.getSnapshot(),
+        buffers
+      })
+    ).toEqual({
+      splitMode: 'vertical',
+      splitRatio: 0.62,
+      activePaneId: 'secondary',
+      panes: {
+        primary: {
+          tabs: [
+            {
+              path: 'C:\\wiki\\alpha\\a.md',
+              mode: 'wysiwyg',
+              cursor: { selectionStart: 2, selectionEnd: 6 },
+              scrollTop: 140,
+              splitPreviewRatio: 0.35
+            }
+          ],
+          activeTabPath: 'C:\\wiki\\alpha\\a.md'
+        },
+        secondary: {
+          tabs: [
+            {
+              path: 'C:\\wiki\\alpha\\b.md',
+              mode: 'split',
+              cursor: { selectionStart: 0, selectionEnd: 0 },
+              scrollTop: 0,
+              splitPreviewRatio: 0.7
+            }
+          ],
+          activeTabPath: 'C:\\wiki\\alpha\\b.md'
+        }
+      }
+    })
+  })
+
   it('restores valid tabs silently, skips missing text/image files, promotes secondary when primary empties, preserves config, and respects cancellation', async () => {
     const harness = createRestoreTestHarness([
       ['C:/wiki/keep.md', '# Keep'],

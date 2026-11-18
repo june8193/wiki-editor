@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { resolveNormalizedWorkspacePath, resolveWorkspaceChildPath } from './workspace'
 import {
-  filterPersistedPaneTabsForWorkspace,
+  mapValidWorkspaceTabs,
   normalizeWorkspaceStateDocument,
   reconcileLoadedWorkspaceLayout,
   reconcilePersistedWorkspaceLayout,
@@ -202,26 +202,23 @@ describe('workspace path security and workspace state normalization', () => {
   })
 
   it('filters candidate pane tabs inside root and reconciles loaded workspace layouts', () => {
-    const filtered = filterPersistedPaneTabsForWorkspace('/ws', {
-      tabs: [
-        {
-          path: '/ws/docs/../a.md',
-          mode: 'raw',
-          cursor: { selectionStart: 1, selectionEnd: 2 },
-          scrollTop: 0,
-          splitPreviewRatio: 0.5
-        },
-        {
-          path: '/outside/secret.md',
-          mode: 'raw',
-          cursor: { selectionStart: 0, selectionEnd: 0 },
-          scrollTop: 0,
-          splitPreviewRatio: 0.5
-        }
-      ],
-      activeTabPath: '/ws/a.md'
-    })
-    expect(filtered.hadInvalid).toBe(true)
+    const filtered = mapValidWorkspaceTabs('/ws', [
+      {
+        path: '/ws/docs/../a.md',
+        mode: 'raw',
+        cursor: { selectionStart: 1, selectionEnd: 2 },
+        scrollTop: 0,
+        splitPreviewRatio: 0.5
+      },
+      {
+        path: '/outside/secret.md',
+        mode: 'raw',
+        cursor: { selectionStart: 0, selectionEnd: 0 },
+        scrollTop: 0,
+        splitPreviewRatio: 0.5
+      }
+    ])
+    expect(filtered.hadDroppedTabs).toBe(true)
     expect(filtered.tabs.map((t) => t.path)).toEqual(['/ws/a.md'])
 
     const result = reconcileLoadedWorkspaceLayout(

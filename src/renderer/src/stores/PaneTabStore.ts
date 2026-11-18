@@ -1,11 +1,10 @@
-import type { BufferKeyRemap, DocumentBufferSnapshot } from '@shared/documentBuffer'
+import type { BufferKeyRemap } from '@shared/documentBuffer'
 import type { GitDiffRequest } from '@shared/git'
 import {
   clampSplitRatio,
   type CursorPosition,
   DEFAULT_SPLIT_RATIO,
   type EditorMode,
-  extractTabViewState,
   MAX_SPLIT_RATIO,
   MIN_SPLIT_RATIO,
   normalizeSplitRatio,
@@ -16,14 +15,6 @@ import {
   type TabTransferPayload,
   type TabViewState
 } from '@shared/window'
-import { resolveNormalizedWorkspacePath, resolveWorkspaceChildPath } from '@shared/workspace'
-import {
-  type PersistedWorkspacePaneLayout,
-  type PersistedWorkspacePaneState,
-  type PersistedWorkspaceTabState,
-  createEmptyPersistedWorkspaceLayout,
-  reconcilePersistedWorkspaceLayout
-} from '@shared/workspaceState'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 
 export type { CursorPosition, EditorMode, PaneId, SplitDirection, SplitMode, TabViewState }
@@ -74,11 +65,6 @@ export interface PaneLayoutState {
   splitRatio: number
   activePaneId: PaneId
   panes: Record<PaneId, PaneState>
-}
-
-export interface WorkspaceLayoutSnapshot {
-  layout: PaneLayoutState
-  buffers: DocumentBufferSnapshot
 }
 
 export interface OpenTabOptions extends Partial<TabViewState> {
@@ -318,54 +304,6 @@ export function countLayoutTabs(layout: PaneLayoutState): number {
   return count
 }
 
-/**
- * Serializes the main window's pane layout into a persisted workspace layout, excluding diff tabs,
- * non-workspace buffers (such as global config.json), and paths outside the workspace root.
- */
-export function serializePaneLayoutForWorkspace(
-  rootPath: string,
-  { layout, buffers }: WorkspaceLayoutSnapshot
-): PersistedWorkspacePaneLayout {
-  const normalizedRoot = resolveNormalizedWorkspacePath(rootPath)
-  if (!normalizedRoot) {
-    return createEmptyPersistedWorkspaceLayout()
-  }
-
-  const serializePane = (pane: PaneState): PersistedWorkspacePaneState => {
-    const tabs: PersistedWorkspaceTabState[] = []
-    let activeTabPath: string | null = null
-
-    for (const tab of pane.tabs) {
-      if (tab.kind !== 'document') continue
-      const buffer = buffers[tab.bufferKey]
-      if (!buffer || buffer.kind !== 'workspace') continue
-      const validPath = resolveWorkspaceChildPath(normalizedRoot, buffer.path)
-      if (!validPath) continue
-
-      const viewState = extractTabViewState(tab)
-      tabs.push({
-        path: validPath,
-        ...viewState,
-        splitPreviewRatio: normalizeSplitRatio(tab.splitPreviewRatio)
-      })
-      if (tab.id === pane.activeTabId) {
-        activeTabPath = validPath
-      }
-    }
-
-    return { tabs, activeTabPath }
-  }
-
-  return reconcilePersistedWorkspaceLayout({
-    splitMode: layout.splitMode,
-    splitRatio: layout.splitRatio,
-    activePaneId: layout.activePaneId,
-    panes: {
-      primary: serializePane(layout.panes.primary),
-      secondary: serializePane(layout.panes.secondary)
-    }
-  })
-}
 /**
  * Manages up to 2 split panes, independent per-pane tab bars, and lightweight inactive tab state.
  */

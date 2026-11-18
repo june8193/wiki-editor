@@ -14,8 +14,7 @@ import {
   getPaneActiveTab,
   PaneTabStore,
   type PaneTabTransition,
-  type TabItem,
-  type WorkspaceLayoutSnapshot
+  type TabItem
 } from '../stores/PaneTabStore'
 import {
   type DirtyTabClosePrompt,
@@ -25,8 +24,9 @@ import {
 import { RendererTabDragController } from '../stores/RendererTabDragController'
 import {
   type RestoreWorkspaceLayoutOptions,
-  restoreWorkspacePaneLayout
-} from '../stores/workspaceLayoutRestore'
+  restoreWorkspacePaneLayout,
+  type WorkspaceLayoutSnapshot
+} from '../stores/workspaceLayoutPersistence'
 import { useWikiApi } from './useWikiApi'
 
 export type { OpenedWorkspaceDocument }

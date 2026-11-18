@@ -4,10 +4,8 @@ import {
   canSplitWithTab,
   normalizeSplitRatio,
   PaneTabStore,
-  serializePaneLayoutForWorkspace,
   type PaneTabTransition
 } from './PaneTabStore'
-import { createDocumentBuffer } from '@shared/documentBufferStore'
 
 describe('PaneTabStore', () => {
   it('opens tabs, deduplicates within a pane, switches active tab, and selects neighbor on close', () => {
@@ -625,65 +623,13 @@ describe('PaneTabStore', () => {
     expect(afterSecond.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id, commitTab.id])
   })
 
-  it('serializes workspace tabs excluding diff, config, and outside-root entries and restores layout while preserving config tabs', () => {
+  it('restores layout while preserving config tabs', () => {
     const store = new PaneTabStore()
-    const aTab = store.openTab('c:/wiki/alpha/a.md', {
-      mode: 'wysiwyg',
-      cursor: { selectionStart: 2, selectionEnd: 6 },
-      scrollTop: 140,
-      splitPreviewRatio: 0.35
-    })
-    const bTab = store.openTab('c:/wiki/alpha/b.md', { paneId: 'secondary', mode: 'split', splitPreviewRatio: 0.7 })
+    store.openTab('c:/wiki/alpha/a.md', { mode: 'wysiwyg' })
+    const bTab = store.openTab('c:/wiki/alpha/b.md', { paneId: 'secondary', mode: 'split' })
     store.openDiffTab({ kind: 'unstaged', path: 'a.md', status: 'M' }, { paneId: 'secondary' })
     store.openTab('c:/users/test/config.json', { paneId: 'primary' })
     store.openTab('c:/outside/secret.md', { paneId: 'secondary' })
-    store.setSplitMode('vertical')
-    store.setSplitRatio(0.62)
-    store.activateTab('primary', aTab.id)
-    store.focusPane('secondary')
-
-    const buffers = {
-      'c:/wiki/alpha/a.md': createDocumentBuffer({ kind: 'workspace', path: 'C:\\wiki\\alpha\\a.md', content: '# A' }),
-      'c:/wiki/alpha/b.md': createDocumentBuffer({ kind: 'workspace', path: 'C:\\wiki\\alpha\\b.md', content: '# B' }),
-      'c:/users/test/config.json': createDocumentBuffer({ kind: 'config', path: 'C:\\Users\\test\\config.json', content: '{}' }),
-      'c:/outside/secret.md': createDocumentBuffer({ kind: 'workspace', path: 'C:\\outside\\secret.md', content: '# Secret' })
-    }
-
-    const serialized = serializePaneLayoutForWorkspace('C:\\wiki\\alpha', {
-      layout: store.getSnapshot(),
-      buffers
-    })
-    expect(serialized).toEqual({
-      splitMode: 'vertical',
-      splitRatio: 0.62,
-      activePaneId: 'secondary',
-      panes: {
-        primary: {
-          tabs: [
-            {
-              path: 'C:\\wiki\\alpha\\a.md',
-              mode: 'wysiwyg',
-              cursor: { selectionStart: 2, selectionEnd: 6 },
-              scrollTop: 140,
-              splitPreviewRatio: 0.35
-            }
-          ],
-          activeTabPath: 'C:\\wiki\\alpha\\a.md'
-        },
-        secondary: {
-          tabs: [
-            {
-              path: 'C:\\wiki\\alpha\\b.md',
-              mode: 'split',
-              cursor: { selectionStart: 0, selectionEnd: 0 },
-              scrollTop: 0,
-              splitPreviewRatio: 0.7
-            }
-          ],
-          activeTabPath: 'C:\\wiki\\alpha\\b.md'
-        }
-      }
-    })
 
     // Simulate workspace switch keeping only config.json open, then restoring workspace beta layout
     store.closeTabsByBufferKeys(['c:/wiki/alpha/a.md', 'c:/wiki/alpha/b.md', 'c:/outside/secret.md'])

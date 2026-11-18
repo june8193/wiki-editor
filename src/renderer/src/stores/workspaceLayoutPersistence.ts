@@ -1,6 +1,6 @@
 import { isSupportedImageFile } from '@shared/assets'
-import type { DocumentBuffer } from '@shared/documentBuffer'
-import { extractTabViewState } from '@shared/window'
+import type { DocumentBuffer, DocumentBufferSnapshot } from '@shared/documentBuffer'
+import { extractTabViewState, normalizeSplitRatio } from '@shared/window'
 import {
   getParentPath,
   getWorkspaceDisplayName,
@@ -9,21 +9,81 @@ import {
   readDirectoriesSettled,
   reanchorPathInWorkspace,
   resolveNormalizedWorkspacePath,
+  resolveWorkspaceChildPath,
   type WorkspaceEntry
 } from '@shared/workspace'
 import {
   createEmptyPersistedWorkspaceLayout,
-  filterPersistedPaneTabsForWorkspace,
+  mapValidWorkspaceTabs,
   type PersistedWorkspacePaneLayout,
   type PersistedWorkspacePaneState,
   type PersistedWorkspaceTabState,
-  reconcileLoadedWorkspaceLayout
+  reconcileLoadedWorkspaceLayout,
+  reconcilePersistedWorkspaceLayout
 } from '@shared/workspaceState'
-import type { RestoreWorkspaceLayoutInput } from './PaneTabStore'
+import type {
+  PaneLayoutState,
+  PaneState,
+  RestoreWorkspaceLayoutInput
+} from './PaneTabStore'
 import type {
   RendererBufferSyncClient,
   WorkspaceFileOpenRequest
 } from './RendererBufferSyncClient'
+
+export interface WorkspaceLayoutSnapshot {
+  layout: PaneLayoutState
+  buffers: DocumentBufferSnapshot
+}
+
+/**
+ * Serializes the main window's pane layout into a persisted workspace layout, excluding diff tabs,
+ * non-workspace buffers (such as global config.json), and paths outside the workspace root.
+ */
+export function serializePaneLayoutForWorkspace(
+  rootPath: string,
+  { layout, buffers }: WorkspaceLayoutSnapshot
+): PersistedWorkspacePaneLayout {
+  const normalizedRoot = resolveNormalizedWorkspacePath(rootPath)
+  if (!normalizedRoot) {
+    return createEmptyPersistedWorkspaceLayout()
+  }
+
+  const serializePane = (pane: PaneState): PersistedWorkspacePaneState => {
+    const tabs: PersistedWorkspaceTabState[] = []
+    let activeTabPath: string | null = null
+
+    for (const tab of pane.tabs) {
+      if (tab.kind !== 'document') continue
+      const buffer = buffers[tab.bufferKey]
+      if (!buffer || buffer.kind !== 'workspace') continue
+      const validPath = resolveWorkspaceChildPath(normalizedRoot, buffer.path)
+      if (!validPath) continue
+
+      const viewState = extractTabViewState(tab)
+      tabs.push({
+        path: validPath,
+        ...viewState,
+        splitPreviewRatio: normalizeSplitRatio(tab.splitPreviewRatio)
+      })
+      if (tab.id === pane.activeTabId) {
+        activeTabPath = validPath
+      }
+    }
+
+    return { tabs, activeTabPath }
+  }
+
+  return reconcilePersistedWorkspaceLayout({
+    splitMode: layout.splitMode,
+    splitRatio: layout.splitRatio,
+    activePaneId: layout.activePaneId,
+    panes: {
+      primary: serializePane(layout.panes.primary),
+      secondary: serializePane(layout.panes.secondary)
+    }
+  })
+}
 
 export interface RestoreWorkspaceLayoutOptions {
   rootPath: string
@@ -212,15 +272,15 @@ export async function restoreWorkspacePaneLayout(
     return emptyResult(true)
   }
 
-  const primaryFiltered = filterPersistedPaneTabsForWorkspace(
+  const primaryFiltered = mapValidWorkspaceTabs(
     normalizedRoot,
-    options.persistedLayout.panes.primary
+    options.persistedLayout.panes.primary.tabs
   )
-  const secondaryFiltered = filterPersistedPaneTabsForWorkspace(
+  const secondaryFiltered = mapValidWorkspaceTabs(
     normalizedRoot,
-    options.persistedLayout.panes.secondary
+    options.persistedLayout.panes.secondary.tabs
   )
-  let hadPrunedTabs = primaryFiltered.hadInvalid || secondaryFiltered.hadInvalid
+  let hadPrunedTabs = primaryFiltered.hadDroppedTabs || secondaryFiltered.hadDroppedTabs
 
   if (primaryFiltered.tabs.length === 0 && secondaryFiltered.tabs.length === 0) {
     const hadNonEmptyLayout =

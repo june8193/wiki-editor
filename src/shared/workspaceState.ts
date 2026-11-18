@@ -287,36 +287,28 @@ function toSinglePaneLayout(
   }
 }
 
-function mapValidWorkspaceTabs(
+/**
+ * Filters and maps candidate workspace tab states to valid strict children inside `normalizedRoot`.
+ */
+export function mapValidWorkspaceTabs(
   normalizedRoot: string,
   candidates: readonly PersistedWorkspaceTabState[],
   resolveCandidatePath: (tabPath: string) => string | null = (tabPath) => tabPath
-): { tabs: PersistedWorkspaceTabState[]; hadDropped: boolean } {
+): { tabs: PersistedWorkspaceTabState[]; hadDroppedTabs: boolean } {
   const tabs: PersistedWorkspaceTabState[] = []
-  let hadDropped = false
+  let hadDroppedTabs = false
   for (const tab of candidates) {
     const resolvedInputPath = resolveCandidatePath(tab.path)
     const canonicalChildPath = resolvedInputPath
       ? resolveWorkspaceChildPath(normalizedRoot, resolvedInputPath)
       : null
     if (!canonicalChildPath) {
-      hadDropped = true
+      hadDroppedTabs = true
       continue
     }
     tabs.push({ ...tab, path: canonicalChildPath })
   }
-  return { tabs, hadDropped }
-}
-
-/**
- * Filters a persisted pane's candidate tabs to valid strict children inside `normalizedRoot`.
- */
-export function filterPersistedPaneTabsForWorkspace(
-  normalizedRoot: string,
-  pane: PersistedWorkspacePaneState
-): { tabs: PersistedWorkspaceTabState[]; hadInvalid: boolean } {
-  const { tabs, hadDropped } = mapValidWorkspaceTabs(normalizedRoot, pane.tabs)
-  return { tabs, hadInvalid: hadDropped }
+  return { tabs, hadDroppedTabs }
 }
 
 /**
@@ -356,7 +348,7 @@ export function reconcileLoadedWorkspaceLayout(
         }
       }
     }),
-    hadDroppedTabs: primaryMapped.hadDropped || secondaryMapped.hadDropped
+    hadDroppedTabs: primaryMapped.hadDroppedTabs || secondaryMapped.hadDroppedTabs
   }
 }
 
