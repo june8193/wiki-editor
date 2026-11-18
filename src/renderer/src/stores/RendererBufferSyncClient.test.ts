@@ -722,12 +722,8 @@ describe('RendererBufferSyncClient race guards', () => {
     }
   })
 
-  it('restores workspace layout, skips missing text/image files silently, promotes secondary when primary empties, preserves config, and respects cancellation', async () => {
-    const files = new Map<string, string>([
-      ['C:/wiki/keep.md', '# Keep'],
-      ['C:/wiki/sec.md', '# Secondary'],
-      ['C:/wiki/assets/ok.png', '<png>']
-    ])
+  it('opens files silently without raising errors and commits restored layouts while preserving config tabs', async () => {
+    const files = new Map<string, string>([['C:/wiki/sec.md', '# Secondary']])
     const hub = new SharedDocumentBufferHub({
       initialAutoSaveConfig: { autoSave: false },
       storage: {
@@ -749,88 +745,18 @@ describe('RendererBufferSyncClient race guards', () => {
 
     try {
       await win1.client.openConfigDocument()
-      expect(win1.tabStore.getBufferKeys()).toEqual(['c:/users/test/config.json'])
       win1.onError.mockClear()
 
-      // 1. Primary has only missing text & deleted image + outside path; secondary has valid sec.md -> promotes sec.md to primary in single mode
-      const promotedResult = await win1.client.restoreWorkspaceLayout({
-        rootPath: 'C:\\wiki',
-        persistedLayout: {
-          splitMode: 'vertical',
-          splitRatio: 0.4,
-          activePaneId: 'secondary',
-          panes: {
-            primary: {
-              tabs: [
-                {
-                  path: 'C:\\wiki\\missing.md',
-                  mode: 'raw',
-                  cursor: { selectionStart: 0, selectionEnd: 0 },
-                  scrollTop: 0,
-                  splitPreviewRatio: 0.5
-                },
-                {
-                  path: 'C:\\wiki\\assets\\deleted.png',
-                  mode: 'raw',
-                  cursor: { selectionStart: 0, selectionEnd: 0 },
-                  scrollTop: 0,
-                  splitPreviewRatio: 0.5
-                },
-                {
-                  path: 'C:\\outside\\secret.md',
-                  mode: 'raw',
-                  cursor: { selectionStart: 0, selectionEnd: 0 },
-                  scrollTop: 0,
-                  splitPreviewRatio: 0.5
-                }
-              ],
-              activeTabPath: 'C:\\wiki\\missing.md'
-            },
-            secondary: {
-              tabs: [
-                {
-                  path: 'C:\\wiki\\sec.md',
-                  mode: 'preview',
-                  cursor: { selectionStart: 0, selectionEnd: 0 },
-                  scrollTop: 75,
-                  splitPreviewRatio: 0.5
-                }
-              ],
-              activeTabPath: 'C:\\wiki\\sec.md'
-            }
-          }
-        },
-        readDir: async (dirPath) => {
-          if (dirPath.replace(/\\/g, '/').toLowerCase() === 'c:/wiki/assets') {
-            return [
-              {
-                name: 'ok.png',
-                path: 'C:/wiki/assets/ok.png',
-                relativePath: 'assets/ok.png',
-                kind: 'file'
-              }
-            ]
-          }
-          return []
-        }
-      })
-
+      const opened = await win1.client.openWorkspaceFilesSilently([
+        { key: 'c:/wiki/missing.md', loadPath: 'C:\\wiki\\missing.md', name: 'missing.md' },
+        { key: 'c:/wiki/sec.md', loadPath: 'C:\\wiki\\sec.md', name: 'sec.md' }
+      ])
       expect(win1.onError).not.toHaveBeenCalled()
-      expect(promotedResult.restored).toBe(true)
-      expect(promotedResult.hadPrunedTabs).toBe(true)
-      expect(promotedResult.reconciledLayout.splitMode).toBe('single')
-      expect(win1.tabStore.getSnapshot().splitMode).toBe('single')
-      expect(win1.tabStore.getSnapshot().activePaneId).toBe('primary')
-      expect(win1.tabStore.getBufferKeys()).toEqual(['c:/wiki/sec.md', 'c:/users/test/config.json'])
-      expect(win1.tabStore.getSnapshot().panes.primary.tabs[0]).toMatchObject({
-        mode: 'preview',
-        scrollTop: 75
-      })
+      expect([...opened.keys()]).toEqual(['c:/wiki/sec.md'])
 
-      // 2. Cancelled restore leaves existing tabs untouched
-      const cancelledResult = await win1.client.restoreWorkspaceLayout({
-        rootPath: 'C:\\wiki',
-        persistedLayout: {
+      const committed = win1.client.commitRestoredWorkspaceLayout(
+        opened.values(),
+        (resolvedKeyByPathKey) => ({
           splitMode: 'single',
           splitRatio: 0.5,
           activePaneId: 'primary',
@@ -838,24 +764,35 @@ describe('RendererBufferSyncClient race guards', () => {
             primary: {
               tabs: [
                 {
-                  path: 'C:\\wiki\\keep.md',
-                  mode: 'raw',
+                  bufferKey: resolvedKeyByPathKey.get('c:/wiki/sec.md')!,
+                  mode: 'preview',
                   cursor: { selectionStart: 0, selectionEnd: 0 },
-                  scrollTop: 0,
+                  scrollTop: 40,
                   splitPreviewRatio: 0.5
                 }
               ],
-              activeTabPath: 'C:\\wiki\\keep.md'
+              activeTabKey: resolvedKeyByPathKey.get('c:/wiki/sec.md')!
             },
-            secondary: { tabs: [], activeTabPath: null }
+            secondary: { tabs: [], activeTabKey: null }
           }
-        },
-        isCancelled: () => true
-      })
-      expect(cancelledResult.restored).toBe(false)
+        })
+      )
+      expect(committed).toBe(true)
       expect(win1.tabStore.getBufferKeys()).toEqual(['c:/wiki/sec.md', 'c:/users/test/config.json'])
-    } finally {
+
       stop1()
+      expect(
+        win1.client.commitRestoredWorkspaceLayout([], () => ({
+          splitMode: 'single',
+          splitRatio: 0.5,
+          activePaneId: 'primary',
+          panes: {
+            primary: { tabs: [], activeTabKey: null },
+            secondary: { tabs: [], activeTabKey: null }
+          }
+        }))
+      ).toBe(false)
+    } finally {
       win1.detach()
       hub.dispose()
     }

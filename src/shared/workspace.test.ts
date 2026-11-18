@@ -16,6 +16,8 @@ import {
   joinWorkspacePath,
   matchPathSeparators,
   normalizeWorkspacePath,
+  readDirectoriesSettled,
+  reanchorPathInWorkspace,
   recordRecentWorkspace,
   remapPathPrefix,
   removeFavoriteWorkspace,
@@ -297,6 +299,24 @@ describe('shared workspace path and favorites helpers', () => {
     ).toEqual([
       { path: 'c:/wiki/docs/', kind: 'directory' },
       { path: 'C:\\wiki\\docs-other\\note.md', kind: 'file' }
+    ])
+  })
+
+  it('re-anchors nested paths onto root casing/separators and collects settled directory reads', async () => {
+    expect(reanchorPathInWorkspace('C:/Wiki/Notes', 'c:\\wiki\\notes\\sub\\a.md')).toBe(
+      'C:/Wiki/Notes/sub/a.md'
+    )
+    expect(reanchorPathInWorkspace('/ws/root', '/outside/a.md')).toBe('/outside/a.md')
+
+    const readDir = async (dirPath = '') => {
+      if (dirPath === '/ws/missing') throw new Error('ENOENT')
+      return [{ name: 'ok.md', path: `${dirPath}/ok.md`, relativePath: 'ok.md', kind: 'file' as const }]
+    }
+    expect(await readDirectoriesSettled(readDir, ['/ws/docs', '/ws/missing'])).toEqual([
+      {
+        dirPath: '/ws/docs',
+        entries: [{ name: 'ok.md', path: '/ws/docs/ok.md', relativePath: 'ok.md', kind: 'file' }]
+      }
     ])
   })
 })

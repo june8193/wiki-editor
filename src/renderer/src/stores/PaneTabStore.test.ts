@@ -649,7 +649,10 @@ describe('PaneTabStore', () => {
       'c:/outside/secret.md': createDocumentBuffer({ kind: 'workspace', path: 'C:\\outside\\secret.md', content: '# Secret' })
     }
 
-    const serialized = serializePaneLayoutForWorkspace('C:\\wiki\\alpha', store.getSnapshot(), buffers)
+    const serialized = serializePaneLayoutForWorkspace('C:\\wiki\\alpha', {
+      layout: store.getSnapshot(),
+      buffers
+    })
     expect(serialized).toEqual({
       splitMode: 'vertical',
       splitRatio: 0.62,

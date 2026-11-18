@@ -6,7 +6,8 @@ import {
   isMarkdownFileName,
   isNestedOrSameWorkspacePath,
   isSameWorkspacePath,
-  joinWorkspacePath,
+  readDirectoriesSettled,
+  reanchorPathInWorkspace,
   remapPathPrefix,
   toWorkspaceRelativePath,
   WorkspaceChangeEvent,
@@ -68,36 +69,11 @@ function resolveExpandedCandidatePaths(
     return { candidates: [], hadInvalidEntries: false }
   }
   const validDirs = filterExpandedDirsForWorkspace(info.rootPath, persistedState.expandedDirs)
-  const candidates = validDirs.map((validDir) => {
-    const rel = toWorkspaceRelativePath(info.rootPath, validDir)
-    return rel ? joinWorkspacePath(info.rootPath, rel) : validDir
-  })
+  const candidates = validDirs.map((validDir) => reanchorPathInWorkspace(info.rootPath, validDir))
   return {
     candidates,
     hadInvalidEntries: validDirs.length < persistedState.expandedDirs.length
   }
-}
-
-async function readDirectoriesSettled(
-  readDir: (dirPath?: string) => Promise<WorkspaceEntry[]>,
-  dirPaths: readonly string[]
-): Promise<Array<{ dirPath: string; entries: WorkspaceEntry[] }>> {
-  if (dirPaths.length === 0) {
-    return []
-  }
-  const settled = await Promise.allSettled(
-    dirPaths.map(async (dirPath) => ({
-      dirPath,
-      entries: await readDir(dirPath)
-    }))
-  )
-  const loaded: Array<{ dirPath: string; entries: WorkspaceEntry[] }> = []
-  for (const result of settled) {
-    if (result.status === 'fulfilled') {
-      loaded.push(result.value)
-    }
-  }
-  return loaded
 }
 
 interface UseWorkspaceTreeOptions {

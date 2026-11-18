@@ -288,6 +288,73 @@ function toSinglePaneLayout(
 }
 
 /**
+ * Filters a persisted pane's candidate tabs to valid strict children inside `normalizedRoot`.
+ */
+export function filterPersistedPaneTabsForWorkspace(
+  normalizedRoot: string,
+  pane: PersistedWorkspacePaneState
+): { tabs: PersistedWorkspaceTabState[]; hadInvalid: boolean } {
+  const tabs: PersistedWorkspaceTabState[] = []
+  let hadInvalid = false
+  for (const tab of pane.tabs) {
+    const validChild = resolveWorkspaceChildPath(normalizedRoot, tab.path)
+    if (!validChild) {
+      hadInvalid = true
+      continue
+    }
+    tabs.push({ ...tab, path: validChild })
+  }
+  return { tabs, hadInvalid }
+}
+
+/**
+ * Reconciles a candidate persisted pane layout against successfully loaded canonical workspace paths.
+ */
+export function reconcileLoadedWorkspaceLayout(
+  normalizedRoot: string,
+  persistedLayout: PersistedWorkspacePaneLayout,
+  primaryCandidates: readonly PersistedWorkspaceTabState[],
+  secondaryCandidates: readonly PersistedWorkspaceTabState[],
+  resolveLoadedPath: (tabPath: string) => string | null
+): { reconciledLayout: PersistedWorkspacePaneLayout; hadDroppedLoaded: boolean } {
+  let hadDroppedLoaded = false
+  const buildLoadedPane = (
+    candidates: readonly PersistedWorkspaceTabState[],
+    activeTabPath: string | null
+  ): PersistedWorkspacePaneState => {
+    const tabs: PersistedWorkspaceTabState[] = []
+    for (const tab of candidates) {
+      const loadedPath = resolveLoadedPath(tab.path)
+      const canonicalChildPath = loadedPath
+        ? resolveWorkspaceChildPath(normalizedRoot, loadedPath)
+        : null
+      if (!canonicalChildPath) {
+        hadDroppedLoaded = true
+        continue
+      }
+      tabs.push({ ...tab, path: canonicalChildPath })
+    }
+    return { tabs, activeTabPath }
+  }
+
+  return {
+    reconciledLayout: reconcilePersistedWorkspaceLayout({
+      splitMode: persistedLayout.splitMode,
+      splitRatio: persistedLayout.splitRatio,
+      activePaneId: persistedLayout.activePaneId,
+      panes: {
+        primary: buildLoadedPane(primaryCandidates, persistedLayout.panes.primary.activeTabPath),
+        secondary: buildLoadedPane(
+          secondaryCandidates,
+          persistedLayout.panes.secondary.activeTabPath
+        )
+      }
+    }),
+    hadDroppedLoaded
+  }
+}
+
+/**
  * Reconciles a pane layout so empty secondary collapses to single mode, empty primary promotes
  * secondary tabs into primary, and activeTabPath stays valid within each pane.
  */

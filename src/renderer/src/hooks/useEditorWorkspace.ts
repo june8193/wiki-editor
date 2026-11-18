@@ -14,7 +14,8 @@ import {
   getPaneActiveTab,
   PaneTabStore,
   type PaneTabTransition,
-  type TabItem
+  type TabItem,
+  type WorkspaceLayoutSnapshot
 } from '../stores/PaneTabStore'
 import {
   type DirtyTabClosePrompt,
@@ -22,6 +23,10 @@ import {
   RendererBufferSyncClient
 } from '../stores/RendererBufferSyncClient'
 import { RendererTabDragController } from '../stores/RendererTabDragController'
+import {
+  type RestoreWorkspaceLayoutOptions,
+  restoreWorkspacePaneLayout
+} from '../stores/workspaceLayoutRestore'
 import { useWikiApi } from './useWikiApi'
 
 export type { OpenedWorkspaceDocument }
@@ -166,6 +171,10 @@ export function useEditorWorkspace({
 
   const buffers = useSyncExternalStore(bufferStore.subscribe, bufferStore.getSnapshot)
   const layout = useSyncExternalStore(tabStore.subscribe, tabStore.getSnapshot)
+  const layoutSnapshot = useMemo<WorkspaceLayoutSnapshot>(
+    () => ({ layout, buffers }),
+    [buffers, layout]
+  )
   const dragState = useSyncExternalStore(
     tabDragController.subscribe,
     tabDragController.getSnapshot
@@ -292,8 +301,10 @@ export function useEditorWorkspace({
     prepareWorkspacePathsForDiscard: syncClient.prepareWorkspacePathsForDiscard,
     finishWorkspacePathsDiscard: syncClient.finishWorkspacePathsDiscard,
     clearWorkspaceBuffers: syncClient.clearWorkspaceBuffers,
-    restoreWorkspaceLayout: syncClient.restoreWorkspaceLayout,
-    getLayoutSnapshot: () => ({
+    restoreWorkspaceLayout: (options: RestoreWorkspaceLayoutOptions) =>
+      restoreWorkspacePaneLayout(syncClient, options),
+    layoutSnapshot,
+    getLayoutSnapshot: (): WorkspaceLayoutSnapshot => ({
       layout: tabStore.getSnapshot(),
       buffers: bufferStore.getSnapshot()
     }),

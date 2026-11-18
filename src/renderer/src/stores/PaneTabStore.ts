@@ -75,6 +75,11 @@ export interface PaneLayoutState {
   panes: Record<PaneId, PaneState>
 }
 
+export interface WorkspaceLayoutSnapshot {
+  layout: PaneLayoutState
+  buffers: DocumentBufferSnapshot
+}
+
 export interface OpenTabOptions extends Partial<TabViewState> {
   paneId?: PaneId
 }
@@ -231,30 +236,6 @@ function collapseOrPromoteSplitLayout(
   }
 }
 
-function reconcileRemovedLayout(
-  primary: PaneState,
-  secondary: PaneState,
-  currentSplitMode: SplitMode,
-  currentActivePaneId: PaneId,
-  hadSecondaryTabs: boolean,
-  promoteSecondaryIfPrimaryEmpty: boolean
-): Pick<PaneLayoutState, 'splitMode' | 'activePaneId' | 'panes'> {
-  if (hadSecondaryTabs && secondary.tabs.length === 0) {
-    return {
-      splitMode: 'single',
-      activePaneId: 'primary',
-      panes: { primary, secondary }
-    }
-  }
-  return collapseOrPromoteSplitLayout(
-    primary,
-    secondary,
-    currentSplitMode,
-    currentActivePaneId,
-    promoteSecondaryIfPrimaryEmpty && currentSplitMode !== 'single'
-  )
-}
-
 export function getPaneActiveTab(pane: PaneState): TabItem | null {
   if (!pane.activeTabId) return null
   return pane.tabs.find((tab) => tab.id === pane.activeTabId) ?? null
@@ -326,8 +307,7 @@ export function countLayoutTabs(layout: PaneLayoutState): number {
  */
 export function serializePaneLayoutForWorkspace(
   rootPath: string,
-  layout: PaneLayoutState,
-  buffers: DocumentBufferSnapshot
+  { layout, buffers }: WorkspaceLayoutSnapshot
 ): PersistedWorkspacePaneLayout {
   const normalizedRoot = resolveNormalizedWorkspacePath(rootPath)
   if (!normalizedRoot) {
@@ -653,19 +633,17 @@ export class PaneTabStore {
   }
 
   closeTab(paneId: PaneId, tabId: string): CloseTabResult | null {
-    const hadSecondaryTabs = this.state.panes.secondary.tabs.length > 0
     const { nextPane, removed } = removeTabFromPane(this.state.panes[paneId], tabId)
     if (!removed) return null
 
     const nextPrimary = paneId === 'primary' ? nextPane : this.state.panes.primary
     const nextSecondary = paneId === 'secondary' ? nextPane : this.state.panes.secondary
-    const reconciled = reconcileRemovedLayout(
+    const reconciled = collapseOrPromoteSplitLayout(
       nextPrimary,
       nextSecondary,
       this.state.splitMode,
       this.state.activePaneId,
-      hadSecondaryTabs,
-      paneId === 'primary'
+      paneId === 'primary' && this.state.splitMode !== 'single'
     )
     const isLastReferenceForBuffer =
       removed.kind === 'document' &&
@@ -781,7 +759,6 @@ export class PaneTabStore {
     targetIndex?: number
   ): void {
     const sourcePane = this.state.panes[sourcePaneId]
-    const hadSecondaryTabs = this.state.panes.secondary.tabs.length > 0
     const { nextPane: nextSourcePane, removed } = removeTabFromPane(sourcePane, tabId)
     if (!removed) return
 
@@ -804,13 +781,12 @@ export class PaneTabStore {
 
     const nextPrimary = sourcePaneId === 'primary' ? nextSourcePane : nextTargetPane
     const nextSecondary = sourcePaneId === 'secondary' ? nextSourcePane : nextTargetPane
-    const reconciled = reconcileRemovedLayout(
+    const reconciled = collapseOrPromoteSplitLayout(
       nextPrimary,
       nextSecondary,
       nextSplitMode,
       targetPaneId,
-      hadSecondaryTabs,
-      true
+      nextSplitMode !== 'single'
     )
 
     this.commit(
@@ -1188,8 +1164,6 @@ export class PaneTabStore {
   }
 
   private removeTabsWhere(shouldRemove: (tab: TabItem) => boolean): void {
-    const hadSecondaryTabs = this.state.panes.secondary.tabs.length > 0
-
     const filterPane = (pane: PaneState): { nextPane: PaneState; changed: boolean } => {
       const nextTabs = pane.tabs.filter((tab) => !shouldRemove(tab))
       if (nextTabs.length === pane.tabs.length) {
@@ -1209,13 +1183,12 @@ export class PaneTabStore {
     const sResult = filterPane(this.state.panes.secondary)
     if (!pResult.changed && !sResult.changed) return
 
-    const reconciled = reconcileRemovedLayout(
+    const reconciled = collapseOrPromoteSplitLayout(
       pResult.nextPane,
       sResult.nextPane,
       this.state.splitMode,
       this.state.activePaneId,
-      hadSecondaryTabs,
-      true
+      this.state.splitMode !== 'single'
     )
 
     this.commit({

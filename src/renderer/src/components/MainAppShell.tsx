@@ -6,17 +6,12 @@ import {
   filterTopLevelWorkspaceEntries,
   formatAbsoluteEntryPath,
   formatRelativeEntryPath,
-  getWorkspacePathKey,
   isFavoriteWorkspacePath,
   isSameWorkspacePath,
   resolveRepoFileInWorkspace,
   type WorkspaceChangeEvent,
   type WorkspaceEntry
 } from '@shared/workspace'
-import {
-  createEmptyPersistedWorkspaceLayout,
-  reconcilePersistedWorkspaceLayout
-} from '@shared/workspaceState'
 import { useConfigController } from '../hooks/useConfigController'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
@@ -246,44 +241,17 @@ export function MainAppShell() {
   const workspaceStatePersistence = useWorkspaceStatePersistence({
     workspaceRootPath: workspace?.rootPath ?? null,
     expandedDirs: treeState.expandedDirs,
-    layout: editor.layout,
-    buffers: editor.buffers,
+    layoutSnapshot: editor.layoutSnapshot,
     getLatestLayoutSnapshot: editor.getLayoutSnapshot
   })
   onWorkspaceRestoredRef.current = (context) => {
     const restoreSeq = ++workspaceRestoreSeqRef.current
-    const persistedLayout = context.persistedState?.layout ?? null
-    const hasCandidateTabs = Boolean(
-      persistedLayout &&
-        (persistedLayout.panes.primary.tabs.length > 0 ||
-          persistedLayout.panes.secondary.tabs.length > 0)
-    )
-    if (!hasCandidateTabs) {
-      workspaceStatePersistence.markRestored({
-        rootPath: context.rootPath,
-        persistedState: context.persistedState,
-        restoredExpandedDirs: context.restoredExpandedDirs,
-        restoredLayout: persistedLayout
-          ? reconcilePersistedWorkspaceLayout(persistedLayout)
-          : createEmptyPersistedWorkspaceLayout(),
-        hadPrunedState:
-          context.hadPrunedExpandedDirs ||
-          Boolean(persistedLayout && persistedLayout.splitMode !== 'single')
-      })
-      return
-    }
-
-    const existingDirectoryEntries = new Map<string, readonly WorkspaceEntry[]>()
-    existingDirectoryEntries.set(getWorkspacePathKey(context.rootPath), context.rootEntries)
-    for (const [dirPath, entries] of Object.entries(context.restoredChildrenByDir)) {
-      existingDirectoryEntries.set(getWorkspacePathKey(dirPath), entries)
-    }
-
     return editor
       .restoreWorkspaceLayout({
         rootPath: context.rootPath,
-        persistedLayout,
-        existingDirectoryEntries,
+        persistedLayout: context.persistedState?.layout ?? null,
+        rootEntries: context.rootEntries,
+        restoredChildrenByDir: context.restoredChildrenByDir,
         readDir: (dirPath) => wikiApi.workspace.readDir(dirPath),
         isCancelled: () => restoreSeq !== workspaceRestoreSeqRef.current
       })

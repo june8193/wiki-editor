@@ -590,6 +590,39 @@ export function joinWorkspacePath(baseRoot: string, relativePath: string): strin
 }
 
 /**
+ * Re-anchors `childPath` onto `rootPath`'s separator style and root casing when nested inside it.
+ */
+export function reanchorPathInWorkspace(rootPath: string, childPath: string): string {
+  const rel = toWorkspaceRelativePath(rootPath, childPath)
+  return rel ? joinWorkspacePath(rootPath, rel) : childPath
+}
+
+/**
+ * Reads multiple workspace directories concurrently, keeping only successful reads.
+ */
+export async function readDirectoriesSettled(
+  readDir: (dirPath?: string) => Promise<WorkspaceEntry[]>,
+  dirPaths: readonly string[]
+): Promise<Array<{ dirPath: string; entries: WorkspaceEntry[] }>> {
+  if (dirPaths.length === 0) {
+    return []
+  }
+  const settled = await Promise.allSettled(
+    dirPaths.map(async (dirPath) => ({
+      dirPath,
+      entries: await readDir(dirPath)
+    }))
+  )
+  const loaded: Array<{ dirPath: string; entries: WorkspaceEntry[] }> = []
+  for (const result of settled) {
+    if (result.status === 'fulfilled') {
+      loaded.push(result.value)
+    }
+  }
+  return loaded
+}
+
+/**
  * Resolves a repository-relative target file path within an optional workspace root.
  * Returns `null` when the resolved file lies outside the open workspace.
  */
