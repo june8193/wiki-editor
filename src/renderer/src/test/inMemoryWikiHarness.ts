@@ -47,6 +47,9 @@ import {
   canDetachTabFromWindow,
   cloneTabTransferPayloads,
   computeOffsetAuxiliaryBounds,
+  computeOffsetMainBounds,
+  MAIN_WINDOW_DEFAULT_HEIGHT,
+  MAIN_WINDOW_DEFAULT_WIDTH,
   type ActiveTabDragSession,
   type ScreenLike,
   type TabTransferPayload,
@@ -61,6 +64,7 @@ import {
   getWorkspacePathKey,
   isMarkdownFileName,
   isNestedOrSameWorkspacePath,
+  isSameWorkspacePath,
   recordRecentWorkspace,
   removeFavoriteWorkspace,
   toggleFavoriteWorkspace,
@@ -164,20 +168,37 @@ export async function triggerMenuCommand(
 export interface CreateInMemoryWindowOptions {
   role?: WindowRole
   initialTabs?: TabTransferPayload[]
+  initialWorkspacePath?: string | null
   bounds?: WindowBounds
+  isolatedSession?: boolean
+}
+
+export interface InMemoryWindowWatchState {
+  active: boolean
+  watchCalls: number
+  unwatchCalls: number
+  auxWatchCalls: number
+  auxUnwatchCalls: number
 }
 
 export interface InMemoryWindowHandle {
   windowId: number
+  sessionId: number
   role: WindowRole
   api: WikiApi
+  hub: SharedDocumentBufferHub
   emitMenuCommand: (command: AppMenuCommand) => void
   emitBeforeInput: (input: BeforeInputKeyEventLike) => void
   requestClose: () => void
   getBounds: () => WindowBounds
   getMenuListenerCount: () => number
+  getFocusCount: () => number
+  getRestoreCount: () => number
+  isMinimized: () => boolean
+  setMinimized: (minimized: boolean) => void
   isClosed: () => boolean
   getInitContext: () => WindowInitContext
+  getWatchState: () => InMemoryWindowWatchState
   destroy: () => void
 }
 
@@ -245,14 +266,9 @@ export function createHubBufferApi(
 
 export interface MultiWindowWikiHarness {
   createWindow: (options?: CreateInMemoryWindowOptions) => InMemoryWindowHandle
-  getAuxiliaryWindows: () => InMemoryWindowHandle[]
-  getWatchState: () => {
-    active: boolean
-    watchCalls: number
-    unwatchCalls: number
-    auxWatchCalls: number
-    auxUnwatchCalls: number
-  }
+  getMainWindows: () => InMemoryWindowHandle[]
+  getAuxiliaryWindows: (mainWindowId?: number) => InMemoryWindowHandle[]
+  getWatchState: (mainWindowId?: number) => InMemoryWindowWatchState
   emitExternalChange: (patch: Partial<AppConfig>) => void
   emitWorkspaceChange: (event: WorkspaceChangeEvent) => void
   getListenerCount: () => number
@@ -263,9 +279,39 @@ export interface MultiWindowWikiHarness {
   dispose: () => void
 }
 
+interface SessionWindowRecord {
+  role: WindowRole
+  isDestroyed: () => boolean
+  getBounds: () => WindowBounds
+  isMinimized: () => boolean
+  restore: () => void
+  focus: () => void
+  forceClose: () => void
+}
+
+interface HarnessSession {
+  sessionId: number
+  hub: SharedDocumentBufferHub
+  dragCoordinator: TabDragCoordinator
+  unsubscribeCoordinatorHub: () => void
+  primaryApi: WikiApi | null
+  activeRoot: string | null
+  pendingInitialWorkspacePath: string | null
+  workspaceListeners: Set<(event: WorkspaceChangeEvent) => void>
+  dragListenersByWindow: Map<number, Set<(session: ActiveTabDragSession | null) => void>>
+  openWindows: Map<number, SessionWindowRecord>
+  mainHandles: InMemoryWindowHandle[]
+  auxiliaryHandles: InMemoryWindowHandle[]
+  watchActive: boolean
+  watchCalls: number
+  unwatchCalls: number
+  auxWatchCalls: number
+  auxUnwatchCalls: number
+}
+
 /**
- * Creates a multi-window in-memory WikiApi test harness backed by a single SharedDocumentBufferHub
- * and shared virtual filesystem/config state.
+ * Creates a multi-window in-memory WikiApi test harness supporting isolated per-main-window
+ * workspace sessions, shared buffer hubs per session, and global config broadcasts.
  */
 export function createMultiWindowWikiHarness(
   initialOverrides: Partial<AppConfig> = {},
@@ -276,14 +322,12 @@ export function createMultiWindowWikiHarness(
     ...initialOverrides
   }
   const configListeners = new Set<(config: AppConfig) => void>()
-  const workspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
   const configPath = 'C:\\Users\\test\\AppData\\Roaming\\wiki-editor\\config.json'
 
   const dirs = new Set<string>()
   const files = new Map<string, string>()
   const readDirCalls: string[] = []
   const copiedTexts: string[] = []
-  let activeRoot: string | null = null
   const seededWorkspaces: Record<string, PersistedWorkspaceState> = {}
   for (const [rawKey, partial] of Object.entries(fsOptions.workspaceStates ?? {})) {
     const rootPath = partial.rootPath ?? rawKey
@@ -299,35 +343,15 @@ export function createMultiWindowWikiHarness(
     : createDefaultWorkspaceStateDocument()
   const selectedFolder: string | null = fsOptions.selectedFolder ?? null
   let nextWindowId = 1
-  let watchActive = false
-  let watchCalls = 0
-  let unwatchCalls = 0
-  let auxWatchCalls = 0
-  let auxUnwatchCalls = 0
+  let nextSessionId = 1
+  const mainHandles: InMemoryWindowHandle[] = []
   const auxiliaryHandles: InMemoryWindowHandle[] = []
+  const sessions = new Map<number, HarnessSession>()
   const screen: ScreenLike = fsOptions.screen ?? {
     getDisplayNearestPoint: () => ({
       workArea: { x: 0, y: 0, width: 1920, height: 1080 }
     })
   }
-  const openWindows = new Map<
-    number,
-    {
-      role: WindowRole
-      isDestroyed: () => boolean
-      getBounds: () => WindowBounds
-      forceClose: () => void
-    }
-  >()
-  const dragListenersByWindow = new Map<number, Set<(session: ActiveTabDragSession | null) => void>>()
-  const dragCoordinator = new TabDragCoordinator()
-  dragCoordinator.onStateChanged((session) => {
-    for (const listeners of dragListenersByWindow.values()) {
-      for (const listener of listeners) {
-        listener(session)
-      }
-    }
-  })
 
   for (const [rootRaw, entries] of Object.entries(fsOptions.workspaces ?? {})) {
     const root = normalizePosix(rootRaw)
@@ -348,31 +372,72 @@ export function createMultiWindowWikiHarness(
     }
   }
 
-  let primaryApi: WikiApi | null = null
+  const createSession = (): HarnessSession => {
+    const sessionId = nextSessionId++
+    const dragListenersByWindow = new Map<
+      number,
+      Set<(session: ActiveTabDragSession | null) => void>
+    >()
+    const dragCoordinator = new TabDragCoordinator()
+    dragCoordinator.onStateChanged((dragSession) => {
+      for (const listeners of dragListenersByWindow.values()) {
+        for (const listener of listeners) {
+          listener(dragSession)
+        }
+      }
+    })
 
-  const hub = new SharedDocumentBufferHub({
-    initialAutoSaveConfig: {
-      autoSave: state.autoSave,
-      autoSaveDelayMs: state.autoSaveDelayMs
-    },
-    storage: {
-      readWorkspaceFile: (filePath) => primaryApi!.workspace.readFile(filePath),
-      writeWorkspaceFile: (filePath, content) => primaryApi!.workspace.writeFile(filePath, content),
-      readWorkspaceDirectory: (dirPath) => primaryApi!.workspace.readDir(dirPath),
-      getConfigPath: () => primaryApi!.config.getConfigPath(),
-      readConfigRaw: () => primaryApi!.config.readRaw(),
-      saveConfigRaw: (raw) => primaryApi!.config.saveRaw(raw)
+    const session: HarnessSession = {
+      sessionId,
+      hub: null as unknown as SharedDocumentBufferHub,
+      dragCoordinator,
+      unsubscribeCoordinatorHub: () => undefined,
+      primaryApi: null,
+      activeRoot: null,
+      pendingInitialWorkspacePath: null,
+      workspaceListeners: new Set(),
+      dragListenersByWindow,
+      openWindows: new Map(),
+      mainHandles: [],
+      auxiliaryHandles: [],
+      watchActive: false,
+      watchCalls: 0,
+      unwatchCalls: 0,
+      auxWatchCalls: 0,
+      auxUnwatchCalls: 0
     }
-  })
 
-  const unsubscribeCoordinatorHub = hub.subscribe((event) => {
-    if (event.type === 'paths-remapped') {
-      dragCoordinator.remapPayloadKeys(event.remappings)
-    }
-  })
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: {
+        autoSave: state.autoSave,
+        autoSaveDelayMs: state.autoSaveDelayMs
+      },
+      storage: {
+        readWorkspaceFile: (filePath) => session.primaryApi!.workspace.readFile(filePath),
+        writeWorkspaceFile: (filePath, content) =>
+          session.primaryApi!.workspace.writeFile(filePath, content),
+        readWorkspaceDirectory: (dirPath) => session.primaryApi!.workspace.readDir(dirPath),
+        getConfigPath: () => session.primaryApi!.config.getConfigPath(),
+        readConfigRaw: () => session.primaryApi!.config.readRaw(),
+        saveConfigRaw: (raw) => session.primaryApi!.config.saveRaw(raw)
+      }
+    })
 
-  const listDir = (dirPath: string): WorkspaceEntry[] => {
-    const target = normalizePosix(dirPath === '.' && activeRoot ? activeRoot : dirPath)
+    session.hub = hub
+    session.unsubscribeCoordinatorHub = hub.subscribe((event) => {
+      if (event.type === 'paths-remapped') {
+        dragCoordinator.remapPayloadKeys(event.remappings)
+      }
+    })
+
+    sessions.set(sessionId, session)
+    return session
+  }
+
+  const defaultSession = createSession()
+
+  const listDir = (session: HarnessSession, dirPath: string): WorkspaceEntry[] => {
+    const target = normalizePosix(dirPath === '.' && session.activeRoot ? session.activeRoot : dirPath)
     readDirCalls.push(target)
     if (!dirs.has(target)) {
       throw new Error(`폴더를 찾을 수 없습니다: ${dirPath}`)
@@ -384,7 +449,7 @@ export function createMultiWindowWikiHarness(
         entries.push({
           name,
           path: dir,
-          relativePath: activeRoot ? dir.slice(activeRoot.length + 1) : name,
+          relativePath: session.activeRoot ? dir.slice(session.activeRoot.length + 1) : name,
           kind: 'directory'
         })
       }
@@ -395,7 +460,7 @@ export function createMultiWindowWikiHarness(
         entries.push({
           name,
           path: file,
-          relativePath: activeRoot ? file.slice(activeRoot.length + 1) : name,
+          relativePath: session.activeRoot ? file.slice(session.activeRoot.length + 1) : name,
           kind: 'file'
         })
       }
@@ -408,10 +473,12 @@ export function createMultiWindowWikiHarness(
 
   const applyAndBroadcast = (nextState: AppConfig): AppConfig => {
     state = cloneAppConfig(nextState)
-    hub.setAutoSaveConfig({
-      autoSave: state.autoSave,
-      autoSaveDelayMs: state.autoSaveDelayMs
-    })
+    for (const session of sessions.values()) {
+      session.hub.setAutoSaveConfig({
+        autoSave: state.autoSave,
+        autoSaveDelayMs: state.autoSaveDelayMs
+      })
+    }
     const snapshot = cloneAppConfig(state)
     for (const listener of configListeners) {
       listener(snapshot)
@@ -419,13 +486,66 @@ export function createMultiWindowWikiHarness(
     return cloneAppConfig(snapshot)
   }
 
-  const createWindow = (options: CreateInMemoryWindowOptions = {}): InMemoryWindowHandle => {
+  const findOpenSessionByWorkspacePath = (
+    targetPath: string,
+    excludeSessionId?: number
+  ): { session: HarnessSession; mainWindow: SessionWindowRecord; mainWindowId: number } | undefined => {
+    for (const session of sessions.values()) {
+      if (session.sessionId === excludeSessionId) continue
+      const candidatePath = session.activeRoot ?? session.pendingInitialWorkspacePath
+      if (!candidatePath || !isSameWorkspacePath(candidatePath, targetPath)) {
+        continue
+      }
+      for (const [winId, winRecord] of session.openWindows.entries()) {
+        if (winRecord.role === 'main' && !winRecord.isDestroyed()) {
+          return { session, mainWindow: winRecord, mainWindowId: winId }
+        }
+      }
+    }
+    return undefined
+  }
+
+  const hasOtherSessionPendingDrag = (excludeSessionId: number): boolean => {
+    for (const session of sessions.values()) {
+      if (session.sessionId !== excludeSessionId && session.dragCoordinator.hasPendingDrag()) {
+        return true
+      }
+    }
+    return false
+  }
+
+  const getAllOpenWindowBounds = (): WindowBounds[] => {
+    const bounds: WindowBounds[] = []
+    for (const session of sessions.values()) {
+      for (const win of session.openWindows.values()) {
+        if (!win.isDestroyed() && !win.isMinimized()) {
+          bounds.push(win.getBounds())
+        }
+      }
+    }
+    return bounds
+  }
+
+  const createWindowInSession = (
+    session: HarnessSession,
+    options: CreateInMemoryWindowOptions = {}
+  ): InMemoryWindowHandle => {
     const windowId = nextWindowId++
     const role: WindowRole = options.role ?? 'main'
     const initialTabs: TabTransferPayload[] = cloneTabTransferPayloads(options.initialTabs ?? [])
+    const initialWorkspacePath =
+      options.initialWorkspacePath !== undefined ? options.initialWorkspacePath : undefined
+    if (role === 'main' && initialWorkspacePath) {
+      session.pendingInitialWorkspacePath = normalizePosix(initialWorkspacePath)
+    }
     const defaultBounds: WindowBounds =
       role === 'main'
-        ? (fsOptions.mainBounds ?? { x: 0, y: 0, width: 1280, height: 820 })
+        ? (fsOptions.mainBounds ?? {
+            x: 0,
+            y: 0,
+            width: MAIN_WINDOW_DEFAULT_WIDTH,
+            height: MAIN_WINDOW_DEFAULT_HEIGHT
+          })
         : {
             x: 40,
             y: 40,
@@ -438,16 +558,19 @@ export function createMultiWindowWikiHarness(
     let closePromptPending = false
     let closeFlushEnabled = false
     let hasSyncedNonEmptyTabs = false
+    let minimized = false
+    let focusCount = 0
+    let restoreCount = 0
     const menuListeners = new Set<(command: AppMenuCommand) => void>()
     const bufferListeners = new Set<(event: SharedBufferHubEvent) => void>()
     const dragListeners = new Set<(session: ActiveTabDragSession | null) => void>()
     const closeRequestedListeners = new Set<() => void>()
     const windowConfigListeners = new Set<(config: AppConfig) => void>()
     const windowWorkspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
-    dragListenersByWindow.set(windowId, dragListeners)
+    session.dragListenersByWindow.set(windowId, dragListeners)
 
     const closeAllOpenAuxiliaryWindows = (): void => {
-      for (const candidate of [...openWindows.values()]) {
+      for (const candidate of [...session.openWindows.values()]) {
         if (candidate.role === 'auxiliary') {
           candidate.forceClose()
         }
@@ -461,13 +584,13 @@ export function createMultiWindowWikiHarness(
       if (role === 'main') {
         closeAllOpenAuxiliaryWindows()
       }
-      dragCoordinator.clearForWindow(windowId)
-      openWindows.delete(windowId)
+      session.dragCoordinator.clearForWindow(windowId)
+      session.openWindows.delete(windowId)
       dragListeners.clear()
-      dragListenersByWindow.delete(windowId)
+      session.dragListenersByWindow.delete(windowId)
       closeRequestedListeners.clear()
       unsubscribeHub()
-      hub.unregisterWindow(windowId)
+      session.hub.unregisterWindow(windowId)
       menuListeners.clear()
       bufferListeners.clear()
       for (const listener of windowConfigListeners) {
@@ -475,7 +598,7 @@ export function createMultiWindowWikiHarness(
       }
       windowConfigListeners.clear()
       for (const listener of windowWorkspaceListeners) {
-        workspaceListeners.delete(listener)
+        session.workspaceListeners.delete(listener)
       }
       windowWorkspaceListeners.clear()
     }
@@ -487,23 +610,33 @@ export function createMultiWindowWikiHarness(
       destroyWindow()
     }
 
-    openWindows.set(windowId, {
+    session.openWindows.set(windowId, {
       role,
       isDestroyed: () => destroyed,
       getBounds: () => ({ ...windowBounds }),
+      isMinimized: () => minimized,
+      restore: () => {
+        if (minimized) {
+          minimized = false
+          restoreCount += 1
+        }
+      },
+      focus: () => {
+        focusCount += 1
+      },
       forceClose: forceCloseWindow
     })
 
     if (role === 'auxiliary') {
       for (const tab of initialTabs) {
-        hub.registerPendingTransfer(windowId, tab.bufferKey)
+        session.hub.registerPendingTransfer(windowId, tab.bufferKey)
       }
     }
 
     const requestCloseWindow = (): void => {
       if (destroyed || closing || closePromptPending) return
       const shouldPromptOrFlush =
-        hub.hasDirtyBuffersForWindowClose(role, windowId) ||
+        session.hub.hasDirtyBuffersForWindowClose(role, windowId) ||
         (role === 'main' && closeFlushEnabled)
       if (!shouldPromptOrFlush) {
         forceCloseWindow()
@@ -515,10 +648,10 @@ export function createMultiWindowWikiHarness(
       }
     }
 
-    const unsubscribeHub = hub.subscribe((event) => {
+    const unsubscribeHub = session.hub.subscribe((event) => {
       if (destroyed) return
       if (role === 'auxiliary' && (event.type === 'state-changed' || event.type === 'buffers-closed')) {
-        const currentTabCount = hub.getWindowTabCount(windowId)
+        const currentTabCount = session.hub.getWindowTabCount(windowId)
         if (currentTabCount > 0) {
           hasSyncedNonEmptyTabs = true
         } else if (hasSyncedNonEmptyTabs) {
@@ -557,10 +690,18 @@ export function createMultiWindowWikiHarness(
       return {
         name: baseNameOf(nextPath),
         path: nextPath,
-        relativePath: activeRoot ? nextPath.slice(activeRoot.length + 1) : baseNameOf(nextPath),
+        relativePath: session.activeRoot
+          ? nextPath.slice(session.activeRoot.length + 1)
+          : baseNameOf(nextPath),
         kind
       }
     }
+
+    const buildInitContext = (): WindowInitContext => ({
+      role,
+      initialTabs: cloneTabTransferPayloads(initialTabs),
+      ...(initialWorkspacePath !== undefined ? { initialWorkspacePath } : {})
+    })
 
     const api: WikiApi = {
       config: {
@@ -617,7 +758,8 @@ export function createMultiWindowWikiHarness(
           if (!dirs.has(normalized)) {
             throw new Error(`워크스페이스 폴더를 찾을 수 없습니다: ${rootPath}`)
           }
-          activeRoot = normalized
+          session.activeRoot = normalized
+          session.pendingInitialWorkspacePath = null
           applyAndBroadcast({
             ...state,
             recentWorkspaces: recordRecentWorkspace(state.recentWorkspaces, rootPath)
@@ -625,16 +767,57 @@ export function createMultiWindowWikiHarness(
           return {
             rootPath: normalized,
             name: getWorkspaceDisplayName(normalized),
-            entries: listDir(normalized)
+            entries: listDir(session, normalized)
+          }
+        },
+        async openInNewWindow(rootPath) {
+          if (role !== 'main') {
+            throw new Error('Only the main window can open a workspace')
+          }
+          const trimmed = rootPath.trim()
+          if (!trimmed) {
+            throw new Error('워크스페이스 경로가 비어 있습니다.')
+          }
+          const normalized = normalizePosix(trimmed)
+          if (files.has(normalized)) {
+            throw new Error('선택한 경로는 폴더가 아닙니다.')
+          }
+          if (!dirs.has(normalized)) {
+            throw new Error(`워크스페이스 폴더를 찾을 수 없습니다: ${rootPath}`)
+          }
+
+          const existing = findOpenSessionByWorkspacePath(normalized)
+          if (existing) {
+            if (existing.mainWindow.isMinimized()) {
+              existing.mainWindow.restore()
+            }
+            existing.mainWindow.focus()
+            return {
+              status: 'focused-existing',
+              windowId: existing.mainWindowId,
+              rootPath: existing.session.activeRoot ?? normalized
+            }
+          }
+
+          const newSession = createSession()
+          const newMainWin = createWindowInSession(newSession, {
+            role: 'main',
+            initialWorkspacePath: normalized,
+            bounds: computeOffsetMainBounds(windowBounds, screen)
+          })
+          return {
+            status: 'opened',
+            windowId: newMainWin.windowId,
+            rootPath: normalized
           }
         },
         async readDir(dirPath) {
-          if (!activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
-          return listDir(dirPath ?? activeRoot)
+          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+          return listDir(session, dirPath ?? session.activeRoot)
         },
         async listMarkdownFiles() {
-          if (!activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
-          const prefix = `${activeRoot}/`
+          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+          const prefix = `${session.activeRoot}/`
           const ignoredSegments = new Set([
             '.git',
             'node_modules',
@@ -675,8 +858,10 @@ export function createMultiWindowWikiHarness(
           files.set(normalized, content)
         },
         async createEntry(parentDirPath, name, kind: WorkspaceEntryKind, initialContent = '') {
-          if (!activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
-          const parent = normalizePosix(parentDirPath === '.' ? activeRoot : parentDirPath)
+          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+          const parent = normalizePosix(
+            parentDirPath === '.' ? session.activeRoot : parentDirPath
+          )
           const target = `${parent}/${name}`
           if (dirs.has(target) || files.has(target)) {
             throw new Error(`이미 존재하는 파일 또는 폴더입니다: ${name}`)
@@ -689,12 +874,12 @@ export function createMultiWindowWikiHarness(
           return {
             name,
             path: target,
-            relativePath: target.slice(activeRoot.length + 1),
+            relativePath: target.slice(session.activeRoot.length + 1),
             kind
           }
         },
         async renameEntry(targetPath, newName) {
-          if (!activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
           const target = normalizePosix(targetPath)
           const next = `${parentDirOf(target)}/${newName}`
           if (dirs.has(next) || files.has(next)) {
@@ -709,8 +894,10 @@ export function createMultiWindowWikiHarness(
           throw new Error(`경로를 찾을 수 없습니다: ${targetPath}`)
         },
         async moveEntries(sourcePaths, targetDirPath): Promise<WorkspaceMovedEntry[]> {
-          if (!activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
-          const targetDir = normalizePosix(targetDirPath === '.' ? activeRoot : targetDirPath)
+          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+          const targetDir = normalizePosix(
+            targetDirPath === '.' ? session.activeRoot : targetDirPath
+          )
           if (!dirs.has(targetDir)) {
             throw new Error(`폴더를 찾을 수 없습니다: ${targetDirPath}`)
           }
@@ -718,8 +905,8 @@ export function createMultiWindowWikiHarness(
 
           const resolved: Array<{ path: string; kind: WorkspaceEntryKind }> = []
           for (const rawSource of sourcePaths) {
-            const source = normalizePosix(rawSource === '.' ? activeRoot : rawSource)
-            if (source === activeRoot) {
+            const source = normalizePosix(rawSource === '.' ? session.activeRoot : rawSource)
+            if (source === session.activeRoot) {
               throw new Error('워크스페이스 루트 폴더는 이동할 수 없습니다.')
             }
             if (dirs.has(source)) {
@@ -793,7 +980,7 @@ export function createMultiWindowWikiHarness(
           if (fsOptions.ingestImage) {
             return fsOptions.ingestImage(input)
           }
-          if (!activeRoot) {
+          if (!session.activeRoot) {
             throw new Error('열린 워크스페이스가 없습니다.')
           }
           const docPosix = normalizePosix(input.documentPath)
@@ -841,7 +1028,7 @@ export function createMultiWindowWikiHarness(
           if (!isSupportedImageFile(candidate)) {
             throw new Error(`지원하지 않는 이미지 파일입니다: ${candidate}`)
           }
-          if (candidate === activeRoot || candidate.startsWith(`${activeRoot}/`)) {
+          if (candidate === session.activeRoot || candidate.startsWith(`${session.activeRoot}/`)) {
             const docParts = docDir.split('/').filter(Boolean)
             const targetParts = candidate.split('/').filter(Boolean)
             let common = 0
@@ -872,26 +1059,26 @@ export function createMultiWindowWikiHarness(
           return fsOptions.getPathForFile?.(file) ?? ''
         },
         async watch() {
-          watchCalls += 1
+          session.watchCalls += 1
           if (role === 'main') {
-            watchActive = true
+            session.watchActive = true
           } else {
-            auxWatchCalls += 1
+            session.auxWatchCalls += 1
           }
         },
         async unwatch() {
-          unwatchCalls += 1
+          session.unwatchCalls += 1
           if (role === 'main') {
-            watchActive = false
+            session.watchActive = false
           } else {
-            auxUnwatchCalls += 1
+            session.auxUnwatchCalls += 1
           }
         },
         onChanged(listener) {
-          workspaceListeners.add(listener)
+          session.workspaceListeners.add(listener)
           windowWorkspaceListeners.add(listener)
           return () => {
-            workspaceListeners.delete(listener)
+            session.workspaceListeners.delete(listener)
             windowWorkspaceListeners.delete(listener)
           }
         }
@@ -971,7 +1158,7 @@ export function createMultiWindowWikiHarness(
           }
         }
       },
-      buffer: createHubBufferApi(hub, windowId, bufferListeners, () => destroyed),
+      buffer: createHubBufferApi(session.hub, windowId, bufferListeners, () => destroyed),
       diagram: {
         copyText: vi.fn(async () => {}),
         copyImage: vi.fn(async () => {}),
@@ -987,22 +1174,19 @@ export function createMultiWindowWikiHarness(
       window: {
         role,
         async getInitContext() {
-          return {
-            role,
-            initialTabs: cloneTabTransferPayloads(initialTabs)
-          }
+          return buildInitContext()
         },
         async detachTabToNewWindow(payload) {
           if (destroyed) {
             throw new Error('Cannot detach tab from a closed window')
           }
-          if (!hub.hasBuffer(payload.bufferKey)) {
+          if (!session.hub.hasBuffer(payload.bufferKey)) {
             throw new Error('Cannot detach unknown document buffer')
           }
-          if (!canDetachTabFromWindow(role, hub.getWindowTabCount(windowId))) {
+          if (!canDetachTabFromWindow(role, session.hub.getWindowTabCount(windowId))) {
             throw new Error('Cannot detach the last tab from an auxiliary window')
           }
-          const aux = createWindow({
+          const aux = createWindowInSession(session, {
             role: 'auxiliary',
             initialTabs: [payload],
             bounds: computeOffsetAuxiliaryBounds(windowBounds, screen)
@@ -1013,45 +1197,50 @@ export function createMultiWindowWikiHarness(
           if (destroyed) {
             throw new Error('Cannot start tab drag from a closed window')
           }
-          if (!hub.hasBuffer(input.payload.bufferKey)) {
+          if (!session.hub.hasBuffer(input.payload.bufferKey)) {
             throw new Error('Cannot drag unknown document buffer')
           }
-          return dragCoordinator.start(windowId, input)
+          return session.dragCoordinator.start(windowId, input)
         },
         async updateTabDragOutcome(dragSessionId, outcome) {
           if (destroyed) return null
-          return dragCoordinator.updateOutcome(windowId, dragSessionId, outcome)
+          return session.dragCoordinator.updateOutcome(windowId, dragSessionId, outcome)
         },
         async acceptTabDragDrop(input) {
           if (destroyed) {
             return { accepted: false, reason: 'invalid-target-window' }
           }
-          return dragCoordinator.acceptCrossWindowDrop({
+          const result = session.dragCoordinator.acceptCrossWindowDrop({
             targetWindowId: windowId,
             dragSessionId: input?.dragSessionId,
-            bufferHub: hub
+            bufferHub: session.hub
           })
+          if (
+            !result.accepted &&
+            (result.reason === 'no-active-drag' || result.reason === 'session-mismatch') &&
+            hasOtherSessionPendingDrag(session.sessionId)
+          ) {
+            return { accepted: false, reason: 'different-workspace-session' }
+          }
+          return result
         },
         async endTabDrag(input) {
           if (destroyed) {
             return { detached: false, outcome: 'cancelled' }
           }
-          const openWindowBounds = Array.from(openWindows.values())
-            .filter((win) => !win.isDestroyed())
-            .map((win) => win.getBounds())
-          const canDetach = canDetachTabFromWindow(role, hub.getWindowTabCount(windowId))
-          const plan = dragCoordinator.finish({
+          const canDetach = canDetachTabFromWindow(role, session.hub.getWindowTabCount(windowId))
+          const plan = session.dragCoordinator.finish({
             sourceWindowId: windowId,
             input,
-            openWindowBounds,
+            openWindowBounds: getAllOpenWindowBounds(),
             canDetach,
-            hasBuffer: (key) => hub.hasBuffer(key),
+            hasBuffer: (key) => session.hub.hasBuffer(key),
             screen
           })
           if (!plan.detach) {
             return plan.result
           }
-          const aux = createWindow({
+          const aux = createWindowInSession(session, {
             role: 'auxiliary',
             initialTabs: [plan.payload],
             bounds: plan.targetBounds
@@ -1091,14 +1280,16 @@ export function createMultiWindowWikiHarness(
       ...(fsOptions.log ? { log: fsOptions.log } : {})
     }
 
-    if (!primaryApi) {
-      primaryApi = api
+    if (!session.primaryApi) {
+      session.primaryApi = api
     }
 
     const handle: InMemoryWindowHandle = {
       windowId,
+      sessionId: session.sessionId,
       role,
       api,
+      hub: session.hub,
       emitMenuCommand(command) {
         if (destroyed || role !== 'main') return
         for (const listener of menuListeners) {
@@ -1107,57 +1298,116 @@ export function createMultiWindowWikiHarness(
       },
       emitBeforeInput(input) {
         if (destroyed) return
-        dragCoordinator.handleBeforeInput(input)
+        session.dragCoordinator.handleBeforeInput(input)
       },
       requestClose: requestCloseWindow,
       getBounds: () => ({ ...windowBounds }),
       getMenuListenerCount: () => menuListeners.size,
+      getFocusCount: () => focusCount,
+      getRestoreCount: () => restoreCount,
+      isMinimized: () => minimized,
+      setMinimized: (nextMinimized) => {
+        minimized = nextMinimized
+      },
       isClosed: () => destroyed,
-      getInitContext: () => ({
-        role,
-        initialTabs: cloneTabTransferPayloads(initialTabs)
+      getInitContext: buildInitContext,
+      getWatchState: () => ({
+        active: session.watchActive,
+        watchCalls: session.watchCalls,
+        unwatchCalls: session.unwatchCalls,
+        auxWatchCalls: session.auxWatchCalls,
+        auxUnwatchCalls: session.auxUnwatchCalls
       }),
       destroy: destroyWindow
     }
 
-    if (role === 'auxiliary') {
+    if (role === 'main') {
+      mainHandles.push(handle)
+      session.mainHandles.push(handle)
+    } else {
       auxiliaryHandles.push(handle)
+      session.auxiliaryHandles.push(handle)
     }
 
     return handle
   }
 
+  const createWindow = (options: CreateInMemoryWindowOptions = {}): InMemoryWindowHandle => {
+    const role: WindowRole = options.role ?? 'main'
+    if (role === 'auxiliary') {
+      return createWindowInSession(defaultSession, options)
+    }
+    const hasLiveDefaultMain = Array.from(defaultSession.openWindows.values()).some(
+      (win) => win.role === 'main' && !win.isDestroyed()
+    )
+    const shouldIsolate =
+      options.isolatedSession === true ||
+      (options.initialWorkspacePath !== undefined && hasLiveDefaultMain)
+    const targetSession = shouldIsolate ? createSession() : defaultSession
+    return createWindowInSession(targetSession, options)
+  }
+
+  const resolveWatchSession = (mainWindowId?: number): HarnessSession => {
+    if (mainWindowId === undefined) return defaultSession
+    const matched = mainHandles.find((win) => win.windowId === mainWindowId)
+    return matched ? (sessions.get(matched.sessionId) ?? defaultSession) : defaultSession
+  }
+
   return {
     createWindow,
-    getAuxiliaryWindows: () => [...auxiliaryHandles],
-    getWatchState: () => ({
-      active: watchActive,
-      watchCalls,
-      unwatchCalls,
-      auxWatchCalls,
-      auxUnwatchCalls
-    }),
+    getMainWindows: () => [...mainHandles],
+    getAuxiliaryWindows: (mainWindowId?: number) => {
+      if (mainWindowId === undefined) {
+        return [...auxiliaryHandles]
+      }
+      const matched = mainHandles.find((win) => win.windowId === mainWindowId)
+      const session = matched ? sessions.get(matched.sessionId) : undefined
+      return session ? [...session.auxiliaryHandles] : []
+    },
+    getWatchState: (mainWindowId?: number) => {
+      const target = resolveWatchSession(mainWindowId)
+      return {
+        active: target.watchActive,
+        watchCalls: target.watchCalls,
+        unwatchCalls: target.unwatchCalls,
+        auxWatchCalls: target.auxWatchCalls,
+        auxUnwatchCalls: target.auxUnwatchCalls
+      }
+    },
     emitExternalChange(patch) {
       applyAndBroadcast({ ...state, ...patch, version: 1 })
     },
     emitWorkspaceChange(event) {
-      for (const listener of workspaceListeners) {
-        listener(event)
+      if (sessions.size === 1) {
+        for (const listener of defaultSession.workspaceListeners) {
+          listener(event)
+        }
+        return
+      }
+      for (const session of sessions.values()) {
+        if (session.activeRoot && isSameWorkspacePath(session.activeRoot, event.rootPath)) {
+          for (const listener of session.workspaceListeners) {
+            listener(event)
+          }
+        }
       }
     },
     getListenerCount: () => configListeners.size,
     getFilesSnapshot: () => new Map(files),
     readDirCalls,
     copiedTexts,
-    hub,
+    hub: defaultSession.hub,
     dispose() {
-      unsubscribeCoordinatorHub()
-      dragCoordinator.dispose()
-      openWindows.clear()
-      dragListenersByWindow.clear()
-      hub.dispose()
+      for (const session of sessions.values()) {
+        session.unsubscribeCoordinatorHub()
+        session.dragCoordinator.dispose()
+        session.openWindows.clear()
+        session.dragListenersByWindow.clear()
+        session.hub.dispose()
+        session.workspaceListeners.clear()
+      }
+      sessions.clear()
       configListeners.clear()
-      workspaceListeners.clear()
     }
   }
 }

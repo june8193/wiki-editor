@@ -304,14 +304,30 @@ body,
   white-space: nowrap;
 }
 
+.workspace-view-new-window-btn,
 .workspace-view-remove-btn {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  padding: 4px 6px;
+  padding: 0;
   border-radius: 4px;
+}
+
+.workspace-view-new-window-btn:hover:not(:disabled) {
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.workspace-view-new-window-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .workspace-view-remove-btn:hover {
