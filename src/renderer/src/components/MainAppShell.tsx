@@ -531,7 +531,11 @@ export function MainAppShell() {
     [promptUnsavedWorkspaceChanges]
   )
 
-  const shouldProceedAfterFocusCheck = useCallback(
+  /**
+   * Attempts to focus an existing main window holding `targetPath` and returns
+   * whether the current window should proceed with a local workspace switch.
+   */
+  const focusExistingAndCheckProceed = useCallback(
     async (targetPath: string, switchSeq: number): Promise<boolean> => {
       const focusIfOpen = wikiApi.workspace.focusIfOpen
       if (!focusIfOpen) {
@@ -565,7 +569,7 @@ export function MainAppShell() {
         return
       }
       guardUnsavedWorkspaceChanges(async () => {
-        if (!(await shouldProceedAfterFocusCheck(targetPath, switchSeq))) {
+        if (!(await focusExistingAndCheckProceed(targetPath, switchSeq))) {
           return
         }
         const prevRoot = activeWorkspaceRootRef.current
@@ -582,10 +586,10 @@ export function MainAppShell() {
       })
     },
     [
+      focusExistingAndCheckProceed,
       guardUnsavedWorkspaceChanges,
       isDialogOpenRef,
       openWorkspace,
-      shouldProceedAfterFocusCheck,
       workspaceStatePersistence
     ]
   )
@@ -605,13 +609,13 @@ export function MainAppShell() {
         proceedSwitchAfterFocusCheck(targetPath, switchSeq)
         return
       }
-      void shouldProceedAfterFocusCheck(targetPath, switchSeq).then((proceed) => {
-        if (proceed) {
+      void focusExistingAndCheckProceed(targetPath, switchSeq).then((shouldProceed) => {
+        if (shouldProceed) {
           proceedSwitchAfterFocusCheck(targetPath, switchSeq)
         }
       })
     },
-    [proceedSwitchAfterFocusCheck, shouldProceedAfterFocusCheck, wikiApi]
+    [focusExistingAndCheckProceed, proceedSwitchAfterFocusCheck, wikiApi]
   )
 
   const handleOpenWorkspaceInNewWindow = useCallback(
