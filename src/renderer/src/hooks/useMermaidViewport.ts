@@ -2,6 +2,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -16,6 +17,10 @@ import {
   computeFitMetricsOrFallback,
   readViewportBox
 } from '../editor/mermaidContainFit'
+import {
+  type MermaidScrollResizeSession,
+  startMermaidScrollResizeSession
+} from '../editor/mermaidScrollResize'
 import { extractMermaidIntrinsicBounds } from '../editor/mermaidSvgBounds'
 import { type PointerDragStartEvent, usePointerDragSession } from './usePointerDragSession'
 
@@ -139,11 +144,14 @@ export function useMermaidViewport({
     startPanY: number
   } | null>(null)
 
-  const resizeOriginRef = useRef<{
-    startY: number
-    startHeight: number
-    heightBounds: MermaidHeightBounds
-  } | null>(null)
+  const activeResizeSessionRef = useRef<MermaidScrollResizeSession | null>(null)
+
+  const stopActiveResizeSession = useCallback(() => {
+    activeResizeSessionRef.current?.stop()
+    activeResizeSessionRef.current = null
+  }, [])
+
+  useEffect(() => stopActiveResizeSession, [stopActiveResizeSession])
 
   const measureViewportHeight = useCallback((): number | null => {
     const el = viewportRef.current
@@ -387,23 +395,27 @@ export function useMermaidViewport({
     bodyClassName: 'is-resizing-mermaid',
     cursor: 'row-resize',
     onDragStart: (event) => {
+      stopActiveResizeSession()
       const { startHeight, heightBounds } = resolveLiveResizeContext()
-      resizeOriginRef.current = {
-        startY: event.clientY,
-        startHeight,
-        heightBounds
-      }
       setDragStartHeightPx(startHeight)
+      activeResizeSessionRef.current = startMermaidScrollResizeSession({
+        viewportEl: viewportRef.current,
+        startClientY: event.clientY,
+        startHeight,
+        heightBounds,
+        onHeightChange: (nextHeightPx) => {
+          commitCustomHeight(nextHeightPx, heightBounds)
+        }
+      })
     },
     onDragMove: (event) => {
-      const origin = resizeOriginRef.current
-      if (!origin || typeof event.clientY !== 'number') {
+      if (typeof event.clientY !== 'number') {
         return
       }
-      commitCustomHeight(origin.startHeight + (event.clientY - origin.startY), origin.heightBounds)
+      activeResizeSessionRef.current?.updatePointer(event.clientY)
     },
     onDragEnd: () => {
-      resizeOriginRef.current = null
+      stopActiveResizeSession()
       setDragStartHeightPx(null)
     }
   })

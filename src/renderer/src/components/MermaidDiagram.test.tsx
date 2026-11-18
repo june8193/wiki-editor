@@ -2315,4 +2315,292 @@ describe('MermaidDiagram', () => {
       canvasStub.restore()
     }
   })
+
+  it('tracks resize drag in ancestor scroll-container document coordinates across wheel scrolls and bottom scrollTop decreases, then detaches scroll listener on drag end', async () => {
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+      }))
+    }
+    const renderer = createMermaidRenderer(driver)
+
+    render(
+      <div data-testid="scroll-container" style={{ overflowY: 'auto' }}>
+        <MermaidDiagram code={'graph TD\n  A-->B'} theme="light" renderer={renderer} debounceMs={0} />
+      </div>
+    )
+
+    const scrollContainer = screen.getByTestId('scroll-container')
+    const viewport = await screen.findByTestId('mermaid-svg')
+    const handle = screen.getByTestId('mermaid-resize-handle')
+
+    let currentScrollTop = 200
+    Object.defineProperties(scrollContainer, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 1200 },
+      scrollTop: {
+        configurable: true,
+        get: () => currentScrollTop,
+        set: (value: number) => {
+          currentScrollTop = value
+        }
+      }
+    })
+    mockElementBoundingRect(scrollContainer, { top: 50, width: 500, height: 400 })
+    mockElementBoundingRect(viewport, { width: 400, height: 200 })
+
+    // Start drag at clientY=250, scrollTop=200 (startDocY = 250 - 50 + 200 = 400)
+    fireEvent.pointerDown(handle, { button: 0, clientY: 250 })
+    fireEvent.pointerMove(window, { clientY: 290 })
+    expect(viewport.style.height).toBe('240px')
+    expect(handle).toHaveAttribute('aria-valuenow', '240')
+
+    // User wheel-scrolls container down while pointer stays at clientY=290 -> height tracks scrollTop (+110px)
+    currentScrollTop = 310
+    fireEvent.scroll(scrollContainer)
+    expect(viewport.style.height).toBe('350px')
+    expect(handle).toHaveAttribute('aria-valuenow', '350')
+
+    // Drag up to clientY=220, then bottom clamp reduces scrollTop by 50px -> height tracks document Y (230px)
+    fireEvent.pointerMove(window, { clientY: 220 })
+    expect(viewport.style.height).toBe('280px')
+
+    currentScrollTop = 260
+    fireEvent.scroll(scrollContainer)
+    expect(viewport.style.height).toBe('230px')
+    expect(handle).toHaveAttribute('aria-valuenow', '230')
+
+    // After pointerup, scrolling container no longer changes diagram height
+    fireEvent.pointerUp(window)
+    currentScrollTop = 100
+    fireEvent.scroll(scrollContainer)
+    expect(viewport.style.height).toBe('230px')
+  })
+
+  it('auto-scrolls downward via rAF in bottom 36px edge without deadlocking at document bottom, reconciles clamped scrollTop, and cleans up on cancel or unmount', async () => {
+    vi.useFakeTimers()
+
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+      }))
+    }
+    const renderer = createMermaidRenderer(driver)
+
+    const { unmount } = render(
+      <div data-testid="scroll-container" style={{ overflowY: 'auto' }}>
+        <MermaidDiagram code={'graph TD\n  A-->B'} theme="light" renderer={renderer} debounceMs={0} />
+      </div>
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    const scrollContainer = screen.getByTestId('scroll-container')
+    const viewport = screen.getByTestId('mermaid-svg')
+    const handle = screen.getByTestId('mermaid-resize-handle')
+
+    mockElementBoundingRect(scrollContainer, { top: 0, width: 500, height: 400 })
+    mockElementBoundingRect(viewport, { width: 400, height: 200 })
+
+    let currentScrollTop = 600
+    let maxScrollCeiling: number | null = null
+    Object.defineProperties(scrollContainer, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: {
+        configurable: true,
+        get: () => {
+          const renderedHeight = Number.parseFloat(viewport.style.height) || 200
+          return 800 + renderedHeight // initial 1000 => initial maxScrollTop = 600
+        }
+      },
+      scrollTop: {
+        configurable: true,
+        get: () => currentScrollTop,
+        set: (value: number) => {
+          const rawMax = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight)
+          const effectiveMax = maxScrollCeiling === null ? rawMax : Math.min(rawMax, maxScrollCeiling)
+          currentScrollTop = Math.max(0, Math.min(effectiveMax, value))
+        }
+      }
+    })
+
+    // 1. Directional deadzone: starting inside bottom 36px zone (380) and staying within +2px (382) does NOT auto-scroll
+    fireEvent.pointerDown(handle, { button: 0, clientY: 380 })
+    fireEvent.pointerMove(window, { clientY: 382 })
+    act(() => {
+      vi.advanceTimersByTime(64)
+    })
+    expect(currentScrollTop).toBe(600)
+    expect(viewport.style.height).toBe('202px')
+
+    // 2. Move into bottom 36px zone (390 >= 400 - 36, > 382) -> rAF expands height FIRST so scrollTop breaks bottom deadlock
+    fireEvent.pointerMove(window, { clientY: 390 })
+    const heightBeforeRaf = Number.parseFloat(viewport.style.height)
+    expect(heightBeforeRaf).toBe(210)
+
+    act(() => {
+      vi.advanceTimersByTime(16)
+    })
+    const heightAfterFrame1 = Number.parseFloat(viewport.style.height)
+    expect(heightAfterFrame1).toBeGreaterThan(heightBeforeRaf)
+    expect(currentScrollTop).toBe(600 + (heightAfterFrame1 - heightBeforeRaf))
+
+    // 3. Move pointer outside bottom edge (420) -> auto-scroll accelerates and expands both height and scrollTop
+    fireEvent.pointerMove(window, { clientY: 420 })
+    const heightBeforeOutside = Number.parseFloat(viewport.style.height)
+    const scrollBeforeOutside = currentScrollTop
+    act(() => {
+      vi.advanceTimersByTime(32)
+    })
+    const heightAfterOutside = Number.parseFloat(viewport.style.height)
+    const gainedOutside = heightAfterOutside - heightBeforeOutside
+    expect(gainedOutside).toBeGreaterThan(heightAfterFrame1 - heightBeforeRaf)
+    expect(currentScrollTop).toBe(scrollBeforeOutside + gainedOutside)
+
+    // 4. Move pointer back above bottom 36px threshold (350 < 364) -> rAF stops auto-scrolling
+    fireEvent.pointerMove(window, { clientY: 350 })
+    const settledScroll = currentScrollTop
+    const settledHeight = viewport.style.height
+    act(() => {
+      vi.advanceTimersByTime(80)
+    })
+    expect(currentScrollTop).toBe(settledScroll)
+    expect(viewport.style.height).toBe(settledHeight)
+
+    // 5. Partial scroll clamp reconciliation: if scrollTop can only advance +5px, height reconciles to +5px
+    fireEvent.pointerMove(window, { clientY: 420 })
+    const preClampHeight = Number.parseFloat(viewport.style.height)
+    const preClampScroll = currentScrollTop
+    maxScrollCeiling = preClampScroll + 5
+    act(() => {
+      vi.advanceTimersByTime(16)
+    })
+    expect(currentScrollTop).toBe(preClampScroll + 5)
+    expect(viewport.style.height).toBe(`${preClampHeight + 5}px`)
+
+    // 6. Cancel via pointercancel + re-enter & unmount while rAF is armed -> stops cleanly without further mutations
+    maxScrollCeiling = null
+    fireEvent(window, new Event('pointercancel'))
+    const scrollAfterCancel = currentScrollTop
+    const heightAfterCancel = viewport.style.height
+    act(() => {
+      vi.advanceTimersByTime(64)
+    })
+    expect(currentScrollTop).toBe(scrollAfterCancel)
+    expect(viewport.style.height).toBe(heightAfterCancel)
+
+    fireEvent.pointerDown(handle, { button: 0, clientY: 380 })
+    fireEvent.pointerMove(window, { clientY: 410 })
+    const cancelRafSpy = vi.spyOn(window, 'cancelAnimationFrame')
+    unmount()
+    expect(cancelRafSpy).toHaveBeenCalled()
+    const scrollAtUnmount = currentScrollTop
+    act(() => {
+      vi.advanceTimersByTime(64)
+    })
+    expect(currentScrollTop).toBe(scrollAtUnmount)
+    cancelRafSpy.mockRestore()
+  })
+
+  it('auto-scrolls upward via rAF in top 36px edge while scrollTop > 0, shrinks height via document coords, stops at scrollTop = 0, and cleans up on blur', async () => {
+    vi.useFakeTimers()
+
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+      }))
+    }
+    const renderer = createMermaidRenderer(driver)
+
+    render(
+      <div data-testid="scroll-container" style={{ overflowY: 'auto' }}>
+        <MermaidDiagram code={'graph TD\n  A-->B'} theme="light" renderer={renderer} debounceMs={0} />
+      </div>
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    const scrollContainer = screen.getByTestId('scroll-container')
+    const viewport = screen.getByTestId('mermaid-svg')
+    const handle = screen.getByTestId('mermaid-resize-handle')
+
+    mockElementBoundingRect(scrollContainer, { top: 40, width: 500, height: 400 })
+    mockElementBoundingRect(viewport, { width: 400, height: 700 })
+
+    let currentScrollTop = 200
+    Object.defineProperties(scrollContainer, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 1600 },
+      scrollTop: {
+        configurable: true,
+        get: () => currentScrollTop,
+        set: (value: number) => {
+          currentScrollTop = Math.max(0, Math.min(1200, value))
+        }
+      }
+    })
+
+    // 1. Directional deadzone: starting inside top 36px zone (60) and moving only -2px (58) does NOT auto-scroll
+    fireEvent.pointerDown(handle, { button: 0, clientY: 60 })
+    fireEvent.pointerMove(window, { clientY: 58 })
+    act(() => {
+      vi.advanceTimersByTime(64)
+    })
+    expect(currentScrollTop).toBe(200)
+    expect(viewport.style.height).toBe('698px')
+    fireEvent.pointerUp(window)
+
+    // 2. Drag from clientY=300 up into top 36px zone (clientY=60 <= 40 + 36) -> shrinks smoothly with upward scroll
+    mockElementBoundingRect(viewport, { width: 400, height: 700 })
+    fireEvent.pointerDown(handle, { button: 0, clientY: 300 })
+    fireEvent.pointerMove(window, { clientY: 60 })
+    const initialContractedHeight = Number.parseFloat(viewport.style.height)
+    // startDocY = 300 - 40 + 200 = 460; currentDocY = 60 - 40 + 200 = 220 => delta = -240 => 458 (from 698)
+    expect(initialContractedHeight).toBe(458)
+
+    act(() => {
+      vi.advanceTimersByTime(16)
+    })
+    const scrollAfterFrame1 = currentScrollTop
+    const heightAfterFrame1 = Number.parseFloat(viewport.style.height)
+    expect(scrollAfterFrame1).toBeLessThan(200)
+    expect(heightAfterFrame1).toBe(initialContractedHeight - (200 - scrollAfterFrame1))
+
+    // 3. Move above container top (clientY=10) -> accelerates and stops cleanly once scrollTop hits 0
+    fireEvent.pointerMove(window, { clientY: 10 })
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+    expect(currentScrollTop).toBe(0)
+    // At scrollTop = 0, currentDocY = 10 - 40 + 0 = -30 => 698 + (-30 - 460) = 208px
+    expect(viewport.style.height).toBe('208px')
+
+    // Extra time at scrollTop = 0 causes no further mutations
+    act(() => {
+      vi.advanceTimersByTime(80)
+    })
+    expect(currentScrollTop).toBe(0)
+    expect(viewport.style.height).toBe('208px')
+    fireEvent.pointerUp(window)
+
+    // 4. Blur during active top auto-scroll immediately cancels rAF loop
+    currentScrollTop = 150
+    fireEvent.pointerDown(handle, { button: 0, clientY: 200 })
+    fireEvent.pointerMove(window, { clientY: 50 })
+    fireEvent(window, new Event('blur'))
+    const scrollAtBlur = currentScrollTop
+    const heightAtBlur = viewport.style.height
+    act(() => {
+      vi.advanceTimersByTime(64)
+    })
+    expect(currentScrollTop).toBe(scrollAtBlur)
+    expect(viewport.style.height).toBe(heightAtBlur)
+  })
 })

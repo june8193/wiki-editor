@@ -1,11 +1,13 @@
 import { EditorView } from '@codemirror/view'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { WikiApi } from '@shared/ipc'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { buildWikiAssetUrl } from '@shared/assets'
+import themeCss from '../styles/theme.css?raw'
+import { mockElementBoundingRect } from '../test/domLayoutStub'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { DocumentEditor } from './DocumentEditor'
 import type { DocumentBuffer } from '@shared/documentBuffer'
@@ -1445,5 +1447,291 @@ describe('DocumentEditor local markdown image rendering across modes', () => {
     const refreshedImg = within(screen.getByTestId('image-preview')).getByRole('img', { name: 'architecture.png' })
     expect(refreshedImg).toHaveAttribute('src', buildWikiAssetUrl('C:/wiki/assets/architecture.png', 2))
     expect(screen.queryByText('이미지를 불러올 수 없습니다.')).not.toBeInTheDocument()
+  })
+})
+
+describe('DocumentEditor Mermaid scroll coordinates, 120px bottom padding, and edge auto-scroll', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('applies 120px bottom padding in WYSIWYG, Preview, and Split preview containers and resizes Mermaid via scroll coordinates and edge auto-scroll without mutating markdown', async () => {
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+    vi.useFakeTimers()
+
+    try {
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async () => ({
+          svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+        }))
+      }
+      const mermaidRenderer = createMermaidRenderer(driver)
+      const markdown = ['# Arch', '', 'Intro', '', '```mermaid', 'flowchart LR', '  A --> B', '```'].join('\n')
+      const doc = createDoc({ content: markdown, savedContent: markdown })
+      const onChangeContent = vi.fn()
+
+      const renderEditor = (mode: EditorMode) => (
+        <DocumentEditor
+          document={doc}
+          tab={createTab(mode)}
+          theme="light"
+          autoSave={false}
+          mermaidRenderer={mermaidRenderer}
+          onChangeContent={onChangeContent}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      const { container, rerender } = render(renderEditor('wysiwyg'))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      // 1. WYSIWYG scroll container has 120px bottom padding and supports doc-coord + edge auto-scroll resize
+      const wysiwygScroller = container.querySelector('.wysiwyg-scroll-container') as HTMLElement
+      expect(getComputedStyle(wysiwygScroller).paddingBottom).toBe('120px')
+
+      const wysiwygViewport = within(wysiwygScroller).getByTestId('mermaid-svg')
+      const wysiwygHandle = within(wysiwygScroller).getByTestId('mermaid-resize-handle')
+      mockElementBoundingRect(wysiwygScroller, { top: 40, width: 500, height: 360 })
+      mockElementBoundingRect(wysiwygViewport, { width: 400, height: 400 })
+
+      let wysScrollTop = 500
+      Object.defineProperties(wysiwygScroller, {
+        clientHeight: { configurable: true, value: 360 },
+        scrollHeight: {
+          configurable: true,
+          get: () => 660 + (Number.parseFloat(wysiwygViewport.style.height) || 400)
+        },
+        scrollTop: {
+          configurable: true,
+          get: () => wysScrollTop,
+          set: (val: number) => {
+            const max = Math.max(0, wysiwygScroller.scrollHeight - wysiwygScroller.clientHeight)
+            wysScrollTop = Math.max(0, Math.min(max, val))
+          }
+        }
+      })
+
+      // Drag down into bottom 36px zone (bottom = 400 -> threshold 364) -> expands height + scrollTop together
+      fireEvent.pointerDown(wysiwygHandle, { button: 0, clientY: 260 })
+      fireEvent.pointerMove(window, { clientY: 380 })
+      const heightBeforeAuto = Number.parseFloat(wysiwygViewport.style.height)
+      expect(heightBeforeAuto).toBe(520)
+
+      act(() => {
+        vi.advanceTimersByTime(32)
+      })
+      const heightAfterDownAuto = Number.parseFloat(wysiwygViewport.style.height)
+      expect(heightAfterDownAuto).toBeGreaterThan(520)
+      expect(wysScrollTop).toBe(500 + (heightAfterDownAuto - 520))
+
+      // Drag up into top 36px zone (top = 40 -> threshold 76) -> contracts smoothly with upward scroll
+      fireEvent.pointerMove(window, { clientY: 60 })
+      const heightBeforeUpAuto = Number.parseFloat(wysiwygViewport.style.height)
+      const scrollBeforeUpAuto = wysScrollTop
+      act(() => {
+        vi.advanceTimersByTime(16)
+      })
+      expect(wysScrollTop).toBeLessThan(scrollBeforeUpAuto)
+      expect(Number.parseFloat(wysiwygViewport.style.height)).toBe(
+        heightBeforeUpAuto - (scrollBeforeUpAuto - wysScrollTop)
+      )
+      fireEvent.pointerUp(window)
+      expect(onChangeContent).not.toHaveBeenCalled()
+
+      // 2. Standalone Preview scroll container has 120px bottom padding and supports bottom-edge auto-scroll
+      rerender(renderEditor('preview'))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const previewScroller = screen.getByTestId('document-editor')
+      expect(getComputedStyle(previewScroller).paddingBottom).toBe('120px')
+
+      const previewViewport = within(previewScroller).getByTestId('mermaid-svg')
+      const previewHandle = within(previewScroller).getByTestId('mermaid-resize-handle')
+      mockElementBoundingRect(previewScroller, { top: 0, width: 500, height: 320 })
+      mockElementBoundingRect(previewViewport, { width: 400, height: 180 })
+
+      let previewScrollTop = 400
+      Object.defineProperties(previewScroller, {
+        clientHeight: { configurable: true, value: 320 },
+        scrollHeight: {
+          configurable: true,
+          get: () => 540 + (Number.parseFloat(previewViewport.style.height) || 180)
+        },
+        scrollTop: {
+          configurable: true,
+          get: () => previewScrollTop,
+          set: (val: number) => {
+            const max = Math.max(0, previewScroller.scrollHeight - previewScroller.clientHeight)
+            previewScrollTop = Math.max(0, Math.min(max, val))
+          }
+        }
+      })
+
+      fireEvent.pointerDown(previewHandle, { button: 0, clientY: 200 })
+      fireEvent.pointerMove(window, { clientY: 310 })
+      act(() => {
+        vi.advanceTimersByTime(16)
+      })
+      expect(Number.parseFloat(previewViewport.style.height)).toBeGreaterThan(290)
+      expect(previewScrollTop).toBeGreaterThan(400)
+      fireEvent.pointerUp(window)
+
+      // 3. Split right Preview scroll container also has 120px bottom padding
+      rerender(renderEditor('split'))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const splitPreview = screen.getByTestId('split-markdown-preview')
+      expect(getComputedStyle(splitPreview).paddingBottom).toBe('120px')
+      expect(onChangeContent).not.toHaveBeenCalled()
+    } finally {
+      styleEl.remove()
+    }
+  })
+
+  it('keeps Split mode bidirectional scroll sync loop-free during Mermaid edge auto-scroll and cleans up rAF on unmount', async () => {
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+    vi.useFakeTimers()
+
+    try {
+      const mermaidLines = [
+        '```mermaid',
+        'flowchart LR',
+        '  A --> B',
+        '  B --> C',
+        '  C --> D',
+        '  D --> E',
+        '```'
+      ]
+      const trailingLines = Array.from({ length: 40 }, (_, i) => `- Trailing item ${i + 1}`)
+      const content = ['# Top', '', ...mermaidLines, '', ...trailingLines].join('\n')
+      const doc = createDoc({ content, savedContent: content })
+      let latestTab = createTab('split', 0.5)
+      const onUpdateViewState = vi.fn((patch: Partial<DocumentTabItem>) => {
+        latestTab = { ...latestTab, ...patch }
+      })
+      const driver: MermaidDriver = {
+        initialize: vi.fn(),
+        render: vi.fn(async () => ({
+          svg: '<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>'
+        }))
+      }
+
+      const { container, unmount } = render(
+        <DocumentEditor
+          document={doc}
+          tab={latestTab}
+          theme="light"
+          autoSave={false}
+          mermaidRenderer={createMermaidRenderer(driver)}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={onUpdateViewState}
+        />
+      )
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      const rawScroller = container.querySelector('.cm-scroller') as HTMLElement
+      const splitPreview = screen.getByTestId('split-markdown-preview') as HTMLElement
+      const cmView = EditorView.findFromDOM(rawScroller)!
+      expect(cmView).not.toBeNull()
+
+      Object.defineProperty(rawScroller, 'clientHeight', { configurable: true, value: 240 })
+      Object.defineProperty(rawScroller, 'scrollHeight', {
+        configurable: true,
+        get: () => cmView.contentHeight
+      })
+
+      const previewViewport = within(splitPreview).getByTestId('mermaid-svg')
+      const previewHandle = within(splitPreview).getByTestId('mermaid-resize-handle')
+      const h1 = splitPreview.querySelector('h1[data-source-line="1"]') as HTMLElement
+      const mermaidBlock = within(splitPreview).getByTestId('mermaid-diagram')
+      const ulEl = splitPreview.querySelector('ul[data-source-line]') as HTMLElement
+
+      const currentDiagramHeight = () => Number.parseFloat(previewViewport.style.height) || 200
+      let previewScrollTop = 180
+      const splitScrollWrites: number[] = []
+      Object.defineProperties(splitPreview, {
+        clientHeight: { configurable: true, value: 240 },
+        scrollHeight: {
+          configurable: true,
+          get: () => 900 + currentDiagramHeight()
+        },
+        scrollTop: {
+          configurable: true,
+          get: () => previewScrollTop,
+          set: (val: number) => {
+            const max = Math.max(0, splitPreview.scrollHeight - splitPreview.clientHeight)
+            previewScrollTop = Math.max(0, Math.min(max, val))
+            splitScrollWrites.push(previewScrollTop)
+          }
+        }
+      })
+      mockElementBoundingRect(splitPreview, { top: 0, width: 500, height: 240 })
+      mockElementBoundingRect(previewViewport, { width: 400, height: 200 })
+
+      h1.getBoundingClientRect = () => {
+        const y = 0 - previewScrollTop
+        return { top: y, left: 0, right: 500, bottom: y + 40, width: 500, height: 40, x: 0, y, toJSON: () => ({}) }
+      }
+      mermaidBlock.getBoundingClientRect = () => {
+        const h = currentDiagramHeight()
+        const y = 60 - previewScrollTop
+        return { top: y, left: 0, right: 500, bottom: y + h, width: 500, height: h, x: 0, y, toJSON: () => ({}) }
+      }
+      ulEl.getBoundingClientRect = () => {
+        const y = 80 + currentDiagramHeight() - previewScrollTop
+        return { top: y, left: 0, right: 500, bottom: y + 600, width: 500, height: 600, x: 0, y, toJSON: () => ({}) }
+      }
+
+      // Drag Mermaid handle into Split preview bottom 36px edge zone -> triggers rAF auto-scroll
+      fireEvent.pointerDown(previewHandle, { button: 0, clientY: 160 })
+      fireEvent.pointerMove(window, { clientY: 230 })
+      act(() => {
+        vi.advanceTimersByTime(16)
+      })
+      expect(previewScrollTop).toBeGreaterThan(180)
+      const syncedPreviewTop = previewScrollTop
+
+      // Browser scroll event on Split preview syncs Raw editor without echo ping-pong back to Split preview
+      onUpdateViewState.mockClear()
+      fireEvent.scroll(splitPreview)
+      expect(rawScroller.scrollTop).toBeGreaterThan(0)
+      expect(onUpdateViewState).toHaveBeenCalledTimes(1)
+      expect(onUpdateViewState).toHaveBeenCalledWith({ scrollTop: rawScroller.scrollTop })
+
+      // Immediate echo scroll from Raw is ignored by ScrollSyncLoopGuard (Split preview scrollTop stays untouched)
+      splitScrollWrites.length = 0
+      const syncedRawTop = rawScroller.scrollTop
+      fireEvent.scroll(rawScroller)
+      expect(previewScrollTop).toBe(syncedPreviewTop)
+      expect(rawScroller.scrollTop).toBe(syncedRawTop)
+      expect(splitScrollWrites).toHaveLength(0)
+
+      // Unmounting while edge auto-scroll is active cancels rAF cleanly
+      const cancelRafSpy = vi.spyOn(window, 'cancelAnimationFrame')
+      unmount()
+      expect(cancelRafSpy).toHaveBeenCalled()
+      const scrollAtUnmount = previewScrollTop
+      act(() => {
+        vi.advanceTimersByTime(64)
+      })
+      expect(previewScrollTop).toBe(scrollAtUnmount)
+      cancelRafSpy.mockRestore()
+    } finally {
+      styleEl.remove()
+    }
   })
 })
