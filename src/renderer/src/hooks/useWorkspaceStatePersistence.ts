@@ -1,19 +1,45 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
+import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import { getWorkspacePathKey } from '@shared/workspace'
-import type { WorkspaceStateUpdate } from '@shared/workspaceState'
+import {
+  createEmptyPersistedWorkspaceLayout,
+  type PersistedWorkspacePaneLayout,
+  type PersistedWorkspaceState,
+  type WorkspaceStateUpdate
+} from '@shared/workspaceState'
+import {
+  type PaneLayoutState,
+  serializePaneLayoutForWorkspace
+} from '../stores/PaneTabStore'
 import { useWikiApi } from './useWikiApi'
-import type { RestoredWorkspaceContext } from './useWorkspaceTree'
 
 export const DEFAULT_WORKSPACE_STATE_SAVE_DEBOUNCE_MS = 250
+
+export interface RestoredWorkspacePersistenceState {
+  rootPath: string
+  persistedState: PersistedWorkspaceState | null
+  restoredExpandedDirs: readonly string[]
+  restoredLayout: PersistedWorkspacePaneLayout
+  hadPrunedState: boolean
+}
 
 export interface UseWorkspaceStatePersistenceOptions {
   workspaceRootPath: string | null
   expandedDirs: ReadonlySet<string>
+  layout: PaneLayoutState
+  buffers: DocumentBufferSnapshot
+  getLatestLayoutSnapshot?: () => {
+    layout: PaneLayoutState
+    buffers: DocumentBufferSnapshot
+  }
   debounceMs?: number
 }
 
-function serializeExpandedDirsSignature(dirs: readonly string[]): string {
-  return JSON.stringify(dirs)
+function serializeWorkspaceStateSignature(
+  dirs: readonly string[],
+  layout: PersistedWorkspacePaneLayout
+): string {
+  return JSON.stringify({ expandedDirs: dirs, layout })
 }
 
 /**
@@ -22,12 +48,20 @@ function serializeExpandedDirsSignature(dirs: readonly string[]): string {
 export function useWorkspaceStatePersistence({
   workspaceRootPath,
   expandedDirs,
+  layout,
+  buffers,
+  getLatestLayoutSnapshot,
   debounceMs = DEFAULT_WORKSPACE_STATE_SAVE_DEBOUNCE_MS
 }: UseWorkspaceStatePersistenceOptions) {
   const wikiApi = useWikiApi()
   const trackedRootPathRef = useRef<string | null>(null)
   const trackedRootKeyRef = useRef<string | null>(null)
   const latestExpandedDirsRef = useRef<string[]>([])
+  const latestLayoutRef = useRef<PersistedWorkspacePaneLayout>(
+    createEmptyPersistedWorkspaceLayout()
+  )
+  const getLatestLayoutSnapshotRef = useRef(getLatestLayoutSnapshot)
+  getLatestLayoutSnapshotRef.current = getLatestLayoutSnapshot
   const lastSavedSignatureRef = useRef<string | null>(null)
   const hasPendingSaveRef = useRef<boolean>(false)
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -38,6 +72,9 @@ export function useWorkspaceStatePersistence({
     getWorkspacePathKey(workspaceRootPath) === trackedRootKeyRef.current
   if (workspaceMatchesTracked) {
     latestExpandedDirsRef.current = [...expandedDirs]
+    if (!getLatestLayoutSnapshotRef.current) {
+      latestLayoutRef.current = serializePaneLayoutForWorkspace(workspaceRootPath, layout, buffers)
+    }
   }
 
   const clearDebounceTimer = useCallback((): void => {
@@ -50,11 +87,22 @@ export function useWorkspaceStatePersistence({
   const flush = useCallback(async (): Promise<void> => {
     clearDebounceTimer()
     const targetRoot = trackedRootPathRef.current
-    if (!targetRoot || !hasPendingSaveRef.current) {
+    if (!targetRoot) {
       return
     }
     const dirsSnapshot = [...latestExpandedDirsRef.current]
-    const signatureSnapshot = serializeExpandedDirsSignature(dirsSnapshot)
+    const liveLayoutSnapshot = getLatestLayoutSnapshotRef.current?.()
+    const layoutSnapshot = liveLayoutSnapshot
+      ? serializePaneLayoutForWorkspace(
+          targetRoot,
+          liveLayoutSnapshot.layout,
+          liveLayoutSnapshot.buffers
+        )
+      : latestLayoutRef.current
+    const signatureSnapshot = serializeWorkspaceStateSignature(dirsSnapshot, layoutSnapshot)
+    if (!hasPendingSaveRef.current && signatureSnapshot === lastSavedSignatureRef.current) {
+      return
+    }
     hasPendingSaveRef.current = false
     lastSavedSignatureRef.current = signatureSnapshot
 
@@ -62,7 +110,10 @@ export function useWorkspaceStatePersistence({
     if (!saveApi) {
       return
     }
-    const update: WorkspaceStateUpdate = { expandedDirs: dirsSnapshot }
+    const update: WorkspaceStateUpdate = {
+      expandedDirs: dirsSnapshot,
+      layout: layoutSnapshot
+    }
     await saveApi(targetRoot, update).catch(() => undefined)
   }, [clearDebounceTimer, wikiApi])
 
@@ -75,19 +126,23 @@ export function useWorkspaceStatePersistence({
   }, [clearDebounceTimer, debounceMs, flush])
 
   const markRestored = useCallback(
-    (context: RestoredWorkspaceContext): void => {
+    (context: RestoredWorkspacePersistenceState): void => {
       clearDebounceTimer()
       const dirs = [...context.restoredExpandedDirs]
       trackedRootPathRef.current = context.rootPath
       trackedRootKeyRef.current = getWorkspacePathKey(context.rootPath)
       latestExpandedDirsRef.current = dirs
+      latestLayoutRef.current = context.restoredLayout
 
-      if (context.hadPrunedExpandedDirs && context.persistedState !== null) {
+      if (context.hadPrunedState && context.persistedState !== null) {
         lastSavedSignatureRef.current = null
         hasPendingSaveRef.current = true
         scheduleSave()
       } else {
-        lastSavedSignatureRef.current = serializeExpandedDirsSignature(dirs)
+        lastSavedSignatureRef.current = serializeWorkspaceStateSignature(
+          dirs,
+          context.restoredLayout
+        )
         hasPendingSaveRef.current = false
       }
     },
@@ -113,14 +168,20 @@ export function useWorkspaceStatePersistence({
       return
     }
     const nextDirs = [...expandedDirs]
+    const nextLayout = serializePaneLayoutForWorkspace(workspaceRootPath, layout, buffers)
     latestExpandedDirsRef.current = nextDirs
-    const nextSignature = serializeExpandedDirsSignature(nextDirs)
+    latestLayoutRef.current = nextLayout
+    const nextSignature = serializeWorkspaceStateSignature(nextDirs, nextLayout)
     if (nextSignature === lastSavedSignatureRef.current) {
+      if (hasPendingSaveRef.current) {
+        hasPendingSaveRef.current = false
+        clearDebounceTimer()
+      }
       return
     }
     hasPendingSaveRef.current = true
     scheduleSave()
-  }, [expandedDirs, scheduleSave, workspaceRootPath])
+  }, [buffers, clearDebounceTimer, expandedDirs, layout, scheduleSave, workspaceRootPath])
 
   useEffect(() => {
     const handleBeforeUnload = (): void => {

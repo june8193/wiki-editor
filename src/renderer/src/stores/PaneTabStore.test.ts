@@ -4,8 +4,10 @@ import {
   canSplitWithTab,
   normalizeSplitRatio,
   PaneTabStore,
+  serializePaneLayoutForWorkspace,
   type PaneTabTransition
 } from './PaneTabStore'
+import { createDocumentBuffer } from '@shared/documentBufferStore'
 
 describe('PaneTabStore', () => {
   it('opens tabs, deduplicates within a pane, switches active tab, and selects neighbor on close', () => {
@@ -621,5 +623,125 @@ describe('PaneTabStore', () => {
     expect(afterSecond.splitMode).toBe('single')
     expect(afterSecond.panes.secondary.tabs).toHaveLength(0)
     expect(afterSecond.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id, commitTab.id])
+  })
+
+  it('serializes workspace tabs excluding diff, config, and outside-root entries and restores layout while preserving config tabs', () => {
+    const store = new PaneTabStore()
+    const aTab = store.openTab('c:/wiki/alpha/a.md', {
+      mode: 'wysiwyg',
+      cursor: { selectionStart: 2, selectionEnd: 6 },
+      scrollTop: 140,
+      splitPreviewRatio: 0.35
+    })
+    const bTab = store.openTab('c:/wiki/alpha/b.md', { paneId: 'secondary', mode: 'split', splitPreviewRatio: 0.7 })
+    store.openDiffTab({ kind: 'unstaged', path: 'a.md', status: 'M' }, { paneId: 'secondary' })
+    store.openTab('c:/users/test/config.json', { paneId: 'primary' })
+    store.openTab('c:/outside/secret.md', { paneId: 'secondary' })
+    store.setSplitMode('vertical')
+    store.setSplitRatio(0.62)
+    store.activateTab('primary', aTab.id)
+    store.focusPane('secondary')
+
+    const buffers = {
+      'c:/wiki/alpha/a.md': createDocumentBuffer({ kind: 'workspace', path: 'C:\\wiki\\alpha\\a.md', content: '# A' }),
+      'c:/wiki/alpha/b.md': createDocumentBuffer({ kind: 'workspace', path: 'C:\\wiki\\alpha\\b.md', content: '# B' }),
+      'c:/users/test/config.json': createDocumentBuffer({ kind: 'config', path: 'C:\\Users\\test\\config.json', content: '{}' }),
+      'c:/outside/secret.md': createDocumentBuffer({ kind: 'workspace', path: 'C:\\outside\\secret.md', content: '# Secret' })
+    }
+
+    const serialized = serializePaneLayoutForWorkspace('C:\\wiki\\alpha', store.getSnapshot(), buffers)
+    expect(serialized).toEqual({
+      splitMode: 'vertical',
+      splitRatio: 0.62,
+      activePaneId: 'secondary',
+      panes: {
+        primary: {
+          tabs: [
+            {
+              path: 'C:\\wiki\\alpha\\a.md',
+              mode: 'wysiwyg',
+              cursor: { selectionStart: 2, selectionEnd: 6 },
+              scrollTop: 140,
+              splitPreviewRatio: 0.35
+            }
+          ],
+          activeTabPath: 'C:\\wiki\\alpha\\a.md'
+        },
+        secondary: {
+          tabs: [
+            {
+              path: 'C:\\wiki\\alpha\\b.md',
+              mode: 'split',
+              cursor: { selectionStart: 0, selectionEnd: 0 },
+              scrollTop: 0,
+              splitPreviewRatio: 0.7
+            }
+          ],
+          activeTabPath: 'C:\\wiki\\alpha\\b.md'
+        }
+      }
+    })
+
+    // Simulate workspace switch keeping only config.json open, then restoring workspace beta layout
+    store.closeTabsByBufferKeys(['c:/wiki/alpha/a.md', 'c:/wiki/alpha/b.md', 'c:/outside/secret.md'])
+    store.closeAllDiffTabs()
+    expect(store.getBufferKeys()).toEqual(['c:/users/test/config.json'])
+
+    store.restoreWorkspaceLayout(
+      {
+        splitMode: 'horizontal',
+        splitRatio: 0.4,
+        activePaneId: 'secondary',
+        panes: {
+          primary: {
+            tabs: [
+              {
+                bufferKey: 'c:/wiki/beta/one.md',
+                mode: 'preview',
+                cursor: { selectionStart: 0, selectionEnd: 0 },
+                scrollTop: 80,
+                splitPreviewRatio: 0.5
+              }
+            ],
+            activeTabKey: 'c:/wiki/beta/one.md'
+          },
+          secondary: {
+            tabs: [
+              {
+                bufferKey: 'c:/wiki/beta/two.md',
+                mode: 'raw',
+                cursor: { selectionStart: 4, selectionEnd: 9 },
+                scrollTop: 220,
+                splitPreviewRatio: 0.5
+              }
+            ],
+            activeTabKey: 'c:/wiki/beta/two.md'
+          }
+        }
+      },
+      {
+        preserveTab: (tab) =>
+          tab.kind === 'document' && tab.bufferKey === 'c:/users/test/config.json'
+      }
+    )
+
+    const restored = store.getSnapshot()
+    expect(restored.splitMode).toBe('horizontal')
+    expect(restored.splitRatio).toBe(0.4)
+    expect(restored.activePaneId).toBe('secondary')
+    expect(
+      restored.panes.primary.tabs.map((t) => (t.kind === 'document' ? t.bufferKey : ''))
+    ).toEqual(['c:/wiki/beta/one.md', 'c:/users/test/config.json'])
+    expect(restored.panes.primary.activeTabId).toBe(restored.panes.primary.tabs[0].id)
+    expect(
+      restored.panes.secondary.tabs.map((t) => (t.kind === 'document' ? t.bufferKey : ''))
+    ).toEqual(['c:/wiki/beta/two.md'])
+    expect(restored.panes.secondary.activeTabId).toBe(restored.panes.secondary.tabs[0].id)
+    expect(restored.panes.secondary.tabs[0]).toMatchObject({
+      mode: 'raw',
+      cursor: { selectionStart: 4, selectionEnd: 9 },
+      scrollTop: 220
+    })
+    expect(bTab.id).not.toBe(restored.panes.secondary.tabs[0].id)
   })
 })

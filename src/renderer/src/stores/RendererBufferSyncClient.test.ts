@@ -610,12 +610,12 @@ describe('RendererBufferSyncClient race guards', () => {
       initialAutoSaveConfig: { autoSave: false },
       storage: {
         readWorkspaceFile: async (filePath) => {
-          const val = files.get(filePath)
+          const val = files.get(filePath.replace(/\\/g, '/'))
           if (val === undefined) throw new Error(`ENOENT: ${filePath}`)
           return val
         },
         writeWorkspaceFile: async (filePath, content) => {
-          files.set(filePath, content)
+          files.set(filePath.replace(/\\/g, '/'), content)
         },
         getConfigPath: async () => 'C:/Users/test/config.json',
         readConfigRaw: async () => '{}',
@@ -718,6 +718,145 @@ describe('RendererBufferSyncClient race guards', () => {
       stop2()
       win1.detach()
       win2.detach()
+      hub.dispose()
+    }
+  })
+
+  it('restores workspace layout, skips missing text/image files silently, promotes secondary when primary empties, preserves config, and respects cancellation', async () => {
+    const files = new Map<string, string>([
+      ['C:/wiki/keep.md', '# Keep'],
+      ['C:/wiki/sec.md', '# Secondary'],
+      ['C:/wiki/assets/ok.png', '<png>']
+    ])
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async (filePath) => {
+          const val = files.get(filePath.replace(/\\/g, '/'))
+          if (val === undefined) throw new Error(`ENOENT: ${filePath}`)
+          return val
+        },
+        writeWorkspaceFile: async (filePath, content) => {
+          files.set(filePath.replace(/\\/g, '/'), content)
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{"theme":"light"}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+    const win1 = attachWindowClient(hub, 1, createMockWindowApi('main'))
+    const stop1 = win1.client.start()
+
+    try {
+      await win1.client.openConfigDocument()
+      expect(win1.tabStore.getBufferKeys()).toEqual(['c:/users/test/config.json'])
+      win1.onError.mockClear()
+
+      // 1. Primary has only missing text & deleted image + outside path; secondary has valid sec.md -> promotes sec.md to primary in single mode
+      const promotedResult = await win1.client.restoreWorkspaceLayout({
+        rootPath: 'C:\\wiki',
+        persistedLayout: {
+          splitMode: 'vertical',
+          splitRatio: 0.4,
+          activePaneId: 'secondary',
+          panes: {
+            primary: {
+              tabs: [
+                {
+                  path: 'C:\\wiki\\missing.md',
+                  mode: 'raw',
+                  cursor: { selectionStart: 0, selectionEnd: 0 },
+                  scrollTop: 0,
+                  splitPreviewRatio: 0.5
+                },
+                {
+                  path: 'C:\\wiki\\assets\\deleted.png',
+                  mode: 'raw',
+                  cursor: { selectionStart: 0, selectionEnd: 0 },
+                  scrollTop: 0,
+                  splitPreviewRatio: 0.5
+                },
+                {
+                  path: 'C:\\outside\\secret.md',
+                  mode: 'raw',
+                  cursor: { selectionStart: 0, selectionEnd: 0 },
+                  scrollTop: 0,
+                  splitPreviewRatio: 0.5
+                }
+              ],
+              activeTabPath: 'C:\\wiki\\missing.md'
+            },
+            secondary: {
+              tabs: [
+                {
+                  path: 'C:\\wiki\\sec.md',
+                  mode: 'preview',
+                  cursor: { selectionStart: 0, selectionEnd: 0 },
+                  scrollTop: 75,
+                  splitPreviewRatio: 0.5
+                }
+              ],
+              activeTabPath: 'C:\\wiki\\sec.md'
+            }
+          }
+        },
+        readDir: async (dirPath) => {
+          if (dirPath.replace(/\\/g, '/').toLowerCase() === 'c:/wiki/assets') {
+            return [
+              {
+                name: 'ok.png',
+                path: 'C:/wiki/assets/ok.png',
+                relativePath: 'assets/ok.png',
+                kind: 'file'
+              }
+            ]
+          }
+          return []
+        }
+      })
+
+      expect(win1.onError).not.toHaveBeenCalled()
+      expect(promotedResult.restored).toBe(true)
+      expect(promotedResult.hadPrunedTabs).toBe(true)
+      expect(promotedResult.reconciledLayout.splitMode).toBe('single')
+      expect(win1.tabStore.getSnapshot().splitMode).toBe('single')
+      expect(win1.tabStore.getSnapshot().activePaneId).toBe('primary')
+      expect(win1.tabStore.getBufferKeys()).toEqual(['c:/wiki/sec.md', 'c:/users/test/config.json'])
+      expect(win1.tabStore.getSnapshot().panes.primary.tabs[0]).toMatchObject({
+        mode: 'preview',
+        scrollTop: 75
+      })
+
+      // 2. Cancelled restore leaves existing tabs untouched
+      const cancelledResult = await win1.client.restoreWorkspaceLayout({
+        rootPath: 'C:\\wiki',
+        persistedLayout: {
+          splitMode: 'single',
+          splitRatio: 0.5,
+          activePaneId: 'primary',
+          panes: {
+            primary: {
+              tabs: [
+                {
+                  path: 'C:\\wiki\\keep.md',
+                  mode: 'raw',
+                  cursor: { selectionStart: 0, selectionEnd: 0 },
+                  scrollTop: 0,
+                  splitPreviewRatio: 0.5
+                }
+              ],
+              activeTabPath: 'C:\\wiki\\keep.md'
+            },
+            secondary: { tabs: [], activeTabPath: null }
+          }
+        },
+        isCancelled: () => true
+      })
+      expect(cancelledResult.restored).toBe(false)
+      expect(win1.tabStore.getBufferKeys()).toEqual(['c:/wiki/sec.md', 'c:/users/test/config.json'])
+    } finally {
+      stop1()
+      win1.detach()
       hub.dispose()
     }
   })

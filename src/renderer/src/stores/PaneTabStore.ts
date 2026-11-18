@@ -1,4 +1,4 @@
-import type { BufferKeyRemap } from '@shared/documentBuffer'
+import type { BufferKeyRemap, DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { GitDiffRequest } from '@shared/git'
 import {
   clampSplitRatio,
@@ -15,6 +15,14 @@ import {
   type TabTransferPayload,
   type TabViewState
 } from '@shared/window'
+import { resolveNormalizedWorkspacePath, resolveWorkspaceChildPath } from '@shared/workspace'
+import {
+  type PersistedWorkspacePaneLayout,
+  type PersistedWorkspacePaneState,
+  type PersistedWorkspaceTabState,
+  createEmptyPersistedWorkspaceLayout,
+  reconcilePersistedWorkspaceLayout
+} from '@shared/workspaceState'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 
 export type { CursorPosition, EditorMode, PaneId, SplitDirection, SplitMode, TabViewState }
@@ -114,6 +122,26 @@ export interface PaneTabStoreOptions {
   onTransition?: (transition: PaneTabTransition) => void
 }
 
+export interface RestoreWorkspaceTabInput extends TabViewState {
+  bufferKey: string
+}
+
+export interface RestoreWorkspacePaneInput {
+  tabs: readonly RestoreWorkspaceTabInput[]
+  activeTabKey: string | null
+}
+
+export interface RestoreWorkspaceLayoutInput {
+  splitMode: SplitMode
+  splitRatio: number
+  activePaneId: PaneId
+  panes: Record<PaneId, RestoreWorkspacePaneInput>
+}
+
+export interface RestoreWorkspaceLayoutOptions {
+  preserveTab?: (tab: TabItem) => boolean
+}
+
 function createInitialState(): PaneLayoutState {
   return {
     splitMode: 'single',
@@ -164,25 +192,16 @@ function insertTabAt(
   return next
 }
 
-function reconcileRemovedLayout(
+function collapseOrPromoteSplitLayout(
   primary: PaneState,
   secondary: PaneState,
-  currentSplitMode: SplitMode,
-  currentActivePaneId: PaneId,
-  hadSecondaryTabs: boolean,
+  splitMode: SplitMode,
+  activePaneId: PaneId,
   promoteSecondaryIfPrimaryEmpty: boolean
 ): Pick<PaneLayoutState, 'splitMode' | 'activePaneId' | 'panes'> {
-  if (hadSecondaryTabs && secondary.tabs.length === 0) {
-    return {
-      splitMode: 'single',
-      activePaneId: 'primary',
-      panes: { primary, secondary }
-    }
-  }
   if (
     promoteSecondaryIfPrimaryEmpty &&
     primary.tabs.length === 0 &&
-    currentSplitMode !== 'single' &&
     secondary.tabs.length > 0
   ) {
     return {
@@ -198,11 +217,42 @@ function reconcileRemovedLayout(
       }
     }
   }
+  if (secondary.tabs.length === 0) {
+    return {
+      splitMode: 'single',
+      activePaneId: 'primary',
+      panes: { primary, secondary }
+    }
+  }
   return {
-    splitMode: currentSplitMode,
-    activePaneId: currentActivePaneId,
+    splitMode,
+    activePaneId,
     panes: { primary, secondary }
   }
+}
+
+function reconcileRemovedLayout(
+  primary: PaneState,
+  secondary: PaneState,
+  currentSplitMode: SplitMode,
+  currentActivePaneId: PaneId,
+  hadSecondaryTabs: boolean,
+  promoteSecondaryIfPrimaryEmpty: boolean
+): Pick<PaneLayoutState, 'splitMode' | 'activePaneId' | 'panes'> {
+  if (hadSecondaryTabs && secondary.tabs.length === 0) {
+    return {
+      splitMode: 'single',
+      activePaneId: 'primary',
+      panes: { primary, secondary }
+    }
+  }
+  return collapseOrPromoteSplitLayout(
+    primary,
+    secondary,
+    currentSplitMode,
+    currentActivePaneId,
+    promoteSecondaryIfPrimaryEmpty && currentSplitMode !== 'single'
+  )
 }
 
 export function getPaneActiveTab(pane: PaneState): TabItem | null {
@@ -268,6 +318,57 @@ export function countLayoutTabs(layout: PaneLayoutState): number {
     count += pane.tabs.length
   }
   return count
+}
+
+/**
+ * Serializes the main window's pane layout into a persisted workspace layout, excluding diff tabs,
+ * non-workspace buffers (such as global config.json), and paths outside the workspace root.
+ */
+export function serializePaneLayoutForWorkspace(
+  rootPath: string,
+  layout: PaneLayoutState,
+  buffers: DocumentBufferSnapshot
+): PersistedWorkspacePaneLayout {
+  const normalizedRoot = resolveNormalizedWorkspacePath(rootPath)
+  if (!normalizedRoot) {
+    return createEmptyPersistedWorkspaceLayout()
+  }
+
+  const serializePane = (pane: PaneState): PersistedWorkspacePaneState => {
+    const tabs: PersistedWorkspaceTabState[] = []
+    let activeTabPath: string | null = null
+
+    for (const tab of pane.tabs) {
+      if (tab.kind !== 'document') continue
+      const buffer = buffers[tab.bufferKey]
+      if (!buffer || buffer.kind !== 'workspace') continue
+      const validPath = resolveWorkspaceChildPath(normalizedRoot, buffer.path)
+      if (!validPath) continue
+
+      tabs.push({
+        path: validPath,
+        mode: tab.mode,
+        cursor: { ...tab.cursor },
+        scrollTop: tab.scrollTop,
+        splitPreviewRatio: normalizeSplitRatio(tab.splitPreviewRatio)
+      })
+      if (tab.id === pane.activeTabId) {
+        activeTabPath = validPath
+      }
+    }
+
+    return { tabs, activeTabPath }
+  }
+
+  return reconcilePersistedWorkspaceLayout({
+    splitMode: layout.splitMode,
+    splitRatio: layout.splitRatio,
+    activePaneId: layout.activePaneId,
+    panes: {
+      primary: serializePane(layout.panes.primary),
+      secondary: serializePane(layout.panes.secondary)
+    }
+  })
 }
 /**
  * Manages up to 2 split panes, independent per-pane tab bars, and lightweight inactive tab state.
@@ -978,6 +1079,112 @@ export class PaneTabStore {
 
   closeAllUnstagedDiffTabs = (): void => {
     this.removeTabsWhere((tab) => tab.kind === 'diff' && tab.diff.request.kind === 'unstaged')
+  }
+
+  restoreWorkspaceLayout = (
+    input: RestoreWorkspaceLayoutInput,
+    options: RestoreWorkspaceLayoutOptions = {}
+  ): void => {
+    const transitions: PaneTabTransition[] = []
+    const buildPane = (paneId: PaneId): { pane: PaneState; restoredCount: number } => {
+      const existingPane = this.state.panes[paneId]
+      const inputPane = input.panes[paneId]
+      const seenKeys = new Set<string>()
+      const restoredTabs: DocumentTabItem[] = []
+
+      for (const tabInput of inputPane.tabs) {
+        if (seenKeys.has(tabInput.bufferKey)) continue
+        seenKeys.add(tabInput.bufferKey)
+        const created: DocumentTabItem = {
+          id: this.nextTabId(),
+          kind: 'document',
+          bufferKey: tabInput.bufferKey,
+          mode: tabInput.mode,
+          cursor: { ...tabInput.cursor },
+          scrollTop: tabInput.scrollTop,
+          splitPreviewRatio: normalizeSplitRatio(
+            tabInput.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO
+          )
+        }
+        restoredTabs.push(created)
+        transitions.push({ type: 'tab-opened', paneId, tab: created })
+      }
+
+      const preservedTabs = options.preserveTab
+        ? existingPane.tabs.filter(
+            (tab) => options.preserveTab!(tab) && !seenKeys.has(getTabIdentityKey(tab))
+          )
+        : []
+
+      const tabs = [...restoredTabs, ...preservedTabs]
+      let activeTabId: string | null = null
+      if (restoredTabs.length > 0) {
+        activeTabId =
+          (inputPane.activeTabKey
+            ? restoredTabs.find((tab) => tab.bufferKey === inputPane.activeTabKey)?.id
+            : undefined) ?? restoredTabs[0].id
+      } else if (preservedTabs.length > 0) {
+        activeTabId =
+          existingPane.activeTabId &&
+          preservedTabs.some((tab) => tab.id === existingPane.activeTabId)
+            ? existingPane.activeTabId
+            : preservedTabs[0].id
+      }
+
+      return {
+        pane: { id: paneId, tabs, activeTabId },
+        restoredCount: restoredTabs.length
+      }
+    }
+
+    const builtPrimary = buildPane('primary')
+    const builtSecondary = buildPane('secondary')
+    const hasAnyRestoredTab = builtPrimary.restoredCount > 0 || builtSecondary.restoredCount > 0
+    const nextSplitRatio =
+      hasAnyRestoredTab || input.splitMode !== 'single'
+        ? normalizeSplitRatio(input.splitRatio)
+        : this.state.splitRatio
+
+    const candidateSplitMode: SplitMode =
+      input.splitMode !== 'single'
+        ? input.splitMode
+        : this.state.splitMode !== 'single'
+          ? this.state.splitMode
+          : 'horizontal'
+    const candidateActivePaneId: PaneId = hasAnyRestoredTab
+      ? input.activePaneId === 'secondary'
+        ? 'secondary'
+        : 'primary'
+      : this.state.activePaneId === 'secondary'
+        ? 'secondary'
+        : 'primary'
+
+    const reconciled = collapseOrPromoteSplitLayout(
+      builtPrimary.pane,
+      builtSecondary.pane,
+      candidateSplitMode,
+      candidateActivePaneId,
+      true
+    )
+
+    if (
+      !hasAnyRestoredTab &&
+      reconciled.splitMode === this.state.splitMode &&
+      nextSplitRatio === this.state.splitRatio &&
+      reconciled.activePaneId === this.state.activePaneId &&
+      reconciled.panes.primary.tabs.length === this.state.panes.primary.tabs.length &&
+      reconciled.panes.secondary.tabs.length === this.state.panes.secondary.tabs.length
+    ) {
+      return
+    }
+
+    this.commit(
+      {
+        ...reconciled,
+        splitRatio: nextSplitRatio
+      },
+      transitions
+    )
   }
 
   private removeTabsWhere(shouldRemove: (tab: TabItem) => boolean): void {

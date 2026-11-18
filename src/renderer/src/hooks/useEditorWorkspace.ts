@@ -292,6 +292,11 @@ export function useEditorWorkspace({
     prepareWorkspacePathsForDiscard: syncClient.prepareWorkspacePathsForDiscard,
     finishWorkspacePathsDiscard: syncClient.finishWorkspacePathsDiscard,
     clearWorkspaceBuffers: syncClient.clearWorkspaceBuffers,
+    restoreWorkspaceLayout: syncClient.restoreWorkspaceLayout,
+    getLayoutSnapshot: () => ({
+      layout: tabStore.getSnapshot(),
+      buffers: bufferStore.getSnapshot()
+    }),
     syncRenamedPath: syncClient.syncRenamedPath,
     syncDeletedPath: syncClient.syncDeletedPath,
     reconcileWorkspaceBuffersWithDisk: syncClient.reconcileWorkspaceBuffersWithDisk

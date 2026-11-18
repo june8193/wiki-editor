@@ -6,12 +6,17 @@ import {
   filterTopLevelWorkspaceEntries,
   formatAbsoluteEntryPath,
   formatRelativeEntryPath,
+  getWorkspacePathKey,
   isFavoriteWorkspacePath,
   isSameWorkspacePath,
   resolveRepoFileInWorkspace,
   type WorkspaceChangeEvent,
   type WorkspaceEntry
 } from '@shared/workspace'
+import {
+  createEmptyPersistedWorkspaceLayout,
+  reconcilePersistedWorkspaceLayout
+} from '@shared/workspaceState'
 import { useConfigController } from '../hooks/useConfigController'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
@@ -113,7 +118,10 @@ export function MainAppShell() {
   const activeGitRepoRootRef = useRef<string | null>(null)
   const activeDiscardTargetPathsRef = useRef<readonly string[] | null>(null)
   const onInitialConfigLoadedRef = useRef<(loadedConfig: AppConfig) => void>(() => undefined)
-  const onWorkspaceRestoredRef = useRef<(context: RestoredWorkspaceContext) => void>(() => undefined)
+  const onWorkspaceRestoredRef = useRef<
+    (context: RestoredWorkspaceContext) => Promise<void> | void
+  >(() => undefined)
+  const workspaceRestoreSeqRef = useRef<number>(0)
 
   const {
     config,
@@ -237,9 +245,61 @@ export function MainAppShell() {
 
   const workspaceStatePersistence = useWorkspaceStatePersistence({
     workspaceRootPath: workspace?.rootPath ?? null,
-    expandedDirs: treeState.expandedDirs
+    expandedDirs: treeState.expandedDirs,
+    layout: editor.layout,
+    buffers: editor.buffers,
+    getLatestLayoutSnapshot: editor.getLayoutSnapshot
   })
-  onWorkspaceRestoredRef.current = workspaceStatePersistence.markRestored
+  onWorkspaceRestoredRef.current = (context) => {
+    const restoreSeq = ++workspaceRestoreSeqRef.current
+    const persistedLayout = context.persistedState?.layout ?? null
+    const hasCandidateTabs = Boolean(
+      persistedLayout &&
+        (persistedLayout.panes.primary.tabs.length > 0 ||
+          persistedLayout.panes.secondary.tabs.length > 0)
+    )
+    if (!hasCandidateTabs) {
+      workspaceStatePersistence.markRestored({
+        rootPath: context.rootPath,
+        persistedState: context.persistedState,
+        restoredExpandedDirs: context.restoredExpandedDirs,
+        restoredLayout: persistedLayout
+          ? reconcilePersistedWorkspaceLayout(persistedLayout)
+          : createEmptyPersistedWorkspaceLayout(),
+        hadPrunedState:
+          context.hadPrunedExpandedDirs ||
+          Boolean(persistedLayout && persistedLayout.splitMode !== 'single')
+      })
+      return
+    }
+
+    const existingDirectoryEntries = new Map<string, readonly WorkspaceEntry[]>()
+    existingDirectoryEntries.set(getWorkspacePathKey(context.rootPath), context.rootEntries)
+    for (const [dirPath, entries] of Object.entries(context.restoredChildrenByDir)) {
+      existingDirectoryEntries.set(getWorkspacePathKey(dirPath), entries)
+    }
+
+    return editor
+      .restoreWorkspaceLayout({
+        rootPath: context.rootPath,
+        persistedLayout,
+        existingDirectoryEntries,
+        readDir: (dirPath) => wikiApi.workspace.readDir(dirPath),
+        isCancelled: () => restoreSeq !== workspaceRestoreSeqRef.current
+      })
+      .then(({ restored, hadPrunedTabs, reconciledLayout }) => {
+        if (!restored || restoreSeq !== workspaceRestoreSeqRef.current) {
+          return
+        }
+        workspaceStatePersistence.markRestored({
+          rootPath: context.rootPath,
+          persistedState: context.persistedState,
+          restoredExpandedDirs: context.restoredExpandedDirs,
+          restoredLayout: reconciledLayout,
+          hadPrunedState: context.hadPrunedExpandedDirs || hadPrunedTabs
+        })
+      })
+  }
 
   onInitialConfigLoadedRef.current = (loadedConfig) => {
     if (
@@ -454,10 +514,16 @@ export function MainAppShell() {
         return
       }
       guardUnsavedWorkspaceChanges(async () => {
+        const prevRoot = activeWorkspaceRootRef.current
         await workspaceStatePersistence.suspendAndFlush()
-        const opened = await openWorkspace(targetPath)
-        if (!opened && activeWorkspaceRootRef.current) {
-          workspaceStatePersistence.resumeForWorkspace(activeWorkspaceRootRef.current)
+        const openResult = await openWorkspace(targetPath)
+        if (
+          openResult === 'failed' &&
+          prevRoot &&
+          activeWorkspaceRootRef.current &&
+          isSameWorkspacePath(activeWorkspaceRootRef.current, prevRoot)
+        ) {
+          workspaceStatePersistence.resumeForWorkspace(prevRoot)
         }
       })
     },

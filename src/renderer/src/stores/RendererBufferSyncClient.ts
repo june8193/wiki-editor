@@ -17,16 +17,30 @@ import {
 } from '@shared/window'
 import { countBufferKeys } from '@shared/windowTabTracker'
 import {
+  getParentPath,
   getWorkspaceDisplayName,
   getWorkspacePathKey,
+  isSameWorkspacePath,
+  joinWorkspacePath,
+  resolveNormalizedWorkspacePath,
+  resolveWorkspaceChildPath,
+  toWorkspaceRelativePath,
   type WorkspaceChangeEvent,
   type WorkspaceEntry
 } from '@shared/workspace'
+import {
+  createEmptyPersistedWorkspaceLayout,
+  type PersistedWorkspacePaneLayout,
+  type PersistedWorkspacePaneState,
+  type PersistedWorkspaceTabState,
+  reconcilePersistedWorkspaceLayout
+} from '@shared/workspaceState'
 import { isImageDocument } from '../editor/editorModes'
 import {
   type DocumentTabItem,
   type PaneId,
   PaneTabStore,
+  type RestoreWorkspaceLayoutInput,
   type TabItem,
   type TransferredTabDropTarget
 } from './PaneTabStore'
@@ -42,6 +56,20 @@ export interface DirtyTabClosePrompt {
   buffer: DocumentBuffer
   saveAndClose: () => Promise<boolean>
   discardAndClose: () => void
+}
+
+export interface RestoreWorkspaceLayoutOptions {
+  rootPath: string
+  persistedLayout: PersistedWorkspacePaneLayout | null
+  existingDirectoryEntries?: ReadonlyMap<string, readonly WorkspaceEntry[]>
+  readDir?: (dirPath: string) => Promise<WorkspaceEntry[]>
+  isCancelled?: () => boolean
+}
+
+export interface RestoreWorkspaceLayoutResult {
+  restored: boolean
+  hadPrunedTabs: boolean
+  reconciledLayout: PersistedWorkspacePaneLayout
 }
 
 type DirtyBufferScope = 'workspace-all' | 'all-windows-close' | 'exclusive-window-close'
@@ -978,6 +1006,276 @@ export class RendererBufferSyncClient {
     }
     this.tabStore.closeAllDiffTabs()
     void this.bufferApi.clearWorkspaceBuffers().catch(() => undefined)
+  }
+
+  private filterCandidateTabsForRoot(
+    normalizedRoot: string,
+    pane: PersistedWorkspacePaneState
+  ): { tabs: PersistedWorkspaceTabState[]; hadInvalid: boolean } {
+    const tabs: PersistedWorkspaceTabState[] = []
+    let hadInvalid = false
+    for (const tab of pane.tabs) {
+      const validChild = resolveWorkspaceChildPath(normalizedRoot, tab.path)
+      if (!validChild) {
+        hadInvalid = true
+        continue
+      }
+      tabs.push({ ...tab, path: validChild })
+    }
+    return { tabs, hadInvalid }
+  }
+
+  private async resolveRestorableFiles(
+    options: RestoreWorkspaceLayoutOptions,
+    candidateTabs: readonly PersistedWorkspaceTabState[]
+  ): Promise<{
+    filesToOpen: Array<{ key: string; loadPath: string; name: string }>
+    hadMissingImage: boolean
+    cancelled: boolean
+  }> {
+    const uniqueFiles = new Map<
+      string,
+      { key: string; loadPath: string; name: string; isImage: boolean }
+    >()
+    for (const tab of candidateTabs) {
+      const key = getWorkspacePathKey(tab.path)
+      if (!key || uniqueFiles.has(key)) continue
+      const rel = toWorkspaceRelativePath(options.rootPath, tab.path)
+      const loadPath = rel ? joinWorkspacePath(options.rootPath, rel) : tab.path
+      uniqueFiles.set(key, {
+        key,
+        loadPath,
+        name: getWorkspaceDisplayName(loadPath),
+        isImage: isSupportedImageFile(loadPath)
+      })
+    }
+
+    const dirEntriesByKey = new Map<string, readonly WorkspaceEntry[]>(
+      options.existingDirectoryEntries ?? []
+    )
+    const missingParentDirs = new Map<string, string>()
+    for (const file of uniqueFiles.values()) {
+      if (!file.isImage) continue
+      const parentDir = getParentPath(file.loadPath, options.rootPath)
+      const parentKey = getWorkspacePathKey(parentDir)
+      if (!dirEntriesByKey.has(parentKey) && !missingParentDirs.has(parentKey)) {
+        missingParentDirs.set(parentKey, parentDir)
+      }
+    }
+
+    if (missingParentDirs.size > 0 && options.readDir) {
+      const readDir = options.readDir
+      const settledDirs = await Promise.allSettled(
+        [...missingParentDirs.entries()].map(async ([parentKey, parentDir]) => ({
+          parentKey,
+          entries: await readDir(parentDir)
+        }))
+      )
+      for (const result of settledDirs) {
+        if (result.status === 'fulfilled') {
+          dirEntriesByKey.set(result.value.parentKey, result.value.entries)
+        }
+      }
+      if (!this.mounted || options.isCancelled?.()) {
+        return { filesToOpen: [], hadMissingImage: false, cancelled: true }
+      }
+    }
+
+    const filesToOpen: Array<{ key: string; loadPath: string; name: string }> = []
+    const canVerifyImages = Boolean(options.readDir || options.existingDirectoryEntries)
+    let hadMissingImage = false
+    for (const file of uniqueFiles.values()) {
+      if (!file.isImage || !canVerifyImages) {
+        filesToOpen.push({ key: file.key, loadPath: file.loadPath, name: file.name })
+        continue
+      }
+      const parentDir = getParentPath(file.loadPath, options.rootPath)
+      const parentEntries = dirEntriesByKey.get(getWorkspacePathKey(parentDir))
+      const matchedImage = parentEntries?.find(
+        (entry) => entry.kind === 'file' && isSameWorkspacePath(entry.path, file.loadPath)
+      )
+      if (!matchedImage) {
+        hadMissingImage = true
+        continue
+      }
+      filesToOpen.push({ key: file.key, loadPath: matchedImage.path, name: matchedImage.name })
+    }
+
+    return { filesToOpen, hadMissingImage, cancelled: false }
+  }
+
+  private async loadRestorableBuffers(
+    filesToOpen: ReadonlyArray<{ key: string; loadPath: string; name: string }>
+  ): Promise<{ loadedBuffersByKey: Map<string, DocumentBuffer>; hadLoadFailure: boolean }> {
+    const loadedBuffersByKey = new Map<string, DocumentBuffer>()
+    let hadLoadFailure = false
+    if (filesToOpen.length === 0) {
+      return { loadedBuffersByKey, hadLoadFailure }
+    }
+
+    const settledFiles = await Promise.allSettled(
+      filesToOpen.map(async (file) => ({
+        key: file.key,
+        buffer: await this.bufferApi.openWorkspaceFile(file.loadPath, file.name)
+      }))
+    )
+    for (const result of settledFiles) {
+      if (result.status === 'fulfilled') {
+        loadedBuffersByKey.set(result.value.key, result.value.buffer)
+      } else {
+        hadLoadFailure = true
+      }
+    }
+    return { loadedBuffersByKey, hadLoadFailure }
+  }
+
+  private buildReconciledRestoreLayout(
+    normalizedRoot: string,
+    persistedLayout: PersistedWorkspacePaneLayout,
+    validPrimary: readonly PersistedWorkspaceTabState[],
+    validSecondary: readonly PersistedWorkspaceTabState[],
+    loadedBuffersByKey: ReadonlyMap<string, DocumentBuffer>
+  ): { reconciledLayout: PersistedWorkspacePaneLayout; hadDroppedLoaded: boolean } {
+    let hadDroppedLoaded = false
+    const buildLoadedPane = (
+      candidates: readonly PersistedWorkspaceTabState[],
+      activeTabPath: string | null
+    ): PersistedWorkspacePaneState => {
+      const tabs: PersistedWorkspaceTabState[] = []
+      for (const tab of candidates) {
+        const loaded = loadedBuffersByKey.get(getWorkspacePathKey(tab.path))
+        const canonicalChildPath = loaded
+          ? resolveWorkspaceChildPath(normalizedRoot, loaded.path)
+          : null
+        if (!canonicalChildPath) {
+          hadDroppedLoaded = true
+          continue
+        }
+        tabs.push({ ...tab, path: canonicalChildPath })
+      }
+      return { tabs, activeTabPath }
+    }
+
+    return {
+      reconciledLayout: reconcilePersistedWorkspaceLayout({
+        splitMode: persistedLayout.splitMode,
+        splitRatio: persistedLayout.splitRatio,
+        activePaneId: persistedLayout.activePaneId,
+        panes: {
+          primary: buildLoadedPane(validPrimary, persistedLayout.panes.primary.activeTabPath),
+          secondary: buildLoadedPane(validSecondary, persistedLayout.panes.secondary.activeTabPath)
+        }
+      }),
+      hadDroppedLoaded
+    }
+  }
+
+  restoreWorkspaceLayout = async (
+    options: RestoreWorkspaceLayoutOptions
+  ): Promise<RestoreWorkspaceLayoutResult> => {
+    const emptyResult = (
+      restored: boolean,
+      hadPrunedTabs = false
+    ): RestoreWorkspaceLayoutResult => ({
+      restored,
+      hadPrunedTabs,
+      reconciledLayout: createEmptyPersistedWorkspaceLayout()
+    })
+
+    const normalizedRoot = resolveNormalizedWorkspacePath(options.rootPath)
+    if (!normalizedRoot || !options.persistedLayout) {
+      return emptyResult(true)
+    }
+
+    const primaryFiltered = this.filterCandidateTabsForRoot(
+      normalizedRoot,
+      options.persistedLayout.panes.primary
+    )
+    const secondaryFiltered = this.filterCandidateTabsForRoot(
+      normalizedRoot,
+      options.persistedLayout.panes.secondary
+    )
+    let hadPrunedTabs = primaryFiltered.hadInvalid || secondaryFiltered.hadInvalid
+
+    if (primaryFiltered.tabs.length === 0 && secondaryFiltered.tabs.length === 0) {
+      const hadNonEmptyLayout =
+        options.persistedLayout.splitMode !== 'single' ||
+        options.persistedLayout.panes.primary.tabs.length > 0 ||
+        options.persistedLayout.panes.secondary.tabs.length > 0
+      return emptyResult(true, hadPrunedTabs || hadNonEmptyLayout)
+    }
+
+    const { filesToOpen, hadMissingImage, cancelled } = await this.resolveRestorableFiles(
+      options,
+      [...primaryFiltered.tabs, ...secondaryFiltered.tabs]
+    )
+    if (cancelled) {
+      return emptyResult(false)
+    }
+    hadPrunedTabs = hadPrunedTabs || hadMissingImage
+
+    const { loadedBuffersByKey, hadLoadFailure } = await this.loadRestorableBuffers(filesToOpen)
+    if (!this.mounted || options.isCancelled?.()) {
+      return emptyResult(false)
+    }
+    hadPrunedTabs = hadPrunedTabs || hadLoadFailure
+
+    const { reconciledLayout, hadDroppedLoaded } = this.buildReconciledRestoreLayout(
+      normalizedRoot,
+      options.persistedLayout,
+      primaryFiltered.tabs,
+      secondaryFiltered.tabs,
+      loadedBuffersByKey
+    )
+    hadPrunedTabs = hadPrunedTabs || hadDroppedLoaded
+
+    const resolvedKeyByPathKey = new Map<string, string>()
+    for (const tab of [
+      ...reconciledLayout.panes.primary.tabs,
+      ...reconciledLayout.panes.secondary.tabs
+    ]) {
+      const pathKey = getWorkspacePathKey(tab.path)
+      if (resolvedKeyByPathKey.has(pathKey)) continue
+      const loaded = loadedBuffersByKey.get(pathKey)
+      if (loaded) {
+        resolvedKeyByPathKey.set(pathKey, this.reconcileIncomingBuffer(loaded))
+      }
+    }
+
+    const toRestorePane = (pane: PersistedWorkspacePaneState) => ({
+      tabs: pane.tabs.map((tab) => ({
+        bufferKey: resolvedKeyByPathKey.get(getWorkspacePathKey(tab.path))!,
+        mode: tab.mode,
+        cursor: { ...tab.cursor },
+        scrollTop: tab.scrollTop,
+        splitPreviewRatio: tab.splitPreviewRatio
+      })),
+      activeTabKey: pane.activeTabPath
+        ? (resolvedKeyByPathKey.get(getWorkspacePathKey(pane.activeTabPath)) ?? null)
+        : null
+    })
+
+    const restoreInput: RestoreWorkspaceLayoutInput = {
+      splitMode: reconciledLayout.splitMode,
+      splitRatio: reconciledLayout.splitRatio,
+      activePaneId: reconciledLayout.activePaneId,
+      panes: {
+        primary: toRestorePane(reconciledLayout.panes.primary),
+        secondary: toRestorePane(reconciledLayout.panes.secondary)
+      }
+    }
+
+    this.tabStore.restoreWorkspaceLayout(restoreInput, {
+      preserveTab: (tab) =>
+        tab.kind === 'document' && this.bufferStore.getBuffer(tab.bufferKey)?.kind === 'config'
+    })
+    this.syncCurrentLayoutTabs()
+
+    return {
+      restored: true,
+      hadPrunedTabs,
+      reconciledLayout
+    }
   }
 
   syncRenamedPath = (oldPath: string, renamed: WorkspaceEntry): void => {

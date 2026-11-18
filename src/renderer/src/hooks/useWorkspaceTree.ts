@@ -49,9 +49,13 @@ export interface OpenWorkspaceOptions {
   onSilentError?: () => void
 }
 
+export type OpenWorkspaceResult = 'opened' | 'superseded' | 'failed'
+
 export interface RestoredWorkspaceContext {
   rootPath: string
   persistedState: PersistedWorkspaceState | null
+  rootEntries: readonly WorkspaceEntry[]
+  restoredChildrenByDir: Readonly<Record<string, readonly WorkspaceEntry[]>>
   restoredExpandedDirs: readonly string[]
   hadPrunedExpandedDirs: boolean
 }
@@ -99,7 +103,7 @@ async function readDirectoriesSettled(
 interface UseWorkspaceTreeOptions {
   onError: (message: string | null, error?: unknown) => void
   onWorkspaceOpened?: () => void
-  onWorkspaceRestored?: (context: RestoredWorkspaceContext) => void
+  onWorkspaceRestored?: (context: RestoredWorkspaceContext) => Promise<void> | void
   onWorkspaceChanged?: (event: WorkspaceChangeEvent) => void
   onEntryRenamed?: (oldPath: string, renamed: WorkspaceEntry) => void
   onEntryDeleted?: (deletedPath: string) => void
@@ -277,26 +281,26 @@ export function useWorkspaceTree({
   )
 
   const openWorkspace = useCallback(
-    async (targetPath: string, options?: OpenWorkspaceOptions): Promise<boolean> => {
+    async (targetPath: string, options?: OpenWorkspaceOptions): Promise<OpenWorkspaceResult> => {
       const seq = ++openRequestSeqRef.current
       if (!options?.silentError) {
         callbacksRef.current.onError(null)
       }
       try {
         const info = await wikiApi.workspace.open(targetPath)
-        if (!mountedRef.current || seq !== openRequestSeqRef.current) return false
+        if (!mountedRef.current || seq !== openRequestSeqRef.current) return 'superseded'
         const [initialMarkdownFiles, persistedState] = await Promise.all([
           wikiApi.workspace.listMarkdownFiles().catch(() => [] as WorkspaceEntry[]),
           wikiApi.workspaceState?.get(info.rootPath).catch(() => null) ?? Promise.resolve(null)
         ])
         if (!mountedRef.current || seq !== openRequestSeqRef.current) {
-          return false
+          return 'superseded'
         }
 
         const { candidates, hadInvalidEntries } = resolveExpandedCandidatePaths(info, persistedState)
         const loadedDirs = await readDirectoriesSettled(wikiApi.workspace.readDir, candidates)
         if (!mountedRef.current || seq !== openRequestSeqRef.current) {
-          return false
+          return 'superseded'
         }
 
         const entryPathByKey = new Map<string, string>()
@@ -331,16 +335,21 @@ export function useWorkspaceTree({
         setSelectedTreePath(null)
         logRendererInfo('ui', 'Workspace opened', { rootPath: info.rootPath, name: info.name })
         callbacksRef.current.onWorkspaceOpened?.()
-        callbacksRef.current.onWorkspaceRestored?.({
+        const restoreTask = callbacksRef.current.onWorkspaceRestored?.({
           rootPath: info.rootPath,
           persistedState,
+          rootEntries: info.entries,
+          restoredChildrenByDir,
           restoredExpandedDirs: [...restoredExpandedDirs],
           hadPrunedExpandedDirs: hadInvalidEntries || hadMissingDirs
         })
         await wikiApi.workspace.watch().catch(() => undefined)
-        return true
+        if (restoreTask) {
+          await restoreTask
+        }
+        return 'opened'
       } catch (error: unknown) {
-        if (!mountedRef.current || seq !== openRequestSeqRef.current) return false
+        if (!mountedRef.current || seq !== openRequestSeqRef.current) return 'superseded'
         if (options?.silentError) {
           options.onSilentError?.()
         } else {
@@ -349,7 +358,7 @@ export function useWorkspaceTree({
             error
           )
         }
-        return false
+        return 'failed'
       }
     },
     [setSelectedTreePath, wikiApi]

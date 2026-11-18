@@ -3227,9 +3227,10 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     // Make main window dirty, expand sub right before closing, and discard on close prompt -> flushed before close resolves
     const mainEditor = within(mainRendered.container).getByTestId('document-editor')
     setRawEditorText(mainEditor, '# Dirty before close')
+    const savesBeforeSub = mainSaveSpy.mock.calls.length
     await user.click(within(explorer).getByText('sub'))
     expect(await within(explorer).findByText('deep.md')).toBeInTheDocument()
-    expect(mainSaveSpy).not.toHaveBeenCalled()
+    expect(mainSaveSpy).toHaveBeenCalledTimes(savesBeforeSub)
 
     act(() => {
       mainWin.requestClose()
@@ -3240,9 +3241,12 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     await waitFor(() => {
       expect(mainWin.isClosed()).toBe(true)
     })
-    expect(mainSaveSpy).toHaveBeenCalledTimes(1)
+    expect(mainSaveSpy).toHaveBeenCalledTimes(savesBeforeSub + 1)
     const saved = await mainWin.api.workspaceState!.get('C:/wiki/docs')
     expect(saved?.expandedDirs).toEqual(['C:\\wiki\\docs\\sub'])
+    expect(saved?.layout.panes.primary.tabs.map((tab) => tab.path)).toEqual([
+      'C:\\wiki\\docs\\extra.md'
+    ])
     expect(auxGetSpy).not.toHaveBeenCalled()
     expect(auxSaveSpy).not.toHaveBeenCalled()
   })
@@ -3285,5 +3289,102 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     expect(mainSaveSpy).toHaveBeenCalledTimes(1)
     const saved = await mainWin.api.workspaceState!.get('C:/wiki/docs')
     expect(saved?.expandedDirs).toEqual(['C:\\wiki\\docs\\sub'])
+  })
+
+  it('excludes auxiliary window splits/tabs from workspaceState and flushes main split layout and tab view state on clean close', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, recentWorkspaces: ['C:\\wiki\\docs'] },
+      {
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'primary.md': '# Primary\n\nBody text',
+            'secondary.md': '# Secondary\n\nMore text',
+            'detached.md': '# Detached'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    const explorer = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('primary.md'))
+    await user.click(within(explorer).getByText('secondary.md'))
+    await user.click(within(explorer).getByText('detached.md'))
+
+    // Detach detached.md to auxiliary window, and set split + wysiwyg in auxiliary -> never persisted
+    const detachedTab = within(mainRendered.container).getByRole('tab', { name: /detached\.md/ })
+    fireEvent.contextMenu(detachedTab)
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu')).getByRole('menuitem', {
+        name: '새 창으로 이동'
+      })
+    )
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(1)
+    })
+    const auxWin = harness.getAuxiliaryWindows()[0]
+    const auxRendered = render(<App wikiApi={auxWin.api} />)
+    const auxModeSwitcher = await within(auxRendered.container).findByRole('group', {
+      name: '에디터 모드 전환'
+    })
+    await user.click(within(auxModeSwitcher).getByRole('button', { name: '위지윅' }))
+
+    // In main window: move secondary.md to secondary pane, switch primary.md to split mode with cursor & scroll, then clean close immediately
+    const mainPrimary = within(mainRendered.container).getByTestId('pane-primary')
+    fireEvent.contextMenu(within(mainPrimary).getByRole('tab', { name: /secondary\.md/ }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
+        'menuitem',
+        { name: '분할 영역으로 이동' }
+      )
+    )
+    const mainSplitter = within(mainRendered.container).getByRole('separator', {
+      name: '화면 분할 크기 조절'
+    })
+    fireEvent.keyDown(mainSplitter, { key: 'ArrowRight' })
+    expect(mainSplitter).toHaveAttribute('aria-valuenow', '55')
+
+    await user.click(within(mainPrimary).getByRole('tab', { name: /primary\.md/ }))
+    await user.click(
+      within(within(mainPrimary).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Split' }
+      )
+    )
+    const splitRaw = within(mainPrimary).getAllByTestId('document-editor')[0]
+    setRawEditorSelection(splitRaw, 3, 7)
+    const splitScroller = getRawEditorScroller(splitRaw)
+    splitScroller.scrollTop = 135
+    fireEvent.scroll(splitScroller)
+
+    act(() => {
+      mainWin.requestClose()
+    })
+    await waitFor(() => {
+      expect(mainWin.isClosed()).toBe(true)
+    })
+    mainRendered.unmount()
+
+    // Reopen main window -> primary.md (split) + secondary.md (raw) at 55% restore; detached.md in aux does NOT restore
+    const reopenedWin = harness.createWindow({ role: 'main' })
+    const reopenedRendered = render(<App wikiApi={reopenedWin.api} />)
+    await waitFor(() => {
+      expect(within(reopenedRendered.container).getByTestId('pane-workspace')).toHaveAttribute(
+        'data-split-mode',
+        'horizontal'
+      )
+    })
+    expect(within(reopenedRendered.container).queryByRole('tab', { name: /detached\.md/ })).toBeNull()
+    expect(
+      within(reopenedRendered.container).getByRole('separator', { name: '화면 분할 크기 조절' })
+    ).toHaveAttribute('aria-valuenow', '55')
+    const restoredSplitRaw = within(
+      within(reopenedRendered.container).getByTestId('pane-primary')
+    ).getAllByTestId('document-editor')[0]
+    expect(getRawEditorSelection(restoredSplitRaw)).toEqual({ start: 3, end: 7 })
+    expect(getRawEditorScroller(restoredSplitRaw).scrollTop).toBe(135)
   })
 })

@@ -3163,7 +3163,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       firstRender.unmount()
       render(<App />)
       await triggerMenuCommand(emitMenuCommand, 'open-folder')
-      await user.click(await screen.findByText('guide.md'))
+      const reopenedExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(reopenedExplorer).findByText('guide.md'))
       const reopenedOutline = within(
         screen.getByRole('complementary', { name: '우측 사이드바' })
       ).getByRole('region', { name: '문서 목차 (Outline)' })
@@ -9828,6 +9829,757 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
       'C:\\wiki\\alpha\\docs',
       'C:\\wiki\\alpha\\docs\\sub'
     ])
+  })
+
+  it('persists and restores pane layout, tab order, active tabs, split mode, splitRatio, and activePaneId across workspace switches and app restart', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'one.md': '# One',
+            'two.md': '# Two',
+            'three.md': '# Three',
+            'four.md': '# Four'
+          },
+          'C:\\wiki\\beta': {
+            'b1.md': '# Beta 1',
+            'b2.md': '# Beta 2'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const firstMount = render(<App />)
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('one.md'))
+    await user.click(within(explorer).getByText('two.md'))
+    await user.click(within(explorer).getByText('three.md'))
+    await user.click(within(explorer).getByText('four.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    // Close four.md, reorder three.md before two.md, and split vertically with two.md into secondary
+    await user.click(within(primaryPane).getByRole('button', { name: 'four.md 탭 닫기' }))
+    const threeTabItem = within(primaryPane).getByRole('tab', { name: /three\.md/ }).closest('.tab-item')!
+    const twoTabItem = within(primaryPane).getByRole('tab', { name: /two\.md/ }).closest('.tab-item')!
+    fireEvent.dragStart(threeTabItem)
+    fireEvent.drop(twoTabItem)
+    fireEvent.dragEnd(threeTabItem)
+
+    expect(
+      within(primaryPane)
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent?.trim())
+    ).toEqual(['one.md', 'three.md', 'two.md'])
+
+    const twoTabTrigger = within(primaryPane).getByRole('tab', { name: /two\.md/ })
+    fireEvent.dragStart(twoTabTrigger)
+    fireEvent.drop(screen.getByTestId('split-drop-zone-vertical'))
+
+    const secondaryPane = await screen.findByTestId('pane-secondary')
+    expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'vertical')
+
+    // Adjust splitter ratio via keyboard (ArrowDown 3x from 50% -> 65%)
+    const splitter = screen.getByRole('separator', { name: '화면 분할 크기 조절' })
+    fireEvent.keyDown(splitter, { key: 'ArrowDown' })
+    fireEvent.keyDown(splitter, { key: 'ArrowDown' })
+    fireEvent.keyDown(splitter, { key: 'ArrowDown' })
+    expect(splitter).toHaveAttribute('aria-valuenow', '65')
+
+    // Activate three.md in primary, then activate secondary pane and open two.md there
+    await user.click(within(primaryPane).getByRole('tab', { name: /three\.md/ }))
+    fireEvent.mouseDown(secondaryPane)
+    expect(secondaryPane).toHaveClass('is-active-pane')
+
+    // Immediately switch to beta before debounce -> alpha layout must be preserved intact (not overwritten with empty)
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^beta$/i
+      })
+    )
+
+    const betaExplorer = await screen.findByLabelText('워크스페이스 탐색기')
+    expect(await within(betaExplorer).findByText('b1.md')).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /one\.md/ })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('pane-secondary')).not.toBeInTheDocument()
+
+    // Open b1.md and b2.md in horizontal split in beta
+    await user.click(within(betaExplorer).getByText('b1.md'))
+    await user.click(within(betaExplorer).getByText('b2.md'))
+    fireEvent.contextMenu(within(screen.getByTestId('pane-primary')).getByRole('tab', { name: /b2\.md/ }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역으로 이동'
+      })
+    )
+    expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
+
+    // Switch back to alpha -> alpha's vertical split, 65% ratio, tab order, active tabs, and activePaneId restore!
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^alpha$/i
+      })
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'vertical')
+    })
+    const restoredPrimary = screen.getByTestId('pane-primary')
+    const restoredSecondary = screen.getByTestId('pane-secondary')
+    expect(
+      within(restoredPrimary)
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent?.trim())
+    ).toEqual(['one.md', 'three.md'])
+    expect(within(restoredPrimary).getByRole('tab', { name: /three\.md/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(
+      within(restoredSecondary)
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent?.trim())
+    ).toEqual(['two.md'])
+    expect(restoredSecondary).toHaveClass('is-active-pane')
+    expect(screen.getByRole('separator', { name: '화면 분할 크기 조절' })).toHaveAttribute(
+      'aria-valuenow',
+      '65'
+    )
+
+    // Unmount and remount <App /> (app restart) -> alpha layout restores again, and switching to beta restores beta's horizontal layout
+    firstMount.unmount()
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'vertical')
+      expect(
+        within(screen.getByTestId('pane-primary'))
+          .getAllByRole('tab')
+          .map((tab) => tab.textContent?.trim())
+      ).toEqual(['one.md', 'three.md'])
+    })
+    expect(screen.getByTestId('pane-secondary')).toHaveClass('is-active-pane')
+    expect(screen.getByRole('separator', { name: '화면 분할 크기 조절' })).toHaveAttribute(
+      'aria-valuenow',
+      '65'
+    )
+
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^beta$/i
+      })
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
+      expect(
+        within(screen.getByTestId('pane-primary'))
+          .getAllByRole('tab')
+          .map((tab) => tab.textContent?.trim())
+      ).toEqual(['b1.md'])
+      expect(
+        within(screen.getByTestId('pane-secondary'))
+          .getAllByRole('tab')
+          .map((tab) => tab.textContent?.trim())
+      ).toEqual(['b2.md'])
+    })
+  })
+
+  it('persists and restores per-tab mode, cursor, scrollTop, splitPreviewRatio, image preview tabs, duplicated split tabs, and rename/move/delete path updates', async () => {
+    const user = userEvent.setup()
+    const createDnDTransfer = () => {
+      const store = new Map<string, string>()
+      return {
+        effectAllowed: 'none',
+        dropEffect: 'none',
+        get types() {
+          return [...store.keys()]
+        },
+        files: [] as unknown as FileList,
+        setData(type: string, value: string) {
+          store.set(type, value)
+        },
+        getData(type: string) {
+          return store.get(type) ?? ''
+        }
+      }
+    }
+
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'raw-doc.md': '# Raw Doc\n\nLine 2\n\nLine 3',
+            'split-doc.md': '# Split Doc\n\nBody text here',
+            'wysiwyg-doc.md': '# Wysiwyg Doc\n\nParagraph',
+            'docs/preview-doc.md': '# Preview Doc\n\nSection body',
+            'assets/banner.png': '<png-bytes>',
+            'temp.md': '# Temp',
+            'archive/.keep': ''
+          },
+          'C:\\wiki\\beta': {
+            'beta.md': '# Beta'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const firstMount = render(<App />)
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+
+    // 1. Open raw-doc.md -> set cursor & scrollTop, then duplicate to secondary pane in preview mode with different scrollTop
+    await user.click(await within(explorer).findByText('raw-doc.md'))
+    const primaryPane = screen.getByTestId('pane-primary')
+    const rawEditor = await within(primaryPane).findByTestId('document-editor')
+    setRawEditorSelection(rawEditor, 4, 9)
+    const rawScroller = getRawEditorScroller(rawEditor)
+    rawScroller.scrollTop = 145
+    fireEvent.scroll(rawScroller)
+
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: /raw-doc\.md/ }))
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역에 복제 열기'
+      })
+    )
+    const secondaryPane = await screen.findByTestId('pane-secondary')
+    await user.click(
+      within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Preview' }
+      )
+    )
+    const secPreviewEl = await within(secondaryPane).findByTestId('document-editor')
+    secPreviewEl.scrollTop = 260
+    fireEvent.scroll(secPreviewEl)
+
+    // 2. Focus primary pane, open split-doc.md -> switch to Split mode, adjust splitPreviewRatio to 35%, cursor & scrollTop
+    fireEvent.mouseDown(primaryPane)
+    await user.click(within(explorer).getByText('split-doc.md'))
+    await user.click(
+      within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Split' }
+      )
+    )
+    const splitEditorSplitter = within(primaryPane).getByRole('separator', {
+      name: '에디터 분할 크기 조절'
+    })
+    fireEvent.keyDown(splitEditorSplitter, { key: 'ArrowLeft' })
+    fireEvent.keyDown(splitEditorSplitter, { key: 'ArrowLeft' })
+    fireEvent.keyDown(splitEditorSplitter, { key: 'ArrowLeft' })
+    expect(splitEditorSplitter).toHaveAttribute('aria-valuenow', '35')
+
+    const splitRawEditor = within(primaryPane).getAllByTestId('document-editor')[0]
+    setRawEditorSelection(splitRawEditor, 2, 7)
+    const splitRawScroller = getRawEditorScroller(splitRawEditor)
+    splitRawScroller.scrollTop = 190
+    fireEvent.scroll(splitRawScroller)
+
+    // 3. Open wysiwyg-doc.md in primary -> switch to 위지윅 mode and scroll
+    await user.click(within(explorer).getByText('wysiwyg-doc.md'))
+    await user.click(
+      within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: '위지윅' }
+      )
+    )
+    const wysiwygScrollContainer = primaryPane.querySelector('.wysiwyg-scroll-container') as HTMLElement
+    wysiwygScrollContainer.scrollTop = 175
+    fireEvent.scroll(wysiwygScrollContainer)
+
+    // 4. Open docs/preview-doc.md in primary -> Preview mode, assets/banner.png -> image preview, temp.md -> delete
+    await user.click(within(explorer).getByText('docs'))
+    await user.click(await within(explorer).findByText('preview-doc.md'))
+    await user.click(
+      within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Preview' }
+      )
+    )
+    const previewDocEl = await within(primaryPane).findByTestId('document-editor')
+    previewDocEl.scrollTop = 310
+    fireEvent.scroll(previewDocEl)
+
+    await user.click(within(explorer).getByText('assets'))
+    await user.click(await within(explorer).findByText('banner.png'))
+    expect(await within(primaryPane).findByTestId('image-preview')).toBeInTheDocument()
+
+    await user.click(within(explorer).getByText('temp.md'))
+
+    // Rename raw-doc.md -> raw-renamed.md via F2
+    const rawDocTreeItem = within(explorer).getByRole('treeitem', { name: 'raw-doc.md' })
+    rawDocTreeItem.focus()
+    fireEvent.keyDown(rawDocTreeItem, { key: 'F2' })
+    const renameInput = await within(explorer).findByLabelText('새 이름 입력')
+    await user.clear(renameInput)
+    await user.type(renameInput, 'raw-renamed.md{Enter}')
+    expect(await within(primaryPane).findByRole('tab', { name: /raw-renamed\.md/ })).toBeInTheDocument()
+
+    // Move docs folder into archive via drag-and-drop -> docs/preview-doc.md updates to archive/docs/preview-doc.md
+    const docsTreeItem = within(explorer).getByRole('treeitem', { name: 'docs' })
+    const archiveTreeItem = within(explorer).getByRole('treeitem', { name: 'archive' })
+    const dtMove = createDnDTransfer()
+    fireEvent.dragStart(docsTreeItem, { dataTransfer: dtMove })
+    fireEvent.dragOver(archiveTreeItem, { dataTransfer: dtMove })
+    fireEvent.drop(archiveTreeItem, { dataTransfer: dtMove })
+    fireEvent.dragEnd(docsTreeItem, { dataTransfer: dtMove })
+    await waitFor(() => {
+      expect(within(primaryPane).getByRole('tab', { name: /preview-doc\.md/ })).toHaveAttribute(
+        'title',
+        'C:/wiki/alpha/archive/docs/preview-doc.md'
+      )
+    })
+
+    // Delete temp.md via context menu
+    fireEvent.contextMenu(within(explorer).getByText('temp.md'))
+    await user.click(
+      within(await screen.findByRole('menu')).getByRole('menuitem', { name: /삭제/i })
+    )
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: /삭제 확인/i })
+    )
+    await waitFor(() => {
+      expect(within(primaryPane).queryByRole('tab', { name: /temp\.md/ })).not.toBeInTheDocument()
+    })
+    await user.click(within(primaryPane).getByRole('tab', { name: /banner\.png/ }))
+    expect(await within(primaryPane).findByTestId('image-preview')).toBeInTheDocument()
+
+    // Switch immediately to beta, then restart app
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^beta$/i
+      })
+    )
+    expect(await within(await screen.findByLabelText('워크스페이스 탐색기')).findByText('beta.md')).toBeInTheDocument()
+
+    // Switch back to alpha and also verify full restart preserves all view states
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^alpha$/i
+      })
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
+    })
+
+    firstMount.unmount()
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
+      expect(within(screen.getByTestId('pane-primary')).getByTestId('image-preview')).toBeInTheDocument()
+    })
+
+    const restartedPrimary = screen.getByTestId('pane-primary')
+    const restartedSecondary = screen.getByTestId('pane-secondary')
+
+    // Secondary holds raw-renamed.md in Preview mode at scrollTop 260
+    expect(
+      within(restartedSecondary).getByRole('heading', { name: /Raw Doc/ })
+    ).toBeInTheDocument()
+    expect(within(restartedSecondary).getByTestId('document-editor').scrollTop).toBe(260)
+
+    // Primary tabs: raw-renamed.md (raw), split-doc.md (split), wysiwyg-doc.md (wysiwyg), preview-doc.md (preview), banner.png (active image)
+    await user.click(within(restartedPrimary).getByRole('tab', { name: /raw-renamed\.md/ }))
+    const restoredRaw = await within(restartedPrimary).findByTestId('document-editor')
+    expect(getRawEditorSelection(restoredRaw)).toEqual({ start: 4, end: 9 })
+    expect(getRawEditorScroller(restoredRaw).scrollTop).toBe(145)
+
+    await user.click(within(restartedPrimary).getByRole('tab', { name: /split-doc\.md/ }))
+    const restoredSplitSplitter = await within(restartedPrimary).findByRole('separator', {
+      name: '에디터 분할 크기 조절'
+    })
+    expect(restoredSplitSplitter).toHaveAttribute('aria-valuenow', '35')
+    const restoredSplitRaw = within(restartedPrimary).getAllByTestId('document-editor')[0]
+    expect(getRawEditorSelection(restoredSplitRaw)).toEqual({ start: 2, end: 7 })
+    expect(getRawEditorScroller(restoredSplitRaw).scrollTop).toBe(190)
+
+    await user.click(within(restartedPrimary).getByRole('tab', { name: /wysiwyg-doc\.md/ }))
+    expect(await within(restartedPrimary).findByLabelText('위지윅 문서 에디터')).toBeInTheDocument()
+    expect(
+      (restartedPrimary.querySelector('.wysiwyg-scroll-container') as HTMLElement).scrollTop
+    ).toBe(175)
+
+    await user.click(within(restartedPrimary).getByRole('tab', { name: /preview-doc\.md/ }))
+    expect(
+      await within(restartedPrimary).findByRole('heading', { name: /Preview Doc/ })
+    ).toBeInTheDocument()
+    expect(within(restartedPrimary).getByRole('tab', { name: /preview-doc\.md/ })).toHaveAttribute(
+      'title',
+      'C:/wiki/alpha/archive/docs/preview-doc.md'
+    )
+    expect(within(restartedPrimary).getByTestId('document-editor').scrollTop).toBe(310)
+  })
+
+  it('skips missing text/image tabs without error banner, collapses empty secondary, promotes secondary when primary empties, falls back active tab, and cancels stale tab restore on rapid switch', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta', 'C:/wiki/gamma']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'keep-primary.md': '# Keep Primary'
+          },
+          'C:\\wiki\\beta': {
+            'only-sec.md': '# Promoted Secondary'
+          },
+          'C:\\wiki\\gamma': {
+            'gamma.md': '# Gamma'
+          }
+        },
+        workspaceStates: {
+          'C:\\wiki\\alpha': {
+            layout: {
+              splitMode: 'vertical',
+              splitRatio: 0.65,
+              activePaneId: 'secondary',
+              panes: {
+                primary: {
+                  tabs: [
+                    {
+                      path: 'C:\\wiki\\alpha\\deleted-active.md',
+                      mode: 'raw',
+                      cursor: { selectionStart: 0, selectionEnd: 0 },
+                      scrollTop: 0,
+                      splitPreviewRatio: 0.5
+                    },
+                    {
+                      path: 'C:\\wiki\\alpha\\keep-primary.md',
+                      mode: 'preview',
+                      cursor: { selectionStart: 0, selectionEnd: 0 },
+                      scrollTop: 120,
+                      splitPreviewRatio: 0.5
+                    }
+                  ],
+                  activeTabPath: 'C:\\wiki\\alpha\\deleted-active.md'
+                },
+                secondary: {
+                  tabs: [
+                    {
+                      path: 'C:\\wiki\\alpha\\assets\\deleted.png',
+                      mode: 'raw',
+                      cursor: { selectionStart: 0, selectionEnd: 0 },
+                      scrollTop: 0,
+                      splitPreviewRatio: 0.5
+                    }
+                  ],
+                  activeTabPath: 'C:\\wiki\\alpha\\assets\\deleted.png'
+                }
+              }
+            }
+          },
+          'C:\\wiki\\beta': {
+            layout: {
+              splitMode: 'horizontal',
+              splitRatio: 0.4,
+              activePaneId: 'secondary',
+              panes: {
+                primary: {
+                  tabs: [
+                    {
+                      path: 'C:\\wiki\\beta\\deleted-pri.md',
+                      mode: 'raw',
+                      cursor: { selectionStart: 0, selectionEnd: 0 },
+                      scrollTop: 0,
+                      splitPreviewRatio: 0.5
+                    }
+                  ],
+                  activeTabPath: 'C:\\wiki\\beta\\deleted-pri.md'
+                },
+                secondary: {
+                  tabs: [
+                    {
+                      path: 'C:\\wiki\\beta\\only-sec.md',
+                      mode: 'preview',
+                      cursor: { selectionStart: 0, selectionEnd: 0 },
+                      scrollTop: 95,
+                      splitPreviewRatio: 0.5
+                    }
+                  ],
+                  activeTabPath: 'C:\\wiki\\beta\\only-sec.md'
+                }
+              }
+            }
+          },
+          'C:\\wiki\\gamma': {
+            layout: {
+              splitMode: 'single',
+              splitRatio: 0.5,
+              activePaneId: 'primary',
+              panes: {
+                primary: {
+                  tabs: [
+                    {
+                      path: 'C:\\wiki\\gamma\\gamma.md',
+                      mode: 'raw',
+                      cursor: { selectionStart: 0, selectionEnd: 0 },
+                      scrollTop: 0,
+                      splitPreviewRatio: 0.5
+                    }
+                  ],
+                  activeTabPath: 'C:\\wiki\\gamma\\gamma.md'
+                },
+                secondary: { tabs: [], activeTabPath: null }
+              }
+            }
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    // 1. Alpha restores: deleted-active.md and deleted.png skipped without error banner, collapses to single, keep-primary.md active in preview
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /keep-primary\.md/ })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    })
+    expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'single')
+    expect(screen.queryByTestId('pane-secondary')).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /deleted-active\.md/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /deleted\.png/ })).not.toBeInTheDocument()
+    expect(screen.getByTestId('document-editor').scrollTop).toBe(120)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    // 2. Switch to Beta -> primary deleted, secondary only-sec.md promoted to primary in single mode without error banner
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^beta$/i
+      })
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /only-sec\.md/ })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    })
+    expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'single')
+    expect(screen.queryByTestId('pane-secondary')).not.toBeInTheDocument()
+    expect(screen.getByTestId('document-editor').scrollTop).toBe(95)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    // 3. Rapid switch: start switching to beta with deferred openWorkspaceFile, immediately switch to gamma -> stale beta tab must not overwrite gamma
+    const origOpenBuffer = api.buffer.openWorkspaceFile.bind(api.buffer)
+    let resolveDelayedBetaTab!: (value: Awaited<ReturnType<typeof origOpenBuffer>>) => void
+    const delayedBetaTab = new Promise<Awaited<ReturnType<typeof origOpenBuffer>>>((resolve) => {
+      resolveDelayedBetaTab = resolve
+    })
+    let betaOpenCount = 0
+    vi.spyOn(api.buffer, 'openWorkspaceFile').mockImplementation(async (filePath, name, initialContent) => {
+      if (filePath.toLowerCase().includes('only-sec.md') && betaOpenCount === 0) {
+        betaOpenCount += 1
+        return await delayedBetaTab
+      }
+      return await origOpenBuffer(filePath, name, initialContent)
+    })
+
+    // First switch back to alpha, then rapid switch to beta -> gamma
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^alpha$/i
+      })
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /keep-primary\.md/ })).toBeInTheDocument()
+    })
+
+    await clickActivityBarButton(user, '워크스페이스')
+    const wsView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(wsView).getByRole('button', { name: /^beta$/i }))
+    await waitFor(() => {
+      expect(betaOpenCount).toBe(1)
+    })
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^gamma$/i
+      })
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /gamma\.md/ })).toBeInTheDocument()
+    })
+
+    const realBetaBuf = await origOpenBuffer('C:/wiki/beta/only-sec.md', 'only-sec.md')
+    await act(async () => {
+      resolveDelayedBetaTab(realBetaBuf)
+    })
+    expect(screen.getByRole('tab', { name: /gamma\.md/ })).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /only-sec\.md/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('excludes Git Diff tabs and config.json from workspace state while preserving open config.json across workspace switches that restore saved tabs', async () => {
+    const user = userEvent.setup()
+    const cleanStatus = {
+      ...createEmptyGitStatus(true, 'C:/wiki/alpha'),
+      branch: 'main',
+      unstaged: [{ path: 'alpha.md', status: 'M' as const }]
+    }
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {
+        autoSave: false,
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'alpha.md': '# Alpha'
+          },
+          'C:\\wiki\\beta': {
+            'beta.md': '# Beta',
+            'side.md': '# Side'
+          }
+        },
+        workspaceStates: {
+          'C:\\wiki\\beta': {
+            layout: {
+              splitMode: 'horizontal',
+              splitRatio: 0.6,
+              activePaneId: 'primary',
+              panes: {
+                primary: {
+                  tabs: [
+                    {
+                      path: 'C:\\wiki\\beta\\beta.md',
+                      mode: 'preview',
+                      cursor: { selectionStart: 0, selectionEnd: 0 },
+                      scrollTop: 50,
+                      splitPreviewRatio: 0.5
+                    }
+                  ],
+                  activeTabPath: 'C:\\wiki\\beta\\beta.md'
+                },
+                secondary: {
+                  tabs: [
+                    {
+                      path: 'C:\\wiki\\beta\\side.md',
+                      mode: 'raw',
+                      cursor: { selectionStart: 0, selectionEnd: 0 },
+                      scrollTop: 0,
+                      splitPreviewRatio: 0.5
+                    }
+                  ],
+                  activeTabPath: 'C:\\wiki\\beta\\side.md'
+                }
+              }
+            }
+          }
+        },
+        git: {
+          status: vi.fn(async () => cleanStatus),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [{ name: 'main', current: true, upstream: null }]
+          })),
+          diff: vi.fn(async () => ({
+            path: 'alpha.md',
+            status: 'M' as const,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: '@@ -1 +1 @@\n-# Alpha\n+# Alpha changed'
+          }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const firstMount = render(<App />)
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('alpha.md'))
+
+    // Open config.json tab and a Git Diff tab moved to secondary pane
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    await user.click(
+      within(screen.getByLabelText('전역 설정 패널')).getByRole('button', {
+        name: /설정 파일 직접 열기/i
+      })
+    )
+    const primaryPane = screen.getByTestId('pane-primary')
+    expect(within(primaryPane).getByRole('tab', { name: /config\.json/i })).toBeInTheDocument()
+
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(await within(gitRegion).findByText('alpha.md'))
+    expect(await within(primaryPane).findByText('Working Tree')).toBeInTheDocument()
+    // Move diff tab to secondary pane so secondary holds ONLY a Diff tab
+    const diffTabs = within(primaryPane).getAllByRole('tab', { name: /alpha\.md/i })
+    const actualDiffTab = diffTabs[diffTabs.length - 1]
+    fireEvent.contextMenu(actualDiffTab)
+    await user.click(
+      within(await screen.findByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역으로 이동'
+      })
+    )
+    expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
+
+    // Switch to beta -> alpha's persisted state excludes Diff tab & config.json and collapses to single; beta restores its split tabs AND keeps config.json tab open!
+    await clickActivityBarButton(user, '워크스페이스')
+    await user.click(
+      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+        name: /^beta$/i
+      })
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
+      expect(within(screen.getByTestId('pane-primary')).getByRole('tab', { name: /beta\.md/ })).toBeInTheDocument()
+      expect(within(screen.getByTestId('pane-secondary')).getByRole('tab', { name: /side\.md/ })).toBeInTheDocument()
+    })
+    expect(within(screen.getByTestId('pane-primary')).getByRole('tab', { name: /config\.json/i })).toBeInTheDocument()
+    expect(screen.queryByText('Working Tree')).not.toBeInTheDocument()
+
+    const savedAlpha = await api.workspaceState!.get('C:/wiki/alpha')
+    expect(savedAlpha?.layout).toEqual({
+      splitMode: 'single',
+      splitRatio: 0.5,
+      activePaneId: 'primary',
+      panes: {
+        primary: {
+          tabs: [
+            {
+              path: 'C:\\wiki\\alpha\\alpha.md',
+              mode: 'raw',
+              cursor: { selectionStart: 0, selectionEnd: 0 },
+              scrollTop: 0,
+              splitPreviewRatio: 0.5
+            }
+          ],
+          activeTabPath: 'C:\\wiki\\alpha\\alpha.md'
+        },
+        secondary: { tabs: [], activeTabPath: null }
+      }
+    })
+
+    // Restart app on beta (recentWorkspaces[0] is beta now) -> only beta.md and side.md restore, NOT config.json or Diff tab
+    firstMount.unmount()
+    render(<App />)
+    await waitFor(() => {
+      expect(within(screen.getByTestId('pane-primary')).getByRole('tab', { name: /beta\.md/ })).toBeInTheDocument()
+      expect(within(screen.getByTestId('pane-secondary')).getByRole('tab', { name: /side\.md/ })).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('tab', { name: /config\.json/i })).not.toBeInTheDocument()
   })
 })
 
