@@ -34,6 +34,42 @@ describe('RawMarkdownEditor (CodeMirror 6)', () => {
     expect(highlightedHeading).not.toBeNull()
   })
 
+  it('renders mermaid and inline monospace code spans without an opaque background-color that hides selection', () => {
+    const { container } = render(
+      <RawMarkdownEditor
+        content={'# Title\n\n`inline`\n\n```mermaid\nflowchart TD\n  A --> B\n```'}
+        language="markdown"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const spans = Array.from(container.querySelectorAll('.cm-line span'))
+    const styleSheetsText = Array.from(document.head.querySelectorAll('style'))
+      .map((el) => el.textContent ?? '')
+      .join('\n')
+
+    for (const tokenText of ['inline', 'flowchart TD']) {
+      const span = spans.find((el) => el.textContent === tokenText)
+      expect(span).toBeDefined()
+      const classes = span!.className.trim().split(/\s+/).filter(Boolean)
+      expect(classes.length).toBeGreaterThan(0)
+
+      const matchingRules = classes
+        .map((cls) => {
+          const escaped = cls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          return styleSheetsText.match(new RegExp(`\\.${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+        })
+        .join('\n')
+
+      expect(matchingRules).toContain('color: var(--cm-code)')
+      expect(matchingRules).not.toContain('background-color')
+    }
+  })
+
   it('uses virtual scrolling viewport for 10,000+ line documents instead of mounting all lines in DOM', () => {
     const lines = Array.from({ length: 12000 }, (_, i) => `Line ${i + 1}: # Heading or text`)
     const hugeMarkdown = lines.join('\n')

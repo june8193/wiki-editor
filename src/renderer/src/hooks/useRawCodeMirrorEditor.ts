@@ -73,7 +73,7 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: tags.emphasis, fontStyle: 'italic' },
   { tag: tags.strikethrough, textDecoration: 'line-through' },
   { tag: [tags.link, tags.url], color: 'var(--cm-link)', textDecoration: 'underline' },
-  { tag: tags.monospace, color: 'var(--cm-code)', backgroundColor: 'var(--code-bg)' },
+  { tag: tags.monospace, color: 'var(--cm-code)' },
   { tag: tags.quote, color: 'var(--cm-quote)', fontStyle: 'italic' },
   { tag: tags.keyword, color: 'var(--cm-keyword)' },
   { tag: tags.string, color: 'var(--cm-string)' },
