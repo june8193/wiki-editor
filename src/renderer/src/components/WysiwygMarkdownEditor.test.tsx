@@ -1180,6 +1180,70 @@ describe('WysiwygMarkdownEditor', () => {
     expect(viewport.style.height).toBe('')
     expect(onChangeContent).not.toHaveBeenCalled()
   })
+
+  it('pastes VS Code code as plain-text Markdown instead of creating a code block, while pasting literally inside existing code blocks', async () => {
+    const createTestClipboardData = (entries: Record<string, string>) => ({
+      types: Object.keys(entries),
+      files: [] as File[],
+      items: [] as DataTransferItem[],
+      getData: (type: string) => entries[type] ?? ''
+    })
+
+    const onChangeContent = vi.fn()
+    const { rerender } = render(
+      <WysiwygMarkdownEditor
+        content={'# Title\n\n'}
+        scrollTop={0}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const targetP = editorEl.querySelector('p')!
+    editorEl.focus()
+    placeCaretInProseMirror(editorEl, targetP)
+
+    fireEvent.paste(editorEl, {
+      clipboardData: createTestClipboardData({
+        'vscode-editor-data': JSON.stringify({ version: 1, mode: 'typescript' }),
+        'text/html': '<div style="color:#000"><span>    const a = 1;</span></div>',
+        'text/plain': '    const a = 1;\n    const b = 2;'
+      })
+    })
+
+    expect(screen.queryByTestId('wysiwyg-code-block')).not.toBeInTheDocument()
+    const latestAfterParagraphPaste = onChangeContent.mock.calls.at(-1)?.[0] as string
+    expect(latestAfterParagraphPaste).toContain('const a = 1;')
+    expect(latestAfterParagraphPaste).toContain('const b = 2;')
+    expect(latestAfterParagraphPaste).not.toContain('```')
+
+    onChangeContent.mockClear()
+    rerender(
+      <WysiwygMarkdownEditor
+        content={'```ts\nlet v = 1;\n```'}
+        scrollTop={0}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const codeBlock = await screen.findByTestId('wysiwyg-code-block')
+    const codeContentEl = codeBlock.querySelector('pre code')!
+    editorEl.focus()
+    placeCaretInProseMirror(editorEl, codeContentEl)
+
+    fireEvent.paste(codeContentEl, {
+      clipboardData: createTestClipboardData({
+        'vscode-editor-data': JSON.stringify({ version: 1, mode: 'python' }),
+        'text/html': '<b>ignored</b>',
+        'text/plain': '# raw heading'
+      })
+    })
+
+    expect(screen.getAllByTestId('wysiwyg-code-block')).toHaveLength(1)
+    const latestAfterCodePaste = onChangeContent.mock.calls.at(-1)?.[0] as string
+    expect(latestAfterCodePaste).toMatch(/```ts[\s\S]*# raw heading[\s\S]*```/)
+    expect(latestAfterCodePaste).not.toContain('```python')
+  })
 })
 
 describe('WysiwygMarkdownEditor link autocomplete & Ctrl+K', () => {
