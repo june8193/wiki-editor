@@ -25,9 +25,47 @@ function textResponse(status: number, body: string, headers?: Record<string, str
   })
 }
 
+export type WikiAssetWorkspaceSource =
+  | WorkspaceFsService
+  | readonly WorkspaceFsService[]
+  | (() => readonly WorkspaceFsService[])
+
+function normalizeWorkspaceServices(
+  workspaceSource: WikiAssetWorkspaceSource
+): readonly WorkspaceFsService[] {
+  if (typeof workspaceSource === 'function') {
+    return workspaceSource()
+  }
+  return Array.isArray(workspaceSource)
+    ? (workspaceSource as readonly WorkspaceFsService[])
+    : [workspaceSource as WorkspaceFsService]
+}
+
+async function resolveAssetAcrossWorkspaces(
+  targetPath: string,
+  workspaceSource: WikiAssetWorkspaceSource
+): Promise<
+  { status: 'ok'; resolvedPath: string } | { status: 'forbidden' } | { status: 'not-found' }
+> {
+  const services = normalizeWorkspaceServices(workspaceSource)
+  let hasNotFound = false
+
+  for (const service of services) {
+    const resolution = await service.resolveAssetPath(targetPath)
+    if (resolution.status === 'ok') {
+      return resolution
+    }
+    if (resolution.status === 'not-found') {
+      hasNotFound = true
+    }
+  }
+
+  return hasNotFound ? { status: 'not-found' } : { status: 'forbidden' }
+}
+
 export async function handleWikiAssetRequest(
   request: { url: string; method: string },
-  workspaceService: WorkspaceFsService
+  workspaceSource: WikiAssetWorkspaceSource
 ): Promise<Response> {
   const method = request.method.toUpperCase()
   if (method !== 'GET' && method !== 'HEAD') {
@@ -43,7 +81,7 @@ export async function handleWikiAssetRequest(
     return textResponse(403, 'Forbidden')
   }
 
-  const resolution = await workspaceService.resolveAssetPath(targetPath)
+  const resolution = await resolveAssetAcrossWorkspaces(targetPath, workspaceSource)
   if (resolution.status === 'forbidden') {
     return textResponse(403, 'Forbidden')
   }

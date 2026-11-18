@@ -3,6 +3,7 @@ import {
   clampWindowBoundsToWorkArea,
   computeCursorAuxiliaryBounds,
   computeOffsetAuxiliaryBounds,
+  computeOffsetMainBounds,
   formatWindowTitle,
   isPointInsideWindowBounds,
   isPointOutsideAllWindows
@@ -15,15 +16,34 @@ import {
 } from './window'
 
 describe('createMainWindowOptions', () => {
-  it('enforces contextIsolation: true, nodeIntegration: false, and sandbox: true with preload path', () => {
+  it('enforces 1280x820 defaults, 900x600 minimums, optional bounds, and secure webPreferences', () => {
     const preloadPath = 'C:\\app\\out\\preload\\index.js'
     const options = createMainWindowOptions(preloadPath)
 
-    expect(options.webPreferences).toMatchObject({
-      preload: preloadPath,
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true
+    expect(options).toMatchObject({
+      width: 1280,
+      height: 820,
+      minWidth: 900,
+      minHeight: 600,
+      show: false,
+      webPreferences: {
+        preload: preloadPath,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
+    })
+
+    const offsetOptions = createMainWindowOptions(preloadPath, {
+      bounds: { x: 140, y: 160, width: 1280, height: 820 }
+    })
+    expect(offsetOptions).toMatchObject({
+      x: 140,
+      y: 160,
+      width: 1280,
+      height: 820,
+      minWidth: 900,
+      minHeight: 600
     })
   })
 
@@ -186,6 +206,34 @@ describe('computeOffsetAuxiliaryBounds and clampWindowBoundsToWorkArea', () => {
       y: 0,
       width: 800,
       height: 600
+    })
+  })
+
+  it('offsets new main window by (+40, +40) at 1280x820 and clamps within nearest display workArea', () => {
+    const fakeScreen = {
+      getDisplayNearestPoint: ({ x }: { x: number; y: number }) =>
+        x < 0
+          ? { workArea: { x: -1920, y: 0, width: 1920, height: 1040 } }
+          : { workArea: { x: 0, y: 0, width: 1920, height: 1080 } }
+    }
+
+    expect(
+      computeOffsetMainBounds({ x: 100, y: 120, width: 1280, height: 820 }, fakeScreen)
+    ).toEqual({
+      x: 140,
+      y: 160,
+      width: 1280,
+      height: 820
+    })
+
+    // Near bottom-right edge -> clamped inside 1920x1080 workArea
+    expect(
+      computeOffsetMainBounds({ x: 800, y: 350, width: 1280, height: 820 }, fakeScreen)
+    ).toEqual({
+      x: 640,
+      y: 260,
+      width: 1280,
+      height: 820
     })
   })
 })

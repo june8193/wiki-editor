@@ -46,6 +46,9 @@ import {
   type WindowRole
 } from '@shared/window'
 import type {
+  ActivateOrOpenWorkspaceResult,
+  FocusOpenWorkspaceResult,
+  OpenWorkspaceInNewWindowResult,
   WorkspaceChangeEvent,
   WorkspaceEntry,
   WorkspaceInfo,
@@ -125,6 +128,21 @@ export function createWikiApi(
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.selectFolder) as Promise<string | null>,
       open: (rootPath) =>
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.open, rootPath) as Promise<WorkspaceInfo>,
+      openInNewWindow: (rootPath) =>
+        ipcRenderer.invoke(
+          WORKSPACE_IPC_CHANNELS.openInNewWindow,
+          rootPath
+        ) as Promise<OpenWorkspaceInNewWindowResult>,
+      activateOrOpen: (rootPath) =>
+        ipcRenderer.invoke(
+          WORKSPACE_IPC_CHANNELS.activateOrOpen,
+          rootPath
+        ) as Promise<ActivateOrOpenWorkspaceResult>,
+      focusIfOpen: (rootPath) =>
+        ipcRenderer.invoke(
+          WORKSPACE_IPC_CHANNELS.focusIfOpen,
+          rootPath
+        ) as Promise<FocusOpenWorkspaceResult>,
       readDir: (dirPath) =>
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.readDir, dirPath) as Promise<WorkspaceEntry[]>,
       listMarkdownFiles: () =>

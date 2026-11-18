@@ -1,4 +1,5 @@
 import type { BrowserWindowConstructorOptions } from 'electron'
+import type { AutoSaveConfig } from '@shared/bufferAutoSaveScheduler'
 import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import { WINDOW_IPC_CHANNELS } from '@shared/ipc'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
@@ -10,6 +11,7 @@ import {
   canDetachTabFromWindow,
   cloneTabTransferPayloads,
   computeOffsetAuxiliaryBounds,
+  computeOffsetMainBounds,
   formatWindowTitle,
   WINDOW_ROLE_QUERY_PARAM,
   type AcceptTabDragDropInput,
@@ -26,8 +28,33 @@ import {
   type WindowInitContext,
   type WindowRole
 } from '@shared/window'
-import { trackHubWindowWebContents, type BufferWebContentsLike } from './ipc/registerBufferIpc'
+import {
+  isSameWorkspacePath,
+  type ActivateOrOpenWorkspaceResult,
+  type FocusOpenWorkspaceResult,
+  type OpenWorkspaceInNewWindowResult,
+  type WorkspaceInfo
+} from '@shared/workspace'
+import type { ConfigService } from './config/ConfigService'
+import type { WebContentsLike } from './ipc/ipcHelpers'
+import {
+  createSharedDocumentBufferHub,
+  trackHubWindowWebContents,
+  type BufferIpcSession,
+  type BufferIpcSessionSource,
+  type BufferWebContentsLike
+} from './ipc/registerBufferIpc'
+import type {
+  WorkspaceIpcCoordinator,
+  WorkspaceIpcSession
+} from './ipc/registerWorkspaceIpc'
+import type { LogService } from './logging/LogService'
 import { createAuxiliaryWindowOptions, createMainWindowOptions } from './window'
+import {
+  resolveValidWorkspaceDirectory,
+  tryResolveRealWorkspacePath,
+  WorkspaceFsService
+} from './workspace/WorkspaceFsService'
 
 export interface WindowWebContentsLike extends BufferWebContentsLike {
   on?: (
@@ -49,12 +76,17 @@ export interface BrowserWindowLike {
   webContents: WindowWebContentsLike
   getBounds(): WindowBounds
   isMinimized?(): boolean
+  isFocused?(): boolean
+  restore?(): void
+  focus?(): void
   removeMenu(): void
   show(): void
   close(): void
   isDestroyed(): boolean
   on?(eventName: 'close', listener: (event: WindowCloseEventLike) => void): void
+  on?(eventName: 'focus', listener: () => void): void
   removeListener?(eventName: 'close', listener: (event: WindowCloseEventLike) => void): void
+  removeListener?(eventName: 'focus', listener: () => void): void
   once(eventName: 'ready-to-show' | 'closed', listener: () => void): void
   loadURL(url: string): Promise<void> | void
   loadFile(filePath: string, options?: { query?: Record<string, string> }): Promise<void> | void
@@ -64,22 +96,61 @@ export interface WindowManagerDependencies {
   preloadPath: string
   rendererUrl?: string
   rendererFilePath: string
-  bufferHub: SharedDocumentBufferHub
+  configService?: ConfigService
+  logService?: LogService
+  trashItem?: (targetPath: string) => Promise<void>
+  initialAutoSaveConfig?: AutoSaveConfig
+  bufferHub?: SharedDocumentBufferHub
+  workspaceService?: WorkspaceFsService
   createWindow: (options: BrowserWindowConstructorOptions) => BrowserWindowLike
   screen?: ScreenLike
+  getFocusedWindow?: () => BrowserWindowLike | undefined
+}
+
+export interface CreateMainWindowOptions {
+  bounds?: Partial<WindowBounds>
+  initialWorkspacePath?: string | null
+}
+
+export interface WorkspaceSessionHandle extends BufferIpcSession, WorkspaceIpcSession {
+  readonly sessionId: number
+  readonly mainWebContentsId: number
+  readonly bufferHub: SharedDocumentBufferHub
+  readonly workspaceService: WorkspaceFsService
+  getTargets: () => WindowWebContentsLike[]
 }
 
 interface WindowRecord {
+  sessionId: number
   webContentsId: number
   role: WindowRole
   window: BrowserWindowLike
   initialTabs: TabTransferPayload[]
+  initialWorkspacePath?: string | null
   hasSyncedNonEmptyTabs: boolean
   closing: boolean
   closePromptPending: boolean
   closeFlushEnabled: boolean
   cleanCloseFlushTimer?: ReturnType<typeof setTimeout>
   cleanupListeners?: () => void
+}
+
+interface WorkspaceSession {
+  sessionId: number
+  mainWebContentsId: number
+  workspaceService: WorkspaceFsService
+  bufferHub: SharedDocumentBufferHub
+  dragCoordinator: TabDragCoordinator
+  ownsBufferHub: boolean
+  ownsWorkspaceService: boolean
+  pendingInitialWorkspacePath: string | null
+  pendingOpenWorkspacePath: string | null
+  windowIds: Set<number>
+  disposed: boolean
+  unsubscribeHub: () => void
+  unsubscribeDrag: () => void
+  disposeCleanups: Array<() => void>
+  handle: WorkspaceSessionHandle
 }
 
 const CLEAN_CLOSE_FLUSH_TIMEOUT_MS = 1000
@@ -90,43 +161,100 @@ function getNumericSenderId(sender: unknown): number | undefined {
   return typeof candidate === 'number' ? candidate : undefined
 }
 
+function matchesTargetWindow(record: WindowRecord, targetWindow: unknown): boolean {
+  if (record.window === targetWindow) return true
+  if (!targetWindow || typeof targetWindow !== 'object') return false
+  const candidate = targetWindow as { id?: unknown; webContents?: unknown }
+  if (typeof candidate.id === 'number' && candidate.id === record.window.id) {
+    return true
+  }
+  return candidate.webContents !== undefined && candidate.webContents === record.window.webContents
+}
+
 /**
- * Coordinates the single main window and detached auxiliary editor windows,
- * window initialization handshakes, transfer ownership claims, menu routing, and zero-tab auto-close.
+ * Coordinates multiple main-window workspace sessions, their owned auxiliary editor windows,
+ * window initialization contexts, session-scoped buffer/workspace/drag isolation, and menu routing.
  */
-export class WindowManager {
+export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordinator {
   private readonly preloadPath: string
   private readonly rendererUrl?: string
   private readonly rendererFilePath: string
-  private readonly bufferHub: SharedDocumentBufferHub
+  private readonly configService?: ConfigService
+  private readonly logService?: LogService
+  private readonly trashItem?: (targetPath: string) => Promise<void>
+  private readonly injectedBufferHub?: SharedDocumentBufferHub
+  private readonly injectedWorkspaceService?: WorkspaceFsService
   private readonly createBrowserWindow: (options: BrowserWindowConstructorOptions) => BrowserWindowLike
   private readonly screen?: ScreenLike
+  private readonly getFocusedWindow?: () => BrowserWindowLike | undefined
 
+  private readonly sessions = new Map<number, WorkspaceSession>()
   private readonly windowsByWebContentsId = new Map<number, WindowRecord>()
   private readonly recordsByWebContents = new WeakMap<object, WindowRecord>()
-  private readonly dragCoordinator = new TabDragCoordinator()
-  private mainWebContentsId: number | null = null
-  private readonly unsubscribeHub: () => void
+  private readonly dragStateListeners = new Set<
+    (session: ActiveTabDragSession | null, targets?: WindowWebContentsLike[]) => void
+  >()
+  private readonly sessionCreatedListeners = new Set<
+    (session: WorkspaceSessionHandle) => (() => void) | void
+  >()
+  private readonly sessionDisposedListeners = new Set<(session: WorkspaceSessionHandle) => void>()
+
+  private nextSessionId = 1
+  private dragSessionCounter = 0
+  private lastActiveSessionId: number | null = null
+  private usedInjectedHub = false
+  private latestAutoSaveConfig?: AutoSaveConfig
+  private readonly unsubscribeConfig?: () => void
   private disposed = false
 
   constructor({
     preloadPath,
     rendererUrl,
     rendererFilePath,
+    configService,
+    logService,
+    trashItem,
+    initialAutoSaveConfig,
     bufferHub,
+    workspaceService,
     createWindow,
-    screen
+    screen,
+    getFocusedWindow
   }: WindowManagerDependencies) {
     this.preloadPath = preloadPath
     this.rendererUrl = rendererUrl
     this.rendererFilePath = rendererFilePath
-    this.bufferHub = bufferHub
+    this.configService = configService
+    this.logService = logService
+    this.trashItem = trashItem
+    this.latestAutoSaveConfig = initialAutoSaveConfig
+    this.injectedBufferHub = bufferHub
+    this.injectedWorkspaceService = workspaceService
     this.createBrowserWindow = createWindow
     this.screen = screen
+    this.getFocusedWindow = getFocusedWindow
 
-    this.unsubscribeHub = this.bufferHub.subscribe((event) => {
-      this.handleHubEvent(event)
-    })
+    if (this.configService) {
+      this.unsubscribeConfig = this.configService.onChanged((config) => {
+        this.latestAutoSaveConfig = {
+          autoSave: config.autoSave,
+          autoSaveDelayMs: config.autoSaveDelayMs
+        }
+      })
+      if (!this.latestAutoSaveConfig) {
+        void this.configService
+          .get()
+          .then((config) => {
+            if (!this.disposed && !this.latestAutoSaveConfig) {
+              this.latestAutoSaveConfig = {
+                autoSave: config.autoSave,
+                autoSaveDelayMs: config.autoSaveDelayMs
+              }
+            }
+          })
+          .catch(() => undefined)
+      }
+    }
   }
 
   private loadRendererContent(win: BrowserWindowLike, role: WindowRole): void {
@@ -145,19 +273,136 @@ export class WindowManager {
     )
   }
 
+  private createSessionServices(): {
+    workspaceService: WorkspaceFsService
+    bufferHub: SharedDocumentBufferHub
+    ownsWorkspaceService: boolean
+    ownsBufferHub: boolean
+  } {
+    if (this.injectedBufferHub && !this.usedInjectedHub) {
+      this.usedInjectedHub = true
+      const workspaceService =
+        this.injectedWorkspaceService ?? new WorkspaceFsService({ trashItem: this.trashItem })
+      return {
+        workspaceService,
+        bufferHub: this.injectedBufferHub,
+        ownsWorkspaceService: !this.injectedWorkspaceService,
+        ownsBufferHub: false
+      }
+    }
+
+    if (!this.configService) {
+      throw new Error('WindowManager requires configService to create main window sessions')
+    }
+
+    const workspaceService = new WorkspaceFsService({ trashItem: this.trashItem })
+    const bufferHub = createSharedDocumentBufferHub({
+      workspaceService,
+      configService: this.configService,
+      logService: this.logService,
+      initialAutoSaveConfig: this.latestAutoSaveConfig
+    })
+    return {
+      workspaceService,
+      bufferHub,
+      ownsWorkspaceService: true,
+      ownsBufferHub: true
+    }
+  }
+
+  private createWorkspaceSession(
+    mainWin: BrowserWindowLike,
+    initialWorkspacePath: string | null
+  ): WorkspaceSession {
+    const sessionId = this.nextSessionId++
+    const { workspaceService, bufferHub, ownsWorkspaceService, ownsBufferHub } =
+      this.createSessionServices()
+    const mainWebContentsId = trackHubWindowWebContents(bufferHub, mainWin.webContents, mainWin.id)
+    const dragCoordinator = new TabDragCoordinator({
+      nextDragSessionId: () => `drag-${++this.dragSessionCounter}`
+    })
+
+    const getTargets = (): WindowWebContentsLike[] => this.getSessionWebContentsTargets(sessionId)
+
+    const session: WorkspaceSession = {
+      sessionId,
+      mainWebContentsId,
+      workspaceService,
+      bufferHub,
+      dragCoordinator,
+      ownsBufferHub,
+      ownsWorkspaceService,
+      pendingInitialWorkspacePath: initialWorkspacePath,
+      pendingOpenWorkspacePath: null,
+      windowIds: new Set<number>(),
+      disposed: false,
+      unsubscribeHub: () => undefined,
+      unsubscribeDrag: () => undefined,
+      disposeCleanups: [],
+      handle: {
+        sessionId,
+        mainWebContentsId,
+        hub: bufferHub,
+        bufferHub,
+        workspaceService,
+        getTargets,
+        resolveWindowId: (sender) => {
+          const record = this.resolveRecordFromSender(sender)
+          return record && record.sessionId === sessionId ? record.webContentsId : undefined
+        },
+        isMainWindow: (sender) => {
+          const record = this.resolveRecordFromSender(sender)
+          return (
+            record !== undefined &&
+            record.sessionId === sessionId &&
+            record.role === 'main' &&
+            !record.window.isDestroyed()
+          )
+        }
+      }
+    }
+
+    session.unsubscribeHub = bufferHub.subscribe((event) => {
+      this.handleHubEvent(session, event)
+    })
+    session.unsubscribeDrag = dragCoordinator.onStateChanged((dragSession) => {
+      if (this.disposed || session.disposed) return
+      const targets = getTargets()
+      for (const listener of this.dragStateListeners) {
+        listener(dragSession, targets)
+      }
+    })
+
+    this.sessions.set(sessionId, session)
+    return session
+  }
+
+  private notifySessionCreated(session: WorkspaceSession): void {
+    for (const listener of this.sessionCreatedListeners) {
+      const cleanup = listener(session.handle)
+      if (typeof cleanup === 'function') {
+        session.disposeCleanups.push(cleanup)
+      }
+    }
+  }
+
   private registerWindow(
+    session: WorkspaceSession,
     win: BrowserWindowLike,
     role: WindowRole,
-    initialTabs: readonly TabTransferPayload[]
+    initialTabs: readonly TabTransferPayload[],
+    initialWorkspacePath?: string | null
   ): WindowRecord {
-    const webContentsId = trackHubWindowWebContents(this.bufferHub, win.webContents, win.id)
+    const webContentsId = trackHubWindowWebContents(session.bufferHub, win.webContents, win.id)
     const clonedTabs = cloneTabTransferPayloads(initialTabs)
 
     const record: WindowRecord = {
+      sessionId: session.sessionId,
       webContentsId,
       role,
       window: win,
       initialTabs: clonedTabs,
+      ...(initialWorkspacePath !== undefined ? { initialWorkspacePath } : {}),
       hasSyncedNonEmptyTabs: false,
       closing: false,
       closePromptPending: false,
@@ -166,12 +411,15 @@ export class WindowManager {
 
     this.windowsByWebContentsId.set(webContentsId, record)
     this.recordsByWebContents.set(win.webContents, record)
+    session.windowIds.add(webContentsId)
+
     if (role === 'main') {
-      this.mainWebContentsId = webContentsId
+      session.mainWebContentsId = webContentsId
+      this.lastActiveSessionId = session.sessionId
     } else {
       win.removeMenu()
       for (const tab of clonedTabs) {
-        this.bufferHub.registerPendingTransfer(webContentsId, tab.bufferKey)
+        session.bufferHub.registerPendingTransfer(webContentsId, tab.bufferKey)
       }
     }
 
@@ -182,49 +430,168 @@ export class WindowManager {
     })
 
     const handleBeforeInput = (_event: unknown, input: BeforeInputKeyEventLike): void => {
-      this.dragCoordinator.handleBeforeInput(input)
+      for (const candidateSession of this.sessions.values()) {
+        if (!candidateSession.disposed) {
+          candidateSession.dragCoordinator.handleBeforeInput(input)
+        }
+      }
     }
     const handleWindowClose = (event: WindowCloseEventLike): void => {
       this.handleWindowClose(record, event)
     }
+    const handleWindowFocus = (): void => {
+      if (!this.disposed && !session.disposed) {
+        this.lastActiveSessionId = session.sessionId
+      }
+    }
     win.webContents.on?.('before-input-event', handleBeforeInput)
     win.on?.('close', handleWindowClose)
+    win.on?.('focus', handleWindowFocus)
     record.cleanupListeners = () => {
       win.webContents.removeListener?.('before-input-event', handleBeforeInput)
       win.removeListener?.('close', handleWindowClose)
+      win.removeListener?.('focus', handleWindowFocus)
       record.cleanupListeners = undefined
     }
 
     win.once('closed', () => {
       this.clearCleanCloseFlushTimer(record)
       record.cleanupListeners?.()
-      this.dragCoordinator.clearForWindow(webContentsId)
+      if (!session.disposed) {
+        session.dragCoordinator.clearForWindow(webContentsId)
+      }
       this.windowsByWebContentsId.delete(webContentsId)
-      if (this.mainWebContentsId === webContentsId) {
-        this.mainWebContentsId = null
-        this.closeAllAuxiliaryWindows()
+      session.windowIds.delete(webContentsId)
+      if (role === 'main') {
+        this.closeSessionAuxiliaryWindows(session)
+        this.disposeSession(session)
       }
     })
 
     return record
   }
 
-  createMainWindow(): BrowserWindowLike {
-    const win = this.createBrowserWindow(createMainWindowOptions(this.preloadPath))
-    this.registerWindow(win, 'main', [])
+  private disposeSession(session: WorkspaceSession): void {
+    if (session.disposed) return
+    session.disposed = true
+
+    for (const listener of this.sessionDisposedListeners) {
+      listener(session.handle)
+    }
+    for (const cleanup of session.disposeCleanups.splice(0)) {
+      cleanup()
+    }
+
+    session.unsubscribeHub()
+    session.unsubscribeDrag()
+    session.dragCoordinator.dispose()
+    if (session.ownsBufferHub) {
+      session.bufferHub.dispose()
+    }
+    if (session.ownsWorkspaceService) {
+      session.workspaceService.dispose()
+    }
+
+    this.sessions.delete(session.sessionId)
+    if (this.lastActiveSessionId === session.sessionId) {
+      this.lastActiveSessionId = this.findFallbackActiveSessionId()
+    }
+  }
+
+  private findFallbackActiveSessionId(): number | null {
+    for (const session of this.sessions.values()) {
+      const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
+      if (mainRecord && !mainRecord.window.isDestroyed()) {
+        return session.sessionId
+      }
+    }
+    return null
+  }
+
+  private getSessionEffectiveWorkspaceRoot(session: WorkspaceSession): string | null {
+    return (
+      session.workspaceService.getWorkspaceRoot() ??
+      session.pendingOpenWorkspacePath ??
+      session.pendingInitialWorkspacePath
+    )
+  }
+
+  private findSessionByWorkspacePath(
+    targetPath: string,
+    excludeSessionId?: number
+  ): WorkspaceSession | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.disposed || session.sessionId === excludeSessionId) continue
+      const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
+      if (!mainRecord || mainRecord.window.isDestroyed()) continue
+      const sessionRoot = this.getSessionEffectiveWorkspaceRoot(session)
+      if (sessionRoot && isSameWorkspacePath(sessionRoot, targetPath)) {
+        return session
+      }
+    }
+    return undefined
+  }
+
+  private focusSessionMainWindow(session: WorkspaceSession): void {
+    const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
+    if (!mainRecord || mainRecord.window.isDestroyed()) return
+    const win = mainRecord.window
+    if (win.isMinimized?.()) {
+      win.restore?.()
+    }
+    if (typeof win.focus === 'function') {
+      win.focus()
+    } else {
+      win.show()
+    }
+    this.lastActiveSessionId = session.sessionId
+  }
+
+  createMainWindow(options?: CreateMainWindowOptions): BrowserWindowLike {
+    const win = this.createBrowserWindow(
+      createMainWindowOptions(this.preloadPath, { bounds: options?.bounds })
+    )
+    const initialWorkspacePath = options?.initialWorkspacePath ?? null
+    const session = this.createWorkspaceSession(win, initialWorkspacePath)
+    this.registerWindow(
+      session,
+      win,
+      'main',
+      [],
+      options?.initialWorkspacePath !== undefined ? options.initialWorkspacePath : undefined
+    )
+    this.notifySessionCreated(session)
     this.loadRendererContent(win, 'main')
     return win
   }
 
   createAuxiliaryWindow(
     initialTabs: readonly TabTransferPayload[],
-    sourceBounds?: WindowBounds
+    sourceBounds?: WindowBounds,
+    sourceSender?: unknown
   ): BrowserWindowLike {
+    const session = this.resolveTargetSessionForAuxCreation(sourceSender)
     const bounds = sourceBounds ? computeOffsetAuxiliaryBounds(sourceBounds, this.screen) : undefined
-    return this.openAuxiliaryWindowWithBounds(initialTabs, bounds)
+    return this.openAuxiliaryWindowWithBounds(session, initialTabs, bounds)
+  }
+
+  private resolveTargetSessionForAuxCreation(sourceSender?: unknown): WorkspaceSession {
+    if (sourceSender !== undefined) {
+      const sourceRecord = this.resolveRecordFromSender(sourceSender)
+      const sourceSession = sourceRecord ? this.sessions.get(sourceRecord.sessionId) : undefined
+      if (sourceSession && !sourceSession.disposed) {
+        return sourceSession
+      }
+    }
+    const activeSession = this.getActiveSession()
+    if (!activeSession) {
+      throw new Error('Cannot create auxiliary window without an active main window session')
+    }
+    return activeSession
   }
 
   private openAuxiliaryWindowWithBounds(
+    session: WorkspaceSession,
     initialTabs: readonly TabTransferPayload[],
     bounds?: WindowBounds
   ): BrowserWindowLike {
@@ -232,25 +599,26 @@ export class WindowManager {
       throw new Error('Auxiliary window requires at least one initial tab')
     }
     const firstKey = initialTabs[0].bufferKey
-    const firstName = this.bufferHub.getBufferName(firstKey)
+    const firstName = session.bufferHub.getBufferName(firstKey)
     const options = createAuxiliaryWindowOptions(this.preloadPath, {
       bounds,
       title: formatWindowTitle(firstName)
     })
 
     const win = this.createBrowserWindow(options)
-    this.registerWindow(win, 'auxiliary', initialTabs)
+    this.registerWindow(session, win, 'auxiliary', initialTabs)
     this.loadRendererContent(win, 'auxiliary')
     return win
   }
 
   private createDetachedAuxiliaryWindow(
+    session: WorkspaceSession,
     payload: TabTransferPayload,
     bounds?: WindowBounds
   ): DetachTabToNewWindowResult {
-    const auxWindow = this.openAuxiliaryWindowWithBounds([payload], bounds)
+    const auxWindow = this.openAuxiliaryWindowWithBounds(session, [payload], bounds)
     return {
-      windowId: trackHubWindowWebContents(this.bufferHub, auxWindow.webContents, auxWindow.id)
+      windowId: trackHubWindowWebContents(session.bufferHub, auxWindow.webContents, auxWindow.id)
     }
   }
 
@@ -263,16 +631,28 @@ export class WindowManager {
     return numericId !== undefined ? this.windowsByWebContentsId.get(numericId) : undefined
   }
 
-  private requireSourceWindow(sender: unknown, action: string): WindowRecord {
+  private requireSourceWindow(
+    sender: unknown,
+    action: string
+  ): { record: WindowRecord; session: WorkspaceSession } {
     const sourceRecord = this.resolveRecordFromSender(sender)
-    if (!sourceRecord || sourceRecord.window.isDestroyed()) {
+    const session = sourceRecord ? this.sessions.get(sourceRecord.sessionId) : undefined
+    if (!sourceRecord || sourceRecord.window.isDestroyed() || !session || session.disposed) {
       throw new Error(`Cannot ${action} from an unknown source window`)
     }
-    return sourceRecord
+    return { record: sourceRecord, session }
   }
 
-  private assertKnownBuffer(payload: TabTransferPayload | undefined, action: string): void {
-    if (!payload || typeof payload.bufferKey !== 'string' || !this.bufferHub.hasBuffer(payload.bufferKey)) {
+  private assertKnownBuffer(
+    session: WorkspaceSession,
+    payload: TabTransferPayload | undefined,
+    action: string
+  ): void {
+    if (
+      !payload ||
+      typeof payload.bufferKey !== 'string' ||
+      !session.bufferHub.hasBuffer(payload.bufferKey)
+    ) {
       throw new Error(`Cannot ${action} unknown document buffer`)
     }
   }
@@ -287,36 +667,219 @@ export class WindowManager {
     return bounds
   }
 
+  private getActiveSession(): WorkspaceSession | undefined {
+    if (this.lastActiveSessionId !== null) {
+      const candidate = this.sessions.get(this.lastActiveSessionId)
+      const mainRecord = candidate ? this.windowsByWebContentsId.get(candidate.mainWebContentsId) : undefined
+      if (candidate && !candidate.disposed && mainRecord && !mainRecord.window.isDestroyed()) {
+        return candidate
+      }
+    }
+    const fallbackId = this.findFallbackActiveSessionId()
+    return fallbackId !== null ? this.sessions.get(fallbackId) : undefined
+  }
+
+  private requireMainSenderSession(sender: unknown): WorkspaceSession {
+    const record = this.resolveRecordFromSender(sender)
+    const session = record ? this.sessions.get(record.sessionId) : undefined
+    if (!record || record.role !== 'main' || record.window.isDestroyed() || !session || session.disposed) {
+      throw new Error('Only the main window can open a workspace')
+    }
+    return session
+  }
+
+  private async openValidatedDirectoryInSession(
+    session: WorkspaceSession,
+    realRoot: string
+  ): Promise<WorkspaceInfo> {
+    session.pendingOpenWorkspacePath = realRoot
+    try {
+      const info = await session.workspaceService.openWorkspace(realRoot)
+      session.pendingInitialWorkspacePath = null
+      return info
+    } catch (error) {
+      if (!session.workspaceService.getWorkspaceRoot()) {
+        session.pendingInitialWorkspacePath = null
+      }
+      throw error
+    } finally {
+      session.pendingOpenWorkspacePath = null
+    }
+  }
+
+  /**
+   * Opens a workspace in a new offset main window after validating the target directory,
+   * or restores and focuses the existing main window if that workspace is already open.
+   */
+  async openWorkspaceInNewWindow(
+    sender: unknown,
+    rootPath: string
+  ): Promise<OpenWorkspaceInNewWindowResult> {
+    if (this.disposed) {
+      throw new Error('WindowManager is disposed')
+    }
+
+    const realRoot = await resolveValidWorkspaceDirectory(rootPath)
+    const existingSession = this.findSessionByWorkspacePath(realRoot)
+    if (existingSession) {
+      this.focusSessionMainWindow(existingSession)
+      return {
+        status: 'focused-existing',
+        windowId: existingSession.mainWebContentsId,
+        rootPath: this.getSessionEffectiveWorkspaceRoot(existingSession) ?? realRoot
+      }
+    }
+
+    const sourceRecord =
+      this.resolveRecordFromSender(sender) ??
+      (() => {
+        const active = this.getActiveSession()
+        return active ? this.windowsByWebContentsId.get(active.mainWebContentsId) : undefined
+      })()
+    const bounds =
+      sourceRecord && !sourceRecord.window.isDestroyed()
+        ? computeOffsetMainBounds(sourceRecord.window.getBounds(), this.screen)
+        : undefined
+
+    const newWin = this.createMainWindow({
+      bounds,
+      initialWorkspacePath: realRoot
+    })
+    const newRecord = this.resolveRecordFromSender(newWin.webContents)
+    if (!newRecord) {
+      throw new Error('Failed to register newly created main window')
+    }
+    return {
+      status: 'opened',
+      windowId: newRecord.webContentsId,
+      rootPath: realRoot
+    }
+  }
+
+  private async prepareMainWorkspaceOpen(
+    sender: WebContentsLike | undefined,
+    rootPath: string
+  ): Promise<{
+    senderSession: WorkspaceSession
+    realRoot: string
+    existingSession: WorkspaceSession | undefined
+  }> {
+    const senderSession = this.requireMainSenderSession(sender)
+    const realRoot = await resolveValidWorkspaceDirectory(rootPath)
+    const existingSession = this.findSessionByWorkspacePath(realRoot, senderSession.sessionId)
+    return { senderSession, realRoot, existingSession }
+  }
+
+  /**
+   * Opens a workspace inside the sender main window's session, or restores and focuses another
+   * main window if that workspace is already open elsewhere.
+   */
+  async activateOrOpenWorkspace(
+    sender: WebContentsLike | undefined,
+    rootPath: string
+  ): Promise<ActivateOrOpenWorkspaceResult> {
+    const { senderSession, realRoot, existingSession } = await this.prepareMainWorkspaceOpen(
+      sender,
+      rootPath
+    )
+    if (existingSession) {
+      this.focusSessionMainWindow(existingSession)
+      return {
+        status: 'focused-existing',
+        windowId: existingSession.mainWebContentsId,
+        rootPath: this.getSessionEffectiveWorkspaceRoot(existingSession) ?? realRoot
+      }
+    }
+
+    const info = await this.openValidatedDirectoryInSession(senderSession, realRoot)
+    return { status: 'opened', info }
+  }
+
+  /**
+   * Opens a workspace inside the sender main window's session while rejecting duplicate opens
+   * across other live main windows by focusing the existing main window first.
+   */
+  async openWorkspaceInSession(
+    sender: WebContentsLike | undefined,
+    rootPath: string
+  ): Promise<WorkspaceInfo> {
+    const { senderSession, realRoot, existingSession } = await this.prepareMainWorkspaceOpen(
+      sender,
+      rootPath
+    )
+    if (existingSession) {
+      this.focusSessionMainWindow(existingSession)
+      throw new Error('이미 다른 창에 열려 있는 워크스페이스입니다.')
+    }
+
+    return this.openValidatedDirectoryInSession(senderSession, realRoot)
+  }
+
+  /**
+   * Checks whether `rootPath` is already open in another main window and focuses it if found.
+   */
+  async focusWorkspaceIfOpen(
+    sender: WebContentsLike | undefined,
+    rootPath: string
+  ): Promise<FocusOpenWorkspaceResult> {
+    const senderSession = this.requireMainSenderSession(sender)
+    const resolvedCandidate = await tryResolveRealWorkspacePath(rootPath)
+    if (!resolvedCandidate) {
+      return { focused: false }
+    }
+
+    const existingSession = this.findSessionByWorkspacePath(
+      resolvedCandidate,
+      senderSession.sessionId
+    )
+    if (!existingSession) {
+      return { focused: false }
+    }
+
+    this.focusSessionMainWindow(existingSession)
+    return {
+      focused: true,
+      windowId: existingSession.mainWebContentsId,
+      rootPath: this.getSessionEffectiveWorkspaceRoot(existingSession) ?? resolvedCandidate
+    }
+  }
+
   detachTabToNewWindow(
     sender: unknown,
     payload: TabTransferPayload
   ): DetachTabToNewWindowResult {
-    const sourceRecord = this.requireSourceWindow(sender, 'detach tab')
-    this.assertKnownBuffer(payload, 'detach')
+    const { record: sourceRecord, session } = this.requireSourceWindow(sender, 'detach tab')
+    this.assertKnownBuffer(session, payload, 'detach')
 
     if (
       !canDetachTabFromWindow(
         sourceRecord.role,
-        this.bufferHub.getWindowTabCount(sourceRecord.webContentsId)
+        session.bufferHub.getWindowTabCount(sourceRecord.webContentsId)
       )
     ) {
       throw new Error('Cannot detach the last tab from an auxiliary window')
     }
 
     return this.createDetachedAuxiliaryWindow(
+      session,
       payload,
       computeOffsetAuxiliaryBounds(sourceRecord.window.getBounds(), this.screen)
     )
   }
 
-  onTabDragStateChanged(listener: (session: ActiveTabDragSession | null) => void): () => void {
-    return this.dragCoordinator.onStateChanged(listener)
+  onTabDragStateChanged(
+    listener: (session: ActiveTabDragSession | null, targets?: WindowWebContentsLike[]) => void
+  ): () => void {
+    this.dragStateListeners.add(listener)
+    return () => {
+      this.dragStateListeners.delete(listener)
+    }
   }
 
   startTabDrag(sender: unknown, input: TabDragStartInput): ActiveTabDragSession {
-    const sourceRecord = this.requireSourceWindow(sender, 'start tab drag')
-    this.assertKnownBuffer(input?.payload, 'drag')
-    return this.dragCoordinator.start(sourceRecord.webContentsId, input)
+    const { record: sourceRecord, session } = this.requireSourceWindow(sender, 'start tab drag')
+    this.assertKnownBuffer(session, input?.payload, 'drag')
+    return session.dragCoordinator.start(sourceRecord.webContentsId, input)
   }
 
   updateTabDragOutcome(
@@ -325,44 +888,74 @@ export class WindowManager {
     outcome: TabDragResolution
   ): ActiveTabDragSession | null {
     const sourceRecord = this.resolveRecordFromSender(sender)
-    if (!sourceRecord || sourceRecord.window.isDestroyed()) {
+    const session = sourceRecord ? this.sessions.get(sourceRecord.sessionId) : undefined
+    if (!sourceRecord || sourceRecord.window.isDestroyed() || !session || session.disposed) {
       return null
     }
-    return this.dragCoordinator.updateOutcome(sourceRecord.webContentsId, dragSessionId, outcome)
+    return session.dragCoordinator.updateOutcome(sourceRecord.webContentsId, dragSessionId, outcome)
   }
 
   /**
-   * Accepts an active external tab drag drop onto the sender window, reserving shared buffer
-   * ownership for the target window before broadcasting `'dropped-in-window'`.
+   * Accepts an active external tab drag drop onto the sender window only when the drag originated
+   * in the same main-window workspace session, reserving shared buffer ownership before broadcast.
    */
   acceptTabDragDrop(sender: unknown, input?: AcceptTabDragDropInput): AcceptTabDragDropResult {
     const targetRecord = this.resolveRecordFromSender(sender)
-    if (!targetRecord || targetRecord.window.isDestroyed()) {
+    const targetSession = targetRecord ? this.sessions.get(targetRecord.sessionId) : undefined
+    if (
+      !targetRecord ||
+      targetRecord.window.isDestroyed() ||
+      !targetSession ||
+      targetSession.disposed
+    ) {
       return { accepted: false, reason: 'invalid-target-window' }
     }
-    return this.dragCoordinator.acceptCrossWindowDrop({
+
+    const result = targetSession.dragCoordinator.acceptCrossWindowDrop({
       targetWindowId: targetRecord.webContentsId,
       dragSessionId: input?.dragSessionId,
-      bufferHub: this.bufferHub
+      bufferHub: targetSession.bufferHub
     })
+
+    if (
+      !result.accepted &&
+      (result.reason === 'no-active-drag' || result.reason === 'session-mismatch') &&
+      this.hasOtherSessionPendingDrag(targetSession.sessionId)
+    ) {
+      return { accepted: false, reason: 'different-workspace-session' }
+    }
+
+    return result
+  }
+
+  private hasOtherSessionPendingDrag(excludeSessionId: number): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.sessionId !== excludeSessionId && !session.disposed) {
+        if (session.dragCoordinator.hasPendingDrag()) {
+          return true
+        }
+      }
+    }
+    return false
   }
 
   endTabDrag(sender: unknown, input: TabDragEndInput): TabDragEndResult {
     const sourceRecord = this.resolveRecordFromSender(sender)
-    if (!sourceRecord || sourceRecord.window.isDestroyed()) {
+    const session = sourceRecord ? this.sessions.get(sourceRecord.sessionId) : undefined
+    if (!sourceRecord || sourceRecord.window.isDestroyed() || !session || session.disposed) {
       return { detached: false, outcome: 'cancelled' }
     }
 
     const canDetach = canDetachTabFromWindow(
       sourceRecord.role,
-      this.bufferHub.getWindowTabCount(sourceRecord.webContentsId)
+      session.bufferHub.getWindowTabCount(sourceRecord.webContentsId)
     )
-    const plan = this.dragCoordinator.finish({
+    const plan = session.dragCoordinator.finish({
       sourceWindowId: sourceRecord.webContentsId,
       input,
       openWindowBounds: this.getOpenWindowBounds(),
       canDetach,
-      hasBuffer: (key) => this.bufferHub.hasBuffer(key),
+      hasBuffer: (key) => session.bufferHub.hasBuffer(key),
       screen: this.screen
     })
 
@@ -370,7 +963,7 @@ export class WindowManager {
       return plan.result
     }
 
-    const { windowId } = this.createDetachedAuxiliaryWindow(plan.payload, plan.targetBounds)
+    const { windowId } = this.createDetachedAuxiliaryWindow(session, plan.payload, plan.targetBounds)
     return { detached: true, windowId }
   }
 
@@ -381,7 +974,10 @@ export class WindowManager {
     }
     return {
       role: record.role,
-      initialTabs: cloneTabTransferPayloads(record.initialTabs)
+      initialTabs: cloneTabTransferPayloads(record.initialTabs),
+      ...(record.initialWorkspacePath !== undefined
+        ? { initialWorkspacePath: record.initialWorkspacePath }
+        : {})
     }
   }
 
@@ -404,12 +1000,18 @@ export class WindowManager {
       event.preventDefault()
       return
     }
-    const hasDirty = this.bufferHub.hasDirtyBuffersForWindowClose(record.role, record.webContentsId)
+    const session = this.sessions.get(record.sessionId)
+    if (!session || session.disposed) return
+
+    const hasDirty = session.bufferHub.hasDirtyBuffersForWindowClose(
+      record.role,
+      record.webContentsId
+    )
     const needsCloseFlush = record.role === 'main' && record.closeFlushEnabled
     if (!hasDirty && !needsCloseFlush) {
       if (record.role === 'main') {
         record.closing = true
-        this.closeAllAuxiliaryWindows()
+        this.closeSessionAuxiliaryWindows(session)
       }
       return
     }
@@ -422,7 +1024,7 @@ export class WindowManager {
         record.cleanCloseFlushTimer = undefined
         if (record.closePromptPending && !record.window.isDestroyed()) {
           record.closePromptPending = false
-          this.closeAllAuxiliaryWindows()
+          this.closeSessionAuxiliaryWindows(session)
           this.closeRecord(record)
         }
       }, CLEAN_CLOSE_FLUSH_TIMEOUT_MS)
@@ -432,9 +1034,10 @@ export class WindowManager {
     }
   }
 
-  private closeAllAuxiliaryWindows(): void {
-    for (const candidate of [...this.windowsByWebContentsId.values()]) {
-      if (candidate.role === 'auxiliary') {
+  private closeSessionAuxiliaryWindows(session: WorkspaceSession): void {
+    for (const windowId of [...session.windowIds]) {
+      const candidate = this.windowsByWebContentsId.get(windowId)
+      if (candidate && candidate.role === 'auxiliary') {
         this.closeRecord(candidate)
       }
     }
@@ -461,19 +1064,23 @@ export class WindowManager {
     record.closePromptPending = false
     if (!approved) return
     if (record.role === 'main') {
-      this.closeAllAuxiliaryWindows()
+      const session = this.sessions.get(record.sessionId)
+      if (session) {
+        this.closeSessionAuxiliaryWindows(session)
+      }
     }
     this.closeRecord(record)
   }
 
-  private handleHubEvent(event: SharedBufferHubEvent): void {
-    if (this.disposed) return
+  private handleHubEvent(session: WorkspaceSession, event: SharedBufferHubEvent): void {
+    if (this.disposed || session.disposed) return
 
     if (event.type === 'paths-remapped') {
-      this.dragCoordinator.remapPayloadKeys(event.remappings)
+      session.dragCoordinator.remapPayloadKeys(event.remappings)
       const remappings = new Map(event.remappings.map((item) => [item.oldKey, item.newKey]))
-      for (const record of this.windowsByWebContentsId.values()) {
-        if (record.role !== 'auxiliary') continue
+      for (const windowId of session.windowIds) {
+        const record = this.windowsByWebContentsId.get(windowId)
+        if (!record || record.role !== 'auxiliary') continue
         for (const tab of record.initialTabs) {
           const nextKey = remappings.get(tab.bufferKey)
           if (nextKey) {
@@ -486,26 +1093,28 @@ export class WindowManager {
 
     if (event.type === 'buffers-closed') {
       const closedKeys = new Set(event.closedKeys)
-      for (const record of this.windowsByWebContentsId.values()) {
-        if (record.role !== 'auxiliary') continue
+      for (const windowId of session.windowIds) {
+        const record = this.windowsByWebContentsId.get(windowId)
+        if (!record || record.role !== 'auxiliary') continue
         record.initialTabs = record.initialTabs.filter((tab) => !closedKeys.has(tab.bufferKey))
       }
-      this.reconcileAuxiliaryAutoClose()
+      this.reconcileAuxiliaryAutoClose(session)
       return
     }
 
     if (event.type === 'state-changed') {
-      this.reconcileAuxiliaryAutoClose()
+      this.reconcileAuxiliaryAutoClose(session)
     }
   }
 
-  private reconcileAuxiliaryAutoClose(): void {
-    for (const record of [...this.windowsByWebContentsId.values()]) {
-      if (record.role !== 'auxiliary' || record.closing || record.window.isDestroyed()) {
+  private reconcileAuxiliaryAutoClose(session: WorkspaceSession): void {
+    for (const windowId of [...session.windowIds]) {
+      const record = this.windowsByWebContentsId.get(windowId)
+      if (!record || record.role !== 'auxiliary' || record.closing || record.window.isDestroyed()) {
         continue
       }
 
-      const tabCount = this.bufferHub.getWindowTabCount(record.webContentsId)
+      const tabCount = session.bufferHub.getWindowTabCount(record.webContentsId)
       if (tabCount > 0) {
         record.hasSyncedNonEmptyTabs = true
         continue
@@ -517,18 +1126,133 @@ export class WindowManager {
     }
   }
 
+  resolveSession(sender: WebContentsLike | undefined): WorkspaceSessionHandle | undefined {
+    const record = this.resolveRecordFromSender(sender)
+    if (!record || record.window.isDestroyed()) return undefined
+    const session = this.sessions.get(record.sessionId)
+    return session && !session.disposed ? session.handle : undefined
+  }
+
+  forEachSession(visitor: (session: BufferIpcSession) => void): void {
+    for (const session of this.sessions.values()) {
+      if (!session.disposed) {
+        visitor(session.handle)
+      }
+    }
+  }
+
+  onSessionCreated(
+    listener: (session: WorkspaceSessionHandle) => (() => void) | void
+  ): () => void {
+    this.sessionCreatedListeners.add(listener)
+    const attachedCleanups: Array<() => void> = []
+    for (const session of this.sessions.values()) {
+      if (session.disposed) continue
+      const cleanup = listener(session.handle)
+      if (typeof cleanup === 'function') {
+        session.disposeCleanups.push(cleanup)
+        attachedCleanups.push(cleanup)
+      }
+    }
+    return () => {
+      this.sessionCreatedListeners.delete(listener)
+      for (const cleanup of attachedCleanups.splice(0)) {
+        cleanup()
+      }
+    }
+  }
+
+  onSessionDisposed(listener: (session: WorkspaceIpcSession) => void): () => void {
+    const wrapped = (session: WorkspaceSessionHandle): void => listener(session)
+    this.sessionDisposedListeners.add(wrapped)
+    return () => {
+      this.sessionDisposedListeners.delete(wrapped)
+    }
+  }
+
+  getWorkspaceServiceForSender(sender: unknown): WorkspaceFsService | undefined {
+    return this.resolveSession(sender as WebContentsLike | undefined)?.workspaceService
+  }
+
+  getWorkspaceServices(): WorkspaceFsService[] {
+    const services: WorkspaceFsService[] = []
+    for (const session of this.sessions.values()) {
+      if (session.disposed) continue
+      const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
+      if (mainRecord && !mainRecord.window.isDestroyed()) {
+        services.push(session.workspaceService)
+      }
+    }
+    return services
+  }
+
+  getWindowForSender(sender: unknown): BrowserWindowLike | undefined {
+    const record = this.resolveRecordFromSender(sender)
+    if (!record || record.window.isDestroyed()) return undefined
+    return record.window
+  }
+
   isMainWebContents(sender: unknown): boolean {
     const record = this.resolveRecordFromSender(sender)
     return record?.role === 'main' && !record.window.isDestroyed()
   }
 
-  getMenuTargetWebContents(): BufferWebContentsLike | undefined {
-    if (this.mainWebContentsId === null) return undefined
-    const record = this.windowsByWebContentsId.get(this.mainWebContentsId)
-    if (!record || record.window.isDestroyed() || record.window.webContents.isDestroyed()) {
+  private getSessionMainWebContentsIfLive(session: WorkspaceSession | undefined): BufferWebContentsLike | undefined {
+    if (!session || session.disposed) return undefined
+    const mainRecord = this.windowsByWebContentsId.get(session.mainWebContentsId)
+    if (!mainRecord || mainRecord.window.isDestroyed() || mainRecord.window.webContents.isDestroyed()) {
       return undefined
     }
-    return record.window.webContents
+    return mainRecord.window.webContents
+  }
+
+  private resolveRecordForTargetWindow(targetWindow: unknown): WindowRecord | undefined {
+    if (targetWindow === undefined) return undefined
+    for (const record of this.windowsByWebContentsId.values()) {
+      if (!record.window.isDestroyed() && matchesTargetWindow(record, targetWindow)) {
+        return record
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Resolves the target main window's webContents for application menu bar commands, mapping an
+   * invoked or focused auxiliary window back to its parent main window.
+   */
+  getMenuTargetWebContents(targetWindow?: unknown): BufferWebContentsLike | undefined {
+    const targetRecord =
+      this.resolveRecordForTargetWindow(targetWindow) ??
+      this.resolveRecordForTargetWindow(this.getFocusedWindow?.()) ??
+      this.findFocusedWindowRecord()
+
+    if (targetRecord) {
+      return this.getSessionMainWebContentsIfLive(this.sessions.get(targetRecord.sessionId))
+    }
+
+    return this.getSessionMainWebContentsIfLive(this.getActiveSession())
+  }
+
+  private findFocusedWindowRecord(): WindowRecord | undefined {
+    for (const record of this.windowsByWebContentsId.values()) {
+      if (!record.window.isDestroyed() && record.window.isFocused?.()) {
+        return record
+      }
+    }
+    return undefined
+  }
+
+  private getSessionWebContentsTargets(sessionId: number): WindowWebContentsLike[] {
+    const session = this.sessions.get(sessionId)
+    if (!session || session.disposed) return []
+    const targets: WindowWebContentsLike[] = []
+    for (const windowId of session.windowIds) {
+      const record = this.windowsByWebContentsId.get(windowId)
+      if (record && !record.window.isDestroyed() && !record.window.webContents.isDestroyed()) {
+        targets.push(record.window.webContents)
+      }
+    }
+    return targets
   }
 
   getWebContentsTargets(): BufferWebContentsLike[] {
@@ -543,13 +1267,19 @@ export class WindowManager {
 
   dispose(): void {
     this.disposed = true
-    this.unsubscribeHub()
+    this.unsubscribeConfig?.()
     for (const record of this.windowsByWebContentsId.values()) {
       this.clearCleanCloseFlushTimer(record)
       record.cleanupListeners?.()
     }
-    this.dragCoordinator.dispose()
+    for (const session of [...this.sessions.values()]) {
+      this.disposeSession(session)
+    }
+    this.dragStateListeners.clear()
+    this.sessionCreatedListeners.clear()
+    this.sessionDisposedListeners.clear()
     this.windowsByWebContentsId.clear()
-    this.mainWebContentsId = null
+    this.sessions.clear()
+    this.lastActiveSessionId = null
   }
 }

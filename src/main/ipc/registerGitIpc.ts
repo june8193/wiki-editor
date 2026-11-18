@@ -4,20 +4,27 @@ import { isSameWorkspacePath } from '@shared/workspace'
 import type { GitService } from '../git/GitService'
 import type { LogService } from '../logging/LogService'
 import type { WorkspaceFsService } from '../workspace/WorkspaceFsService'
-import { IpcHandlerTuple, IpcMainLike, registerIpcHandlers } from './ipcHelpers'
+import {
+  IpcHandlerTuple,
+  IpcMainLike,
+  registerIpcHandlers,
+  resolveSenderWebContents,
+  type WebContentsLike
+} from './ipcHelpers'
 
 export interface RegisterGitIpcOptions {
   ipcMain: IpcMainLike
   gitService: GitService
-  workspaceService: WorkspaceFsService
+  workspaceService?: WorkspaceFsService
+  resolveWorkspaceService?: (sender: WebContentsLike | undefined) => WorkspaceFsService | undefined
   logService?: LogService
 }
 
 function assertActiveWorkspaceRoot(
-  workspaceService: WorkspaceFsService,
+  workspaceService: WorkspaceFsService | undefined,
   workspacePath: unknown
 ): string {
-  const activeRoot = workspaceService.getWorkspaceRoot()
+  const activeRoot = workspaceService?.getWorkspaceRoot()
   if (!activeRoot) {
     throw new Error('열린 워크스페이스가 없습니다.')
   }
@@ -32,18 +39,24 @@ function assertActiveWorkspaceRoot(
 }
 
 /**
- * Registers git:* IPC handlers scoped strictly to the currently opened workspace.
+ * Registers git:* IPC handlers scoped strictly to the sender session's currently opened workspace.
  */
 export function registerGitIpc({
   ipcMain,
   gitService,
   workspaceService,
+  resolveWorkspaceService,
   logService
 }: RegisterGitIpcOptions): () => void {
+  const resolveService =
+    resolveWorkspaceService ??
+    (() => workspaceService)
+
   const withWorkspace =
     <TArgs extends unknown[], TResult>(fn: (rootPath: string, ...args: TArgs) => Promise<TResult>) =>
-    (_event: unknown, workspacePath: unknown, ...rest: unknown[]) => {
-      const rootPath = assertActiveWorkspaceRoot(workspaceService, workspacePath)
+    (event: unknown, workspacePath: unknown, ...rest: unknown[]) => {
+      const senderService = resolveService(resolveSenderWebContents(event))
+      const rootPath = assertActiveWorkspaceRoot(senderService, workspacePath)
       return fn(rootPath, ...(rest as TArgs))
     }
 
