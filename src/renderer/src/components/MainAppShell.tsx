@@ -325,33 +325,25 @@ export function MainAppShell() {
 
   useEffect(() => {
     let cancelled = false
-    const getInitContext = wikiApi.window?.getInitContext
-    if (!getInitContext) {
-      startupInitRef.current = {
-        ...startupInitRef.current,
-        initResolved: true,
-        initialWorkspacePath: null
-      }
+    const finalizeInitContext = (initialPath: string | null): void => {
+      if (cancelled) return
+      startupInitRef.current.initResolved = true
+      startupInitRef.current.initialWorkspacePath = initialPath
       tryStartupWorkspaceOpenRef.current()
-      return () => {
-        cancelled = true
-      }
     }
 
-    startupInitRef.current = {
-      ...startupInitRef.current,
-      initResolved: false,
-      initialWorkspacePath: null
+    const getInitContext = wikiApi.window?.getInitContext
+    if (!getInitContext) {
+      finalizeInitContext(null)
+      return
     }
+
+    startupInitRef.current.initResolved = false
+    startupInitRef.current.initialWorkspacePath = null
     void getInitContext()
       .then((context) => context?.initialWorkspacePath?.trim() || null)
       .catch(() => null)
-      .then((initialPath) => {
-        if (cancelled) return
-        startupInitRef.current.initResolved = true
-        startupInitRef.current.initialWorkspacePath = initialPath
-        tryStartupWorkspaceOpenRef.current()
-      })
+      .then(finalizeInitContext)
 
     return () => {
       cancelled = true

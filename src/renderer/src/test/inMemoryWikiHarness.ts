@@ -168,9 +168,11 @@ export async function triggerMenuCommand(
 export interface CreateInMemoryWindowOptions {
   role?: WindowRole
   initialTabs?: TabTransferPayload[]
-  initialWorkspacePath?: string | null
   bounds?: WindowBounds
-  isolatedSession?: boolean
+}
+
+interface CreateSessionWindowOptions extends CreateInMemoryWindowOptions {
+  initialWorkspacePath?: string | null
 }
 
 export interface InMemoryWindowWatchState {
@@ -192,13 +194,8 @@ export interface InMemoryWindowHandle {
   requestClose: () => void
   getBounds: () => WindowBounds
   getMenuListenerCount: () => number
-  getFocusCount: () => number
-  getRestoreCount: () => number
-  isMinimized: () => boolean
-  setMinimized: (minimized: boolean) => void
   isClosed: () => boolean
   getInitContext: () => WindowInitContext
-  getWatchState: () => InMemoryWindowWatchState
   destroy: () => void
 }
 
@@ -283,9 +280,6 @@ interface SessionWindowRecord {
   role: WindowRole
   isDestroyed: () => boolean
   getBounds: () => WindowBounds
-  isMinimized: () => boolean
-  restore: () => void
-  focus: () => void
   forceClose: () => void
 }
 
@@ -518,7 +512,7 @@ export function createMultiWindowWikiHarness(
     const bounds: WindowBounds[] = []
     for (const session of sessions.values()) {
       for (const win of session.openWindows.values()) {
-        if (!win.isDestroyed() && !win.isMinimized()) {
+        if (!win.isDestroyed()) {
           bounds.push(win.getBounds())
         }
       }
@@ -528,7 +522,7 @@ export function createMultiWindowWikiHarness(
 
   const createWindowInSession = (
     session: HarnessSession,
-    options: CreateInMemoryWindowOptions = {}
+    options: CreateSessionWindowOptions = {}
   ): InMemoryWindowHandle => {
     const windowId = nextWindowId++
     const role: WindowRole = options.role ?? 'main'
@@ -558,9 +552,6 @@ export function createMultiWindowWikiHarness(
     let closePromptPending = false
     let closeFlushEnabled = false
     let hasSyncedNonEmptyTabs = false
-    let minimized = false
-    let focusCount = 0
-    let restoreCount = 0
     const menuListeners = new Set<(command: AppMenuCommand) => void>()
     const bufferListeners = new Set<(event: SharedBufferHubEvent) => void>()
     const dragListeners = new Set<(session: ActiveTabDragSession | null) => void>()
@@ -614,16 +605,6 @@ export function createMultiWindowWikiHarness(
       role,
       isDestroyed: () => destroyed,
       getBounds: () => ({ ...windowBounds }),
-      isMinimized: () => minimized,
-      restore: () => {
-        if (minimized) {
-          minimized = false
-          restoreCount += 1
-        }
-      },
-      focus: () => {
-        focusCount += 1
-      },
       forceClose: forceCloseWindow
     })
 
@@ -788,10 +769,6 @@ export function createMultiWindowWikiHarness(
 
           const existing = findOpenSessionByWorkspacePath(normalized)
           if (existing) {
-            if (existing.mainWindow.isMinimized()) {
-              existing.mainWindow.restore()
-            }
-            existing.mainWindow.focus()
             return {
               status: 'focused-existing',
               windowId: existing.mainWindowId,
@@ -1303,21 +1280,8 @@ export function createMultiWindowWikiHarness(
       requestClose: requestCloseWindow,
       getBounds: () => ({ ...windowBounds }),
       getMenuListenerCount: () => menuListeners.size,
-      getFocusCount: () => focusCount,
-      getRestoreCount: () => restoreCount,
-      isMinimized: () => minimized,
-      setMinimized: (nextMinimized) => {
-        minimized = nextMinimized
-      },
       isClosed: () => destroyed,
       getInitContext: buildInitContext,
-      getWatchState: () => ({
-        active: session.watchActive,
-        watchCalls: session.watchCalls,
-        unwatchCalls: session.unwatchCalls,
-        auxWatchCalls: session.auxWatchCalls,
-        auxUnwatchCalls: session.auxUnwatchCalls
-      }),
       destroy: destroyWindow
     }
 
@@ -1333,25 +1297,22 @@ export function createMultiWindowWikiHarness(
   }
 
   const createWindow = (options: CreateInMemoryWindowOptions = {}): InMemoryWindowHandle => {
-    const role: WindowRole = options.role ?? 'main'
-    if (role === 'auxiliary') {
-      return createWindowInSession(defaultSession, options)
-    }
-    const hasLiveDefaultMain = Array.from(defaultSession.openWindows.values()).some(
-      (win) => win.role === 'main' && !win.isDestroyed()
-    )
-    const shouldIsolate =
-      options.isolatedSession === true ||
-      (options.initialWorkspacePath !== undefined && hasLiveDefaultMain)
-    const targetSession = shouldIsolate ? createSession() : defaultSession
-    return createWindowInSession(targetSession, options)
+    return createWindowInSession(defaultSession, options)
   }
 
-  const resolveWatchSession = (mainWindowId?: number): HarnessSession => {
+  const findSessionByMainWindowId = (mainWindowId?: number): HarnessSession | undefined => {
     if (mainWindowId === undefined) return defaultSession
     const matched = mainHandles.find((win) => win.windowId === mainWindowId)
-    return matched ? (sessions.get(matched.sessionId) ?? defaultSession) : defaultSession
+    return matched ? sessions.get(matched.sessionId) : undefined
   }
+
+  const toWatchState = (target: HarnessSession): InMemoryWindowWatchState => ({
+    active: target.watchActive,
+    watchCalls: target.watchCalls,
+    unwatchCalls: target.unwatchCalls,
+    auxWatchCalls: target.auxWatchCalls,
+    auxUnwatchCalls: target.auxUnwatchCalls
+  })
 
   return {
     createWindow,
@@ -1360,20 +1321,11 @@ export function createMultiWindowWikiHarness(
       if (mainWindowId === undefined) {
         return [...auxiliaryHandles]
       }
-      const matched = mainHandles.find((win) => win.windowId === mainWindowId)
-      const session = matched ? sessions.get(matched.sessionId) : undefined
+      const session = findSessionByMainWindowId(mainWindowId)
       return session ? [...session.auxiliaryHandles] : []
     },
-    getWatchState: (mainWindowId?: number) => {
-      const target = resolveWatchSession(mainWindowId)
-      return {
-        active: target.watchActive,
-        watchCalls: target.watchCalls,
-        unwatchCalls: target.unwatchCalls,
-        auxWatchCalls: target.auxWatchCalls,
-        auxUnwatchCalls: target.auxUnwatchCalls
-      }
-    },
+    getWatchState: (mainWindowId?: number) =>
+      toWatchState(findSessionByMainWindowId(mainWindowId) ?? defaultSession),
     emitExternalChange(patch) {
       applyAndBroadcast({ ...state, ...patch, version: 1 })
     },
