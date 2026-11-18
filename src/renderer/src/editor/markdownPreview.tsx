@@ -50,6 +50,7 @@ interface PreviewRenderContextValue {
 interface SourceLineDataProps {
   'data-source-line'?: string
   'data-source-end-line'?: string
+  'data-mermaid-index'?: string
 }
 
 const PreviewRenderContext = createContext<PreviewRenderContextValue>({ theme: 'light' })
@@ -85,6 +86,39 @@ function rehypeSourceLineAnnotation() {
         'data-source-end-line': String(endLine)
       }
     }
+  }
+}
+
+function isMermaidHastPreElement(node: HastRoot | HastRootContent): node is HastElement {
+  if (node.type !== 'element' || node.tagName !== 'pre') return false
+  const meaningfulChildren = node.children.filter(
+    (child) => child.type !== 'text' || child.value.trim().length > 0
+  )
+  if (meaningfulChildren.length !== 1) return false
+  const onlyChild = meaningfulChildren[0]
+  if (onlyChild.type !== 'element' || onlyChild.tagName !== 'code') return false
+  return isMermaidLanguage(extractCodeLanguage(onlyChild.properties?.className))
+}
+
+function rehypeMermaidIndexAnnotation() {
+  return (tree: HastRoot): void => {
+    let nextIndex = 0
+    const visit = (node: HastRoot | HastRootContent): void => {
+      if (isMermaidHastPreElement(node)) {
+        node.properties = {
+          ...node.properties,
+          'data-mermaid-index': String(nextIndex)
+        }
+        nextIndex += 1
+        return
+      }
+      if ('children' in node && Array.isArray(node.children)) {
+        for (const child of node.children) {
+          visit(child)
+        }
+      }
+    }
+    visit(tree)
   }
 }
 
@@ -240,6 +274,7 @@ function PreviewPre(props: ComponentPropsWithoutRef<'pre'> & SourceLineDataProps
   const {
     'data-source-line': sourceLine,
     'data-source-end-line': sourceEndLine,
+    'data-mermaid-index': rawMermaidIndex,
     ...preProps
   } = props
   const meaningfulChildren = Children.toArray(preProps.children).filter(
@@ -256,12 +291,17 @@ function PreviewPre(props: ComponentPropsWithoutRef<'pre'> & SourceLineDataProps
       const rawCode = extractReactText(onlyChild.props.children).replace(/\n$/, '')
 
       if (isMermaidLanguage(rawLanguage)) {
+        const blockIndex =
+          rawMermaidIndex !== undefined && /^\d+$/.test(rawMermaidIndex)
+            ? Number(rawMermaidIndex)
+            : undefined
         return (
           <MermaidDiagram
             code={rawCode}
             theme={theme}
             renderer={mermaidRenderer}
             documentTitle={documentTitle}
+            blockIndex={blockIndex}
             sourceLine={sourceLine}
             sourceEndLine={sourceEndLine}
           />
@@ -333,6 +373,7 @@ function buildPreviewProcessor() {
     .use(rehypeRaw)
     .use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA)
     .use(rehypeSourceLineAnnotation)
+    .use(rehypeMermaidIndexAnnotation)
     .use(rehypeHeadingEnhancer)
     .use(rehypeReact, {
       Fragment,

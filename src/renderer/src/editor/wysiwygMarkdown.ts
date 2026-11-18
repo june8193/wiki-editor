@@ -737,6 +737,38 @@ export function extractWysiwygHeadingCandidates(
 }
 
 /**
+ * Collects the ProseMirror document positions of all `mermaid` code blocks in 0-based order.
+ */
+export function collectWysiwygMermaidPositions(doc: Editor['state']['doc']): number[] {
+  const positions: number[] = []
+  doc.descendants((node, pos) => {
+    if (node.type.name === 'codeBlock') {
+      const language = typeof node.attrs.language === 'string' ? node.attrs.language : ''
+      if (isMermaidLanguage(language)) {
+        positions.push(pos)
+      }
+      return false
+    }
+    return true
+  })
+  return positions
+}
+
+/**
+ * Resolves the 0-based Mermaid block occurrence index for a ProseMirror `codeBlock` position,
+ * or `-1` when not found.
+ */
+export function resolveWysiwygMermaidIndex(
+  doc: Editor['state']['doc'],
+  targetPos: number | undefined
+): number {
+  if (typeof targetPos !== 'number') {
+    return -1
+  }
+  return collectWysiwygMermaidPositions(doc).indexOf(targetPos)
+}
+
+/**
  * Inserts ingested images at the given range (or current selection), placing multi-image
  * batches into ordered paragraphs while preserving clean relative Markdown URLs.
  */

@@ -1,9 +1,14 @@
 import { useCallback, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
+import {
+  type MermaidHeightChangeHandler,
+  MermaidHeightSessionContext
+} from '../editor/mermaidHeightSession'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
+import type { MermaidDiagramHeightMap } from '../stores/PaneTabStore'
 
 export interface PreviewScrollRequest {
   slug?: string
@@ -18,6 +23,8 @@ interface MarkdownPreviewProps {
   documentPath?: string
   mermaidRenderer?: MermaidRenderer
   documentTitle?: string
+  mermaidHeights?: MermaidDiagramHeightMap
+  onMermaidHeightChange?: MermaidHeightChangeHandler
   scrollRequest?: PreviewScrollRequest | null
   isActive?: boolean
   scrollContainerRef?: { current: HTMLDivElement | null }
@@ -40,6 +47,8 @@ export function MarkdownPreview({
   documentPath,
   mermaidRenderer,
   documentTitle,
+  mermaidHeights,
+  onMermaidHeightChange,
   scrollRequest,
   isActive = true,
   scrollContainerRef,
@@ -99,24 +108,31 @@ export function MarkdownPreview({
     [content, documentPath, documentTitle, handleAnchorNavigate, mermaidRenderer, onLinkNavigate, theme]
   )
 
+  const mermaidHeightSessionValue = useMemo(
+    () => ({ mermaidHeights, onMermaidHeightChange }),
+    [mermaidHeights, onMermaidHeightChange]
+  )
+
   return (
-    <div
-      ref={(el) => {
-        containerRef.current = el
-        if (scrollContainerRef) {
-          scrollContainerRef.current = el
-        }
-      }}
-      className="markdown-preview"
-      data-testid={testId}
-      aria-label="마크다운 미리보기"
-      tabIndex={0}
-    >
-      {content.trim().length === 0 ? (
-        <p className="markdown-preview-empty">미리 볼 내용이 없습니다.</p>
-      ) : (
-        rendered
-      )}
-    </div>
+    <MermaidHeightSessionContext.Provider value={mermaidHeightSessionValue}>
+      <div
+        ref={(el) => {
+          containerRef.current = el
+          if (scrollContainerRef) {
+            scrollContainerRef.current = el
+          }
+        }}
+        className="markdown-preview"
+        data-testid={testId}
+        aria-label="마크다운 미리보기"
+        tabIndex={0}
+      >
+        {content.trim().length === 0 ? (
+          <p className="markdown-preview-empty">미리 볼 내용이 없습니다.</p>
+        ) : (
+          rendered
+        )}
+      </div>
+    </MermaidHeightSessionContext.Provider>
   )
 }

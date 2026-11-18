@@ -1,6 +1,7 @@
 import { createContext, useContext, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
 import { NodeViewContent, NodeViewWrapper } from '@tiptap/react'
+import { useMermaidSessionHeight } from '../editor/mermaidHeightSession'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { useMermaidRenderState } from '../hooks/useMermaidRenderState'
@@ -13,6 +14,7 @@ export interface WysiwygMermaidContextValue {
   theme: ThemeMode
   mermaidRenderer?: MermaidRenderer
   documentTitle?: string
+  mermaidPositionsKey?: string
 }
 
 export const WysiwygMermaidContext = createContext<WysiwygMermaidContextValue>({
@@ -22,6 +24,7 @@ export const WysiwygMermaidContext = createContext<WysiwygMermaidContextValue>({
 export interface WysiwygMermaidBlockProps {
   language: string
   code: string
+  resolveBlockIndex?: () => number
   autoFocusTriggerOnMount: boolean
   onSelectLanguage: (nextLanguage: string) => void
 }
@@ -33,11 +36,15 @@ export interface WysiwygMermaidBlockProps {
 export function WysiwygMermaidBlock({
   language,
   code,
+  resolveBlockIndex,
   autoFocusTriggerOnMount,
   onSelectLanguage
 }: WysiwygMermaidBlockProps) {
   const { theme, mermaidRenderer, documentTitle } = useContext(WysiwygMermaidContext)
   const [showSource, setShowSource] = useState(false)
+  const rawBlockIndex = resolveBlockIndex?.()
+  const blockIndex = rawBlockIndex !== undefined && rawBlockIndex >= 0 ? rawBlockIndex : undefined
+  const { persistedHeightPx, onCustomHeightChange } = useMermaidSessionHeight(blockIndex)
 
   const { mermaidTheme, displaySvg, confirmedSvg, displayError } = useMermaidRenderState({
     code,
@@ -54,7 +61,10 @@ export function WysiwygMermaidBlock({
 
   const viewport = useMermaidViewport({
     hasSvg: displaySvg !== null,
-    svgMarkup: displaySvg
+    svgMarkup: displaySvg,
+    persistedHeightPx,
+    heightSyncKey: blockIndex,
+    onCustomHeightChange
   })
 
   return (

@@ -33,7 +33,13 @@ export interface DiffTabState {
   viewMode: GitDiffViewMode
 }
 
-export interface DocumentTabItem extends TabViewState {
+export type MermaidDiagramHeightMap = Readonly<Record<string, number>>
+
+export interface DocumentTabRuntimeViewState {
+  mermaidHeights?: MermaidDiagramHeightMap
+}
+
+export interface DocumentTabItem extends TabViewState, DocumentTabRuntimeViewState {
   id: string
   kind: 'document'
   bufferKey: string
@@ -82,7 +88,7 @@ export type TransferredTabDropTarget =
       direction: SplitDirection
     }
 
-export type TabViewPatch = Partial<TabViewState>
+export type TabViewPatch = Partial<TabViewState & DocumentTabRuntimeViewState>
 
 export interface CloseTabResult {
   closedTab: TabItem
@@ -132,6 +138,35 @@ export interface RestoreWorkspaceLayoutInput {
 
 export interface PaneTabRestoreOptions {
   preserveTab?: (tab: TabItem) => boolean
+}
+
+function normalizeMermaidHeightMap(
+  raw: MermaidDiagramHeightMap | undefined
+): MermaidDiagramHeightMap | undefined {
+  if (!raw) return undefined
+  const normalized: Record<string, number> = {}
+  let count = 0
+  for (const [key, height] of Object.entries(raw)) {
+    if (typeof height === 'number' && Number.isFinite(height) && height > 0) {
+      normalized[key] = Math.round(height)
+      count += 1
+    }
+  }
+  return count > 0 ? normalized : undefined
+}
+
+function areMermaidHeightMapsEqual(
+  left: MermaidDiagramHeightMap | undefined,
+  right: MermaidDiagramHeightMap | undefined
+): boolean {
+  if (left === right) return true
+  const leftKeys = left ? Object.keys(left) : []
+  const rightKeys = right ? Object.keys(right) : []
+  if (leftKeys.length !== rightKeys.length) return false
+  for (const key of leftKeys) {
+    if (left![key] !== right![key]) return false
+  }
+  return true
 }
 
 function createDocumentTab(
@@ -911,23 +946,30 @@ export class PaneTabStore {
       patch.splitPreviewRatio !== undefined
         ? normalizeSplitRatio(patch.splitPreviewRatio)
         : current.splitPreviewRatio
+    const nextMermaidHeights =
+      'mermaidHeights' in patch
+        ? normalizeMermaidHeightMap(patch.mermaidHeights)
+        : current.mermaidHeights
 
     if (
       nextMode === current.mode &&
       nextCursor.selectionStart === current.cursor.selectionStart &&
       nextCursor.selectionEnd === current.cursor.selectionEnd &&
       nextScrollTop === current.scrollTop &&
-      nextSplitPreviewRatio === current.splitPreviewRatio
+      nextSplitPreviewRatio === current.splitPreviewRatio &&
+      areMermaidHeightMapsEqual(nextMermaidHeights, current.mermaidHeights)
     ) {
       return
     }
 
+    const { mermaidHeights: _omittedMermaidHeights, ...baseTab } = current
     const updatedTab: DocumentTabItem = {
-      ...current,
+      ...baseTab,
       mode: nextMode,
       cursor: { ...nextCursor },
       scrollTop: nextScrollTop,
-      splitPreviewRatio: nextSplitPreviewRatio
+      splitPreviewRatio: nextSplitPreviewRatio,
+      ...(nextMermaidHeights ? { mermaidHeights: nextMermaidHeights } : {})
     }
 
     const transitions: PaneTabTransition[] =

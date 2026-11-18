@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import { NodeViewContent, type NodeViewProps, NodeViewWrapper } from '@tiptap/react'
 import { isMermaidLanguage, resolveCanonicalLanguageInput } from '../editor/codeBlockHighlight'
+import { resolveWysiwygMermaidIndex } from '../editor/wysiwygMarkdown'
 import { CodeBlockCopyButton, CodeBlockLanguageCombobox } from './CodeBlockHeaderControls'
 import { WysiwygMermaidBlock } from './MermaidCodeBlockNodeView'
 
@@ -8,7 +9,7 @@ import { WysiwygMermaidBlock } from './MermaidCodeBlockNodeView'
  * TipTap NodeView for WYSIWYG code blocks, rendering either a syntax-highlighted
  * code block header with language combobox/copy controls or the Mermaid diagram block.
  */
-export function CodeBlockNodeView({ node, updateAttributes }: NodeViewProps) {
+export function CodeBlockNodeView({ node, updateAttributes, editor, getPos }: NodeViewProps) {
   const language = typeof node.attrs.language === 'string' ? node.attrs.language : ''
   const isMermaid = isMermaidLanguage(language)
   const pendingTriggerFocusRef = useRef(false)
@@ -61,6 +62,12 @@ export function CodeBlockNodeView({ node, updateAttributes }: NodeViewProps) {
     <WysiwygMermaidBlock
       language={language || 'mermaid'}
       code={node.textContent}
+      resolveBlockIndex={() =>
+        resolveWysiwygMermaidIndex(
+          editor.state.doc,
+          typeof getPos === 'function' ? getPos() : undefined
+        )
+      }
       autoFocusTriggerOnMount={autoFocusTriggerOnMount}
       onSelectLanguage={handleSelectLanguage}
     />

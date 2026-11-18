@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
+import { useMermaidSessionHeight } from '../editor/mermaidHeightSession'
 import { defaultMermaidRenderer, type MermaidRenderer, type MermaidTheme } from '../editor/mermaidRenderer'
 import { useMermaidDiagramActions } from '../hooks/useMermaidDiagramActions'
 import { DEFAULT_MERMAID_DEBOUNCE_MS, useMermaidRenderState } from '../hooks/useMermaidRenderState'
@@ -139,6 +140,7 @@ interface MermaidDiagramProps {
   documentTitle?: string
   renderer?: MermaidRenderer
   debounceMs?: number
+  blockIndex?: number
   className?: string
   sourceLine?: string
   sourceEndLine?: string
@@ -154,11 +156,13 @@ export function MermaidDiagram({
   documentTitle,
   renderer = defaultMermaidRenderer,
   debounceMs = DEFAULT_MERMAID_DEBOUNCE_MS,
+  blockIndex,
   className,
   sourceLine,
   sourceEndLine
 }: MermaidDiagramProps) {
   const [isHovered, setIsHovered] = useState(false)
+  const { persistedHeightPx, onCustomHeightChange } = useMermaidSessionHeight(blockIndex)
 
   const { mermaidTheme, displaySvg, confirmedSvg, displayError } = useMermaidRenderState({
     code,
@@ -176,7 +180,10 @@ export function MermaidDiagram({
 
   const viewport = useMermaidViewport({
     hasSvg: displaySvg !== null,
-    svgMarkup: displaySvg
+    svgMarkup: displaySvg,
+    persistedHeightPx,
+    heightSyncKey: blockIndex,
+    onCustomHeightChange
   })
 
   return (

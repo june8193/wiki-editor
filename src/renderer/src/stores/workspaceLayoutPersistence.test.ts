@@ -73,6 +73,9 @@ describe('workspaceLayoutPersistence', () => {
       mode: 'split',
       splitPreviewRatio: 0.7
     })
+    store.updateTabViewState('primary', aTab.id, {
+      mermaidHeights: { '0': 310, '1': 480 }
+    })
     store.openDiffTab({ kind: 'unstaged', path: 'a.md', status: 'M' }, { paneId: 'secondary' })
     store.openTab('c:/users/test/config.json', { paneId: 'primary' })
     store.openTab('c:/outside/secret.md', { paneId: 'secondary' })
@@ -104,12 +107,12 @@ describe('workspaceLayoutPersistence', () => {
       })
     }
 
-    expect(
-      serializePaneLayoutForWorkspace('C:\\wiki\\alpha', {
-        layout: store.getSnapshot(),
-        buffers
-      })
-    ).toEqual({
+    const serialized = serializePaneLayoutForWorkspace('C:\\wiki\\alpha', {
+      layout: store.getSnapshot(),
+      buffers
+    })
+    expect(JSON.stringify(serialized)).not.toContain('mermaidHeights')
+    expect(serialized).toEqual({
       splitMode: 'vertical',
       splitRatio: 0.62,
       activePaneId: 'secondary',

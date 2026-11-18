@@ -66,6 +66,9 @@ export interface MermaidViewportState {
 export interface UseMermaidViewportOptions {
   hasSvg: boolean
   svgMarkup?: string | null
+  persistedHeightPx?: number | null
+  heightSyncKey?: string | number
+  onCustomHeightChange?: (nextHeightPx: number | null) => void
 }
 
 interface ViewportInternalState {
@@ -96,16 +99,24 @@ function isIdentityViewport(zoom: number, pan: { x: number; y: number }): boolea
  */
 export function useMermaidViewport({
   hasSvg,
-  svgMarkup = null
+  svgMarkup = null,
+  persistedHeightPx = null,
+  heightSyncKey,
+  onCustomHeightChange
 }: UseMermaidViewportOptions): MermaidViewportState {
+  const normalizedPersistedHeight =
+    typeof persistedHeightPx === 'number' && Number.isFinite(persistedHeightPx) && persistedHeightPx > 0
+      ? Math.round(persistedHeightPx)
+      : null
+
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
-  const [state, setState] = useState<ViewportInternalState>({
+  const [state, setState] = useState<ViewportInternalState>(() => ({
     zoom: MERMAID_DEFAULT_ZOOM,
     pan: { x: 0, y: 0 },
-    customHeightPx: null,
+    customHeightPx: normalizedPersistedHeight,
     lockedAutoHeightPx: null
-  })
+  }))
   const [measuredBox, setMeasuredBox] = useState<MeasuredViewportBox>({
     availableWidth: 0,
     verticalInset: 0
@@ -119,6 +130,64 @@ export function useMermaidViewport({
 
   const stateRef = useRef(state)
   stateRef.current = state
+
+  const latestCustomHeightRef = useRef<number | null>(normalizedPersistedHeight)
+  const prevPersistedHeightRef = useRef<number | null>(normalizedPersistedHeight)
+  const prevHeightSyncKeyRef = useRef<string | number | undefined>(heightSyncKey)
+  const inFlightEmitsRef = useRef<Array<number | null>>([])
+  const onCustomHeightChangeRef = useRef(onCustomHeightChange)
+  onCustomHeightChangeRef.current = onCustomHeightChange
+
+  const emitCustomHeightChange = useCallback((nextHeightPx: number | null) => {
+    const callback = onCustomHeightChangeRef.current
+    if (!callback) return
+    if (inFlightEmitsRef.current.length >= 32) {
+      inFlightEmitsRef.current.shift()
+    }
+    inFlightEmitsRef.current.push(nextHeightPx)
+    callback(nextHeightPx)
+  }, [])
+
+  const clearPersistedCustomHeight = useCallback(() => {
+    const hadCustomHeight =
+      latestCustomHeightRef.current !== null || prevPersistedHeightRef.current !== null
+    latestCustomHeightRef.current = null
+    if (hadCustomHeight) {
+      emitCustomHeightChange(null)
+    }
+  }, [emitCustomHeightChange])
+
+  useLayoutEffect(() => {
+    const syncKeyChanged = prevHeightSyncKeyRef.current !== heightSyncKey
+    const persistedChanged = prevPersistedHeightRef.current !== normalizedPersistedHeight
+    if (!syncKeyChanged && !persistedChanged) {
+      return
+    }
+    prevHeightSyncKeyRef.current = heightSyncKey
+    prevPersistedHeightRef.current = normalizedPersistedHeight
+
+    if (!syncKeyChanged) {
+      const echoIndex = inFlightEmitsRef.current.indexOf(normalizedPersistedHeight)
+      if (echoIndex !== -1) {
+        inFlightEmitsRef.current = inFlightEmitsRef.current.slice(echoIndex + 1)
+        return
+      }
+    }
+
+    inFlightEmitsRef.current = []
+    latestCustomHeightRef.current = normalizedPersistedHeight
+    setState((prev) => {
+      if (prev.customHeightPx === normalizedPersistedHeight) {
+        return prev
+      }
+      return {
+        ...prev,
+        customHeightPx: normalizedPersistedHeight,
+        lockedAutoHeightPx:
+          normalizedPersistedHeight !== null ? null : prev.lockedAutoHeightPx
+      }
+    })
+  }, [heightSyncKey, normalizedPersistedHeight])
 
   const hasSvgRef = useRef(hasSvg)
   hasSvgRef.current = hasSvg
@@ -252,7 +321,8 @@ export function useMermaidViewport({
         lockedAutoHeightPx: null
       }
     })
-  }, [])
+    clearPersistedCustomHeight()
+  }, [clearPersistedCustomHeight])
 
   useLayoutEffect(() => {
     const viewportEl = viewportRef.current
@@ -355,10 +425,11 @@ export function useMermaidViewport({
 
   const resolveResizeBaseHeight = useCallback(
     (autoViewportHeightPx: number | null, heightBounds: MermaidHeightBounds): number => {
-      const current = stateRef.current
-      if (current.customHeightPx !== null) {
-        return clampMermaidHeight(current.customHeightPx, heightBounds)
+      const currentCustom = latestCustomHeightRef.current
+      if (currentCustom !== null) {
+        return clampMermaidHeight(currentCustom, heightBounds)
       }
+      const current = stateRef.current
       return (
         current.lockedAutoHeightPx ??
         measureViewportHeight() ??
@@ -369,21 +440,29 @@ export function useMermaidViewport({
     [measureViewportHeight]
   )
 
-  const commitCustomHeight = useCallback((rawHeightPx: number, heightBounds: MermaidHeightBounds) => {
-    const nextHeight = clampMermaidHeight(rawHeightPx, heightBounds)
-    setState((prev) =>
-      prev.customHeightPx === nextHeight
-        ? prev
-        : { ...prev, customHeightPx: nextHeight, lockedAutoHeightPx: null }
-    )
-  }, [])
+  const commitCustomHeight = useCallback(
+    (rawHeightPx: number, heightBounds: MermaidHeightBounds) => {
+      const nextHeight = clampMermaidHeight(rawHeightPx, heightBounds)
+      if (latestCustomHeightRef.current === nextHeight) {
+        return
+      }
+      latestCustomHeightRef.current = nextHeight
+      setState((prev) =>
+        prev.customHeightPx === nextHeight
+          ? prev
+          : { ...prev, customHeightPx: nextHeight, lockedAutoHeightPx: null }
+      )
+      emitCustomHeightChange(nextHeight)
+    },
+    [emitCustomHeightChange]
+  )
 
   const resolveLiveResizeContext = useCallback(() => {
     const box = syncMeasuredViewport()
     const { autoViewportHeightPx, heightBounds } = computeFitMetricsOrFallback(
       intrinsicBoundsRef.current,
       box,
-      stateRef.current.customHeightPx
+      latestCustomHeightRef.current
     )
     return {
       startHeight: resolveResizeBaseHeight(autoViewportHeightPx, heightBounds),
@@ -448,7 +527,8 @@ export function useMermaidViewport({
       customHeightPx: null,
       lockedAutoHeightPx: isIdentityViewport(prev.zoom, prev.pan) ? null : prev.lockedAutoHeightPx
     }))
-  }, [])
+    clearPersistedCustomHeight()
+  }, [clearPersistedCustomHeight])
 
   const { fitMetrics, autoViewportHeightPx, heightBounds } = useMemo(
     () => computeFitMetricsOrFallback(intrinsicBounds, measuredBox, state.customHeightPx),

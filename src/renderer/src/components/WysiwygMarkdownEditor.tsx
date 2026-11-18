@@ -4,6 +4,10 @@ import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
+import {
+  type MermaidHeightChangeHandler,
+  MermaidHeightSessionContext
+} from '../editor/mermaidHeightSession'
 import { isLinkNavigationClick } from '../editor/editorModes'
 import {
   type HeadingScrollSpySample,
@@ -12,6 +16,7 @@ import {
 import {
   addTableRowBeforeSafely,
   applyWysiwygCtrlK,
+  collectWysiwygMermaidPositions,
   createWysiwygExtensions,
   deleteTableRowPreservingHeader,
   detectProseMirrorLinkQuery,
@@ -28,6 +33,7 @@ import { useDismissable } from '../hooks/useDismissable'
 import { useEditorImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
 import { useLinkMenu } from '../hooks/useLinkMenu'
+import type { MermaidDiagramHeightMap } from '../stores/PaneTabStore'
 import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
 
@@ -44,6 +50,8 @@ interface WysiwygMarkdownEditorProps {
   isShortcutDisabled?: boolean
   documentTitle?: string
   mermaidRenderer?: MermaidRenderer
+  mermaidHeights?: MermaidDiagramHeightMap
+  onMermaidHeightChange?: MermaidHeightChangeHandler
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   activeFilePath?: string | null
   documentPath?: string
@@ -226,6 +234,8 @@ export function WysiwygMarkdownEditor({
   isShortcutDisabled = false,
   documentTitle,
   mermaidRenderer,
+  mermaidHeights,
+  onMermaidHeightChange,
   workspaceMarkdownFiles,
   activeFilePath,
   documentPath,
@@ -480,9 +490,20 @@ export function WysiwygMarkdownEditor({
     })
   })
 
+  const mermaidPositionsKey = useEditorState({
+    editor,
+    selector: ({ editor: instance }): string =>
+      collectWysiwygMermaidPositions(instance.state.doc).join(',')
+  })
+
   const mermaidContextValue = useMemo(
-    () => ({ theme, mermaidRenderer, documentTitle }),
-    [documentTitle, mermaidRenderer, theme]
+    () => ({ theme, mermaidRenderer, documentTitle, mermaidPositionsKey }),
+    [documentTitle, mermaidPositionsKey, mermaidRenderer, theme]
+  )
+
+  const mermaidHeightSessionValue = useMemo(
+    () => ({ mermaidHeights, onMermaidHeightChange }),
+    [mermaidHeights, onMermaidHeightChange]
   )
 
   return (
@@ -578,9 +599,11 @@ export function WysiwygMarkdownEditor({
           </div>
         )}
 
-        <WysiwygMermaidContext.Provider value={mermaidContextValue}>
-          <EditorContent editor={editor} className="wysiwyg-editor-content" />
-        </WysiwygMermaidContext.Provider>
+        <MermaidHeightSessionContext.Provider value={mermaidHeightSessionValue}>
+          <WysiwygMermaidContext.Provider value={mermaidContextValue}>
+            <EditorContent editor={editor} className="wysiwyg-editor-content" />
+          </WysiwygMermaidContext.Provider>
+        </MermaidHeightSessionContext.Provider>
       </div>
 
       {cellMenuPos && (
