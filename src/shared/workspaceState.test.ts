@@ -243,16 +243,6 @@ describe('workspace path security and workspace state normalization', () => {
           }
         }
       },
-      filtered.tabs,
-      [
-        {
-          path: '/ws/b.md',
-          mode: 'preview',
-          cursor: { selectionStart: 0, selectionEnd: 0 },
-          scrollTop: 30,
-          splitPreviewRatio: 0.5
-        }
-      ],
       () => null
     )
     expect(result.hadDroppedTabs).toBe(true)

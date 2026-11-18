@@ -103,6 +103,30 @@ async function clickActivityBarButton(
   await user.click(within(activityBar).getByRole('button', { name: label }))
 }
 
+async function switchWorkspaceFromView(
+  user: ReturnType<typeof userEvent.setup>,
+  workspaceNamePattern: RegExp
+): Promise<void> {
+  await clickActivityBarButton(user, '워크스페이스')
+  await user.click(
+    within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
+      name: workspaceNamePattern
+    })
+  )
+}
+
+async function switchPaneEditorMode(
+  user: ReturnType<typeof userEvent.setup>,
+  pane: HTMLElement,
+  modeLabel: 'Raw' | 'Split' | 'Preview' | '위지윅'
+): Promise<void> {
+  await user.click(
+    within(within(pane).getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+      name: modeLabel
+    })
+  )
+}
+
 describe('App shell, theme persistence, and settings panel', () => {
   beforeEach(() => {
     document.documentElement.removeAttribute('data-theme')
@@ -9896,12 +9920,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     expect(secondaryPane).toHaveClass('is-active-pane')
 
     // Immediately switch to beta before debounce -> alpha layout must be preserved intact (not overwritten with empty)
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^beta$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^beta$/i)
 
     const betaExplorer = await screen.findByLabelText('워크스페이스 탐색기')
     expect(await within(betaExplorer).findByText('b1.md')).toBeInTheDocument()
@@ -9920,12 +9939,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
 
     // Switch back to alpha -> alpha's vertical split, 65% ratio, tab order, active tabs, and activePaneId restore!
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^alpha$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^alpha$/i)
 
     await waitFor(() => {
       expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'vertical')
@@ -9970,12 +9984,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
       '65'
     )
 
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^beta$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^beta$/i)
     await waitFor(() => {
       expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
       expect(
@@ -10053,12 +10062,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
       })
     )
     const secondaryPane = await screen.findByTestId('pane-secondary')
-    await user.click(
-      within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
-        'button',
-        { name: 'Preview' }
-      )
-    )
+    await switchPaneEditorMode(user, secondaryPane, 'Preview')
     const secPreviewEl = await within(secondaryPane).findByTestId('document-editor')
     secPreviewEl.scrollTop = 260
     fireEvent.scroll(secPreviewEl)
@@ -10066,12 +10070,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     // 2. Focus primary pane, open split-doc.md -> switch to Split mode, adjust splitPreviewRatio to 35%, cursor & scrollTop
     fireEvent.mouseDown(primaryPane)
     await user.click(within(explorer).getByText('split-doc.md'))
-    await user.click(
-      within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
-        'button',
-        { name: 'Split' }
-      )
-    )
+    await switchPaneEditorMode(user, primaryPane, 'Split')
     const splitEditorSplitter = within(primaryPane).getByRole('separator', {
       name: '에디터 분할 크기 조절'
     })
@@ -10088,12 +10087,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
 
     // 3. Open wysiwyg-doc.md in primary -> switch to 위지윅 mode and scroll
     await user.click(within(explorer).getByText('wysiwyg-doc.md'))
-    await user.click(
-      within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
-        'button',
-        { name: '위지윅' }
-      )
-    )
+    await switchPaneEditorMode(user, primaryPane, '위지윅')
     const wysiwygScrollContainer = primaryPane.querySelector('.wysiwyg-scroll-container') as HTMLElement
     wysiwygScrollContainer.scrollTop = 175
     fireEvent.scroll(wysiwygScrollContainer)
@@ -10101,12 +10095,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     // 4. Open docs/preview-doc.md in primary -> Preview mode, assets/banner.png -> image preview, temp.md -> delete
     await user.click(within(explorer).getByText('docs'))
     await user.click(await within(explorer).findByText('preview-doc.md'))
-    await user.click(
-      within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
-        'button',
-        { name: 'Preview' }
-      )
-    )
+    await switchPaneEditorMode(user, primaryPane, 'Preview')
     const previewDocEl = await within(primaryPane).findByTestId('document-editor')
     previewDocEl.scrollTop = 310
     fireEvent.scroll(previewDocEl)
@@ -10156,21 +10145,11 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     expect(await within(primaryPane).findByTestId('image-preview')).toBeInTheDocument()
 
     // Switch immediately to beta, then restart app
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^beta$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^beta$/i)
     expect(await within(await screen.findByLabelText('워크스페이스 탐색기')).findByText('beta.md')).toBeInTheDocument()
 
     // Switch back to alpha and also verify full restart preserves all view states
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^alpha$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^alpha$/i)
     await waitFor(() => {
       expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
     })
@@ -10360,12 +10339,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
     // 2. Switch to Beta -> primary deleted, secondary only-sec.md promoted to primary in single mode without error banner
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^beta$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^beta$/i)
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: /only-sec\.md/ })).toHaveAttribute(
         'aria-selected',
@@ -10393,28 +10367,16 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     })
 
     // First switch back to alpha, then rapid switch to beta -> gamma
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^alpha$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^alpha$/i)
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: /keep-primary\.md/ })).toBeInTheDocument()
     })
 
-    await clickActivityBarButton(user, '워크스페이스')
-    const wsView = screen.getByRole('region', { name: '워크스페이스 뷰' })
-    await user.click(within(wsView).getByRole('button', { name: /^beta$/i }))
+    await switchWorkspaceFromView(user, /^beta$/i)
     await waitFor(() => {
       expect(betaOpenCount).toBe(1)
     })
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^gamma$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^gamma$/i)
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: /gamma\.md/ })).toBeInTheDocument()
     })
@@ -10535,12 +10497,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')
 
     // Switch to beta -> alpha's persisted state excludes Diff tab & config.json and collapses to single; beta restores its split tabs AND keeps config.json tab open!
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^beta$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^beta$/i)
 
     await waitFor(() => {
       expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'horizontal')

@@ -317,19 +317,21 @@ export function mapValidWorkspaceTabs(
 export function reconcileLoadedWorkspaceLayout(
   normalizedRoot: string,
   persistedLayout: PersistedWorkspacePaneLayout,
-  primaryCandidates: readonly PersistedWorkspaceTabState[],
-  secondaryCandidates: readonly PersistedWorkspaceTabState[],
-  resolveLoadedPath: (tabPath: string) => string | null
+  resolveLoadedPath: (canonicalChildPath: string) => string | null
 ): { reconciledLayout: PersistedWorkspacePaneLayout; hadDroppedTabs: boolean } {
+  const resolveValidLoadedPath = (tabPath: string): string | null => {
+    const validCandidate = resolveWorkspaceChildPath(normalizedRoot, tabPath)
+    return validCandidate ? resolveLoadedPath(validCandidate) : null
+  }
   const primaryMapped = mapValidWorkspaceTabs(
     normalizedRoot,
-    primaryCandidates,
-    resolveLoadedPath
+    persistedLayout.panes.primary.tabs,
+    resolveValidLoadedPath
   )
   const secondaryMapped = mapValidWorkspaceTabs(
     normalizedRoot,
-    secondaryCandidates,
-    resolveLoadedPath
+    persistedLayout.panes.secondary.tabs,
+    resolveValidLoadedPath
   )
 
   return {

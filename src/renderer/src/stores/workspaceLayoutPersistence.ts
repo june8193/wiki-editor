@@ -272,17 +272,13 @@ export async function restoreWorkspacePaneLayout(
     return emptyResult(true)
   }
 
-  const primaryFiltered = mapValidWorkspaceTabs(
-    normalizedRoot,
-    options.persistedLayout.panes.primary.tabs
-  )
-  const secondaryFiltered = mapValidWorkspaceTabs(
-    normalizedRoot,
-    options.persistedLayout.panes.secondary.tabs
-  )
-  let hadPrunedTabs = primaryFiltered.hadDroppedTabs || secondaryFiltered.hadDroppedTabs
+  const candidateTabs = mapValidWorkspaceTabs(normalizedRoot, [
+    ...options.persistedLayout.panes.primary.tabs,
+    ...options.persistedLayout.panes.secondary.tabs
+  ])
+  let hadPrunedTabs = candidateTabs.hadDroppedTabs
 
-  if (primaryFiltered.tabs.length === 0 && secondaryFiltered.tabs.length === 0) {
+  if (candidateTabs.tabs.length === 0) {
     const hadNonEmptyLayout =
       options.persistedLayout.splitMode !== 'single' ||
       options.persistedLayout.panes.primary.tabs.length > 0 ||
@@ -293,7 +289,7 @@ export async function restoreWorkspacePaneLayout(
   const { filesToOpen, hadMissingImage, cancelled } = await verifyAndCollectRestorableFiles(
     syncTarget,
     options,
-    [...primaryFiltered.tabs, ...secondaryFiltered.tabs]
+    candidateTabs.tabs
   )
   if (cancelled) {
     return emptyResult(false)
@@ -305,14 +301,12 @@ export async function restoreWorkspacePaneLayout(
     return emptyResult(false)
   }
 
-  const { reconciledLayout, hadDroppedTabs: hadDroppedLoadedTabs } = reconcileLoadedWorkspaceLayout(
+  const { reconciledLayout, hadDroppedTabs } = reconcileLoadedWorkspaceLayout(
     normalizedRoot,
     options.persistedLayout,
-    primaryFiltered.tabs,
-    secondaryFiltered.tabs,
     (tabPath) => loadedBuffersByKey.get(getWorkspacePathKey(tabPath))?.path ?? null
   )
-  hadPrunedTabs = hadPrunedTabs || hadDroppedLoadedTabs
+  hadPrunedTabs = hadPrunedTabs || hadDroppedTabs
 
   const loadedBuffers = collectBuffersToCommit(reconciledLayout, loadedBuffersByKey)
   const committed = syncTarget.commitRestoredWorkspaceLayout(
