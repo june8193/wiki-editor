@@ -14,7 +14,7 @@ import {
   toggleFavoriteWorkspace
 } from '@shared/workspace'
 import { createAsyncQueue } from '../asyncQueue'
-import { nextUniqueSuffix, writeFileAtomic } from '../fs/atomicFile'
+import { loadOrInitializeJsonFile, writeFileAtomic } from '../fs/atomicFile'
 import type { LogService } from '../logging/LogService'
 
 export type ConfigChangeListener = (config: AppConfig) => void
@@ -110,47 +110,25 @@ export class ConfigService {
     return cloneAppConfig(next)
   }
 
-  private async loadOrInitialize(): Promise<AppConfig> {
-    let raw: string
-    try {
-      raw = await readFile(this.configPath, 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
-        return this.writeDefaults()
-      }
-      throw error
-    }
-
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (!isPlainRecord(parsed)) {
-        return this.recoverCorrupted(raw, 'non-object')
-      }
-      return normalizeAppConfig(parsed)
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : 'invalid-json'
-      return this.recoverCorrupted(raw, reason)
-    }
-  }
-
-  private async writeDefaults(): Promise<AppConfig> {
-    const initial = cloneAppConfig(DEFAULT_APP_CONFIG)
-    await writeFileAtomic(this.configPath, serializeConfig(initial))
-    return cloneAppConfig(initial)
-  }
-
-  private async recoverCorrupted(corruptRaw: string, reason: string): Promise<AppConfig> {
-    const backupPath = `${this.configPath}.corrupt.${nextUniqueSuffix()}.bak`
-    await writeFileAtomic(backupPath, corruptRaw)
-    await this.logService?.warn('config', 'Recovered corrupted config.json to defaults', {
-      data: {
-        configPath: this.configPath,
-        backupPath,
-        reason,
-        contentLength: corruptRaw.length
-      }
+  private loadOrInitialize(): Promise<AppConfig> {
+    return loadOrInitializeJsonFile({
+      filePath: this.configPath,
+      createDefault: () => cloneAppConfig(DEFAULT_APP_CONFIG),
+      serialize: serializeConfig,
+      parseValid: (parsed) =>
+        isPlainRecord(parsed)
+          ? { ok: true, value: normalizeAppConfig(parsed) }
+          : { ok: false, reason: 'non-object' },
+      onRecovered: ({ filePath, backupPath, reason, contentLength }) =>
+        this.logService?.warn('config', 'Recovered corrupted config.json to defaults', {
+          data: {
+            configPath: filePath,
+            backupPath,
+            reason,
+            contentLength
+          }
+        })
     })
-    return this.writeDefaults()
   }
 
   private notifyListeners(config: AppConfig): void {

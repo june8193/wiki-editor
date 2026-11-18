@@ -8,7 +8,6 @@ import {
   isSameWorkspacePath,
   joinWorkspacePath,
   remapPathPrefix,
-  resolveWorkspaceChildPath,
   toWorkspaceRelativePath,
   WorkspaceChangeEvent,
   WorkspaceEntry,
@@ -17,7 +16,10 @@ import {
   WorkspaceMovedEntry,
   WorkspaceSummary
 } from '@shared/workspace'
-import type { PersistedWorkspaceState } from '@shared/workspaceState'
+import {
+  filterExpandedDirsForWorkspace,
+  type PersistedWorkspaceState
+} from '@shared/workspaceState'
 import { logRendererInfo } from '../logging/rendererLogger'
 import { toErrorMessage } from '@shared/errors'
 import { useWikiApi } from './useWikiApi'
@@ -61,27 +63,37 @@ function resolveExpandedCandidatePaths(
   if (!persistedState || persistedState.expandedDirs.length === 0) {
     return { candidates: [], hadInvalidEntries: false }
   }
-  const seen = new Set<string>()
-  const candidates: string[] = []
-  let hadInvalidEntries = false
-
-  for (const rawDir of persistedState.expandedDirs) {
-    const validDir = resolveWorkspaceChildPath(info.rootPath, rawDir)
-    if (!validDir) {
-      hadInvalidEntries = true
-      continue
-    }
+  const validDirs = filterExpandedDirsForWorkspace(info.rootPath, persistedState.expandedDirs)
+  const candidates = validDirs.map((validDir) => {
     const rel = toWorkspaceRelativePath(info.rootPath, validDir)
-    const targetDir = rel ? joinWorkspacePath(info.rootPath, rel) : validDir
-    const key = getWorkspacePathKey(targetDir)
-    if (!key || seen.has(key)) {
-      continue
-    }
-    seen.add(key)
-    candidates.push(targetDir)
+    return rel ? joinWorkspacePath(info.rootPath, rel) : validDir
+  })
+  return {
+    candidates,
+    hadInvalidEntries: validDirs.length < persistedState.expandedDirs.length
   }
+}
 
-  return { candidates, hadInvalidEntries }
+async function readDirectoriesSettled(
+  readDir: (dirPath?: string) => Promise<WorkspaceEntry[]>,
+  dirPaths: readonly string[]
+): Promise<Array<{ dirPath: string; entries: WorkspaceEntry[] }>> {
+  if (dirPaths.length === 0) {
+    return []
+  }
+  const settled = await Promise.allSettled(
+    dirPaths.map(async (dirPath) => ({
+      dirPath,
+      entries: await readDir(dirPath)
+    }))
+  )
+  const loaded: Array<{ dirPath: string; entries: WorkspaceEntry[] }> = []
+  for (const result of settled) {
+    if (result.status === 'fulfilled') {
+      loaded.push(result.value)
+    }
+  }
+  return loaded
 }
 
 interface UseWorkspaceTreeOptions {
@@ -186,19 +198,12 @@ export function useWorkspaceTree({
         return
       }
 
-      const results = await Promise.allSettled(
-        expandedList.map(async (dirPath) => ({
-          dirPath,
-          entries: await wikiApi.workspace.readDir(dirPath)
-        }))
-      )
+      const loadedDirs = await readDirectoriesSettled(wikiApi.workspace.readDir, expandedList)
       if (!mountedRef.current || workspaceRef.current?.rootPath !== currentWs.rootPath) return
 
       const nextChildren: Record<string, WorkspaceEntry[]> = {}
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          nextChildren[result.value.dirPath] = result.value.entries
-        }
+      for (const loaded of loadedDirs) {
+        nextChildren[loaded.dirPath] = loaded.entries
       }
       setChildrenByDir(nextChildren)
     } catch (error: unknown) {
@@ -289,15 +294,7 @@ export function useWorkspaceTree({
         }
 
         const { candidates, hadInvalidEntries } = resolveExpandedCandidatePaths(info, persistedState)
-        const dirResults =
-          candidates.length > 0
-            ? await Promise.allSettled(
-                candidates.map(async (dirPath) => ({
-                  dirPath,
-                  entries: await wikiApi.workspace.readDir(dirPath)
-                }))
-              )
-            : []
+        const loadedDirs = await readDirectoriesSettled(wikiApi.workspace.readDir, candidates)
         if (!mountedRef.current || seq !== openRequestSeqRef.current) {
           return false
         }
@@ -311,25 +308,19 @@ export function useWorkspaceTree({
           }
         }
         indexDirEntries(info.entries)
-        for (const result of dirResults) {
-          if (result.status === 'fulfilled') {
-            indexDirEntries(result.value.entries)
-          }
+        for (const loaded of loadedDirs) {
+          indexDirEntries(loaded.entries)
         }
 
         const restoredExpandedDirs = new Set<string>()
         const restoredChildrenByDir: Record<string, WorkspaceEntry[]> = {}
-        let hadMissingDirs = false
-        for (const result of dirResults) {
-          if (result.status !== 'fulfilled') {
-            hadMissingDirs = true
-            continue
-          }
+        for (const loaded of loadedDirs) {
           const canonicalDirPath =
-            entryPathByKey.get(getWorkspacePathKey(result.value.dirPath)) ?? result.value.dirPath
+            entryPathByKey.get(getWorkspacePathKey(loaded.dirPath)) ?? loaded.dirPath
           restoredExpandedDirs.add(canonicalDirPath)
-          restoredChildrenByDir[canonicalDirPath] = result.value.entries
+          restoredChildrenByDir[canonicalDirPath] = loaded.entries
         }
+        const hadMissingDirs = loadedDirs.length < candidates.length
 
         markdownFilesSeqRef.current += 1
         setWorkspace({ rootPath: info.rootPath, name: info.name })

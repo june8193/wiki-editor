@@ -266,6 +266,29 @@ function normalizePaneState(
   }
 }
 
+function reconcilePaneState(pane: PersistedWorkspacePaneState): PersistedWorkspacePaneState {
+  const tabs = dedupeTabStates(pane.tabs)
+  return {
+    tabs,
+    activeTabPath: resolveActiveTabPath(tabs, pane.activeTabPath)
+  }
+}
+
+function toSinglePaneLayout(
+  splitRatio: number,
+  primary: PersistedWorkspacePaneState
+): PersistedWorkspacePaneLayout {
+  return {
+    splitMode: 'single',
+    splitRatio,
+    activePaneId: 'primary',
+    panes: {
+      primary,
+      secondary: { tabs: [], activeTabPath: null }
+    }
+  }
+}
+
 /**
  * Reconciles a pane layout so empty secondary collapses to single mode, empty primary promotes
  * secondary tabs into primary, and activeTabPath stays valid within each pane.
@@ -274,55 +297,23 @@ export function reconcilePersistedWorkspaceLayout(
   layout: PersistedWorkspacePaneLayout
 ): PersistedWorkspacePaneLayout {
   const splitRatio = normalizeSplitRatio(layout.splitRatio)
-  const primaryTabs = dedupeTabStates(layout.panes.primary.tabs)
-  const primary: PersistedWorkspacePaneState = {
-    tabs: primaryTabs,
-    activeTabPath: resolveActiveTabPath(primaryTabs, layout.panes.primary.activeTabPath)
-  }
-  const secondaryTabs = dedupeTabStates(layout.panes.secondary.tabs)
-  const secondary: PersistedWorkspacePaneState = {
-    tabs: secondaryTabs,
-    activeTabPath: resolveActiveTabPath(secondaryTabs, layout.panes.secondary.activeTabPath)
-  }
+  const primary = reconcilePaneState(layout.panes.primary)
+  const secondary = reconcilePaneState(layout.panes.secondary)
 
   if (primary.tabs.length === 0 && secondary.tabs.length > 0) {
-    return {
-      splitMode: 'single',
-      splitRatio,
-      activePaneId: 'primary',
-      panes: {
-        primary: secondary,
-        secondary: { tabs: [], activeTabPath: null }
-      }
-    }
+    return toSinglePaneLayout(splitRatio, secondary)
   }
 
   if (secondary.tabs.length === 0) {
-    return {
-      splitMode: 'single',
-      splitRatio,
-      activePaneId: 'primary',
-      panes: {
-        primary,
-        secondary: { tabs: [], activeTabPath: null }
-      }
-    }
+    return toSinglePaneLayout(splitRatio, primary)
   }
 
   if (layout.splitMode === 'single') {
     const mergedTabs = dedupeTabStates([...primary.tabs, ...secondary.tabs])
-    return {
-      splitMode: 'single',
-      splitRatio,
-      activePaneId: 'primary',
-      panes: {
-        primary: {
-          tabs: mergedTabs,
-          activeTabPath: resolveActiveTabPath(mergedTabs, primary.activeTabPath)
-        },
-        secondary: { tabs: [], activeTabPath: null }
-      }
-    }
+    return toSinglePaneLayout(splitRatio, {
+      tabs: mergedTabs,
+      activeTabPath: resolveActiveTabPath(mergedTabs, primary.activeTabPath)
+    })
   }
 
   return {
@@ -453,6 +444,18 @@ export function validateWorkspaceStateUpdate(update: unknown): asserts update is
   }
 }
 
+export function validateWorkspaceStateSaveInput(
+  rootPath: string,
+  update: unknown
+): { normalizedRoot: string; update: WorkspaceStateUpdate } {
+  validateWorkspaceStateUpdate(update)
+  const normalizedRoot = resolveNormalizedWorkspacePath(rootPath)
+  if (!normalizedRoot) {
+    throw new Error('유효하지 않은 워크스페이스 경로입니다.')
+  }
+  return { normalizedRoot, update }
+}
+
 export function applyWorkspaceStateUpdate(
   currentDoc: WorkspaceStateDocument,
   rootPath: string,
@@ -460,11 +463,7 @@ export function applyWorkspaceStateUpdate(
   updatedAt = new Date().toISOString(),
   options: NormalizeWorkspaceStateOptions = {}
 ): { document: WorkspaceStateDocument; workspaceState: PersistedWorkspaceState } {
-  validateWorkspaceStateUpdate(update)
-  const normalizedRoot = resolveNormalizedWorkspacePath(rootPath)
-  if (!normalizedRoot) {
-    throw new Error('유효하지 않은 워크스페이스 경로입니다.')
-  }
+  const { normalizedRoot } = validateWorkspaceStateSaveInput(rootPath, update)
 
   const key = getWorkspacePathKey(normalizedRoot)
   const existing = currentDoc.workspaces[key]

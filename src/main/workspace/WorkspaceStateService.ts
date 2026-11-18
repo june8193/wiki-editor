@@ -1,21 +1,18 @@
-import { readFile } from 'node:fs/promises'
 import { getWorkspacePathKey, resolveNormalizedWorkspacePath } from '@shared/workspace'
 import {
   applyWorkspaceStateUpdate,
   clonePersistedWorkspaceState,
-  cloneWorkspaceStateDocument,
   createDefaultWorkspaceStateDocument,
   DEFAULT_MAX_PERSISTED_WORKSPACES,
   getCorruptWorkspaceStateRootReason,
   normalizeWorkspaceStateDocument,
   type PersistedWorkspaceState,
-  validateWorkspaceStateUpdate,
+  validateWorkspaceStateSaveInput,
   type WorkspaceStateDocument,
   type WorkspaceStateUpdate
 } from '@shared/workspaceState'
 import { createAsyncQueue } from '../asyncQueue'
-import { isErrnoCode } from '../fs/pathSecurity'
-import { nextUniqueSuffix, writeFileAtomic } from '../fs/atomicFile'
+import { loadOrInitializeJsonFile, writeFileAtomic } from '../fs/atomicFile'
 import type { LogService } from '../logging/LogService'
 
 export interface WorkspaceStateServiceOptions {
@@ -69,10 +66,7 @@ export class WorkspaceStateService {
     update: WorkspaceStateUpdate
   ): Promise<PersistedWorkspaceState> {
     try {
-      validateWorkspaceStateUpdate(update)
-      if (!resolveNormalizedWorkspacePath(rootPath)) {
-        throw new Error('유효하지 않은 워크스페이스 경로입니다.')
-      }
+      validateWorkspaceStateSaveInput(rootPath, update)
     } catch (error) {
       return Promise.reject(error)
     }
@@ -95,47 +89,30 @@ export class WorkspaceStateService {
     return this.queue.flush()
   }
 
-  private async loadOrInitialize(): Promise<WorkspaceStateDocument> {
-    let raw: string
-    try {
-      raw = await readFile(this.statePath, 'utf8')
-    } catch (error) {
-      if (isErrnoCode(error, 'ENOENT')) {
-        return this.writeDefaults()
-      }
-      throw error
-    }
-
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      const corruptReason = getCorruptWorkspaceStateRootReason(parsed)
-      if (corruptReason) {
-        return this.recoverCorrupted(raw, corruptReason)
-      }
-      return normalizeWorkspaceStateDocument(parsed, { maxWorkspaces: this.maxWorkspaces })
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : 'invalid-json'
-      return this.recoverCorrupted(raw, reason)
-    }
-  }
-
-  private async writeDefaults(): Promise<WorkspaceStateDocument> {
-    const initial = createDefaultWorkspaceStateDocument()
-    await writeFileAtomic(this.statePath, serializeWorkspaceState(initial))
-    return cloneWorkspaceStateDocument(initial)
-  }
-
-  private async recoverCorrupted(corruptRaw: string, reason: string): Promise<WorkspaceStateDocument> {
-    const backupPath = `${this.statePath}.corrupt.${nextUniqueSuffix()}.bak`
-    await writeFileAtomic(backupPath, corruptRaw)
-    await this.logService?.warn('workspace', 'Recovered corrupted workspace-state.json to defaults', {
-      data: {
-        statePath: this.statePath,
-        backupPath,
-        reason,
-        contentLength: corruptRaw.length
-      }
+  private loadOrInitialize(): Promise<WorkspaceStateDocument> {
+    return loadOrInitializeJsonFile({
+      filePath: this.statePath,
+      createDefault: createDefaultWorkspaceStateDocument,
+      serialize: serializeWorkspaceState,
+      parseValid: (parsed) => {
+        const corruptReason = getCorruptWorkspaceStateRootReason(parsed)
+        if (corruptReason) {
+          return { ok: false, reason: corruptReason }
+        }
+        return {
+          ok: true,
+          value: normalizeWorkspaceStateDocument(parsed, { maxWorkspaces: this.maxWorkspaces })
+        }
+      },
+      onRecovered: ({ filePath, backupPath, reason, contentLength }) =>
+        this.logService?.warn('workspace', 'Recovered corrupted workspace-state.json to defaults', {
+          data: {
+            statePath: filePath,
+            backupPath,
+            reason,
+            contentLength
+          }
+        })
     })
-    return this.writeDefaults()
   }
 }
