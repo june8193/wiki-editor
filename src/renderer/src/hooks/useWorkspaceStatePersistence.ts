@@ -36,6 +36,19 @@ function serializeWorkspaceStateSignature(
   return JSON.stringify({ expandedDirs: dirs, layout })
 }
 
+function serializeWorkspaceStatePayload(
+  rootPath: string,
+  expandedDirs: readonly string[],
+  layoutSnapshot: WorkspaceLayoutSnapshot
+): { update: WorkspaceStateUpdate; signature: string } {
+  const dirs = [...expandedDirs]
+  const layout = serializePaneLayoutForWorkspace(rootPath, layoutSnapshot)
+  return {
+    update: { expandedDirs: dirs, layout },
+    signature: serializeWorkspaceStateSignature(dirs, layout)
+  }
+}
+
 /**
  * Coordinates debounced and immediate-flush persistence of the main window's active workspace state.
  */
@@ -77,25 +90,20 @@ export function useWorkspaceStatePersistence({
     if (!targetRoot) {
       return
     }
-    const dirsSnapshot = [...latestExpandedDirsRef.current]
-    const serializedLayout = serializePaneLayoutForWorkspace(
+    const { update, signature } = serializeWorkspaceStatePayload(
       targetRoot,
+      latestExpandedDirsRef.current,
       getLatestLayoutSnapshotRef.current()
     )
-    const signatureSnapshot = serializeWorkspaceStateSignature(dirsSnapshot, serializedLayout)
-    if (!hasPendingSaveRef.current && signatureSnapshot === lastSavedSignatureRef.current) {
+    if (!hasPendingSaveRef.current && signature === lastSavedSignatureRef.current) {
       return
     }
     hasPendingSaveRef.current = false
-    lastSavedSignatureRef.current = signatureSnapshot
+    lastSavedSignatureRef.current = signature
 
     const saveApi = wikiApi.workspaceState?.save
     if (!saveApi) {
       return
-    }
-    const update: WorkspaceStateUpdate = {
-      expandedDirs: dirsSnapshot,
-      layout: serializedLayout
     }
     await saveApi(targetRoot, update).catch(() => undefined)
   }, [clearDebounceTimer, wikiApi])
@@ -150,10 +158,9 @@ export function useWorkspaceStatePersistence({
       return
     }
     const nextDirs = [...expandedDirs]
-    const nextLayout = serializePaneLayoutForWorkspace(workspaceRootPath, layoutSnapshot)
     latestExpandedDirsRef.current = nextDirs
-    const nextSignature = serializeWorkspaceStateSignature(nextDirs, nextLayout)
-    if (nextSignature === lastSavedSignatureRef.current) {
+    const { signature } = serializeWorkspaceStatePayload(workspaceRootPath, nextDirs, layoutSnapshot)
+    if (signature === lastSavedSignatureRef.current) {
       if (hasPendingSaveRef.current) {
         hasPendingSaveRef.current = false
         clearDebounceTimer()

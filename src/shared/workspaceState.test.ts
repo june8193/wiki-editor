@@ -258,7 +258,7 @@ describe('workspace path security and workspace state normalization', () => {
       ],
       () => null
     )
-    expect(result.hadDroppedLoaded).toBe(true)
+    expect(result.hadDroppedTabs).toBe(true)
     expect(result.reconciledLayout.splitMode).toBe('single')
     expect(result.reconciledLayout.panes.primary.tabs).toEqual([])
   })

@@ -5,6 +5,7 @@ import {
   type CursorPosition,
   DEFAULT_SPLIT_RATIO,
   type EditorMode,
+  extractTabViewState,
   MAX_SPLIT_RATIO,
   MIN_SPLIT_RATIO,
   normalizeSplitRatio,
@@ -143,8 +144,24 @@ export interface RestoreWorkspaceLayoutInput {
   panes: Record<PaneId, RestoreWorkspacePaneInput>
 }
 
-export interface RestoreWorkspaceLayoutOptions {
+export interface PaneTabRestoreOptions {
   preserveTab?: (tab: TabItem) => boolean
+}
+
+function createDocumentTab(
+  id: string,
+  bufferKey: string,
+  viewState: Partial<TabViewState> = {}
+): DocumentTabItem {
+  return {
+    id,
+    kind: 'document',
+    bufferKey,
+    mode: viewState.mode ?? 'raw',
+    cursor: viewState.cursor ? { ...viewState.cursor } : { selectionStart: 0, selectionEnd: 0 },
+    scrollTop: viewState.scrollTop ?? 0,
+    splitPreviewRatio: normalizeSplitRatio(viewState.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
+  }
 }
 
 function createInitialState(): PaneLayoutState {
@@ -325,11 +342,10 @@ export function serializePaneLayoutForWorkspace(
       const validPath = resolveWorkspaceChildPath(normalizedRoot, buffer.path)
       if (!validPath) continue
 
+      const viewState = extractTabViewState(tab)
       tabs.push({
         path: validPath,
-        mode: tab.mode,
-        cursor: { ...tab.cursor },
-        scrollTop: tab.scrollTop,
+        ...viewState,
         splitPreviewRatio: normalizeSplitRatio(tab.splitPreviewRatio)
       })
       if (tab.id === pane.activeTabId) {
@@ -597,15 +613,7 @@ export class PaneTabStore {
       return existing
     }
 
-    const created: DocumentTabItem = {
-      id: this.nextTabId(),
-      kind: 'document',
-      bufferKey,
-      mode: options.mode ?? 'raw',
-      cursor: options.cursor ? { ...options.cursor } : { selectionStart: 0, selectionEnd: 0 },
-      scrollTop: options.scrollTop ?? 0,
-      splitPreviewRatio: normalizeSplitRatio(options.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
-    }
+    const created = createDocumentTab(this.nextTabId(), bufferKey, options)
 
     return this.appendNewTabInPane(
       targetPaneId,
@@ -1059,7 +1067,7 @@ export class PaneTabStore {
 
   restoreWorkspaceLayout = (
     input: RestoreWorkspaceLayoutInput,
-    options: RestoreWorkspaceLayoutOptions = {}
+    options: PaneTabRestoreOptions = {}
   ): void => {
     const transitions: PaneTabTransition[] = []
     const buildPane = (paneId: PaneId): { pane: PaneState; restoredCount: number } => {
@@ -1071,17 +1079,7 @@ export class PaneTabStore {
       for (const tabInput of inputPane.tabs) {
         if (seenKeys.has(tabInput.bufferKey)) continue
         seenKeys.add(tabInput.bufferKey)
-        const created: DocumentTabItem = {
-          id: this.nextTabId(),
-          kind: 'document',
-          bufferKey: tabInput.bufferKey,
-          mode: tabInput.mode,
-          cursor: { ...tabInput.cursor },
-          scrollTop: tabInput.scrollTop,
-          splitPreviewRatio: normalizeSplitRatio(
-            tabInput.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO
-          )
-        }
+        const created = createDocumentTab(this.nextTabId(), tabInput.bufferKey, tabInput)
         restoredTabs.push(created)
         transitions.push({ type: 'tab-opened', paneId, tab: created })
       }

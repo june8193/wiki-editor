@@ -1,5 +1,6 @@
 import { isSupportedImageFile } from '@shared/assets'
 import type { DocumentBuffer } from '@shared/documentBuffer'
+import { extractTabViewState } from '@shared/window'
 import {
   getParentPath,
   getWorkspaceDisplayName,
@@ -171,10 +172,7 @@ function toRestoreLayoutInput(
   const toRestorePane = (pane: PersistedWorkspacePaneState) => ({
     tabs: pane.tabs.map((tab) => ({
       bufferKey: resolvedKeyByPathKey.get(getWorkspacePathKey(tab.path))!,
-      mode: tab.mode,
-      cursor: { ...tab.cursor },
-      scrollTop: tab.scrollTop,
-      splitPreviewRatio: tab.splitPreviewRatio
+      ...extractTabViewState(tab)
     })),
     activeTabKey: pane.activeTabPath
       ? (resolvedKeyByPathKey.get(getWorkspacePathKey(pane.activeTabPath)) ?? null)
@@ -247,14 +245,14 @@ export async function restoreWorkspacePaneLayout(
     return emptyResult(false)
   }
 
-  const { reconciledLayout, hadDroppedLoaded } = reconcileLoadedWorkspaceLayout(
+  const { reconciledLayout, hadDroppedTabs: hadDroppedLoadedTabs } = reconcileLoadedWorkspaceLayout(
     normalizedRoot,
     options.persistedLayout,
     primaryFiltered.tabs,
     secondaryFiltered.tabs,
     (tabPath) => loadedBuffersByKey.get(getWorkspacePathKey(tabPath))?.path ?? null
   )
-  hadPrunedTabs = hadPrunedTabs || hadDroppedLoaded
+  hadPrunedTabs = hadPrunedTabs || hadDroppedLoadedTabs
 
   const loadedBuffers = collectBuffersToCommit(reconciledLayout, loadedBuffersByKey)
   const committed = syncTarget.commitRestoredWorkspaceLayout(
