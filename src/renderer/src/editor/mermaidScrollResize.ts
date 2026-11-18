@@ -1,6 +1,6 @@
 import { clampMermaidHeight, type MermaidHeightBounds } from './mermaidContainFit'
 
-export const MERMAID_EDGE_AUTOSCROLL_THRESHOLD_PX = 36
+const MERMAID_EDGE_AUTOSCROLL_THRESHOLD_PX = 36
 const MERMAID_EDGE_AUTOSCROLL_MIN_STEP_PX = 2
 const MERMAID_EDGE_AUTOSCROLL_MAX_STEP_PX = 28
 const MERMAID_EDGE_AUTOSCROLL_DIRECTION_DEADZONE_PX = 2
@@ -26,10 +26,7 @@ function isScrollableOverflow(overflowY: string): boolean {
   return overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay'
 }
 
-/**
- * Walks ancestor elements from `element` to find the nearest vertical scroll container.
- */
-export function findNearestScrollContainer(element: HTMLElement | null): HTMLElement | null {
+function findNearestScrollContainer(element: HTMLElement | null): HTMLElement | null {
   if (typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') {
     return null
   }
@@ -94,9 +91,12 @@ export function startMermaidScrollResizeSession({
   onHeightChange
 }: MermaidScrollResizeSessionOptions): MermaidScrollResizeSession {
   const scrollContainer = findNearestScrollContainer(viewportEl)
-  const startDocY = scrollContainer
-    ? startClientY - scrollContainer.getBoundingClientRect().top + scrollContainer.scrollTop
-    : null
+  const readContainerDocY = (clientY: number): number | null =>
+    scrollContainer
+      ? clientY - scrollContainer.getBoundingClientRect().top + scrollContainer.scrollTop
+      : null
+
+  const startDocY = readContainerDocY(startClientY)
 
   let lastClientY = startClientY
   let currentHeightPx = clampMermaidHeight(startHeight, heightBounds)
@@ -111,11 +111,22 @@ export function startMermaidScrollResizeSession({
     }
   }
 
+  const setScrollTopGuarded = (nextScrollTop: number): void => {
+    if (!scrollContainer) return
+    isApplyingAutoScroll = true
+    try {
+      scrollContainer.scrollTop = nextScrollTop
+    } finally {
+      isApplyingAutoScroll = false
+    }
+  }
+
   const syncHeightFromPointer = (): void => {
     if (isStopped) return
+    const currentDocY = readContainerDocY(lastClientY)
     const deltaY =
-      scrollContainer && startDocY !== null
-        ? lastClientY - scrollContainer.getBoundingClientRect().top + scrollContainer.scrollTop - startDocY
+      currentDocY !== null && startDocY !== null
+        ? currentDocY - startDocY
         : lastClientY - startClientY
     const nextHeight = clampMermaidHeight(startHeight + deltaY, heightBounds)
     currentHeightPx = nextHeight
@@ -150,12 +161,7 @@ export function startMermaidScrollResizeSession({
     viewportEl.style.height = `${targetHeight}px`
 
     const prevScrollTop = scrollContainer.scrollTop
-    isApplyingAutoScroll = true
-    try {
-      scrollContainer.scrollTop = prevScrollTop + gain
-    } finally {
-      isApplyingAutoScroll = false
-    }
+    setScrollTopGuarded(prevScrollTop + gain)
 
     const actualDelta = Math.max(0, scrollContainer.scrollTop - prevScrollTop)
     const finalHeight =
@@ -181,12 +187,7 @@ export function startMermaidScrollResizeSession({
       return false
     }
 
-    isApplyingAutoScroll = true
-    try {
-      scrollContainer.scrollTop = Math.max(0, prevScrollTop - stepPx)
-    } finally {
-      isApplyingAutoScroll = false
-    }
+    setScrollTopGuarded(Math.max(0, prevScrollTop - stepPx))
     if (scrollContainer.scrollTop >= prevScrollTop) {
       return false
     }
