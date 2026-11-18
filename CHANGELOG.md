@@ -5,6 +5,19 @@
 
 ---
 
+## [1.5.0] - 2026-11-19
+
+### Added
+- 앱 시작 및 워크스페이스 전환 시 워크스페이스별 이전 작업 상태를 별도 `workspace-state.json`에 원자적으로 영속화·복원: 폴더 트리 펼침 상태(`expandedDirs`), 메인 창 편집 공간 분할 레이아웃(`splitMode`, `splitRatio`, `activePaneId`), 열린 문서 탭 목록·순서·활성 탭 및 탭별 뷰 상태(`mode`, `cursor`, `scrollTop`, `splitPreviewRatio`) 자동 복원, 누락 파일·폴더 무오류 정리 및 동일 워크스페이스 재선택 시 초기화 방지 지원 ([상세 스펙](.backlog/done/workspace-state-persistence/spec.md), [티켓 01](.backlog/done/workspace-state-persistence/issues/01-workspace-state-storage-and-tree-restore.md), [티켓 02](.backlog/done/workspace-state-persistence/issues/02-pane-layout-and-tab-view-state-restore.md))
+- 워크스페이스 뷰의 즐겨찾기·최근 워크스페이스 항목별 `새 창에서 열기`(`↗`) 버튼 및 다중 메인 창 워크스페이스 세션 아키텍처 추가: 메인 창별 독립 워크스페이스 파일시스템·파일 감시(`watch`)·공유 문서 버퍼 허브·Git·소속 보조 창 격리, 새 메인 창 초기 워크스페이스 지정 및 상태 복원, 이미 다른 메인 창에 열린 워크스페이스 선택 시 기존 창 자동 복원·포커스 전환 지원 ([상세 스펙](.backlog/done/open-workspace-new-window/spec.md), [티켓 01](.backlog/done/open-workspace-new-window/issues/01-multi-main-window-session-coordinator-and-ipc.md), [티켓 02](.backlog/done/open-workspace-new-window/issues/02-workspace-view-open-in-new-window-button.md), [티켓 03](.backlog/done/open-workspace-new-window/issues/03-cross-window-duplicate-workspace-focus-and-domain-docs.md))
+
+### Changed
+- Mermaid 다이어그램 블록 리사이즈 핸들 사용성 및 Contain 스케일링 개선: 가용 영역 비율 유지 자동 스케일링(Contain 피팅) 및 동적 높이 경계(`64px`~`1600px`), 카드 하단 전체 폭 히트존·실시간 높이 수치 배지 및 위지윅 단일 카드 테두리 통합, 배율·패닝·수동 높이를 한 번에 되돌리는 통합 `뷰 초기화` 버튼, 문서 스크롤 좌표 기반 드래그와 상·하단 가장자리 자동 스크롤(에디터 하단 여백 `120px`), 열린 탭 세션 메모리 기반 모드·탭 전환 간 블록별 수동 높이 유지 지원 ([상세 스펙](.backlog/done/mermaid-resize-handle/spec.md), [티켓 01](.backlog/done/mermaid-resize-handle/issues/01-contain-scaling-and-unified-card-handle.md), [티켓 02](.backlog/done/mermaid-resize-handle/issues/02-document-coords-and-edge-autoscroll.md), [티켓 03](.backlog/done/mermaid-resize-handle/issues/03-tab-session-height-persistence-and-glossary.md))
+
+### Fixed
+- 위지윅(WYSIWYG) 모드에서 외부 클립보드 텍스트(IDE·웹페이지 HTML 및 들여쓰기 포함 텍스트) 붙여넣기 시 강제로 코드 블록으로 변환되던 문제를 수정하여 평문(`text/plain`) 마크다운 기준으로 일관되게 붙여넣도록 개선
+- Raw 모드 에디터에서 인라인 코드(`monospace`)의 불투명 배경색으로 인해 텍스트 선택 영역 하이라이트가 가려지던 문제 수정
+
 ## [1.4.0] - 2026-11-17
 
 ### Added
