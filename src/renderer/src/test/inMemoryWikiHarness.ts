@@ -294,7 +294,6 @@ interface HarnessSession {
   workspaceListeners: Set<(event: WorkspaceChangeEvent) => void>
   dragListenersByWindow: Map<number, Set<(session: ActiveTabDragSession | null) => void>>
   openWindows: Map<number, SessionWindowRecord>
-  mainHandles: InMemoryWindowHandle[]
   auxiliaryHandles: InMemoryWindowHandle[]
   watchActive: boolean
   watchCalls: number
@@ -392,7 +391,6 @@ export function createMultiWindowWikiHarness(
       workspaceListeners: new Set(),
       dragListenersByWindow,
       openWindows: new Map(),
-      mainHandles: [],
       auxiliaryHandles: [],
       watchActive: false,
       watchCalls: 0,
@@ -481,18 +479,16 @@ export function createMultiWindowWikiHarness(
   }
 
   const findOpenSessionByWorkspacePath = (
-    targetPath: string,
-    excludeSessionId?: number
-  ): { session: HarnessSession; mainWindow: SessionWindowRecord; mainWindowId: number } | undefined => {
+    targetPath: string
+  ): { session: HarnessSession; mainWindowId: number } | undefined => {
     for (const session of sessions.values()) {
-      if (session.sessionId === excludeSessionId) continue
       const candidatePath = session.activeRoot ?? session.pendingInitialWorkspacePath
       if (!candidatePath || !isSameWorkspacePath(candidatePath, targetPath)) {
         continue
       }
       for (const [winId, winRecord] of session.openWindows.entries()) {
         if (winRecord.role === 'main' && !winRecord.isDestroyed()) {
-          return { session, mainWindow: winRecord, mainWindowId: winId }
+          return { session, mainWindowId: winId }
         }
       }
     }
@@ -1287,7 +1283,6 @@ export function createMultiWindowWikiHarness(
 
     if (role === 'main') {
       mainHandles.push(handle)
-      session.mainHandles.push(handle)
     } else {
       auxiliaryHandles.push(handle)
       session.auxiliaryHandles.push(handle)
