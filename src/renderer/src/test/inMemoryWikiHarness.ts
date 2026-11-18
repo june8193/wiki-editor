@@ -175,14 +175,6 @@ interface CreateSessionWindowOptions extends CreateInMemoryWindowOptions {
   initialWorkspacePath?: string | null
 }
 
-export interface InMemoryWindowWatchState {
-  active: boolean
-  watchCalls: number
-  unwatchCalls: number
-  auxWatchCalls: number
-  auxUnwatchCalls: number
-}
-
 export interface InMemoryWindowHandle {
   windowId: number
   sessionId: number
@@ -265,7 +257,13 @@ export interface MultiWindowWikiHarness {
   createWindow: (options?: CreateInMemoryWindowOptions) => InMemoryWindowHandle
   getMainWindows: () => InMemoryWindowHandle[]
   getAuxiliaryWindows: (mainWindowId?: number) => InMemoryWindowHandle[]
-  getWatchState: (mainWindowId?: number) => InMemoryWindowWatchState
+  getWatchState: () => {
+    active: boolean
+    watchCalls: number
+    unwatchCalls: number
+    auxWatchCalls: number
+    auxUnwatchCalls: number
+  }
   emitExternalChange: (patch: Partial<AppConfig>) => void
   emitWorkspaceChange: (event: WorkspaceChangeEvent) => void
   getListenerCount: () => number
@@ -1295,20 +1293,6 @@ export function createMultiWindowWikiHarness(
     return createWindowInSession(defaultSession, options)
   }
 
-  const findSessionByMainWindowId = (mainWindowId?: number): HarnessSession | undefined => {
-    if (mainWindowId === undefined) return defaultSession
-    const matched = mainHandles.find((win) => win.windowId === mainWindowId)
-    return matched ? sessions.get(matched.sessionId) : undefined
-  }
-
-  const toWatchState = (target: HarnessSession): InMemoryWindowWatchState => ({
-    active: target.watchActive,
-    watchCalls: target.watchCalls,
-    unwatchCalls: target.unwatchCalls,
-    auxWatchCalls: target.auxWatchCalls,
-    auxUnwatchCalls: target.auxUnwatchCalls
-  })
-
   return {
     createWindow,
     getMainWindows: () => [...mainHandles],
@@ -1316,11 +1300,17 @@ export function createMultiWindowWikiHarness(
       if (mainWindowId === undefined) {
         return [...auxiliaryHandles]
       }
-      const session = findSessionByMainWindowId(mainWindowId)
+      const matched = mainHandles.find((win) => win.windowId === mainWindowId)
+      const session = matched ? sessions.get(matched.sessionId) : undefined
       return session ? [...session.auxiliaryHandles] : []
     },
-    getWatchState: (mainWindowId?: number) =>
-      toWatchState(findSessionByMainWindowId(mainWindowId) ?? defaultSession),
+    getWatchState: () => ({
+      active: defaultSession.watchActive,
+      watchCalls: defaultSession.watchCalls,
+      unwatchCalls: defaultSession.unwatchCalls,
+      auxWatchCalls: defaultSession.auxWatchCalls,
+      auxUnwatchCalls: defaultSession.auxUnwatchCalls
+    }),
     emitExternalChange(patch) {
       applyAndBroadcast({ ...state, ...patch, version: 1 })
     },
