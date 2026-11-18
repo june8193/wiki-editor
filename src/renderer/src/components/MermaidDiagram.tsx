@@ -112,8 +112,8 @@ export function MermaidDiagramView({
           tabIndex={0}
           aria-label="Mermaid 다이어그램 높이 조절"
           aria-orientation="horizontal"
-          aria-valuemin={viewport.minHeightPx}
-          aria-valuemax={viewport.maxHeightPx}
+          aria-valuemin={viewport.heightBounds.min}
+          aria-valuemax={viewport.heightBounds.max}
           aria-valuenow={viewport.effectiveHeightPx ?? viewport.autoViewportHeightPx ?? undefined}
           data-testid="mermaid-resize-handle"
           className={`mermaid-resize-handle${viewport.isResizingHeight ? ' is-dragging' : ''}`}

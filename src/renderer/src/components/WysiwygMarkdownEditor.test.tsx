@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import { buildWikiAssetUrl } from '@shared/assets'
 import { ImageTransferContext } from '../hooks/useEditorImageTransfer'
+import { installResizeObserverStub, mockElementBoundingRect } from '../test/resizeObserverStub'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import themeCss from '../styles/theme.css?raw'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
@@ -1188,18 +1189,7 @@ describe('WysiwygMarkdownEditor', () => {
     styleEl.textContent = themeCss
     document.head.appendChild(styleEl)
 
-    const OriginalResizeObserver = globalThis.ResizeObserver
-    const observerCallbacks: Array<() => void> = []
-    globalThis.ResizeObserver = class MockResizeObserver {
-      private callback: () => void
-      constructor(callback: ResizeObserverCallback) {
-        this.callback = () => callback([], this as unknown as ResizeObserver)
-        observerCallbacks.push(this.callback)
-      }
-      observe(): void {}
-      unobserve(): void {}
-      disconnect(): void {}
-    } as unknown as typeof ResizeObserver
+    const resizeObserver = installResizeObserverStub()
 
     try {
       const driver: MermaidDriver = {
@@ -1242,21 +1232,26 @@ describe('WysiwygMarkdownEditor', () => {
       expect(embeddedStyle.marginTop).toBe('0px')
       expect(embeddedStyle.marginBottom).toBe('0px')
 
+      // Toggling optional inline source open stays unified with zero inner border or duplicate margin/padding on <pre>
+      const toggleSourceBtn = within(header).getByRole('button', { name: '코드 편집' })
+      fireEvent.click(toggleSourceBtn)
+      const sourceWrapper = outerCard.querySelector('.mermaid-node-source-wrapper') as HTMLElement
+      const sourcePre = outerCard.querySelector('pre.mermaid-node-source') as HTMLElement
+      const sourceWrapperStyle = getComputedStyle(sourceWrapper)
+      const sourcePreStyle = getComputedStyle(sourcePre)
+      expect(sourceWrapper.style.display).toBe('')
+      expect(sourceWrapperStyle.borderBottomWidth).toBe('1px')
+      expect(sourcePreStyle.borderTopWidth).toBe('0px')
+      expect(sourcePreStyle.borderBottomWidth).toBe('0px')
+      expect(sourcePreStyle.marginTop).toBe('0px')
+      expect(sourcePreStyle.marginBottom).toBe('0px')
+      expect(sourcePreStyle.paddingTop).toBe('0px')
+      expect(sourcePreStyle.paddingLeft).toBe('0px')
+      fireEvent.click(within(header).getByRole('button', { name: '코드 숨기기' }))
+
       // Viewport has 12px padding (24px horizontal & 24px vertical); 424px outer rect -> 400px availableWidth, 74px auto height
-      vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue({
-        left: 0,
-        top: 0,
-        right: 424,
-        bottom: 74,
-        width: 424,
-        height: 74,
-        x: 0,
-        y: 0,
-        toJSON: () => ({})
-      })
-      act(() => {
-        observerCallbacks.forEach((cb) => cb())
-      })
+      mockElementBoundingRect(viewport, { width: 424, height: 74 })
+      resizeObserver.trigger()
 
       const resetViewBtn = within(header).getByRole('button', { name: '뷰 초기화' })
       const zoomInBtn = within(header).getByRole('button', { name: '확대' })
@@ -1299,7 +1294,7 @@ describe('WysiwygMarkdownEditor', () => {
       expect(resetViewBtn).toBeDisabled()
       expect(onChangeContent).not.toHaveBeenCalled()
     } finally {
-      globalThis.ResizeObserver = OriginalResizeObserver
+      resizeObserver.restore()
       styleEl.remove()
     }
   })

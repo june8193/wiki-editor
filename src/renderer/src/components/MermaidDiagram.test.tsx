@@ -6,52 +6,9 @@ import type { WikiApi } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
 import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import themeCss from '../styles/theme.css?raw'
+import { installResizeObserverStub, mockElementBoundingRect } from '../test/resizeObserverStub'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { MermaidDiagram } from './MermaidDiagram'
-
-function mockViewportRect(
-  viewport: HTMLElement,
-  { left = 0, top = 0, width, height }: { left?: number; top?: number; width: number; height: number }
-): void {
-  vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue({
-    left,
-    top,
-    right: left + width,
-    bottom: top + height,
-    width,
-    height,
-    x: left,
-    y: top,
-    toJSON: () => ({})
-  })
-}
-
-function installMockResizeObserver(): {
-  trigger: () => void
-  restore: () => void
-} {
-  const OriginalResizeObserver = globalThis.ResizeObserver
-  const observerCallbacks: Array<() => void> = []
-  globalThis.ResizeObserver = class MockResizeObserver {
-    constructor(callback: ResizeObserverCallback) {
-      observerCallbacks.push(() => callback([], this as unknown as ResizeObserver))
-    }
-    observe(): void {}
-    unobserve(): void {}
-    disconnect(): void {}
-  } as unknown as typeof ResizeObserver
-
-  return {
-    trigger: () => {
-      act(() => {
-        observerCallbacks.forEach((cb) => cb())
-      })
-    },
-    restore: () => {
-      globalThis.ResizeObserver = OriginalResizeObserver
-    }
-  }
-}
 
 describe('MermaidDiagram', () => {
   const originalWikiApi = (window as { wikiApi?: WikiApi }).wikiApi
@@ -1674,7 +1631,7 @@ describe('MermaidDiagram', () => {
     const viewport = await screen.findByTestId('mermaid-svg')
     const stage = within(viewport).getByTestId('mermaid-svg-stage')
 
-    mockViewportRect(viewport, { width: 400, height: 180 })
+    mockElementBoundingRect(viewport, { width: 400, height: 180 })
 
     expect(zoomOutBtn).toBeEnabled()
     expect(resetBtn).toBeEnabled()
@@ -1733,7 +1690,7 @@ describe('MermaidDiagram', () => {
     const stage = within(viewport).getByTestId('mermaid-svg-stage')
     const resetBtn = screen.getByRole('button', { name: '배율 초기화' })
 
-    mockViewportRect(viewport, { left: 100, top: 50, width: 400, height: 200 })
+    mockElementBoundingRect(viewport, { left: 100, top: 50, width: 400, height: 200 })
     // Viewport center is (300, 150)
 
     // Plain wheel without Ctrl/Meta -> does not preventDefault or zoom
@@ -1800,7 +1757,7 @@ describe('MermaidDiagram', () => {
     const stage = within(viewport).getByTestId('mermaid-svg-stage')
     const resetBtn = screen.getByRole('button', { name: '배율 초기화' })
 
-    mockViewportRect(viewport, { width: 320, height: 160 })
+    mockElementBoundingRect(viewport, { width: 320, height: 160 })
 
     fireEvent.mouseDown(viewport, { button: 0, clientX: 100, clientY: 80 })
     expect(viewport).toHaveClass('is-panning')
@@ -1849,7 +1806,7 @@ describe('MermaidDiagram', () => {
       const stage = within(viewport).getByTestId('mermaid-svg-stage')
       const handle = screen.getByTestId('mermaid-resize-handle')
 
-      mockViewportRect(viewport, { width: 400, height: 200 })
+      mockElementBoundingRect(viewport, { width: 400, height: 200 })
 
       expect(handle).toHaveAttribute('role', 'separator')
       expect(handle).toHaveAttribute('aria-orientation', 'horizontal')
@@ -1908,7 +1865,7 @@ describe('MermaidDiagram', () => {
   })
 
   it('computes dynamic [min(64, auto), max(1600, auto)] height bounds without first-1px jump on short (<120px) and giant (>1200px) diagrams', async () => {
-    const resizeObserver = installMockResizeObserver()
+    const resizeObserver = installResizeObserverStub()
 
     try {
       const driver: MermaidDriver = {
@@ -1932,7 +1889,7 @@ describe('MermaidDiagram', () => {
       const viewport = await screen.findByTestId('mermaid-svg')
       const handle = screen.getByTestId('mermaid-resize-handle')
 
-      mockViewportRect(viewport, { width: 400, height: 48 })
+      mockElementBoundingRect(viewport, { width: 400, height: 48 })
       resizeObserver.trigger()
 
       expect(handle).toHaveAttribute('aria-valuemin', '48')
@@ -1954,7 +1911,7 @@ describe('MermaidDiagram', () => {
       await waitFor(() => {
         expect(screen.getByTestId('mermaid-svg').innerHTML).toContain('200')
       })
-      mockViewportRect(viewport, { width: 400, height: 200 })
+      mockElementBoundingRect(viewport, { width: 400, height: 200 })
       resizeObserver.trigger()
       expect(handle).toHaveAttribute('aria-valuemin', '64')
       expect(handle).toHaveAttribute('aria-valuemax', '1600')
@@ -1966,7 +1923,7 @@ describe('MermaidDiagram', () => {
       await waitFor(() => {
         expect(screen.getByTestId('mermaid-svg').innerHTML).toContain('1800')
       })
-      mockViewportRect(viewport, { width: 400, height: 1800 })
+      mockElementBoundingRect(viewport, { width: 400, height: 1800 })
       resizeObserver.trigger()
 
       expect(handle).toHaveAttribute('aria-valuemin', '64')
@@ -1976,11 +1933,24 @@ describe('MermaidDiagram', () => {
       fireEvent.pointerDown(handle, { button: 0, clientY: 1800 })
       fireEvent.pointerMove(window, { clientY: 1799 })
       expect(viewport.style.height).toBe('1799px')
-      fireEvent.pointerMove(window, { clientY: 2100 })
-      expect(viewport.style.height).toBe('1800px')
       fireEvent.pointerMove(window, { clientY: 30 })
       expect(viewport.style.height).toBe('64px')
+      fireEvent.pointerMove(window, { clientY: 2100 })
+      expect(viewport.style.height).toBe('1800px')
       fireEvent.pointerUp(window)
+
+      // 4. Switching back to a medium diagram clamps displayed height to 1600px, and next step starts from clamped 1600px (not raw 1800px)
+      rerender(
+        <MermaidDiagram code={'graph TD\n  medium'} theme="light" renderer={renderer} debounceMs={0} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('mermaid-svg').innerHTML).toContain('200')
+      })
+      mockElementBoundingRect(viewport, { width: 400, height: 1600 })
+      resizeObserver.trigger()
+      expect(viewport.style.height).toBe('1600px')
+      fireEvent.keyDown(handle, { key: 'ArrowUp' })
+      expect(viewport.style.height).toBe('1576px')
     } finally {
       resizeObserver.restore()
     }
@@ -1999,7 +1969,7 @@ describe('MermaidDiagram', () => {
     const viewport = await screen.findByTestId('mermaid-svg')
     const handle = screen.getByTestId('mermaid-resize-handle')
 
-    mockViewportRect(viewport, { width: 400, height: 200 })
+    mockElementBoundingRect(viewport, { width: 400, height: 200 })
 
     // 1. pointerdown session (including browser-emitted trailing mousedown): ignores mousemove/mouseup
     fireEvent.pointerDown(handle, { button: 0, clientY: 200 })
@@ -2035,7 +2005,7 @@ describe('MermaidDiagram', () => {
   })
 
   it('applies Contain ratio-preserving SVG scaling, removes inline max-width on manual resize, caps at 100% width before expanding viewport, updates on ResizeObserver, and falls back safely without bounds', async () => {
-    const resizeObserver = installMockResizeObserver()
+    const resizeObserver = installResizeObserverStub()
 
     try {
       const driver: MermaidDriver = {
@@ -2071,7 +2041,7 @@ describe('MermaidDiagram', () => {
       const handle = screen.getByTestId('mermaid-resize-handle')
       const getSvg = () => viewport.querySelector('svg') as SVGSVGElement
 
-      mockViewportRect(viewport, { width: 400, height: 50 })
+      mockElementBoundingRect(viewport, { width: 400, height: 50 })
       resizeObserver.trigger()
 
       expect(getSvg().style.width).toBe('100px')
@@ -2093,7 +2063,7 @@ describe('MermaidDiagram', () => {
       fireEvent.pointerUp(window)
 
       // Container narrows to 200px -> ResizeObserver immediately updates fitted SVG to 200x100
-      mockViewportRect(viewport, { width: 200, height: 300 })
+      mockElementBoundingRect(viewport, { width: 200, height: 300 })
       resizeObserver.trigger()
       expect(getSvg().style.width).toBe('200px')
       expect(getSvg().style.height).toBe('100px')
@@ -2105,7 +2075,7 @@ describe('MermaidDiagram', () => {
       expect(getSvg().style.height).toBe('50px')
 
       // 2. Wide diagram (800x400) on 400px container -> auto fits down to 400x200
-      mockViewportRect(viewport, { width: 400, height: 200 })
+      mockElementBoundingRect(viewport, { width: 400, height: 200 })
       rerender(
         <MermaidDiagram code={'graph LR\n  wide'} theme="light" renderer={renderer} debounceMs={0} />
       )
@@ -2122,7 +2092,7 @@ describe('MermaidDiagram', () => {
       await waitFor(() => {
         expect(getSvg().getAttribute('viewBox')).toBe('0 0 200 200')
       })
-      mockViewportRect(viewport, { width: 400, height: 200 })
+      mockElementBoundingRect(viewport, { width: 400, height: 200 })
       resizeObserver.trigger()
       fireEvent.pointerDown(handle, { button: 0, clientY: 200 })
       fireEvent.pointerMove(window, { clientY: 100 })
@@ -2172,7 +2142,7 @@ describe('MermaidDiagram', () => {
 
       const viewport = await screen.findByTestId('mermaid-svg')
       const handle = screen.getByTestId('mermaid-resize-handle')
-      mockViewportRect(viewport, { width: 400, height: 200 })
+      mockElementBoundingRect(viewport, { width: 400, height: 200 })
 
       const handleStyle = getComputedStyle(handle)
       expect(handleStyle.position).toBe('absolute')
@@ -2258,7 +2228,7 @@ describe('MermaidDiagram', () => {
       const handle = screen.getByTestId('mermaid-resize-handle')
       const zoomInBtn = screen.getByRole('button', { name: '확대' })
       const resetZoomBtn = screen.getByRole('button', { name: '배율 초기화' })
-      mockViewportRect(viewport, { width: 400, height: 50 })
+      mockElementBoundingRect(viewport, { width: 400, height: 50 })
 
       // Identity state -> 뷰 초기화 disabled
       expect(resetViewBtn).toBeDisabled()

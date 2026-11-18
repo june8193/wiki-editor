@@ -2097,8 +2097,10 @@ body.is-resizing-mermaid * {
   background-color: var(--code-bg);
 }
 
+.wysiwyg-prosemirror .wysiwyg-mermaid-node .mermaid-node-source,
 .mermaid-node-source {
   margin: 0;
+  border: none;
   border-radius: 4px;
   background-color: transparent;
   padding: 0;
