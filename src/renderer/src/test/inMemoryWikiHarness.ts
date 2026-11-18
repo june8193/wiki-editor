@@ -31,6 +31,7 @@ import {
   clonePersistedWorkspaceState,
   createDefaultWorkspaceStateDocument,
   createEmptyPersistedWorkspaceLayout,
+  findWorkspaceStateInDocument,
   normalizeWorkspaceStateDocument,
   type PersistedWorkspaceState,
   type WorkspaceStateDocument
@@ -62,7 +63,6 @@ import {
   isNestedOrSameWorkspacePath,
   recordRecentWorkspace,
   removeFavoriteWorkspace,
-  resolveNormalizedWorkspacePath,
   toggleFavoriteWorkspace,
   type WorkspaceChangeEvent,
   type WorkspaceEntry,
@@ -436,6 +436,7 @@ export function createMultiWindowWikiHarness(
     let destroyed = false
     let closing = false
     let closePromptPending = false
+    let closeFlushEnabled = false
     let hasSyncedNonEmptyTabs = false
     const menuListeners = new Set<(command: AppMenuCommand) => void>()
     const bufferListeners = new Set<(event: SharedBufferHubEvent) => void>()
@@ -501,7 +502,10 @@ export function createMultiWindowWikiHarness(
 
     const requestCloseWindow = (): void => {
       if (destroyed || closing || closePromptPending) return
-      if (!hub.hasDirtyBuffersForWindowClose(role, windowId)) {
+      const shouldPromptOrFlush =
+        hub.hasDirtyBuffersForWindowClose(role, windowId) ||
+        (role === 'main' && closeFlushEnabled)
+      if (!shouldPromptOrFlush) {
         forceCloseWindow()
         return
       }
@@ -897,10 +901,7 @@ export function createMultiWindowWikiHarness(
           if (role !== 'main') {
             throw new Error('Only the main window can access workspace state')
           }
-          const normalizedRoot = resolveNormalizedWorkspacePath(rootPath)
-          if (!normalizedRoot) return null
-          const found = workspaceStateDoc.workspaces[getWorkspacePathKey(normalizedRoot)]
-          return found ? clonePersistedWorkspaceState(found) : null
+          return findWorkspaceStateInDocument(workspaceStateDoc, rootPath)
         },
         async save(rootPath, update) {
           if (role !== 'main') {
@@ -1079,6 +1080,11 @@ export function createMultiWindowWikiHarness(
           closePromptPending = false
           if (approved) {
             forceCloseWindow()
+          }
+        },
+        async setCloseFlushEnabled(enabled) {
+          if (!destroyed && role === 'main') {
+            closeFlushEnabled = Boolean(enabled)
           }
         }
       },

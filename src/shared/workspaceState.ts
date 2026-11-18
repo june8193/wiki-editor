@@ -258,12 +258,10 @@ function normalizePaneState(
       validTabs.push(normalized)
     }
   }
-  const tabs = dedupeTabStates(validTabs)
-  const activeCandidate = typeof raw.activeTabPath === 'string' ? raw.activeTabPath : null
-  return {
-    tabs,
-    activeTabPath: resolveActiveTabPath(tabs, activeCandidate)
-  }
+  return reconcilePaneState({
+    tabs: validTabs,
+    activeTabPath: typeof raw.activeTabPath === 'string' ? raw.activeTabPath : null
+  })
 }
 
 function reconcilePaneState(pane: PersistedWorkspacePaneState): PersistedWorkspacePaneState {
@@ -309,11 +307,13 @@ export function reconcilePersistedWorkspaceLayout(
   }
 
   if (layout.splitMode === 'single') {
-    const mergedTabs = dedupeTabStates([...primary.tabs, ...secondary.tabs])
-    return toSinglePaneLayout(splitRatio, {
-      tabs: mergedTabs,
-      activeTabPath: resolveActiveTabPath(mergedTabs, primary.activeTabPath)
-    })
+    return toSinglePaneLayout(
+      splitRatio,
+      reconcilePaneState({
+        tabs: [...primary.tabs, ...secondary.tabs],
+        activeTabPath: primary.activeTabPath
+      })
+    )
   }
 
   return {
@@ -442,6 +442,18 @@ export function validateWorkspaceStateUpdate(update: unknown): asserts update is
   if (update.layout !== undefined && !isPlainRecord(update.layout)) {
     throw new Error('Invalid layout: expected plain object')
   }
+}
+
+export function findWorkspaceStateInDocument(
+  doc: WorkspaceStateDocument,
+  rootPath: string
+): PersistedWorkspaceState | null {
+  const normalizedRoot = resolveNormalizedWorkspacePath(rootPath)
+  if (!normalizedRoot) {
+    return null
+  }
+  const found = doc.workspaces[getWorkspacePathKey(normalizedRoot)]
+  return found ? clonePersistedWorkspaceState(found) : null
 }
 
 export function validateWorkspaceStateSaveInput(

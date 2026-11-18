@@ -1,9 +1,8 @@
-import { getWorkspacePathKey, resolveNormalizedWorkspacePath } from '@shared/workspace'
 import {
   applyWorkspaceStateUpdate,
-  clonePersistedWorkspaceState,
   createDefaultWorkspaceStateDocument,
   DEFAULT_MAX_PERSISTED_WORKSPACES,
+  findWorkspaceStateInDocument,
   getCorruptWorkspaceStateRootReason,
   normalizeWorkspaceStateDocument,
   type PersistedWorkspaceState,
@@ -51,14 +50,8 @@ export class WorkspaceStateService {
   }
 
   async getWorkspaceState(rootPath: string): Promise<PersistedWorkspaceState | null> {
-    const normalizedRoot = resolveNormalizedWorkspacePath(rootPath)
-    if (!normalizedRoot) {
-      return null
-    }
-    const key = getWorkspacePathKey(normalizedRoot)
     const doc = await this.getDocument()
-    const found = doc.workspaces[key]
-    return found ? clonePersistedWorkspaceState(found) : null
+    return findWorkspaceStateInDocument(doc, rootPath)
   }
 
   saveWorkspaceState(

@@ -475,6 +475,17 @@ export function resolveNormalizedWorkspacePath(rawPath: string): string | null {
   return parseResolvedAbsolutePath(rawPath)?.formattedPath ?? null
 }
 
+function hasMatchingPathRoot(
+  left: NormalizedPathParts,
+  right: NormalizedPathParts
+): { matched: boolean; caseInsensitive: boolean } {
+  const caseInsensitive = left.caseInsensitive || right.caseInsensitive
+  const matched = caseInsensitive
+    ? left.rootPrefix.toLowerCase() === right.rootPrefix.toLowerCase()
+    : left.rootPrefix === right.rootPrefix
+  return { matched, caseInsensitive }
+}
+
 /**
  * Resolves `candidatePath` and verifies it is a strict lexical descendant of `rootPath`.
  * Returns `null` for relative paths, root-escaping `..` traversal, mismatched roots, or `rootPath` itself.
@@ -484,11 +495,8 @@ export function resolveWorkspaceChildPath(rootPath: string, candidatePath: strin
   const parsedCandidate = parseResolvedAbsolutePath(candidatePath)
   if (!parsedRoot || !parsedCandidate) return null
 
-  const caseInsensitive = parsedRoot.caseInsensitive || parsedCandidate.caseInsensitive
-  const sameRoot = caseInsensitive
-    ? parsedRoot.rootPrefix.toLowerCase() === parsedCandidate.rootPrefix.toLowerCase()
-    : parsedRoot.rootPrefix === parsedCandidate.rootPrefix
-  if (!sameRoot) {
+  const { matched, caseInsensitive } = hasMatchingPathRoot(parsedRoot, parsedCandidate)
+  if (!matched) {
     return null
   }
 
@@ -525,11 +533,8 @@ export function resolveRelativeWorkspacePath(
     return { ok: false, reason: 'outside-workspace' }
   }
 
-  const caseInsensitive = parsedRoot.caseInsensitive || parsedBase.caseInsensitive
-  const sameRoot = caseInsensitive
-    ? parsedRoot.rootPrefix.toLowerCase() === parsedBase.rootPrefix.toLowerCase()
-    : parsedRoot.rootPrefix === parsedBase.rootPrefix
-  if (!sameRoot) {
+  const { matched, caseInsensitive } = hasMatchingPathRoot(parsedRoot, parsedBase)
+  if (!matched) {
     return { ok: false, reason: 'outside-workspace' }
   }
 

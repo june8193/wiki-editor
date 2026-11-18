@@ -162,7 +162,8 @@ export const WINDOW_IPC_CHANNELS = {
   dragStateChanged: 'window:drag-state-changed',
   closeCurrent: 'window:close-current',
   closeRequested: 'window:close-requested',
-  resolveCloseRequest: 'window:resolve-close-request'
+  resolveCloseRequest: 'window:resolve-close-request',
+  setCloseFlushEnabled: 'window:set-close-flush-enabled'
 } as const
 export interface WikiConfigApi {
   get(): Promise<AppConfig>
@@ -278,6 +279,7 @@ export interface WikiWindowApi {
   closeCurrent(): Promise<void>
   onCloseRequested(listener: () => void): () => void
   resolveCloseRequest(approved: boolean): Promise<void>
+  setCloseFlushEnabled?(enabled: boolean): Promise<void>
 }
 
 export interface WikiWorkspaceStateApi {

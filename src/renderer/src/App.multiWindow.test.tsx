@@ -3246,4 +3246,44 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     expect(auxGetSpy).not.toHaveBeenCalled()
     expect(auxSaveSpy).not.toHaveBeenCalled()
   })
+
+  it('flushes pending expandedDirs immediately on clean main window close without showing confirm dialog', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, recentWorkspaces: ['C:\\wiki\\docs'] },
+      {
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'note.md': '# Note',
+            'sub/deep.md': '# Deep'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainSaveSpy = vi.spyOn(mainWin.api.workspaceState!, 'save')
+
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    const explorer = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    expect(await within(explorer).findByText('note.md')).toBeInTheDocument()
+
+    await user.click(within(explorer).getByText('sub'))
+    expect(await within(explorer).findByText('deep.md')).toBeInTheDocument()
+    expect(mainSaveSpy).not.toHaveBeenCalled()
+
+    // Clean close (no dirty buffers) -> no confirm dialog, yet flushes expandedDirs before closing
+    act(() => {
+      mainWin.requestClose()
+    })
+    expect(within(mainRendered.container).queryByRole('alertdialog')).not.toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(mainWin.isClosed()).toBe(true)
+    })
+    expect(mainSaveSpy).toHaveBeenCalledTimes(1)
+    const saved = await mainWin.api.workspaceState!.get('C:/wiki/docs')
+    expect(saved?.expandedDirs).toEqual(['C:\\wiki\\docs\\sub'])
+  })
 })

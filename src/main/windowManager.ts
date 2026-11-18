@@ -77,8 +77,12 @@ interface WindowRecord {
   hasSyncedNonEmptyTabs: boolean
   closing: boolean
   closePromptPending: boolean
+  closeFlushEnabled: boolean
+  cleanCloseFlushTimer?: ReturnType<typeof setTimeout>
   cleanupListeners?: () => void
 }
+
+const CLEAN_CLOSE_FLUSH_TIMEOUT_MS = 1000
 
 function getNumericSenderId(sender: unknown): number | undefined {
   if (!sender || typeof sender !== 'object') return undefined
@@ -156,7 +160,8 @@ export class WindowManager {
       initialTabs: clonedTabs,
       hasSyncedNonEmptyTabs: false,
       closing: false,
-      closePromptPending: false
+      closePromptPending: false,
+      closeFlushEnabled: false
     }
 
     this.windowsByWebContentsId.set(webContentsId, record)
@@ -191,6 +196,7 @@ export class WindowManager {
     }
 
     win.once('closed', () => {
+      this.clearCleanCloseFlushTimer(record)
       record.cleanupListeners?.()
       this.dragCoordinator.clearForWindow(webContentsId)
       this.windowsByWebContentsId.delete(webContentsId)
@@ -379,13 +385,28 @@ export class WindowManager {
     }
   }
 
+  private clearCleanCloseFlushTimer(record: WindowRecord): void {
+    if (record.cleanCloseFlushTimer !== undefined) {
+      clearTimeout(record.cleanCloseFlushTimer)
+      record.cleanCloseFlushTimer = undefined
+    }
+  }
+
+  setCloseFlushEnabled(sender: unknown, enabled: boolean): void {
+    const record = this.resolveRecordFromSender(sender)
+    if (!record || record.window.isDestroyed() || record.role !== 'main') return
+    record.closeFlushEnabled = Boolean(enabled)
+  }
+
   private handleWindowClose(record: WindowRecord, event: WindowCloseEventLike): void {
     if (this.disposed || record.closing) return
     if (record.closePromptPending) {
       event.preventDefault()
       return
     }
-    if (!this.bufferHub.hasDirtyBuffersForWindowClose(record.role, record.webContentsId)) {
+    const hasDirty = this.bufferHub.hasDirtyBuffersForWindowClose(record.role, record.webContentsId)
+    const needsCloseFlush = record.role === 'main' && record.closeFlushEnabled
+    if (!hasDirty && !needsCloseFlush) {
       if (record.role === 'main') {
         record.closing = true
         this.closeAllAuxiliaryWindows()
@@ -395,6 +416,17 @@ export class WindowManager {
 
     event.preventDefault()
     record.closePromptPending = true
+    if (!hasDirty && needsCloseFlush) {
+      this.clearCleanCloseFlushTimer(record)
+      record.cleanCloseFlushTimer = setTimeout(() => {
+        record.cleanCloseFlushTimer = undefined
+        if (record.closePromptPending && !record.window.isDestroyed()) {
+          record.closePromptPending = false
+          this.closeAllAuxiliaryWindows()
+          this.closeRecord(record)
+        }
+      }, CLEAN_CLOSE_FLUSH_TIMEOUT_MS)
+    }
     if (!record.window.webContents.isDestroyed()) {
       record.window.webContents.send(WINDOW_IPC_CHANNELS.closeRequested, undefined)
     }
@@ -409,6 +441,7 @@ export class WindowManager {
   }
 
   private closeRecord(record: WindowRecord): void {
+    this.clearCleanCloseFlushTimer(record)
     if (record.closing || record.window.isDestroyed()) return
     record.closePromptPending = false
     record.closing = true
@@ -424,6 +457,7 @@ export class WindowManager {
   resolveCloseRequest(sender: unknown, approved: boolean): void {
     const record = this.resolveRecordFromSender(sender)
     if (!record || record.window.isDestroyed() || !record.closePromptPending) return
+    this.clearCleanCloseFlushTimer(record)
     record.closePromptPending = false
     if (!approved) return
     if (record.role === 'main') {
@@ -511,6 +545,7 @@ export class WindowManager {
     this.disposed = true
     this.unsubscribeHub()
     for (const record of this.windowsByWebContentsId.values()) {
+      this.clearCleanCloseFlushTimer(record)
       record.cleanupListeners?.()
     }
     this.dragCoordinator.dispose()

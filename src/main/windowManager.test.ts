@@ -1501,4 +1501,26 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       mainWin.sentMessages.some((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
     ).toBe(false)
   })
+
+  it('waits for close flush handshake on clean main window close when close-flush is enabled', async () => {
+    await writeFile(join(workspaceDir, 'clean.md'), '# Clean', 'utf-8')
+    const mainWin = windowManager.createMainWindow() as FakeWindowInstance
+    await ipcHarness.invokeFrom(mainWin.webContents, WORKSPACE_IPC_CHANNELS.open, workspaceDir)
+    await ipcHarness.invokeFrom(
+      mainWin.webContents,
+      WINDOW_IPC_CHANNELS.setCloseFlushEnabled,
+      true
+    )
+
+    mainWin.sentMessages.length = 0
+    mainWin.simulateUserClose()
+
+    expect(mainWin.isDestroyed()).toBe(false)
+    expect(
+      mainWin.sentMessages.filter((msg) => msg.channel === WINDOW_IPC_CHANNELS.closeRequested)
+    ).toHaveLength(1)
+
+    await ipcHarness.invokeFrom(mainWin.webContents, WINDOW_IPC_CHANNELS.resolveCloseRequest, true)
+    expect(mainWin.isDestroyed()).toBe(true)
+  })
 })

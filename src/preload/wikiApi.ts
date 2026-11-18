@@ -332,7 +332,9 @@ export function createWikiApi(
           listener()
         ),
       resolveCloseRequest: (approved) =>
-        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.resolveCloseRequest, approved) as Promise<void>
+        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.resolveCloseRequest, approved) as Promise<void>,
+      setCloseFlushEnabled: (enabled) =>
+        ipcRenderer.invoke(WINDOW_IPC_CHANNELS.setCloseFlushEnabled, enabled) as Promise<void>
     },
     log: {
       write: (payload) => ipcRenderer.invoke(LOG_IPC_CHANNELS.write, payload) as Promise<void>

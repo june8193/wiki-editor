@@ -38,9 +38,15 @@ export function useWindowCloseGuard({
 
   const activeCancelRef = useRef<(() => void) | null>(null)
 
+  const hasCloseFlush = Boolean(onBeforeApproveClose)
+
   useEffect(() => {
     const windowApi = wikiApi.window
     if (!windowApi) return
+
+    if (hasCloseFlush) {
+      void windowApi.setCloseFlushEnabled?.(true).catch(() => undefined)
+    }
 
     const resolveApprovedClose = (): void => {
       void Promise.resolve(callbacksRef.current.onBeforeApproveClose?.())
@@ -79,6 +85,9 @@ export function useWindowCloseGuard({
     return () => {
       activeCancelRef.current?.()
       unsubscribe()
+      if (hasCloseFlush) {
+        void windowApi.setCloseFlushEnabled?.(false).catch(() => undefined)
+      }
     }
-  }, [confirmUnsavedChanges, wikiApi])
+  }, [confirmUnsavedChanges, hasCloseFlush, wikiApi])
 }

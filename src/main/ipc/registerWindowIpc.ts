@@ -89,6 +89,12 @@ export function registerWindowIpc({
       (event, approved) => {
         windowManager.resolveCloseRequest(resolveSenderWebContents(event), Boolean(approved))
       }
+    ],
+    [
+      WINDOW_IPC_CHANNELS.setCloseFlushEnabled,
+      (event, enabled) => {
+        windowManager.setCloseFlushEnabled(resolveSenderWebContents(event), Boolean(enabled))
+      }
     ]
   ]
 

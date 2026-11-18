@@ -394,6 +394,7 @@ describe('createWikiApi', () => {
     })
     await auxApi.window.closeCurrent()
     await auxApi.window.resolveCloseRequest(false)
+    await auxApi.window.setCloseFlushEnabled?.(true)
 
     let closeRequestCount = 0
     const unsubscribeCloseRequested = auxApi.window.onCloseRequested(() => {
@@ -450,7 +451,8 @@ describe('createWikiApi', () => {
         ]
       },
       { channel: WINDOW_IPC_CHANNELS.closeCurrent, args: [] },
-      { channel: WINDOW_IPC_CHANNELS.resolveCloseRequest, args: [false] }
+      { channel: WINDOW_IPC_CHANNELS.resolveCloseRequest, args: [false] },
+      { channel: WINDOW_IPC_CHANNELS.setCloseFlushEnabled, args: [true] }
     ])
   })
 
