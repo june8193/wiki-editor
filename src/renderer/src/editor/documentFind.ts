@@ -21,6 +21,23 @@ export interface DocumentFindMatchResult {
   errorMessage: string | null
 }
 
+export interface DocumentFindKeyboardEvent extends KeyboardEventLike {
+  keyCode?: number
+  nativeEvent?: { isComposing?: boolean }
+  preventDefault?: () => void
+  stopPropagation?: () => void
+}
+
+export interface FindBarKeyHandlers {
+  onNextMatch: () => void
+  onPreviousMatch: () => void
+  onClose: () => void
+}
+
+function isEventComposing(event: DocumentFindKeyboardEvent): boolean {
+  return Boolean(event.isComposing || event.nativeEvent?.isComposing || event.keyCode === 229)
+}
+
 /**
  * Creates a fresh default find bar state for an editor pane or standalone document editor.
  */
@@ -30,6 +47,69 @@ export function createDefaultDocumentFindState(): DocumentFindState {
     query: '',
     options: { ...DEFAULT_SEARCH_MATCH_OPTIONS },
     focusRequest: null
+  }
+}
+
+/**
+ * Applies an open-find transition, optionally replacing the query from a single-line selection.
+ */
+export function applyOpenDocumentFind(
+  state: DocumentFindState,
+  focusNonce: number,
+  initialQuery?: string | null
+): DocumentFindState {
+  return {
+    ...state,
+    isOpen: true,
+    query: initialQuery !== null && initialQuery !== undefined ? initialQuery : state.query,
+    focusRequest: { nonce: focusNonce, selectAll: true }
+  }
+}
+
+/**
+ * Toggles Find Bar open state while assigning a focus-and-select request when opening.
+ */
+export function applyToggleDocumentFind(
+  state: DocumentFindState,
+  focusNonce: number
+): DocumentFindState {
+  return state.isOpen
+    ? { ...state, isOpen: false }
+    : { ...state, isOpen: true, focusRequest: { nonce: focusNonce, selectAll: true } }
+}
+
+/**
+ * Closes the Find Bar while preserving the current query and match options.
+ */
+export function applyCloseDocumentFind(state: DocumentFindState): DocumentFindState {
+  if (!state.isOpen) return state
+  return { ...state, isOpen: false }
+}
+
+/**
+ * Updates the active find query when it differs from the current query.
+ */
+export function applyQueryDocumentFind(
+  state: DocumentFindState,
+  nextQuery: string
+): DocumentFindState {
+  if (state.query === nextQuery) return state
+  return { ...state, query: nextQuery }
+}
+
+/**
+ * Toggles a single find match option flag (`caseSensitive`, `wholeWord`, or `useRegex`).
+ */
+export function applyToggleOptionDocumentFind(
+  state: DocumentFindState,
+  optionKey: keyof SearchMatchOptions
+): DocumentFindState {
+  return {
+    ...state,
+    options: {
+      ...state.options,
+      [optionKey]: !state.options[optionKey]
+    }
   }
 }
 
@@ -119,12 +199,12 @@ export function readRawEditorSingleLineSelection(view: EditorView | null): strin
 /**
  * Returns true when a keyboard event matches the in-document find shortcut (`Ctrl+F` / `Cmd+F` without Shift/Alt).
  */
-export function isDocumentFindShortcut(event: KeyboardEventLike): boolean {
+export function isDocumentFindShortcut(event: DocumentFindKeyboardEvent): boolean {
   return (
     (event.ctrlKey || event.metaKey) &&
     !event.shiftKey &&
     !event.altKey &&
-    !event.isComposing &&
+    !isEventComposing(event) &&
     event.key.toLowerCase() === 'f'
   )
 }
@@ -133,10 +213,10 @@ export function isDocumentFindShortcut(event: KeyboardEventLike): boolean {
  * Resolves Find Bar navigation/close shortcuts (`Enter`, `Shift+Enter`, `F3`, `Shift+F3`, `Escape`).
  */
 export function resolveFindBarKeyAction(
-  event: KeyboardEventLike,
+  event: DocumentFindKeyboardEvent,
   options: { allowEnter?: boolean } = {}
 ): FindBarKeyAction | null {
-  if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) {
+  if (event.ctrlKey || event.metaKey || event.altKey || isEventComposing(event)) {
     return null
   }
   if (event.key === 'Escape') {
@@ -149,4 +229,29 @@ export function resolveFindBarKeyAction(
     return event.shiftKey ? 'prev' : 'next'
   }
   return null
+}
+
+/**
+ * Resolves a Find Bar key action from a DOM or React keyboard event and dispatches
+ * the matching handler while suppressing default browser handling when handled.
+ */
+export function dispatchFindBarKeyAction(
+  event: DocumentFindKeyboardEvent,
+  options: { allowEnter?: boolean },
+  handlers: FindBarKeyHandlers
+): boolean {
+  const action = resolveFindBarKeyAction(event, options)
+  if (!action) {
+    return false
+  }
+  event.preventDefault?.()
+  event.stopPropagation?.()
+  if (action === 'next') {
+    handlers.onNextMatch()
+  } else if (action === 'prev') {
+    handlers.onPreviousMatch()
+  } else {
+    handlers.onClose()
+  }
+  return true
 }

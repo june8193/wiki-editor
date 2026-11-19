@@ -338,7 +338,7 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
     expect(container.querySelectorAll('.cm-search-match')).toHaveLength(0)
   })
 
-  it('centers the Raw viewport on the active match when navigating and avoids scroll jump on document edits', async () => {
+  it('centers the Raw scroll area on the active match when navigating and avoids scroll jump on document edits', async () => {
     const user = userEvent.setup()
     const lines = Array.from({ length: 60 }, (_, idx) =>
       idx === 1 || idx === 49 ? `Line ${idx + 1} TargetMatch` : `Line ${idx + 1} filler`
@@ -377,7 +377,7 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
     await user.type(findInput, 'TargetMatch')
     expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
 
-    // Navigate to 2nd match on line 50 -> scrolls Raw viewport to center line 50
+    // Navigate to 2nd match on line 50 -> scrolls Raw editor to center line 50
     fireEvent.keyDown(findInput, { key: 'Enter' })
     expect(within(findBar).getByText('2 / 2')).toBeInTheDocument()
 

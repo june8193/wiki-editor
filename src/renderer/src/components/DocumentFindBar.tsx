@@ -1,7 +1,7 @@
 import { type KeyboardEvent, useEffect, useRef } from 'react'
 import { ChevronDown, ChevronUp, X } from 'lucide-react'
 import type { SearchMatchOptions } from '@shared/search'
-import { resolveFindBarKeyAction } from '../editor/documentFind'
+import { dispatchFindBarKeyAction } from '../editor/documentFind'
 import { SEARCH_OPTION_BUTTONS, type SearchFocusRequest } from '../utils/workspaceSearch'
 
 export interface DocumentFindBarProps {
@@ -56,53 +56,14 @@ export function DocumentFindBar({
     }
   }, [focusRequest, onConsumeFocusNonce])
 
-  const dispatchAction = (
-    event: KeyboardEvent<HTMLElement>,
-    action: 'next' | 'prev' | 'close' | null
-  ): boolean => {
-    if (!action) return false
-    event.preventDefault()
-    event.stopPropagation()
-    if (action === 'next') {
-      onNextMatch()
-    } else if (action === 'prev') {
-      onPreviousMatch()
-    } else {
-      onClose()
-    }
-    return true
-  }
+  const keyHandlers = { onNextMatch, onPreviousMatch, onClose }
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return
-    const action = resolveFindBarKeyAction(
-      {
-        key: event.key,
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-        shiftKey: event.shiftKey,
-        altKey: event.altKey,
-        isComposing: event.nativeEvent.isComposing
-      },
-      { allowEnter: true }
-    )
-    dispatchAction(event, action)
+    dispatchFindBarKeyAction(event, { allowEnter: true }, keyHandlers)
   }
 
   const handleContainerKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return
-    const action = resolveFindBarKeyAction(
-      {
-        key: event.key,
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-        shiftKey: event.shiftKey,
-        altKey: event.altKey,
-        isComposing: event.nativeEvent.isComposing
-      },
-      { allowEnter: false }
-    )
-    dispatchAction(event, action)
+    dispatchFindBarKeyAction(event, { allowEnter: false }, keyHandlers)
   }
 
   const countText =

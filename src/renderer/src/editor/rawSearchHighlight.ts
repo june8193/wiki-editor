@@ -1,6 +1,5 @@
 import {
   EditorSelection,
-  type Extension,
   RangeSetBuilder,
   StateEffect,
   StateField,
@@ -70,23 +69,8 @@ export const rawSearchHighlightField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field)
 })
 
-export const rawSearchTheme: Extension = EditorView.baseTheme({
-  '.cm-search-match': {
-    backgroundColor: 'var(--search-match-bg)',
-    borderRadius: '2px'
-  },
-  '.cm-search-match.cm-search-match-active': {
-    backgroundColor: 'var(--search-match-active-bg)',
-    outline: '1px solid var(--search-match-active-outline)'
-  }
-})
-
-export function createRawSearchExtensions(): Extension {
-  return [rawSearchHighlightField, rawSearchTheme]
-}
-
 /**
- * Applies search match decorations to a CodeMirror 6 view and optionally centers the active match in the viewport.
+ * Applies search match decorations to a CodeMirror 6 view and optionally centers the active match in the scroll area.
  */
 export function syncRawSearchHighlights(
   view: EditorView,

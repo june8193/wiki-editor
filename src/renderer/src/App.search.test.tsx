@@ -839,7 +839,7 @@ describe('In-Document Find Bar Pane State & Integration (<App />)', () => {
     expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
   })
 
-  it('maintains independent Find Bar states for primary and secondary split panes', async () => {
+  it('maintains independent Find Bar states for primary and secondary editing areas', async () => {
     const user = userEvent.setup()
     const { api, emitMenuCommand } = createInMemoryWikiApi(
       { autoSave: false, theme: 'light' },

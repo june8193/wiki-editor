@@ -1,26 +1,7 @@
-import {
-  KeyboardEvent as ReactKeyboardEvent,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState
-} from 'react'
+import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef } from 'react'
 import { Search } from 'lucide-react'
 import type { ThemeMode } from '@shared/config'
-import type { SearchMatchOptions } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
-import {
-  clampActiveMatchIndex,
-  createDefaultDocumentFindState,
-  type DocumentFindState,
-  findTextMatchesInDocument,
-  isDocumentFindShortcut,
-  readRawEditorSingleLineSelection,
-  resolveFindBarKeyAction,
-  stepActiveMatchIndex
-} from '../editor/documentFind'
 import {
   getRawEditorLanguage,
   isImageDocument,
@@ -36,6 +17,10 @@ import type {
   HeadingScrollSpySample,
   OutlineScrollRequest
 } from '../editor/outlineScrollSpy'
+import {
+  type DocumentEditorFindControl,
+  useDocumentEditorFind
+} from '../hooks/useDocumentEditorFind'
 import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
 import {
   DEFAULT_SPLIT_RATIO,
@@ -52,16 +37,7 @@ import { RawMarkdownEditor } from './RawMarkdownEditor'
 import { SplitSplitter } from './SplitSplitter'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
 
-export interface DocumentEditorFindControl {
-  state: DocumentFindState
-  onOpen: (initialQuery?: string | null) => void
-  onToggle: () => void
-  onClose: () => void
-  onChangeQuery: (query: string) => void
-  onToggleOption: (optionKey: keyof SearchMatchOptions) => void
-  onRegisterSelectionReader?: (reader: (() => string | null) | null) => void
-  onConsumeFocusNonce?: (nonce: number) => boolean
-}
+export type { DocumentEditorFindControl }
 
 interface DocumentEditorProps {
   document: DocumentBuffer
@@ -130,10 +106,6 @@ export function DocumentEditor({
     : null
   const editorBodyRef = useRef<HTMLDivElement | null>(null)
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
-  const localFocusNonceRef = useRef(0)
-  const [localFindState, setLocalFindState] = useState<DocumentFindState>(
-    createDefaultDocumentFindState
-  )
   const {
     rawEditorViewRef,
     splitPreviewContainerRef,
@@ -145,252 +117,14 @@ export function DocumentEditor({
     onUpdateViewState
   })
 
-  const effectiveFindState = findControl?.state ?? localFindState
-
-  const openFind = useCallback(
-    (initialQuery?: string | null): void => {
-      if (findControl) {
-        findControl.onOpen(initialQuery)
-        return
-      }
-      localFocusNonceRef.current += 1
-      const nonce = localFocusNonceRef.current
-      setLocalFindState((prev) => ({
-        ...prev,
-        isOpen: true,
-        query: initialQuery !== null && initialQuery !== undefined ? initialQuery : prev.query,
-        focusRequest: { nonce, selectAll: true }
-      }))
-    },
-    [findControl]
-  )
-
-  const toggleFind = useCallback((): void => {
-    if (findControl) {
-      findControl.onToggle()
-      return
-    }
-    localFocusNonceRef.current += 1
-    const nonce = localFocusNonceRef.current
-    setLocalFindState((prev) =>
-      prev.isOpen
-        ? { ...prev, isOpen: false }
-        : { ...prev, isOpen: true, focusRequest: { nonce, selectAll: true } }
-    )
-  }, [findControl])
-
-  const focusActiveEditorBody = useCallback((): void => {
-    if (effectiveMode === 'raw' || effectiveMode === 'split') {
-      rawEditorViewRef.current?.focus()
-      return
-    }
-    const target = editorBodyRef.current?.querySelector<HTMLElement>('[data-testid="document-editor"]')
-    target?.focus()
-  }, [effectiveMode, rawEditorViewRef])
-
-  const closeFind = useCallback((): void => {
-    if (findControl) {
-      findControl.onClose()
-    } else {
-      setLocalFindState((prev) => (prev.isOpen ? { ...prev, isOpen: false } : prev))
-    }
-    focusActiveEditorBody()
-  }, [findControl, focusActiveEditorBody])
-
-  const changeFindQuery = useCallback(
-    (nextQuery: string): void => {
-      if (findControl) {
-        findControl.onChangeQuery(nextQuery)
-        return
-      }
-      setLocalFindState((prev) => (prev.query === nextQuery ? prev : { ...prev, query: nextQuery }))
-    },
-    [findControl]
-  )
-
-  const toggleFindOption = useCallback(
-    (optionKey: keyof SearchMatchOptions): void => {
-      if (findControl) {
-        findControl.onToggleOption(optionKey)
-        return
-      }
-      setLocalFindState((prev) => ({
-        ...prev,
-        options: {
-          ...prev.options,
-          [optionKey]: !prev.options[optionKey]
-        }
-      }))
-    },
-    [findControl]
-  )
-
-  const readSingleLineSelection = useCallback((): string | null => {
-    if (isImage) return null
-    if (effectiveMode === 'raw' || effectiveMode === 'split') {
-      return readRawEditorSingleLineSelection(rawEditorViewRef.current)
-    }
-    return null
-  }, [effectiveMode, isImage, rawEditorViewRef])
-
-  const registerSelectionReader = findControl?.onRegisterSelectionReader
-  useEffect(() => {
-    if (!registerSelectionReader) return
-    registerSelectionReader(readSingleLineSelection)
-    return () => {
-      registerSelectionReader(null)
-    }
-  }, [readSingleLineSelection, registerSelectionReader])
-
-  const isFindActive = !isImage && effectiveFindState.isOpen
-  const isRawFindMode = isFindActive && (effectiveMode === 'raw' || effectiveMode === 'split')
-  const rawFindResult = useMemo(
-    () =>
-      isRawFindMode
-        ? findTextMatchesInDocument(
-            activeDoc.content,
-            effectiveFindState.query,
-            effectiveFindState.options
-          )
-        : { matches: [], errorMessage: null },
-    [activeDoc.content, effectiveFindState.options, effectiveFindState.query, isRawFindMode]
-  )
-
-  const findMatches = rawFindResult.matches
-  const findMatchCount = findMatches.length
-  const findErrorMessage = rawFindResult.errorMessage
-
-  const [matchCursor, setMatchCursor] = useState<{
-    index: number
-    scrollNonce: number
-    wasOpen: boolean
-    query: string
-    options: SearchMatchOptions
-    mode: EditorMode
-  }>(() => ({
-    index: isFindActive && findMatchCount > 0 ? 0 : -1,
-    scrollNonce: 0,
-    wasOpen: isFindActive,
-    query: effectiveFindState.query,
-    options: effectiveFindState.options,
-    mode: effectiveMode
-  }))
-
-  const findCriteriaChanged =
-    matchCursor.wasOpen !== isFindActive ||
-    matchCursor.query !== effectiveFindState.query ||
-    matchCursor.options !== effectiveFindState.options ||
-    matchCursor.mode !== effectiveMode
-
-  const resolvedActiveMatchIndex = !isFindActive
-    ? -1
-    : findCriteriaChanged
-      ? findMatchCount > 0
-        ? 0
-        : -1
-      : clampActiveMatchIndex(matchCursor.index, findMatchCount)
-
-  useLayoutEffect(() => {
-    const queryOrOptionsOrOpenChanged =
-      !matchCursor.wasOpen && isFindActive
-        ? true
-        : isFindActive &&
-          (matchCursor.query !== effectiveFindState.query ||
-            matchCursor.options !== effectiveFindState.options)
-    const modeChanged = matchCursor.mode !== effectiveMode
-    const closedNow = matchCursor.wasOpen && !isFindActive
-
-    if (queryOrOptionsOrOpenChanged) {
-      setMatchCursor((prev) => ({
-        index: findMatchCount > 0 ? 0 : -1,
-        scrollNonce: findMatchCount > 0 ? prev.scrollNonce + 1 : prev.scrollNonce,
-        wasOpen: isFindActive,
-        query: effectiveFindState.query,
-        options: effectiveFindState.options,
-        mode: effectiveMode
-      }))
-      return
-    }
-
-    if (closedNow) {
-      setMatchCursor((prev) => ({
-        ...prev,
-        index: -1,
-        wasOpen: false,
-        query: effectiveFindState.query,
-        options: effectiveFindState.options,
-        mode: effectiveMode
-      }))
-      return
-    }
-
-    if (modeChanged || resolvedActiveMatchIndex !== matchCursor.index) {
-      setMatchCursor((prev) => ({
-        ...prev,
-        index: resolvedActiveMatchIndex,
-        wasOpen: isFindActive,
-        query: effectiveFindState.query,
-        options: effectiveFindState.options,
-        mode: effectiveMode
-      }))
-    }
-  }, [
-    effectiveFindState.options,
-    effectiveFindState.query,
+  const docFind = useDocumentEditorFind({
+    content: activeDoc.content,
     effectiveMode,
-    findMatchCount,
-    isFindActive,
-    matchCursor.index,
-    matchCursor.mode,
-    matchCursor.options,
-    matchCursor.query,
-    matchCursor.wasOpen,
-    resolvedActiveMatchIndex
-  ])
-
-  const stepActiveMatch = useCallback(
-    (direction: 'next' | 'prev'): void => {
-      if (!isFindActive || findMatchCount === 0) return
-      const nextIndex = stepActiveMatchIndex(resolvedActiveMatchIndex, findMatchCount, direction)
-      setMatchCursor((prev) => ({
-        index: nextIndex,
-        scrollNonce: prev.scrollNonce + 1,
-        wasOpen: isFindActive,
-        query: effectiveFindState.query,
-        options: effectiveFindState.options,
-        mode: effectiveMode
-      }))
-    },
-    [
-      effectiveFindState.options,
-      effectiveFindState.query,
-      effectiveMode,
-      findMatchCount,
-      isFindActive,
-      resolvedActiveMatchIndex
-    ]
-  )
-
-  const handleNextMatch = useCallback((): void => {
-    stepActiveMatch('next')
-  }, [stepActiveMatch])
-
-  const handlePreviousMatch = useCallback((): void => {
-    stepActiveMatch('prev')
-  }, [stepActiveMatch])
-
-  const rawFindHighlight = useMemo(
-    () =>
-      isRawFindMode
-        ? {
-            isActive: true,
-            matches: findMatches,
-            activeIndex: resolvedActiveMatchIndex,
-            scrollNonce: matchCursor.scrollNonce
-          }
-        : null,
-    [findMatches, isRawFindMode, matchCursor.scrollNonce, resolvedActiveMatchIndex]
-  )
+    isImage,
+    findControl,
+    rawEditorViewRef,
+    editorBodyRef
+  })
 
   const handleSplitRatioChange = useCallback(
     (nextRatio: number): void => {
@@ -452,50 +186,7 @@ export function DocumentEditor({
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (isShortcutDisabled) return
-
-    if (
-      isDocumentFindShortcut({
-        key: event.key,
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-        shiftKey: event.shiftKey,
-        altKey: event.altKey,
-        isComposing: event.nativeEvent.isComposing
-      })
-    ) {
-      event.preventDefault()
-      event.stopPropagation()
-      if (!isImage) {
-        openFind(readSingleLineSelection())
-      }
-      return
-    }
-
-    if (isFindActive && !event.defaultPrevented) {
-      const findAction = resolveFindBarKeyAction(
-        {
-          key: event.key,
-          ctrlKey: event.ctrlKey,
-          metaKey: event.metaKey,
-          shiftKey: event.shiftKey,
-          altKey: event.altKey,
-          isComposing: event.nativeEvent.isComposing
-        },
-        { allowEnter: false }
-      )
-      if (findAction) {
-        event.preventDefault()
-        event.stopPropagation()
-        if (findAction === 'next') {
-          handleNextMatch()
-        } else if (findAction === 'prev') {
-          handlePreviousMatch()
-        } else {
-          closeFind()
-        }
-        return
-      }
-    }
+    if (docFind.handleEditorFindKeyDown(event)) return
 
     const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes, isImage)
     if (!shortcut) return
@@ -539,7 +230,7 @@ export function DocumentEditor({
             ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
             : null
         }
-        findHighlight={rawFindHighlight}
+        findHighlight={docFind.rawFindHighlight}
         isActive={isActive}
         editorViewRef={rawEditorViewRef}
         onChangeContent={onChangeContent}
@@ -606,16 +297,12 @@ export function DocumentEditor({
         <div className="editor-header-actions">
           <button
             type="button"
-            className={`icon-btn editor-find-btn${effectiveFindState.isOpen && !isImage ? ' is-active' : ''}`}
+            className={`icon-btn editor-find-btn${docFind.isFindActive ? ' is-active' : ''}`}
             aria-label="문서 내 찾기"
-            aria-pressed={effectiveFindState.isOpen && !isImage}
+            aria-pressed={docFind.isFindActive}
             title="문서 내 찾기 (Ctrl+F)"
             disabled={isImage}
-            onClick={() => {
-              if (!isImage) {
-                toggleFind()
-              }
-            }}
+            onClick={docFind.handleHeaderToggle}
           >
             <Search size={14} strokeWidth={1.75} aria-hidden="true" />
           </button>
@@ -633,22 +320,7 @@ export function DocumentEditor({
       </div>
 
       <div ref={editorBodyRef} className="editor-body">
-        {isFindActive && (
-          <DocumentFindBar
-            query={effectiveFindState.query}
-            options={effectiveFindState.options}
-            matchCount={findMatchCount}
-            activeMatchIndex={resolvedActiveMatchIndex}
-            errorMessage={findErrorMessage}
-            focusRequest={effectiveFindState.focusRequest}
-            onConsumeFocusNonce={findControl?.onConsumeFocusNonce}
-            onQueryChange={changeFindQuery}
-            onToggleOption={toggleFindOption}
-            onNextMatch={handleNextMatch}
-            onPreviousMatch={handlePreviousMatch}
-            onClose={closeFind}
-          />
-        )}
+        {docFind.findBarProps && <DocumentFindBar {...docFind.findBarProps} />}
 
         {isImage ? (
           <ImagePreview

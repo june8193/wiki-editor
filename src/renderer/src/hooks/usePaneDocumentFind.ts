@@ -2,12 +2,17 @@ import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { SearchMatchOptions } from '@shared/search'
 import { getWorkspacePathKey } from '@shared/workspace'
-import type { DocumentEditorFindControl } from '../components/DocumentEditor'
 import {
+  applyCloseDocumentFind,
+  applyOpenDocumentFind,
+  applyQueryDocumentFind,
+  applyToggleDocumentFind,
+  applyToggleOptionDocumentFind,
   createDefaultDocumentFindState,
   type DocumentFindState,
   isDocumentFindShortcut
 } from '../editor/documentFind'
+import type { DocumentEditorFindControl } from './useDocumentEditorFind'
 import { isImageDocument } from '../editor/editorModes'
 import { getPaneActiveTab, type PaneId, type PaneLayoutState } from '../stores/PaneTabStore'
 
@@ -88,76 +93,58 @@ export function usePaneDocumentFind({
     })
   }, [layout.panes.primary.tabs.length, layout.panes.secondary.tabs.length])
 
-  const openPaneFind = useCallback((paneId: PaneId, initialQuery?: string | null): void => {
-    focusNonceRef.current += 1
-    const nonce = focusNonceRef.current
-    setPaneStates((prev) => {
-      const current = prev[paneId]
-      return {
-        ...prev,
-        [paneId]: {
-          ...current,
-          isOpen: true,
-          query: initialQuery !== null && initialQuery !== undefined ? initialQuery : current.query,
-          focusRequest: { nonce, selectAll: true }
-        }
-      }
-    })
-  }, [])
-
-  const togglePaneFind = useCallback((paneId: PaneId): void => {
-    focusNonceRef.current += 1
-    const nonce = focusNonceRef.current
-    setPaneStates((prev) => {
-      const current = prev[paneId]
-      return {
-        ...prev,
-        [paneId]: current.isOpen
-          ? { ...current, isOpen: false }
-          : { ...current, isOpen: true, focusRequest: { nonce, selectAll: true } }
-      }
-    })
-  }, [])
-
-  const closePaneFind = useCallback((paneId: PaneId): void => {
-    setPaneStates((prev) => {
-      const current = prev[paneId]
-      if (!current.isOpen) return prev
-      return {
-        ...prev,
-        [paneId]: { ...current, isOpen: false }
-      }
-    })
-  }, [])
-
-  const changePaneFindQuery = useCallback((paneId: PaneId, nextQuery: string): void => {
-    setPaneStates((prev) => {
-      const current = prev[paneId]
-      if (current.query === nextQuery) return prev
-      return {
-        ...prev,
-        [paneId]: { ...current, query: nextQuery }
-      }
-    })
-  }, [])
-
-  const togglePaneFindOption = useCallback(
-    (paneId: PaneId, optionKey: keyof SearchMatchOptions): void => {
+  const updatePaneState = useCallback(
+    (paneId: PaneId, updater: (current: DocumentFindState) => DocumentFindState): void => {
       setPaneStates((prev) => {
         const current = prev[paneId]
+        const next = updater(current)
+        if (next === current) return prev
         return {
           ...prev,
-          [paneId]: {
-            ...current,
-            options: {
-              ...current.options,
-              [optionKey]: !current.options[optionKey]
-            }
-          }
+          [paneId]: next
         }
       })
     },
     []
+  )
+
+  const openPaneFind = useCallback(
+    (paneId: PaneId, initialQuery?: string | null): void => {
+      focusNonceRef.current += 1
+      const nonce = focusNonceRef.current
+      updatePaneState(paneId, (current) => applyOpenDocumentFind(current, nonce, initialQuery))
+    },
+    [updatePaneState]
+  )
+
+  const togglePaneFind = useCallback(
+    (paneId: PaneId): void => {
+      focusNonceRef.current += 1
+      const nonce = focusNonceRef.current
+      updatePaneState(paneId, (current) => applyToggleDocumentFind(current, nonce))
+    },
+    [updatePaneState]
+  )
+
+  const closePaneFind = useCallback(
+    (paneId: PaneId): void => {
+      updatePaneState(paneId, applyCloseDocumentFind)
+    },
+    [updatePaneState]
+  )
+
+  const changePaneFindQuery = useCallback(
+    (paneId: PaneId, nextQuery: string): void => {
+      updatePaneState(paneId, (current) => applyQueryDocumentFind(current, nextQuery))
+    },
+    [updatePaneState]
+  )
+
+  const togglePaneFindOption = useCallback(
+    (paneId: PaneId, optionKey: keyof SearchMatchOptions): void => {
+      updatePaneState(paneId, (current) => applyToggleOptionDocumentFind(current, optionKey))
+    },
+    [updatePaneState]
   )
 
   const registerSelectionReader = useCallback(

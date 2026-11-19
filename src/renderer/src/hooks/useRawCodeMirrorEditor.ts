@@ -19,7 +19,7 @@ import type { WorkspaceEntry } from '@shared/workspace'
 import { normalizeRawDocText } from '../editor/documentFind'
 import { formatRawMarkdownImages } from '../editor/imageIngestion'
 import {
-  createRawSearchExtensions,
+  rawSearchHighlightField,
   type RawFindHighlightRequest,
   syncRawSearchHighlights
 } from '../editor/rawSearchHighlight'
@@ -363,7 +363,7 @@ export function useRawCodeMirrorEditor({
         bracketMatching(),
         EditorView.lineWrapping,
         syntaxHighlighting(markdownHighlightStyle),
-        createRawSearchExtensions(),
+        rawSearchHighlightField,
         compartments.language.of(createLanguageExtension(initial.language)),
         compartments.theme.of(createEditorThemeExtension(initial.theme)),
         compartments.tableKeymap.of(initial.showTableToolbar ? rawTableKeymap : []),
