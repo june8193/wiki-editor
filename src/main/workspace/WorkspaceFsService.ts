@@ -73,8 +73,6 @@ export interface ListWorkspaceFilesOptions {
 }
 
 export interface ReadTextFileForSearchOptions {
-  maxBytes?: number
-  probeBytes?: number
   signal?: AbortSignal
 }
 
@@ -350,14 +348,12 @@ export class WorkspaceFsService {
 
   /**
    * Safely reads a workspace UTF-8 text file for search, returning `null` if the file exceeds
-   * `maxBytes`, contains a null byte in the leading `probeBytes` window, is missing, or is aborted.
+   * 2MB, contains a null byte in its leading 8KB window, is missing, or is aborted.
    */
   async readTextFileForSearch(
     filePath: string,
     options: ReadTextFileForSearchOptions = {}
   ): Promise<string | null> {
-    const maxBytes = options.maxBytes ?? DEFAULT_SEARCH_MAX_FILE_BYTES
-    const probeBytes = options.probeBytes ?? DEFAULT_SEARCH_BINARY_PROBE_BYTES
     const signal = options.signal
 
     const { resolvedReal, exists } = await this.resolveRealWorkspaceTarget(filePath)
@@ -373,14 +369,14 @@ export class WorkspaceFsService {
       }
 
       const fileStats = await handle.stat()
-      if (!fileStats.isFile() || fileStats.size > maxBytes) {
+      if (!fileStats.isFile() || fileStats.size > DEFAULT_SEARCH_MAX_FILE_BYTES) {
         return null
       }
       if (fileStats.size === 0) {
         return ''
       }
 
-      const initialSize = Math.min(fileStats.size, probeBytes)
+      const initialSize = Math.min(fileStats.size, DEFAULT_SEARCH_BINARY_PROBE_BYTES)
       const probeBuffer = Buffer.allocUnsafe(initialSize)
       let probeRead = 0
       while (probeRead < initialSize) {
@@ -407,16 +403,16 @@ export class WorkspaceFsService {
 
       const chunks: Buffer[] = [validProbe]
       let totalRead = probeRead
-      while (totalRead <= maxBytes) {
+      while (totalRead <= DEFAULT_SEARCH_MAX_FILE_BYTES) {
         if (signal?.aborted) {
           return null
         }
-        const chunkSize = Math.min(64 * 1024, maxBytes + 1 - totalRead)
+        const chunkSize = Math.min(64 * 1024, DEFAULT_SEARCH_MAX_FILE_BYTES + 1 - totalRead)
         const chunk = Buffer.allocUnsafe(chunkSize)
         const { bytesRead } = await handle.read(chunk, 0, chunkSize, totalRead)
         if (bytesRead === 0) break
         totalRead += bytesRead
-        if (totalRead > maxBytes) {
+        if (totalRead > DEFAULT_SEARCH_MAX_FILE_BYTES) {
           return null
         }
         chunks.push(chunk.subarray(0, bytesRead))

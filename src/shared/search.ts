@@ -52,8 +52,9 @@ export const DEFAULT_SEARCH_MATCH_OPTIONS: SearchMatchOptions = {
 
 export const DEFAULT_WORKSPACE_SEARCH_MAX_TOTAL_MATCHES = 1000
 export const DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE = 100
-export const DEFAULT_SEARCH_SNIPPET_MAX_LENGTH = 240
-export const DEFAULT_SEARCH_SNIPPET_LEAD_CONTEXT = 60
+
+const SEARCH_SNIPPET_MAX_LENGTH = 240
+const SEARCH_SNIPPET_LEAD_CONTEXT = 60
 
 export interface CompiledSearchMatcher {
   readonly query: string
@@ -64,11 +65,6 @@ export interface CompiledSearchMatcher {
 export type CompileSearchMatcherResult =
   | { ok: true; matcher: CompiledSearchMatcher }
   | { ok: false; error: string }
-
-export interface ExtractLineSnippetOptions {
-  maxLength?: number
-  leadContext?: number
-}
 
 const REGEX_META_RE = /[.*+?^${}()|[\]\\]/g
 const UNICODE_NON_WORD_CHAR_CLASS = '[^\\p{L}\\p{M}\\p{N}_]'
@@ -179,19 +175,6 @@ export function compileSearchMatcher(
 }
 
 /**
- * Finds UTF-16 match spans inside `text` for a single query invocation.
- * Returns an empty array when the query is empty or regex syntax is invalid.
- */
-export function findTextMatches(
-  text: string,
-  query: string,
-  options?: Partial<SearchMatchOptions>
-): TextMatchSpan[] {
-  const compiled = compileSearchMatcher(query, options)
-  return compiled.ok ? compiled.matcher.findMatches(text) : []
-}
-
-/**
  * Splits text into lines across CRLF, CR, and LF line endings so 1-based line numbers align with CodeMirror.
  */
 export function splitSearchLines(text: string): string[] {
@@ -204,16 +187,9 @@ export function splitSearchLines(text: string): string[] {
  */
 export function extractLineSnippet(
   line: string,
-  rawMatches: readonly TextMatchSpan[],
-  options: ExtractLineSnippetOptions = {}
+  rawMatches: readonly TextMatchSpan[]
 ): { lineText: string; lineOffset: number; matches: TextMatchSpan[] } {
-  const maxLength = Math.max(1, Math.floor(options.maxLength ?? DEFAULT_SEARCH_SNIPPET_MAX_LENGTH))
-  const leadContext = Math.max(
-    0,
-    Math.floor(options.leadContext ?? DEFAULT_SEARCH_SNIPPET_LEAD_CONTEXT)
-  )
-
-  if (line.length <= maxLength) {
+  if (line.length <= SEARCH_SNIPPET_MAX_LENGTH) {
     return {
       lineText: line,
       lineOffset: 0,
@@ -222,16 +198,20 @@ export function extractLineSnippet(
   }
 
   const anchorStart = rawMatches.length > 0 ? rawMatches[0].start : 0
-  let sliceStart = Math.max(0, Math.min(anchorStart - leadContext, line.length - maxLength))
+  let sliceStart = Math.max(
+    0,
+    Math.min(anchorStart - SEARCH_SNIPPET_LEAD_CONTEXT, line.length - SEARCH_SNIPPET_MAX_LENGTH)
+  )
   if (
     sliceStart > 0 &&
     isLowSurrogate(line.charCodeAt(sliceStart)) &&
     isHighSurrogate(line.charCodeAt(sliceStart - 1))
   ) {
-    sliceStart -= 1
+    // Advance past the preceding surrogate pair when possible so tail-clamped snippets still cover the anchor.
+    sliceStart = sliceStart < anchorStart ? sliceStart + 1 : sliceStart - 1
   }
 
-  let sliceEnd = Math.min(line.length, sliceStart + maxLength)
+  let sliceEnd = Math.min(line.length, sliceStart + SEARCH_SNIPPET_MAX_LENGTH)
   if (
     sliceEnd < line.length &&
     sliceEnd > sliceStart &&
@@ -282,13 +262,4 @@ export function compareWorkspaceSearchFileResults(
     return aHasNameMatch ? -1 : 1
   }
   return compareWorkspaceEntriesByRelativePath(a, b)
-}
-
-/**
- * Returns a sorted copy of workspace search file results.
- */
-export function sortWorkspaceSearchFileResults(
-  files: readonly WorkspaceSearchFileResult[]
-): WorkspaceSearchFileResult[] {
-  return [...files].sort(compareWorkspaceSearchFileResults)
 }

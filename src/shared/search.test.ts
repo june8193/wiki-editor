@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import {
+  compareWorkspaceSearchFileResults,
   compileSearchMatcher,
   DEFAULT_SEARCH_MATCH_OPTIONS,
   extractLineSnippet,
-  findTextMatches,
-  sortWorkspaceSearchFileResults,
+  type SearchMatchOptions,
+  type TextMatchSpan,
   type WorkspaceSearchFileResult
 } from './search'
+
+function findTextMatches(
+  text: string,
+  query: string,
+  options?: Partial<SearchMatchOptions>
+): TextMatchSpan[] {
+  const compiled = compileSearchMatcher(query, options)
+  return compiled.ok ? compiled.matcher.findMatches(text) : []
+}
 
 describe('shared search matching engine', () => {
   it('performs case-insensitive substring matching by default including 1-char queries and UTF-16 offsets', () => {
@@ -197,48 +207,54 @@ describe('shared search matching engine', () => {
       matches: [{ start: 11, end: 17 }]
     })
 
-    const prefix = 'x'.repeat(200)
+    const prefix = 'x'.repeat(280)
     const suffix = 'y'.repeat(200)
     const longLine = `${prefix}TARGET${suffix}`
-    const snippet = extractLineSnippet(longLine, [{ start: 200, end: 206 }], {
-      maxLength: 100,
-      leadContext: 20
-    })
+    const snippet = extractLineSnippet(longLine, [{ start: 280, end: 286 }])
 
-    expect(snippet.lineText.length).toBeLessThanOrEqual(100)
-    expect(snippet.lineOffset).toBe(180)
-    expect(snippet.matches).toEqual([{ start: 20, end: 26 }])
+    expect(snippet.lineText.length).toBeLessThanOrEqual(240)
+    expect(snippet.lineOffset).toBe(220)
+    expect(snippet.matches).toEqual([{ start: 60, end: 66 }])
     const restoredColumn = snippet.lineOffset + snippet.matches[0].start
-    expect(restoredColumn).toBe(200)
+    expect(restoredColumn).toBe(280)
     expect(longLine.slice(restoredColumn, snippet.lineOffset + snippet.matches[0].end)).toBe(
       'TARGET'
     )
     expect(snippet.lineText.slice(snippet.matches[0].start, snippet.matches[0].end)).toBe('TARGET')
 
-    // Surrogate boundary near sliceStart should not split a UTF-16 surrogate pair
-    const emojiPrefix = '😀'.repeat(15) // 30 UTF-16 code units
-    const emojiLongLine = `${emojiPrefix}${'z'.repeat(40)}HIT${'w'.repeat(100)}`
-    const emojiSnippet = extractLineSnippet(emojiLongLine, [{ start: 70, end: 73 }], {
-      maxLength: 80,
-      leadContext: 41 // 70 - 41 = 29, which lands inside the 15th 😀 (indices 28..29)
-    })
+    // Surrogate boundary near sliceStart (200 - 60 = 140 lands in surrogate at 139..140)
+    const emojiLongLine = `${'😀'.repeat(69)}a😀${'z'.repeat(59)}HIT${'w'.repeat(200)}`
+    const emojiSnippet = extractLineSnippet(emojiLongLine, [{ start: 200, end: 203 }])
     expect(emojiSnippet.lineText.charCodeAt(0)).not.toBe(0xde00)
     const hitStart = emojiSnippet.lineOffset + emojiSnippet.matches[0].start
-    expect(hitStart).toBe(70)
+    expect(hitStart).toBe(200)
     expect(
       emojiSnippet.lineText.slice(emojiSnippet.matches[0].start, emojiSnippet.matches[0].end)
     ).toBe('HIT')
 
-    // Matches beyond snippet window end are excluded while in-window spans stay bounded
-    const multiHitSnippet = extractLineSnippet(
-      emojiLongLine,
-      [
-        { start: 70, end: 73 },
-        { start: 160, end: 163 }
-      ],
-      { maxLength: 80, leadContext: 20 }
-    )
-    expect(multiHitSnippet.matches).toEqual([{ start: 20, end: 23 }])
+    // Matches beyond snippet window end (40..280) are excluded while in-window spans stay bounded
+    const multiHitLine = `${'m'.repeat(100)}HIT${'n'.repeat(217)}HIT${'p'.repeat(40)}`
+    const multiHitSnippet = extractLineSnippet(multiHitLine, [
+      { start: 100, end: 103 },
+      { start: 320, end: 323 }
+    ])
+    expect(multiHitSnippet.matches).toEqual([{ start: 60, end: 63 }])
+
+    // Surrogate pair straddling (line.length - 240) with anchor at the very end must not drop the anchor
+    const tailStraddleLine = `${'a'.repeat(59)}😀${'b'.repeat(238)}X`
+    expect(tailStraddleLine.length).toBe(300)
+    const tailSnippet = extractLineSnippet(tailStraddleLine, [{ start: 299, end: 300 }])
+    expect(tailSnippet.lineText.length).toBeLessThanOrEqual(240)
+    expect(tailSnippet.lineText.charCodeAt(0)).not.toBe(0xde00)
+    expect(tailSnippet.matches).toHaveLength(1)
+    expect(tailSnippet.lineOffset + tailSnippet.matches[0].start).toBe(299)
+    expect(
+      tailSnippet.lineText.slice(tailSnippet.matches[0].start, tailSnippet.matches[0].end)
+    ).toBe('X')
+
+    const eolZeroWidthSnippet = extractLineSnippet(tailStraddleLine, [{ start: 300, end: 300 }])
+    expect(eolZeroWidthSnippet.matches).toHaveLength(1)
+    expect(eolZeroWidthSnippet.lineOffset + eolZeroWidthSnippet.matches[0].start).toBe(300)
   })
 
   it('sorts file results with nameMatches first, then by relativePath ascending', () => {
@@ -255,12 +271,12 @@ describe('shared search matching engine', () => {
       truncatedInFile: false
     })
 
-    const sorted = sortWorkspaceSearchFileResults([
+    const sorted = [
       makeResult('a-body-only.md', false),
       makeResult('z-name-match.md', true),
       makeResult('docs/b-name-match.md', true),
       makeResult('b-body-only.md', false)
-    ])
+    ].sort(compareWorkspaceSearchFileResults)
 
     expect(sorted.map((item) => item.relativePath)).toEqual([
       'docs/b-name-match.md',
