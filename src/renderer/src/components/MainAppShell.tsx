@@ -728,7 +728,7 @@ export function MainAppShell() {
     [openDiffTab, refreshDiffRequest]
   )
 
-  const handleOpenDiffTargetFile = useCallback(
+  const handleOpenRepoWorkspaceFile = useCallback(
     (repoRelativePath: string): void => {
       const target = resolveRepoFileInWorkspace(
         git.status?.repoRoot,
@@ -826,9 +826,9 @@ export function MainAppShell() {
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       ...editor.paneActions,
-      onOpenDiffTargetFile: handleOpenDiffTargetFile
+      onOpenDiffTargetFile: handleOpenRepoWorkspaceFile
     }),
-    [editor.paneActions, handleOpenDiffTargetFile]
+    [editor.paneActions, handleOpenRepoWorkspaceFile]
   )
 
   const isCurrentWorkspaceFavorite =
@@ -920,7 +920,7 @@ export function MainAppShell() {
                 onFetch={() => void git.fetch()}
                 onSync={() => void git.sync()}
                 onOpenFileDiff={handleOpenFileDiff}
-                onOpenWorkspaceFile={handleOpenDiffTargetFile}
+                onOpenWorkspaceFile={handleOpenRepoWorkspaceFile}
                 onToggleChangesCollapsed={handleToggleGitChangesCollapsed}
                 onToggleGraphCollapsed={handleToggleGitGraphCollapsed}
                 onResizeChangesRatio={handleResizeGitChangesRatio}

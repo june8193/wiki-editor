@@ -37,8 +37,7 @@ import {
   formatGitCommitPlaceholder,
   getGitBranchLabel,
   getGitPrimaryActionState,
-  type GitCommitActionMode,
-  type GitPrimaryActionState
+  type GitCommitActionMode
 } from '../utils/gitPrimaryAction'
 import { GitChangesFileGroups, GitChangesHeaderActions } from './GitChangesSection'
 import { GitGraphScopeToggle, GitGraphSection } from './GitGraphSection'
@@ -483,16 +482,13 @@ function useGitCommitInputState(
   }
 }
 
+type GitCommitInputController = ReturnType<typeof useGitCommitInputState>
+
 interface GitCommitFormProps {
   workspaceRootPath: string | null
   status: GitStatus
   isBusy: boolean
-  commitMessage: string
-  validationMessage: string | null
-  primaryAction: GitPrimaryActionState
-  isCommitDisabled: boolean
-  onChangeMessage: (nextValue: string) => void
-  onSubmitCommit: (mode?: GitCommitActionMode) => Promise<void>
+  commitInput: GitCommitInputController
   onPush: () => void
   onSync: () => void
 }
@@ -504,15 +500,18 @@ function GitCommitForm({
   workspaceRootPath,
   status,
   isBusy,
-  commitMessage,
-  validationMessage,
-  primaryAction,
-  isCommitDisabled,
-  onChangeMessage,
-  onSubmitCommit,
+  commitInput,
   onPush,
   onSync
 }: GitCommitFormProps) {
+  const {
+    commitMessage,
+    validationMessage,
+    primaryAction,
+    isCommitDisabled,
+    submitCommit,
+    handleMessageChange
+  } = commitInput
   const commitInputRef = useRef<HTMLTextAreaElement | null>(null)
   const commitMenu = useMenuPopover(isCommitDisabled, workspaceRootPath)
   const branchLabel = getGitBranchLabel(status)
@@ -528,13 +527,13 @@ function GitCommitForm({
 
   const handleFormSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
-    void onSubmitCommit('commit')
+    void submitCommit('commit')
   }
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault()
-      void onSubmitCommit('commit')
+      void submitCommit('commit')
     }
   }
 
@@ -548,7 +547,7 @@ function GitCommitForm({
         rows={1}
         value={commitMessage}
         disabled={isBusy}
-        onChange={(event) => onChangeMessage(event.target.value)}
+        onChange={(event) => handleMessageChange(event.target.value)}
         onKeyDown={handleInputKeyDown}
       />
       {validationMessage && <p className="git-validation-text">{validationMessage}</p>}
@@ -619,7 +618,7 @@ function GitCommitForm({
                   disabled={isCommitDisabled}
                   onClick={() => {
                     commitMenu.close()
-                    void onSubmitCommit(item.mode)
+                    void submitCommit(item.mode)
                   }}
                 >
                   {item.label}
@@ -806,12 +805,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 workspaceRootPath={workspaceRootPath}
                 status={status}
                 isBusy={isBusy}
-                commitMessage={commitInput.commitMessage}
-                validationMessage={commitInput.validationMessage}
-                primaryAction={commitInput.primaryAction}
-                isCommitDisabled={commitInput.isCommitDisabled}
-                onChangeMessage={commitInput.handleMessageChange}
-                onSubmitCommit={commitInput.submitCommit}
+                commitInput={commitInput}
                 onPush={onPush}
                 onSync={onSync}
               />
