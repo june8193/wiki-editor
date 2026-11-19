@@ -39,7 +39,11 @@ import {
   getLeftSidebarWidthBounds,
   LEFT_SIDEBAR_DEFAULT_WIDTH
 } from '../utils/sidebarWidth'
-import { isWorkspaceSearchShortcut, type SearchFocusRequest } from '../utils/workspaceSearch'
+import {
+  isEventOutsideShell,
+  isWorkspaceSearchShortcut,
+  type SearchFocusRequest
+} from '../utils/workspaceSearch'
 import { ActivityBar, type LeftSidebarView } from './ActivityBar'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 import { type EntryPathCopyMode, FolderTreeSidebar } from './FolderTreeSidebar'
@@ -203,10 +207,7 @@ export function MainAppShell() {
       if (!isWorkspaceSearchShortcut(event)) {
         return
       }
-      const shellEl = shellRef.current
-      const targetShell =
-        event.target instanceof Element ? event.target.closest('.app-shell') : null
-      if (shellEl && targetShell && targetShell !== shellEl) {
+      if (isEventOutsideShell(event.target, shellRef.current)) {
         return
       }
       event.preventDefault()

@@ -43,6 +43,10 @@ export function detectDocumentLineEnding(markdown: string): '\r\n' | '\n' {
   return markdown.includes('\r\n') ? '\r\n' : '\n'
 }
 
+export function normalizeLineEndingsToLf(text: string): string {
+  return text.replace(/\r\n?/g, '\n')
+}
+
 export function getLineNumberAtOffset(text: string, offset: number): number {
   const clamped = Math.max(0, Math.min(offset, text.length))
   let line = 1

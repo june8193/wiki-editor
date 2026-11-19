@@ -5,7 +5,12 @@ import {
   type SearchMatchOptions,
   type TextMatchSpan
 } from '@shared/search'
-import type { KeyboardEventLike, SearchFocusRequest } from '../utils/workspaceSearch'
+import {
+  isKeyboardEventComposing,
+  type KeyboardEventLike,
+  type SearchFocusRequest
+} from '../utils/workspaceSearch'
+import { normalizeLineEndingsToLf } from './MarkdownTocEngine'
 
 export interface DocumentFindState {
   isOpen: boolean
@@ -22,8 +27,6 @@ export interface DocumentFindMatchResult {
 }
 
 export interface DocumentFindKeyboardEvent extends KeyboardEventLike {
-  keyCode?: number
-  nativeEvent?: { isComposing?: boolean }
   preventDefault?: () => void
   stopPropagation?: () => void
 }
@@ -40,10 +43,6 @@ export interface DocumentFindActionHandlers {
   onClose: () => void
   onChangeQuery: (query: string) => void
   onToggleOption: (optionKey: keyof SearchMatchOptions) => void
-}
-
-function isEventComposing(event: DocumentFindKeyboardEvent): boolean {
-  return Boolean(event.isComposing || event.nativeEvent?.isComposing || event.keyCode === 229)
 }
 
 /**
@@ -145,13 +144,6 @@ export function createDocumentFindActions(
 }
 
 /**
- * Normalizes CRLF and CR line endings to LF so text match offsets align with CodeMirror 6 docs.
- */
-export function normalizeRawDocText(text: string): string {
-  return text.replace(/\r\n?/g, '\n')
-}
-
-/**
  * Finds all text matches in a document using the shared search matching engine,
  * returning structured regex syntax errors instead of throwing.
  */
@@ -168,7 +160,7 @@ export function findTextMatchesInDocument(
     return { matches: [], errorMessage: compiled.error }
   }
   return {
-    matches: compiled.matcher.findMatches(normalizeRawDocText(content)),
+    matches: compiled.matcher.findMatches(normalizeLineEndingsToLf(content)),
     errorMessage: null
   }
 }
@@ -228,26 +220,13 @@ export function readRawEditorSingleLineSelection(view: EditorView | null): strin
 }
 
 /**
- * Returns true when a keyboard event matches the in-document find shortcut (`Ctrl+F` / `Cmd+F` without Shift/Alt).
- */
-export function isDocumentFindShortcut(event: DocumentFindKeyboardEvent): boolean {
-  return (
-    (event.ctrlKey || event.metaKey) &&
-    !event.shiftKey &&
-    !event.altKey &&
-    !isEventComposing(event) &&
-    event.key.toLowerCase() === 'f'
-  )
-}
-
-/**
  * Resolves Find Bar navigation/close shortcuts (`Enter`, `Shift+Enter`, `F3`, `Shift+F3`, `Escape`).
  */
 export function resolveFindBarKeyAction(
   event: DocumentFindKeyboardEvent,
   options: { allowEnter?: boolean } = {}
 ): FindBarKeyAction | null {
-  if (event.ctrlKey || event.metaKey || event.altKey || isEventComposing(event)) {
+  if (event.ctrlKey || event.metaKey || event.altKey || isKeyboardEventComposing(event)) {
     return null
   }
   if (event.key === 'Escape') {

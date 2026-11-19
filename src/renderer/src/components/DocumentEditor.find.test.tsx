@@ -94,6 +94,20 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
     expect(openedInput.selectionStart).toBe(0)
     expect(openedInput.selectionEnd).toBe('beta'.length)
 
+    // Ctrl+F while focused inside Find Bar focuses/selects typed query without overwriting from stale Raw selection
+    await user.clear(openedInput)
+    await user.type(openedInput, 'alpha')
+    expect(cmView.state.doc.sliceString(cmView.state.selection.main.from, cmView.state.selection.main.to)).toBe('beta')
+    fireEvent.keyDown(openedInput, { key: 'f', ctrlKey: true })
+    expect(openedInput.value).toBe('alpha')
+    expect(openedInput).toHaveFocus()
+    expect(openedInput.selectionStart).toBe(0)
+    expect(openedInput.selectionEnd).toBe('alpha'.length)
+
+    // Restore 'beta' before verifying multi-line Raw selection does NOT overwrite query
+    await user.clear(openedInput)
+    await user.type(openedInput, 'beta')
+
     // Ctrl+F with multi-line selection does NOT overwrite query; focuses & selects existing input text
     const multiStart = doc.content.indexOf('alpha\n')
     const multiEnd = doc.content.indexOf('gamma')
@@ -499,7 +513,7 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
     expect(previewRegion.scrollTop).toBeCloseTo(expectedPreviewTop!, 2)
     expect(previewRegion.scrollTop).toBeGreaterThan(200)
 
-    // Switch Split -> Raw preserves Find Bar, query, count, and Raw decorations
+    // Switch Split -> Raw preserves Find Bar, query, active match index, and Raw decorations
     await user.click(
       within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
         name: 'Raw'
@@ -519,9 +533,17 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
       />
     )
     const keptBar = screen.getByRole('region', { name: '문서 내 찾기 바' })
-    expect(
-      (within(keptBar).getByRole('textbox', { name: '문서 내 검색어 입력' }) as HTMLInputElement).value
-    ).toBe('SplitTarget')
+    const keptInput = within(keptBar).getByRole('textbox', {
+      name: '문서 내 검색어 입력'
+    }) as HTMLInputElement
+    expect(keptInput.value).toBe('SplitTarget')
+    expect(within(keptBar).getByText('2 / 2')).toBeInTheDocument()
+    const firstRawMatch = container.querySelector('.cm-search-match')
+    expect(firstRawMatch).not.toBeNull()
+    expect(firstRawMatch).not.toHaveClass('cm-search-match-active')
+
+    // Wrapping forward from 2 / 2 lands on 1 / 2 and activates the first match in Raw mode
+    fireEvent.keyDown(keptInput, { key: 'Enter' })
     expect(within(keptBar).getByText('1 / 2')).toBeInTheDocument()
     expect(container.querySelector('.cm-search-match-active')?.textContent).toBe('SplitTarget')
   })

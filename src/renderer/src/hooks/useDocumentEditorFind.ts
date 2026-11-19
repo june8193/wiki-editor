@@ -19,12 +19,12 @@ import {
   type DocumentFindActionHandlers,
   type DocumentFindState,
   findTextMatchesInDocument,
-  isDocumentFindShortcut,
   readRawEditorSingleLineSelection,
   stepActiveMatchIndex
 } from '../editor/documentFind'
 import type { RawFindHighlightRequest } from '../editor/rawSearchHighlight'
 import type { EditorMode } from '../stores/PaneTabStore'
+import { isDocumentFindShortcut } from '../utils/workspaceSearch'
 
 export interface DocumentEditorFindControl extends DocumentFindActionHandlers {
   state: DocumentFindState
@@ -36,7 +36,6 @@ interface FindCriteriaSnapshot {
   isOpen: boolean
   query: string
   options: SearchMatchOptions
-  mode: EditorMode
 }
 
 interface MatchCursorState {
@@ -56,12 +55,7 @@ function didFindCriteriaActivateOrChange(
 }
 
 function areCriteriaEqual(a: FindCriteriaSnapshot, b: FindCriteriaSnapshot): boolean {
-  return (
-    a.isOpen === b.isOpen &&
-    a.query === b.query &&
-    a.options === b.options &&
-    a.mode === b.mode
-  )
+  return a.isOpen === b.isOpen && a.query === b.query && a.options === b.options
 }
 
 export interface UseDocumentEditorFindOptions {
@@ -103,15 +97,16 @@ export function useDocumentEditorFind({
   )
   const activeControl = findControl ?? fallbackControl
   const effectiveFindState = activeControl.state
+  const isRawBasedMode = effectiveMode === 'raw' || effectiveMode === 'split'
 
   const focusActiveEditorBody = useCallback((): void => {
-    if (effectiveMode === 'raw' || effectiveMode === 'split') {
+    if (isRawBasedMode) {
       rawEditorViewRef.current?.focus()
       return
     }
     const target = editorBodyRef.current?.querySelector<HTMLElement>('[data-testid="document-editor"]')
     target?.focus()
-  }, [editorBodyRef, effectiveMode, rawEditorViewRef])
+  }, [editorBodyRef, isRawBasedMode, rawEditorViewRef])
 
   const closeFind = useCallback((): void => {
     activeControl.onClose()
@@ -120,11 +115,11 @@ export function useDocumentEditorFind({
 
   const readSingleLineSelection = useCallback((): string | null => {
     if (isImage) return null
-    if (effectiveMode === 'raw' || effectiveMode === 'split') {
+    if (isRawBasedMode) {
       return readRawEditorSingleLineSelection(rawEditorViewRef.current)
     }
     return null
-  }, [effectiveMode, isImage, rawEditorViewRef])
+  }, [isImage, isRawBasedMode, rawEditorViewRef])
 
   const registerSelectionReader = findControl?.onRegisterSelectionReader
   useEffect(() => {
@@ -136,7 +131,7 @@ export function useDocumentEditorFind({
   }, [readSingleLineSelection, registerSelectionReader])
 
   const isFindActive = !isImage && effectiveFindState.isOpen
-  const isRawFindMode = isFindActive && (effectiveMode === 'raw' || effectiveMode === 'split')
+  const isRawFindMode = isFindActive && isRawBasedMode
   const rawFindResult = useMemo(
     () =>
       isRawFindMode
@@ -153,10 +148,9 @@ export function useDocumentEditorFind({
     () => ({
       isOpen: isFindActive,
       query: effectiveFindState.query,
-      options: effectiveFindState.options,
-      mode: effectiveMode
+      options: effectiveFindState.options
     }),
-    [effectiveFindState.options, effectiveFindState.query, effectiveMode, isFindActive]
+    [effectiveFindState.options, effectiveFindState.query, isFindActive]
   )
 
   const [matchCursor, setMatchCursor] = useState<MatchCursorState>(() => ({
@@ -192,10 +186,7 @@ export function useDocumentEditorFind({
       return
     }
 
-    if (
-      matchCursor.criteria.mode !== currentCriteria.mode ||
-      resolvedActiveMatchIndex !== matchCursor.index
-    ) {
+    if (resolvedActiveMatchIndex !== matchCursor.index) {
       setMatchCursor((prev) => ({
         ...prev,
         index: resolvedActiveMatchIndex,
@@ -244,7 +235,9 @@ export function useDocumentEditorFind({
         event.preventDefault()
         event.stopPropagation()
         if (!isImage) {
-          activeControl.onOpen(readSingleLineSelection())
+          const isFromFindBar =
+            event.target instanceof Element && event.target.closest('.document-find-bar') !== null
+          activeControl.onOpen(isFromFindBar ? null : readSingleLineSelection())
         }
         return true
       }

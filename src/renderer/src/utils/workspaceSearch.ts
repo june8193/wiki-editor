@@ -35,6 +35,8 @@ export interface KeyboardEventLike {
   shiftKey: boolean
   altKey: boolean
   isComposing?: boolean
+  keyCode?: number
+  nativeEvent?: { isComposing?: boolean }
 }
 
 export interface SearchFocusRequest {
@@ -48,16 +50,46 @@ export interface TextMatchSegment {
 }
 
 /**
+ * Returns true when a DOM or React keyboard event is part of an active IME composition.
+ */
+export function isKeyboardEventComposing(event: KeyboardEventLike): boolean {
+  return Boolean(event.isComposing || event.nativeEvent?.isComposing || event.keyCode === 229)
+}
+
+function isFindShortcut(event: KeyboardEventLike, requireShift: boolean): boolean {
+  return (
+    (event.ctrlKey || event.metaKey) &&
+    event.shiftKey === requireShift &&
+    !event.altKey &&
+    !isKeyboardEventComposing(event) &&
+    event.key.toLowerCase() === 'f'
+  )
+}
+
+/**
  * Returns true when a keyboard event matches the Main Window workspace search shortcut (`Ctrl+Shift+F` / `Cmd+Shift+F`).
  */
 export function isWorkspaceSearchShortcut(event: KeyboardEventLike): boolean {
-  return (
-    (event.ctrlKey || event.metaKey) &&
-    event.shiftKey &&
-    !event.altKey &&
-    !event.isComposing &&
-    event.key.toLowerCase() === 'f'
-  )
+  return isFindShortcut(event, true)
+}
+
+/**
+ * Returns true when a keyboard event matches the in-document find shortcut (`Ctrl+F` / `Cmd+F` without Shift/Alt).
+ */
+export function isDocumentFindShortcut(event: KeyboardEventLike): boolean {
+  return isFindShortcut(event, false)
+}
+
+/**
+ * Returns true when a DOM event originated inside another window's `.app-shell` element.
+ */
+export function isEventOutsideShell(
+  target: EventTarget | null,
+  shellEl: HTMLElement | null
+): boolean {
+  if (!shellEl || !(target instanceof Element)) return false
+  const targetShell = target.closest('.app-shell')
+  return targetShell !== null && targetShell !== shellEl
 }
 
 /**

@@ -5,9 +5,9 @@ import {
   applyCloseDocumentFind,
   createDefaultDocumentFindState,
   createDocumentFindActions,
-  type DocumentFindState,
-  isDocumentFindShortcut
+  type DocumentFindState
 } from '../editor/documentFind'
+import { isDocumentFindShortcut, isEventOutsideShell } from '../utils/workspaceSearch'
 import type { DocumentEditorFindControl } from './useDocumentEditorFind'
 import { isImageDocument } from '../editor/editorModes'
 import { getPaneActiveTab, type PaneId, type PaneLayoutState } from '../stores/PaneTabStore'
@@ -145,10 +145,7 @@ export function usePaneDocumentFind({
         return
       }
 
-      const shellEl = shellRef.current
-      const targetShell =
-        event.target instanceof Element ? event.target.closest('.app-shell') : null
-      if (shellEl && targetShell && targetShell !== shellEl) {
+      if (isEventOutsideShell(event.target, shellRef.current)) {
         return
       }
 

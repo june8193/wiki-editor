@@ -16,7 +16,6 @@ import {
 import { tags } from '@lezer/highlight'
 import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
-import { normalizeRawDocText } from '../editor/documentFind'
 import { formatRawMarkdownImages } from '../editor/imageIngestion'
 import {
   rawSearchHighlightField,
@@ -32,7 +31,11 @@ import {
 } from '../editor/LinkAutocompleteEngine'
 import { isLinkNavigationClick } from '../editor/editorModes'
 import { extractMarkdownLinkHrefAtOffset } from '../editor/MarkdownLinkSyntax'
-import { detectDocumentLineEnding, isOffsetInCodeFence } from '../editor/MarkdownTocEngine'
+import {
+  detectDocumentLineEnding,
+  isOffsetInCodeFence,
+  normalizeLineEndingsToLf
+} from '../editor/MarkdownTocEngine'
 import {
   type HeadingScrollSpySample,
   measureActiveHeadingIndexInRawEditor
@@ -316,7 +319,7 @@ export function useRawCodeMirrorEditor({
 
   const [inTable, setInTable] = useState(() => {
     if (!showTableToolbar) return false
-    const normalized = normalizeRawDocText(content)
+    const normalized = normalizeLineEndingsToLf(content)
     const { anchor } = clampSelection(normalized.length, cursor)
     return detectTableAtOffset(normalized, anchor) !== null
   })
@@ -327,7 +330,7 @@ export function useRawCodeMirrorEditor({
 
     const initial = runtimeRef.current
     const compartments = compartmentsRef.current
-    const normalizedInitial = normalizeRawDocText(initial.content)
+    const normalizedInitial = normalizeLineEndingsToLf(initial.content)
     const initialSelection = clampSelection(normalizedInitial.length, initial.cursor)
     lastCursorPropRef.current = initial.cursor
 
@@ -558,7 +561,7 @@ export function useRawCodeMirrorEditor({
     const view = viewRef.current
     if (!view) return
 
-    const normalizedPropDoc = normalizeRawDocText(content)
+    const normalizedPropDoc = normalizeLineEndingsToLf(content)
     const currentDoc = view.state.doc.toString()
     const docChanged = currentDoc !== normalizedPropDoc
     if (docChanged && (content.includes('\n') || content.includes('\r'))) {

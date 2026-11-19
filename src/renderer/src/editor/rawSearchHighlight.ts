@@ -7,6 +7,7 @@ import {
 } from '@codemirror/state'
 import { Decoration, type DecorationSet, EditorView } from '@codemirror/view'
 import type { TextMatchSpan } from '@shared/search'
+import { clampActiveMatchIndex } from './documentFind'
 
 export interface RawSearchHighlightPayload {
   matches: readonly TextMatchSpan[]
@@ -25,6 +26,12 @@ export const setRawSearchHighlightEffect = StateEffect.define<RawSearchHighlight
 const matchMark = Decoration.mark({ class: 'cm-search-match' })
 const activeMatchMark = Decoration.mark({ class: 'cm-search-match cm-search-match-active' })
 
+function clampSpanToDoc(span: TextMatchSpan, docLength: number): { from: number; to: number } {
+  const from = Math.max(0, Math.min(span.start, docLength))
+  const to = Math.max(from, Math.min(span.end, docLength))
+  return { from, to }
+}
+
 function buildSearchDecorations(docLength: number, payload: RawSearchHighlightPayload): DecorationSet {
   const { matches, activeIndex } = payload
   if (matches.length === 0 || docLength <= 0) {
@@ -34,9 +41,7 @@ function buildSearchDecorations(docLength: number, payload: RawSearchHighlightPa
   const builder = new RangeSetBuilder<Decoration>()
   const normalized: Array<{ from: number; to: number; isActive: boolean }> = []
   for (let i = 0; i < matches.length; i += 1) {
-    const span = matches[i]
-    const from = Math.max(0, Math.min(span.start, docLength))
-    const to = Math.max(from, Math.min(span.end, docLength))
+    const { from, to } = clampSpanToDoc(matches[i], docLength)
     // CodeMirror Decoration.mark forbids zero-length ranges; empty regex matches still count and scroll.
     if (to <= from) {
       continue
@@ -85,10 +90,9 @@ export function syncRawSearchHighlights(
 ): void {
   const { isActive, matches, activeIndex, scrollToActive, externalAnnotation, onScrolled } = options
   const resolvedMatches = isActive ? matches : []
-  const resolvedIndex =
-    isActive && resolvedMatches.length > 0
-      ? Math.max(0, Math.min(activeIndex, resolvedMatches.length - 1))
-      : -1
+  const resolvedIndex = isActive
+    ? clampActiveMatchIndex(activeIndex, resolvedMatches.length)
+    : -1
 
   const effects: StateEffect<unknown>[] = [
     setRawSearchHighlightEffect.of({
@@ -99,12 +103,12 @@ export function syncRawSearchHighlights(
 
   let activeRange: { from: number; to: number } | null = null
   if (scrollToActive && resolvedIndex >= 0) {
-    const targetSpan = resolvedMatches[resolvedIndex]
-    const docLength = view.state.doc.length
-    const from = Math.max(0, Math.min(targetSpan.start, docLength))
-    const to = Math.max(from, Math.min(targetSpan.end, docLength))
-    activeRange = { from, to }
-    effects.push(EditorView.scrollIntoView(EditorSelection.range(from, to), { y: 'center' }))
+    activeRange = clampSpanToDoc(resolvedMatches[resolvedIndex], view.state.doc.length)
+    effects.push(
+      EditorView.scrollIntoView(EditorSelection.range(activeRange.from, activeRange.to), {
+        y: 'center'
+      })
+    )
   }
 
   view.dispatch({
