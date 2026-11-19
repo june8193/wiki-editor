@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GitBranchList, GitStatus } from '@shared/git'
 import { logRendererError, logRendererWarn } from '../logging/rendererLogger'
 import { toErrorMessage } from '@shared/errors'
@@ -389,6 +389,31 @@ export function useGitController({
     [executeGitActionBody, withMutationLock]
   )
 
+  const { stageAllSpec, pushSpec, syncSpec } = useMemo(
+    (): {
+      stageAllSpec: GitActionExecutionOptions
+      pushSpec: GitActionExecutionOptions
+      syncSpec: GitActionExecutionOptions
+    } => ({
+      stageAllSpec: {
+        fallbackError: '전체 파일을 Stage하지 못했습니다.',
+        run: (rootPath) => wikiApi.git.stageAll(rootPath)
+      },
+      pushSpec: {
+        fetchRepoMetadata: true,
+        fallbackError: 'Push에 실패했습니다.',
+        run: (rootPath) => wikiApi.git.push(rootPath)
+      },
+      syncSpec: {
+        affectsWorkspaceFiles: true,
+        fetchRepoMetadata: true,
+        fallbackError: 'Sync에 실패했습니다.',
+        run: async (rootPath) => (await wikiApi.git.sync(rootPath)).status
+      }
+    }),
+    [wikiApi]
+  )
+
   const executePostCommitRemoteStep = useCallback(
     async (
       ctx: GitRequestContext,
@@ -401,27 +426,22 @@ export function useGitController({
 
       if (mode === 'commit-push') {
         await executeGitActionBody(ctx, 'Push', {
-          fetchRepoMetadata: true,
-          fallbackError: 'Push에 실패했습니다.',
-          fallbackStatusOnFailure: committedStatus,
-          run: (rootPath) => wikiApi.git.push(rootPath)
+          ...pushSpec,
+          fallbackStatusOnFailure: committedStatus
         })
         return
       }
 
       await executeGitActionBody(ctx, 'Sync', {
-        affectsWorkspaceFiles: true,
-        fetchRepoMetadata: true,
-        fallbackError: 'Sync에 실패했습니다.',
+        ...syncSpec,
         fallbackStatusOnFailure: committedStatus,
         onConfirmCanceled: async () => {
           setErrorMessage('미저장 문서 확인이 취소되어 Sync를 실행하지 않았습니다.')
           await applyWorkspaceGitState(ctx.rootPath, ctx.epoch, committedStatus, true)
-        },
-        run: async (rootPath) => (await wikiApi.git.sync(rootPath)).status
+        }
       })
     },
-    [applyWorkspaceGitState, executeGitActionBody, wikiApi]
+    [applyWorkspaceGitState, executeGitActionBody, pushSpec, syncSpec]
   )
 
   const initRepo = useCallback(async (): Promise<void> => {
@@ -443,11 +463,8 @@ export function useGitController({
   )
 
   const stageAll = useCallback(async (): Promise<void> => {
-    await runGitAction('전체 Stage', {
-      fallbackError: '전체 파일을 Stage하지 못했습니다.',
-      run: (rootPath) => wikiApi.git.stageAll(rootPath)
-    })
-  }, [runGitAction, wikiApi])
+    await runGitAction('전체 Stage', stageAllSpec)
+  }, [runGitAction, stageAllSpec])
 
   const unstageFile = useCallback(
     async (filePath: string, origPath?: string): Promise<void> => {
@@ -518,10 +535,7 @@ export function useGitController({
         }
 
         if (needsAutoStage) {
-          const stagedOk = await executeGitActionBody(ctx, '전체 Stage', {
-            fallbackError: '전체 파일을 Stage하지 못했습니다.',
-            run: (rootPath) => wikiApi.git.stageAll(rootPath)
-          })
+          const stagedOk = await executeGitActionBody(ctx, '전체 Stage', stageAllSpec)
           if (!stagedOk || !isCurrentRequest(ctx.rootPath, ctx.epoch)) {
             return false
           }
@@ -548,6 +562,7 @@ export function useGitController({
       executeGitActionBody,
       executePostCommitRemoteStep,
       isCurrentRequest,
+      stageAllSpec,
       wikiApi,
       withMutationLock
     ]
@@ -575,12 +590,8 @@ export function useGitController({
   }, [runGitAction, wikiApi])
 
   const push = useCallback(async (): Promise<void> => {
-    await runGitAction('Push', {
-      fetchRepoMetadata: true,
-      fallbackError: 'Push에 실패했습니다.',
-      run: (rootPath) => wikiApi.git.push(rootPath)
-    })
-  }, [runGitAction, wikiApi])
+    await runGitAction('Push', pushSpec)
+  }, [pushSpec, runGitAction])
 
   const fetch = useCallback(async (): Promise<void> => {
     await runGitAction('Fetch', {
@@ -591,13 +602,8 @@ export function useGitController({
   }, [runGitAction, wikiApi])
 
   const sync = useCallback(async (): Promise<void> => {
-    await runGitAction('Sync', {
-      affectsWorkspaceFiles: true,
-      fetchRepoMetadata: true,
-      fallbackError: 'Sync에 실패했습니다.',
-      run: async (rootPath) => (await wikiApi.git.sync(rootPath)).status
-    })
-  }, [runGitAction, wikiApi])
+    await runGitAction('Sync', syncSpec)
+  }, [runGitAction, syncSpec])
 
   const dismissError = useCallback((): void => {
     setErrorMessage(null)

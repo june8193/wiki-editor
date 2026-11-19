@@ -26,7 +26,6 @@ export interface ConfirmActionDialogRequest {
   title: string
   message: string
   confirmLabel: string
-  confirmTone?: ConfirmDialogTone
   onResolve: (approved: boolean) => void
 }
 
@@ -111,7 +110,6 @@ export function useConfirmDialog() {
           title: request.title,
           message: request.message,
           confirmLabel: request.confirmLabel,
-          confirmTone: request.confirmTone,
           onConfirm: () => {
             setPendingDialog(null)
             settle(true)
