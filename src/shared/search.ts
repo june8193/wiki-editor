@@ -1,5 +1,4 @@
 import { compareWorkspaceEntriesByRelativePath } from './workspace'
-import type { PaneId } from './window'
 
 export interface SearchMatchOptions {
   caseSensitive: boolean
@@ -45,17 +44,6 @@ export interface WorkspaceSearchResponse {
   error?: string // 잘못된 정규식 등 검색식 오류
 }
 
-export interface DocumentSearchJumpRequest {
-  paneId: PaneId
-  tabId: string
-  query: string
-  options: SearchMatchOptions
-  lineNumber: number // 1-based
-  columnStart: number // 0-based UTF-16 offset within line
-  columnEnd: number // 0-based UTF-16 offset within line
-  nonce: number
-}
-
 export const DEFAULT_SEARCH_MATCH_OPTIONS: SearchMatchOptions = {
   caseSensitive: false,
   wholeWord: false,
@@ -70,7 +58,6 @@ export const DEFAULT_SEARCH_SNIPPET_LEAD_CONTEXT = 60
 export interface CompiledSearchMatcher {
   readonly query: string
   readonly options: SearchMatchOptions
-  readonly isEmptyQuery: boolean
   findMatches(text: string): TextMatchSpan[]
 }
 
@@ -132,7 +119,6 @@ export function compileSearchMatcher(
       matcher: {
         query,
         options: resolved,
-        isEmptyQuery: true,
         findMatches: () => []
       }
     }
@@ -160,7 +146,6 @@ export function compileSearchMatcher(
     matcher: {
       query,
       options: resolved,
-      isEmptyQuery: false,
       findMatches(text: string): TextMatchSpan[] {
         compiledRegex.lastIndex = 0
         const spans: TextMatchSpan[] = []

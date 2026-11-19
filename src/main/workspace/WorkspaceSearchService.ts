@@ -111,7 +111,6 @@ interface SearchCandidate {
 
 type CandidateScanSlot =
   | { kind: 'skip' }
-  | { kind: 'name-only' }
   | {
       kind: 'scanned'
       lineMatches: WorkspaceSearchLineMatch[]
@@ -168,6 +167,9 @@ function scanTextContent(
     }
 
     totalMatchCount += rawMatches.length
+    if (totalMatchCount > maxMatchesPerFile) {
+      truncatedInFile = true
+    }
 
     if (keptMatchCount >= maxMatchesPerFile) {
       truncatedInFile = true
@@ -269,10 +271,7 @@ export class WorkspaceSearchService {
   /**
    * Searches workspace text filenames/paths and contents (preferring open workspace text buffers).
    */
-  async search(
-    request: WorkspaceSearchRequest,
-    externalSignal?: AbortSignal
-  ): Promise<WorkspaceSearchResponse> {
+  async search(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse> {
     const capturedRoot = this.workspaceService.getWorkspaceRoot()
     if (!capturedRoot) {
       throw new Error('열린 워크스페이스가 없습니다.')
@@ -291,17 +290,12 @@ export class WorkspaceSearchService {
 
     this.cancelActiveSearch()
 
-    if (this.disposed || externalSignal?.aborted) {
+    if (this.disposed) {
       return emptySearchResponse(query)
     }
 
     const controller = new AbortController()
     this.activeSearchController = controller
-
-    const onExternalAbort = (): void => {
-      controller.abort()
-    }
-    externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
 
     const isInvalidated = (): boolean =>
       this.disposed ||
@@ -359,7 +353,6 @@ export class WorkspaceSearchService {
         isInvalidated
       })
     } finally {
-      externalSignal?.removeEventListener('abort', onExternalAbort)
       if (this.activeSearchController === controller) {
         this.activeSearchController = null
       }
@@ -464,13 +457,6 @@ export class WorkspaceSearchService {
           continue
         }
 
-        if (slot.kind === 'name-only') {
-          if (candidate.nameMatches.length > 0) {
-            pushFileResult(candidate, [], 0, false)
-          }
-          continue
-        }
-
         const remainingBudget = maxTotalMatches - committedMatchCount
         if (remainingBudget <= 0) {
           if (slot.totalMatchCount > 0) {
@@ -478,7 +464,7 @@ export class WorkspaceSearchService {
             stopBodyScanning = true
           }
           if (candidate.nameMatches.length > 0) {
-            pushFileResult(candidate, [], 0, false)
+            pushFileResult(candidate, [], slot.totalMatchCount, slot.totalMatchCount > 0)
           }
           continue
         }
@@ -508,15 +494,10 @@ export class WorkspaceSearchService {
         nextDispatchIndex += 1
 
         const candidate = candidates[index]
-        if (stopBodyScanning) {
-          if (candidate.nameMatches.length === 0) {
-            slotResults[index] = { kind: 'skip' }
-            commitReadySlots()
-            return
-          }
-          slotResults[index] = { kind: 'name-only' }
+        if (stopBodyScanning && candidate.nameMatches.length === 0) {
+          slotResults[index] = { kind: 'skip' }
           commitReadySlots()
-          continue
+          return
         }
 
         let text: string | null
@@ -539,7 +520,12 @@ export class WorkspaceSearchService {
           continue
         }
 
-        const scanned = scanTextContent(text, matcher, maxMatchesPerFile, signal)
+        const scanned = scanTextContent(
+          text,
+          matcher,
+          stopBodyScanning ? 0 : maxMatchesPerFile,
+          signal
+        )
         if (!scanned || isInvalidated()) {
           return
         }

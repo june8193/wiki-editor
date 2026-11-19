@@ -355,4 +355,100 @@ describe('WorkspaceSearchService', () => {
     })
     readSpy.mockRestore()
   })
+
+  it('sets truncatedInFile when a single long line exceeds maxMatchesPerFile outside its snippet window', async () => {
+    const info = await workspaceService.openWorkspace(workspaceDir)
+    const longLine = [
+      'hit',
+      'a'.repeat(20),
+      'hit',
+      'b'.repeat(350),
+      'hit',
+      'c'.repeat(40),
+      'hit',
+      'd'.repeat(40),
+      'hit',
+      'e'.repeat(40),
+      'hit'
+    ].join('')
+    await writeFile(join(info.rootPath, 'single-long.md'), longLine, 'utf8')
+
+    const response = await searchService.search({
+      query: 'hit',
+      options: DEFAULT_SEARCH_MATCH_OPTIONS,
+      maxMatchesPerFile: 4,
+      maxTotalMatches: 100
+    })
+
+    expect(response.files).toHaveLength(1)
+    expect(response.files[0].totalMatchCount).toBe(6)
+    expect(response.files[0].lineMatches[0].matches.length).toBeLessThanOrEqual(4)
+    expect(response.files[0].truncatedInFile).toBe(true)
+    expect(response.truncated).toBe(false)
+  })
+
+  it('preserves pre-truncation totalMatchCount and binary/size exclusions on nameMatches files after maxTotalMatches is exhausted', async () => {
+    const info = await workspaceService.openWorkspace(workspaceDir)
+    await writeFile(join(info.rootPath, '01-hit.md'), 'hit hit hit', 'utf8')
+    await writeFile(join(info.rootPath, '02-hit.md'), 'hit\nhit\nhit\nhit', 'utf8')
+    await writeFile(
+      join(info.rootPath, '03-hit-null.txt'),
+      Buffer.from('hit\0binary')
+    )
+    await writeFile(
+      join(info.rootPath, '04-hit-huge.md'),
+      Buffer.concat([Buffer.from('hit '), Buffer.alloc(2 * 1024 * 1024, 0x61)])
+    )
+    await writeFile(join(info.rootPath, '05-hit-clean.md'), 'nothing in body', 'utf8')
+    await writeFile(join(info.rootPath, '06-body-only.md'), 'hit in body', 'utf8')
+
+    // Sequential mode forces stopBodyScanning before 02-hit..05-hit are dispatched
+    const sequentialSearch = new WorkspaceSearchService({
+      workspaceService,
+      concurrency: 1
+    })
+
+    try {
+      for (const service of [sequentialSearch, searchService]) {
+        const response = await service.search({
+          query: 'hit',
+          options: DEFAULT_SEARCH_MATCH_OPTIONS,
+          maxMatchesPerFile: 10,
+          maxTotalMatches: 2
+        })
+
+        expect(response.truncated).toBe(true)
+        expect(response.totalMatchCount).toBe(2)
+        expect(response.files.map((f) => f.relativePath)).toEqual([
+          '01-hit.md',
+          '02-hit.md',
+          '05-hit-clean.md'
+        ])
+
+        expect(response.files[0].lineMatches).toEqual([
+          {
+            lineNumber: 1,
+            lineText: 'hit hit hit',
+            lineOffset: 0,
+            matches: [
+              { start: 0, end: 3 },
+              { start: 4, end: 7 }
+            ]
+          }
+        ])
+        expect(response.files[0].totalMatchCount).toBe(3)
+        expect(response.files[0].truncatedInFile).toBe(true)
+
+        expect(response.files[1].lineMatches).toEqual([])
+        expect(response.files[1].totalMatchCount).toBe(4)
+        expect(response.files[1].truncatedInFile).toBe(true)
+
+        expect(response.files[2].lineMatches).toEqual([])
+        expect(response.files[2].totalMatchCount).toBe(0)
+        expect(response.files[2].truncatedInFile).toBe(false)
+      }
+    } finally {
+      sequentialSearch.dispose()
+    }
+  })
 })

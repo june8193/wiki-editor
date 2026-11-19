@@ -24,7 +24,7 @@ import {
 
 export interface WorkspaceIpcSession {
   workspaceService: WorkspaceFsService
-  searchService?: WorkspaceSearchService
+  searchService: WorkspaceSearchService
   getTargets: () => WebContentsLike[]
   isMainWindow: (sender: WebContentsLike | undefined) => boolean
 }
@@ -56,7 +56,6 @@ export interface RegisterWorkspaceIpcOptions {
   selectDirectory: (sender?: WebContentsLike) => Promise<string | null>
   coordinator?: WorkspaceIpcCoordinator
   workspaceService?: WorkspaceFsService
-  searchService?: WorkspaceSearchService
   bufferHub?: SharedDocumentBufferHub
   getTargets?: () => WebContentsLike[]
   isMainWindowSender?: (sender: WebContentsLike | undefined) => boolean
@@ -69,7 +68,6 @@ export interface RegisterWorkspaceIpcOptions {
 export function registerWorkspaceIpc({
   ipcMain,
   workspaceService,
-  searchService,
   bufferHub,
   configService,
   selectDirectory,
@@ -79,7 +77,7 @@ export function registerWorkspaceIpc({
   logService
 }: RegisterWorkspaceIpcOptions): () => void {
   const watchersByService = new Map<WorkspaceFsService, () => void>()
-  const ownedSearchServices = new Map<WorkspaceIpcSession, WorkspaceSearchService>()
+  let ownedSearchService: WorkspaceSearchService | undefined
 
   let activeCoordinator: WorkspaceIpcCoordinator
   if (coordinator) {
@@ -90,38 +88,19 @@ export function registerWorkspaceIpc({
         'registerWorkspaceIpc requires either coordinator or workspaceService and getTargets'
       )
     }
-    const singleSearchService =
-      searchService ??
-      new WorkspaceSearchService({
-        workspaceService,
-        getOpenBuffers: bufferHub ? () => Object.values(bufferHub.getSnapshot().buffers) : () => []
-      })
+    ownedSearchService = new WorkspaceSearchService({
+      workspaceService,
+      getOpenBuffers: bufferHub ? () => Object.values(bufferHub.getSnapshot().buffers) : () => []
+    })
     const singleSession: WorkspaceIpcSession = {
       workspaceService,
-      searchService: singleSearchService,
+      searchService: ownedSearchService,
       getTargets,
       isMainWindow: isMainWindowSender
-    }
-    if (!searchService) {
-      ownedSearchServices.set(singleSession, singleSearchService)
     }
     activeCoordinator = {
       resolveSession: () => singleSession
     }
-  }
-
-  const resolveSearchService = (session: WorkspaceIpcSession): WorkspaceSearchService => {
-    if (session.searchService) {
-      return session.searchService
-    }
-    let owned = ownedSearchServices.get(session)
-    if (!owned) {
-      owned = new WorkspaceSearchService({
-        workspaceService: session.workspaceService
-      })
-      ownedSearchServices.set(session, owned)
-    }
-    return owned
   }
 
   const clearWatcher = (targetService: WorkspaceFsService): void => {
@@ -138,8 +117,6 @@ export function registerWorkspaceIpc({
 
   const unsubscribeSessionDisposed = activeCoordinator.onSessionDisposed?.((session) => {
     clearWatcher(session.workspaceService)
-    ownedSearchServices.get(session)?.dispose()
-    ownedSearchServices.delete(session)
   })
 
   const requireSession = (event: unknown): WorkspaceIpcSession => {
@@ -184,7 +161,7 @@ export function registerWorkspaceIpc({
     session: WorkspaceIpcSession,
     rootPath: string
   ): Promise<WorkspaceInfo> => {
-    resolveSearchService(session).cancelActiveSearch()
+    session.searchService.cancelActiveSearch()
     return session.workspaceService.openWorkspace(rootPath)
   }
 
@@ -247,7 +224,7 @@ export function registerWorkspaceIpc({
     [
       WORKSPACE_IPC_CHANNELS.search,
       (event, request) =>
-        resolveSearchService(requireSession(event)).search(request as WorkspaceSearchRequest)
+        requireSession(event).searchService.search(request as WorkspaceSearchRequest)
     ],
     [
       WORKSPACE_IPC_CHANNELS.readFile,
@@ -327,10 +304,7 @@ export function registerWorkspaceIpc({
   return () => {
     unsubscribeSessionDisposed?.()
     clearAllWatchers()
-    for (const owned of ownedSearchServices.values()) {
-      owned.dispose()
-    }
-    ownedSearchServices.clear()
+    ownedSearchService?.dispose()
     removeHandlers()
   }
 }
