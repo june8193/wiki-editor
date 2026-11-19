@@ -1539,49 +1539,129 @@ describe('WysiwygMarkdownEditor link autocomplete & Ctrl+K', () => {
     })
   })
 
-  it('triggers onLinkNavigate in WYSIWYG mode only on Ctrl/Meta+click while preserving normal click and blocking browser navigation', () => {
-    const onLinkNavigate = vi.fn()
-    render(
-      <WysiwygMarkdownEditor
-        content={[
-          'See [섹션](#%EA%B0%9C%EC%9A%94), [`parseSym`](#parsesym), [문서](./other.md#top), and [웹](https://example.com).'
-        ].join('\n')}
-        scrollTop={0}
-        onChangeContent={vi.fn()}
-        onLinkNavigate={onLinkNavigate}
-      />
-    )
+  it('triggers onLinkNavigate in WYSIWYG mode on plain click and Ctrl/Meta+click, shows pointer cursor, preserves drag selection, and blocks browser navigation', () => {
+    const styleEl = document.createElement('style')
+    styleEl.textContent = `[contenteditable="true"] a { cursor: text; }\n${themeCss}`
+    document.head.appendChild(styleEl)
 
-    const editorEl = screen.getByTestId('document-editor')
-    const anchors = Array.from(editorEl.querySelectorAll('a'))
-    expect(anchors.length).toBeGreaterThanOrEqual(4)
+    try {
+      const onLinkNavigate = vi.fn()
+      render(
+        <WysiwygMarkdownEditor
+          content={[
+            'See [섹션](#%EA%B0%9C%EC%9A%94), [`parseSym`](#parsesym), [문서](./other.md#top), and [웹](https://example.com).'
+          ].join('\n')}
+          scrollTop={0}
+          onChangeContent={vi.fn()}
+          onLinkNavigate={onLinkNavigate}
+        />
+      )
 
-    const sectionAnchor = anchors.find((a) => a.getAttribute('href') === '#%EA%B0%9C%EC%9A%94')!
-    const symCode = anchors
-      .find((a) => a.getAttribute('href') === '#parsesym')!
-      .querySelector('code')!
-    const fileAnchor = anchors.find((a) => a.getAttribute('href') === './other.md#top')!
-    const externalAnchor = anchors.find((a) => a.getAttribute('href') === 'https://example.com')!
+      const editorEl = screen.getByTestId('document-editor')
+      const anchors = Array.from(editorEl.querySelectorAll('a'))
+      expect(anchors.length).toBeGreaterThanOrEqual(4)
 
-    // Normal click only prevents browser navigation and does not trigger onLinkNavigate
-    expect(fireEvent.click(sectionAnchor)).toBe(false)
-    expect(fireEvent.click(fileAnchor)).toBe(false)
-    expect(fireEvent.click(externalAnchor)).toBe(false)
-    expect(fireEvent.click(fileAnchor, { ctrlKey: true, altKey: true })).toBe(false)
-    expect(onLinkNavigate).not.toHaveBeenCalled()
+      const sectionAnchor = anchors.find((a) => a.getAttribute('href') === '#%EA%B0%9C%EC%9A%94')!
+      const symCode = anchors
+        .find((a) => a.getAttribute('href') === '#parsesym')!
+        .querySelector('code')!
+      const fileAnchor = anchors.find((a) => a.getAttribute('href') === './other.md#top')!
+      const externalAnchor = anchors.find((a) => a.getAttribute('href') === 'https://example.com')!
 
-    // Ctrl+click and Meta+click (including clicking child <code> inside <a>) trigger onLinkNavigate
-    expect(fireEvent.click(sectionAnchor, { ctrlKey: true })).toBe(false)
-    expect(onLinkNavigate).toHaveBeenNthCalledWith(1, '#%EA%B0%9C%EC%9A%94')
+      expect(editorEl).toHaveAttribute('contenteditable', 'true')
+      expect(window.getComputedStyle(sectionAnchor).cursor).toBe('pointer')
+      expect(window.getComputedStyle(symCode).cursor).toBe('pointer')
+      expect(window.getComputedStyle(fileAnchor).cursor).toBe('pointer')
 
-    expect(fireEvent.click(symCode, { metaKey: true })).toBe(false)
-    expect(onLinkNavigate).toHaveBeenNthCalledWith(2, '#parsesym')
+      // Alt+click and non-primary click block browser navigation without invoking onLinkNavigate
+      expect(fireEvent.click(fileAnchor, { altKey: true })).toBe(false)
+      expect(fireEvent.click(fileAnchor, { ctrlKey: true, altKey: true })).toBe(false)
+      expect(fireEvent.click(fileAnchor, { button: 1 })).toBe(false)
+      expect(onLinkNavigate).not.toHaveBeenCalled()
 
-    expect(fireEvent.click(fileAnchor, { ctrlKey: true })).toBe(false)
-    expect(onLinkNavigate).toHaveBeenNthCalledWith(3, './other.md#top')
+      // Plain primary clicks (including clicking child <code> inside <a>) trigger onLinkNavigate
+      expect(fireEvent.click(sectionAnchor)).toBe(false)
+      expect(onLinkNavigate).toHaveBeenNthCalledWith(1, '#%EA%B0%9C%EC%9A%94')
 
-    expect(fireEvent.click(externalAnchor, { ctrlKey: true })).toBe(false)
-    expect(onLinkNavigate).toHaveBeenNthCalledWith(4, 'https://example.com')
+      expect(fireEvent.click(symCode)).toBe(false)
+      expect(onLinkNavigate).toHaveBeenNthCalledWith(2, '#parsesym')
+
+      expect(fireEvent.click(fileAnchor)).toBe(false)
+      expect(onLinkNavigate).toHaveBeenNthCalledWith(3, './other.md#top')
+
+      expect(fireEvent.click(externalAnchor)).toBe(false)
+      expect(onLinkNavigate).toHaveBeenNthCalledWith(4, 'https://example.com')
+
+      // Ctrl+click and Meta+click also trigger onLinkNavigate
+      expect(fireEvent.click(sectionAnchor, { ctrlKey: true })).toBe(false)
+      expect(onLinkNavigate).toHaveBeenNthCalledWith(5, '#%EA%B0%9C%EC%9A%94')
+
+      expect(fireEvent.click(symCode, { metaKey: true })).toBe(false)
+      expect(onLinkNavigate).toHaveBeenNthCalledWith(6, '#parsesym')
+
+      // ProseMirror mousedown -> mouseup -> click with Ctrl/Meta must not convert block into NodeSelection
+      const originalElementFromPoint = Object.getOwnPropertyDescriptor(document, 'elementFromPoint')
+      const originalCaretPositionFromPoint = Object.getOwnPropertyDescriptor(
+        document,
+        'caretPositionFromPoint'
+      )
+      try {
+        Object.defineProperty(document, 'elementFromPoint', {
+          configurable: true,
+          writable: true,
+          value: () => sectionAnchor
+        })
+        Object.defineProperty(document, 'caretPositionFromPoint', {
+          configurable: true,
+          writable: true,
+          value: () => ({ offsetNode: sectionAnchor.firstChild!, offset: 1 })
+        })
+
+        onLinkNavigate.mockClear()
+        fireEvent.mouseDown(sectionAnchor, { button: 0, clientX: 1, clientY: 1, ctrlKey: true })
+        fireEvent.mouseUp(sectionAnchor, { button: 0, clientX: 1, clientY: 1, ctrlKey: true })
+        expect(fireEvent.click(sectionAnchor, { button: 0, clientX: 1, clientY: 1, ctrlKey: true })).toBe(
+          false
+        )
+        expect(sectionAnchor.closest('p')).not.toHaveClass('ProseMirror-selectednode')
+        expect(onLinkNavigate).toHaveBeenCalledTimes(1)
+        expect(onLinkNavigate).toHaveBeenCalledWith('#%EA%B0%9C%EC%9A%94')
+      } finally {
+        if (originalElementFromPoint) {
+          Object.defineProperty(document, 'elementFromPoint', originalElementFromPoint)
+        } else {
+          delete (document as unknown as Record<string, unknown>).elementFromPoint
+        }
+        if (originalCaretPositionFromPoint) {
+          Object.defineProperty(document, 'caretPositionFromPoint', originalCaretPositionFromPoint)
+        } else {
+          delete (document as unknown as Record<string, unknown>).caretPositionFromPoint
+        }
+      }
+
+      // Drag selection inside link suppresses navigation for both plain and Ctrl+click
+      const range = document.createRange()
+      range.selectNodeContents(sectionAnchor)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+
+      onLinkNavigate.mockClear()
+      expect(fireEvent.click(sectionAnchor)).toBe(false)
+      expect(fireEvent.click(sectionAnchor, { ctrlKey: true })).toBe(false)
+      expect(onLinkNavigate).not.toHaveBeenCalled()
+
+      // Collapsing selection allows plain click navigation again
+      range.collapse(false)
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      expect(fireEvent.click(sectionAnchor)).toBe(false)
+      expect(onLinkNavigate).toHaveBeenCalledTimes(1)
+      expect(onLinkNavigate).toHaveBeenCalledWith('#%EA%B0%9C%EC%9A%94')
+    } finally {
+      window.getSelection()?.removeAllRanges()
+      styleEl.remove()
+    }
   })
 })
 
