@@ -2877,22 +2877,35 @@ body.is-resizing-git-sections * {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
-.git-status-letter.is-added,
-.git-status-letter.is-untracked {
+.git-badge {
+  flex: 0 0 auto;
+  width: 16px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.git-status-letter.is-green,
+.git-badge--a,
+.git-badge--untracked {
   color: var(--git-status-added);
 }
 
-.git-status-letter.is-modified {
+.git-status-letter.is-amber,
+.git-badge--m {
   color: var(--git-status-modified);
 }
 
-.git-status-letter.is-deleted,
-.git-status-letter.is-conflict {
+.git-status-letter.is-red,
+.git-badge--d,
+.git-badge--u {
   color: var(--git-status-deleted);
 }
 
-.git-status-letter.is-renamed,
-.git-status-letter.is-copied {
+.git-status-letter.is-accent,
+.git-badge--r,
+.git-badge--c {
   color: var(--git-status-renamed);
 }
 
@@ -2944,34 +2957,6 @@ body.is-resizing-git-sections * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.git-badge {
-  flex: 0 0 auto;
-  width: 16px;
-  text-align: center;
-  font-size: 11px;
-  font-weight: 700;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-}
-
-.git-badge--a,
-.git-badge--untracked {
-  color: var(--git-status-added);
-}
-
-.git-badge--m {
-  color: var(--git-status-modified);
-}
-
-.git-badge--r,
-.git-badge--c {
-  color: var(--git-status-renamed);
-}
-
-.git-badge--d,
-.git-badge--u {
-  color: var(--git-status-deleted);
 }
 
 .git-graph-scope-toggle {

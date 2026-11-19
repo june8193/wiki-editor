@@ -3,20 +3,10 @@ import { isAbsoluteOrDrivePrefix, resolveRepoFileInWorkspace } from '@shared/wor
 
 export type GitFileStatusTone = 'amber' | 'green' | 'red' | 'accent'
 
-export type GitFileStatusModifier =
-  | 'modified'
-  | 'added'
-  | 'deleted'
-  | 'renamed'
-  | 'copied'
-  | 'untracked'
-  | 'conflict'
-
 export interface GitFileStatusDisplay {
   status: GitFileStatusCode
   displayCode: 'M' | 'A' | 'D' | 'R' | 'C' | 'U'
   tone: GitFileStatusTone
-  modifier: GitFileStatusModifier
   label: string
   strikethrough: boolean
 }
@@ -26,49 +16,42 @@ const GIT_FILE_STATUS_DISPLAY_MAP: Record<GitFileStatusCode, Omit<GitFileStatusD
     M: {
       displayCode: 'M',
       tone: 'amber',
-      modifier: 'modified',
       label: 'Modified',
       strikethrough: false
     },
     A: {
       displayCode: 'A',
       tone: 'green',
-      modifier: 'added',
       label: 'Added',
       strikethrough: false
     },
     D: {
       displayCode: 'D',
       tone: 'red',
-      modifier: 'deleted',
       label: 'Deleted',
       strikethrough: true
     },
     R: {
       displayCode: 'R',
       tone: 'accent',
-      modifier: 'renamed',
       label: 'Renamed',
       strikethrough: false
     },
     C: {
       displayCode: 'C',
       tone: 'accent',
-      modifier: 'copied',
       label: 'Copied',
       strikethrough: false
     },
     '?': {
       displayCode: 'U',
       tone: 'green',
-      modifier: 'untracked',
       label: 'Untracked',
       strikethrough: false
     },
     U: {
       displayCode: 'C',
       tone: 'red',
-      modifier: 'conflict',
       label: 'Conflict',
       strikethrough: false
     }

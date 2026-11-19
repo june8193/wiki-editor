@@ -96,17 +96,16 @@ describe('gitFilePresentation', () => {
       code: GitFileStatusCode
       displayCode: string
       tone: string
-      modifier: string
       label: string
       strikethrough: boolean
     }> = [
-      { code: 'M', displayCode: 'M', tone: 'amber', modifier: 'modified', label: 'Modified', strikethrough: false },
-      { code: 'A', displayCode: 'A', tone: 'green', modifier: 'added', label: 'Added', strikethrough: false },
-      { code: 'D', displayCode: 'D', tone: 'red', modifier: 'deleted', label: 'Deleted', strikethrough: true },
-      { code: 'R', displayCode: 'R', tone: 'accent', modifier: 'renamed', label: 'Renamed', strikethrough: false },
-      { code: 'C', displayCode: 'C', tone: 'accent', modifier: 'copied', label: 'Copied', strikethrough: false },
-      { code: '?', displayCode: 'U', tone: 'green', modifier: 'untracked', label: 'Untracked', strikethrough: false },
-      { code: 'U', displayCode: 'C', tone: 'red', modifier: 'conflict', label: 'Conflict', strikethrough: false }
+      { code: 'M', displayCode: 'M', tone: 'amber', label: 'Modified', strikethrough: false },
+      { code: 'A', displayCode: 'A', tone: 'green', label: 'Added', strikethrough: false },
+      { code: 'D', displayCode: 'D', tone: 'red', label: 'Deleted', strikethrough: true },
+      { code: 'R', displayCode: 'R', tone: 'accent', label: 'Renamed', strikethrough: false },
+      { code: 'C', displayCode: 'C', tone: 'accent', label: 'Copied', strikethrough: false },
+      { code: '?', displayCode: 'U', tone: 'green', label: 'Untracked', strikethrough: false },
+      { code: 'U', displayCode: 'C', tone: 'red', label: 'Conflict', strikethrough: false }
     ]
 
     for (const item of cases) {
@@ -116,7 +115,6 @@ describe('gitFilePresentation', () => {
         status: item.code,
         displayCode: item.displayCode,
         tone: item.tone,
-        modifier: item.modifier,
         label: item.label,
         strikethrough: item.strikethrough
       })

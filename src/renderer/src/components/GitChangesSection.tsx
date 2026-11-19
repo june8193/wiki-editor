@@ -138,24 +138,30 @@ function GitChangesSubgroup({
     [files, viewMode]
   )
 
+  const renderFileRow = (
+    file: GitChangedFile,
+    rowMode: GitChangesViewMode,
+    indentDepth = 0
+  ) => (
+    <GitChangedFileRow
+      key={`${groupKey}:${file.status}:${file.origPath ?? ''}:${file.path}`}
+      file={file}
+      displayMode={rowMode}
+      indentDepth={indentDepth}
+      isBusy={isBusy}
+      canOpenFile={canOpenGitChangedFile(file, repoRoot, workspaceRootPath)}
+      itemAction={itemAction}
+      onSelectFile={onSelectFile}
+      onOpenWorkspaceFile={onOpenWorkspaceFile}
+      onDiscardFile={onDiscardFile}
+      onItemAction={onItemAction}
+    />
+  )
+
   const renderTreeNodes = (nodes: readonly GitFileTreeNode[], depth: number) =>
     nodes.map((node) => {
       if (node.kind === 'file') {
-        return (
-          <GitChangedFileRow
-            key={`${groupKey}:${node.file.status}:${node.file.origPath ?? ''}:${node.file.path}`}
-            file={node.file}
-            displayMode="tree"
-            indentDepth={depth}
-            isBusy={isBusy}
-            canOpenFile={canOpenGitChangedFile(node.file, repoRoot, workspaceRootPath)}
-            itemAction={itemAction}
-            onSelectFile={onSelectFile}
-            onOpenWorkspaceFile={onOpenWorkspaceFile}
-            onDiscardFile={onDiscardFile}
-            onItemAction={onItemAction}
-          />
-        )
+        return renderFileRow(node.file, 'tree', depth)
       }
 
       const dirKey = `${groupKey}:${node.path}`
@@ -253,20 +259,7 @@ function GitChangesSubgroup({
           <ul className="git-file-list" role="list">
             {viewMode === 'tree'
               ? renderTreeNodes(treeNodes, 0)
-              : files.map((file) => (
-                  <GitChangedFileRow
-                    key={`${groupKey}:${file.status}:${file.origPath ?? ''}:${file.path}`}
-                    file={file}
-                    displayMode="list"
-                    isBusy={isBusy}
-                    canOpenFile={canOpenGitChangedFile(file, repoRoot, workspaceRootPath)}
-                    itemAction={itemAction}
-                    onSelectFile={onSelectFile}
-                    onOpenWorkspaceFile={onOpenWorkspaceFile}
-                    onDiscardFile={onDiscardFile}
-                    onItemAction={onItemAction}
-                  />
-                ))}
+              : files.map((file) => renderFileRow(file, 'list'))}
           </ul>
         ))}
     </div>

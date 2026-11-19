@@ -144,7 +144,7 @@ export function GitChangedFileRow({
       )}
 
       <span
-        className={`git-status-letter is-${statusDisplay.modifier}`}
+        className={`git-status-letter is-${statusDisplay.tone}`}
         aria-label={statusDisplay.label}
         title={statusDisplay.label}
       >
