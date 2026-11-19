@@ -120,28 +120,8 @@ describe('editorModes helpers', () => {
     ).toBeNull()
   })
 
-  it('triggers link navigation on normal primary click in Preview mode', () => {
-    expect(
-      isLinkNavigationClick('preview', {
-        button: 0,
-        ctrlKey: false,
-        metaKey: false,
-        altKey: false
-      })
-    ).toBe(true)
-
-    expect(
-      isLinkNavigationClick('preview', {
-        button: 1,
-        ctrlKey: false,
-        metaKey: false,
-        altKey: false
-      })
-    ).toBe(false)
-  })
-
-  it('requires Ctrl+click or Meta+click for link navigation in Raw and WYSIWYG modes', () => {
-    for (const mode of ['raw', 'wysiwyg'] as const) {
+  it('triggers link navigation on normal primary click and Ctrl/Meta+click in Preview and WYSIWYG modes', () => {
+    for (const mode of ['preview', 'wysiwyg'] as const) {
       expect(
         isLinkNavigationClick(mode, {
           button: 0,
@@ -149,7 +129,7 @@ describe('editorModes helpers', () => {
           metaKey: false,
           altKey: false
         })
-      ).toBe(false)
+      ).toBe(true)
 
       expect(
         isLinkNavigationClick(mode, {
@@ -171,6 +151,24 @@ describe('editorModes helpers', () => {
 
       expect(
         isLinkNavigationClick(mode, {
+          button: 1,
+          ctrlKey: false,
+          metaKey: false,
+          altKey: false
+        })
+      ).toBe(false)
+
+      expect(
+        isLinkNavigationClick(mode, {
+          button: 0,
+          ctrlKey: false,
+          metaKey: false,
+          altKey: true
+        })
+      ).toBe(false)
+
+      expect(
+        isLinkNavigationClick(mode, {
           button: 0,
           ctrlKey: true,
           metaKey: false,
@@ -178,6 +176,44 @@ describe('editorModes helpers', () => {
         })
       ).toBe(false)
     }
+  })
+
+  it('requires Ctrl+click or Meta+click for link navigation in Raw mode', () => {
+    expect(
+      isLinkNavigationClick('raw', {
+        button: 0,
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false
+      })
+    ).toBe(false)
+
+    expect(
+      isLinkNavigationClick('raw', {
+        button: 0,
+        ctrlKey: true,
+        metaKey: false,
+        altKey: false
+      })
+    ).toBe(true)
+
+    expect(
+      isLinkNavigationClick('raw', {
+        button: 0,
+        ctrlKey: false,
+        metaKey: true,
+        altKey: false
+      })
+    ).toBe(true)
+
+    expect(
+      isLinkNavigationClick('raw', {
+        button: 0,
+        ctrlKey: true,
+        metaKey: false,
+        altKey: true
+      })
+    ).toBe(false)
   })
 
   it('disables markdown modes, save shortcut, and mode shortcuts for read-only image buffers', () => {

@@ -9666,16 +9666,23 @@ describe('Markdown link navigation and missing target banner', () => {
       expect(rawTargetTab).toHaveAttribute('aria-selected', 'true')
       await user.click(within(primaryPane).getByRole('tab', { name: /current\.md/i }))
 
-      // 3) WYSIWYG mode: normal click does not jump, Meta+click scrolls heading, Ctrl+click opens relative file
+      // 3) WYSIWYG mode: Alt+click does not jump, plain click and Meta+click scroll heading, plain click opens relative file
       await user.click(within(primaryPane).getByRole('button', { name: '위지윅' }))
       scrollIntoViewMock.mockClear()
       const wysiwygEl = within(primaryPane).getByTestId('document-editor')
       const wysiwygSectionLink = Array.from(wysiwygEl.querySelectorAll('a')).find(
         (a) => a.getAttribute('href') === '#%EC%84%B8%EB%B6%80-%ED%95%AD%EB%AA%A9'
       )!
-      expect(fireEvent.click(wysiwygSectionLink)).toBe(false)
+      expect(fireEvent.click(wysiwygSectionLink, { altKey: true })).toBe(false)
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
 
+      expect(fireEvent.click(wysiwygSectionLink)).toBe(false)
+      await waitFor(() => {
+        expect(getHeadingScrollTargets()).toHaveLength(1)
+      })
+      expect(getHeadingScrollTargets()[0].textContent).toContain('세부 항목')
+
+      scrollIntoViewMock.mockClear()
       expect(fireEvent.click(wysiwygSectionLink, { metaKey: true })).toBe(false)
       await waitFor(() => {
         expect(getHeadingScrollTargets()).toHaveLength(1)
@@ -9685,7 +9692,7 @@ describe('Markdown link navigation and missing target banner', () => {
       const wysiwygRelLink = Array.from(wysiwygEl.querySelectorAll('a')).find(
         (a) => a.getAttribute('href') === './wysiwyg-target.md'
       )!
-      expect(fireEvent.click(wysiwygRelLink, { ctrlKey: true })).toBe(false)
+      expect(fireEvent.click(wysiwygRelLink)).toBe(false)
       const wysiwygTargetTab = await within(primaryPane).findByRole('tab', {
         name: /wysiwyg-target\.md/i
       })

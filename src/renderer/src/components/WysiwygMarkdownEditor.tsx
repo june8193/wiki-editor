@@ -8,7 +8,7 @@ import {
   type MermaidHeightChangeHandler,
   MermaidHeightSessionProvider
 } from '../editor/mermaidHeightSession'
-import { isLinkNavigationClick } from '../editor/editorModes'
+import { isLinkNavigationClick, type LinkClickModifierState } from '../editor/editorModes'
 import {
   type HeadingScrollSpySample,
   resolveMatchingOutlineCandidates
@@ -226,6 +226,48 @@ const TABLE_ACTION_ITEMS: ReadonlyArray<{
   }
 ]
 
+function hasExpandedWysiwygSelection(editor: Editor | null): boolean {
+  if (!editor || editor.isDestroyed) {
+    return false
+  }
+  const domSelection = window.getSelection?.()
+  if (domSelection && domSelection.rangeCount > 0) {
+    const editorDom = editor.view.dom
+    const selectionInEditor = Boolean(
+      (domSelection.anchorNode && editorDom.contains(domSelection.anchorNode)) ||
+        (domSelection.focusNode && editorDom.contains(domSelection.focusNode))
+    )
+    if (selectionInEditor) {
+      return !domSelection.isCollapsed
+    }
+  }
+  return !editor.state.selection.empty
+}
+
+function findEventAnchor(target: EventTarget | null): HTMLAnchorElement | null {
+  return target instanceof Element ? target.closest('a') : null
+}
+
+function shouldNavigateWysiwygLinkClick(
+  editor: Editor | null,
+  event: LinkClickModifierState
+): boolean {
+  return isLinkNavigationClick('wysiwyg', event) && !hasExpandedWysiwygSelection(editor)
+}
+
+function shouldSuppressProseMirrorLinkSelection(
+  editor: Editor | null,
+  event: MouseEvent
+): boolean {
+  if (!findEventAnchor(event.target)) {
+    return false
+  }
+  if (event.ctrlKey || event.metaKey) {
+    return isLinkNavigationClick('wysiwyg', event)
+  }
+  return shouldNavigateWysiwygLinkClick(editor, event)
+}
+
 export function WysiwygMarkdownEditor({
   content,
   scrollTop,
@@ -324,6 +366,8 @@ export function WysiwygMarkdownEditor({
         },
         transformPastedHTML: sanitizeHtmlWithRehype,
         handlePaste: (view, event) => handleImagePaste(event, view),
+        handleClick: (_view, _pos, event) =>
+          shouldSuppressProseMirrorLinkSelection(editorRef.current, event),
         handleDOMEvents: {
           dragover: (_view, event) => handleImageDragOver(event),
           drop: (view, event) => handleImageDrop(event, view)
@@ -557,13 +601,12 @@ export function WysiwygMarkdownEditor({
           setCellMenuPos({ x: event.clientX, y: event.clientY })
         }}
         onClick={(event) => {
-          const target = event.target as HTMLElement | null
-          const anchor = target?.closest('a')
+          const anchor = findEventAnchor(event.target)
           if (!anchor) {
             return
           }
           event.preventDefault()
-          if (!isLinkNavigationClick('wysiwyg', event)) {
+          if (!shouldNavigateWysiwygLinkClick(editor, event)) {
             return
           }
           const href = anchor.getAttribute('href')
@@ -572,8 +615,7 @@ export function WysiwygMarkdownEditor({
           }
         }}
         onAuxClick={(event) => {
-          const target = event.target as HTMLElement | null
-          if (target?.closest('a')) {
+          if (findEventAnchor(event.target)) {
             event.preventDefault()
           }
         }}

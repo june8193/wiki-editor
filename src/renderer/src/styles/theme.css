@@ -1073,6 +1073,7 @@ body.is-resizing-sidebar .pane-workspace {
 .wysiwyg-prosemirror a {
   color: var(--accent-color);
   text-decoration: underline;
+  cursor: pointer;
 }
 
 .markdown-preview blockquote,

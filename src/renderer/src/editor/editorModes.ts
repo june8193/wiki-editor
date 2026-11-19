@@ -156,14 +156,14 @@ export function resolveEditorShortcut(
 
 /**
  * Determines whether a mouse click should trigger Markdown link navigation in the given editor mode.
- * Preview navigates on primary click, whereas Raw and WYSIWYG require Ctrl/Meta+click so normal
- * clicks continue to move the editing caret.
+ * Preview and WYSIWYG navigate on primary click (as well as Ctrl/Meta+click), whereas Raw
+ * requires Ctrl/Meta+click so normal clicks continue to move the editing caret.
  */
 export function isLinkNavigationClick(mode: EditorMode, event: LinkClickModifierState): boolean {
   if (event.button !== 0 || event.altKey) {
     return false
   }
-  if (mode === 'preview') {
+  if (mode === 'preview' || mode === 'wysiwyg') {
     return true
   }
   return event.ctrlKey || event.metaKey
