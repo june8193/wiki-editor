@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode, useEffect, useRef } from 'react'
+import { type KeyboardEvent, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, FileText, RotateCw } from 'lucide-react'
 import type {
   SearchMatchOptions,
@@ -7,6 +7,7 @@ import type {
   WorkspaceSearchResponse
 } from '@shared/search'
 import { getWorkspacePathKey } from '@shared/workspace'
+import { useSearchInputFocus } from '../hooks/useSearchInputFocus'
 import { type SearchFocusRequest, splitTextByMatchSpans } from '../utils/workspaceSearch'
 import { SearchOptionGroup } from './SearchOptionGroup'
 
@@ -61,21 +62,7 @@ export function SearchSidebarPanel({
   onToggleFileCollapsed,
   onOpenFile
 }: SearchSidebarPanelProps) {
-  const inputRef = useRef<HTMLInputElement | null>(null)
-  const lastHandledFocusNonceRef = useRef(0)
-
-  useEffect(() => {
-    if (!focusRequest || focusRequest.nonce === 0) return
-    if (focusRequest.nonce === lastHandledFocusNonceRef.current) return
-    lastHandledFocusNonceRef.current = focusRequest.nonce
-
-    const input = inputRef.current
-    if (!input) return
-    input.focus()
-    if (focusRequest.selectAll && input.value.length > 0) {
-      input.select()
-    }
-  }, [focusRequest])
+  const inputRef = useSearchInputFocus(focusRequest)
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key !== 'Enter') return
