@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -30,9 +31,23 @@ import { type DismissReason, useDismissable } from '../hooks/useDismissable'
 import type { GitGraphState } from '../hooks/useGitGraphLog'
 import { toGitDiffRequest } from '../utils/gitFilePresentation'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
+import {
+  formatGitCommitPlaceholder,
+  getGitBranchLabel,
+  getGitPrimaryActionState,
+  type GitCommitActionMode
+} from '../utils/gitPrimaryAction'
 import { GitFileTriggerButton } from './GitFileTriggerButton'
 import { GitGraphScopeToggle, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
+
+const COMMIT_INPUT_MAX_HEIGHT_PX = 120
+
+const COMMIT_ACTION_MENU_ITEMS: ReadonlyArray<{ mode: GitCommitActionMode; label: string }> = [
+  { mode: 'commit', label: 'Commit' },
+  { mode: 'commit-push', label: 'Commit & Push' },
+  { mode: 'commit-sync', label: 'Commit & Sync' }
+]
 
 export interface GitSidebarPanelProps {
   workspaceRootPath: string | null
@@ -54,7 +69,7 @@ export interface GitSidebarPanelProps {
   onUnstageAll: () => void
   onDiscardFile: (path: string) => void
   onDiscardAll: () => void
-  onCommit: (message: string) => Promise<boolean> | boolean
+  onCommit: (message: string, mode?: GitCommitActionMode) => Promise<boolean> | boolean
   onCheckoutBranch: (branchName: string) => void
   onPull: () => void
   onPush: () => void
@@ -392,7 +407,7 @@ function GitBranchSubrow({
   onSync
 }: GitBranchSubrowProps) {
   const currentBranch = status.branch
-  const branchLabel = status.branch ?? (status.isDetached ? '(detached)' : 'HEAD')
+  const branchLabel = getGitBranchLabel(status)
   const isPickerDisabled = isBusy || branches.length === 0
   const branchMenu = useMenuPopover(isPickerDisabled, workspaceRootPath)
   const isRemoteDisabled = isBusy || status.isUnborn || status.isDetached
@@ -482,6 +497,194 @@ function GitBranchSubrow({
   )
 }
 
+interface GitCommitFormProps {
+  workspaceRootPath: string | null
+  status: GitStatus
+  isBusy: boolean
+  onCommit: (message: string, mode?: GitCommitActionMode) => Promise<boolean> | boolean
+  onPush: () => void
+  onSync: () => void
+}
+
+/**
+ * Renders the 1-line auto-resizing commit input and smart primary CTA (`Commit ▾` / `Publish Branch` / `Sync Changes`).
+ */
+function GitCommitForm({
+  workspaceRootPath,
+  status,
+  isBusy,
+  onCommit,
+  onPush,
+  onSync
+}: GitCommitFormProps) {
+  const [commitMessage, setCommitMessage] = useState('')
+  const [validationMessage, setValidationMessage] = useState<string | null>(null)
+  const commitInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const commitInFlightRef = useRef(false)
+
+  const primaryAction = getGitPrimaryActionState(status)
+  const isCommitMode = primaryAction.kind === 'commit'
+  const isCommitDisabled = isBusy || !isCommitMode || primaryAction.disabled
+  const commitMenu = useMenuPopover(isCommitDisabled, workspaceRootPath)
+  const branchLabel = getGitBranchLabel(status)
+
+  useEffect(() => {
+    setValidationMessage(null)
+  }, [workspaceRootPath])
+
+  useEffect(() => {
+    if (!isCommitMode || primaryAction.disabled) {
+      setValidationMessage(null)
+    }
+  }, [isCommitMode, primaryAction.kind === 'commit' ? primaryAction.disabled : false])
+
+  useLayoutEffect(() => {
+    const input = commitInputRef.current
+    if (!input) return
+    input.style.height = 'auto'
+    if (input.scrollHeight > 0) {
+      input.style.height = `${Math.min(input.scrollHeight, COMMIT_INPUT_MAX_HEIGHT_PX)}px`
+    }
+  }, [commitMessage, status.isRepo])
+
+  const submitCommit = async (mode: GitCommitActionMode = 'commit'): Promise<void> => {
+    if (
+      commitInFlightRef.current ||
+      isBusy ||
+      primaryAction.kind !== 'commit' ||
+      primaryAction.disabled
+    ) {
+      return
+    }
+    const trimmed = commitMessage.trim()
+    if (!trimmed) {
+      setValidationMessage('커밋 메시지를 입력하세요.')
+      return
+    }
+    setValidationMessage(null)
+    commitInFlightRef.current = true
+    try {
+      const committed = await onCommit(trimmed, mode)
+      if (committed) {
+        setCommitMessage('')
+      }
+    } finally {
+      commitInFlightRef.current = false
+    }
+  }
+
+  const handleFormSubmit = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    void submitCommit('commit')
+  }
+
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault()
+      void submitCommit('commit')
+    }
+  }
+
+  return (
+    <form className="git-commit-form" onSubmit={handleFormSubmit}>
+      <textarea
+        ref={commitInputRef}
+        className="git-commit-input"
+        aria-label="커밋 메시지"
+        placeholder={formatGitCommitPlaceholder(branchLabel)}
+        rows={1}
+        value={commitMessage}
+        disabled={isBusy}
+        onChange={(event) => {
+          setCommitMessage(event.target.value)
+          if (validationMessage && event.target.value.trim()) {
+            setValidationMessage(null)
+          }
+        }}
+        onKeyDown={handleInputKeyDown}
+      />
+      {validationMessage && <p className="git-validation-text">{validationMessage}</p>}
+      {status.hasConflicts && (
+        <p className="git-validation-text">
+          병합 충돌 파일을 해결하고 Stage(+)한 후 커밋하세요.
+        </p>
+      )}
+      {primaryAction.kind === 'publish' ? (
+        <button
+          type="button"
+          className="btn btn-sm btn-primary git-commit-btn"
+          title="원격 저장소에 브랜치 게시 (Publish / Push)"
+          disabled={isBusy}
+          onClick={onPush}
+        >
+          <CloudUpload size={14} strokeWidth={1.75} aria-hidden="true" />
+          <span className="git-commit-btn-label">Publish Branch</span>
+        </button>
+      ) : primaryAction.kind === 'sync' ? (
+        <button
+          type="button"
+          className="btn btn-sm btn-primary git-commit-btn"
+          title={`원격 저장소와 동기화 (Sync · ↓${primaryAction.behind} ↑${primaryAction.ahead})`}
+          disabled={isBusy}
+          onClick={onSync}
+        >
+          <RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />
+          <span className="git-commit-btn-label">
+            Sync Changes {primaryAction.behind}↓ {primaryAction.ahead}↑
+          </span>
+        </button>
+      ) : (
+        <div ref={commitMenu.containerRef} className="git-commit-split-wrap">
+          <button
+            type="submit"
+            className="btn btn-sm btn-primary git-commit-split-main"
+            disabled={isCommitDisabled}
+          >
+            <Check size={14} strokeWidth={1.75} aria-hidden="true" />
+            <span className="git-commit-btn-label">Commit</span>
+          </button>
+          <button
+            ref={commitMenu.triggerRef}
+            type="button"
+            className="btn btn-sm btn-primary git-commit-split-toggle"
+            aria-label="커밋 작업 더 보기"
+            title="커밋 작업 더 보기"
+            aria-haspopup="menu"
+            aria-expanded={commitMenu.isOpen}
+            disabled={isCommitDisabled}
+            onClick={() => commitMenu.setIsOpen((open) => !open)}
+          >
+            <ChevronDown size={13} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+          {commitMenu.isOpen && (
+            <div
+              className="tree-context-menu git-popover-menu git-commit-menu"
+              role="menu"
+              aria-label="커밋 옵션"
+            >
+              {COMMIT_ACTION_MENU_ITEMS.map((item) => (
+                <button
+                  key={item.mode}
+                  type="button"
+                  role="menuitem"
+                  className="context-menu-item git-popover-menu-item"
+                  disabled={isCommitDisabled}
+                  onClick={() => {
+                    commitMenu.close()
+                    void submitCommit(item.mode)
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </form>
+  )
+}
+
 /**
  * Sidebar panel for the Git panel header, 26px branch subrow, and collapsible Changes and Graph sections.
  */
@@ -516,13 +719,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onToggleGraphCollapsed,
   onResizeChangesRatio
 }: GitSidebarPanelProps) {
-  const [commitMessage, setCommitMessage] = useState('')
-  const [validationMessage, setValidationMessage] = useState<string | null>(null)
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    setValidationMessage(null)
-  }, [workspaceRootPath])
 
   const isBusy = pendingAction !== null
   const unstagedAndUntracked: GitChangedFile[] = status
@@ -531,34 +728,6 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   const availableBranches = branchList?.branches ?? []
   const totalChangedCount = getGitChangedCount(status)
   const layout = computeGitSectionLayout(splitState)
-
-  const submitCommit = async (): Promise<void> => {
-    if (isBusy || !status?.isRepo || status.staged.length === 0 || status.hasConflicts) {
-      return
-    }
-    const trimmed = commitMessage.trim()
-    if (!trimmed) {
-      setValidationMessage('커밋 메시지를 입력하세요.')
-      return
-    }
-    setValidationMessage(null)
-    const committed = await onCommit(trimmed)
-    if (committed) {
-      setCommitMessage('')
-    }
-  }
-
-  const handleCommitFormSubmit = (event: FormEvent<HTMLFormElement>): void => {
-    event.preventDefault()
-    void submitCommit()
-  }
-
-  const handleCommitKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-      event.preventDefault()
-      void submitCommit()
-    }
-  }
 
   const renderNonRepoBody = () => {
     if (!workspaceRootPath) {
@@ -662,36 +831,14 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
               flexRatio={layout.changesFlexRatio}
               onToggle={onToggleChangesCollapsed}
             >
-              <form className="git-commit-form" onSubmit={handleCommitFormSubmit}>
-                <textarea
-                  className="git-commit-input"
-                  aria-label="커밋 메시지"
-                  placeholder="커밋 메시지를 입력하세요 (Ctrl+Enter)"
-                  rows={2}
-                  value={commitMessage}
-                  disabled={isBusy}
-                  onChange={(event) => {
-                    setCommitMessage(event.target.value)
-                    if (validationMessage && event.target.value.trim()) {
-                      setValidationMessage(null)
-                    }
-                  }}
-                  onKeyDown={handleCommitKeyDown}
-                />
-                {validationMessage && <p className="git-validation-text">{validationMessage}</p>}
-                {status.hasConflicts && (
-                  <p className="git-validation-text">
-                    병합 충돌 파일을 해결하고 Stage(+)한 후 커밋하세요.
-                  </p>
-                )}
-                <button
-                  type="submit"
-                  className="btn btn-sm btn-primary git-commit-btn"
-                  disabled={isBusy || status.staged.length === 0 || status.hasConflicts}
-                >
-                  Commit
-                </button>
-              </form>
+              <GitCommitForm
+                workspaceRootPath={workspaceRootPath}
+                status={status}
+                isBusy={isBusy}
+                onCommit={onCommit}
+                onPush={onPush}
+                onSync={onSync}
+              />
 
               <GitFileSection
                 title="스테이지됨"

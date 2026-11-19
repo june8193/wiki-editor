@@ -4486,6 +4486,245 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(currentRowBtn).toHaveAttribute('aria-expanded', 'false')
     expect(within(graphRegion).queryByRole('region', { name: '2222222 커밋 상세' })).toBeNull()
   })
+
+  it('supports smart commit CTA transitions (auto-stage ConfirmDialog, Publish Branch, Sync Changes) and compound Commit & Push / Commit & Sync error and dirty-buffer flows', async () => {
+    const user = userEvent.setup()
+    let hasUpstream = false
+    let ahead = 0
+    let behind = 0
+    let hasConflicts = false
+    let staged: Array<{ path: string; status: GitFileStatusCode }> = []
+    let unstaged: Array<{ path: string; status: GitFileStatusCode }> = [
+      { path: 'note.md', status: 'M' }
+    ]
+    let untracked: Array<{ path: string; status: GitFileStatusCode }> = [
+      { path: 'draft.md', status: '?' }
+    ]
+    let commits: GitGraphCommit[] = []
+    const callOrder: string[] = []
+    let pushShouldFail = false
+
+    const buildStatus = () => ({
+      ...createEmptyGitStatus(true, 'C:/wiki/smart-cta'),
+      branch: 'feature/smart',
+      hasUpstream,
+      ahead,
+      behind,
+      hasConflicts,
+      staged,
+      unstaged,
+      untracked
+    })
+
+    const stageAllSpy = vi.fn(async () => {
+      callOrder.push('stageAll')
+      staged = [...unstaged, ...untracked].map((file) => ({
+        path: file.path,
+        status: (file.status === '?' ? 'A' : file.status) as GitFileStatusCode
+      }))
+      unstaged = []
+      untracked = []
+      return buildStatus()
+    })
+
+    const commitSpy = vi.fn(async (_ws: string, message: string) => {
+      callOrder.push(`commit:${message}`)
+      staged = []
+      ahead += 1
+      commits = [
+        {
+          hash: `${commits.length + 1}`.repeat(40),
+          shortHash: `${commits.length + 1}`.repeat(7),
+          parents: commits[0] ? [commits[0].hash] : [],
+          subject: message,
+          authorName: 'Alice',
+          committedAt: '2026-11-19T10:00:00+09:00',
+          refs: [{ name: 'feature/smart', kind: 'local-branch', isCurrentHead: true }]
+        },
+        ...commits
+      ]
+      return buildStatus()
+    })
+
+    const pushSpy = vi.fn(async () => {
+      callOrder.push('push')
+      if (pushShouldFail) {
+        throw new Error('원격 저장소 Push 권한이 없습니다.')
+      }
+      hasUpstream = true
+      ahead = 0
+      return buildStatus()
+    })
+
+    const syncSpy = vi.fn(async () => {
+      callOrder.push('sync')
+      ahead = 0
+      behind = 0
+      return { status: buildStatus(), pulled: true, pushed: true, summary: '동기화 완료' }
+    })
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/smart-cta',
+        workspaces: {
+          'C:/wiki/smart-cta': {
+            'note.md': '# Note',
+            'draft.md': '# Draft'
+          }
+        },
+        git: {
+          status: vi.fn(async () => buildStatus()),
+          branches: vi.fn(async () => ({
+            current: 'feature/smart',
+            isDetached: false,
+            branches: [
+              {
+                name: 'feature/smart',
+                current: true,
+                upstream: hasUpstream ? 'origin/feature/smart' : null
+              }
+            ]
+          })),
+          stageAll: stageAllSpy,
+          commit: commitSpy,
+          push: pushSpy,
+          sync: syncSpy,
+          log: vi.fn(async () => ({ commits, hasMore: false }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    // Dirty note.md in editor for later Commit & Sync buffer protection verification
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('note.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), '\nUnsaved buffer edit')
+
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const input = within(gitRegion).getByPlaceholderText(
+      '메시지 (Ctrl+Enter로 "feature/smart"에 커밋)'
+    ) as HTMLTextAreaElement
+
+    // 1. Blank message inline validation runs BEFORE auto-stage ConfirmDialog
+    await user.click(within(gitRegion).getByRole('button', { name: 'Commit' }))
+    expect(within(gitRegion).getByText('커밋 메시지를 입력하세요.')).toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+
+    // 2. Staged=0 + valid message -> ConfirmDialog -> cancel aborts cleanly
+    await user.type(input, 'feat: initial smart commit')
+    await user.click(within(gitRegion).getByRole('button', { name: 'Commit' }))
+    const cancelAutoDialog = await screen.findByRole('alertdialog')
+    expect(cancelAutoDialog).toHaveTextContent(
+      '스테이지된 변경 사항이 없습니다. 모든 변경 사항을 자동으로 Stage하고 커밋할까요?'
+    )
+    await user.click(within(cancelAutoDialog).getByRole('button', { name: '취소' }))
+    expect(stageAllSpy).not.toHaveBeenCalled()
+    expect(commitSpy).not.toHaveBeenCalled()
+    expect(input.value).toBe('feat: initial smart commit')
+
+    // 3. Ctrl+Enter with Staged=0 -> approve auto-stage -> stageAll -> commit -> transitions to Publish Branch
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+    const approveAutoDialog = await screen.findByRole('alertdialog')
+    await user.click(within(approveAutoDialog).getByRole('button', { name: 'Stage 후 커밋' }))
+
+    await waitFor(() => {
+      expect(input.value).toBe('')
+    })
+    expect(callOrder).toEqual(['stageAll', 'commit:feat: initial smart commit'])
+    expect(await within(gitRegion).findByText('feat: initial smart commit')).toBeInTheDocument()
+
+    // Clean unpublished state renders Publish Branch -> clicking executes Push -> synced disabled Commit
+    const publishBtn = await within(gitRegion).findByRole('button', { name: 'Publish Branch' })
+    await user.click(publishBtn)
+    await waitFor(() => {
+      expect(pushSpy).toHaveBeenCalledTimes(1)
+    })
+    expect(await within(gitRegion).findByRole('button', { name: 'Commit' })).toBeDisabled()
+    expect(within(gitRegion).getByRole('button', { name: '커밋 작업 더 보기' })).toBeDisabled()
+
+    // 4. Clean + ahead/behind renders Sync Changes N↓ M↑ -> clicking triggers Sync (with dirty buffer prompt)
+    ahead = 2
+    behind = 1
+    await user.click(within(gitRegion).getByRole('button', { name: 'Git 상태 새로고침' }))
+    const syncChangesBtn = await within(gitRegion).findByRole('button', {
+      name: 'Sync Changes 1↓ 2↑'
+    })
+    await user.click(syncChangesBtn)
+    const dirtySyncDialog1 = await screen.findByRole('alertdialog')
+    await user.click(within(dirtySyncDialog1).getByRole('button', { name: '저장 없이 진행' }))
+    await waitFor(() => {
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+    })
+
+    // 5. Commit & Push where commit succeeds and push fails -> input clears and only push error banner is shown
+    staged = [{ path: 'note.md', status: 'M' }]
+    pushShouldFail = true
+    await user.click(within(gitRegion).getByRole('button', { name: 'Git 상태 새로고침' }))
+
+    const commitInput = within(gitRegion).getByLabelText('커밋 메시지') as HTMLTextAreaElement
+    await user.type(commitInput, 'feat: push fails after commit')
+    await user.click(within(gitRegion).getByRole('button', { name: '커밋 작업 더 보기' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'Commit & Push' }))
+
+    await waitFor(() => {
+      expect(commitInput.value).toBe('')
+    })
+    expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(
+      '원격 저장소 Push 권한이 없습니다.'
+    )
+    expect(within(gitRegion).getByText('feat: push fails after commit')).toBeInTheDocument()
+
+    // 6. Commit & Sync with Staged=0 + dirty buffer: cancel Sync prompt preserves commit & dirty buffer, clears input, shows Sync banner
+    staged = []
+    unstaged = [{ path: 'note.md', status: 'M' }]
+    await user.click(within(gitRegion).getByRole('button', { name: 'Git 상태 새로고침' }))
+
+    await user.type(commitInput, 'feat: commit then cancel sync')
+    await user.click(within(gitRegion).getByRole('button', { name: '커밋 작업 더 보기' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'Commit & Sync' }))
+
+    const autoStageForSync = await screen.findByRole('alertdialog')
+    await user.click(within(autoStageForSync).getByRole('button', { name: 'Stage 후 커밋' }))
+
+    const dirtySyncPrompt = await screen.findByRole('alertdialog')
+    expect(dirtySyncPrompt).toHaveTextContent(/note\.md/)
+    await user.click(within(dirtySyncPrompt).getByRole('button', { name: '취소' }))
+
+    await waitFor(() => {
+      expect(commitInput.value).toBe('')
+    })
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(/Sync/)
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toContain('Unsaved buffer edit')
+
+    // 7. Commit & Sync approved -> sync runs after commit
+    staged = [{ path: 'note.md', status: 'M' }]
+    await user.click(within(gitRegion).getByRole('button', { name: 'Git 상태 새로고침' }))
+    await user.type(commitInput, 'feat: commit and sync ok')
+    await user.click(within(gitRegion).getByRole('button', { name: '커밋 작업 더 보기' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'Commit & Sync' }))
+
+    const dirtySyncApprove = await screen.findByRole('alertdialog')
+    await user.click(within(dirtySyncApprove).getByRole('button', { name: '저장 없이 진행' }))
+    await waitFor(() => {
+      expect(syncSpy).toHaveBeenCalledTimes(2)
+    })
+
+    // 8. Merge conflicts disable Commit split CTA & dropdown and preserve conflict guidance
+    hasConflicts = true
+    unstaged = [{ path: 'note.md', status: 'U' }]
+    await user.click(within(gitRegion).getByRole('button', { name: 'Git 상태 새로고침' }))
+
+    expect(await within(gitRegion).findByRole('button', { name: 'Commit' })).toBeDisabled()
+    expect(within(gitRegion).getByRole('button', { name: '커밋 작업 더 보기' })).toBeDisabled()
+    expect(
+      within(gitRegion).getByText('병합 충돌 파일을 해결하고 Stage(+)한 후 커밋하세요.')
+    ).toBeInTheDocument()
+  })
 })
 
 describe('Renderer error logging & UI breadcrumbs', () => {

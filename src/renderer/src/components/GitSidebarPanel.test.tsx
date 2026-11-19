@@ -228,7 +228,7 @@ describe('GitSidebarPanel', () => {
     await user.clear(messageInput)
     await user.type(messageInput, 'docs: update handbook')
     await user.click(commitBtn)
-    expect(onCommit).toHaveBeenCalledWith('docs: update handbook')
+    expect(onCommit).toHaveBeenCalledWith('docs: update handbook', 'commit')
     expect((messageInput as HTMLTextAreaElement).value).toBe('')
 
     // Immediate branch checkout from 26px branch picker overlay
@@ -348,7 +348,7 @@ describe('GitSidebarPanel', () => {
     const commitInput = within(region).getByLabelText('커밋 메시지')
     await user.type(commitInput, 'chore: ctrl enter commit')
     fireEvent.keyDown(commitInput, { key: 'Enter', ctrlKey: true })
-    expect(onCommit).toHaveBeenCalledWith('chore: ctrl enter commit')
+    expect(onCommit).toHaveBeenCalledWith('chore: ctrl enter commit', 'commit')
 
     // Collapse Changes -> commit form and file sections hide, but branch subrow & remote sync remain active
     await user.click(changesToggle)
@@ -391,7 +391,7 @@ describe('GitSidebarPanel', () => {
         })}
       />
     )
-    expect(within(region).getByRole('button', { name: /Changes/i })).toHaveTextContent('0')
+    expect(within(region).getByRole('button', { name: /^Changes/i })).toHaveTextContent('0')
   })
 
   it('renders horizontal section resizer only when both sections are expanded and supports keyboard, pointer drag, double-click, and collapse ratio preservation', async () => {
@@ -1239,5 +1239,219 @@ describe('GitSidebarPanel', () => {
       />
     )
     expect(within(region).getByRole('button', { name: '전체 변경 사항 롤백' })).toBeDisabled()
+  })
+
+  it('renders 1-line auto-resizing commit input with branch placeholder and Cmd+Enter shortcut', async () => {
+    const user = userEvent.setup()
+    const onCommit = vi.fn().mockResolvedValue(true)
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({ branch: 'feature/cta' }),
+          onCommit
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const input = within(region).getByPlaceholderText(
+      '메시지 (Ctrl+Enter로 "feature/cta"에 커밋)'
+    ) as HTMLTextAreaElement
+    expect(input).toHaveAttribute('rows', '1')
+
+    let measuredScrollHeight = 28
+    Object.defineProperty(input, 'scrollHeight', {
+      configurable: true,
+      get: () => measuredScrollHeight
+    })
+
+    // Input expands up to max-height (120px) and shrinks back when cleared
+    measuredScrollHeight = 76
+    await user.type(input, 'line 1\nline 2')
+    expect(input.style.height).toBe('76px')
+
+    measuredScrollHeight = 220
+    await user.type(input, '\nline 3\nline 4\nline 5')
+    expect(input.style.height).toBe('120px')
+
+    // Cmd+Enter triggers commit and resets input height on clear
+    measuredScrollHeight = 28
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true })
+    expect(onCommit).toHaveBeenCalledWith('line 1\nline 2\nline 3\nline 4\nline 5', 'commit')
+    await vi.waitFor(() => {
+      expect(input.value).toBe('')
+    })
+    expect(input.style.height).toBe('28px')
+
+    // Detached HEAD placeholder updates dynamically
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({ branch: null, isDetached: true }),
+          onCommit
+        })}
+      />
+    )
+    expect(
+      within(region).getByPlaceholderText('메시지 (Ctrl+Enter로 "(detached)"에 커밋)')
+    ).toBeInTheDocument()
+  })
+
+  it('renders Commit split dropdown (Commit / Commit & Push / Commit & Sync), validates empty message before commit, handles outside click / Escape, and switches CTA for Publish Branch / Sync Changes / conflicts', async () => {
+    const user = userEvent.setup()
+    const onCommit = vi.fn().mockResolvedValue(false)
+    const onPush = vi.fn()
+    const onSync = vi.fn()
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [],
+            unstaged: [{ path: 'README.md', status: 'M' }],
+            untracked: []
+          }),
+          onCommit,
+          onPush,
+          onSync
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const input = within(region).getByLabelText('커밋 메시지') as HTMLTextAreaElement
+    const commitMainBtn = within(region).getByRole('button', { name: 'Commit' })
+    const commitDropdownBtn = within(region).getByRole('button', { name: '커밋 작업 더 보기' })
+
+    expect(commitMainBtn).toBeEnabled()
+    expect(commitDropdownBtn).toBeEnabled()
+
+    // 1. Staged=0 + blank message via dropdown validates inline without invoking onCommit
+    await user.click(commitDropdownBtn)
+    const menu = within(region).getByRole('menu', { name: '커밋 옵션' })
+    expect(within(menu).getByRole('menuitem', { name: 'Commit' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: 'Commit & Push' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: 'Commit & Sync' })).toBeInTheDocument()
+
+    await user.click(within(menu).getByRole('menuitem', { name: 'Commit & Push' }))
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(within(region).getByText('커밋 메시지를 입력하세요.')).toBeInTheDocument()
+    expect(within(region).queryByRole('menu', { name: '커밋 옵션' })).not.toBeInTheDocument()
+
+    // 2. Escape restores focus to toggle and outside click closes dropdown
+    await user.click(commitDropdownBtn)
+    expect(within(region).getByRole('menu', { name: '커밋 옵션' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(within(region).queryByRole('menu', { name: '커밋 옵션' })).not.toBeInTheDocument()
+    expect(commitDropdownBtn).toHaveFocus()
+
+    await user.click(commitDropdownBtn)
+    fireEvent.mouseDown(document.body)
+    expect(within(region).queryByRole('menu', { name: '커밋 옵션' })).not.toBeInTheDocument()
+
+    // 3. Staged=0 + valid message preserves message when onCommit returns false (e.g. cancelled dialog)
+    await user.type(input, 'feat: staged zero')
+    await user.click(commitDropdownBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Commit & Sync' }))
+    expect(onCommit).toHaveBeenCalledWith('feat: staged zero', 'commit-sync')
+    expect(input.value).toBe('feat: staged zero')
+
+    // When onCommit returns true, message clears
+    onCommit.mockResolvedValueOnce(true)
+    await user.click(commitDropdownBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Commit & Push' }))
+    expect(onCommit).toHaveBeenLastCalledWith('feat: staged zero', 'commit-push')
+    await vi.waitFor(() => {
+      expect(input.value).toBe('')
+    })
+
+    // 4. Clean + no upstream -> Publish Branch calls onPush
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasUpstream: false,
+            ahead: 0,
+            behind: 0,
+            staged: [],
+            unstaged: [],
+            untracked: []
+          }),
+          onCommit,
+          onPush,
+          onSync
+        })}
+      />
+    )
+    const publishCta = within(region).getByRole('button', { name: 'Publish Branch' })
+    await user.click(publishCta)
+    expect(onPush).toHaveBeenCalledTimes(1)
+    expect(within(region).queryByRole('button', { name: 'Commit' })).not.toBeInTheDocument()
+
+    // 5. Clean + ahead/behind -> Sync Changes N↓ M↑ calls onSync
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasUpstream: true,
+            ahead: 2,
+            behind: 3,
+            staged: [],
+            unstaged: [],
+            untracked: []
+          }),
+          onCommit,
+          onPush,
+          onSync
+        })}
+      />
+    )
+    const syncCta = within(region).getByRole('button', { name: 'Sync Changes 3↓ 2↑' })
+    await user.click(syncCta)
+    expect(onSync).toHaveBeenCalledTimes(1)
+
+    // 6. Clean + synced -> Commit split button & dropdown both disabled
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasUpstream: true,
+            ahead: 0,
+            behind: 0,
+            staged: [],
+            unstaged: [],
+            untracked: []
+          }),
+          onCommit,
+          onPush,
+          onSync
+        })}
+      />
+    )
+    expect(within(region).getByRole('button', { name: 'Commit' })).toBeDisabled()
+    expect(within(region).getByRole('button', { name: '커밋 작업 더 보기' })).toBeDisabled()
+
+    // 7. Merge conflicts disable both Commit & dropdown and keep conflict guidance
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasConflicts: true,
+            staged: [],
+            unstaged: [{ path: 'conflict.md', status: 'U' }],
+            untracked: []
+          }),
+          onCommit,
+          onPush,
+          onSync
+        })}
+      />
+    )
+    expect(within(region).getByRole('button', { name: 'Commit' })).toBeDisabled()
+    expect(within(region).getByRole('button', { name: '커밋 작업 더 보기' })).toBeDisabled()
+    expect(
+      within(region).getByText('병합 충돌 파일을 해결하고 Stage(+)한 후 커밋하세요.')
+    ).toBeInTheDocument()
   })
 })
