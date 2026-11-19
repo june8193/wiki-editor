@@ -33,6 +33,12 @@ export type PreviewElementClassifier = (
   element: ReactElement<{ children?: ReactNode }>
 ) => PreviewElementClassification | null
 
+export interface PreviewSearchTarget {
+  baseTree: ReactNode
+  isBlankDocument: boolean
+  classify: PreviewElementClassifier
+}
+
 const SKIP_ELEMENT_TAGS = new Set([
   'img',
   'input',
@@ -392,17 +398,15 @@ function flushPreviewTextRun(
 }
 
 function buildPreviewSearchPlan(
-  baseTree: ReactNode,
-  isBlankDocument: boolean,
-  criteria: DocumentFindCriteria,
-  classify: PreviewElementClassifier
+  target: PreviewSearchTarget,
+  criteria: DocumentFindCriteria
 ): PreviewSearchPlan {
   if (criteria.query.length === 0) {
     return EMPTY_SEARCH_PLAN
   }
-  if (!isBlankDocument && cachedSearchPlan) {
+  if (!target.isBlankDocument && cachedSearchPlan) {
     if (
-      cachedSearchPlan.baseTree === baseTree &&
+      cachedSearchPlan.baseTree === target.baseTree &&
       areDocumentFindCriteriaEqual(cachedSearchPlan.criteria, criteria)
     ) {
       return cachedSearchPlan.plan
@@ -417,13 +421,13 @@ function buildPreviewSearchPlan(
       textPatches: new Map(),
       codePatches: new Map()
     }
-    if (!isBlankDocument) {
-      cachedSearchPlan = { baseTree, criteria, plan: errorPlan }
+    if (!target.isBlankDocument) {
+      cachedSearchPlan = { baseTree: target.baseTree, criteria, plan: errorPlan }
     }
     return errorPlan
   }
 
-  if (isBlankDocument) {
+  if (target.isBlankDocument) {
     return EMPTY_SEARCH_PLAN
   }
 
@@ -444,7 +448,7 @@ function buildPreviewSearchPlan(
     runLength = 0
   }
 
-  walkPreviewTree<void>(baseTree, classify, {
+  walkPreviewTree<void>(target.baseTree, target.classify, {
     identity: () => undefined,
     onText: (text, slotId) => {
       runSegments.push({
@@ -483,7 +487,7 @@ function buildPreviewSearchPlan(
     textPatches,
     codePatches
   }
-  cachedSearchPlan = { baseTree, criteria, plan }
+  cachedSearchPlan = { baseTree: target.baseTree, criteria, plan }
   return plan
 }
 
@@ -586,12 +590,10 @@ function applyPreviewSearchPlan(
  * validating regex syntax even when the document is blank or whitespace-only.
  */
 export function evaluatePreviewSearchMatches(
-  baseTree: ReactNode,
-  isBlankDocument: boolean,
-  criteria: DocumentFindCriteria,
-  classify: PreviewElementClassifier
+  target: PreviewSearchTarget,
+  criteria: DocumentFindCriteria
 ): PreviewSearchMatchResult {
-  const plan = buildPreviewSearchPlan(baseTree, isBlankDocument, criteria, classify)
+  const plan = buildPreviewSearchPlan(target, criteria)
   return {
     matchCount: plan.matchCount,
     errorMessage: plan.errorMessage
@@ -603,14 +605,16 @@ export function evaluatePreviewSearchMatches(
  * while excluding Mermaid diagrams and code block UI chrome.
  */
 export function highlightPreviewTree(
-  baseTree: ReactNode,
-  isBlankDocument: boolean,
-  findHighlight: DocumentFindHighlightQuery | null | undefined,
-  classify: PreviewElementClassifier
+  target: PreviewSearchTarget,
+  findHighlight: DocumentFindHighlightQuery | null | undefined
 ): ReactNode {
-  if (!findHighlight?.isActive || findHighlight.criteria.query.length === 0 || isBlankDocument) {
-    return baseTree
+  if (
+    !findHighlight?.isActive ||
+    findHighlight.criteria.query.length === 0 ||
+    target.isBlankDocument
+  ) {
+    return target.baseTree
   }
-  const plan = buildPreviewSearchPlan(baseTree, false, findHighlight.criteria, classify)
-  return applyPreviewSearchPlan(baseTree, plan, findHighlight.activeIndex, classify)
+  const plan = buildPreviewSearchPlan(target, findHighlight.criteria)
+  return applyPreviewSearchPlan(target.baseTree, plan, findHighlight.activeIndex, target.classify)
 }

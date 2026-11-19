@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
 import {
+  applyFindScrollNonce,
   type DocumentFindHighlightQuery,
   scrollMatchElementIntoView
 } from '../editor/documentFind'
@@ -130,22 +131,19 @@ export function MarkdownPreview({
     if (!container || !findHighlight?.isActive) {
       return
     }
-    if (
-      findHighlight.scrollNonce > 0 &&
-      findHighlight.scrollNonce !== lastScrolledFindNonceRef.current
-    ) {
-      if (findHighlight.activeIndex < 0) {
-        lastScrolledFindNonceRef.current = findHighlight.scrollNonce
-        return
-      }
-      const activeEl = container.querySelector(
-        `[data-search-match-index="${findHighlight.activeIndex}"]`
-      )
-      if (activeEl) {
-        lastScrolledFindNonceRef.current = findHighlight.scrollNonce
+    applyFindScrollNonce(lastScrolledFindNonceRef, findHighlight.scrollNonce, {
+      skipScroll: findHighlight.activeIndex < 0,
+      performScroll: () => {
+        const activeEl = container.querySelector(
+          `[data-search-match-index="${findHighlight.activeIndex}"]`
+        )
+        if (!activeEl) {
+          return false
+        }
         scrollMatchElementIntoView(activeEl, container)
+        return true
       }
-    }
+    })
   }, [content, findHighlight])
 
   const setPreviewContainerRef = useCallback(

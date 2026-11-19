@@ -380,7 +380,7 @@ export function readWysiwygSingleLineSelection(editor: Editor | null): string | 
     WYSIWYG_SEARCH_CHROME_SELECTOR,
     shell
   )
-  if (domResult.status !== 'absent') {
+  if (domResult.inBoundary) {
     return domResult.value
   }
 

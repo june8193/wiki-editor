@@ -126,10 +126,6 @@ function buildRawHighlightRequest(ctx: ModeHighlightContext): RawFindHighlightRe
   }
 }
 
-function focusDocumentContainer(editorBodyRef: RefObject<HTMLDivElement | null>): void {
-  editorBodyRef.current?.querySelector<HTMLElement>('[data-testid="document-editor"]')?.focus()
-}
-
 const MODE_FIND_STRATEGIES: Record<EditorMode, ModeFindStrategy> = {
   raw: {
     source: 'raw',
@@ -165,7 +161,7 @@ const MODE_FIND_STRATEGIES: Record<EditorMode, ModeFindStrategy> = {
         editor.view.focus()
         return
       }
-      focusDocumentContainer(editorBodyRef)
+      editorBodyRef.current?.querySelector<HTMLElement>('[data-testid="document-editor"]')?.focus()
     },
     readSelection: ({ wysiwygEditorRef }) =>
       readWysiwygSingleLineSelection(wysiwygEditorRef?.current ?? null),
@@ -177,7 +173,7 @@ const MODE_FIND_STRATEGIES: Record<EditorMode, ModeFindStrategy> = {
   },
   preview: {
     source: 'preview',
-    focus: ({ editorBodyRef }) => focusDocumentContainer(editorBodyRef),
+    focus: ({ previewContainerRef }) => previewContainerRef?.current?.focus(),
     readSelection: ({ previewContainerRef }) =>
       readDomSingleLineSelection(
         previewContainerRef?.current ?? null,
@@ -494,10 +490,6 @@ export function useDocumentEditorFind({
     ]
   )
 
-  const handleWysiwygFindResultChange = useCallback((report: DocumentFindResultReport): void => {
-    setWysiwygFindReport(report)
-  }, [])
-
   const handleEditorFindKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>): boolean => {
       if (isDocumentFindShortcut(event)) {
@@ -564,7 +556,7 @@ export function useDocumentEditorFind({
     rawFindHighlight: findHighlights.raw,
     wysiwygFindHighlight: findHighlights.wysiwyg,
     previewFindHighlight: findHighlights.preview,
-    handleWysiwygFindResultChange,
+    handleWysiwygFindResultChange: setWysiwygFindReport,
     findBarProps,
     handleHeaderToggle,
     handleEditorFindKeyDown

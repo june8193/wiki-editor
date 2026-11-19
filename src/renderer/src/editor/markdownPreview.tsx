@@ -480,6 +480,15 @@ function classifyCustomPreviewElement(
   return null
 }
 
+function buildPreviewSearchTarget(markdown: string) {
+  const isBlankDocument = markdown.trim().length === 0
+  return {
+    baseTree: isBlankDocument ? null : processPreviewBaseTree(markdown),
+    isBlankDocument,
+    classify: classifyCustomPreviewElement
+  }
+}
+
 /**
  * Counts rendered Preview matches (excluding Mermaid diagrams and code block UI chrome)
  * for `markdown` under the supplied search `criteria`.
@@ -488,14 +497,7 @@ export function findPreviewSearchMatches(
   markdown: string,
   criteria: DocumentFindCriteria
 ): PreviewSearchMatchResult {
-  const isBlankDocument = markdown.trim().length === 0
-  const baseTree = isBlankDocument ? null : processPreviewBaseTree(markdown)
-  return evaluatePreviewSearchMatches(
-    baseTree,
-    isBlankDocument,
-    criteria,
-    classifyCustomPreviewElement
-  )
+  return evaluatePreviewSearchMatches(buildPreviewSearchTarget(markdown), criteria)
 }
 
 /**
@@ -506,12 +508,9 @@ export function renderMarkdownToReact(
   markdown: string,
   options: MarkdownPreviewRenderOptions = {}
 ): ReactNode {
-  const baseTree = processPreviewBaseTree(markdown)
   const contentTree = highlightPreviewTree(
-    baseTree,
-    markdown.trim().length === 0,
-    options.findHighlight,
-    classifyCustomPreviewElement
+    buildPreviewSearchTarget(markdown),
+    options.findHighlight
   )
 
   const contextValue: PreviewRenderContextValue = {

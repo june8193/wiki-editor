@@ -4,6 +4,7 @@ import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import {
+  applyFindScrollNonce,
   areDocumentFindResultReportsEqual,
   type DocumentFindHighlightQuery,
   type DocumentFindResultReport
@@ -526,17 +527,16 @@ export function WysiwygMarkdownEditor({
       onFindResultChangeRef.current?.(nextSnapshot.report)
     }
 
-    if (
-      findHighlight.scrollNonce > 0 &&
-      findHighlight.scrollNonce !== lastScrolledFindNonceRef.current
-    ) {
-      if (nextSnapshot.report.matchCount === 0) {
-        lastScrolledFindNonceRef.current = findHighlight.scrollNonce
-      } else if (nextSnapshot.activeIndex >= 0) {
-        lastScrolledFindNonceRef.current = findHighlight.scrollNonce
+    applyFindScrollNonce(lastScrolledFindNonceRef, findHighlight.scrollNonce, {
+      skipScroll: nextSnapshot.report.matchCount === 0,
+      performScroll: () => {
+        if (nextSnapshot.activeIndex < 0) {
+          return false
+        }
         scrollWysiwygActiveMatch(editor, scrollContainerRef.current)
+        return true
       }
-    }
+    })
   }, [editor, findHighlight, wysiwygSearchSnapshot])
 
   const toolbarState = useEditorState({

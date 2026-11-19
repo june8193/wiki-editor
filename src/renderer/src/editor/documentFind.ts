@@ -83,6 +83,26 @@ export function areDocumentFindResultReportsEqual(
 }
 
 /**
+ * Consumes a positive, unseen `scrollNonce` when either scrolling is skipped (`skipScroll`)
+ * or `performScroll` locates and scrolls a target element.
+ */
+export function applyFindScrollNonce(
+  lastHandledNonceRef: { current: number },
+  scrollNonce: number,
+  options: {
+    skipScroll: boolean
+    performScroll: () => boolean
+  }
+): void {
+  if (scrollNonce <= 0 || scrollNonce === lastHandledNonceRef.current) {
+    return
+  }
+  if (options.skipScroll || options.performScroll()) {
+    lastHandledNonceRef.current = scrollNonce
+  }
+}
+
+/**
  * Scrolls a matched DOM element into the center of its scroll container, falling back to
  * `scrollTop` math when `scrollIntoView` is unavailable in test DOM environments.
  */
@@ -313,31 +333,31 @@ const SINGLE_LINE_BLOCK_SELECTOR =
 export const PREVIEW_SEARCH_CHROME_SELECTOR =
   '.code-block-header, .mermaid-diagram-block, .markdown-preview-empty'
 
-export type DomSingleLineSelectionResult =
-  | { status: 'absent'; value: null }
-  | { status: 'blocked'; value: null }
-  | { status: 'resolved'; value: string | null }
+export interface DomSingleLineSelectionInspection {
+  inBoundary: boolean
+  value: string | null
+}
 
 /**
  * Inspects the active browser DOM selection relative to `container` and `guardBoundary`,
- * distinguishing selections absent from `guardBoundary` from selections blocked by `excludedSelector`.
+ * distinguishing whether the selection touches `guardBoundary` (`inBoundary`) from chrome-blocked or non-single-line values.
  */
 export function inspectDomSingleLineSelection(
   container: Element | null,
   excludedSelector: string = PREVIEW_SEARCH_CHROME_SELECTOR,
   guardBoundary: Element | null = container
-): DomSingleLineSelectionResult {
+): DomSingleLineSelectionInspection {
   if (!container || typeof window === 'undefined') {
-    return { status: 'absent', value: null }
+    return { inBoundary: false, value: null }
   }
   const selection = window.getSelection()
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-    return { status: 'absent', value: null }
+    return { inBoundary: false, value: null }
   }
   const range = selection.getRangeAt(0)
   const boundary = guardBoundary ?? container
   if (!boundary.contains(range.startContainer) && !boundary.contains(range.endContainer)) {
-    return { status: 'absent', value: null }
+    return { inBoundary: false, value: null }
   }
 
   const startEl =
@@ -346,28 +366,30 @@ export function inspectDomSingleLineSelection(
       : range.startContainer.parentElement
   const endEl =
     range.endContainer instanceof Element ? range.endContainer : range.endContainer.parentElement
-  if (startEl?.closest(excludedSelector) || endEl?.closest(excludedSelector)) {
-    return { status: 'blocked', value: null }
-  }
-  if (!container.contains(range.startContainer) || !container.contains(range.endContainer)) {
-    return { status: 'blocked', value: null }
+  if (
+    startEl?.closest(excludedSelector) ||
+    endEl?.closest(excludedSelector) ||
+    !container.contains(range.startContainer) ||
+    !container.contains(range.endContainer)
+  ) {
+    return { inBoundary: true, value: null }
   }
 
   const startBlock = startEl?.closest(SINGLE_LINE_BLOCK_SELECTOR) ?? null
   const endBlock = endEl?.closest(SINGLE_LINE_BLOCK_SELECTOR) ?? null
   if (startBlock !== endBlock) {
-    return { status: 'resolved', value: null }
+    return { inBoundary: true, value: null }
   }
 
   const fragment = range.cloneContents()
   if (fragment.querySelector('br')) {
-    return { status: 'resolved', value: null }
+    return { inBoundary: true, value: null }
   }
   if (!startBlock && fragment.querySelector(SINGLE_LINE_BLOCK_SELECTOR)) {
-    return { status: 'resolved', value: null }
+    return { inBoundary: true, value: null }
   }
 
-  return { status: 'resolved', value: extractSingleLineFindQuery(range.toString()) }
+  return { inBoundary: true, value: extractSingleLineFindQuery(range.toString()) }
 }
 
 /**
