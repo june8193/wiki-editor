@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useMemo, useState } from 'react'
+import { type ReactNode, type Ref, useCallback, useMemo, useState } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
@@ -65,6 +65,7 @@ export function buildPaneWorkspaceProps(
 }
 
 export interface EditorWindowFrameProps {
+  shellRef?: Ref<HTMLDivElement>
   paneWorkspaceProps: WindowFramePaneWorkspaceProps
   showHeadingNumbers: boolean
   onToggleHeadingNumbers: () => void
@@ -86,6 +87,7 @@ export interface EditorWindowFrameProps {
  * and confirm dialog.
  */
 export function EditorWindowFrame({
+  shellRef,
   paneWorkspaceProps,
   showHeadingNumbers,
   onToggleHeadingNumbers,
@@ -144,7 +146,7 @@ export function EditorWindowFrame({
   )
 
   return (
-    <div className="app-shell" data-theme={paneWorkspaceProps.theme}>
+    <div ref={shellRef} className="app-shell" data-theme={paneWorkspaceProps.theme}>
       {errorMessage && (
         <div className="error-banner" role="alert">
           {errorMessage}

@@ -1,18 +1,19 @@
 import { realpath } from 'node:fs/promises'
-import { extname } from 'node:path'
-import { isSupportedImageFile } from '@shared/assets'
 import type { DocumentBuffer } from '@shared/documentBuffer'
 import {
+  commitSearchCandidateSlot,
   compareWorkspaceSearchFileResults,
   compileSearchMatcher,
   type CompiledSearchMatcher,
   DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE,
   DEFAULT_WORKSPACE_SEARCH_MAX_TOTAL_MATCHES,
-  extractLineSnippet,
-  splitSearchLines,
+  emptyWorkspaceSearchResponse,
+  isExcludedSearchFileName,
+  normalizeWorkspaceSearchLimit,
+  scanSearchTextContent,
+  type SearchCandidateScanResult,
   type TextMatchSpan,
-  type WorkspaceSearchFileResult,
-  type WorkspaceSearchLineMatch,
+  type WorkspaceSearchAccumulator,
   type WorkspaceSearchRequest,
   type WorkspaceSearchResponse
 } from '@shared/search'
@@ -20,81 +21,6 @@ import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
 import type { WorkspaceFsService } from './WorkspaceFsService'
 
 const DEFAULT_SEARCH_CONCURRENCY = 8
-
-const KNOWN_BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
-  '.ico',
-  '.icns',
-  '.tif',
-  '.tiff',
-  '.psd',
-  '.heic',
-  '.heif',
-  '.raw',
-  '.mp3',
-  '.wav',
-  '.flac',
-  '.aac',
-  '.ogg',
-  '.m4a',
-  '.mp4',
-  '.mov',
-  '.avi',
-  '.mkv',
-  '.webm',
-  '.wmv',
-  '.flv',
-  '.zip',
-  '.tar',
-  '.gz',
-  '.tgz',
-  '.bz2',
-  '.xz',
-  '.7z',
-  '.rar',
-  '.asar',
-  '.jar',
-  '.war',
-  '.whl',
-  '.nupkg',
-  '.exe',
-  '.dll',
-  '.so',
-  '.dylib',
-  '.bin',
-  '.dat',
-  '.obj',
-  '.o',
-  '.a',
-  '.lib',
-  '.pdb',
-  '.class',
-  '.pyc',
-  '.pyo',
-  '.wasm',
-  '.node',
-  '.msi',
-  '.dmg',
-  '.iso',
-  '.img',
-  '.woff',
-  '.woff2',
-  '.ttf',
-  '.otf',
-  '.eot',
-  '.pdf',
-  '.doc',
-  '.docx',
-  '.xls',
-  '.xlsx',
-  '.ppt',
-  '.pptx',
-  '.odt',
-  '.ods',
-  '.odp',
-  '.sqlite',
-  '.sqlite3',
-  '.db'
-])
 
 export interface WorkspaceSearchServiceDependencies {
   workspaceService: WorkspaceFsService
@@ -111,130 +37,7 @@ interface SearchCandidate {
 
 type CandidateScanSlot =
   | { kind: 'skip' }
-  | {
-      kind: 'scanned'
-      lineMatches: WorkspaceSearchLineMatch[]
-      totalMatchCount: number
-      keptMatchCount: number
-      truncatedInFile: boolean
-    }
-
-function isExcludedNonTextFileName(fileName: string): boolean {
-  if (isSupportedImageFile(fileName)) {
-    return true
-  }
-  const ext = extname(fileName).toLowerCase()
-  return ext.length > 0 && KNOWN_BINARY_EXTENSIONS.has(ext)
-}
-
-function normalizePositiveLimit(value: number | undefined, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 1
-    ? Math.floor(value)
-    : fallback
-}
-
-function emptySearchResponse(query: string, error?: string): WorkspaceSearchResponse {
-  return {
-    query,
-    files: [],
-    totalFileCount: 0,
-    totalMatchCount: 0,
-    truncated: false,
-    ...(error !== undefined ? { error } : {})
-  }
-}
-
-function scanTextContent(
-  text: string,
-  matcher: CompiledSearchMatcher,
-  maxMatchesPerFile: number,
-  signal: AbortSignal
-): Extract<CandidateScanSlot, { kind: 'scanned' }> | null {
-  const lines = splitSearchLines(text)
-  const lineMatches: WorkspaceSearchLineMatch[] = []
-  let totalMatchCount = 0
-  let keptMatchCount = 0
-  let truncatedInFile = false
-
-  for (let index = 0; index < lines.length; index += 1) {
-    if ((index & 1023) === 0 && signal.aborted) {
-      return null
-    }
-    const rawLine = lines[index]
-    const rawMatches = matcher.findMatches(rawLine)
-    if (rawMatches.length === 0) {
-      continue
-    }
-
-    totalMatchCount += rawMatches.length
-    if (totalMatchCount > maxMatchesPerFile) {
-      truncatedInFile = true
-    }
-
-    if (keptMatchCount >= maxMatchesPerFile) {
-      truncatedInFile = true
-      continue
-    }
-
-    const snippet = extractLineSnippet(rawLine, rawMatches)
-    if (snippet.matches.length === 0) {
-      continue
-    }
-
-    const remainingInFile = maxMatchesPerFile - keptMatchCount
-    const clipped = snippet.matches.length > remainingInFile
-    const keptMatches = clipped ? snippet.matches.slice(0, remainingInFile) : snippet.matches
-    if (clipped) {
-      truncatedInFile = true
-    }
-
-    keptMatchCount += keptMatches.length
-    lineMatches.push({
-      lineNumber: index + 1,
-      lineText: snippet.lineText,
-      lineOffset: snippet.lineOffset,
-      matches: keptMatches
-    })
-  }
-
-  return {
-    kind: 'scanned',
-    lineMatches,
-    totalMatchCount,
-    keptMatchCount,
-    truncatedInFile
-  }
-}
-
-function trimLineMatchesToBudget(
-  lineMatches: readonly WorkspaceSearchLineMatch[],
-  budget: number
-): { lineMatches: WorkspaceSearchLineMatch[]; keptCount: number } {
-  const trimmedLines: WorkspaceSearchLineMatch[] = []
-  let remaining = budget
-  let keptCount = 0
-
-  for (const line of lineMatches) {
-    if (remaining <= 0) {
-      break
-    }
-    if (line.matches.length <= remaining) {
-      trimmedLines.push(line)
-      keptCount += line.matches.length
-      remaining -= line.matches.length
-      continue
-    }
-    trimmedLines.push({
-      ...line,
-      matches: line.matches.slice(0, remaining)
-    })
-    keptCount += remaining
-    remaining = 0
-    break
-  }
-
-  return { lineMatches: trimmedLines, keptCount }
-}
+  | ({ kind: 'scanned' } & SearchCandidateScanResult)
 
 /**
  * Executes session-scoped workspace text search combining the workspace filesystem and live
@@ -279,11 +82,11 @@ export class WorkspaceSearchService {
 
     const query = typeof request?.query === 'string' ? request.query : ''
     const options = request?.options
-    const maxTotalMatches = normalizePositiveLimit(
+    const maxTotalMatches = normalizeWorkspaceSearchLimit(
       request?.maxTotalMatches,
       DEFAULT_WORKSPACE_SEARCH_MAX_TOTAL_MATCHES
     )
-    const maxMatchesPerFile = normalizePositiveLimit(
+    const maxMatchesPerFile = normalizeWorkspaceSearchLimit(
       request?.maxMatchesPerFile,
       DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE
     )
@@ -291,7 +94,7 @@ export class WorkspaceSearchService {
     this.cancelActiveSearch()
 
     if (this.disposed) {
-      return emptySearchResponse(query)
+      return emptyWorkspaceSearchResponse(query)
     }
 
     const controller = new AbortController()
@@ -304,33 +107,33 @@ export class WorkspaceSearchService {
 
     try {
       if (query.length === 0) {
-        return emptySearchResponse(query)
+        return emptyWorkspaceSearchResponse(query)
       }
 
       const compiled = compileSearchMatcher(query, options)
       if (!compiled.ok) {
-        return emptySearchResponse(query, compiled.error)
+        return emptyWorkspaceSearchResponse(query, compiled.error)
       }
 
       const openTextBuffersByKey = await this.collectOpenWorkspaceTextBuffers()
       if (isInvalidated()) {
-        return emptySearchResponse(query)
+        return emptyWorkspaceSearchResponse(query)
       }
 
       let entries: WorkspaceEntry[]
       try {
         entries = await this.workspaceService.listWorkspaceFiles({
-          filterFileName: (name) => !isExcludedNonTextFileName(name),
+          filterFileName: (name) => !isExcludedSearchFileName(name),
           signal: controller.signal
         })
       } catch (error) {
         if (isInvalidated()) {
-          return emptySearchResponse(query)
+          return emptyWorkspaceSearchResponse(query)
         }
         throw error
       }
       if (isInvalidated()) {
-        return emptySearchResponse(query)
+        return emptyWorkspaceSearchResponse(query)
       }
 
       const candidates: SearchCandidate[] = entries
@@ -418,33 +221,19 @@ export class WorkspaceSearchService {
     } = params
 
     if (candidates.length === 0) {
-      return emptySearchResponse(query)
+      return emptyWorkspaceSearchResponse(query)
     }
 
     const slotResults = new Array<CandidateScanSlot | undefined>(candidates.length)
-    const files: WorkspaceSearchFileResult[] = []
+    const accumulator: WorkspaceSearchAccumulator = {
+      files: [],
+      committedMatchCount: 0,
+      truncated: false,
+      stopBodyScanning: false,
+      maxTotalMatches
+    }
     let nextDispatchIndex = 0
     let nextCommitIndex = 0
-    let committedMatchCount = 0
-    let responseTruncated = false
-    let stopBodyScanning = false
-
-    const pushFileResult = (
-      candidate: SearchCandidate,
-      lineMatches: WorkspaceSearchLineMatch[],
-      totalMatchCount: number,
-      truncatedInFile: boolean
-    ): void => {
-      files.push({
-        path: candidate.entry.path,
-        relativePath: candidate.entry.relativePath,
-        name: candidate.entry.name,
-        nameMatches: candidate.nameMatches,
-        lineMatches,
-        totalMatchCount,
-        truncatedInFile
-      })
-    }
 
     const commitReadySlots = (): void => {
       while (nextCommitIndex < candidates.length && slotResults[nextCommitIndex] !== undefined) {
@@ -457,31 +246,16 @@ export class WorkspaceSearchService {
           continue
         }
 
-        const remainingBudget = maxTotalMatches - committedMatchCount
-        if (remainingBudget <= 0) {
-          if (slot.totalMatchCount > 0) {
-            responseTruncated = true
-            stopBodyScanning = true
-          }
-          if (candidate.nameMatches.length > 0) {
-            pushFileResult(candidate, [], slot.totalMatchCount, slot.totalMatchCount > 0)
-          }
-          continue
-        }
-
-        if (slot.keptMatchCount > remainingBudget) {
-          const trimmed = trimLineMatchesToBudget(slot.lineMatches, remainingBudget)
-          committedMatchCount += trimmed.keptCount
-          responseTruncated = true
-          stopBodyScanning = true
-          pushFileResult(candidate, trimmed.lineMatches, slot.totalMatchCount, true)
-          continue
-        }
-
-        committedMatchCount += slot.keptMatchCount
-        if (candidate.nameMatches.length > 0 || slot.lineMatches.length > 0) {
-          pushFileResult(candidate, slot.lineMatches, slot.totalMatchCount, slot.truncatedInFile)
-        }
+        commitSearchCandidateSlot(
+          accumulator,
+          {
+            path: candidate.entry.path,
+            relativePath: candidate.entry.relativePath,
+            name: candidate.entry.name,
+            nameMatches: candidate.nameMatches
+          },
+          slot
+        )
       }
     }
 
@@ -494,7 +268,7 @@ export class WorkspaceSearchService {
         nextDispatchIndex += 1
 
         const candidate = candidates[index]
-        if (stopBodyScanning && candidate.nameMatches.length === 0) {
+        if (accumulator.stopBodyScanning && candidate.nameMatches.length === 0) {
           slotResults[index] = { kind: 'skip' }
           commitReadySlots()
           return
@@ -520,17 +294,17 @@ export class WorkspaceSearchService {
           continue
         }
 
-        const scanned = scanTextContent(
+        const scanned = scanSearchTextContent(
           text,
           matcher,
-          stopBodyScanning ? 0 : maxMatchesPerFile,
-          signal
+          accumulator.stopBodyScanning ? 0 : maxMatchesPerFile,
+          () => signal.aborted
         )
         if (!scanned || isInvalidated()) {
           return
         }
 
-        slotResults[index] = scanned
+        slotResults[index] = { kind: 'scanned', ...scanned }
         commitReadySlots()
       }
     }
@@ -539,17 +313,17 @@ export class WorkspaceSearchService {
     await Promise.all(Array.from({ length: workerCount }, () => runWorker()))
 
     if (isInvalidated()) {
-      return emptySearchResponse(query)
+      return emptyWorkspaceSearchResponse(query)
     }
 
     commitReadySlots()
 
     return {
       query,
-      files,
-      totalFileCount: files.length,
-      totalMatchCount: committedMatchCount,
-      truncated: responseTruncated
+      files: accumulator.files,
+      totalFileCount: accumulator.files.length,
+      totalMatchCount: accumulator.committedMatchCount,
+      truncated: accumulator.truncated
     }
   }
 

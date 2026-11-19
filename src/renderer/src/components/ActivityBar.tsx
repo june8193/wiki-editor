@@ -1,15 +1,17 @@
-import { Files, Folders, GitBranch, type LucideIcon } from 'lucide-react'
+import { Files, Folders, GitBranch, Search, type LucideIcon } from 'lucide-react'
 
-export type LeftSidebarView = 'explorer' | 'git' | 'workspace'
+export type LeftSidebarView = 'explorer' | 'search' | 'git' | 'workspace'
 
 interface ActivityBarItem {
   id: LeftSidebarView
   label: string
+  title?: string
   Icon: LucideIcon
 }
 
 const ACTIVITY_BAR_ITEMS: readonly ActivityBarItem[] = [
   { id: 'explorer', label: '탐색기', Icon: Files },
+  { id: 'search', label: '검색', title: '검색 (Ctrl+Shift+F)', Icon: Search },
   { id: 'git', label: 'Git', Icon: GitBranch },
   { id: 'workspace', label: '워크스페이스', Icon: Folders }
 ]
@@ -39,7 +41,7 @@ export function ActivityBar({
 }: ActivityBarProps) {
   return (
     <nav className="activity-bar" aria-label="액티비티 바">
-      {ACTIVITY_BAR_ITEMS.map(({ id, label, Icon }) => {
+      {ACTIVITY_BAR_ITEMS.map(({ id, label, title, Icon }) => {
         const isActive = !isCollapsed && activeView === id
         const badgeText = id === 'git' ? formatBadgeText(gitChangedCount) : null
         return (
@@ -48,7 +50,7 @@ export function ActivityBar({
             type="button"
             className={`activity-bar-btn${isActive ? ' is-active' : ''}`}
             aria-label={label}
-            title={label}
+            title={title ?? label}
             aria-pressed={isActive}
             onClick={() => onSelectView(id)}
           >

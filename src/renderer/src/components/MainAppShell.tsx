@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand, WikiApi } from '@shared/ipc'
 import { getGitChangedCount, type GitDiffRequest } from '@shared/git'
+import type { WorkspaceSearchFileResult } from '@shared/search'
 import {
   filterTopLevelWorkspaceEntries,
   formatAbsoluteEntryPath,
@@ -22,6 +23,7 @@ import { useGitDiffTabs } from '../hooks/useGitDiffTabs'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
 import { useWindowWidth } from '../hooks/useWindowWidth'
+import { useWorkspaceSearch } from '../hooks/useWorkspaceSearch'
 import { useWorkspaceStatePersistence } from '../hooks/useWorkspaceStatePersistence'
 import { type RestoredWorkspaceContext, useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import { buildDiscardAllConfirmMessage, getGitFileBaseName } from '../utils/gitFilePresentation'
@@ -37,11 +39,13 @@ import {
   getLeftSidebarWidthBounds,
   LEFT_SIDEBAR_DEFAULT_WIDTH
 } from '../utils/sidebarWidth'
+import { isWorkspaceSearchShortcut, type SearchFocusRequest } from '../utils/workspaceSearch'
 import { ActivityBar, type LeftSidebarView } from './ActivityBar'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 import { type EntryPathCopyMode, FolderTreeSidebar } from './FolderTreeSidebar'
 import { GitSidebarPanel } from './GitSidebarPanel'
 import type { PaneInteractionActions } from './PaneTabBar'
+import { SearchSidebarPanel } from './SearchSidebarPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { SidebarResizer } from './SidebarResizer'
 import { WorkspaceView } from './WorkspaceView'
@@ -106,7 +110,12 @@ export function MainAppShell() {
     createDefaultGitPanelSplitState
   )
   const [isGitWorkspaceMutating, setIsGitWorkspaceMutating] = useState(false)
+  const [searchFocusRequest, setSearchFocusRequest] = useState<SearchFocusRequest | null>(null)
 
+  const shellRef = useRef<HTMLDivElement | null>(null)
+  const searchFocusNonceRef = useRef<number>(0)
+  const leftSidebarRef = useRef<LeftSidebarState>(leftSidebar)
+  leftSidebarRef.current = leftSidebar
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
   const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
   const activeWorkspaceRootRef = useRef<string | null>(null)
@@ -144,6 +153,8 @@ export function MainAppShell() {
   })
 
   const isEditorShortcutDisabled = pendingDialog !== null || isSettingsOpen
+  const isEditorShortcutDisabledRef = useRef<boolean>(isEditorShortcutDisabled)
+  isEditorShortcutDisabledRef.current = isEditorShortcutDisabled
   const editor = useEditorWorkspace({
     isAutoSavePaused: pendingDialog !== null || isGitWorkspaceMutating,
     isShortcutDisabled: isEditorShortcutDisabled,
@@ -164,11 +175,55 @@ export function MainAppShell() {
     )
   }, [leftSidebarWidth])
 
-  const hasUserSelectedSidebarViewRef = useRef<boolean>(false)
-  const handleSelectLeftSidebarView = useCallback((view: LeftSidebarView): void => {
-    hasUserSelectedSidebarViewRef.current = true
-    setLeftSidebar((prev) => selectLeftSidebarView(prev, view))
+  const focusSearchInput = useCallback((selectAll: boolean): void => {
+    searchFocusNonceRef.current += 1
+    setSearchFocusRequest({ nonce: searchFocusNonceRef.current, selectAll })
   }, [])
+
+  const hasUserSelectedSidebarViewRef = useRef<boolean>(false)
+  const handleSelectLeftSidebarView = useCallback(
+    (view: LeftSidebarView): void => {
+      hasUserSelectedSidebarViewRef.current = true
+      const current = leftSidebarRef.current
+      const willOpenSearch =
+        view === 'search' && (current.isCollapsed || current.activeView !== 'search')
+      setLeftSidebar((prev) => selectLeftSidebarView(prev, view))
+      if (willOpenSearch) {
+        focusSearchInput(false)
+      }
+    },
+    [focusSearchInput]
+  )
+
+  useEffect(() => {
+    const handleWindowKeyDown = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || isEditorShortcutDisabledRef.current) {
+        return
+      }
+      if (!isWorkspaceSearchShortcut(event)) {
+        return
+      }
+      const shellEl = shellRef.current
+      const targetShell =
+        event.target instanceof Element ? event.target.closest('.app-shell') : null
+      if (shellEl && targetShell && targetShell !== shellEl) {
+        return
+      }
+      event.preventDefault()
+      hasUserSelectedSidebarViewRef.current = true
+      setLeftSidebar((prev) =>
+        prev.activeView === 'search' && !prev.isCollapsed
+          ? prev
+          : { ...prev, activeView: 'search', isCollapsed: false }
+      )
+      focusSearchInput(true)
+    }
+
+    window.addEventListener('keydown', handleWindowKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleWindowKeyDown)
+    }
+  }, [focusSearchInput])
 
   const handleResizeLeftSidebar = useCallback((nextWidth: number): void => {
     setLeftSidebar((prev) => (prev.width === nextWidth ? prev : { ...prev, width: nextWidth }))
@@ -249,6 +304,10 @@ export function MainAppShell() {
     onEntryDeleted: editor.syncDeletedPath
   })
   hadOpenWorkspaceRef.current = workspace !== null
+
+  const workspaceSearch = useWorkspaceSearch({
+    workspaceRootPath: workspace?.rootPath ?? null
+  })
 
   const workspaceStatePersistence = useWorkspaceStatePersistence({
     workspaceRootPath: workspace?.rootPath ?? null,
@@ -692,6 +751,12 @@ export function MainAppShell() {
     },
     [openWorkspaceFile]
   )
+  const handleOpenSearchResultFile = useCallback(
+    (file: WorkspaceSearchFileResult): void => {
+      void openWorkspaceFile(file.path, undefined, file.name)
+    },
+    [openWorkspaceFile]
+  )
 
   const handleOpenConfigEditor = useCallback((): void => {
     setIsSettingsOpen(false)
@@ -837,6 +902,26 @@ export function MainAppShell() {
               />
             )}
 
+            {leftSidebar.activeView === 'search' && (
+              <SearchSidebarPanel
+                workspaceRootPath={workspace?.rootPath ?? null}
+                query={workspaceSearch.query}
+                options={workspaceSearch.options}
+                response={workspaceSearch.response}
+                errorMessage={workspaceSearch.errorMessage}
+                isSearching={workspaceSearch.isSearching}
+                collapsedFileKeys={workspaceSearch.collapsedFileKeys}
+                focusRequest={searchFocusRequest}
+                onQueryChange={workspaceSearch.onQueryChange}
+                onCompositionStart={workspaceSearch.onCompositionStart}
+                onCompositionEnd={workspaceSearch.onCompositionEnd}
+                onSubmitSearch={workspaceSearch.onSubmitSearch}
+                onToggleOption={workspaceSearch.onToggleOption}
+                onToggleFileCollapsed={workspaceSearch.onToggleFileCollapsed}
+                onOpenFile={handleOpenSearchResultFile}
+              />
+            )}
+
             {leftSidebar.activeView === 'git' && (
               <GitSidebarPanel
                 workspaceRootPath={workspace?.rootPath ?? null}
@@ -897,6 +982,7 @@ export function MainAppShell() {
 
   return (
     <EditorWindowFrame
+      shellRef={shellRef}
       errorMessage={errorMessage}
       pendingDialog={pendingDialog}
       onDismissDialog={dismissDialog}
