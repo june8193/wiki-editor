@@ -850,7 +850,8 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
       expect(within(findBar).getByRole('alert')).toHaveTextContent(/정규식/)
       expect(container.querySelectorAll('.preview-search-match')).toHaveLength(0)
 
-      // 7. Empty Preview placeholder text ("미리 볼 내용이 없습니다.") is NOT searched
+      // 7. Empty Preview placeholder text ("미리 볼 내용이 없습니다.") is NOT searched,
+      // while invalid regex still surfaces inline alert consistently across modes
       await user.click(regexBtn)
       await user.clear(findInput)
       await user.type(findInput, '미리')
@@ -869,6 +870,11 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
       expect(screen.getByText('미리 볼 내용이 없습니다.')).toBeInTheDocument()
       expect(within(findBar).getByText('결과 없음')).toBeInTheDocument()
       expect(container.querySelectorAll('.preview-search-match')).toHaveLength(0)
+
+      await user.click(regexBtn)
+      fireEvent.change(findInput, { target: { value: '[unclosed' } })
+      expect(within(findBar).getByRole('alert')).toHaveTextContent(/정규식/)
+      await user.click(regexBtn)
 
       // 8. Esc closes Find Bar and returns focus to Preview container
       rerender(
@@ -1124,6 +1130,25 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
     selection.removeAllRanges()
     selection.addRange(multiLineCodeRange)
     document.dispatchEvent(new Event('selectionchange'))
+
+    fireEvent.keyDown(wysiwygEl, { key: 'f', ctrlKey: true })
+    expect(wysiwygInput.value).toBe('bold word')
+
+    // Dragging selection inside WYSIWYG code block header while a prior ProseMirror paragraph selection exists
+    // must NOT leak the stale ProseMirror selection on Ctrl+F
+    const priorParagraphRange = document.createRange()
+    priorParagraphRange.selectNodeContents(paragraphs[1].firstChild!)
+    selection.removeAllRanges()
+    selection.addRange(priorParagraphRange)
+    wysiwygEl.focus()
+    fireEvent.mouseUp(paragraphs[1])
+    document.dispatchEvent(new Event('selectionchange'))
+
+    const wysiwygCopyBtn = codeBlock.querySelector('.code-block-copy-btn')!
+    const headerChromeRange = document.createRange()
+    headerChromeRange.selectNodeContents(wysiwygCopyBtn)
+    selection.removeAllRanges()
+    selection.addRange(headerChromeRange)
 
     fireEvent.keyDown(wysiwygEl, { key: 'f', ctrlKey: true })
     expect(wysiwygInput.value).toBe('bold word')

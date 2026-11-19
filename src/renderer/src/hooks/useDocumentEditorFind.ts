@@ -142,22 +142,61 @@ export function useDocumentEditorFind({
   )
   const activeControl = findControl ?? fallbackControl
   const effectiveFindState = activeControl.state
-  const isRawBasedMode = effectiveMode === 'raw' || effectiveMode === 'split'
-  const isWysiwygMode = effectiveMode === 'wysiwyg'
-  const isPreviewMode = effectiveMode === 'preview'
+
+  const modeHandlers = useMemo<
+    Record<EditorMode, { focus: () => void; readSelection: () => string | null }>
+  >(
+    () => ({
+      raw: {
+        focus: () => rawEditorViewRef.current?.focus(),
+        readSelection: () => readRawEditorSingleLineSelection(rawEditorViewRef.current)
+      },
+      split: {
+        focus: () => rawEditorViewRef.current?.focus(),
+        readSelection: () =>
+          readRawEditorSingleLineSelection(rawEditorViewRef.current) ??
+          readDomSingleLineSelection(
+            splitPreviewContainerRef?.current ?? null,
+            PREVIEW_SEARCH_CHROME_SELECTOR
+          )
+      },
+      wysiwyg: {
+        focus: () => {
+          const editor = wysiwygEditorRef?.current
+          if (editor && !editor.isDestroyed) {
+            editor.view.focus()
+            return
+          }
+          editorBodyRef.current
+            ?.querySelector<HTMLElement>('[data-testid="document-editor"]')
+            ?.focus()
+        },
+        readSelection: () => readWysiwygSingleLineSelection(wysiwygEditorRef?.current ?? null)
+      },
+      preview: {
+        focus: () =>
+          editorBodyRef.current
+            ?.querySelector<HTMLElement>('[data-testid="document-editor"]')
+            ?.focus(),
+        readSelection: () =>
+          readDomSingleLineSelection(
+            previewContainerRef?.current ?? null,
+            PREVIEW_SEARCH_CHROME_SELECTOR
+          )
+      }
+    }),
+    [
+      editorBodyRef,
+      previewContainerRef,
+      rawEditorViewRef,
+      splitPreviewContainerRef,
+      wysiwygEditorRef
+    ]
+  )
 
   const focusActiveEditorBody = useCallback((): void => {
-    if (isRawBasedMode) {
-      rawEditorViewRef.current?.focus()
-      return
-    }
-    if (isWysiwygMode && wysiwygEditorRef?.current && !wysiwygEditorRef.current.isDestroyed) {
-      wysiwygEditorRef.current.view.focus()
-      return
-    }
-    const target = editorBodyRef.current?.querySelector<HTMLElement>('[data-testid="document-editor"]')
-    target?.focus()
-  }, [editorBodyRef, isRawBasedMode, isWysiwygMode, rawEditorViewRef, wysiwygEditorRef])
+    modeHandlers[effectiveMode].focus()
+  }, [effectiveMode, modeHandlers])
 
   const closeFind = useCallback((): void => {
     activeControl.onClose()
@@ -166,38 +205,8 @@ export function useDocumentEditorFind({
 
   const readSingleLineSelection = useCallback((): string | null => {
     if (isImage) return null
-    if (isRawBasedMode) {
-      return (
-        readRawEditorSingleLineSelection(rawEditorViewRef.current) ??
-        (effectiveMode === 'split'
-          ? readDomSingleLineSelection(
-              splitPreviewContainerRef?.current ?? null,
-              PREVIEW_SEARCH_CHROME_SELECTOR
-            )
-          : null)
-      )
-    }
-    if (isWysiwygMode) {
-      return readWysiwygSingleLineSelection(wysiwygEditorRef?.current ?? null)
-    }
-    if (isPreviewMode) {
-      return readDomSingleLineSelection(
-        previewContainerRef?.current ?? null,
-        PREVIEW_SEARCH_CHROME_SELECTOR
-      )
-    }
-    return null
-  }, [
-    effectiveMode,
-    isImage,
-    isPreviewMode,
-    isRawBasedMode,
-    isWysiwygMode,
-    previewContainerRef,
-    rawEditorViewRef,
-    splitPreviewContainerRef,
-    wysiwygEditorRef
-  ])
+    return modeHandlers[effectiveMode].readSelection()
+  }, [effectiveMode, isImage, modeHandlers])
 
   const registerSelectionReader = findControl?.onRegisterSelectionReader
   useEffect(() => {
@@ -209,9 +218,9 @@ export function useDocumentEditorFind({
   }, [readSingleLineSelection, registerSelectionReader])
 
   const isFindActive = !isImage && effectiveFindState.isOpen
-  const isRawFindMode = isFindActive && isRawBasedMode
-  const isWysiwygFindMode = isFindActive && isWysiwygMode
-  const isPreviewFindMode = isFindActive && isPreviewMode
+  const isRawFindMode = isFindActive && (effectiveMode === 'raw' || effectiveMode === 'split')
+  const isWysiwygFindMode = isFindActive && effectiveMode === 'wysiwyg'
+  const isPreviewFindMode = isFindActive && effectiveMode === 'preview'
   const [wysiwygFindReport, setWysiwygFindReport] = useState<DocumentFindResultReport | null>(null)
   const rawFindResult = useMemo(
     () =>
@@ -390,7 +399,7 @@ export function useDocumentEditorFind({
     if (!isFindActive) {
       return null
     }
-    if (isPreviewMode) {
+    if (effectiveMode === 'preview') {
       return buildRichHighlight(resolvedActiveMatchIndex, matchCursor.scrollNonce)
     }
     if (effectiveMode === 'split') {
@@ -401,7 +410,6 @@ export function useDocumentEditorFind({
     buildRichHighlight,
     effectiveMode,
     isFindActive,
-    isPreviewMode,
     matchCursor.scrollNonce,
     resolvedActiveMatchIndex
   ])

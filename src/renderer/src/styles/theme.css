@@ -3493,32 +3493,16 @@ body.is-resizing-git-sections * {
   word-break: break-word;
 }
 
-.cm-search-match {
-  background-color: var(--search-match-bg);
-  border-radius: 2px;
-}
-
-.cm-search-match.cm-search-match-active {
-  background-color: var(--search-match-active-bg);
-  outline: 1px solid var(--search-match-active-outline);
-}
-
-.pm-search-match {
-  background-color: var(--search-match-bg);
-  border-radius: 2px;
-}
-
-.pm-search-match.pm-search-match-active {
-  background-color: var(--search-match-active-bg);
-  outline: 1px solid var(--search-match-active-outline);
-}
-
+.cm-search-match,
+.pm-search-match,
 .preview-search-match {
   background-color: var(--search-match-bg);
   color: inherit;
   border-radius: 2px;
 }
 
+.cm-search-match.cm-search-match-active,
+.pm-search-match.pm-search-match-active,
 .preview-search-match.preview-search-match-active {
   background-color: var(--search-match-active-bg);
   outline: 1px solid var(--search-match-active-outline);

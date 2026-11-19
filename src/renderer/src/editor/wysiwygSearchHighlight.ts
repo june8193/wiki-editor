@@ -294,7 +294,7 @@ export function syncWysiwygSearchHighlights(
 }
 
 /**
- * Scrolls the active ProseMirror search match DOM element into the center of the WYSIWYG viewport.
+ * Scrolls the active ProseMirror search match DOM element into the center of the WYSIWYG scroll container.
  */
 export function scrollWysiwygActiveMatch(
   editor: Editor,
@@ -319,12 +319,42 @@ const WYSIWYG_SEARCH_CHROME_SELECTOR =
   '.code-block-header, .mermaid-node-header, .mermaid-node-preview, .mermaid-node-source-wrapper, .mermaid-diagram-block, .editor-toolbar, .editor-table-toolbar'
 
 /**
- * Reads a single-line selection from the WYSIWYG ProseMirror editor (with DOM selection fallback),
- * excluding cross-block selections and Mermaid/code-header UI chrome.
+ * Reads a single-line selection from the WYSIWYG ProseMirror editor (prioritizing active DOM selections
+ * inside the WYSIWYG shell so stale ProseMirror selections cannot leak when dragging in UI chrome).
  */
 export function readWysiwygSingleLineSelection(editor: Editor | null): string | null {
   if (!editor || editor.isDestroyed) {
     return null
+  }
+
+  if (typeof window !== 'undefined') {
+    const domSelection = window.getSelection()
+    if (domSelection && domSelection.rangeCount > 0 && !domSelection.isCollapsed) {
+      const range = domSelection.getRangeAt(0)
+      const shell = editor.view.dom.closest('.wysiwyg-shell') ?? editor.view.dom
+      if (shell.contains(range.startContainer) || shell.contains(range.endContainer)) {
+        const startEl =
+          range.startContainer instanceof Element
+            ? range.startContainer
+            : range.startContainer.parentElement
+        const endEl =
+          range.endContainer instanceof Element
+            ? range.endContainer
+            : range.endContainer.parentElement
+        if (
+          startEl?.closest(WYSIWYG_SEARCH_CHROME_SELECTOR) ||
+          endEl?.closest(WYSIWYG_SEARCH_CHROME_SELECTOR)
+        ) {
+          return null
+        }
+        if (
+          editor.view.dom.contains(range.startContainer) &&
+          editor.view.dom.contains(range.endContainer)
+        ) {
+          return readDomSingleLineSelection(editor.view.dom, WYSIWYG_SEARCH_CHROME_SELECTOR)
+        }
+      }
+    }
   }
 
   const { from, to, empty, $from, $to } = editor.state.selection
@@ -343,5 +373,5 @@ export function readWysiwygSingleLineSelection(editor: Editor | null): string | 
     return extractSingleLineFindQuery(editor.state.doc.textBetween(from, to, '\n'))
   }
 
-  return readDomSingleLineSelection(editor.view.dom, WYSIWYG_SEARCH_CHROME_SELECTOR)
+  return null
 }
