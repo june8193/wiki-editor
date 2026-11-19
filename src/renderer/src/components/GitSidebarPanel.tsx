@@ -393,19 +393,19 @@ function GitPanelHeader({
 
           {moreMenu.isOpen && (
             <div
-              className="git-popover-menu git-more-menu"
+              className="tree-context-menu git-popover-menu git-more-menu"
               role="menu"
               aria-label="Git 패널 추가 작업"
             >
               {moreMenuEntries.map((entry) =>
                 entry.kind === 'separator' ? (
-                  <div key={entry.key} className="git-menu-separator" role="separator" />
+                  <div key={entry.key} className="context-menu-separator" role="separator" />
                 ) : (
                   <button
                     key={entry.label}
                     type="button"
                     role="menuitem"
-                    className={`git-popover-menu-item${entry.danger ? ' is-danger' : ''}`}
+                    className={`context-menu-item git-popover-menu-item${entry.danger ? ' is-danger' : ''}`}
                     disabled={entry.disabled}
                     onClick={() => {
                       moreMenu.close()
@@ -482,7 +482,7 @@ function GitBranchSubrow({
         </button>
 
         {branchMenu.isOpen && (
-          <div className="git-popover-menu git-branch-menu" role="menu" aria-label="브랜치 선택">
+          <div className="tree-context-menu git-popover-menu git-branch-menu" role="menu" aria-label="브랜치 선택">
             {branches.map((branch) => {
               const isCurrent = !status.isDetached && branch.name === currentBranch
               return (
@@ -490,7 +490,7 @@ function GitBranchSubrow({
                   key={branch.name}
                   type="button"
                   role="menuitem"
-                  className={`git-popover-menu-item git-branch-menu-item${isCurrent ? ' is-active' : ''}`}
+                  className={`context-menu-item git-popover-menu-item git-branch-menu-item${isCurrent ? ' is-active' : ''}`}
                   title={branch.upstream ? `${branch.name} → ${branch.upstream}` : branch.name}
                   aria-current={isCurrent ? 'true' : undefined}
                   onClick={() => {
