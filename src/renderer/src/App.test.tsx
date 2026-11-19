@@ -3947,7 +3947,8 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     expect(within(gitRegion).getByText('Source Control').closest('button')).toBeNull()
 
-    const changesToggle = within(gitRegion).getByRole('button', { name: /Changes/i })
+    const changesSection = within(gitRegion).getByRole('region', { name: 'Changes' })
+    const changesToggle = within(changesSection).getAllByRole('button', { name: /^Changes/i })[0]
     const graphToggle = within(gitRegion).getByRole('button', { name: /Graph/i })
     expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
     expect(changesToggle).toHaveTextContent('3')
@@ -4036,10 +4037,10 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     await clickActivityBarButton(user, 'Git')
 
     const remountedGit = screen.getByRole('region', { name: 'Git 소스 제어' })
-    expect(within(remountedGit).getByRole('button', { name: /Changes/i })).toHaveAttribute(
-      'aria-expanded',
-      'true'
-    )
+    const remountedChangesSection = within(remountedGit).getByRole('region', { name: 'Changes' })
+    expect(
+      within(remountedChangesSection).getAllByRole('button', { name: /^Changes/i })[0]
+    ).toHaveAttribute('aria-expanded', 'true')
     expect(within(remountedGit).getByRole('button', { name: /Graph/i })).toHaveAttribute(
       'aria-expanded',
       'true'
@@ -4724,6 +4725,197 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(
       within(gitRegion).getByText('병합 충돌 파일을 해결하고 Stage(+)한 후 커밋하세요.')
     ).toBeInTheDocument()
+  })
+
+  it('supports Changes header toolbar (tree view toggle, Commit ✓ auto-stage flow, refresh), hover open-file vs row Diff tab, and session-only compressed tree folder collapse reset on workspace switch', async () => {
+    const user = userEvent.setup()
+    let staged: Array<{ path: string; status: GitFileStatusCode }> = []
+    let unstaged: Array<{ path: string; status: GitFileStatusCode }> = [
+      { path: 'wiki/a/b/c/note.md', status: 'M' },
+      { path: 'wiki/gone.md', status: 'D' },
+      { path: 'outside/ext.md', status: 'M' }
+    ]
+    let untracked: Array<{ path: string; status: GitFileStatusCode }> = [
+      { path: 'wiki/new.md', status: '?' }
+    ]
+    const diffSpy = vi.fn(async (_ws: string, request: GitDiffRequest) => ({
+      path: request.path,
+      status: request.status,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: request.status !== 'D',
+      rawPatch: `diff --git a/${request.path} b/${request.path}\n@@ -1 +1 @@\n-old\n+new`
+    }))
+    const stageAllSpy = vi.fn(async (ws: string) => {
+      staged = [...unstaged, ...untracked].map((f) => ({
+        path: f.path,
+        status: (f.status === '?' ? 'A' : f.status) as GitFileStatusCode
+      }))
+      unstaged = []
+      untracked = []
+      return {
+        ...createEmptyGitStatus(true, 'C:/repo'),
+        repoRoot: 'C:/repo',
+        branch: 'main',
+        staged,
+        unstaged,
+        untracked
+      }
+    })
+    const commitSpy = vi.fn(async () => {
+      staged = []
+      return {
+        ...createEmptyGitStatus(true, 'C:/repo'),
+        repoRoot: 'C:/repo',
+        branch: 'main',
+        staged: [],
+        unstaged: [],
+        untracked: []
+      }
+    })
+    const statusSpy = vi.fn(async (wsPath: string) => {
+      if (wsPath.toLowerCase().includes('beta')) {
+        return {
+          ...createEmptyGitStatus(true, 'C:/repo'),
+          repoRoot: 'C:/repo',
+          branch: 'main',
+          staged: [],
+          unstaged: [{ path: 'wiki/a/b/c/note.md', status: 'M' as GitFileStatusCode }],
+          untracked: []
+        }
+      }
+      return {
+        ...createEmptyGitStatus(true, 'C:/repo'),
+        repoRoot: 'C:/repo',
+        branch: 'main',
+        staged,
+        unstaged,
+        untracked
+      }
+    })
+
+    const { api } = createInMemoryWikiApi(
+      {
+        autoSave: false,
+        recentWorkspaces: ['C:/repo/wiki', 'C:/repo/beta']
+      },
+      {
+        workspaces: {
+          'C:/repo/wiki': {
+            'a/b/c/note.md': '# Compressed Note Body',
+            'new.md': '# Untracked Note'
+          },
+          'C:/repo/beta': {
+            'beta.md': '# Beta Doc'
+          }
+        },
+        git: {
+          status: statusSpy,
+          stageAll: stageAllSpy,
+          commit: commitSpy,
+          diff: diffSpy
+        }
+      }
+    )
+    const configUpdateSpy = vi.spyOn(api.config, 'update')
+    window.wikiApi = api
+
+    render(<App />)
+    await screen.findByLabelText('워크스페이스 탐색기')
+    await clickActivityBarButton(user, 'Git')
+
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const changesSection = within(gitRegion).getByRole('region', { name: 'Changes' })
+
+    // 1. Staged Changes hidden when 0; list mode displays filename + dimmed relative dir + VS Code status chars
+    expect(within(changesSection).queryByRole('group', { name: 'Staged Changes' })).toBeNull()
+    expect(within(changesSection).getByText('note.md')).toBeInTheDocument()
+    expect(within(changesSection).getByText('wiki/a/b/c')).toBeInTheDocument()
+    expect(within(changesSection).getByText('gone.md')).toHaveClass('is-deleted')
+    expect(within(changesSection).getByText('U')).toBeInTheDocument()
+
+    // 2. Open-file hover icon excluded on D and outside-workspace files; clicking open-file on workspace file opens normal editor tab (no Diff tab)
+    expect(
+      within(changesSection).queryByRole('button', { name: 'wiki/gone.md 파일 열기' })
+    ).toBeNull()
+    expect(
+      within(changesSection).queryByRole('button', { name: 'outside/ext.md 파일 열기' })
+    ).toBeNull()
+
+    await user.click(within(changesSection).getByRole('button', { name: 'wiki/a/b/c/note.md 파일 열기' }))
+    const primaryPane = screen.getByTestId('pane-primary')
+    const docEditor = await within(primaryPane).findByTestId('document-editor')
+    expect(getRawEditorText(docEditor)).toContain('# Compressed Note Body')
+    expect(diffSpy).not.toHaveBeenCalled()
+    expect(within(primaryPane).getByRole('tab', { name: 'note.md' })).toBeInTheDocument()
+
+    // Clicking file row body opens Diff tab preserving internal '?' status
+    await user.click(within(changesSection).getByText('new.md'))
+    expect(diffSpy).toHaveBeenCalledWith('C:/repo/wiki', {
+      kind: 'unstaged',
+      path: 'wiki/new.md',
+      status: '?'
+    })
+    expect(await within(primaryPane).findByText('Working Tree')).toBeInTheDocument()
+
+    // 3. Switch to compressed tree view, collapse folder a/b/c, verify preserved across Activity Bar view switches (without config.json writes)
+    await user.click(within(changesSection).getByRole('button', { name: '트리 보기로 전환' }))
+    const folderBtn = within(changesSection).getByRole('button', { name: 'a/b/c' })
+    expect(folderBtn).toHaveAttribute('aria-expanded', 'true')
+    await user.click(folderBtn)
+    expect(folderBtn).toHaveAttribute('aria-expanded', 'false')
+    expect(within(changesSection).queryByText('note.md')).not.toBeInTheDocument()
+
+    await clickActivityBarButton(user, '탐색기')
+    await clickActivityBarButton(user, 'Git')
+    const reopenedChanges = within(screen.getByRole('region', { name: 'Git 소스 제어' })).getByRole(
+      'region',
+      { name: 'Changes' }
+    )
+    expect(within(reopenedChanges).getByRole('button', { name: '리스트 보기로 전환' })).toBeInTheDocument()
+    expect(within(reopenedChanges).getByRole('button', { name: 'a/b/c' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+    expect(configUpdateSpy).not.toHaveBeenCalled()
+
+    // 4. Switching workspace resets collapsed tree folder set (keeping session tree mode)
+    await switchWorkspaceFromView(user, /^beta$/i)
+    await clickActivityBarButton(user, 'Git')
+    const betaChanges = within(screen.getByRole('region', { name: 'Git 소스 제어' })).getByRole(
+      'region',
+      { name: 'Changes' }
+    )
+    expect(within(betaChanges).getByRole('button', { name: 'wiki/a/b/c' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(betaChanges).getByText('note.md')).toBeInTheDocument()
+
+    // 5. Switch back to wiki, test Changes header refresh ↻ and Commit ✓ (with Staged=0 auto-stage ConfirmDialog)
+    await switchWorkspaceFromView(user, /^wiki$/i)
+    await clickActivityBarButton(user, 'Git')
+    const wikiChanges = within(screen.getByRole('region', { name: 'Git 소스 제어' })).getByRole(
+      'region',
+      { name: 'Changes' }
+    )
+    const callsBeforeRefresh = statusSpy.mock.calls.length
+    await user.click(within(wikiChanges).getByRole('button', { name: '변경 사항 새로고침' }))
+    await waitFor(() => {
+      expect(statusSpy.mock.calls.length).toBeGreaterThan(callsBeforeRefresh)
+    })
+
+    const commitInput = within(wikiChanges).getByLabelText('커밋 메시지') as HTMLTextAreaElement
+    await user.type(commitInput, 'feat: commit via changes header check')
+    await user.click(within(wikiChanges).getByRole('button', { name: '변경 사항 커밋' }))
+    const autoStageDialog = await screen.findByRole('alertdialog')
+    await user.click(within(autoStageDialog).getByRole('button', { name: 'Stage 후 커밋' }))
+
+    await waitFor(() => {
+      expect(stageAllSpy).toHaveBeenCalledTimes(1)
+      expect(commitSpy).toHaveBeenCalledWith('C:/repo/wiki', 'feat: commit via changes header check')
+      expect(commitInput.value).toBe('')
+    })
   })
 })
 
@@ -6130,7 +6322,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     expect(screen.queryByRole('tab')).toBeNull()
 
     // 2. Clicking staged file opens Diff tab defaulting to side-by-side
-    const stagedList = within(gitPanel).getByText('스테이지됨 (1)').closest('.git-section') as HTMLElement
+    const stagedList = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
     await user.click(within(stagedList).getByText('guide.md'))
 
     const primaryPane = screen.getByTestId('pane-primary')
@@ -6145,7 +6337,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     expect(within(primaryPane).getByTestId('diff-inline')).toBeInTheDocument()
 
     // 3. Clicking another file in Changes reuses the existing Diff tab in primary pane
-    const changesList = within(gitPanel).getByText('변경 사항 (1)').closest('.git-section') as HTMLElement
+    const changesList = within(gitPanel).getByRole('group', { name: 'Changes' })
     await user.click(within(changesList).getByText('deleted.md'))
 
     await waitFor(() => {
@@ -6262,7 +6454,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     const gitPanel = await screen.findByLabelText('Git 소스 제어')
 
     // Open Staged diff for doc.md in primary pane -> move it to secondary pane
-    const stagedList = within(gitPanel).getByText('스테이지됨 (1)').closest('.git-section') as HTMLElement
+    const stagedList = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
     await user.click(within(stagedList).getByText('doc.md'))
 
     const primaryPane = screen.getByTestId('pane-primary')
@@ -6287,7 +6479,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
 
     // Focus primary pane and open another Diff tab -> secondary Diff tab stays preserved
     fireEvent.mouseDown(primaryPane)
-    const changesList = within(gitPanel).getByText('변경 사항 (1)').closest('.git-section') as HTMLElement
+    const changesList = within(gitPanel).getByRole('group', { name: 'Changes' })
     await user.click(within(changesList).getByText('other.md'))
     await within(primaryPane).findByText('after v1')
     expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*doc\.md/ })).toBeInTheDocument()
@@ -6539,7 +6731,7 @@ describe('Git Graph commit file diff integration', () => {
     })
 
     // 4. Open Working Tree Diff tab from Changes -> replaces commit Diff tab in active pane
-    const changesList = within(gitPanel).getByText('변경 사항 (1)').closest('.git-section') as HTMLElement
+    const changesList = within(gitPanel).getByRole('group', { name: 'Changes' })
     await user.click(within(changesList).getByText('notes.md'))
     await waitFor(() => {
       expect(within(primaryPane).getByText('working after')).toBeInTheDocument()

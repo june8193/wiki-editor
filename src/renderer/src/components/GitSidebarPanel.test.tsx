@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -9,6 +9,15 @@ import {
   type GitStatus
 } from '@shared/git'
 import { createInitialGitGraphState } from '../hooks/useGitGraphLog'
+import themeCss from '../styles/theme.css?raw'
+import {
+  createDefaultGitChangesViewState,
+  resetGitChangesTreeCollapsedDirs,
+  toggleGitChangesGroupCollapsed,
+  toggleGitChangesTreeDirCollapsed,
+  toggleGitChangesViewMode,
+  type GitChangesViewState
+} from '../utils/gitFileTree'
 import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
@@ -68,28 +77,53 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onLoadMoreCommits: vi.fn(),
     onToggleCommitDetail: vi.fn(),
     splitState: createDefaultGitPanelSplitState(),
+    changesViewState: createDefaultGitChangesViewState(),
     onOpenFileDiff: vi.fn(),
+    onOpenWorkspaceFile: vi.fn(),
     onToggleChangesCollapsed: vi.fn(),
     onToggleGraphCollapsed: vi.fn(),
     onResizeChangesRatio: vi.fn(),
+    onToggleChangesViewMode: vi.fn(),
+    onToggleChangesGroupCollapsed: vi.fn(),
+    onToggleChangesTreeDirCollapsed: vi.fn(),
     ...overrides
   }
 }
 
 function StatefulGitSidebarPanel(props: GitSidebarPanelProps) {
   const [splitState, setSplitState] = useState<GitPanelSplitState>(() => props.splitState)
+  const [changesViewState, setChangesViewState] = useState<GitChangesViewState>(
+    () => props.changesViewState
+  )
+
+  useEffect(() => {
+    setChangesViewState(resetGitChangesTreeCollapsedDirs)
+  }, [props.workspaceRootPath])
 
   return (
     <GitSidebarPanel
       {...props}
       splitState={splitState}
+      changesViewState={changesViewState}
       onToggleChangesCollapsed={() => setSplitState(toggleGitChangesCollapsed)}
       onToggleGraphCollapsed={() => setSplitState(toggleGitGraphCollapsed)}
       onResizeChangesRatio={(nextRatio) =>
         setSplitState((prev) => updateChangesHeightRatio(prev, nextRatio))
       }
+      onToggleChangesViewMode={() => setChangesViewState(toggleGitChangesViewMode)}
+      onToggleChangesGroupCollapsed={(group) =>
+        setChangesViewState((prev) => toggleGitChangesGroupCollapsed(prev, group))
+      }
+      onToggleChangesTreeDirCollapsed={(dirKey) =>
+        setChangesViewState((prev) => toggleGitChangesTreeDirCollapsed(prev, dirKey))
+      }
     />
   )
+}
+
+function getChangesAccordionToggle(region: HTMLElement): HTMLElement {
+  const changesSection = within(region).getByRole('region', { name: 'Changes' })
+  return within(changesSection).getAllByRole('button', { name: /^Changes/i })[0]
 }
 
 describe('GitSidebarPanel', () => {
@@ -164,13 +198,15 @@ describe('GitSidebarPanel', () => {
     expect(within(region).queryByLabelText('브랜치 선택')).not.toBeInTheDocument()
     expect(within(region).queryByRole('button', { name: '브랜치 전환' })).not.toBeInTheDocument()
 
-    // Status badges for staged and unstaged/untracked items
+    // Status badges for staged and unstaged/untracked items (VS Code UI chars)
     expect(within(region).getByText('R')).toBeInTheDocument()
-    expect(within(region).getByText('docs/old.md → docs/guide.md')).toBeInTheDocument()
+    expect(within(region).getByText('old.md → guide.md')).toBeInTheDocument()
+    expect(within(region).getByText('docs')).toBeInTheDocument()
     expect(within(region).getByText('A')).toBeInTheDocument()
     expect(within(region).getByText('M')).toBeInTheDocument()
     expect(within(region).getByText('D')).toBeInTheDocument()
-    expect(within(region).getByText('?')).toBeInTheDocument()
+    expect(within(region).getByText('U')).toBeInTheDocument()
+    expect(within(region).queryByText('?')).not.toBeInTheDocument()
 
     await user.click(within(region).getByRole('button', { name: 'Git 상태 새로고침' }))
     expect(onRefresh).toHaveBeenCalledTimes(1)
@@ -338,7 +374,7 @@ describe('GitSidebarPanel', () => {
     expect(within(region).getByRole('button', { name: 'Git 상태 새로고침' })).toBeInTheDocument()
     expect(within(region).getByRole('button', { name: '더 보기' })).toBeInTheDocument()
 
-    const changesToggle = within(region).getByRole('button', { name: /Changes/i })
+    const changesToggle = getChangesAccordionToggle(region)
     const graphToggle = within(region).getByRole('button', { name: /Graph/i })
     expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
     expect(changesToggle).toHaveTextContent('5')
@@ -354,7 +390,7 @@ describe('GitSidebarPanel', () => {
     await user.click(changesToggle)
     expect(changesToggle).toHaveAttribute('aria-expanded', 'false')
     expect(within(region).queryByLabelText('커밋 메시지')).not.toBeInTheDocument()
-    expect(within(region).queryByText(/스테이지됨/)).not.toBeInTheDocument()
+    expect(within(region).queryByRole('group', { name: 'Staged Changes' })).not.toBeInTheDocument()
     expect(graphToggle).toHaveAttribute('aria-expanded', 'true')
 
     await user.click(within(region).getByRole('button', { name: '현재 브랜치 main' }))
@@ -379,7 +415,7 @@ describe('GitSidebarPanel', () => {
     await user.click(graphToggle)
     expect(graphToggle).toHaveAttribute('aria-expanded', 'true')
 
-    // Clean repository shows 0 badge
+    // Clean repository shows 0 badge and hides Staged Changes
     rerender(
       <StatefulGitSidebarPanel
         {...buildProps({
@@ -391,7 +427,8 @@ describe('GitSidebarPanel', () => {
         })}
       />
     )
-    expect(within(region).getByRole('button', { name: /^Changes/i })).toHaveTextContent('0')
+    expect(getChangesAccordionToggle(region)).toHaveTextContent('0')
+    expect(within(region).queryByRole('group', { name: 'Staged Changes' })).not.toBeInTheDocument()
   })
 
   it('renders horizontal section resizer only when both sections are expanded and supports keyboard, pointer drag, double-click, and collapse ratio preservation', async () => {
@@ -488,7 +525,7 @@ describe('GitSidebarPanel', () => {
     expect(graphSection).toHaveStyle({ flex: '0.35 1 0%' })
 
     // Collapsing Changes hides separator and lets Graph fill 100% of remaining height
-    await user.click(within(region).getByRole('button', { name: /Changes/i }))
+    await user.click(getChangesAccordionToggle(region))
     expect(within(region).queryByRole('separator', { name: 'Git 섹션 높이 조절' })).not.toBeInTheDocument()
     expect(graphSection).toHaveStyle({ flex: '1 1 0%' })
   })
@@ -782,7 +819,7 @@ describe('GitSidebarPanel', () => {
       />
     )
 
-    await user.click(screen.getByText('docs/old.md → docs/renamed.md'))
+    await user.click(screen.getByText('old.md → renamed.md'))
     expect(onOpenFileDiff).toHaveBeenCalledWith({
       kind: 'staged',
       path: 'docs/renamed.md',
@@ -928,8 +965,8 @@ describe('GitSidebarPanel', () => {
     expect(within(region).getByRole('button', { name: '현재 브랜치 main' })).toBeInTheDocument()
     expect(within(region).getByRole('button', { name: /Sync.*↓1 ↑2/ })).toBeInTheDocument()
     expect(within(region).getByLabelText('커밋 메시지')).toBeInTheDocument()
-    expect(within(region).getByText('스테이지됨 (1)')).toBeInTheDocument()
-    expect(within(region).getByText('변경 사항 (2)')).toBeInTheDocument()
+    expect(within(region).getByRole('group', { name: 'Staged Changes' })).toBeInTheDocument()
+    expect(within(region).getByRole('group', { name: 'Changes' })).toBeInTheDocument()
 
     await user.click(refreshBtn)
     expect(onRefresh).toHaveBeenCalledTimes(1)
@@ -1144,7 +1181,7 @@ describe('GitSidebarPanel', () => {
       const discardBtn = within(region).getByRole('button', { name: `${filePath} 변경 사항 롤백` })
       const stageBtn = within(region).getByRole('button', { name: `${filePath} Stage` })
       expect(discardBtn).toHaveAttribute('title', '변경 사항 롤백')
-      expect(discardBtn).toHaveTextContent('↶')
+      expect(discardBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
       expect(discardBtn).toBeEnabled()
       expect(
         discardBtn.compareDocumentPosition(stageBtn) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -1199,13 +1236,13 @@ describe('GitSidebarPanel', () => {
 
     const discardAllBtn = discardAllButtons[0]
     const stageAllBtn = within(region).getByRole('button', { name: '전체 Stage' })
-    const stagedSection = within(region).getByText('스테이지됨 (1)').closest('.git-section') as HTMLElement
+    const stagedSection = within(region).getByRole('group', { name: 'Staged Changes' })
     expect(
       within(stagedSection).queryByRole('button', { name: '전체 변경 사항 롤백' })
     ).not.toBeInTheDocument()
 
     expect(discardAllBtn).toHaveAttribute('title', '전체 변경 사항 롤백')
-    expect(discardAllBtn).toHaveTextContent('전체 ↶')
+    expect(discardAllBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
     expect(discardAllBtn).toBeEnabled()
     expect(
       discardAllBtn.compareDocumentPosition(stageAllBtn) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -1453,5 +1490,349 @@ describe('GitSidebarPanel', () => {
     expect(
       within(region).getByText('병합 충돌 파일을 해결하고 Stage(+)한 후 커밋하세요.')
     ).toBeInTheDocument()
+  })
+
+  it('renders Changes header icon toolbar (view toggle, Commit ✓, refresh ↻), hides empty Staged Changes, and supports subgroup collapse with bulk icons', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn()
+    const onCommit = vi.fn().mockResolvedValue(true)
+    const onStageAll = vi.fn()
+    const onUnstageAll = vi.fn()
+    const onDiscardAll = vi.fn()
+
+    const { rerender } = render(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [],
+            unstaged: [{ path: 'docs/guide.md', status: 'M' }],
+            untracked: [{ path: 'draft.md', status: '?' }]
+          }),
+          onRefresh,
+          onCommit,
+          onStageAll,
+          onUnstageAll,
+          onDiscardAll
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const changesSection = within(region).getByRole('region', { name: 'Changes' })
+
+    // 1. Staged Changes is hidden when staged=0; Changes subgroup renders with count 2
+    expect(within(changesSection).queryByRole('group', { name: 'Staged Changes' })).toBeNull()
+    const changesGroup = within(changesSection).getByRole('group', { name: 'Changes' })
+    expect(within(changesGroup).getByRole('button', { name: 'Changes' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(changesGroup).getByText('2')).toBeInTheDocument()
+
+    // 2. Changes header icon toolbar: view toggle, Commit ✓, Refresh ↻
+    const viewToggleBtn = within(changesSection).getByRole('button', { name: '트리 보기로 전환' })
+    const headerCommitBtn = within(changesSection).getByRole('button', { name: '변경 사항 커밋' })
+    const headerRefreshBtn = within(changesSection).getByRole('button', {
+      name: '변경 사항 새로고침'
+    })
+    expect(viewToggleBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(headerCommitBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(headerRefreshBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    await user.click(headerRefreshBtn)
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+
+    // Header Commit ✓ validates blank message first, then submits non-empty message through smart commit flow
+    await user.click(headerCommitBtn)
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(within(changesSection).getByText('커밋 메시지를 입력하세요.')).toBeInTheDocument()
+
+    // Collapse Changes accordion, then click header Commit ✓ with blank message -> re-expands Changes to surface validation
+    await user.click(getChangesAccordionToggle(region))
+    expect(within(changesSection).queryByLabelText('커밋 메시지')).not.toBeInTheDocument()
+    await user.click(headerCommitBtn)
+    expect(await within(changesSection).findByLabelText('커밋 메시지')).toBeInTheDocument()
+
+    const commitInput = within(changesSection).getByLabelText('커밋 메시지') as HTMLTextAreaElement
+    await user.type(commitInput, 'feat: header check commit')
+    await user.click(headerCommitBtn)
+    expect(onCommit).toHaveBeenCalledWith('feat: header check commit', 'commit')
+    await vi.waitFor(() => {
+      expect(commitInput.value).toBe('')
+    })
+
+    // 3. With staged >= 1, Staged Changes renders with collapse toggle, count badge, and bulk Unstage (-)
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [{ path: 'docs/staged.md', status: 'A' }],
+            unstaged: [{ path: 'docs/guide.md', status: 'M' }],
+            untracked: []
+          }),
+          onRefresh,
+          onCommit,
+          onStageAll,
+          onUnstageAll,
+          onDiscardAll
+        })}
+      />
+    )
+
+    const stagedGroup = within(changesSection).getByRole('group', { name: 'Staged Changes' })
+    const stagedToggle = within(stagedGroup).getByRole('button', { name: /Staged Changes/ })
+    expect(stagedToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(within(stagedGroup).getByText('1')).toBeInTheDocument()
+
+    await user.click(within(stagedGroup).getByRole('button', { name: '전체 Unstage' }))
+    expect(onUnstageAll).toHaveBeenCalledTimes(1)
+
+    await user.click(stagedToggle)
+    expect(stagedToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(within(stagedGroup).queryByText('staged.md')).not.toBeInTheDocument()
+    await user.click(stagedToggle)
+    expect(within(stagedGroup).getByText('staged.md')).toBeInTheDocument()
+
+    const updatedChangesGroup = within(changesSection).getByRole('group', { name: 'Changes' })
+    await user.click(within(updatedChangesGroup).getByRole('button', { name: '전체 변경 사항 롤백' }))
+    await user.click(within(updatedChangesGroup).getByRole('button', { name: '전체 Stage' }))
+    expect(onDiscardAll).toHaveBeenCalledTimes(1)
+    expect(onStageAll).toHaveBeenCalledTimes(1)
+
+    const changesSubToggle = within(updatedChangesGroup).getByRole('button', { name: /^Changes$/ })
+    await user.click(changesSubToggle)
+    expect(changesSubToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(within(updatedChangesGroup).queryByText('guide.md')).not.toBeInTheDocument()
+    await user.click(changesSubToggle)
+    expect(within(updatedChangesGroup).getByText('guide.md')).toBeInTheDocument()
+
+    // 4. Header Commit ✓ disables when clean or conflicted
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [],
+            unstaged: [],
+            untracked: []
+          })
+        })}
+      />
+    )
+    expect(within(changesSection).getByRole('button', { name: '변경 사항 커밋' })).toBeDisabled()
+
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasConflicts: true,
+            staged: [],
+            unstaged: [{ path: 'conflict.md', status: 'U' }],
+            untracked: []
+          })
+        })}
+      />
+    )
+    expect(within(changesSection).getByRole('button', { name: '변경 사항 커밋' })).toBeDisabled()
+  })
+
+  it('renders compact file rows with VS Code status chars, deleted strikethrough, workspace-scoped open file action, and compressed tree view with workspace-reset collapse', async () => {
+    const user = userEvent.setup()
+    const onOpenFileDiff = vi.fn()
+    const onOpenWorkspaceFile = vi.fn()
+
+    const status = buildGitStatus({
+      repoRoot: 'C:/repo',
+      staged: [
+        { path: 'wiki/docs/sub/staged-added.md', status: 'A' },
+        { path: 'wiki/docs/gone-staged.md', status: 'D' },
+        { path: 'wiki/docs/sub/renamed.md', origPath: 'legacy/old-doc.md', status: 'R' }
+      ],
+      unstaged: [
+        { path: 'wiki/a/b/c/edited.md', status: 'M' },
+        { path: 'wiki/removed.md', status: 'D' },
+        { path: 'wiki/conflict.md', status: 'U' },
+        { path: 'outside/external.md', status: 'M' }
+      ],
+      untracked: [
+        { path: 'wiki/a/b/c/new-note.md', status: '?' },
+        { path: 'root-note.md', status: '?' }
+      ]
+    })
+
+    const { rerender } = render(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          workspaceRootPath: 'C:/repo/wiki',
+          status,
+          onOpenFileDiff,
+          onOpenWorkspaceFile
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const changesSection = within(region).getByRole('region', { name: 'Changes' })
+
+    // 1. List mode shows filename + dimmed relative dir + VS Code status chars + deleted strikethrough
+    expect(within(changesSection).getByText('edited.md')).toBeInTheDocument()
+    expect(within(changesSection).getAllByText('wiki/a/b/c')).toHaveLength(2)
+    expect(within(changesSection).getByText('removed.md')).toHaveClass('is-deleted')
+    expect(within(changesSection).getByText('gone-staged.md')).toHaveClass('is-deleted')
+    expect(within(changesSection).getAllByText('U')).toHaveLength(2)
+    expect(within(changesSection).getByText('C')).toBeInTheDocument()
+
+    // 2. Open file button excluded for 'D' files and files outside workspaceRootPath, included for valid workspace files
+    expect(
+      within(changesSection).queryByRole('button', { name: 'wiki/removed.md 파일 열기' })
+    ).toBeNull()
+    expect(
+      within(changesSection).queryByRole('button', { name: 'wiki/docs/gone-staged.md 파일 열기' })
+    ).toBeNull()
+    expect(
+      within(changesSection).queryByRole('button', { name: 'outside/external.md 파일 열기' })
+    ).toBeNull()
+
+    const openEditedBtn = within(changesSection).getByRole('button', {
+      name: 'wiki/a/b/c/edited.md 파일 열기'
+    })
+    await user.click(openEditedBtn)
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith('wiki/a/b/c/edited.md')
+    expect(onOpenFileDiff).not.toHaveBeenCalled()
+
+    // Row click opens Diff tab with original internal status preserved ('?' and 'U')
+    await user.click(within(changesSection).getByText('new-note.md'))
+    expect(onOpenFileDiff).toHaveBeenCalledWith({
+      kind: 'unstaged',
+      path: 'wiki/a/b/c/new-note.md',
+      status: '?'
+    })
+
+    // 3. Toggle to tree view -> stops compression at wiki/ (has direct files), compresses child a/b/c, sorts folders before root files
+    await user.click(within(changesSection).getByRole('button', { name: '트리 보기로 전환' }))
+    expect(within(changesSection).getByRole('button', { name: '리스트 보기로 전환' })).toBeInTheDocument()
+
+    const wikiFolderBtn = within(changesSection).getByRole('button', { name: 'wiki' })
+    const treeFolderBtn = within(changesSection).getByRole('button', { name: 'a/b/c' })
+    const rootNoteBtn = within(changesSection).getByRole('button', { name: 'root-note.md' })
+    expect(wikiFolderBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(treeFolderBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(
+      wikiFolderBtn.compareDocumentPosition(rootNoteBtn) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(within(changesSection).getByText('edited.md')).toBeInTheDocument()
+    expect(within(changesSection).getByText('new-note.md')).toBeInTheDocument()
+    const renamedTreeTrigger = within(changesSection).getByRole('button', { name: 'renamed.md' })
+    expect(renamedTreeTrigger).toHaveAttribute('title', 'legacy/old-doc.md → wiki/docs/sub/renamed.md')
+
+    // Collapse compressed folder -> hides nested files while keeping sibling files under wiki visible
+    await user.click(treeFolderBtn)
+    expect(treeFolderBtn).toHaveAttribute('aria-expanded', 'false')
+    expect(within(changesSection).queryByText('edited.md')).not.toBeInTheDocument()
+    expect(within(changesSection).queryByText('new-note.md')).not.toBeInTheDocument()
+    expect(within(changesSection).getByText('removed.md')).toBeInTheDocument()
+
+    // Workspace switch resets collapsed folder state so folders start expanded again
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          workspaceRootPath: 'C:/repo/other',
+          status,
+          onOpenFileDiff,
+          onOpenWorkspaceFile
+        })}
+      />
+    )
+    expect(within(changesSection).getByRole('button', { name: 'a/b/c' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(changesSection).getByText('edited.md')).toBeInTheDocument()
+  })
+
+  it('reveals subgroup and file hover actions via keyboard :focus-within and defines light/dark VS Code status color tokens', async () => {
+    const user = userEvent.setup()
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    try {
+      const { container } = render(
+        <div data-theme="light">
+          <button type="button">Before Git Changes</button>
+          <GitSidebarPanel
+            {...buildProps({
+              status: buildGitStatus({
+                staged: [{ path: 'added.md', status: 'A' }],
+                unstaged: [
+                  { path: 'modified.md', status: 'M' },
+                  { path: 'deleted.md', status: 'D' },
+                  { path: 'conflict.md', status: 'U' }
+                ],
+                untracked: [{ path: 'untracked.md', status: '?' }]
+              })
+            })}
+          />
+        </div>
+      )
+
+      const themedRoot = container.firstElementChild as HTMLElement
+      const lightVars = {
+        added: getComputedStyle(themedRoot).getPropertyValue('--git-status-added').trim(),
+        modified: getComputedStyle(themedRoot).getPropertyValue('--git-status-modified').trim(),
+        deleted: getComputedStyle(themedRoot).getPropertyValue('--git-status-deleted').trim(),
+        renamed: getComputedStyle(themedRoot).getPropertyValue('--git-status-renamed').trim()
+      }
+      expect(lightVars.added).not.toBe('')
+      expect(lightVars.modified).not.toBe('')
+      expect(lightVars.deleted).not.toBe('')
+      expect(lightVars.renamed).not.toBe('')
+      expect(new Set(Object.values(lightVars)).size).toBe(4)
+
+      themedRoot.setAttribute('data-theme', 'dark')
+      const darkVars = {
+        added: getComputedStyle(themedRoot).getPropertyValue('--git-status-added').trim(),
+        modified: getComputedStyle(themedRoot).getPropertyValue('--git-status-modified').trim(),
+        deleted: getComputedStyle(themedRoot).getPropertyValue('--git-status-deleted').trim(),
+        renamed: getComputedStyle(themedRoot).getPropertyValue('--git-status-renamed').trim()
+      }
+      expect(darkVars.added).not.toBe('')
+      expect(darkVars.modified).not.toBe('')
+      expect(darkVars.deleted).not.toBe('')
+      expect(darkVars.renamed).not.toBe('')
+      expect(darkVars).not.toEqual(lightVars)
+
+      expect(getComputedStyle(screen.getByText('deleted.md')).textDecorationLine).toBe(
+        'line-through'
+      )
+
+      const stagedGroup = screen.getByRole('group', { name: 'Staged Changes' })
+      const unstageAllBtn = within(stagedGroup).getByRole('button', { name: '전체 Unstage' })
+      const stagedActions = unstageAllBtn.parentElement as HTMLElement
+
+      const openModifiedBtn = screen.getByRole('button', { name: 'modified.md 파일 열기' })
+      const fileActions = openModifiedBtn.parentElement as HTMLElement
+
+      // Idle state hides hover-only containers visually while keeping buttons keyboard-focusable
+      expect(getComputedStyle(stagedActions).opacity).toBe('0')
+      expect(getComputedStyle(fileActions).opacity).toBe('0')
+
+      // Focusing action button activates CSS :focus-within on subgroup header and file row
+      unstageAllBtn.focus()
+      expect(unstageAllBtn).toHaveFocus()
+      expect(getComputedStyle(stagedActions).opacity).toBe('1')
+
+      openModifiedBtn.focus()
+      expect(openModifiedBtn).toHaveFocus()
+      expect(getComputedStyle(fileActions).opacity).toBe('1')
+
+      await user.tab()
+      expect(screen.getByRole('button', { name: 'modified.md 변경 사항 롤백' })).toHaveFocus()
+      expect(getComputedStyle(fileActions).opacity).toBe('1')
+
+      screen.getByRole('button', { name: 'Before Git Changes' }).focus()
+      expect(getComputedStyle(fileActions).opacity).toBe('0')
+    } finally {
+      styleEl.remove()
+    }
   })
 })

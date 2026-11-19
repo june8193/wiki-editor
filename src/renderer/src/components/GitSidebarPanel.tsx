@@ -13,6 +13,7 @@ import {
 import {
   Check,
   ChevronDown,
+  ChevronRight,
   CloudUpload,
   GitBranch,
   MoreHorizontal,
@@ -30,14 +31,16 @@ import {
 import { type DismissReason, useDismissable } from '../hooks/useDismissable'
 import type { GitGraphState } from '../hooks/useGitGraphLog'
 import { toGitDiffRequest } from '../utils/gitFilePresentation'
+import type { GitChangesGroupKey, GitChangesViewState } from '../utils/gitFileTree'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
 import {
   formatGitCommitPlaceholder,
   getGitBranchLabel,
   getGitPrimaryActionState,
-  type GitCommitActionMode
+  type GitCommitActionMode,
+  type GitPrimaryActionState
 } from '../utils/gitPrimaryAction'
-import { GitFileTriggerButton } from './GitFileTriggerButton'
+import { GitChangesFileGroups, GitChangesHeaderActions } from './GitChangesSection'
 import { GitGraphScopeToggle, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
 
@@ -57,6 +60,7 @@ export interface GitSidebarPanelProps {
   pendingAction: string | null
   errorMessage: string | null
   splitState: GitPanelSplitState
+  changesViewState: GitChangesViewState
   onDismissError: () => void
   onRefresh: () => void
   onChangeLogScope: (nextScope: GitLogScope) => void
@@ -76,9 +80,13 @@ export interface GitSidebarPanelProps {
   onFetch: () => void
   onSync: () => void
   onOpenFileDiff: (request: GitDiffRequest) => void
+  onOpenWorkspaceFile: (repoRelativePath: string) => void
   onToggleChangesCollapsed: () => void
   onToggleGraphCollapsed: () => void
   onResizeChangesRatio: (nextRatio: number) => void
+  onToggleChangesViewMode: () => void
+  onToggleChangesGroupCollapsed: (group: GitChangesGroupKey) => void
+  onToggleChangesTreeDirCollapsed: (dirKey: string) => void
 }
 
 /**
@@ -113,105 +121,6 @@ function useMenuPopover(isDisabled: boolean, resetKey: string | null) {
 
 function getSectionFlexStyle(flexRatio: number | null): CSSProperties | undefined {
   return flexRatio !== null ? { flex: `${flexRatio} 1 0%` } : undefined
-}
-
-interface GitFileSectionProps {
-  title: string
-  files: readonly GitChangedFile[]
-  emptyText: string
-  bulkButtonText: string
-  bulkAriaLabel: string
-  itemActionSymbol: '+' | '-'
-  itemActionTitle: 'Stage' | 'Unstage'
-  isBusy: boolean
-  onBulkAction: () => void
-  onBulkDiscard?: () => void
-  onSelectFile: (file: GitChangedFile) => void
-  onItemAction: (file: GitChangedFile) => void
-  onDiscardFile?: (file: GitChangedFile) => void
-}
-
-function GitFileSection({
-  title,
-  files,
-  emptyText,
-  bulkButtonText,
-  bulkAriaLabel,
-  itemActionSymbol,
-  itemActionTitle,
-  isBusy,
-  onBulkAction,
-  onBulkDiscard,
-  onSelectFile,
-  onItemAction,
-  onDiscardFile
-}: GitFileSectionProps) {
-  return (
-    <div className="git-section">
-      <div className="git-section-header">
-        <span className="git-section-title">
-          {title} ({files.length})
-        </span>
-        <div className="git-section-actions">
-          {onBulkDiscard && (
-            <button
-              type="button"
-              className="git-section-action-btn"
-              aria-label="전체 변경 사항 롤백"
-              title="전체 변경 사항 롤백"
-              disabled={isBusy || files.length === 0}
-              onClick={onBulkDiscard}
-            >
-              전체 ↶
-            </button>
-          )}
-          <button
-            type="button"
-            className="git-section-action-btn"
-            aria-label={bulkAriaLabel}
-            title={bulkAriaLabel}
-            disabled={isBusy || files.length === 0}
-            onClick={onBulkAction}
-          >
-            {bulkButtonText}
-          </button>
-        </div>
-      </div>
-      {files.length === 0 ? (
-        <p className="git-empty-subtext">{emptyText}</p>
-      ) : (
-        <ul className="git-file-list" role="list">
-          {files.map((file) => (
-            <li key={`${itemActionTitle}:${file.status}:${file.path}`} className="git-file-item">
-              <GitFileTriggerButton file={file} onClick={() => onSelectFile(file)} />
-              {onDiscardFile && (
-                <button
-                  type="button"
-                  className="git-file-action-btn"
-                  aria-label={`${file.path} 변경 사항 롤백`}
-                  title="변경 사항 롤백"
-                  disabled={isBusy}
-                  onClick={() => onDiscardFile(file)}
-                >
-                  ↶
-                </button>
-              )}
-              <button
-                type="button"
-                className="git-file-action-btn"
-                aria-label={`${file.path} ${itemActionTitle}`}
-                title={itemActionTitle}
-                disabled={isBusy}
-                onClick={() => onItemAction(file)}
-              >
-                {itemActionSymbol}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
 }
 
 interface GitCommonBannersProps {
@@ -279,7 +188,11 @@ function GitAccordionSection({
           onClick={onToggle}
         >
           <span className="git-accordion-chevron" aria-hidden="true">
-            {isExpanded ? '▾' : '▸'}
+            {isExpanded ? (
+              <ChevronDown size={13} strokeWidth={1.75} />
+            ) : (
+              <ChevronRight size={13} strokeWidth={1.75} />
+            )}
           </span>
           <span className="git-accordion-title">{title}</span>
           {badgeCount !== undefined && <span className="git-accordion-badge">{badgeCount}</span>}
@@ -497,36 +410,19 @@ function GitBranchSubrow({
   )
 }
 
-interface GitCommitFormProps {
-  workspaceRootPath: string | null
-  status: GitStatus
-  isBusy: boolean
+function useGitCommitInputState(
+  workspaceRootPath: string | null,
+  status: GitStatus | null,
+  isBusy: boolean,
   onCommit: (message: string, mode?: GitCommitActionMode) => Promise<boolean> | boolean
-  onPush: () => void
-  onSync: () => void
-}
-
-/**
- * Renders the 1-line auto-resizing commit input and smart primary CTA (`Commit ▾` / `Publish Branch` / `Sync Changes`).
- */
-function GitCommitForm({
-  workspaceRootPath,
-  status,
-  isBusy,
-  onCommit,
-  onPush,
-  onSync
-}: GitCommitFormProps) {
+) {
   const [commitMessage, setCommitMessage] = useState('')
   const [validationMessage, setValidationMessage] = useState<string | null>(null)
-  const commitInputRef = useRef<HTMLTextAreaElement | null>(null)
   const commitInFlightRef = useRef(false)
 
   const primaryAction = getGitPrimaryActionState(status)
   const isCommitMode = primaryAction.kind === 'commit'
   const isCommitDisabled = isBusy || !isCommitMode || primaryAction.disabled
-  const commitMenu = useMenuPopover(isCommitDisabled, workspaceRootPath)
-  const branchLabel = getGitBranchLabel(status)
 
   useEffect(() => {
     setValidationMessage(null)
@@ -538,6 +434,89 @@ function GitCommitForm({
     }
   }, [isCommitMode, primaryAction.kind === 'commit' ? primaryAction.disabled : false])
 
+  const submitCommit = useCallback(
+    async (mode: GitCommitActionMode = 'commit'): Promise<void> => {
+      if (
+        commitInFlightRef.current ||
+        isBusy ||
+        primaryAction.kind !== 'commit' ||
+        primaryAction.disabled
+      ) {
+        return
+      }
+      const trimmed = commitMessage.trim()
+      if (!trimmed) {
+        setValidationMessage('커밋 메시지를 입력하세요.')
+        return
+      }
+      setValidationMessage(null)
+      commitInFlightRef.current = true
+      try {
+        const committed = await onCommit(trimmed, mode)
+        if (committed) {
+          setCommitMessage('')
+        }
+      } finally {
+        commitInFlightRef.current = false
+      }
+    },
+    [commitMessage, isBusy, onCommit, primaryAction]
+  )
+
+  const handleMessageChange = useCallback(
+    (nextValue: string): void => {
+      setCommitMessage(nextValue)
+      if (validationMessage && nextValue.trim()) {
+        setValidationMessage(null)
+      }
+    },
+    [validationMessage]
+  )
+
+  return {
+    commitMessage,
+    validationMessage,
+    primaryAction,
+    isCommitDisabled,
+    submitCommit,
+    handleMessageChange
+  }
+}
+
+interface GitCommitFormProps {
+  workspaceRootPath: string | null
+  status: GitStatus
+  isBusy: boolean
+  commitMessage: string
+  validationMessage: string | null
+  primaryAction: GitPrimaryActionState
+  isCommitDisabled: boolean
+  onChangeMessage: (nextValue: string) => void
+  onSubmitCommit: (mode?: GitCommitActionMode) => Promise<void>
+  onPush: () => void
+  onSync: () => void
+}
+
+/**
+ * Renders the 1-line auto-resizing commit input and smart primary CTA (`Commit ▾` / `Publish Branch` / `Sync Changes`).
+ */
+function GitCommitForm({
+  workspaceRootPath,
+  status,
+  isBusy,
+  commitMessage,
+  validationMessage,
+  primaryAction,
+  isCommitDisabled,
+  onChangeMessage,
+  onSubmitCommit,
+  onPush,
+  onSync
+}: GitCommitFormProps) {
+  const commitInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const commitMenu = useMenuPopover(isCommitDisabled, workspaceRootPath)
+  const branchLabel = getGitBranchLabel(status)
+
   useLayoutEffect(() => {
     const input = commitInputRef.current
     if (!input) return
@@ -547,41 +526,15 @@ function GitCommitForm({
     }
   }, [commitMessage, status.isRepo])
 
-  const submitCommit = async (mode: GitCommitActionMode = 'commit'): Promise<void> => {
-    if (
-      commitInFlightRef.current ||
-      isBusy ||
-      primaryAction.kind !== 'commit' ||
-      primaryAction.disabled
-    ) {
-      return
-    }
-    const trimmed = commitMessage.trim()
-    if (!trimmed) {
-      setValidationMessage('커밋 메시지를 입력하세요.')
-      return
-    }
-    setValidationMessage(null)
-    commitInFlightRef.current = true
-    try {
-      const committed = await onCommit(trimmed, mode)
-      if (committed) {
-        setCommitMessage('')
-      }
-    } finally {
-      commitInFlightRef.current = false
-    }
-  }
-
   const handleFormSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
-    void submitCommit('commit')
+    void onSubmitCommit('commit')
   }
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault()
-      void submitCommit('commit')
+      void onSubmitCommit('commit')
     }
   }
 
@@ -595,12 +548,7 @@ function GitCommitForm({
         rows={1}
         value={commitMessage}
         disabled={isBusy}
-        onChange={(event) => {
-          setCommitMessage(event.target.value)
-          if (validationMessage && event.target.value.trim()) {
-            setValidationMessage(null)
-          }
-        }}
+        onChange={(event) => onChangeMessage(event.target.value)}
         onKeyDown={handleInputKeyDown}
       />
       {validationMessage && <p className="git-validation-text">{validationMessage}</p>}
@@ -671,7 +619,7 @@ function GitCommitForm({
                   disabled={isCommitDisabled}
                   onClick={() => {
                     commitMenu.close()
-                    void submitCommit(item.mode)
+                    void onSubmitCommit(item.mode)
                   }}
                 >
                   {item.label}
@@ -696,6 +644,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   pendingAction,
   errorMessage,
   splitState,
+  changesViewState,
   onDismissError,
   onRefresh,
   onChangeLogScope,
@@ -715,19 +664,31 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onFetch,
   onSync,
   onOpenFileDiff,
+  onOpenWorkspaceFile,
   onToggleChangesCollapsed,
   onToggleGraphCollapsed,
-  onResizeChangesRatio
+  onResizeChangesRatio,
+  onToggleChangesViewMode,
+  onToggleChangesGroupCollapsed,
+  onToggleChangesTreeDirCollapsed
 }: GitSidebarPanelProps) {
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
 
   const isBusy = pendingAction !== null
+  const commitInput = useGitCommitInputState(workspaceRootPath, status, isBusy, onCommit)
   const unstagedAndUntracked: GitChangedFile[] = status
     ? [...status.unstaged, ...status.untracked]
     : []
   const availableBranches = branchList?.branches ?? []
   const totalChangedCount = getGitChangedCount(status)
   const layout = computeGitSectionLayout(splitState)
+
+  const handleHeaderCommit = (): void => {
+    if (splitState.isChangesCollapsed && !commitInput.commitMessage.trim()) {
+      onToggleChangesCollapsed()
+    }
+    void commitInput.submitCommit('commit')
+  }
 
   const renderNonRepoBody = () => {
     if (!workspaceRootPath) {
@@ -827,6 +788,16 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
             <GitAccordionSection
               title="Changes"
               badgeCount={totalChangedCount}
+              headerActions={
+                <GitChangesHeaderActions
+                  viewMode={changesViewState.viewMode}
+                  isBusy={isBusy}
+                  isCommitDisabled={commitInput.isCommitDisabled}
+                  onToggleViewMode={onToggleChangesViewMode}
+                  onHeaderCommit={handleHeaderCommit}
+                  onRefresh={onRefresh}
+                />
+              }
               isExpanded={layout.showChangesBody}
               flexRatio={layout.changesFlexRatio}
               onToggle={onToggleChangesCollapsed}
@@ -835,38 +806,33 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 workspaceRootPath={workspaceRootPath}
                 status={status}
                 isBusy={isBusy}
-                onCommit={onCommit}
+                commitMessage={commitInput.commitMessage}
+                validationMessage={commitInput.validationMessage}
+                primaryAction={commitInput.primaryAction}
+                isCommitDisabled={commitInput.isCommitDisabled}
+                onChangeMessage={commitInput.handleMessageChange}
+                onSubmitCommit={commitInput.submitCommit}
                 onPush={onPush}
                 onSync={onSync}
               />
 
-              <GitFileSection
-                title="스테이지됨"
-                files={status.staged}
-                emptyText="스테이지된 변경 사항 없음"
-                bulkButtonText="전체 -"
-                bulkAriaLabel="전체 Unstage"
-                itemActionSymbol="-"
-                itemActionTitle="Unstage"
+              <GitChangesFileGroups
+                stagedFiles={status.staged}
+                unstagedAndUntracked={unstagedAndUntracked}
+                viewState={changesViewState}
                 isBusy={isBusy}
-                onBulkAction={onUnstageAll}
-                onSelectFile={(file) => onOpenFileDiff(toGitDiffRequest('staged', file))}
-                onItemAction={(file) => onUnstageFile(file.path, file.origPath)}
-              />
-
-              <GitFileSection
-                title="변경 사항"
-                files={unstagedAndUntracked}
-                emptyText="변경된 파일 없음"
-                bulkButtonText="전체 +"
-                bulkAriaLabel="전체 Stage"
-                itemActionSymbol="+"
-                itemActionTitle="Stage"
-                isBusy={isBusy}
-                onBulkAction={onStageAll}
-                onBulkDiscard={onDiscardAll}
-                onSelectFile={(file) => onOpenFileDiff(toGitDiffRequest('unstaged', file))}
-                onItemAction={(file) => onStageFile(file.path)}
+                repoRoot={status.repoRoot}
+                workspaceRootPath={workspaceRootPath}
+                onToggleGroupCollapsed={onToggleChangesGroupCollapsed}
+                onToggleTreeDir={onToggleChangesTreeDirCollapsed}
+                onStageAll={onStageAll}
+                onUnstageAll={onUnstageAll}
+                onDiscardAll={onDiscardAll}
+                onSelectStagedFile={(file) => onOpenFileDiff(toGitDiffRequest('staged', file))}
+                onSelectWorkingFile={(file) => onOpenFileDiff(toGitDiffRequest('unstaged', file))}
+                onOpenWorkspaceFile={onOpenWorkspaceFile}
+                onStageFile={(file) => onStageFile(file.path)}
+                onUnstageFile={(file) => onUnstageFile(file.path, file.origPath)}
                 onDiscardFile={(file) => onDiscardFile(file.path)}
               />
             </GitAccordionSection>

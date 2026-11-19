@@ -26,6 +26,15 @@ import { useWorkspaceStatePersistence } from '../hooks/useWorkspaceStatePersiste
 import { type RestoredWorkspaceContext, useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import { buildDiscardAllConfirmMessage, getGitFileBaseName } from '../utils/gitFilePresentation'
 import {
+  createDefaultGitChangesViewState,
+  resetGitChangesTreeCollapsedDirs,
+  toggleGitChangesGroupCollapsed,
+  toggleGitChangesTreeDirCollapsed,
+  toggleGitChangesViewMode,
+  type GitChangesGroupKey,
+  type GitChangesViewState
+} from '../utils/gitFileTree'
+import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
   toggleGitGraphCollapsed,
@@ -105,6 +114,9 @@ export function MainAppShell() {
   })
   const [gitPanelSplit, setGitPanelSplit] = useState<GitPanelSplitState>(
     createDefaultGitPanelSplitState
+  )
+  const [gitChangesView, setGitChangesView] = useState<GitChangesViewState>(
+    createDefaultGitChangesViewState
   )
   const [isGitWorkspaceMutating, setIsGitWorkspaceMutating] = useState(false)
 
@@ -187,6 +199,18 @@ export function MainAppShell() {
     setGitPanelSplit((prev) => updateChangesHeightRatio(prev, nextRatio))
   }, [])
 
+  const handleToggleGitChangesViewMode = useCallback((): void => {
+    setGitChangesView(toggleGitChangesViewMode)
+  }, [])
+
+  const handleToggleGitChangesGroupCollapsed = useCallback((group: GitChangesGroupKey): void => {
+    setGitChangesView((prev) => toggleGitChangesGroupCollapsed(prev, group))
+  }, [])
+
+  const handleToggleGitChangesTreeDirCollapsed = useCallback((dirKey: string): void => {
+    setGitChangesView((prev) => toggleGitChangesTreeDirCollapsed(prev, dirKey))
+  }, [])
+
   const isSelectingFolderRef = useRef<boolean>(false)
   const hasWorkspaceInteractionRef = useRef<boolean>(false)
   const isStartupRestoreRef = useRef<boolean>(false)
@@ -250,6 +274,11 @@ export function MainAppShell() {
     onEntryDeleted: editor.syncDeletedPath
   })
   hadOpenWorkspaceRef.current = workspace !== null
+
+  const activeWorkspaceRoot = workspace?.rootPath ?? null
+  useEffect(() => {
+    setGitChangesView(resetGitChangesTreeCollapsedDirs)
+  }, [activeWorkspaceRoot])
 
   const workspaceStatePersistence = useWorkspaceStatePersistence({
     workspaceRootPath: workspace?.rootPath ?? null,
@@ -871,6 +900,7 @@ export function MainAppShell() {
                 pendingAction={git.pendingAction}
                 errorMessage={git.errorMessage}
                 splitState={gitPanelSplit}
+                changesViewState={gitChangesView}
                 onDismissError={git.dismissError}
                 onRefresh={() => void git.refreshStatus()}
                 onChangeLogScope={(nextScope) => void git.changeLogScope(nextScope)}
@@ -890,9 +920,13 @@ export function MainAppShell() {
                 onFetch={() => void git.fetch()}
                 onSync={() => void git.sync()}
                 onOpenFileDiff={handleOpenFileDiff}
+                onOpenWorkspaceFile={handleOpenDiffTargetFile}
                 onToggleChangesCollapsed={handleToggleGitChangesCollapsed}
                 onToggleGraphCollapsed={handleToggleGitGraphCollapsed}
                 onResizeChangesRatio={handleResizeGitChangesRatio}
+                onToggleChangesViewMode={handleToggleGitChangesViewMode}
+                onToggleChangesGroupCollapsed={handleToggleGitChangesGroupCollapsed}
+                onToggleChangesTreeDirCollapsed={handleToggleGitChangesTreeDirCollapsed}
               />
             )}
           </aside>
