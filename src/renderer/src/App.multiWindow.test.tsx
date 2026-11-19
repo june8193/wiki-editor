@@ -2355,7 +2355,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     fireEvent.mouseDown(primaryPane)
     const graphSection = within(gitPanel).getByRole('region', { name: 'Graph' })
     await user.click(within(graphSection).getByRole('button', { name: /Initial commit/ }))
-    await user.click(await within(graphSection).findByRole('button', { name: /wiki\/notes\.md/ }))
+    await user.click(await within(graphSection).findByTitle('wiki/notes.md'))
     expect(await within(primaryPane).findByText('Commit abcdef1')).toBeInTheDocument()
 
     // 1. Discard M (wiki/notes.md) -> immediate (no modal), syncs clean notes.md buffer, closes secondary unstaged diff tab while preserving primary commit diff & dirty other/config
@@ -3136,7 +3136,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     fireEvent.mouseDown(primaryPane)
     const graphSection = within(gitPanel).getByRole('region', { name: 'Graph' })
     await user.click(within(graphSection).getByRole('button', { name: /Initial commit/ }))
-    await user.click(await within(graphSection).findByRole('button', { name: /wiki\/notes\.md/ }))
+    await user.click(await within(graphSection).findByTitle('wiki/notes.md'))
     expect(await within(primaryPane).findByText('Commit abcdef1')).toBeInTheDocument()
 
     // Re-dirty notes.md in Aux1 -> 전체 ↶ -> 전체 롤백 -> 저장 없이 진행

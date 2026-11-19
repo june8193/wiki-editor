@@ -558,7 +558,7 @@ describe('GitSidebarPanel', () => {
         subject: 'Update docs',
         authorName: 'Bob',
         committedAt: '2026-11-15T05:15:00Z',
-        refs: []
+        refs: [{ name: 'origin/unmerged', kind: 'remote-branch' }]
       },
       {
         hash: '3333333000000000000000000000000000000000',
@@ -588,32 +588,60 @@ describe('GitSidebarPanel', () => {
     )
 
     const graphRegion = screen.getByRole('region', { name: 'Graph' })
-    const allBtn = within(graphRegion).getByRole('button', { name: '전체' })
-    const currentBtn = within(graphRegion).getByRole('button', { name: '현재 브랜치' })
-    expect(allBtn).toHaveAttribute('aria-pressed', 'true')
-    expect(currentBtn).toHaveAttribute('aria-pressed', 'false')
+    const scopeBtn = within(graphRegion).getByRole('button', { name: 'Auto' })
 
-    await user.click(currentBtn)
+    await user.click(scopeBtn)
     expect(onChangeLogScope).toHaveBeenCalledWith('current')
     expect(onToggleGraphCollapsed).not.toHaveBeenCalled()
 
-    // Commit rows, ref badges, SVG lanes, and tooltips
+    // Commit rows, right-aligned merged ref badges, 24px SVG lanes, and tooltips
     const list = within(graphRegion).getByRole('list', { name: '커밋 그래프' })
     const items = within(list).getAllByRole('listitem')
     expect(items).toHaveLength(3)
 
-    expect(within(items[0]).getByText('Merge feature branch into main')).toBeInTheDocument()
-    expect(within(items[0]).getByText('Alice')).toBeInTheDocument()
-    expect(within(items[0]).getByText('HEAD')).toHaveClass('is-head')
-    expect(within(items[0]).getByText('main')).toHaveClass('is-local-branch')
-    expect(within(items[0]).getByText('origin/main')).toHaveClass('is-remote-branch')
-    expect(within(items[0]).getByText('v1.0.0')).toHaveClass('is-tag')
+    const subjectEl = within(items[0]).getByText('Merge feature branch into main')
+    const authorEl = within(items[0]).getByText('Alice')
+    const mainBadge = within(items[0]).getByText('main').closest('.git-ref-badge') as HTMLElement
+    const syncedCloud = within(items[0]).getByTitle('origin')
+    const tagBadge = within(items[0]).getByText('v1.0.0').closest('.git-ref-badge') as HTMLElement
+
+    expect(subjectEl).toBeInTheDocument()
+    expect(authorEl).toBeInTheDocument()
+    expect(within(items[0]).queryByText('HEAD')).toBeNull()
+    expect(within(items[0]).queryByText('origin/main')).toBeNull()
+    expect(mainBadge).toHaveClass('is-local-branch', 'is-current-head')
+    expect(mainBadge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(syncedCloud).toHaveClass('is-synced-remote')
+    expect(syncedCloud.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(tagBadge).toHaveClass('is-tag')
+    expect(tagBadge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    // Subject -> author -> right-aligned ref badges order
+    expect(subjectEl.compareDocumentPosition(authorEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(authorEl.compareDocumentPosition(mainBadge) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    // Standalone unmatched remote ref & non-checked-out local branch
+    const standaloneRemoteBadge = within(items[1])
+      .getByText('origin/unmerged')
+      .closest('.git-ref-badge') as HTMLElement
+    expect(standaloneRemoteBadge).toHaveClass('is-remote-branch')
+    expect(standaloneRemoteBadge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    const sideBranchBadge = within(items[2])
+      .getByText('feature/side')
+      .closest('.git-ref-badge') as HTMLElement
+    expect(sideBranchBadge).toHaveClass('is-local-branch')
+    expect(sideBranchBadge).not.toHaveClass('is-current-head')
+    expect(sideBranchBadge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
     expect(items[0].getAttribute('title')).toMatch(
       /^1111111 · Alice · \d{4}-\d{2}-\d{2} \d{2}:\d{2} · Merge feature branch into main$/
     )
 
-    // HEAD emphasis ring + merge marker + SVG paths rendered across lanes
-    expect(items[0].querySelector('svg.git-graph-svg')).not.toBeNull()
+    // Compact 24px SVG lanes + HEAD emphasis ring + merge marker
+    const firstSvg = items[0].querySelector('svg.git-graph-svg')
+    expect(firstSvg).not.toBeNull()
+    expect(firstSvg).toHaveAttribute('height', '24')
     expect(items[0].querySelector('circle.git-graph-head-ring')).not.toBeNull()
     expect(items[0].querySelector('circle.git-graph-merge-dot')).not.toBeNull()
     expect(items[1].querySelector('circle.git-graph-head-ring')).toBeNull()
@@ -747,18 +775,31 @@ describe('GitSidebarPanel', () => {
     expect(detailRegion).toHaveTextContent('Second detail line')
     expect(detailRegion).toHaveTextContent('alice@example.com')
     expect(detailRegion).toHaveTextContent('변경된 파일 (4)')
-    expect(detailRegion).toHaveTextContent('notes/new.md')
-    expect(detailRegion).toHaveTextContent('README.md')
-    expect(detailRegion).toHaveTextContent('legacy.md')
-    expect(detailRegion).toHaveTextContent('old/title.md → new/title.md')
+    expect(within(detailRegion).getByText('new.md')).toBeInTheDocument()
+    expect(within(detailRegion).getByText('notes')).toBeInTheDocument()
+    expect(within(detailRegion).getByText('README.md')).toBeInTheDocument()
+    const deletedDetailFile = within(detailRegion).getByText('legacy.md')
+    expect(deletedDetailFile).toHaveClass('is-deleted')
+    expect(within(detailRegion).getByText('old/title.md → title.md')).toBeInTheDocument()
+    expect(within(detailRegion).getByText('new')).toBeInTheDocument()
+    expect(within(detailRegion).getByTitle('old/title.md → new/title.md')).toBeInTheDocument()
+    expect(within(detailRegion).getByText('A')).toHaveClass('git-status-letter', 'is-green')
+    expect(within(detailRegion).getByText('M')).toHaveClass('git-status-letter', 'is-amber')
+    expect(within(detailRegion).getByText('D')).toHaveClass('git-status-letter', 'is-red')
+    expect(within(detailRegion).getByText('R')).toHaveClass('git-status-letter', 'is-accent')
+    expect(within(detailRegion).queryByRole('button', { name: /파일 열기|롤백|Stage|Unstage/ })).toBeNull()
 
-    // Copy full hash button preserves accessible label while showing feedback
+    // Copy full hash button uses lucide-react icon and preserves accessible label while showing feedback
     const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
     try {
       const copyBtn = within(detailRegion).getByRole('button', { name: '해시 복사' })
+      expect(copyBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+      expect(copyBtn).not.toHaveTextContent('복사')
       await user.click(copyBtn)
       expect(writeTextSpy).toHaveBeenCalledWith(fullHash)
-      expect(within(detailRegion).getByRole('button', { name: '해시 복사' })).toHaveTextContent('복사됨')
+      const copiedBtn = within(detailRegion).getByRole('button', { name: '해시 복사' })
+      expect(copiedBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+      expect(copiedBtn).toHaveTextContent('복사됨')
     } finally {
       writeTextSpy.mockRestore()
     }
@@ -903,7 +944,7 @@ describe('GitSidebarPanel', () => {
 
     const detailRegion = screen.getByRole('region', { name: 'a1b2c3d 커밋 상세' })
 
-    await user.click(within(detailRegion).getByRole('button', { name: /docs\/guide\.md/ }))
+    await user.click(within(detailRegion).getByTitle('docs/guide.md'))
     expect(onOpenFileDiff).toHaveBeenCalledWith({
       kind: 'commit',
       commitHash: fullHash,
@@ -912,7 +953,7 @@ describe('GitSidebarPanel', () => {
       status: 'M'
     })
 
-    await user.click(within(detailRegion).getByRole('button', { name: /docs\/deleted\.md/ }))
+    await user.click(within(detailRegion).getByTitle('docs/deleted.md'))
     expect(onOpenFileDiff).toHaveBeenCalledWith({
       kind: 'commit',
       commitHash: fullHash,
@@ -921,9 +962,7 @@ describe('GitSidebarPanel', () => {
       status: 'D'
     })
 
-    await user.click(
-      within(detailRegion).getByRole('button', { name: /docs\/old\.md → docs\/renamed\.md/ })
-    )
+    await user.click(within(detailRegion).getByTitle('docs/old.md → docs/renamed.md'))
     expect(onOpenFileDiff).toHaveBeenCalledWith({
       kind: 'commit',
       commitHash: fullHash,
@@ -1831,6 +1870,183 @@ describe('GitSidebarPanel', () => {
 
       screen.getByRole('button', { name: 'Before Git Changes' }).focus()
       expect(getComputedStyle(fileActions).opacity).toBe('0')
+    } finally {
+      styleEl.remove()
+    }
+  })
+
+  it('renders Graph header scope toggle (Auto / 현재 브랜치) and Lucide icon toolbar (Fetch, Pull, Push, 새로고침) separated from collapse toggle and disabled while busy', async () => {
+    const user = userEvent.setup()
+    const onChangeLogScope = vi.fn()
+    const onFetch = vi.fn()
+    const onPull = vi.fn()
+    const onPush = vi.fn()
+    const onRefresh = vi.fn()
+    const onToggleGraphCollapsed = vi.fn()
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          graphState: {
+            ...createInitialGitGraphState(),
+            scope: 'all'
+          },
+          onChangeLogScope,
+          onFetch,
+          onPull,
+          onPush,
+          onRefresh,
+          onToggleGraphCollapsed
+        })}
+      />
+    )
+
+    const graphRegion = screen.getByRole('region', { name: 'Graph' })
+    const collapseBtn = within(graphRegion).getByRole('button', { name: /^Graph$/i })
+    const autoBtn = within(graphRegion).getByRole('button', { name: 'Auto' })
+    const fetchBtn = within(graphRegion).getByRole('button', { name: 'Fetch' })
+    const pullBtn = within(graphRegion).getByRole('button', { name: 'Pull' })
+    const pushBtn = within(graphRegion).getByRole('button', { name: 'Push' })
+    const refreshBtn = within(graphRegion).getByRole('button', { name: '그래프 새로고침' })
+
+    expect(within(graphRegion).queryByRole('button', { name: '현재 브랜치' })).toBeNull()
+    for (const btn of [autoBtn, fetchBtn, pullBtn, pushBtn, refreshBtn]) {
+      expect(collapseBtn.contains(btn)).toBe(false)
+      expect(btn).toBeEnabled()
+    }
+    for (const iconBtn of [fetchBtn, pullBtn, pushBtn, refreshBtn]) {
+      expect(iconBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    }
+
+    await user.click(autoBtn)
+    await user.click(fetchBtn)
+    await user.click(pullBtn)
+    await user.click(pushBtn)
+    await user.click(refreshBtn)
+
+    expect(onChangeLogScope).toHaveBeenCalledWith('current')
+    expect(onFetch).toHaveBeenCalledTimes(1)
+    expect(onPull).toHaveBeenCalledTimes(1)
+    expect(onPush).toHaveBeenCalledTimes(1)
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+    expect(onToggleGraphCollapsed).not.toHaveBeenCalled()
+
+    // Scope = 'current' displays '현재 브랜치' and switches back to 'all' on click
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          graphState: {
+            ...createInitialGitGraphState(),
+            scope: 'current'
+          },
+          onChangeLogScope,
+          onFetch,
+          onPull,
+          onPush,
+          onRefresh,
+          onToggleGraphCollapsed
+        })}
+      />
+    )
+    const currentScopeBtn = within(graphRegion).getByRole('button', { name: '현재 브랜치' })
+    expect(within(graphRegion).queryByRole('button', { name: 'Auto' })).toBeNull()
+    await user.click(currentScopeBtn)
+    expect(onChangeLogScope).toHaveBeenLastCalledWith('all')
+
+    // Pending action disables all 4 Graph action icons
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          pendingAction: 'Fetch',
+          onChangeLogScope,
+          onFetch,
+          onPull,
+          onPush,
+          onRefresh
+        })}
+      />
+    )
+    expect(within(graphRegion).getByRole('button', { name: 'Fetch' })).toBeDisabled()
+    expect(within(graphRegion).getByRole('button', { name: 'Pull' })).toBeDisabled()
+    expect(within(graphRegion).getByRole('button', { name: 'Push' })).toBeDisabled()
+    expect(within(graphRegion).getByRole('button', { name: '그래프 새로고침' })).toBeDisabled()
+
+    // Graph log loading disables graph refresh button without disabling remote actions
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          graphState: {
+            ...createInitialGitGraphState(),
+            isLoading: true
+          }
+        })}
+      />
+    )
+    expect(within(graphRegion).getByRole('button', { name: '그래프 새로고침' })).toBeDisabled()
+  })
+
+  it('renders detached HEAD badge, multi-remote cloud tooltip, and enforces 24px compact row and 260px truncation CSS rules', () => {
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    try {
+      const commits: GitGraphCommit[] = [
+        {
+          hash: '1111111111111111111111111111111111111111',
+          shortHash: '1111111',
+          parents: ['2222222222222222222222222222222222222222'],
+          subject: 'Detached commit with a very long commit subject that must truncate gracefully',
+          authorName: 'VeryLongAuthorName',
+          committedAt: '2026-11-15T06:30:00Z',
+          refs: [
+            { name: 'HEAD', kind: 'head', isCurrentHead: true },
+            { name: 'master', kind: 'local-branch', isCurrentHead: false },
+            { name: 'origin/master', kind: 'remote-branch' },
+            { name: 'upstream/master', kind: 'remote-branch' }
+          ]
+        }
+      ]
+
+      render(
+        <div style={{ width: '260px' }}>
+          <GitSidebarPanel
+            {...buildProps({
+              status: buildGitStatus({ branch: null, isDetached: true }),
+              graphState: {
+                ...createInitialGitGraphState(),
+                commits
+              }
+            })}
+          />
+        </div>
+      )
+
+      const graphRegion = screen.getByRole('region', { name: 'Graph' })
+      const rowBtn = within(graphRegion).getByRole('button', { name: /Detached commit/ })
+      const headBadge = within(rowBtn).getByText('HEAD').closest('.git-ref-badge') as HTMLElement
+      const masterBadge = within(rowBtn).getByText('master').closest('.git-ref-badge') as HTMLElement
+      const multiRemoteCloud = within(rowBtn).getByTitle('origin, upstream')
+      const subjectEl = within(rowBtn).getByText(/Detached commit/)
+      const authorEl = within(rowBtn).getByText('VeryLongAuthorName')
+      const refsContainer = headBadge.parentElement as HTMLElement
+
+      expect(headBadge).toHaveClass('is-head')
+      expect(headBadge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+      expect(masterBadge).toHaveClass('is-local-branch')
+      expect(masterBadge).not.toHaveClass('is-current-head')
+      expect(multiRemoteCloud).toHaveClass('is-synced-remote')
+
+      expect(getComputedStyle(rowBtn).height).toBe('24px')
+      expect(getComputedStyle(subjectEl).textOverflow).toBe('ellipsis')
+      expect(getComputedStyle(subjectEl).overflow).toBe('hidden')
+      expect(getComputedStyle(subjectEl).minWidth).toMatch(/^0(px)?$/)
+      expect(getComputedStyle(authorEl).textOverflow).toBe('ellipsis')
+      expect(getComputedStyle(refsContainer).minWidth).toMatch(/^0(px)?$/)
+      expect(getComputedStyle(refsContainer).overflow).toBe('hidden')
+      expect(getComputedStyle(masterBadge.querySelector('.git-ref-label')!).textOverflow).toBe(
+        'ellipsis'
+      )
     } finally {
       styleEl.remove()
     }

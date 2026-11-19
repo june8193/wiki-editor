@@ -39,6 +39,8 @@
   --git-status-modified: #9a6700;
   --git-status-deleted: #cf222e;
   --git-status-renamed: #0969da;
+  --git-ref-tag-border: #d97706;
+  --git-ref-tag-color: #9a6700;
   color-scheme: light;
 }
 
@@ -82,6 +84,8 @@
   --git-status-modified: #d29922;
   --git-status-deleted: #f85149;
   --git-status-renamed: #58a6ff;
+  --git-ref-tag-border: #d29922;
+  --git-ref-tag-color: #e3b341;
   color-scheme: dark;
 }
 
@@ -2959,36 +2963,27 @@ body.is-resizing-git-sections * {
   white-space: nowrap;
 }
 
-.git-graph-scope-toggle {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  margin-right: 6px;
-  border: 1px solid var(--border-color);
-  border-radius: 5px;
-  background-color: var(--bg-elevated);
-}
-
 .git-graph-scope-btn {
-  border: none;
-  border-radius: 3px;
-  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-elevated);
   color: var(--text-secondary);
   font-size: 10px;
   font-weight: 600;
   line-height: 1.2;
   padding: 2px 6px;
+  margin-right: 2px;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .git-graph-scope-btn:hover {
   color: var(--text-primary);
+  border-color: var(--text-secondary);
 }
 
-.git-graph-scope-btn.is-active {
+.git-graph-scope-btn.is-current {
+  border-color: var(--accent-color);
   background-color: var(--accent-color);
   color: #ffffff;
 }
@@ -3033,7 +3028,8 @@ body.is-resizing-git-sections * {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 28px;
+  height: 24px;
+  min-height: 24px;
   width: 100%;
   padding: 0 4px;
   border: none;
@@ -3074,29 +3070,37 @@ body.is-resizing-git-sections * {
   min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.git-graph-commit-primary {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  gap: 5px;
   overflow: hidden;
 }
 
 .git-graph-refs {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  max-width: 52%;
+  min-width: 0;
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 3px;
+  overflow: hidden;
+}
+
+.git-ref-branch-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .git-ref-badge {
   display: inline-flex;
   align-items: center;
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
+  height: 16px;
   padding: 0 5px;
   border-radius: 4px;
   border: 1px solid var(--border-color);
@@ -3104,7 +3108,18 @@ body.is-resizing-git-sections * {
   color: var(--text-primary);
   font-size: 10px;
   font-weight: 600;
-  line-height: 15px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.git-ref-icon {
+  flex: 0 0 auto;
+}
+
+.git-ref-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -3119,14 +3134,20 @@ body.is-resizing-git-sections * {
   color: var(--accent-color);
 }
 
-.git-ref-badge.is-remote-branch {
+.git-ref-badge.is-remote-branch,
+.git-ref-badge.is-synced-remote {
   border-style: dashed;
   color: var(--text-secondary);
 }
 
+.git-ref-badge.is-synced-remote {
+  flex: 0 0 auto;
+  padding: 0 4px;
+}
+
 .git-ref-badge.is-tag {
-  border-color: #d97706;
-  color: #b45309;
+  border-color: var(--git-ref-tag-border);
+  color: var(--git-ref-tag-color);
 }
 
 .git-graph-subject {
@@ -3140,13 +3161,15 @@ body.is-resizing-git-sections * {
 }
 
 .git-graph-author {
-  flex: 0 0 auto;
-  max-width: 72px;
+  flex: 0 1 auto;
+  max-width: 60px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
   color: var(--text-secondary);
+  opacity: 0.82;
 }
 
 .git-graph-load-more-btn {
@@ -3213,18 +3236,21 @@ body.is-resizing-git-sections * {
 }
 
 .git-commit-detail-copy-btn {
-  padding: 2px 6px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background-color: var(--bg-elevated);
-  color: var(--text-primary);
+  width: auto;
+  min-width: 22px;
+  height: 20px;
+  gap: 3px;
+  padding: 0 4px;
   font-size: 10px;
   font-weight: 600;
-  cursor: pointer;
 }
 
-.git-commit-detail-copy-btn:hover {
-  border-color: var(--accent-color);
+.git-commit-detail-copy-btn.is-copied {
+  color: var(--git-status-added);
+}
+
+.git-commit-detail-copy-status {
+  line-height: 1;
 }
 
 .git-commit-detail-subject {
@@ -3271,21 +3297,7 @@ body.is-resizing-git-sections * {
 }
 
 .git-commit-detail-files {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.git-commit-detail-file-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  font-size: 11px;
+  gap: 1px;
 }
 
 .tab-diff-badge {

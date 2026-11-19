@@ -40,7 +40,7 @@ import {
   type GitCommitActionMode
 } from '../utils/gitPrimaryAction'
 import { GitChangesFileGroups, GitChangesHeaderActions } from './GitChangesSection'
-import { GitGraphScopeToggle, GitGraphSection } from './GitGraphSection'
+import { GitGraphHeaderActions, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
 
 const COMMIT_INPUT_MAX_HEIGHT_PX = 120
@@ -842,7 +842,16 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
             <GitAccordionSection
               title="Graph"
               headerActions={
-                <GitGraphScopeToggle scope={graphState.scope} onChangeScope={onChangeLogScope} />
+                <GitGraphHeaderActions
+                  scope={graphState.scope}
+                  isBusy={isBusy}
+                  isRefreshing={graphState.isLoading}
+                  onChangeScope={onChangeLogScope}
+                  onFetch={onFetch}
+                  onPull={onPull}
+                  onPush={onPush}
+                  onRefresh={onRefresh}
+                />
               }
               isExpanded={layout.showGraphBody}
               flexRatio={layout.graphFlexRatio}

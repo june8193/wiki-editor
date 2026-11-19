@@ -4246,10 +4246,14 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       expect(within(graphRegion).getByText('Merge feature-x')).toBeInTheDocument()
     })
     expect(within(graphRegion).getByText('Side branch work')).toBeInTheDocument()
-    expect(within(graphRegion).getByText('HEAD')).toHaveClass('is-head')
-    expect(within(graphRegion).getByText('main')).toHaveClass('is-local-branch')
-    expect(within(graphRegion).getByText('origin/main')).toHaveClass('is-remote-branch')
-    expect(within(graphRegion).getByText('v1.0.0')).toHaveClass('is-tag')
+    expect(within(graphRegion).queryByText('HEAD')).toBeNull()
+    expect(within(graphRegion).queryByText('origin/main')).toBeNull()
+    expect(within(graphRegion).getByText('main').closest('.git-ref-badge')).toHaveClass(
+      'is-local-branch',
+      'is-current-head'
+    )
+    expect(within(graphRegion).getByTitle('origin')).toHaveClass('is-synced-remote')
+    expect(within(graphRegion).getByText('v1.0.0').closest('.git-ref-badge')).toHaveClass('is-tag')
     expect(graphRegion.querySelectorAll('svg.git-graph-svg').length).toBe(2)
 
     const items = within(within(graphRegion).getByRole('list', { name: '커밋 그래프' })).getAllByRole(
@@ -4259,17 +4263,14 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       /^aaaa111 · Alice · \d{4}-\d{2}-\d{2} \d{2}:\d{2} · Merge feature-x$/
     )
 
-    // Switch to 현재 브랜치 without toggling Graph accordion collapse
-    const allBtn = within(graphRegion).getByRole('button', { name: '전체' })
-    const currentBtn = within(graphRegion).getByRole('button', { name: '현재 브랜치' })
-    expect(allBtn).toHaveAttribute('aria-pressed', 'true')
-
-    await user.click(currentBtn)
+    // Switch Auto -> 현재 브랜치 without toggling Graph accordion collapse
+    const autoBtn = within(graphRegion).getByRole('button', { name: 'Auto' })
+    await user.click(autoBtn)
     await waitFor(() => {
       expect(within(graphRegion).queryByText('Side branch work')).not.toBeInTheDocument()
     })
     expect(graphAccordionBtn).toHaveAttribute('aria-expanded', 'true')
-    expect(currentBtn).toHaveAttribute('aria-pressed', 'true')
+    const currentBtn = within(graphRegion).getByRole('button', { name: '현재 브랜치' })
 
     // Click 더 보기 to paginate current branch commits
     await user.click(within(graphRegion).getByRole('button', { name: '더 보기' }))
@@ -4282,10 +4283,10 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       skip: 1
     })
 
-    // Trigger delayed 전체 request, then immediately toggle back to 현재 브랜치 -> stale response ignored
+    // Trigger delayed Auto ('all') request, then immediately toggle back to 현재 브랜치 -> stale response ignored
     delayNextAllScope = true
-    await user.click(allBtn)
     await user.click(currentBtn)
+    await user.click(within(graphRegion).getByRole('button', { name: 'Auto' }))
     await waitFor(() => {
       expect(within(graphRegion).getByText('Merge feature-x')).toBeInTheDocument()
     })
@@ -4443,14 +4444,20 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(firstDetailRegion).toHaveTextContent('Detailed body line 1')
     expect(firstDetailRegion).toHaveTextContent('Detailed body line 2')
     expect(firstDetailRegion).toHaveTextContent('alice@example.com')
-    expect(firstDetailRegion).toHaveTextContent('docs/added.md')
-    expect(firstDetailRegion).toHaveTextContent('notes.md')
-    expect(firstDetailRegion).toHaveTextContent('old.md → renamed.md')
+    expect(within(firstDetailRegion).getByText('added.md')).toBeInTheDocument()
+    expect(within(firstDetailRegion).getByText('docs')).toBeInTheDocument()
+    expect(within(firstDetailRegion).getByText('notes.md')).toBeInTheDocument()
+    expect(within(firstDetailRegion).getByText('old.md → renamed.md')).toBeInTheDocument()
+    expect(within(firstDetailRegion).getByText('A')).toHaveClass('git-status-letter', 'is-green')
+    expect(within(firstDetailRegion).getByText('M')).toHaveClass('git-status-letter', 'is-amber')
+    expect(within(firstDetailRegion).getByText('R')).toHaveClass('git-status-letter', 'is-accent')
 
     // Copy full commit hash
     const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
     try {
-      await user.click(within(firstDetailRegion).getByRole('button', { name: '해시 복사' }))
+      const copyBtn = within(firstDetailRegion).getByRole('button', { name: '해시 복사' })
+      expect(copyBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+      await user.click(copyBtn)
       expect(writeTextSpy).toHaveBeenCalledWith(firstHash)
     } finally {
       writeTextSpy.mockRestore()
@@ -4472,7 +4479,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(within(graphRegion).queryByRole('region', { name: '1111111 커밋 상세' })).toBeNull()
 
     // Scope toggle clears expanded detail cleanly
-    await user.click(within(graphRegion).getByRole('button', { name: '현재 브랜치' }))
+    await user.click(within(graphRegion).getByRole('button', { name: 'Auto' }))
     await waitFor(() => {
       expect(within(graphRegion).queryByRole('region', { name: '2222222 커밋 상세' })).toBeNull()
     })
@@ -4916,6 +4923,196 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       expect(commitSpy).toHaveBeenCalledWith('C:/repo/wiki', 'feat: commit via changes header check')
       expect(commitInput.value).toBe('')
     })
+  })
+
+  it('supports Graph header toolbar (Fetch, Pull, Push, refresh, disabled while running), merged vs standalone remote badges, and detached HEAD badge end-to-end', async () => {
+    const user = userEvent.setup()
+    let behind = 0
+    let ahead = 1
+    let isDetached = false
+    let commits: GitGraphCommit[] = [
+      {
+        hash: '1111111111111111111111111111111111111111',
+        shortHash: '1111111',
+        parents: [],
+        subject: 'Local main commit',
+        authorName: 'Alice',
+        committedAt: '2026-11-19T09:00:00+09:00',
+        refs: [
+          { name: 'HEAD', kind: 'head', isCurrentHead: true },
+          { name: 'main', kind: 'local-branch', isCurrentHead: true },
+          { name: 'origin/main', kind: 'remote-branch' }
+        ]
+      }
+    ]
+
+    let resolvePendingFetch!: (status: ReturnType<typeof createEmptyGitStatus>) => void
+    const buildStatus = () => ({
+      ...createEmptyGitStatus(true, 'C:/repo/graph-toolbar'),
+      branch: isDetached ? null : 'main',
+      isDetached,
+      hasUpstream: !isDetached,
+      ahead,
+      behind
+    })
+
+    const fetchSpy = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof createEmptyGitStatus>>((resolve) => {
+          resolvePendingFetch = resolve
+        })
+    )
+    const pullSpy = vi.fn(async () => {
+      behind = 0
+      commits = [
+        {
+          hash: '3333333333333333333333333333333333333333',
+          shortHash: '3333333',
+          parents: ['2222222222222222222222222222222222222222'],
+          subject: 'Pulled remote commit',
+          authorName: 'Bob',
+          committedAt: '2026-11-19T11:00:00+09:00',
+          refs: [
+            { name: 'HEAD', kind: 'head', isCurrentHead: true },
+            { name: 'main', kind: 'local-branch', isCurrentHead: true },
+            { name: 'origin/main', kind: 'remote-branch' }
+          ]
+        },
+        ...commits.slice(1)
+      ]
+      return buildStatus()
+    })
+    const pushSpy = vi.fn(async () => {
+      ahead = 0
+      return buildStatus()
+    })
+    const logSpy = vi.fn(async () => ({ commits, hasMore: false }))
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/repo/graph-toolbar',
+        workspaces: {
+          'C:/repo/graph-toolbar': {
+            'notes.md': '# Notes'
+          }
+        },
+        git: {
+          status: vi.fn(async () => buildStatus()),
+          branches: vi.fn(async () => ({
+            current: isDetached ? null : 'main',
+            isDetached,
+            branches: [{ name: 'main', current: !isDetached, upstream: 'origin/main' }]
+          })),
+          fetch: fetchSpy,
+          pull: pullSpy,
+          push: pushSpy,
+          log: logSpy
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    // Create dirty buffer to confirm Fetch runs without dirty-buffer prompt while Pull enforces it
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('notes.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), '\nUnsaved draft')
+
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const graphRegion = within(gitRegion).getByRole('region', { name: 'Graph' })
+    const graphAccordionBtn = within(graphRegion).getByRole('button', { name: /^Graph$/i })
+
+    await waitFor(() => {
+      expect(within(graphRegion).getByText('Local main commit')).toBeInTheDocument()
+    })
+    expect(within(graphRegion).queryByText('HEAD')).toBeNull()
+    expect(within(graphRegion).getByText('main').closest('.git-ref-badge')).toHaveClass(
+      'is-local-branch',
+      'is-current-head'
+    )
+    expect(within(graphRegion).getByTitle('origin')).toHaveClass('is-synced-remote')
+
+    // 1. Click Graph Fetch -> disables Graph toolbar buttons while pending, no dirty prompt
+    const fetchBtn = within(graphRegion).getByRole('button', { name: 'Fetch' })
+    const pullBtn = within(graphRegion).getByRole('button', { name: 'Pull' })
+    const pushBtn = within(graphRegion).getByRole('button', { name: 'Push' })
+    const refreshBtn = within(graphRegion).getByRole('button', { name: '그래프 새로고침' })
+
+    await user.click(fetchBtn)
+    expect(fetchSpy).toHaveBeenCalledWith('C:/repo/graph-toolbar')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(fetchBtn).toBeDisabled()
+    expect(pullBtn).toBeDisabled()
+    expect(pushBtn).toBeDisabled()
+    expect(refreshBtn).toBeDisabled()
+    expect(graphAccordionBtn).toHaveAttribute('aria-expanded', 'true')
+
+    behind = 1
+    commits = [
+      {
+        hash: '2222222222222222222222222222222222222222',
+        shortHash: '2222222',
+        parents: ['1111111111111111111111111111111111111111'],
+        subject: 'Fetched remote tip',
+        authorName: 'Bob',
+        committedAt: '2026-11-19T10:00:00+09:00',
+        refs: [{ name: 'origin/main', kind: 'remote-branch' }]
+      },
+      ...commits
+    ]
+    await act(async () => {
+      resolvePendingFetch(buildStatus())
+    })
+
+    await waitFor(() => {
+      expect(within(gitRegion).getByRole('button', { name: /Sync.*↓1 ↑1/ })).toBeInTheDocument()
+      expect(within(graphRegion).getByText('Fetched remote tip')).toBeInTheDocument()
+    })
+    expect(within(graphRegion).getByText('origin/main').closest('.git-ref-badge')).toHaveClass(
+      'is-remote-branch'
+    )
+    expect(fetchBtn).toBeEnabled()
+
+    // 2. Click Graph Pull -> enforces dirty buffer ConfirmDialog and updates graph
+    await user.click(pullBtn)
+    const pullConfirm = await screen.findByRole('alertdialog')
+    await user.click(within(pullConfirm).getByRole('button', { name: '저장 없이 진행' }))
+    await waitFor(() => {
+      expect(pullSpy).toHaveBeenCalledWith('C:/repo/graph-toolbar')
+      expect(within(graphRegion).getByText('Pulled remote commit')).toBeInTheDocument()
+    })
+
+    // 3. Click Graph Push -> clears ahead count
+    await user.click(pushBtn)
+    await waitFor(() => {
+      expect(pushSpy).toHaveBeenCalledWith('C:/repo/graph-toolbar')
+      expect(within(gitRegion).getByRole('button', { name: /Sync.*↓0 ↑0/ })).toBeInTheDocument()
+    })
+
+    // 4. Detached HEAD + Graph Refresh -> exposes HEAD badge cleanly without collapsing Graph
+    isDetached = true
+    commits = [
+      {
+        hash: '4444444444444444444444444444444444444444',
+        shortHash: '4444444',
+        parents: [],
+        subject: 'Detached tip commit',
+        authorName: 'Carol',
+        committedAt: '2026-11-19T12:00:00+09:00',
+        refs: [{ name: 'HEAD', kind: 'head', isCurrentHead: true }]
+      }
+    ]
+    const logCallsBeforeRefresh = logSpy.mock.calls.length
+    await user.click(refreshBtn)
+    await waitFor(() => {
+      expect(logSpy.mock.calls.length).toBeGreaterThan(logCallsBeforeRefresh)
+      expect(within(graphRegion).getByText('Detached tip commit')).toBeInTheDocument()
+    })
+    expect(within(graphRegion).getByText('HEAD').closest('.git-ref-badge')).toHaveClass('is-head')
+    expect(graphAccordionBtn).toHaveAttribute('aria-expanded', 'true')
   })
 })
 
@@ -6678,7 +6875,7 @@ describe('Git Graph commit file diff integration', () => {
       name: `${shortHash} 커밋 상세`
     })
 
-    await user.click(within(detailRegion).getByRole('button', { name: /docs\/guide\.md/ }))
+    await user.click(within(detailRegion).getByTitle('docs/guide.md'))
     expect(diffSpy).toHaveBeenCalledWith('C:/wiki/graph-diff-app', {
       kind: 'commit',
       commitHash,
@@ -6704,7 +6901,7 @@ describe('Git Graph commit file diff integration', () => {
     expect(openFileBtn).toBeEnabled()
 
     // 2. Click historically deleted file in the same commit -> replaces active Diff tab and disables 파일 열기
-    await user.click(within(detailRegion).getByRole('button', { name: /docs\/removed-old\.md/ }))
+    await user.click(within(detailRegion).getByTitle('docs/removed-old.md'))
     await waitFor(() => {
       expect(within(primaryPane).getByText('removed historical line')).toBeInTheDocument()
     })
@@ -6715,9 +6912,7 @@ describe('Git Graph commit file diff integration', () => {
     expect(within(primaryPane).getByRole('button', { name: '파일 열기' })).toBeDisabled()
 
     // 3. Click renamed commit file -> passes origPath and replaces active Diff tab
-    await user.click(
-      within(detailRegion).getByRole('button', { name: /docs\/legacy\.md → docs\/renamed\.md/ })
-    )
+    await user.click(within(detailRegion).getByTitle('docs/legacy.md → docs/renamed.md'))
     expect(diffSpy).toHaveBeenLastCalledWith('C:/wiki/graph-diff-app', {
       kind: 'commit',
       commitHash,
@@ -6747,7 +6942,7 @@ describe('Git Graph commit file diff integration', () => {
     expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*notes\.md/ })).toBeInTheDocument()
 
     fireEvent.mouseDown(primaryPane)
-    await user.click(within(detailRegion).getByRole('button', { name: /docs\/guide\.md/ }))
+    await user.click(within(detailRegion).getByTitle('docs/guide.md'))
     await within(primaryPane).findByText('commit after')
     expect(
       within(primaryPane).getByRole('tab', { name: /Diff\s*guide\.md \(a1b2c3d\)/ })
