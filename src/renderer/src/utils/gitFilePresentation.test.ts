@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import type { GitChangedFile, GitFileStatusCode } from '@shared/git'
 import {
+  canOpenGitChangedFile,
+  formatGitChangedFileDisplay,
   formatGitDiffTabKey,
   getGitDiffContextLabel,
   getGitDiffTabLabel,
+  getGitFileDirPath,
+  getGitFileStatusDisplay,
   toGitDiffRequest
 } from './gitFilePresentation'
 
@@ -84,5 +89,107 @@ describe('gitFilePresentation', () => {
 
     expect(getGitDiffContextLabel(reqA)).toBe('Commit a1b2c3d')
     expect(formatGitDiffTabKey(reqA)).not.toBe(formatGitDiffTabKey(reqB))
+  })
+
+  it('maps every GitFileStatusCode to VS Code UI display char, tone, label, and strikethrough without mutating input code', () => {
+    const cases: Array<{
+      code: GitFileStatusCode
+      displayCode: string
+      tone: string
+      label: string
+      strikethrough: boolean
+    }> = [
+      { code: 'M', displayCode: 'M', tone: 'amber', label: 'Modified', strikethrough: false },
+      { code: 'A', displayCode: 'A', tone: 'green', label: 'Added', strikethrough: false },
+      { code: 'D', displayCode: 'D', tone: 'red', label: 'Deleted', strikethrough: true },
+      { code: 'R', displayCode: 'R', tone: 'accent', label: 'Renamed', strikethrough: false },
+      { code: 'C', displayCode: 'C', tone: 'accent', label: 'Copied', strikethrough: false },
+      { code: '?', displayCode: 'U', tone: 'green', label: 'Untracked', strikethrough: false },
+      { code: 'U', displayCode: 'C', tone: 'red', label: 'Conflict', strikethrough: false }
+    ]
+
+    for (const item of cases) {
+      const file: GitChangedFile = { path: 'docs/note.md', status: item.code }
+      const result = getGitFileStatusDisplay(file.status)
+      expect(result).toEqual({
+        status: item.code,
+        displayCode: item.displayCode,
+        tone: item.tone,
+        label: item.label,
+        strikethrough: item.strikethrough
+      })
+      // Internal GitFileStatusCode remains unchanged on the domain record and diff requests.
+      expect(file.status).toBe(item.code)
+      expect(toGitDiffRequest('unstaged', file).status).toBe(item.code)
+    }
+  })
+
+  it('splits changed file paths into filename, dimmed relative directory, and rename tooltips', () => {
+    expect(getGitFileDirPath('README.md')).toBe('')
+    expect(getGitFileDirPath('docs/sub/guide.md')).toBe('docs/sub')
+    expect(getGitFileDirPath('docs\\sub\\guide.md')).toBe('docs/sub')
+
+    expect(formatGitChangedFileDisplay({ path: 'README.md', status: 'M' })).toEqual({
+      fileName: 'README.md',
+      dirPath: '',
+      tooltip: 'README.md'
+    })
+
+    expect(formatGitChangedFileDisplay({ path: 'docs/sub/guide.md', status: 'A' })).toEqual({
+      fileName: 'guide.md',
+      dirPath: 'docs/sub',
+      tooltip: 'docs/sub/guide.md'
+    })
+
+    expect(
+      formatGitChangedFileDisplay({
+        path: 'docs/new-name.md',
+        origPath: 'docs/old-name.md',
+        status: 'R'
+      })
+    ).toEqual({
+      fileName: 'old-name.md → new-name.md',
+      dirPath: 'docs',
+      tooltip: 'docs/old-name.md → docs/new-name.md'
+    })
+
+    expect(
+      formatGitChangedFileDisplay({
+        path: 'new/guide.md',
+        origPath: 'legacy/old.md',
+        status: 'R'
+      })
+    ).toEqual({
+      fileName: 'legacy/old.md → guide.md',
+      dirPath: 'new',
+      tooltip: 'legacy/old.md → new/guide.md'
+    })
+  })
+
+  it('excludes deleted files and paths outside the open workspace root from workspace file opening', () => {
+    expect(
+      canOpenGitChangedFile({ path: 'notes.md', status: 'M' }, 'C:/repo', 'C:/repo')
+    ).toBe(true)
+    expect(
+      canOpenGitChangedFile({ path: 'draft.md', status: '?' }, 'C:/repo', 'C:/repo')
+    ).toBe(true)
+    expect(
+      canOpenGitChangedFile({ path: 'conflict.md', status: 'U' }, 'C:/repo', 'C:/repo')
+    ).toBe(true)
+    expect(
+      canOpenGitChangedFile({ path: 'gone.md', status: 'D' }, 'C:/repo', 'C:/repo')
+    ).toBe(false)
+
+    // Subdirectory workspace inside a larger Git repo: only files under workspace root can open
+    expect(
+      canOpenGitChangedFile({ path: 'wiki/guide.md', status: 'M' }, 'C:/repo', 'C:/repo/wiki')
+    ).toBe(true)
+    expect(
+      canOpenGitChangedFile({ path: 'docs/outside.md', status: 'M' }, 'C:/repo', 'C:/repo/wiki')
+    ).toBe(false)
+    expect(
+      canOpenGitChangedFile({ path: '../escape.md', status: 'M' }, 'C:/repo', 'C:/repo/wiki')
+    ).toBe(false)
+    expect(canOpenGitChangedFile({ path: 'notes.md', status: 'M' }, 'C:/repo', null)).toBe(false)
   })
 })

@@ -26,6 +26,15 @@ import { useWorkspaceStatePersistence } from '../hooks/useWorkspaceStatePersiste
 import { type RestoredWorkspaceContext, useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import { buildDiscardAllConfirmMessage, getGitFileBaseName } from '../utils/gitFilePresentation'
 import {
+  createDefaultGitChangesViewState,
+  resetGitChangesTreeCollapsedDirs,
+  toggleGitChangesGroupCollapsed,
+  toggleGitChangesTreeDirCollapsed,
+  toggleGitChangesViewMode,
+  type GitChangesGroupKey,
+  type GitChangesViewState
+} from '../utils/gitChangesView'
+import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
   toggleGitGraphCollapsed,
@@ -94,7 +103,8 @@ export function MainAppShell() {
     dismissDialog,
     isDialogOpenRef,
     confirmCloseDirtyTab,
-    confirmUnsavedChanges
+    confirmUnsavedChanges,
+    confirmAction
   } = useConfirmDialog()
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
@@ -104,6 +114,9 @@ export function MainAppShell() {
   })
   const [gitPanelSplit, setGitPanelSplit] = useState<GitPanelSplitState>(
     createDefaultGitPanelSplitState
+  )
+  const [gitChangesView, setGitChangesView] = useState<GitChangesViewState>(
+    createDefaultGitChangesViewState
   )
   const [isGitWorkspaceMutating, setIsGitWorkspaceMutating] = useState(false)
 
@@ -186,6 +199,18 @@ export function MainAppShell() {
     setGitPanelSplit((prev) => updateChangesHeightRatio(prev, nextRatio))
   }, [])
 
+  const handleToggleGitChangesViewMode = useCallback((): void => {
+    setGitChangesView(toggleGitChangesViewMode)
+  }, [])
+
+  const handleToggleGitChangesGroupCollapsed = useCallback((group: GitChangesGroupKey): void => {
+    setGitChangesView((prev) => toggleGitChangesGroupCollapsed(prev, group))
+  }, [])
+
+  const handleToggleGitChangesTreeDirCollapsed = useCallback((dirKey: string): void => {
+    setGitChangesView((prev) => toggleGitChangesTreeDirCollapsed(prev, dirKey))
+  }, [])
+
   const isSelectingFolderRef = useRef<boolean>(false)
   const hasWorkspaceInteractionRef = useRef<boolean>(false)
   const isStartupRestoreRef = useRef<boolean>(false)
@@ -249,6 +274,11 @@ export function MainAppShell() {
     onEntryDeleted: editor.syncDeletedPath
   })
   hadOpenWorkspaceRef.current = workspace !== null
+
+  const activeWorkspaceRoot = workspace?.rootPath ?? null
+  useEffect(() => {
+    setGitChangesView(resetGitChangesTreeCollapsedDirs)
+  }, [activeWorkspaceRoot])
 
   const workspaceStatePersistence = useWorkspaceStatePersistence({
     workspaceRootPath: workspace?.rootPath ?? null,
@@ -394,6 +424,17 @@ export function MainAppShell() {
     return resolved
   }, [])
 
+  const awaitGitConfirm = useCallback(
+    (openDialog: (onResolve: (approved: boolean) => void) => () => void): Promise<boolean> =>
+      new Promise<boolean>((resolve) => {
+        pendingGitConfirmCancelRef.current = openDialog((approved) => {
+          pendingGitConfirmCancelRef.current = null
+          resolve(approved)
+        })
+      }),
+    []
+  )
+
   const promptUnsavedWorkspaceChanges = useCallback(
     (options: {
       targetPaths?: readonly string[]
@@ -406,20 +447,18 @@ export function MainAppShell() {
         return Promise.resolve(true)
       }
 
-      return new Promise<boolean>((resolve) => {
-        pendingGitConfirmCancelRef.current = confirmUnsavedChanges({
+      return awaitGitConfirm((onResolve) =>
+        confirmUnsavedChanges({
           message: options.message(dirtySummary),
           confirmLabel: options.confirmLabel,
           secondaryLabel: options.secondaryLabel,
           onSave: () => ensureAllWorkspaceBuffersSaved(options.targetPaths),
-          onResolve: (accepted) => {
-            pendingGitConfirmCancelRef.current = null
-            resolve(accepted)
-          }
+          onResolve
         })
-      })
+      )
     },
     [
+      awaitGitConfirm,
       confirmUnsavedChanges,
       ensureAllWorkspaceBuffersSaved,
       getDirtyWorkspaceSummary
@@ -440,6 +479,20 @@ export function MainAppShell() {
       })
     },
     [promptUnsavedWorkspaceChanges, resolveTargetWorkspacePaths]
+  )
+
+  const confirmAutoStageCommit = useCallback(
+    (): Promise<boolean> =>
+      awaitGitConfirm((onResolve) =>
+        confirmAction({
+          title: '자동 Stage 후 커밋',
+          message:
+            '스테이지된 변경 사항이 없습니다. 모든 변경 사항을 자동으로 Stage하고 커밋할까요?',
+          confirmLabel: 'Stage 후 커밋',
+          onResolve
+        })
+      ),
+    [awaitGitConfirm, confirmAction]
   )
 
   const handleBeforeWorkspaceDiscard = useCallback(
@@ -485,6 +538,7 @@ export function MainAppShell() {
 
   const git = useGitController({
     workspaceRootPath: workspace?.rootPath ?? null,
+    confirmAutoStageCommit,
     confirmBeforeWorkspaceMutation: confirmDirtyBuffersBeforeGitMutation,
     onBeforeWorkspaceDiscard: handleBeforeWorkspaceDiscard,
     onAfterWorkspaceDiscard: handleAfterWorkspaceDiscard,
@@ -674,7 +728,7 @@ export function MainAppShell() {
     [openDiffTab, refreshDiffRequest]
   )
 
-  const handleOpenDiffTargetFile = useCallback(
+  const handleOpenRepoWorkspaceFile = useCallback(
     (repoRelativePath: string): void => {
       const target = resolveRepoFileInWorkspace(
         git.status?.repoRoot,
@@ -772,9 +826,9 @@ export function MainAppShell() {
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       ...editor.paneActions,
-      onOpenDiffTargetFile: handleOpenDiffTargetFile
+      onOpenDiffTargetFile: handleOpenRepoWorkspaceFile
     }),
-    [editor.paneActions, handleOpenDiffTargetFile]
+    [editor.paneActions, handleOpenRepoWorkspaceFile]
   )
 
   const isCurrentWorkspaceFavorite =
@@ -846,6 +900,7 @@ export function MainAppShell() {
                 pendingAction={git.pendingAction}
                 errorMessage={git.errorMessage}
                 splitState={gitPanelSplit}
+                changesViewState={gitChangesView}
                 onDismissError={git.dismissError}
                 onRefresh={() => void git.refreshStatus()}
                 onChangeLogScope={(nextScope) => void git.changeLogScope(nextScope)}
@@ -862,11 +917,16 @@ export function MainAppShell() {
                 onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
                 onPull={() => void git.pull()}
                 onPush={() => void git.push()}
+                onFetch={() => void git.fetch()}
                 onSync={() => void git.sync()}
                 onOpenFileDiff={handleOpenFileDiff}
+                onOpenWorkspaceFile={handleOpenRepoWorkspaceFile}
                 onToggleChangesCollapsed={handleToggleGitChangesCollapsed}
                 onToggleGraphCollapsed={handleToggleGitGraphCollapsed}
                 onResizeChangesRatio={handleResizeGitChangesRatio}
+                onToggleChangesViewMode={handleToggleGitChangesViewMode}
+                onToggleChangesGroupCollapsed={handleToggleGitChangesGroupCollapsed}
+                onToggleChangesTreeDirCollapsed={handleToggleGitChangesTreeDirCollapsed}
               />
             )}
           </aside>

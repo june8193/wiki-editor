@@ -61,6 +61,7 @@ function installMockGitWikiApi(overrides: Partial<WikiApi['git']> = {}): void {
       checkout: vi.fn(),
       pull: vi.fn(),
       push: vi.fn(),
+      fetch: vi.fn(),
       sync: vi.fn(),
       log: vi.fn(async () => ({ commits: [], hasMore: false })),
       commitDetail: vi.fn(async (_ws: string, hash: string) => makeCommitDetail(hash)),
@@ -846,5 +847,416 @@ describe('useGitController', () => {
     })
     expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith({ scope: 'all', paths: [] }, false)
     expect(result.current.errorMessage).toBe('discardAll failed')
+  })
+
+  it('runs fetch without dirty workspace confirm or workspace mutation callbacks, updates status/branches/graph, and reports errors', async () => {
+    const initialStatus = makeStatus('main', 0)
+    const fetchedStatus: GitStatus = { ...initialStatus, behind: 2 }
+
+    let resolveFetch!: (value: GitStatus) => void
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<GitStatus>((resolve) => {
+            resolveFetch = resolve
+          })
+      )
+      .mockRejectedValueOnce(new Error('원격 저장소(remote)가 설정되어 있지 않습니다.'))
+      .mockRejectedValueOnce('unknown error')
+
+    const branchesMock = vi
+      .fn()
+      .mockResolvedValueOnce({ current: 'main', isDetached: false, branches: [] })
+      .mockResolvedValueOnce({
+        current: 'main',
+        isDetached: false,
+        branches: [
+          { name: 'main', current: true, upstream: 'origin/main' },
+          { name: 'release', current: false, upstream: null }
+        ]
+      })
+
+    let fetchedOnce = false
+    const logMock = vi.fn(async () => ({
+      commits: fetchedOnce ? [makeCommit('remote222'), makeCommit('local111')] : [makeCommit('local111')],
+      hasMore: false
+    }))
+
+    installMockGitWikiApi({
+      status: vi.fn(async () => initialStatus),
+      fetch: fetchMock,
+      branches: branchesMock,
+      log: logMock
+    })
+
+    const confirmBeforeWorkspaceMutation = vi.fn(async () => true)
+    const onWorkspaceMutated = vi.fn(async () => [])
+
+    const { result } = renderHook(() =>
+      useGitController({
+        workspaceRootPath: 'C:/wiki',
+        confirmBeforeWorkspaceMutation,
+        onWorkspaceMutated
+      })
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.branch).toBe('main')
+    })
+
+    let pendingFetch!: Promise<void>
+    act(() => {
+      pendingFetch = result.current.fetch()
+    })
+    await waitFor(() => {
+      expect(result.current.pendingAction).toBe('Fetch')
+    })
+
+    fetchedOnce = true
+    await act(async () => {
+      resolveFetch(fetchedStatus)
+      await pendingFetch
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('C:/wiki')
+    expect(confirmBeforeWorkspaceMutation).not.toHaveBeenCalled()
+    expect(onWorkspaceMutated).not.toHaveBeenCalled()
+    expect(result.current.pendingAction).toBeNull()
+    expect(result.current.status?.behind).toBe(2)
+    expect(result.current.branchList?.branches.map((b) => b.name)).toEqual(['main', 'release'])
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['remote222', 'local111'])
+
+    await act(async () => {
+      await result.current.fetch()
+    })
+    expect(result.current.errorMessage).toBe('원격 저장소(remote)가 설정되어 있지 않습니다.')
+
+    await act(async () => {
+      await result.current.fetch()
+    })
+    expect(result.current.errorMessage).toBe('Fetch에 실패했습니다.')
+  })
+
+  it('prompts confirmAutoStageCommit when staged=0 with working changes, runs stageAll -> commit under single lock, and preserves staged state if commit fails', async () => {
+    const baseStatus = makeStatus('main', 0)
+    const unstagedOnlyStatus: GitStatus = {
+      ...baseStatus,
+      unstaged: [{ path: 'notes.md', status: 'M' }]
+    }
+    const stagedStatus: GitStatus = {
+      ...baseStatus,
+      staged: [{ path: 'notes.md', status: 'M' }]
+    }
+    const cleanCommittedStatus: GitStatus = {
+      ...baseStatus,
+      ahead: 1
+    }
+
+    const callOrder: string[] = []
+    let resolveStageAll!: (status: GitStatus) => void
+    const statusMock = vi.fn(async () => unstagedOnlyStatus)
+    const stageAllMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<GitStatus>((resolve) => {
+            callOrder.push('stageAll')
+            resolveStageAll = resolve
+          })
+      )
+      .mockImplementationOnce(async () => {
+        callOrder.push('stageAll-2')
+        return stagedStatus
+      })
+      .mockRejectedValueOnce(new Error('stageAll failed'))
+
+    const commitMock = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        callOrder.push('commit')
+        return cleanCommittedStatus
+      })
+      .mockRejectedValueOnce(new Error('hook rejected commit'))
+
+    let committed = false
+    const logMock = vi.fn(async () => ({
+      commits: committed ? [makeCommit('new222'), makeCommit('old111')] : [makeCommit('old111')],
+      hasMore: false
+    }))
+
+    installMockGitWikiApi({
+      status: statusMock,
+      stageAll: stageAllMock,
+      commit: commitMock,
+      log: logMock
+    })
+
+    let autoStageApproved = false
+    const confirmAutoStageCommit = vi.fn(async () => autoStageApproved)
+    const activeTransitions: boolean[] = []
+
+    const { result } = renderHook(() =>
+      useGitController({
+        workspaceRootPath: 'C:/wiki',
+        confirmAutoStageCommit,
+        onWorkspaceMutationActiveChange: (active) => activeTransitions.push(active)
+      })
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.unstaged).toHaveLength(1)
+    })
+
+    // 1. Canceled auto-stage confirmation aborts cleanly without touching git
+    let firstResult!: boolean
+    await act(async () => {
+      firstResult = await result.current.commit('feat: first attempt', 'commit')
+    })
+    expect(firstResult).toBe(false)
+    expect(confirmAutoStageCommit).toHaveBeenCalledTimes(1)
+    expect(stageAllMock).not.toHaveBeenCalled()
+    expect(commitMock).not.toHaveBeenCalled()
+    expect(activeTransitions).toEqual([true, false])
+
+    // 2. Approved auto-stage runs stageAll -> commit under a single mutation lock
+    autoStageApproved = true
+    let pendingCommit!: Promise<boolean>
+    act(() => {
+      pendingCommit = result.current.commit('feat: auto stage commit', 'commit')
+    })
+
+    await waitFor(() => {
+      expect(result.current.pendingAction).toBe('전체 Stage')
+    })
+
+    // Concurrent FS watch refresh must be skipped while locked
+    const statusCallsDuringLock = statusMock.mock.calls.length
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    expect(statusMock.mock.calls.length).toBe(statusCallsDuringLock)
+
+    committed = true
+    let secondResult!: boolean
+    await act(async () => {
+      resolveStageAll(stagedStatus)
+      secondResult = await pendingCommit
+    })
+
+    expect(secondResult).toBe(true)
+    expect(callOrder).toEqual(['stageAll', 'commit'])
+    expect(commitMock).toHaveBeenCalledWith('C:/wiki', 'feat: auto stage commit')
+    expect(result.current.status?.ahead).toBe(1)
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['new222', 'old111'])
+    expect(result.current.pendingAction).toBeNull()
+    expect(result.current.errorMessage).toBeNull()
+
+    // 3. Re-seed unstaged status: if stageAll succeeds and commit fails, staged status is preserved and returns false
+    statusMock.mockResolvedValue(unstagedOnlyStatus)
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+
+    let thirdResult!: boolean
+    await act(async () => {
+      thirdResult = await result.current.commit('feat: failing commit', 'commit')
+    })
+    expect(thirdResult).toBe(false)
+    expect(result.current.status?.staged).toEqual([{ path: 'notes.md', status: 'M' }])
+    expect(result.current.status?.unstaged).toEqual([])
+    expect(result.current.errorMessage).toBe('hook rejected commit')
+
+    // 4. If stageAll itself fails, commit is skipped and error is reported
+    statusMock.mockResolvedValue(unstagedOnlyStatus)
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+
+    const commitCallsBeforeStageFail = commitMock.mock.calls.length
+    let fourthResult!: boolean
+    await act(async () => {
+      fourthResult = await result.current.commit('feat: failing stage', 'commit')
+    })
+    expect(fourthResult).toBe(false)
+    expect(commitMock).toHaveBeenCalledTimes(commitCallsBeforeStageFail)
+    expect(result.current.errorMessage).toBe('stageAll failed')
+  })
+
+  it('handles Commit & Push compound flow: returns true and reports only push error when commit succeeds and push fails', async () => {
+    const unstagedStatus: GitStatus = {
+      ...makeStatus('main', 0),
+      unstaged: [{ path: 'guide.md', status: 'M' }]
+    }
+    const stagedStatus: GitStatus = {
+      ...makeStatus('main', 0),
+      staged: [{ path: 'guide.md', status: 'M' }]
+    }
+    const committedStatus: GitStatus = makeStatus('main', 1)
+    const pushedStatus: GitStatus = makeStatus('main', 0)
+
+    const callOrder: string[] = []
+    let commitDone = false
+    const stageAllMock = vi.fn(async () => {
+      callOrder.push('stageAll')
+      return stagedStatus
+    })
+    const commitMock = vi.fn(async () => {
+      callOrder.push('commit')
+      commitDone = true
+      return committedStatus
+    })
+    const pushMock = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        callOrder.push('push-ok')
+        return pushedStatus
+      })
+      .mockImplementationOnce(async () => {
+        callOrder.push('push-fail')
+        throw new Error('원격 Push가 거부되었습니다.')
+      })
+
+    installMockGitWikiApi({
+      status: vi.fn(async () => (commitDone ? committedStatus : unstagedStatus)),
+      stageAll: stageAllMock,
+      commit: commitMock,
+      push: pushMock,
+      log: vi.fn(async () => ({
+        commits: commitDone ? [makeCommit('commit111')] : [],
+        hasMore: false
+      }))
+    })
+
+    const confirmAutoStageCommit = vi.fn(async () => true)
+    const confirmBeforeWorkspaceMutation = vi.fn(async () => true)
+
+    const { result } = renderHook(() =>
+      useGitController({
+        workspaceRootPath: 'C:/wiki',
+        confirmAutoStageCommit,
+        confirmBeforeWorkspaceMutation
+      })
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.unstaged).toHaveLength(1)
+    })
+
+    // 1. Full Commit & Push succeeds without dirty workspace confirm
+    let okResult!: boolean
+    await act(async () => {
+      okResult = await result.current.commit('feat: push combo', 'commit-push')
+    })
+    expect(okResult).toBe(true)
+    expect(callOrder).toEqual(['stageAll', 'commit', 'push-ok'])
+    expect(confirmBeforeWorkspaceMutation).not.toHaveBeenCalled()
+    expect(result.current.status?.ahead).toBe(0)
+    expect(result.current.errorMessage).toBeNull()
+
+    // 2. Staged commit succeeds, push fails -> returns true (caller clears message), updates graph/status, shows push error only
+    commitDone = false
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    commitDone = true
+    let partialResult!: boolean
+    await act(async () => {
+      partialResult = await result.current.commit('feat: local ok remote fail', 'commit-push')
+    })
+    expect(partialResult).toBe(true)
+    expect(result.current.status?.ahead).toBe(1)
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['commit111'])
+    expect(result.current.errorMessage).toBe('원격 Push가 거부되었습니다.')
+  })
+
+  it('handles Commit & Sync compound flow: honors dirty buffer confirm, aborts sync on cancel while keeping commit=true, and propagates sync errors/warnings', async () => {
+    const stagedStatus: GitStatus = {
+      ...makeStatus('main', 0),
+      staged: [{ path: 'guide.md', status: 'M' }]
+    }
+    const committedStatus: GitStatus = makeStatus('main', 1)
+    const syncedStatus: GitStatus = makeStatus('main', 0)
+
+    let commitDone = false
+    const commitMock = vi.fn(async () => {
+      commitDone = true
+      return committedStatus
+    })
+    const syncMock = vi
+      .fn()
+      .mockResolvedValueOnce({ status: syncedStatus, pulled: true, pushed: true, summary: '완료' })
+      .mockRejectedValueOnce(new Error('원격 Sync 충돌 발생'))
+
+    let confirmSyncDecision = false
+    const confirmBeforeWorkspaceMutation = vi.fn(async () => confirmSyncDecision)
+    const onWorkspaceMutated = vi.fn(async () => [] as string[])
+    const confirmAutoStageCommit = vi.fn(async () => true)
+
+    installMockGitWikiApi({
+      status: vi.fn(async () => (commitDone ? committedStatus : stagedStatus)),
+      commit: commitMock,
+      sync: syncMock,
+      log: vi.fn(async () => ({
+        commits: commitDone ? [makeCommit('sync111')] : [],
+        hasMore: false
+      }))
+    })
+
+    const { result } = renderHook(() =>
+      useGitController({
+        workspaceRootPath: 'C:/wiki',
+        confirmAutoStageCommit,
+        confirmBeforeWorkspaceMutation,
+        onWorkspaceMutated
+      })
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.staged).toHaveLength(1)
+    })
+
+    // 1. Commit succeeds, user cancels dirty buffer Sync confirmation -> returns true, sync NOT called, error banner set
+    let cancelResult!: boolean
+    await act(async () => {
+      cancelResult = await result.current.commit('feat: commit then cancel sync', 'commit-sync')
+    })
+    expect(cancelResult).toBe(true)
+    expect(confirmAutoStageCommit).not.toHaveBeenCalled()
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledWith('Sync')
+    expect(syncMock).not.toHaveBeenCalled()
+    expect(onWorkspaceMutated).not.toHaveBeenCalled()
+    expect(result.current.status?.ahead).toBe(1)
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['sync111'])
+    expect(result.current.errorMessage).toMatch(/Sync/)
+
+    // 2. Approved dirty buffer confirm -> sync runs & refreshes workspace buffers
+    confirmSyncDecision = true
+    commitDone = false
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    let okResult!: boolean
+    await act(async () => {
+      okResult = await result.current.commit('feat: commit and sync ok', 'commit-sync')
+    })
+    expect(okResult).toBe(true)
+    expect(syncMock).toHaveBeenCalledWith('C:/wiki')
+    expect(onWorkspaceMutated).toHaveBeenCalledTimes(1)
+    expect(result.current.status?.ahead).toBe(0)
+    expect(result.current.errorMessage).toBeNull()
+
+    // 3. Approved dirty buffer confirm, sync fails -> returns true, reports sync error, still reconciles workspace
+    commitDone = false
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    let failResult!: boolean
+    await act(async () => {
+      failResult = await result.current.commit('feat: commit ok sync fail', 'commit-sync')
+    })
+    expect(failResult).toBe(true)
+    expect(onWorkspaceMutated).toHaveBeenCalledTimes(2)
+    expect(result.current.errorMessage).toBe('원격 Sync 충돌 발생')
   })
 })

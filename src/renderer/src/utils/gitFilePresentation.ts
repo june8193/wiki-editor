@@ -1,4 +1,81 @@
 import type { GitChangedFile, GitDiffRequest, GitFileStatusCode } from '@shared/git'
+import { isAbsoluteOrDrivePrefix, resolveRepoFileInWorkspace } from '@shared/workspace'
+
+export type GitFileStatusTone = 'amber' | 'green' | 'red' | 'accent'
+
+export interface GitFileStatusDisplay {
+  status: GitFileStatusCode
+  displayCode: 'M' | 'A' | 'D' | 'R' | 'C' | 'U'
+  tone: GitFileStatusTone
+  label: string
+  strikethrough: boolean
+}
+
+const GIT_FILE_STATUS_DISPLAY_MAP: Record<GitFileStatusCode, Omit<GitFileStatusDisplay, 'status'>> =
+  {
+    M: {
+      displayCode: 'M',
+      tone: 'amber',
+      label: 'Modified',
+      strikethrough: false
+    },
+    A: {
+      displayCode: 'A',
+      tone: 'green',
+      label: 'Added',
+      strikethrough: false
+    },
+    D: {
+      displayCode: 'D',
+      tone: 'red',
+      label: 'Deleted',
+      strikethrough: true
+    },
+    R: {
+      displayCode: 'R',
+      tone: 'accent',
+      label: 'Renamed',
+      strikethrough: false
+    },
+    C: {
+      displayCode: 'C',
+      tone: 'accent',
+      label: 'Copied',
+      strikethrough: false
+    },
+    '?': {
+      displayCode: 'U',
+      tone: 'green',
+      label: 'Untracked',
+      strikethrough: false
+    },
+    U: {
+      displayCode: 'C',
+      tone: 'red',
+      label: 'Conflict',
+      strikethrough: false
+    }
+  }
+
+export interface GitChangedFileDisplay {
+  fileName: string
+  dirPath: string
+  tooltip: string
+}
+
+function normalizeRepoRelativePath(filePath: string): string {
+  return filePath.replace(/\\/g, '/').replace(/^\/+/, '')
+}
+
+/**
+ * Maps an internal `GitFileStatusCode` to its VS Code UI display metadata without mutating the source code.
+ */
+export function getGitFileStatusDisplay(status: GitFileStatusCode): GitFileStatusDisplay {
+  return {
+    status,
+    ...GIT_FILE_STATUS_DISPLAY_MAP[status]
+  }
+}
 
 /**
  * Formats a Git file path label, showing `origPath → path` for renamed or copied files.
@@ -20,6 +97,65 @@ export function getGitFileBadgeModifier(code: GitFileStatusCode): string {
 export function getGitFileBaseName(filePath: string): string {
   const parts = filePath.split(/[\\/]/)
   return parts[parts.length - 1] || filePath
+}
+
+/**
+ * Extracts the normalized POSIX parent directory path for a repo-relative file path (`''` for root files).
+ */
+export function getGitFileDirPath(filePath: string): string {
+  const normalized = normalizeRepoRelativePath(filePath)
+  const lastSlash = normalized.lastIndexOf('/')
+  return lastSlash > 0 ? normalized.slice(0, lastSlash) : ''
+}
+
+/**
+ * Splits a changed Git file into its primary filename label, dimmed relative directory, and full tooltip.
+ */
+export function formatGitChangedFileDisplay(file: GitChangedFile): GitChangedFileDisplay {
+  const normalizedPath = normalizeRepoRelativePath(file.path)
+  const targetName = getGitFileBaseName(normalizedPath)
+  const targetDir = getGitFileDirPath(normalizedPath)
+
+  if (!file.origPath) {
+    return {
+      fileName: targetName,
+      dirPath: targetDir,
+      tooltip: normalizedPath
+    }
+  }
+
+  const normalizedOrig = normalizeRepoRelativePath(file.origPath)
+  const origDir = getGitFileDirPath(normalizedOrig)
+  const origLabel = origDir === targetDir ? getGitFileBaseName(normalizedOrig) : normalizedOrig
+
+  return {
+    fileName: `${origLabel} → ${targetName}`,
+    dirPath: targetDir,
+    tooltip: `${normalizedOrig} → ${normalizedPath}`
+  }
+}
+
+/**
+ * Returns true when a changed Git file exists in the working tree (`status !== 'D'`)
+ * and resolves strictly inside the currently open workspace root.
+ */
+export function canOpenGitChangedFile(
+  file: Pick<GitChangedFile, 'path' | 'status'>,
+  repoRoot: string | null | undefined,
+  workspaceRootPath: string | null | undefined
+): boolean {
+  if (file.status === 'D' || !workspaceRootPath || !file.path) {
+    return false
+  }
+  const normalized = normalizeRepoRelativePath(file.path)
+  if (!normalized || isAbsoluteOrDrivePrefix(file.path)) {
+    return false
+  }
+  const segments = normalized.split('/')
+  if (segments.some((seg) => seg === '..')) {
+    return false
+  }
+  return resolveRepoFileInWorkspace(repoRoot, workspaceRootPath, file.path) !== null
 }
 
 /**

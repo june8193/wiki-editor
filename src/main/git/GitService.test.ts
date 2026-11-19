@@ -309,6 +309,79 @@ describe('GitService integration (isolated temp repos)', () => {
     await expect(service.pull(repoDir)).rejects.toThrow(/원격|upstream|오류/)
   }, 90_000)
 
+  it('fetches remote refs and behind count from a bare remote without modifying working tree or staged index, and handles non-repo/no-remote/unreachable errors', async () => {
+    await expect(service.fetch(nonGitDir)).rejects.toThrow(/Git 저장소가 아닙니다/)
+
+    await service.init(repoDir)
+    await runGit(repoDir, ['config', 'user.name', 'Local User'])
+    await runGit(repoDir, ['config', 'user.email', 'local@example.com'])
+    await writeFile(join(repoDir, 'local.md'), '# Local\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'local only')
+    await expect(service.fetch(repoDir)).rejects.toThrow(/원격 저장소/)
+
+    await runGit(repoDir, ['remote', 'add', 'origin', join(tempRoot, 'missing-remote.git')])
+    await expect(service.fetch(repoDir)).rejects.toThrow(/원격|오류/)
+
+    const bareRemote = join(tempRoot, 'fetch-remote.git')
+    const cloneA = join(tempRoot, 'fetch-clone-a')
+    const cloneB = join(tempRoot, 'fetch-clone-b')
+    await mkdir(bareRemote, { recursive: true })
+    await runGit(bareRemote, ['init', '--bare'])
+
+    await runGit(tempRoot, ['clone', bareRemote, cloneA])
+    await runGit(cloneA, ['checkout', '-b', 'main'])
+    await runGit(cloneA, ['config', 'user.name', 'Alice'])
+    await runGit(cloneA, ['config', 'user.email', 'alice@example.com'])
+    await writeFile(join(cloneA, 'shared.md'), '# Shared v1\n', 'utf8')
+    await service.stageAll(cloneA)
+    await service.commit(cloneA, 'seed remote')
+    await service.push(cloneA)
+    await runGit(bareRemote, ['symbolic-ref', 'HEAD', 'refs/heads/main'])
+
+    await runGit(tempRoot, ['clone', bareRemote, cloneB])
+    await runGit(cloneB, ['config', 'user.name', 'Bob'])
+    await runGit(cloneB, ['config', 'user.email', 'bob@example.com'])
+
+    // Push a new commit from cloneA without pulling in cloneB
+    await writeFile(join(cloneA, 'shared.md'), '# Shared v2 from remote\n', 'utf8')
+    await writeFile(join(cloneA, 'remote-only.md'), '# Remote Only\n', 'utf8')
+    await service.stageAll(cloneA)
+    await service.commit(cloneA, 'remote advance')
+    const remoteHeadHash = (await runGit(cloneA, ['rev-parse', 'HEAD'])).trim()
+    await service.push(cloneA)
+
+    // Create staged, unstaged, and untracked local changes in cloneB
+    await writeFile(join(cloneB, 'staged-local.md'), '# Staged Local\n', 'utf8')
+    await service.stage(cloneB, ['staged-local.md'])
+    await writeFile(join(cloneB, 'shared.md'), '# Local Unstaged Edit\n', 'utf8')
+    await writeFile(join(cloneB, 'untracked-local.md'), '# Untracked Local\n', 'utf8')
+
+    const beforeStatus = await service.status(cloneB)
+    expect(beforeStatus.behind).toBe(0)
+
+    const fetchedStatus = await service.fetch(cloneB)
+    expect(fetchedStatus.hasUpstream).toBe(true)
+    expect(fetchedStatus.ahead).toBe(0)
+    expect(fetchedStatus.behind).toBe(1)
+    expect(fetchedStatus.staged).toEqual([{ path: 'staged-local.md', status: 'A' }])
+    expect(fetchedStatus.unstaged).toEqual([{ path: 'shared.md', status: 'M' }])
+    expect(fetchedStatus.untracked).toEqual([{ path: 'untracked-local.md', status: '?' }])
+
+    // Working tree files remain untouched and remote-only.md is NOT checked out into working tree
+    expect(await readFile(join(cloneB, 'shared.md'), 'utf8')).toBe('# Local Unstaged Edit\n')
+    expect(await readFile(join(cloneB, 'staged-local.md'), 'utf8')).toBe('# Staged Local\n')
+    expect(await readFile(join(cloneB, 'untracked-local.md'), 'utf8')).toBe('# Untracked Local\n')
+    await expect(lstat(join(cloneB, 'remote-only.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    // Remote ref origin/main is updated
+    expect((await runGit(cloneB, ['rev-parse', 'refs/remotes/origin/main'])).trim()).toBe(
+      remoteHeadHash
+    )
+    const logResult = await service.log(cloneB, { scope: 'all' })
+    expect(logResult.commits.some((commit) => commit.hash === remoteHeadHash)).toBe(true)
+  }, 60_000)
+
   it('logs raw Git CLI stderr, stdout, and exit code at error level before formatting user messages, without logging benign non-repo probes', async () => {
     const logService = new LogService(join(tempRoot, 'logs'))
     const loggedService = new GitService({

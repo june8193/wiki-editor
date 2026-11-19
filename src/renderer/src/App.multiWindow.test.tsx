@@ -2327,14 +2327,10 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     const gitPanel = await within(rendered.container).findByLabelText('Git 소스 제어')
     expect(within(rendered.container).getByRole('button', { name: 'Git' })).toHaveTextContent('5')
 
-    const stagedSection = within(gitPanel)
-      .getByText('스테이지됨 (1)')
-      .closest('.git-section') as HTMLElement
+    const stagedSection = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
     expect(within(stagedSection).queryByRole('button', { name: /변경 사항 롤백/ })).toBeNull()
 
-    const changesSection = within(gitPanel)
-      .getByText('변경 사항 (4)')
-      .closest('.git-section') as HTMLElement
+    const changesSection = within(gitPanel).getByRole('group', { name: 'Changes' })
     const notesDiscardBtn = within(changesSection).getByRole('button', {
       name: 'wiki/notes.md 변경 사항 롤백'
     })
@@ -2345,7 +2341,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     ).toBe(true)
 
     // Open unstaged Diff(wiki/notes.md) in primary, duplicate to secondary, and replace primary with commit Diff(wiki/notes.md)
-    await user.click(within(changesSection).getByText('wiki/notes.md'))
+    await user.click(within(changesSection).getByText('notes.md'))
     const primaryPane = within(rendered.container).getByTestId('pane-primary')
     await within(primaryPane).findByText('Working Tree')
     const unstagedDiffTab = within(primaryPane).getByRole('tab', { selected: true })
@@ -2359,7 +2355,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     fireEvent.mouseDown(primaryPane)
     const graphSection = within(gitPanel).getByRole('region', { name: 'Graph' })
     await user.click(within(graphSection).getByRole('button', { name: /Initial commit/ }))
-    await user.click(await within(graphSection).findByRole('button', { name: /wiki\/notes\.md/ }))
+    await user.click(await within(graphSection).findByTitle('wiki/notes.md'))
     expect(await within(primaryPane).findByText('Commit abcdef1')).toBeInTheDocument()
 
     // 1. Discard M (wiki/notes.md) -> immediate (no modal), syncs clean notes.md buffer, closes secondary unstaged diff tab while preserving primary commit diff & dirty other/config
@@ -2385,7 +2381,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toBe('# Head Notes')
 
     // 2. Also preserve staged Diff tab while discarding D, U, and ? files and updating tree & badge
-    await user.click(within(stagedSection).getByText('wiki/staged.md'))
+    await user.click(within(stagedSection).getByText('staged.md'))
     expect(await within(primaryPane).findByText('Staged')).toBeInTheDocument()
 
     await user.click(
@@ -2742,16 +2738,14 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     await user.click(within(rendered.container).getByRole('button', { name: 'Git' }))
     const gitPanel = await within(rendered.container).findByLabelText('Git 소스 제어')
 
-    // 1. 0 unstaged/untracked changes (even with staged files) -> 전체 ↶ disabled & absent from 스테이지됨
-    const stagedSection = within(gitPanel)
-      .getByText('스테이지됨 (1)')
-      .closest('.git-section') as HTMLElement
+    // 1. 0 unstaged/untracked changes (even with staged files) -> 전체 ↶ disabled & absent from Staged Changes
+    const stagedSection = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
     expect(within(stagedSection).queryByRole('button', { name: '전체 변경 사항 롤백' })).toBeNull()
 
     const discardAllBtn = within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' })
     const stageAllBtn = within(gitPanel).getByRole('button', { name: '전체 Stage' })
     expect(discardAllBtn).toHaveAttribute('title', '전체 변경 사항 롤백')
-    expect(discardAllBtn).toHaveTextContent('전체 ↶')
+    expect(discardAllBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
     expect(discardAllBtn).toBeDisabled()
     expect(
       Boolean(discardAllBtn.compareDocumentPosition(stageAllBtn) & Node.DOCUMENT_POSITION_FOLLOWING)
@@ -2798,7 +2792,9 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     }
     await user.click(within(gitPanel).getByRole('button', { name: 'Git 상태 새로고침' }))
     await waitFor(() => {
-      expect(within(gitPanel).getByText('변경 사항 (3)')).toBeInTheDocument()
+      expect(
+        within(within(gitPanel).getByRole('group', { name: 'Changes' })).getByText('3')
+      ).toBeInTheDocument()
     })
 
     await user.click(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' }))
@@ -2828,7 +2824,9 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     }
     await user.click(within(gitPanel).getByRole('button', { name: 'Git 상태 새로고침' }))
     await waitFor(() => {
-      expect(within(gitPanel).getByText('변경 사항 (5)')).toBeInTheDocument()
+      expect(
+        within(within(gitPanel).getByRole('group', { name: 'Changes' })).getByText('5')
+      ).toBeInTheDocument()
     })
 
     await user.click(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' }))
@@ -2844,7 +2842,8 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     expect(discardAllSpy).not.toHaveBeenCalled()
 
     // 5. Disabled while another Git action is running
-    await user.click(within(gitPanel).getByRole('button', { name: 'Pull' }))
+    await user.click(within(gitPanel).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitPanel).getByRole('menuitem', { name: 'Pull' }))
     await waitFor(() => {
       expect(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' })).toBeDisabled()
     })
@@ -3039,15 +3038,11 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     const gitPanel = await within(mainRendered.container).findByLabelText('Git 소스 제어')
     expect(within(mainRendered.container).getByRole('button', { name: 'Git' })).toHaveTextContent('5')
 
-    const stagedSection = within(gitPanel)
-      .getByText('스테이지됨 (1)')
-      .closest('.git-section') as HTMLElement
-    const changesSection = within(gitPanel)
-      .getByText('변경 사항 (4)')
-      .closest('.git-section') as HTMLElement
+    const stagedSection = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
+    const changesSection = within(gitPanel).getByRole('group', { name: 'Changes' })
 
     // Open staged(wiki/staged.md) in Primary and move to Secondary, then open unstaged(wiki/draft.md) in Primary and duplicate to Secondary, then open unstaged(wiki/notes.md) in Primary
-    await user.click(within(stagedSection).getByText('wiki/staged.md'))
+    await user.click(within(stagedSection).getByText('staged.md'))
     const primaryPane = within(mainRendered.container).getByTestId('pane-primary')
     await within(primaryPane).findByText('Staged')
     fireEvent.contextMenu(within(primaryPane).getByRole('tab', { selected: true }))
@@ -3060,7 +3055,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     const secondaryPane = await within(mainRendered.container).findByTestId('pane-secondary')
 
     fireEvent.mouseDown(primaryPane)
-    await user.click(within(changesSection).getByText('wiki/draft.md'))
+    await user.click(within(changesSection).getByText('draft.md'))
     await within(primaryPane).findByText('Working Tree')
     fireEvent.contextMenu(within(primaryPane).getByRole('tab', { selected: true }))
     await user.click(
@@ -3073,7 +3068,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     expect(within(secondaryPane).getByRole('tab', { name: /staged\.md/ })).toBeInTheDocument()
 
     fireEvent.mouseDown(primaryPane)
-    await user.click(within(changesSection).getByText('wiki/notes.md'))
+    await user.click(within(changesSection).getByText('notes.md'))
     await within(primaryPane).findByText('Working Tree')
 
     // Canceling at target-only dirty prompt aborts discardAll and keeps dirty edits intact
@@ -3135,13 +3130,13 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
 
     // Replace secondary staged diff with unstaged(wiki/notes.md), and open commit diff in primary
     fireEvent.mouseDown(secondaryPane)
-    await user.click(within(changesSection).getByText('wiki/notes.md'))
+    await user.click(within(changesSection).getByText('notes.md'))
     expect(await within(secondaryPane).findByText('Working Tree')).toBeInTheDocument()
 
     fireEvent.mouseDown(primaryPane)
     const graphSection = within(gitPanel).getByRole('region', { name: 'Graph' })
     await user.click(within(graphSection).getByRole('button', { name: /Initial commit/ }))
-    await user.click(await within(graphSection).findByRole('button', { name: /wiki\/notes\.md/ }))
+    await user.click(await within(graphSection).findByTitle('wiki/notes.md'))
     expect(await within(primaryPane).findByText('Commit abcdef1')).toBeInTheDocument()
 
     // Re-dirty notes.md in Aux1 -> 전체 ↶ -> 전체 롤백 -> 저장 없이 진행

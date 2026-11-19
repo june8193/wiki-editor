@@ -1,15 +1,27 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  CircleDot,
+  Cloud,
+  CloudDownload,
+  Copy,
+  GitBranch,
+  RefreshCw,
+  Tag,
+  type LucideIcon
+} from 'lucide-react'
 import type {
   GitCommitDetail,
   GitDiffRequest,
   GitGraphCommit,
-  GitLogScope,
-  GitRefBadge,
-  GitRefKind
+  GitLogScope
 } from '@shared/git'
 import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
 import { toGitDiffRequest } from '../utils/gitFilePresentation'
-import { GitFileTriggerButton } from './GitFileTriggerButton'
+import { normalizeGitGraphRefs, type GitGraphDisplayRef } from '../utils/gitGraphRefs'
+import { GitChangedFileRow } from './GitChangedFileRow'
 import {
   buildGitGraphConnectionPath,
   computeGitGraphLayout,
@@ -18,10 +30,10 @@ import {
 } from '../utils/gitGraphLayout'
 
 const GRAPH_LANE_WIDTH = 14
-const GRAPH_ROW_HEIGHT = 28
-const GRAPH_NODE_RADIUS = 3.5
-const GRAPH_HEAD_RING_RADIUS = 6
-const GRAPH_MERGE_DOT_RADIUS = 1.6
+const GRAPH_ROW_HEIGHT = 24
+const GRAPH_NODE_RADIUS = 3
+const GRAPH_HEAD_RING_RADIUS = 5.5
+const GRAPH_MERGE_DOT_RADIUS = 1.5
 
 const LANE_FALLBACK_COLORS = [
   '#2563eb',
@@ -32,22 +44,16 @@ const LANE_FALLBACK_COLORS = [
   '#0891b2'
 ] as const
 
-const SCOPE_OPTIONS: ReadonlyArray<{ value: GitLogScope; label: string }> = [
-  { value: 'all', label: '전체' },
-  { value: 'current', label: '현재 브랜치' }
-]
-
-const REF_KIND_CLASS: Record<GitRefKind, string> = {
-  head: 'is-head',
-  'local-branch': 'is-local-branch',
-  'remote-branch': 'is-remote-branch',
-  tag: 'is-tag'
-}
-
-/** Props for the Graph section header filter toggle (`전체` / `현재 브랜치`). */
-export interface GitGraphScopeToggleProps {
+/** Props for the Graph accordion header toolbar (`Auto`/`현재 브랜치` scope + `Fetch`/`Pull`/`Push`/`새로고침`). */
+export interface GitGraphHeaderActionsProps {
   scope: GitLogScope
+  isBusy: boolean
+  isRefreshing: boolean
   onChangeScope: (nextScope: GitLogScope) => void
+  onFetch: () => void
+  onPull: () => void
+  onPush: () => void
+  onRefresh: () => void
 }
 
 /** Props for the Graph accordion body rendering commit graph rows and pagination. */
@@ -87,11 +93,77 @@ export function formatGitCommitTooltip(commit: GitGraphCommit): string {
   return `${commit.shortHash} · ${commit.authorName} · ${formatGitCommitTimestamp(commit.committedAt)} · ${commit.subject}`
 }
 
-function getRefBadgeClassName(ref: GitRefBadge): string {
-  const kindClass = REF_KIND_CLASS[ref.kind]
-  const currentHeadClass =
-    ref.kind === 'local-branch' && ref.isCurrentHead ? ' is-current-head' : ''
-  return `git-ref-badge ${kindClass}${currentHeadClass}`
+function getDisplayRefKey(displayRef: GitGraphDisplayRef): string {
+  return displayRef.kind === 'head' ? 'head' : `${displayRef.kind}:${displayRef.name}`
+}
+
+function GitGraphRefBadgeChip({
+  variantClass,
+  title,
+  label,
+  Icon,
+  strokeWidth = 1.75
+}: {
+  variantClass: string
+  title: string
+  label: string
+  Icon: LucideIcon
+  strokeWidth?: number
+}) {
+  return (
+    <span className={`git-ref-badge ${variantClass}`} title={title}>
+      <Icon size={10} strokeWidth={strokeWidth} className="git-ref-icon" aria-hidden="true" />
+      <span className="git-ref-label">{label}</span>
+    </span>
+  )
+}
+
+function GitGraphRefBadgeItem({ displayRef }: { displayRef: GitGraphDisplayRef }) {
+  if (displayRef.kind === 'head') {
+    return (
+      <GitGraphRefBadgeChip
+        variantClass="is-head"
+        title="HEAD (detached)"
+        label="HEAD"
+        Icon={CircleDot}
+        strokeWidth={2}
+      />
+    )
+  }
+
+  if (displayRef.kind === 'branch') {
+    const remoteTooltip = displayRef.syncedRemotes.join(', ')
+    return (
+      <span className="git-ref-branch-group">
+        <GitGraphRefBadgeChip
+          variantClass={`is-local-branch${displayRef.isCurrentHead ? ' is-current-head' : ''}`}
+          title={displayRef.name}
+          label={displayRef.name}
+          Icon={displayRef.isCurrentHead ? CircleDot : GitBranch}
+          strokeWidth={displayRef.isCurrentHead ? 2 : 1.75}
+        />
+        {displayRef.syncedRemotes.length > 0 && (
+          <span
+            className="git-ref-badge is-synced-remote"
+            title={remoteTooltip}
+            aria-label={`원격: ${remoteTooltip}`}
+          >
+            <Cloud size={10} strokeWidth={1.75} className="git-ref-icon" aria-hidden="true" />
+          </span>
+        )}
+      </span>
+    )
+  }
+
+  const isRemote = displayRef.kind === 'remote'
+  return (
+    <GitGraphRefBadgeChip
+      variantClass={isRemote ? 'is-remote-branch' : 'is-tag'}
+      title={displayRef.name}
+      label={displayRef.name}
+      Icon={isRemote ? Cloud : Tag}
+    />
+  )
 }
 
 function getLaneCenterX(col: number): number {
@@ -99,28 +171,84 @@ function getLaneCenterX(col: number): number {
 }
 
 /**
- * Filter toggle rendered in the Graph accordion header without nesting inside its collapse button.
+ * Renders the VS Code scope toggle (`Auto` / `현재 브랜치`) and `Fetch`/`Pull`/`Push`/`새로고침`
+ * icon toolbar on the Graph accordion header, separate from its collapse button.
  */
-export const GitGraphScopeToggle = memo(function GitGraphScopeToggle({
+export const GitGraphHeaderActions = memo(function GitGraphHeaderActions({
   scope,
-  onChangeScope
-}: GitGraphScopeToggleProps) {
+  isBusy,
+  isRefreshing,
+  onChangeScope,
+  onFetch,
+  onPull,
+  onPush,
+  onRefresh
+}: GitGraphHeaderActionsProps) {
+  const isCurrentScope = scope === 'current'
+  const nextScope: GitLogScope = isCurrentScope ? 'all' : 'current'
+  const scopeLabel = isCurrentScope ? '현재 브랜치' : 'Auto'
+  const scopeTitle = isCurrentScope
+    ? '표시 범위: 현재 브랜치 (클릭하여 Auto로 전환)'
+    : '표시 범위: Auto (전체 브랜치 · 클릭하여 현재 브랜치로 전환)'
+
+  const actionItems = [
+    {
+      key: 'fetch',
+      label: 'Fetch',
+      title: '원격 변경 사항 가져오기 (Fetch)',
+      disabled: isBusy,
+      onClick: onFetch,
+      Icon: CloudDownload
+    },
+    {
+      key: 'pull',
+      label: 'Pull',
+      title: '원격 변경 사항 받아오기 (Pull)',
+      disabled: isBusy,
+      onClick: onPull,
+      Icon: ArrowDown
+    },
+    {
+      key: 'push',
+      label: 'Push',
+      title: '원격 저장소로 Push',
+      disabled: isBusy,
+      onClick: onPush,
+      Icon: ArrowUp
+    },
+    {
+      key: 'refresh',
+      label: '그래프 새로고침',
+      title: '커밋 그래프 새로고침',
+      disabled: isBusy || isRefreshing,
+      onClick: onRefresh,
+      Icon: RefreshCw
+    }
+  ] as const
+
   return (
-    <div className="git-graph-scope-toggle" role="group" aria-label="브랜치 필터">
-      {SCOPE_OPTIONS.map((option) => {
-        const isActive = scope === option.value
-        return (
-          <button
-            key={option.value}
-            type="button"
-            className={`git-graph-scope-btn${isActive ? ' is-active' : ''}`}
-            aria-pressed={isActive}
-            onClick={() => onChangeScope(option.value)}
-          >
-            {option.label}
-          </button>
-        )
-      })}
+    <div className="git-accordion-actions">
+      <button
+        type="button"
+        className={`git-graph-scope-btn${isCurrentScope ? ' is-current' : ''}`}
+        title={scopeTitle}
+        onClick={() => onChangeScope(nextScope)}
+      >
+        {scopeLabel}
+      </button>
+      {actionItems.map(({ key, label, title, disabled, onClick, Icon }) => (
+        <button
+          key={key}
+          type="button"
+          className="git-icon-btn"
+          aria-label={label}
+          title={title}
+          disabled={disabled}
+          onClick={onClick}
+        >
+          <Icon size={13} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      ))}
     </div>
   )
 })
@@ -235,28 +363,25 @@ function GitCommitDetailFiles({
   return (
     <div className="git-commit-detail-files-section">
       <div className="git-commit-detail-files-header">변경된 파일 ({detail.files.length})</div>
-      <ul className="git-commit-detail-files" aria-label="변경된 파일">
+      <ul className="git-file-list git-commit-detail-files" aria-label="변경된 파일" role="list">
         {detail.files.map((file) => (
-          <li
+          <GitChangedFileRow
             key={`${file.status}:${file.origPath ?? ''}:${file.path}`}
-            className="git-commit-detail-file-item"
-          >
-            <GitFileTriggerButton
-              file={file}
-              onClick={() =>
-                onOpenFileDiff(
-                  toGitDiffRequest(
-                    {
-                      kind: 'commit',
-                      commitHash: detail.hash,
-                      shortHash: detail.shortHash
-                    },
-                    file
-                  )
+            file={file}
+            displayMode="list"
+            onSelectFile={(selectedFile) =>
+              onOpenFileDiff(
+                toGitDiffRequest(
+                  {
+                    kind: 'commit',
+                    commitHash: detail.hash,
+                    shortHash: detail.shortHash
+                  },
+                  selectedFile
                 )
-              }
-            />
-          </li>
+              )
+            }
+          />
         ))}
       </ul>
     </div>
@@ -335,11 +460,19 @@ function GitCommitDetailPanel({
             </code>
             <button
               type="button"
-              className="git-commit-detail-copy-btn"
+              className={`git-icon-btn git-commit-detail-copy-btn${isCopied ? ' is-copied' : ''}`}
               aria-label="해시 복사"
+              title={isCopied ? '복사됨' : '전체 해시 복사'}
               onClick={() => void handleCopyHash(loadedDetail.hash)}
             >
-              {isCopied ? '복사됨' : '복사'}
+              {isCopied ? (
+                <>
+                  <Check size={12} strokeWidth={1.75} aria-hidden="true" />
+                  <span className="git-commit-detail-copy-status">복사됨</span>
+                </>
+              ) : (
+                <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
+              )}
             </button>
           </div>
           <div className="git-commit-detail-subject">{loadedDetail.subject}</div>
@@ -405,6 +538,7 @@ export const GitGraphSection = memo(function GitGraphSection({
         {layout.rows.map((row) => {
           const isExpanded =
             commitDetail.status !== 'idle' && commitDetail.selectedHash === row.commit.hash
+          const displayRefs = normalizeGitGraphRefs(row.commit.refs)
 
           return (
             <li
@@ -420,22 +554,18 @@ export const GitGraphSection = memo(function GitGraphSection({
               >
                 <GitGraphLaneSvg row={row} maxLanes={layout.maxLanes} />
                 <div className="git-graph-commit-info">
-                  <div className="git-graph-commit-primary">
-                    {row.commit.refs.length > 0 && (
-                      <span className="git-graph-refs">
-                        {row.commit.refs.map((ref) => (
-                          <span
-                            key={`${ref.kind}:${ref.name}`}
-                            className={getRefBadgeClassName(ref)}
-                          >
-                            {ref.name}
-                          </span>
-                        ))}
-                      </span>
-                    )}
-                    <span className="git-graph-subject">{row.commit.subject}</span>
-                  </div>
+                  <span className="git-graph-subject">{row.commit.subject}</span>
                   <span className="git-graph-author">{row.commit.authorName}</span>
+                  {displayRefs.length > 0 && (
+                    <span className="git-graph-refs">
+                      {displayRefs.map((displayRef) => (
+                        <GitGraphRefBadgeItem
+                          key={getDisplayRefKey(displayRef)}
+                          displayRef={displayRef}
+                        />
+                      ))}
+                    </span>
+                  )}
                 </div>
               </button>
               {isExpanded && (

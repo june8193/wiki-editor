@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -9,6 +9,15 @@ import {
   type GitStatus
 } from '@shared/git'
 import { createInitialGitGraphState } from '../hooks/useGitGraphLog'
+import themeCss from '../styles/theme.css?raw'
+import {
+  createDefaultGitChangesViewState,
+  resetGitChangesTreeCollapsedDirs,
+  toggleGitChangesGroupCollapsed,
+  toggleGitChangesTreeDirCollapsed,
+  toggleGitChangesViewMode,
+  type GitChangesViewState
+} from '../utils/gitChangesView'
 import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
@@ -61,34 +70,60 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onCheckoutBranch: vi.fn(),
     onPull: vi.fn(),
     onPush: vi.fn(),
+    onFetch: vi.fn(),
     onSync: vi.fn(),
     graphState: createInitialGitGraphState(),
     onChangeLogScope: vi.fn(),
     onLoadMoreCommits: vi.fn(),
     onToggleCommitDetail: vi.fn(),
     splitState: createDefaultGitPanelSplitState(),
+    changesViewState: createDefaultGitChangesViewState(),
     onOpenFileDiff: vi.fn(),
+    onOpenWorkspaceFile: vi.fn(),
     onToggleChangesCollapsed: vi.fn(),
     onToggleGraphCollapsed: vi.fn(),
     onResizeChangesRatio: vi.fn(),
+    onToggleChangesViewMode: vi.fn(),
+    onToggleChangesGroupCollapsed: vi.fn(),
+    onToggleChangesTreeDirCollapsed: vi.fn(),
     ...overrides
   }
 }
 
 function StatefulGitSidebarPanel(props: GitSidebarPanelProps) {
   const [splitState, setSplitState] = useState<GitPanelSplitState>(() => props.splitState)
+  const [changesViewState, setChangesViewState] = useState<GitChangesViewState>(
+    () => props.changesViewState
+  )
+
+  useEffect(() => {
+    setChangesViewState(resetGitChangesTreeCollapsedDirs)
+  }, [props.workspaceRootPath])
 
   return (
     <GitSidebarPanel
       {...props}
       splitState={splitState}
+      changesViewState={changesViewState}
       onToggleChangesCollapsed={() => setSplitState(toggleGitChangesCollapsed)}
       onToggleGraphCollapsed={() => setSplitState(toggleGitGraphCollapsed)}
       onResizeChangesRatio={(nextRatio) =>
         setSplitState((prev) => updateChangesHeightRatio(prev, nextRatio))
       }
+      onToggleChangesViewMode={() => setChangesViewState(toggleGitChangesViewMode)}
+      onToggleChangesGroupCollapsed={(group) =>
+        setChangesViewState((prev) => toggleGitChangesGroupCollapsed(prev, group))
+      }
+      onToggleChangesTreeDirCollapsed={(dirKey) =>
+        setChangesViewState((prev) => toggleGitChangesTreeDirCollapsed(prev, dirKey))
+      }
     />
   )
+}
+
+function getChangesAccordionToggle(region: HTMLElement): HTMLElement {
+  const changesSection = within(region).getByRole('region', { name: 'Changes' })
+  return within(changesSection).getAllByRole('button', { name: /^Changes/i })[0]
 }
 
 describe('GitSidebarPanel', () => {
@@ -157,16 +192,21 @@ describe('GitSidebarPanel', () => {
     )
 
     const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    expect(within(region).getByText('Source Control')).toBeInTheDocument()
     expect(within(region).getByLabelText('현재 브랜치 main')).toHaveTextContent('main')
-    expect(within(region).getByLabelText('Ahead 2 Behind 1')).toBeInTheDocument()
+    expect(within(region).getByRole('button', { name: /Sync.*↓1 ↑2/ })).toHaveTextContent('↓1 ↑2')
+    expect(within(region).queryByLabelText('브랜치 선택')).not.toBeInTheDocument()
+    expect(within(region).queryByRole('button', { name: '브랜치 전환' })).not.toBeInTheDocument()
 
-    // Status badges for staged and unstaged/untracked items
+    // Status badges for staged and unstaged/untracked items (VS Code UI chars)
     expect(within(region).getByText('R')).toBeInTheDocument()
-    expect(within(region).getByText('docs/old.md → docs/guide.md')).toBeInTheDocument()
+    expect(within(region).getByText('old.md → guide.md')).toBeInTheDocument()
+    expect(within(region).getByText('docs')).toBeInTheDocument()
     expect(within(region).getByText('A')).toBeInTheDocument()
     expect(within(region).getByText('M')).toBeInTheDocument()
     expect(within(region).getByText('D')).toBeInTheDocument()
-    expect(within(region).getByText('?')).toBeInTheDocument()
+    expect(within(region).getByText('U')).toBeInTheDocument()
+    expect(within(region).queryByText('?')).not.toBeInTheDocument()
 
     await user.click(within(region).getByRole('button', { name: 'Git 상태 새로고침' }))
     expect(onRefresh).toHaveBeenCalledTimes(1)
@@ -187,11 +227,12 @@ describe('GitSidebarPanel', () => {
     expect(onStageAll).toHaveBeenCalledTimes(1)
   })
 
-  it('validates non-empty commit message, triggers commit, remote pull/push/sync, branch checkout, loading state, and error dismissal', async () => {
+  it('validates non-empty commit message, triggers commit, remote pull/push/fetch/sync via more menu and subrow, immediate branch checkout, loading state, and error dismissal', async () => {
     const user = userEvent.setup()
     const onCommit = vi.fn().mockResolvedValue(true)
     const onPull = vi.fn()
     const onPush = vi.fn()
+    const onFetch = vi.fn()
     const onSync = vi.fn()
     const onCheckoutBranch = vi.fn()
     const onDismissError = vi.fn()
@@ -202,6 +243,7 @@ describe('GitSidebarPanel', () => {
           onCommit,
           onPull,
           onPush,
+          onFetch,
           onSync,
           onCheckoutBranch,
           onDismissError
@@ -222,22 +264,31 @@ describe('GitSidebarPanel', () => {
     await user.clear(messageInput)
     await user.type(messageInput, 'docs: update handbook')
     await user.click(commitBtn)
-    expect(onCommit).toHaveBeenCalledWith('docs: update handbook')
+    expect(onCommit).toHaveBeenCalledWith('docs: update handbook', 'commit')
     expect((messageInput as HTMLTextAreaElement).value).toBe('')
 
-    // Branch selection & checkout
-    const branchSelect = within(region).getByLabelText('브랜치 선택')
-    await user.selectOptions(branchSelect, 'feature/git')
-    await user.click(within(region).getByRole('button', { name: '브랜치 전환' }))
+    // Immediate branch checkout from 26px branch picker overlay
+    await user.click(within(region).getByRole('button', { name: '현재 브랜치 main' }))
+    const branchMenu = within(region).getByRole('menu', { name: '브랜치 선택' })
+    await user.click(within(branchMenu).getByRole('menuitem', { name: 'feature/git' }))
     expect(onCheckoutBranch).toHaveBeenCalledWith('feature/git')
+    expect(within(region).queryByRole('menu', { name: '브랜치 선택' })).not.toBeInTheDocument()
 
-    // Pull / Push / Sync
-    await user.click(within(region).getByRole('button', { name: 'Pull' }))
-    await user.click(within(region).getByRole('button', { name: 'Push' }))
-    await user.click(within(region).getByRole('button', { name: 'Sync' }))
+    // Pull / Push / Fetch / Sync via ... more menu and subrow Sync trigger
+    const moreBtn = within(region).getByRole('button', { name: '더 보기' })
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Pull' }))
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Push' }))
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Fetch' }))
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Sync' }))
+    await user.click(within(region).getByRole('button', { name: /Sync.*↓1 ↑2/ }))
     expect(onPull).toHaveBeenCalledTimes(1)
     expect(onPush).toHaveBeenCalledTimes(1)
-    expect(onSync).toHaveBeenCalledTimes(1)
+    expect(onFetch).toHaveBeenCalledTimes(1)
+    expect(onSync).toHaveBeenCalledTimes(2)
 
     // Loading state and error banner
     rerender(
@@ -251,8 +302,10 @@ describe('GitSidebarPanel', () => {
     )
 
     expect(within(region).getByRole('status')).toHaveTextContent(/Sync/)
-    expect(within(region).getByRole('button', { name: 'Sync' })).toBeDisabled()
-    expect(within(region).getByRole('button', { name: 'Pull' })).toBeDisabled()
+    expect(within(region).getByRole('button', { name: '더 보기' })).toBeDisabled()
+    expect(within(region).getByRole('button', { name: 'Git 상태 새로고침' })).toBeDisabled()
+    expect(within(region).getByRole('button', { name: '현재 브랜치 main' })).toBeDisabled()
+    expect(within(region).getByRole('button', { name: /Sync.*↓1 ↑2/ })).toBeDisabled()
 
     const alert = within(region).getByRole('alert')
     expect(alert).toHaveTextContent('원격 저장소 인증에 실패했습니다.')
@@ -277,9 +330,9 @@ describe('GitSidebarPanel', () => {
     )
 
     const region = screen.getByRole('region', { name: 'Git 소스 제어' })
-    expect(within(region).getByText('Git')).toBeInTheDocument()
+    expect(within(region).getByText('Source Control')).toBeInTheDocument()
     expect(within(region).getByText('Git 상태를 불러오는 중...')).toBeInTheDocument()
-    expect(within(region).queryByRole('button', { name: /^Git$/i })).not.toBeInTheDocument()
+    expect(within(region).getByText('Source Control').closest('button')).toBeNull()
     expect(within(region).queryByRole('button', { name: /Changes/i })).not.toBeInTheDocument()
     expect(within(region).queryByRole('button', { name: /Graph/i })).not.toBeInTheDocument()
 
@@ -316,11 +369,12 @@ describe('GitSidebarPanel', () => {
       />
     )
 
-    // Header has no collapse toggle (only refresh button in header)
-    expect(within(region).queryByRole('button', { name: /Git.*main/i })).not.toBeInTheDocument()
+    // Header has no collapse toggle (refresh and ... menu buttons in header)
+    expect(within(region).getByText('Source Control').closest('button')).toBeNull()
     expect(within(region).getByRole('button', { name: 'Git 상태 새로고침' })).toBeInTheDocument()
+    expect(within(region).getByRole('button', { name: '더 보기' })).toBeInTheDocument()
 
-    const changesToggle = within(region).getByRole('button', { name: /Changes/i })
+    const changesToggle = getChangesAccordionToggle(region)
     const graphToggle = within(region).getByRole('button', { name: /Graph/i })
     expect(changesToggle).toHaveAttribute('aria-expanded', 'true')
     expect(changesToggle).toHaveTextContent('5')
@@ -330,18 +384,18 @@ describe('GitSidebarPanel', () => {
     const commitInput = within(region).getByLabelText('커밋 메시지')
     await user.type(commitInput, 'chore: ctrl enter commit')
     fireEvent.keyDown(commitInput, { key: 'Enter', ctrlKey: true })
-    expect(onCommit).toHaveBeenCalledWith('chore: ctrl enter commit')
+    expect(onCommit).toHaveBeenCalledWith('chore: ctrl enter commit', 'commit')
 
-    // Collapse Changes -> commit form and file sections hide, but common branch & remote actions remain active
+    // Collapse Changes -> commit form and file sections hide, but branch subrow & remote sync remain active
     await user.click(changesToggle)
     expect(changesToggle).toHaveAttribute('aria-expanded', 'false')
     expect(within(region).queryByLabelText('커밋 메시지')).not.toBeInTheDocument()
-    expect(within(region).queryByText(/스테이지됨/)).not.toBeInTheDocument()
+    expect(within(region).queryByRole('group', { name: 'Staged Changes' })).not.toBeInTheDocument()
     expect(graphToggle).toHaveAttribute('aria-expanded', 'true')
 
-    await user.selectOptions(within(region).getByLabelText('브랜치 선택'), 'feature/git')
-    await user.click(within(region).getByRole('button', { name: '브랜치 전환' }))
-    await user.click(within(region).getByRole('button', { name: 'Sync' }))
+    await user.click(within(region).getByRole('button', { name: '현재 브랜치 main' }))
+    await user.click(within(region).getByRole('menuitem', { name: 'feature/git' }))
+    await user.click(within(region).getByRole('button', { name: /Sync.*↓1 ↑2/ }))
     expect(onCheckoutBranch).toHaveBeenCalledWith('feature/git')
     expect(onSync).toHaveBeenCalledTimes(1)
 
@@ -361,7 +415,7 @@ describe('GitSidebarPanel', () => {
     await user.click(graphToggle)
     expect(graphToggle).toHaveAttribute('aria-expanded', 'true')
 
-    // Clean repository shows 0 badge
+    // Clean repository shows 0 badge and hides Staged Changes
     rerender(
       <StatefulGitSidebarPanel
         {...buildProps({
@@ -373,7 +427,8 @@ describe('GitSidebarPanel', () => {
         })}
       />
     )
-    expect(within(region).getByRole('button', { name: /Changes/i })).toHaveTextContent('0')
+    expect(getChangesAccordionToggle(region)).toHaveTextContent('0')
+    expect(within(region).queryByRole('group', { name: 'Staged Changes' })).not.toBeInTheDocument()
   })
 
   it('renders horizontal section resizer only when both sections are expanded and supports keyboard, pointer drag, double-click, and collapse ratio preservation', async () => {
@@ -470,7 +525,7 @@ describe('GitSidebarPanel', () => {
     expect(graphSection).toHaveStyle({ flex: '0.35 1 0%' })
 
     // Collapsing Changes hides separator and lets Graph fill 100% of remaining height
-    await user.click(within(region).getByRole('button', { name: /Changes/i }))
+    await user.click(getChangesAccordionToggle(region))
     expect(within(region).queryByRole('separator', { name: 'Git 섹션 높이 조절' })).not.toBeInTheDocument()
     expect(graphSection).toHaveStyle({ flex: '1 1 0%' })
   })
@@ -503,7 +558,7 @@ describe('GitSidebarPanel', () => {
         subject: 'Update docs',
         authorName: 'Bob',
         committedAt: '2026-11-15T05:15:00Z',
-        refs: []
+        refs: [{ name: 'origin/unmerged', kind: 'remote-branch' }]
       },
       {
         hash: '3333333000000000000000000000000000000000',
@@ -533,32 +588,60 @@ describe('GitSidebarPanel', () => {
     )
 
     const graphRegion = screen.getByRole('region', { name: 'Graph' })
-    const allBtn = within(graphRegion).getByRole('button', { name: '전체' })
-    const currentBtn = within(graphRegion).getByRole('button', { name: '현재 브랜치' })
-    expect(allBtn).toHaveAttribute('aria-pressed', 'true')
-    expect(currentBtn).toHaveAttribute('aria-pressed', 'false')
+    const scopeBtn = within(graphRegion).getByRole('button', { name: 'Auto' })
 
-    await user.click(currentBtn)
+    await user.click(scopeBtn)
     expect(onChangeLogScope).toHaveBeenCalledWith('current')
     expect(onToggleGraphCollapsed).not.toHaveBeenCalled()
 
-    // Commit rows, ref badges, SVG lanes, and tooltips
+    // Commit rows, right-aligned merged ref badges, 24px SVG lanes, and tooltips
     const list = within(graphRegion).getByRole('list', { name: '커밋 그래프' })
     const items = within(list).getAllByRole('listitem')
     expect(items).toHaveLength(3)
 
-    expect(within(items[0]).getByText('Merge feature branch into main')).toBeInTheDocument()
-    expect(within(items[0]).getByText('Alice')).toBeInTheDocument()
-    expect(within(items[0]).getByText('HEAD')).toHaveClass('is-head')
-    expect(within(items[0]).getByText('main')).toHaveClass('is-local-branch')
-    expect(within(items[0]).getByText('origin/main')).toHaveClass('is-remote-branch')
-    expect(within(items[0]).getByText('v1.0.0')).toHaveClass('is-tag')
+    const subjectEl = within(items[0]).getByText('Merge feature branch into main')
+    const authorEl = within(items[0]).getByText('Alice')
+    const mainBadge = within(items[0]).getByText('main').closest('.git-ref-badge') as HTMLElement
+    const syncedCloud = within(items[0]).getByTitle('origin')
+    const tagBadge = within(items[0]).getByText('v1.0.0').closest('.git-ref-badge') as HTMLElement
+
+    expect(subjectEl).toBeInTheDocument()
+    expect(authorEl).toBeInTheDocument()
+    expect(within(items[0]).queryByText('HEAD')).toBeNull()
+    expect(within(items[0]).queryByText('origin/main')).toBeNull()
+    expect(mainBadge).toHaveClass('is-local-branch', 'is-current-head')
+    expect(mainBadge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(syncedCloud).toHaveClass('is-synced-remote')
+    expect(syncedCloud.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(tagBadge).toHaveClass('is-tag')
+    expect(tagBadge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    // Subject -> author -> right-aligned ref badges order
+    expect(subjectEl.compareDocumentPosition(authorEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(authorEl.compareDocumentPosition(mainBadge) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    // Standalone unmatched remote ref & non-checked-out local branch
+    const standaloneRemoteBadge = within(items[1])
+      .getByText('origin/unmerged')
+      .closest('.git-ref-badge') as HTMLElement
+    expect(standaloneRemoteBadge).toHaveClass('is-remote-branch')
+    expect(standaloneRemoteBadge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    const sideBranchBadge = within(items[2])
+      .getByText('feature/side')
+      .closest('.git-ref-badge') as HTMLElement
+    expect(sideBranchBadge).toHaveClass('is-local-branch')
+    expect(sideBranchBadge).not.toHaveClass('is-current-head')
+    expect(sideBranchBadge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
     expect(items[0].getAttribute('title')).toMatch(
       /^1111111 · Alice · \d{4}-\d{2}-\d{2} \d{2}:\d{2} · Merge feature branch into main$/
     )
 
-    // HEAD emphasis ring + merge marker + SVG paths rendered across lanes
-    expect(items[0].querySelector('svg.git-graph-svg')).not.toBeNull()
+    // Compact 24px SVG lanes + HEAD emphasis ring + merge marker
+    const firstSvg = items[0].querySelector('svg.git-graph-svg')
+    expect(firstSvg).not.toBeNull()
+    expect(firstSvg).toHaveAttribute('height', '24')
     expect(items[0].querySelector('circle.git-graph-head-ring')).not.toBeNull()
     expect(items[0].querySelector('circle.git-graph-merge-dot')).not.toBeNull()
     expect(items[1].querySelector('circle.git-graph-head-ring')).toBeNull()
@@ -692,18 +775,31 @@ describe('GitSidebarPanel', () => {
     expect(detailRegion).toHaveTextContent('Second detail line')
     expect(detailRegion).toHaveTextContent('alice@example.com')
     expect(detailRegion).toHaveTextContent('변경된 파일 (4)')
-    expect(detailRegion).toHaveTextContent('notes/new.md')
-    expect(detailRegion).toHaveTextContent('README.md')
-    expect(detailRegion).toHaveTextContent('legacy.md')
-    expect(detailRegion).toHaveTextContent('old/title.md → new/title.md')
+    expect(within(detailRegion).getByText('new.md')).toBeInTheDocument()
+    expect(within(detailRegion).getByText('notes')).toBeInTheDocument()
+    expect(within(detailRegion).getByText('README.md')).toBeInTheDocument()
+    const deletedDetailFile = within(detailRegion).getByText('legacy.md')
+    expect(deletedDetailFile).toHaveClass('is-deleted')
+    expect(within(detailRegion).getByText('old/title.md → title.md')).toBeInTheDocument()
+    expect(within(detailRegion).getByText('new')).toBeInTheDocument()
+    expect(within(detailRegion).getByTitle('old/title.md → new/title.md')).toBeInTheDocument()
+    expect(within(detailRegion).getByText('A')).toHaveClass('git-status-letter', 'is-green')
+    expect(within(detailRegion).getByText('M')).toHaveClass('git-status-letter', 'is-amber')
+    expect(within(detailRegion).getByText('D')).toHaveClass('git-status-letter', 'is-red')
+    expect(within(detailRegion).getByText('R')).toHaveClass('git-status-letter', 'is-accent')
+    expect(within(detailRegion).queryByRole('button', { name: /파일 열기|롤백|Stage|Unstage/ })).toBeNull()
 
-    // Copy full hash button preserves accessible label while showing feedback
+    // Copy full hash button uses lucide-react icon and preserves accessible label while showing feedback
     const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
     try {
       const copyBtn = within(detailRegion).getByRole('button', { name: '해시 복사' })
+      expect(copyBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+      expect(copyBtn).not.toHaveTextContent('복사')
       await user.click(copyBtn)
       expect(writeTextSpy).toHaveBeenCalledWith(fullHash)
-      expect(within(detailRegion).getByRole('button', { name: '해시 복사' })).toHaveTextContent('복사됨')
+      const copiedBtn = within(detailRegion).getByRole('button', { name: '해시 복사' })
+      expect(copiedBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+      expect(copiedBtn).toHaveTextContent('복사됨')
     } finally {
       writeTextSpy.mockRestore()
     }
@@ -764,7 +860,7 @@ describe('GitSidebarPanel', () => {
       />
     )
 
-    await user.click(screen.getByText('docs/old.md → docs/renamed.md'))
+    await user.click(screen.getByText('old.md → renamed.md'))
     expect(onOpenFileDiff).toHaveBeenCalledWith({
       kind: 'staged',
       path: 'docs/renamed.md',
@@ -848,7 +944,7 @@ describe('GitSidebarPanel', () => {
 
     const detailRegion = screen.getByRole('region', { name: 'a1b2c3d 커밋 상세' })
 
-    await user.click(within(detailRegion).getByRole('button', { name: /docs\/guide\.md/ }))
+    await user.click(within(detailRegion).getByTitle('docs/guide.md'))
     expect(onOpenFileDiff).toHaveBeenCalledWith({
       kind: 'commit',
       commitHash: fullHash,
@@ -857,7 +953,7 @@ describe('GitSidebarPanel', () => {
       status: 'M'
     })
 
-    await user.click(within(detailRegion).getByRole('button', { name: /docs\/deleted\.md/ }))
+    await user.click(within(detailRegion).getByTitle('docs/deleted.md'))
     expect(onOpenFileDiff).toHaveBeenCalledWith({
       kind: 'commit',
       commitHash: fullHash,
@@ -866,9 +962,7 @@ describe('GitSidebarPanel', () => {
       status: 'D'
     })
 
-    await user.click(
-      within(detailRegion).getByRole('button', { name: /docs\/old\.md → docs\/renamed\.md/ })
-    )
+    await user.click(within(detailRegion).getByTitle('docs/old.md → docs/renamed.md'))
     expect(onOpenFileDiff).toHaveBeenCalledWith({
       kind: 'commit',
       commitHash: fullHash,
@@ -881,7 +975,7 @@ describe('GitSidebarPanel', () => {
     expect(onToggleCommitDetail).not.toHaveBeenCalled()
   })
 
-  it('renders Git panel with a fixed non-collapsible header and always keeps the body visible', async () => {
+  it('renders Git panel fixed non-collapsible header, 26px branch subrow, and always keeps the body visible', async () => {
     const user = userEvent.setup()
     const onRefresh = vi.fn()
 
@@ -894,28 +988,26 @@ describe('GitSidebarPanel', () => {
     )
 
     const region = screen.getByRole('region', { name: 'Git 소스 제어' })
-    const header = within(region).getByText('Git').closest('.git-header') as HTMLElement
-    for (const button of within(header).getAllByRole('button')) {
-      expect(button).not.toHaveAttribute('aria-expanded')
-    }
+    const title = within(region).getByText('Source Control')
+    const header = title.closest('.git-header') as HTMLElement
+    const refreshBtn = within(header).getByRole('button', { name: 'Git 상태 새로고침' })
+    const moreBtn = within(header).getByRole('button', { name: '더 보기' })
+
+    expect(title.closest('button')).toBeNull()
+    expect(refreshBtn).not.toHaveAttribute('aria-expanded')
+    expect(refreshBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(moreBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
     expect(within(header).queryByText('▾')).not.toBeInTheDocument()
     expect(within(header).queryByText('▸')).not.toBeInTheDocument()
 
-    const title = within(region).getByText('Git')
-    const branchBadge = within(region).getByLabelText('현재 브랜치 main')
-    const syncBadge = within(region).getByLabelText('Ahead 2 Behind 1')
-    expect(title.closest('button')).toBeNull()
-    expect(branchBadge.closest('button')).toBeNull()
-    expect(syncBadge.closest('button')).toBeNull()
-
     await user.click(title)
-    await user.click(branchBadge)
-    expect(within(region).getByLabelText('브랜치 선택')).toBeInTheDocument()
+    expect(within(region).getByRole('button', { name: '현재 브랜치 main' })).toBeInTheDocument()
+    expect(within(region).getByRole('button', { name: /Sync.*↓1 ↑2/ })).toBeInTheDocument()
     expect(within(region).getByLabelText('커밋 메시지')).toBeInTheDocument()
-    expect(within(region).getByText('스테이지됨 (1)')).toBeInTheDocument()
-    expect(within(region).getByText('변경 사항 (2)')).toBeInTheDocument()
+    expect(within(region).getByRole('group', { name: 'Staged Changes' })).toBeInTheDocument()
+    expect(within(region).getByRole('group', { name: 'Changes' })).toBeInTheDocument()
 
-    await user.click(within(region).getByRole('button', { name: 'Git 상태 새로고침' }))
+    await user.click(refreshBtn)
     expect(onRefresh).toHaveBeenCalledTimes(1)
 
     rerender(
@@ -927,11 +1019,172 @@ describe('GitSidebarPanel', () => {
         })}
       />
     )
-    expect(within(region).getByText('Git')).toBeInTheDocument()
+    expect(within(region).getByText('Source Control')).toBeInTheDocument()
     expect(within(region).getByText(/워크스페이스를 먼저 열어주세요/)).toBeInTheDocument()
-    for (const button of within(region).getAllByRole('button')) {
-      expect(button).not.toHaveAttribute('aria-expanded')
-    }
+    expect(within(region).queryByRole('button', { name: /현재 브랜치/ })).not.toBeInTheDocument()
+    expect(within(region).getByRole('button', { name: 'Git 상태 새로고침' })).toBeDisabled()
+    expect(within(region).getByRole('button', { name: '더 보기' })).toBeDisabled()
+  })
+
+  it('supports ... more menu items, separator, disabled guards, outside click / Escape dismissal, and branch subrow states (unpublished, unborn, detached)', async () => {
+    const user = userEvent.setup()
+    const onPull = vi.fn()
+    const onPush = vi.fn()
+    const onFetch = vi.fn()
+    const onSync = vi.fn()
+    const onStageAll = vi.fn()
+    const onUnstageAll = vi.fn()
+    const onDiscardAll = vi.fn()
+    const onCheckoutBranch = vi.fn()
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasUpstream: false,
+            ahead: 0,
+            behind: 0,
+            staged: [],
+            unstaged: [{ path: 'README.md', status: 'M' }],
+            untracked: []
+          }),
+          onPull,
+          onPush,
+          onFetch,
+          onSync,
+          onStageAll,
+          onUnstageAll,
+          onDiscardAll,
+          onCheckoutBranch
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+
+    // 1. Unpublished local branch shows 미게시 and clicking executes Publish/Push
+    const publishBtn = within(region).getByRole('button', { name: /미게시/ })
+    expect(publishBtn).toBeEnabled()
+    await user.click(publishBtn)
+    expect(onPush).toHaveBeenCalledTimes(1)
+
+    // 2. ... menu lists all 7 items with separator, disables Unstage All Changes when staged=0, and dismisses on Escape / outside click
+    const moreBtn = within(region).getByRole('button', { name: '더 보기' })
+    await user.click(moreBtn)
+    const moreMenu = within(region).getByRole('menu', { name: 'Git 패널 추가 작업' })
+    expect(within(moreMenu).getByRole('separator')).toBeInTheDocument()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Pull' })).toBeEnabled()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Push' })).toBeEnabled()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Fetch' })).toBeEnabled()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Sync' })).toBeEnabled()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Stage All Changes' })).toBeEnabled()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Unstage All Changes' })).toBeDisabled()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Discard All Changes' })).toBeEnabled()
+
+    await user.keyboard('{Escape}')
+    expect(within(region).queryByRole('menu', { name: 'Git 패널 추가 작업' })).not.toBeInTheDocument()
+
+    await user.click(moreBtn)
+    expect(within(region).getByRole('menu', { name: 'Git 패널 추가 작업' })).toBeInTheDocument()
+    fireEvent.mouseDown(document.body)
+    expect(within(region).queryByRole('menu', { name: 'Git 패널 추가 작업' })).not.toBeInTheDocument()
+
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Stage All Changes' }))
+    expect(onStageAll).toHaveBeenCalledTimes(1)
+
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Discard All Changes' }))
+    expect(onDiscardAll).toHaveBeenCalledTimes(1)
+
+    // 3. Staged-only repo enables Unstage All Changes and disables Stage/Discard All Changes
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [{ path: 'README.md', status: 'M' }],
+            unstaged: [],
+            untracked: []
+          }),
+          onStageAll,
+          onUnstageAll,
+          onDiscardAll,
+          onCheckoutBranch
+        })}
+      />
+    )
+    await user.click(moreBtn)
+    expect(within(region).getByRole('menuitem', { name: 'Stage All Changes' })).toBeDisabled()
+    expect(within(region).getByRole('menuitem', { name: 'Discard All Changes' })).toBeDisabled()
+    await user.click(within(region).getByRole('menuitem', { name: 'Unstage All Changes' }))
+    expect(onUnstageAll).toHaveBeenCalledTimes(1)
+
+    // 4. Branch picker dismisses on Escape and outside click, and ignores clicking the active branch
+    const branchBtn = within(region).getByRole('button', { name: '현재 브랜치 main' })
+    await user.click(branchBtn)
+    const branchMenu = within(region).getByRole('menu', { name: '브랜치 선택' })
+    await user.click(within(branchMenu).getByRole('menuitem', { name: 'main' }))
+    expect(onCheckoutBranch).not.toHaveBeenCalled()
+    expect(within(region).queryByRole('menu', { name: '브랜치 선택' })).not.toBeInTheDocument()
+
+    await user.click(branchBtn)
+    expect(within(region).getByRole('menu', { name: '브랜치 선택' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(within(region).queryByRole('menu', { name: '브랜치 선택' })).not.toBeInTheDocument()
+
+    await user.click(branchBtn)
+    expect(within(region).getByRole('menu', { name: '브랜치 선택' })).toBeInTheDocument()
+    fireEvent.mouseDown(document.body)
+    expect(within(region).queryByRole('menu', { name: '브랜치 선택' })).not.toBeInTheDocument()
+
+    // 5. Unborn repo disables remote trigger and empty branch picker
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            isUnborn: true,
+            hasUpstream: false,
+            ahead: 0,
+            behind: 0,
+            staged: [],
+            unstaged: [],
+            untracked: []
+          }),
+          branchList: { current: 'main', isDetached: false, branches: [] }
+        })}
+      />
+    )
+    expect(within(region).getByRole('button', { name: '현재 브랜치 main' })).toBeDisabled()
+    expect(within(region).getByRole('button', { name: /미게시/ })).toBeDisabled()
+
+    // 6. Detached HEAD displays (detached), disables remote trigger, and allows switching to local branch
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            branch: null,
+            isDetached: true,
+            hasUpstream: false,
+            ahead: 0,
+            behind: 0
+          }),
+          branchList: {
+            current: null,
+            isDetached: true,
+            branches: [{ name: 'main', current: false, upstream: 'origin/main' }]
+          },
+          onCheckoutBranch
+        })}
+      />
+    )
+    const detachedPicker = within(region).getByRole('button', { name: '현재 브랜치 (detached)' })
+    expect(detachedPicker).toHaveTextContent('(detached)')
+    expect(detachedPicker).toBeEnabled()
+    expect(within(region).getByRole('button', { name: /미게시/ })).toBeDisabled()
+
+    await user.click(detachedPicker)
+    await user.click(within(region).getByRole('menuitem', { name: 'main' }))
+    expect(onCheckoutBranch).toHaveBeenCalledWith('main')
   })
 
   it('renders permanent ↶ button left of + only on 변경 사항 rows, disables it when busy, and does not open diff on click', async () => {
@@ -967,7 +1220,7 @@ describe('GitSidebarPanel', () => {
       const discardBtn = within(region).getByRole('button', { name: `${filePath} 변경 사항 롤백` })
       const stageBtn = within(region).getByRole('button', { name: `${filePath} Stage` })
       expect(discardBtn).toHaveAttribute('title', '변경 사항 롤백')
-      expect(discardBtn).toHaveTextContent('↶')
+      expect(discardBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
       expect(discardBtn).toBeEnabled()
       expect(
         discardBtn.compareDocumentPosition(stageBtn) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -1022,13 +1275,13 @@ describe('GitSidebarPanel', () => {
 
     const discardAllBtn = discardAllButtons[0]
     const stageAllBtn = within(region).getByRole('button', { name: '전체 Stage' })
-    const stagedSection = within(region).getByText('스테이지됨 (1)').closest('.git-section') as HTMLElement
+    const stagedSection = within(region).getByRole('group', { name: 'Staged Changes' })
     expect(
       within(stagedSection).queryByRole('button', { name: '전체 변경 사항 롤백' })
     ).not.toBeInTheDocument()
 
     expect(discardAllBtn).toHaveAttribute('title', '전체 변경 사항 롤백')
-    expect(discardAllBtn).toHaveTextContent('전체 ↶')
+    expect(discardAllBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
     expect(discardAllBtn).toBeEnabled()
     expect(
       discardAllBtn.compareDocumentPosition(stageAllBtn) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -1062,5 +1315,740 @@ describe('GitSidebarPanel', () => {
       />
     )
     expect(within(region).getByRole('button', { name: '전체 변경 사항 롤백' })).toBeDisabled()
+  })
+
+  it('renders 1-line auto-resizing commit input with branch placeholder and Cmd+Enter shortcut', async () => {
+    const user = userEvent.setup()
+    const onCommit = vi.fn().mockResolvedValue(true)
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({ branch: 'feature/cta' }),
+          onCommit
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const input = within(region).getByPlaceholderText(
+      '메시지 (Ctrl+Enter로 "feature/cta"에 커밋)'
+    ) as HTMLTextAreaElement
+    expect(input).toHaveAttribute('rows', '1')
+
+    let measuredScrollHeight = 28
+    Object.defineProperty(input, 'scrollHeight', {
+      configurable: true,
+      get: () => measuredScrollHeight
+    })
+
+    // Input expands up to max-height (120px) and shrinks back when cleared
+    measuredScrollHeight = 76
+    await user.type(input, 'line 1\nline 2')
+    expect(input.style.height).toBe('76px')
+
+    measuredScrollHeight = 220
+    await user.type(input, '\nline 3\nline 4\nline 5')
+    expect(input.style.height).toBe('120px')
+
+    // Cmd+Enter triggers commit and resets input height on clear
+    measuredScrollHeight = 28
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true })
+    expect(onCommit).toHaveBeenCalledWith('line 1\nline 2\nline 3\nline 4\nline 5', 'commit')
+    await vi.waitFor(() => {
+      expect(input.value).toBe('')
+    })
+    expect(input.style.height).toBe('28px')
+
+    // Detached HEAD placeholder updates dynamically
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({ branch: null, isDetached: true }),
+          onCommit
+        })}
+      />
+    )
+    expect(
+      within(region).getByPlaceholderText('메시지 (Ctrl+Enter로 "(detached)"에 커밋)')
+    ).toBeInTheDocument()
+  })
+
+  it('renders Commit split dropdown (Commit / Commit & Push / Commit & Sync), validates empty message before commit, handles outside click / Escape, and switches CTA for Publish Branch / Sync Changes / conflicts', async () => {
+    const user = userEvent.setup()
+    const onCommit = vi.fn().mockResolvedValue(false)
+    const onPush = vi.fn()
+    const onSync = vi.fn()
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [],
+            unstaged: [{ path: 'README.md', status: 'M' }],
+            untracked: []
+          }),
+          onCommit,
+          onPush,
+          onSync
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const input = within(region).getByLabelText('커밋 메시지') as HTMLTextAreaElement
+    const commitMainBtn = within(region).getByRole('button', { name: 'Commit' })
+    const commitDropdownBtn = within(region).getByRole('button', { name: '커밋 작업 더 보기' })
+
+    expect(commitMainBtn).toBeEnabled()
+    expect(commitDropdownBtn).toBeEnabled()
+
+    // 1. Staged=0 + blank message via dropdown validates inline without invoking onCommit
+    await user.click(commitDropdownBtn)
+    const menu = within(region).getByRole('menu', { name: '커밋 옵션' })
+    expect(within(menu).getByRole('menuitem', { name: 'Commit' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: 'Commit & Push' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: 'Commit & Sync' })).toBeInTheDocument()
+
+    await user.click(within(menu).getByRole('menuitem', { name: 'Commit & Push' }))
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(within(region).getByText('커밋 메시지를 입력하세요.')).toBeInTheDocument()
+    expect(within(region).queryByRole('menu', { name: '커밋 옵션' })).not.toBeInTheDocument()
+
+    // 2. Escape restores focus to toggle and outside click closes dropdown
+    await user.click(commitDropdownBtn)
+    expect(within(region).getByRole('menu', { name: '커밋 옵션' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(within(region).queryByRole('menu', { name: '커밋 옵션' })).not.toBeInTheDocument()
+    expect(commitDropdownBtn).toHaveFocus()
+
+    await user.click(commitDropdownBtn)
+    fireEvent.mouseDown(document.body)
+    expect(within(region).queryByRole('menu', { name: '커밋 옵션' })).not.toBeInTheDocument()
+
+    // 3. Staged=0 + valid message preserves message when onCommit returns false (e.g. cancelled dialog)
+    await user.type(input, 'feat: staged zero')
+    await user.click(commitDropdownBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Commit & Sync' }))
+    expect(onCommit).toHaveBeenCalledWith('feat: staged zero', 'commit-sync')
+    expect(input.value).toBe('feat: staged zero')
+
+    // When onCommit returns true, message clears
+    onCommit.mockResolvedValueOnce(true)
+    await user.click(commitDropdownBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Commit & Push' }))
+    expect(onCommit).toHaveBeenLastCalledWith('feat: staged zero', 'commit-push')
+    await vi.waitFor(() => {
+      expect(input.value).toBe('')
+    })
+
+    // 4. Clean + no upstream -> Publish Branch calls onPush
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasUpstream: false,
+            ahead: 0,
+            behind: 0,
+            staged: [],
+            unstaged: [],
+            untracked: []
+          }),
+          onCommit,
+          onPush,
+          onSync
+        })}
+      />
+    )
+    const publishCta = within(region).getByRole('button', { name: 'Publish Branch' })
+    await user.click(publishCta)
+    expect(onPush).toHaveBeenCalledTimes(1)
+    expect(within(region).queryByRole('button', { name: 'Commit' })).not.toBeInTheDocument()
+
+    // 5. Clean + ahead/behind -> Sync Changes N↓ M↑ calls onSync
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasUpstream: true,
+            ahead: 2,
+            behind: 3,
+            staged: [],
+            unstaged: [],
+            untracked: []
+          }),
+          onCommit,
+          onPush,
+          onSync
+        })}
+      />
+    )
+    const syncCta = within(region).getByRole('button', { name: 'Sync Changes 3↓ 2↑' })
+    await user.click(syncCta)
+    expect(onSync).toHaveBeenCalledTimes(1)
+
+    // 6. Clean + synced -> Commit split button & dropdown both disabled
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasUpstream: true,
+            ahead: 0,
+            behind: 0,
+            staged: [],
+            unstaged: [],
+            untracked: []
+          }),
+          onCommit,
+          onPush,
+          onSync
+        })}
+      />
+    )
+    expect(within(region).getByRole('button', { name: 'Commit' })).toBeDisabled()
+    expect(within(region).getByRole('button', { name: '커밋 작업 더 보기' })).toBeDisabled()
+
+    // 7. Merge conflicts disable both Commit & dropdown and keep conflict guidance
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasConflicts: true,
+            staged: [],
+            unstaged: [{ path: 'conflict.md', status: 'U' }],
+            untracked: []
+          }),
+          onCommit,
+          onPush,
+          onSync
+        })}
+      />
+    )
+    expect(within(region).getByRole('button', { name: 'Commit' })).toBeDisabled()
+    expect(within(region).getByRole('button', { name: '커밋 작업 더 보기' })).toBeDisabled()
+    expect(
+      within(region).getByText('병합 충돌 파일을 해결하고 Stage(+)한 후 커밋하세요.')
+    ).toBeInTheDocument()
+  })
+
+  it('renders Changes header icon toolbar (view toggle, Commit ✓, refresh ↻), hides empty Staged Changes, and supports subgroup collapse with bulk icons', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn()
+    const onCommit = vi.fn().mockResolvedValue(true)
+    const onStageAll = vi.fn()
+    const onUnstageAll = vi.fn()
+    const onDiscardAll = vi.fn()
+
+    const { rerender } = render(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [],
+            unstaged: [{ path: 'docs/guide.md', status: 'M' }],
+            untracked: [{ path: 'draft.md', status: '?' }]
+          }),
+          onRefresh,
+          onCommit,
+          onStageAll,
+          onUnstageAll,
+          onDiscardAll
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const changesSection = within(region).getByRole('region', { name: 'Changes' })
+
+    // 1. Staged Changes is hidden when staged=0; Changes subgroup renders with count 2
+    expect(within(changesSection).queryByRole('group', { name: 'Staged Changes' })).toBeNull()
+    const changesGroup = within(changesSection).getByRole('group', { name: 'Changes' })
+    expect(within(changesGroup).getByRole('button', { name: 'Changes' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(changesGroup).getByText('2')).toBeInTheDocument()
+
+    // 2. Changes header icon toolbar: view toggle, Commit ✓, Refresh ↻
+    const viewToggleBtn = within(changesSection).getByRole('button', { name: '트리 보기로 전환' })
+    const headerCommitBtn = within(changesSection).getByRole('button', { name: '변경 사항 커밋' })
+    const headerRefreshBtn = within(changesSection).getByRole('button', {
+      name: '변경 사항 새로고침'
+    })
+    expect(viewToggleBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(headerCommitBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(headerRefreshBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    await user.click(headerRefreshBtn)
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+
+    // Header Commit ✓ validates blank message first, then submits non-empty message through smart commit flow
+    await user.click(headerCommitBtn)
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(within(changesSection).getByText('커밋 메시지를 입력하세요.')).toBeInTheDocument()
+
+    // Collapse Changes accordion, then click header Commit ✓ with blank message -> re-expands Changes to surface validation
+    await user.click(getChangesAccordionToggle(region))
+    expect(within(changesSection).queryByLabelText('커밋 메시지')).not.toBeInTheDocument()
+    await user.click(headerCommitBtn)
+    expect(await within(changesSection).findByLabelText('커밋 메시지')).toBeInTheDocument()
+
+    const commitInput = within(changesSection).getByLabelText('커밋 메시지') as HTMLTextAreaElement
+    await user.type(commitInput, 'feat: header check commit')
+    await user.click(headerCommitBtn)
+    expect(onCommit).toHaveBeenCalledWith('feat: header check commit', 'commit')
+    await vi.waitFor(() => {
+      expect(commitInput.value).toBe('')
+    })
+
+    // 3. With staged >= 1, Staged Changes renders with collapse toggle, count badge, and bulk Unstage (-)
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [{ path: 'docs/staged.md', status: 'A' }],
+            unstaged: [{ path: 'docs/guide.md', status: 'M' }],
+            untracked: []
+          }),
+          onRefresh,
+          onCommit,
+          onStageAll,
+          onUnstageAll,
+          onDiscardAll
+        })}
+      />
+    )
+
+    const stagedGroup = within(changesSection).getByRole('group', { name: 'Staged Changes' })
+    const stagedToggle = within(stagedGroup).getByRole('button', { name: /Staged Changes/ })
+    expect(stagedToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(within(stagedGroup).getByText('1')).toBeInTheDocument()
+
+    await user.click(within(stagedGroup).getByRole('button', { name: '전체 Unstage' }))
+    expect(onUnstageAll).toHaveBeenCalledTimes(1)
+
+    await user.click(stagedToggle)
+    expect(stagedToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(within(stagedGroup).queryByText('staged.md')).not.toBeInTheDocument()
+    await user.click(stagedToggle)
+    expect(within(stagedGroup).getByText('staged.md')).toBeInTheDocument()
+
+    const updatedChangesGroup = within(changesSection).getByRole('group', { name: 'Changes' })
+    await user.click(within(updatedChangesGroup).getByRole('button', { name: '전체 변경 사항 롤백' }))
+    await user.click(within(updatedChangesGroup).getByRole('button', { name: '전체 Stage' }))
+    expect(onDiscardAll).toHaveBeenCalledTimes(1)
+    expect(onStageAll).toHaveBeenCalledTimes(1)
+
+    const changesSubToggle = within(updatedChangesGroup).getByRole('button', { name: /^Changes$/ })
+    await user.click(changesSubToggle)
+    expect(changesSubToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(within(updatedChangesGroup).queryByText('guide.md')).not.toBeInTheDocument()
+    await user.click(changesSubToggle)
+    expect(within(updatedChangesGroup).getByText('guide.md')).toBeInTheDocument()
+
+    // 4. Header Commit ✓ disables when clean or conflicted
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            staged: [],
+            unstaged: [],
+            untracked: []
+          })
+        })}
+      />
+    )
+    expect(within(changesSection).getByRole('button', { name: '변경 사항 커밋' })).toBeDisabled()
+
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          status: buildGitStatus({
+            hasConflicts: true,
+            staged: [],
+            unstaged: [{ path: 'conflict.md', status: 'U' }],
+            untracked: []
+          })
+        })}
+      />
+    )
+    expect(within(changesSection).getByRole('button', { name: '변경 사항 커밋' })).toBeDisabled()
+  })
+
+  it('renders compact file rows with VS Code status chars, deleted strikethrough, workspace-scoped open file action, and compressed tree view with workspace-reset collapse', async () => {
+    const user = userEvent.setup()
+    const onOpenFileDiff = vi.fn()
+    const onOpenWorkspaceFile = vi.fn()
+
+    const status = buildGitStatus({
+      repoRoot: 'C:/repo',
+      staged: [
+        { path: 'wiki/docs/sub/staged-added.md', status: 'A' },
+        { path: 'wiki/docs/gone-staged.md', status: 'D' },
+        { path: 'wiki/docs/sub/renamed.md', origPath: 'legacy/old-doc.md', status: 'R' }
+      ],
+      unstaged: [
+        { path: 'wiki/a/b/c/edited.md', status: 'M' },
+        { path: 'wiki/removed.md', status: 'D' },
+        { path: 'wiki/conflict.md', status: 'U' },
+        { path: 'outside/external.md', status: 'M' }
+      ],
+      untracked: [
+        { path: 'wiki/a/b/c/new-note.md', status: '?' },
+        { path: 'root-note.md', status: '?' }
+      ]
+    })
+
+    const { rerender } = render(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          workspaceRootPath: 'C:/repo/wiki',
+          status,
+          onOpenFileDiff,
+          onOpenWorkspaceFile
+        })}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+    const changesSection = within(region).getByRole('region', { name: 'Changes' })
+
+    // 1. List mode shows filename + dimmed relative dir + VS Code status chars + deleted strikethrough
+    expect(within(changesSection).getByText('edited.md')).toBeInTheDocument()
+    expect(within(changesSection).getAllByText('wiki/a/b/c')).toHaveLength(2)
+    expect(within(changesSection).getByText('removed.md')).toHaveClass('is-deleted')
+    expect(within(changesSection).getByText('gone-staged.md')).toHaveClass('is-deleted')
+    expect(within(changesSection).getAllByText('U')).toHaveLength(2)
+    expect(within(changesSection).getByText('C')).toBeInTheDocument()
+
+    // 2. Open file button excluded for 'D' files and files outside workspaceRootPath, included for valid workspace files
+    expect(
+      within(changesSection).queryByRole('button', { name: 'wiki/removed.md 파일 열기' })
+    ).toBeNull()
+    expect(
+      within(changesSection).queryByRole('button', { name: 'wiki/docs/gone-staged.md 파일 열기' })
+    ).toBeNull()
+    expect(
+      within(changesSection).queryByRole('button', { name: 'outside/external.md 파일 열기' })
+    ).toBeNull()
+
+    const openEditedBtn = within(changesSection).getByRole('button', {
+      name: 'wiki/a/b/c/edited.md 파일 열기'
+    })
+    await user.click(openEditedBtn)
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith('wiki/a/b/c/edited.md')
+    expect(onOpenFileDiff).not.toHaveBeenCalled()
+
+    // Row click opens Diff tab with original internal status preserved ('?' and 'U')
+    await user.click(within(changesSection).getByText('new-note.md'))
+    expect(onOpenFileDiff).toHaveBeenCalledWith({
+      kind: 'unstaged',
+      path: 'wiki/a/b/c/new-note.md',
+      status: '?'
+    })
+
+    // 3. Toggle to tree view -> stops compression at wiki/ (has direct files), compresses child a/b/c, sorts folders before root files
+    await user.click(within(changesSection).getByRole('button', { name: '트리 보기로 전환' }))
+    expect(within(changesSection).getByRole('button', { name: '리스트 보기로 전환' })).toBeInTheDocument()
+
+    const wikiFolderBtn = within(changesSection).getByRole('button', { name: 'wiki' })
+    const treeFolderBtn = within(changesSection).getByRole('button', { name: 'a/b/c' })
+    const rootNoteBtn = within(changesSection).getByRole('button', { name: 'root-note.md' })
+    expect(wikiFolderBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(treeFolderBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(
+      wikiFolderBtn.compareDocumentPosition(rootNoteBtn) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(within(changesSection).getByText('edited.md')).toBeInTheDocument()
+    expect(within(changesSection).getByText('new-note.md')).toBeInTheDocument()
+    const renamedTreeTrigger = within(changesSection).getByRole('button', { name: 'renamed.md' })
+    expect(renamedTreeTrigger).toHaveAttribute('title', 'legacy/old-doc.md → wiki/docs/sub/renamed.md')
+
+    // Collapse compressed folder -> hides nested files while keeping sibling files under wiki visible
+    await user.click(treeFolderBtn)
+    expect(treeFolderBtn).toHaveAttribute('aria-expanded', 'false')
+    expect(within(changesSection).queryByText('edited.md')).not.toBeInTheDocument()
+    expect(within(changesSection).queryByText('new-note.md')).not.toBeInTheDocument()
+    expect(within(changesSection).getByText('removed.md')).toBeInTheDocument()
+
+    // Workspace switch resets collapsed folder state so folders start expanded again
+    rerender(
+      <StatefulGitSidebarPanel
+        {...buildProps({
+          workspaceRootPath: 'C:/repo/other',
+          status,
+          onOpenFileDiff,
+          onOpenWorkspaceFile
+        })}
+      />
+    )
+    expect(within(changesSection).getByRole('button', { name: 'a/b/c' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(changesSection).getByText('edited.md')).toBeInTheDocument()
+  })
+
+  it('reveals subgroup and file hover actions via keyboard :focus-within and defines light/dark VS Code status color tokens', async () => {
+    const user = userEvent.setup()
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    try {
+      const { container } = render(
+        <div data-theme="light">
+          <button type="button">Before Git Changes</button>
+          <GitSidebarPanel
+            {...buildProps({
+              status: buildGitStatus({
+                staged: [{ path: 'added.md', status: 'A' }],
+                unstaged: [
+                  { path: 'modified.md', status: 'M' },
+                  { path: 'deleted.md', status: 'D' },
+                  { path: 'conflict.md', status: 'U' }
+                ],
+                untracked: [{ path: 'untracked.md', status: '?' }]
+              })
+            })}
+          />
+        </div>
+      )
+
+      const themedRoot = container.firstElementChild as HTMLElement
+      const lightVars = {
+        added: getComputedStyle(themedRoot).getPropertyValue('--git-status-added').trim(),
+        modified: getComputedStyle(themedRoot).getPropertyValue('--git-status-modified').trim(),
+        deleted: getComputedStyle(themedRoot).getPropertyValue('--git-status-deleted').trim(),
+        renamed: getComputedStyle(themedRoot).getPropertyValue('--git-status-renamed').trim()
+      }
+      expect(lightVars.added).not.toBe('')
+      expect(lightVars.modified).not.toBe('')
+      expect(lightVars.deleted).not.toBe('')
+      expect(lightVars.renamed).not.toBe('')
+      expect(new Set(Object.values(lightVars)).size).toBe(4)
+
+      themedRoot.setAttribute('data-theme', 'dark')
+      const darkVars = {
+        added: getComputedStyle(themedRoot).getPropertyValue('--git-status-added').trim(),
+        modified: getComputedStyle(themedRoot).getPropertyValue('--git-status-modified').trim(),
+        deleted: getComputedStyle(themedRoot).getPropertyValue('--git-status-deleted').trim(),
+        renamed: getComputedStyle(themedRoot).getPropertyValue('--git-status-renamed').trim()
+      }
+      expect(darkVars.added).not.toBe('')
+      expect(darkVars.modified).not.toBe('')
+      expect(darkVars.deleted).not.toBe('')
+      expect(darkVars.renamed).not.toBe('')
+      expect(darkVars).not.toEqual(lightVars)
+
+      expect(getComputedStyle(screen.getByText('deleted.md')).textDecorationLine).toBe(
+        'line-through'
+      )
+
+      const stagedGroup = screen.getByRole('group', { name: 'Staged Changes' })
+      const unstageAllBtn = within(stagedGroup).getByRole('button', { name: '전체 Unstage' })
+      const stagedActions = unstageAllBtn.parentElement as HTMLElement
+
+      const openModifiedBtn = screen.getByRole('button', { name: 'modified.md 파일 열기' })
+      const fileActions = openModifiedBtn.parentElement as HTMLElement
+
+      // Idle state hides hover-only containers visually while keeping buttons keyboard-focusable
+      expect(getComputedStyle(stagedActions).opacity).toBe('0')
+      expect(getComputedStyle(fileActions).opacity).toBe('0')
+
+      // Focusing action button activates CSS :focus-within on subgroup header and file row
+      unstageAllBtn.focus()
+      expect(unstageAllBtn).toHaveFocus()
+      expect(getComputedStyle(stagedActions).opacity).toBe('1')
+
+      openModifiedBtn.focus()
+      expect(openModifiedBtn).toHaveFocus()
+      expect(getComputedStyle(fileActions).opacity).toBe('1')
+
+      await user.tab()
+      expect(screen.getByRole('button', { name: 'modified.md 변경 사항 롤백' })).toHaveFocus()
+      expect(getComputedStyle(fileActions).opacity).toBe('1')
+
+      screen.getByRole('button', { name: 'Before Git Changes' }).focus()
+      expect(getComputedStyle(fileActions).opacity).toBe('0')
+    } finally {
+      styleEl.remove()
+    }
+  })
+
+  it('renders Graph header scope toggle (Auto / 현재 브랜치) and Lucide icon toolbar (Fetch, Pull, Push, 새로고침) separated from collapse toggle and disabled while busy', async () => {
+    const user = userEvent.setup()
+    const onChangeLogScope = vi.fn()
+    const onFetch = vi.fn()
+    const onPull = vi.fn()
+    const onPush = vi.fn()
+    const onRefresh = vi.fn()
+    const onToggleGraphCollapsed = vi.fn()
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          graphState: {
+            ...createInitialGitGraphState(),
+            scope: 'all'
+          },
+          onChangeLogScope,
+          onFetch,
+          onPull,
+          onPush,
+          onRefresh,
+          onToggleGraphCollapsed
+        })}
+      />
+    )
+
+    const graphRegion = screen.getByRole('region', { name: 'Graph' })
+    const collapseBtn = within(graphRegion).getByRole('button', { name: /^Graph$/i })
+    const autoBtn = within(graphRegion).getByRole('button', { name: 'Auto' })
+    const fetchBtn = within(graphRegion).getByRole('button', { name: 'Fetch' })
+    const pullBtn = within(graphRegion).getByRole('button', { name: 'Pull' })
+    const pushBtn = within(graphRegion).getByRole('button', { name: 'Push' })
+    const refreshBtn = within(graphRegion).getByRole('button', { name: '그래프 새로고침' })
+
+    expect(within(graphRegion).queryByRole('button', { name: '현재 브랜치' })).toBeNull()
+    for (const btn of [autoBtn, fetchBtn, pullBtn, pushBtn, refreshBtn]) {
+      expect(collapseBtn.contains(btn)).toBe(false)
+      expect(btn).toBeEnabled()
+    }
+    for (const iconBtn of [fetchBtn, pullBtn, pushBtn, refreshBtn]) {
+      expect(iconBtn.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    }
+
+    await user.click(autoBtn)
+    await user.click(fetchBtn)
+    await user.click(pullBtn)
+    await user.click(pushBtn)
+    await user.click(refreshBtn)
+
+    expect(onChangeLogScope).toHaveBeenCalledWith('current')
+    expect(onFetch).toHaveBeenCalledTimes(1)
+    expect(onPull).toHaveBeenCalledTimes(1)
+    expect(onPush).toHaveBeenCalledTimes(1)
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+    expect(onToggleGraphCollapsed).not.toHaveBeenCalled()
+
+    // Scope = 'current' displays '현재 브랜치' and switches back to 'all' on click
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          graphState: {
+            ...createInitialGitGraphState(),
+            scope: 'current'
+          },
+          onChangeLogScope,
+          onFetch,
+          onPull,
+          onPush,
+          onRefresh,
+          onToggleGraphCollapsed
+        })}
+      />
+    )
+    const currentScopeBtn = within(graphRegion).getByRole('button', { name: '현재 브랜치' })
+    expect(within(graphRegion).queryByRole('button', { name: 'Auto' })).toBeNull()
+    await user.click(currentScopeBtn)
+    expect(onChangeLogScope).toHaveBeenLastCalledWith('all')
+
+    // Pending action disables all 4 Graph action icons
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          pendingAction: 'Fetch',
+          onChangeLogScope,
+          onFetch,
+          onPull,
+          onPush,
+          onRefresh
+        })}
+      />
+    )
+    expect(within(graphRegion).getByRole('button', { name: 'Fetch' })).toBeDisabled()
+    expect(within(graphRegion).getByRole('button', { name: 'Pull' })).toBeDisabled()
+    expect(within(graphRegion).getByRole('button', { name: 'Push' })).toBeDisabled()
+    expect(within(graphRegion).getByRole('button', { name: '그래프 새로고침' })).toBeDisabled()
+
+    // Graph log loading disables graph refresh button without disabling remote actions
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          graphState: {
+            ...createInitialGitGraphState(),
+            isLoading: true
+          }
+        })}
+      />
+    )
+    expect(within(graphRegion).getByRole('button', { name: '그래프 새로고침' })).toBeDisabled()
+  })
+
+  it('renders detached HEAD badge, multi-remote cloud tooltip, and enforces 24px compact row and 260px truncation CSS rules', () => {
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    try {
+      const commits: GitGraphCommit[] = [
+        {
+          hash: '1111111111111111111111111111111111111111',
+          shortHash: '1111111',
+          parents: ['2222222222222222222222222222222222222222'],
+          subject: 'Detached commit with a very long commit subject that must truncate gracefully',
+          authorName: 'VeryLongAuthorName',
+          committedAt: '2026-11-15T06:30:00Z',
+          refs: [
+            { name: 'HEAD', kind: 'head', isCurrentHead: true },
+            { name: 'master', kind: 'local-branch', isCurrentHead: false },
+            { name: 'origin/master', kind: 'remote-branch' },
+            { name: 'upstream/master', kind: 'remote-branch' }
+          ]
+        }
+      ]
+
+      render(
+        <div style={{ width: '260px' }}>
+          <GitSidebarPanel
+            {...buildProps({
+              status: buildGitStatus({ branch: null, isDetached: true }),
+              graphState: {
+                ...createInitialGitGraphState(),
+                commits
+              }
+            })}
+          />
+        </div>
+      )
+
+      const graphRegion = screen.getByRole('region', { name: 'Graph' })
+      const rowBtn = within(graphRegion).getByRole('button', { name: /Detached commit/ })
+      const headBadge = within(rowBtn).getByText('HEAD').closest('.git-ref-badge') as HTMLElement
+      const masterBadge = within(rowBtn).getByText('master').closest('.git-ref-badge') as HTMLElement
+      const multiRemoteCloud = within(rowBtn).getByTitle('origin, upstream')
+      const subjectEl = within(rowBtn).getByText(/Detached commit/)
+      const authorEl = within(rowBtn).getByText('VeryLongAuthorName')
+      const refsContainer = headBadge.parentElement as HTMLElement
+
+      expect(headBadge).toHaveClass('is-head')
+      expect(headBadge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+      expect(masterBadge).toHaveClass('is-local-branch')
+      expect(masterBadge).not.toHaveClass('is-current-head')
+      expect(multiRemoteCloud).toHaveClass('is-synced-remote')
+
+      expect(getComputedStyle(rowBtn).height).toBe('24px')
+      expect(getComputedStyle(subjectEl).textOverflow).toBe('ellipsis')
+      expect(getComputedStyle(subjectEl).overflow).toBe('hidden')
+      expect(getComputedStyle(subjectEl).minWidth).toMatch(/^0(px)?$/)
+      expect(getComputedStyle(authorEl).textOverflow).toBe('ellipsis')
+      expect(getComputedStyle(refsContainer).minWidth).toMatch(/^0(px)?$/)
+      expect(getComputedStyle(refsContainer).overflow).toBe('hidden')
+      expect(getComputedStyle(masterBadge.querySelector('.git-ref-label')!).textOverflow).toBe(
+        'ellipsis'
+      )
+    } finally {
+      styleEl.remove()
+    }
   })
 })

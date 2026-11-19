@@ -409,6 +409,18 @@ export class GitService {
     return this.statusForRepo(repoRoot)
   }
 
+  /** Updates remote-tracking refs via `git fetch` without modifying the working tree or index. */
+  async fetch(workspacePath: string): Promise<GitStatus> {
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    await this.requireRemotes(repoRoot)
+    try {
+      await this.execGit(repoRoot, ['fetch'], this.networkTimeoutMs)
+    } catch (error) {
+      throw await this.formatAndLogGitError('fetch', error)
+    }
+    return this.statusForRepo(repoRoot)
+  }
+
   async sync(workspacePath: string): Promise<GitSyncResult> {
     const { repoRoot, currentStatus, branch, remotes } = await this.requirePublishableBranchContext(
       workspacePath,

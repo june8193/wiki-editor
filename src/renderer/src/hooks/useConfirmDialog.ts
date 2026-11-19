@@ -22,6 +22,13 @@ export interface UnsavedChangesDialogRequest {
   onResolve: (approved: boolean) => void
 }
 
+export interface ConfirmActionDialogRequest {
+  title: string
+  message: string
+  confirmLabel: string
+  onResolve: (approved: boolean) => void
+}
+
 /**
  * Manages the window's confirm dialog state and unsaved close/action confirmation flows.
  */
@@ -33,6 +40,23 @@ export function useConfirmDialog() {
   const dismissDialog = useCallback((): void => {
     setPendingDialog(null)
   }, [])
+
+  const openSettledConfirmDialog = useCallback(
+    (
+      buildState: (settle: (approved: boolean) => void) => ConfirmDialogState,
+      onResolve: (approved: boolean) => void
+    ): (() => void) => {
+      let settled = false
+      const settle = (approved: boolean): void => {
+        if (settled) return
+        settled = true
+        onResolve(approved)
+      }
+      setPendingDialog(buildState(settle))
+      return () => settle(false)
+    },
+    []
+  )
 
   const confirmCloseDirtyTab = useCallback((request: DirtyTabCloseRequest): void => {
     setPendingDialog({
@@ -51,33 +75,52 @@ export function useConfirmDialog() {
     })
   }, [])
 
-  const confirmUnsavedChanges = useCallback((request: UnsavedChangesDialogRequest): (() => void) => {
-    let settled = false
-    const settle = (approved: boolean): void => {
-      if (settled) return
-      settled = true
-      request.onResolve(approved)
-    }
+  const confirmUnsavedChanges = useCallback(
+    (request: UnsavedChangesDialogRequest): (() => void) =>
+      openSettledConfirmDialog(
+        (settle) => ({
+          title: '저장하지 않은 변경 사항',
+          message: request.message,
+          confirmLabel: request.confirmLabel,
+          secondaryLabel: request.secondaryLabel,
+          onConfirm: async () => {
+            setPendingDialog(null)
+            const saved = await request.onSave()
+            settle(saved)
+          },
+          onSecondary: () => {
+            setPendingDialog(null)
+            settle(true)
+          },
+          onCancel: () => settle(false)
+        }),
+        request.onResolve
+      ),
+    [openSettledConfirmDialog]
+  )
 
-    setPendingDialog({
-      title: '저장하지 않은 변경 사항',
-      message: request.message,
-      confirmLabel: request.confirmLabel,
-      secondaryLabel: request.secondaryLabel,
-      onConfirm: async () => {
-        setPendingDialog(null)
-        const saved = await request.onSave()
-        settle(saved)
-      },
-      onSecondary: () => {
-        setPendingDialog(null)
-        settle(true)
-      },
-      onCancel: () => settle(false)
-    })
-
-    return () => settle(false)
-  }, [])
+  const confirmAction = useCallback(
+    (request: ConfirmActionDialogRequest): (() => void) => {
+      if (isDialogOpenRef.current) {
+        request.onResolve(false)
+        return () => undefined
+      }
+      return openSettledConfirmDialog(
+        (settle) => ({
+          title: request.title,
+          message: request.message,
+          confirmLabel: request.confirmLabel,
+          onConfirm: () => {
+            setPendingDialog(null)
+            settle(true)
+          },
+          onCancel: () => settle(false)
+        }),
+        request.onResolve
+      )
+    },
+    [openSettledConfirmDialog]
+  )
 
   return {
     pendingDialog,
@@ -85,6 +128,7 @@ export function useConfirmDialog() {
     dismissDialog,
     isDialogOpenRef,
     confirmCloseDirtyTab,
-    confirmUnsavedChanges
+    confirmUnsavedChanges,
+    confirmAction
   }
 }

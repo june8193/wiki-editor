@@ -95,6 +95,7 @@ describe('registerGitIpc', () => {
       | 'checkout'
       | 'pull'
       | 'push'
+      | 'fetch'
       | 'sync'
       | 'log'
       | 'commitDetail'
@@ -117,6 +118,7 @@ describe('registerGitIpc', () => {
       checkout: vi.fn(async () => sampleStatus),
       pull: vi.fn(async () => sampleStatus),
       push: vi.fn(async () => sampleStatus),
+      fetch: vi.fn(async () => sampleStatus),
       sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'done' })),
       log: vi.fn(async () => sampleLog),
       commitDetail: vi.fn(async () => sampleCommitDetail),
@@ -133,6 +135,7 @@ describe('registerGitIpc', () => {
     const diffRequest = { kind: 'staged' as const, path: 'README.md', status: 'M' as const }
 
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.fetch, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.discard, workspaceDir, ['a.md'])).rejects.toThrow(
       /열린 워크스페이스/
     )
@@ -150,6 +153,7 @@ describe('registerGitIpc', () => {
     const opened = await workspaceService.openWorkspace(workspaceDir)
 
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, otherDir)).rejects.toThrow(/일치하지 않습니다/)
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.fetch, otherDir)).rejects.toThrow(/일치하지 않습니다/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.discard, otherDir, ['a.md'])).rejects.toThrow(
       /일치하지 않습니다/
     )
@@ -203,6 +207,9 @@ describe('registerGitIpc', () => {
     await ipcMain.invoke(GIT_IPC_CHANNELS.push, workspaceDir)
     expect(fakeGitService.push).toHaveBeenCalledWith(opened.rootPath)
 
+    expect(await ipcMain.invoke(GIT_IPC_CHANNELS.fetch, workspaceDir)).toEqual(sampleStatus)
+    expect(fakeGitService.fetch).toHaveBeenCalledWith(opened.rootPath)
+
     await ipcMain.invoke(GIT_IPC_CHANNELS.sync, workspaceDir)
     expect(fakeGitService.sync).toHaveBeenCalledWith(opened.rootPath)
 
@@ -247,6 +254,7 @@ describe('registerGitIpc', () => {
       | 'checkout'
       | 'pull'
       | 'push'
+      | 'fetch'
       | 'sync'
       | 'log'
       | 'commitDetail'
@@ -265,6 +273,7 @@ describe('registerGitIpc', () => {
       checkout: vi.fn(async () => sampleStatus),
       pull: vi.fn(async () => sampleStatus),
       push: vi.fn(async () => sampleStatus),
+      fetch: vi.fn(async () => sampleStatus),
       sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'done' })),
       log: vi.fn(async () => ({ commits: [], hasMore: false })),
       commitDetail: vi.fn(async () => ({
@@ -330,7 +339,8 @@ describe('registerGitIpc', () => {
     const senderB = { isDestroyed: () => false, send: () => undefined }
     const unknownSender = { isDestroyed: () => false, send: () => undefined }
     const fakeGitService = {
-      status: vi.fn(async (rootPath: string) => createEmptyGitStatus(true, rootPath))
+      status: vi.fn(async (rootPath: string) => createEmptyGitStatus(true, rootPath)),
+      fetch: vi.fn(async (rootPath: string) => createEmptyGitStatus(true, rootPath))
     } as unknown as GitService
 
     const ipcMain = createSessionAwareFakeIpcMain()
@@ -344,10 +354,16 @@ describe('registerGitIpc', () => {
     const statusA = await ipcMain.invokeFrom(senderA, GIT_IPC_CHANNELS.status, workspaceDir)
     expect(statusA).toMatchObject({ repoRoot: workspaceDir })
 
+    const fetchA = await ipcMain.invokeFrom(senderA, GIT_IPC_CHANNELS.fetch, workspaceDir)
+    expect(fetchA).toMatchObject({ repoRoot: workspaceDir })
+
     const statusB = await ipcMain.invokeFrom(senderB, GIT_IPC_CHANNELS.status, otherDir)
     expect(statusB).toMatchObject({ repoRoot: otherDir })
 
     await expect(ipcMain.invokeFrom(senderA, GIT_IPC_CHANNELS.status, otherDir)).rejects.toThrow(
+      /일치하지 않습니다/
+    )
+    await expect(ipcMain.invokeFrom(senderA, GIT_IPC_CHANNELS.fetch, otherDir)).rejects.toThrow(
       /일치하지 않습니다/
     )
     await expect(
