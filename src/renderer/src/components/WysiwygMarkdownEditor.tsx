@@ -4,7 +4,7 @@ import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import {
-  areSearchMatchOptionsEqual,
+  areDocumentFindResultReportsEqual,
   type DocumentFindHighlightQuery,
   type DocumentFindResultReport
 } from '../editor/documentFind'
@@ -35,9 +35,10 @@ import {
   syncWysiwygImageDisplaySources
 } from '../editor/wysiwygMarkdown'
 import {
+  areWysiwygSearchSnapshotsEqual,
+  getWysiwygSearchSnapshot,
   scrollWysiwygActiveMatch,
-  syncWysiwygSearchHighlights,
-  wysiwygSearchHighlightPluginKey
+  syncWysiwygSearchHighlights
 } from '../editor/wysiwygSearchHighlight'
 import { useDismissable } from '../hooks/useDismissable'
 import { useEditorImageTransfer } from '../hooks/useEditorImageTransfer'
@@ -505,29 +506,8 @@ export function WysiwygMarkdownEditor({
 
   const wysiwygSearchSnapshot = useEditorState({
     editor,
-    selector: ({ editor: instance }) => {
-      const state = wysiwygSearchHighlightPluginKey.getState(instance.state)
-      return state
-        ? {
-            isActive: state.isActive,
-            query: state.query,
-            options: state.options,
-            matchCount: state.matches.length,
-            errorMessage: state.errorMessage,
-            activeIndex: state.activeIndex
-          }
-        : null
-    },
-    equalityFn: (prev, next) =>
-      prev === next ||
-      (prev !== null &&
-        next !== null &&
-        prev.isActive === next.isActive &&
-        prev.query === next.query &&
-        areSearchMatchOptionsEqual(prev.options, next.options) &&
-        prev.matchCount === next.matchCount &&
-        prev.errorMessage === next.errorMessage &&
-        prev.activeIndex === next.activeIndex)
+    selector: ({ editor: instance }) => getWysiwygSearchSnapshot(instance),
+    equalityFn: areWysiwygSearchSnapshotsEqual
   })
 
   useLayoutEffect(() => {
@@ -535,37 +515,24 @@ export function WysiwygMarkdownEditor({
       return
     }
 
-    const nextState = syncWysiwygSearchHighlights(editor, findHighlight ?? null)
-    if (!findHighlight?.isActive || !nextState) {
+    const nextSnapshot = syncWysiwygSearchHighlights(editor, findHighlight ?? null)
+    if (!findHighlight?.isActive || !nextSnapshot) {
       lastReportedFindRef.current = null
       return
     }
 
-    const prevReported = lastReportedFindRef.current
-    if (
-      !prevReported ||
-      prevReported.query !== nextState.query ||
-      !areSearchMatchOptionsEqual(prevReported.options, nextState.options) ||
-      prevReported.matchCount !== nextState.matches.length ||
-      prevReported.errorMessage !== nextState.errorMessage
-    ) {
-      const report: DocumentFindResultReport = {
-        query: nextState.query,
-        options: nextState.options,
-        matchCount: nextState.matches.length,
-        errorMessage: nextState.errorMessage
-      }
-      lastReportedFindRef.current = report
-      onFindResultChangeRef.current?.(report)
+    if (!areDocumentFindResultReportsEqual(lastReportedFindRef.current, nextSnapshot.report)) {
+      lastReportedFindRef.current = nextSnapshot.report
+      onFindResultChangeRef.current?.(nextSnapshot.report)
     }
 
     if (
       findHighlight.scrollNonce > 0 &&
       findHighlight.scrollNonce !== lastScrolledFindNonceRef.current
     ) {
-      if (nextState.matches.length === 0) {
+      if (nextSnapshot.report.matchCount === 0) {
         lastScrolledFindNonceRef.current = findHighlight.scrollNonce
-      } else if (nextState.activeIndex >= 0) {
+      } else if (nextSnapshot.activeIndex >= 0) {
         lastScrolledFindNonceRef.current = findHighlight.scrollNonce
         scrollWysiwygActiveMatch(editor, scrollContainerRef.current)
       }

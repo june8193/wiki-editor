@@ -5,28 +5,35 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import {
   compileSearchMatcher,
   DEFAULT_SEARCH_MATCH_OPTIONS,
-  type CompiledSearchMatcher,
-  type SearchMatchOptions
+  type CompiledSearchMatcher
 } from '@shared/search'
 import { isMermaidLanguage } from './codeBlockHighlight'
 import {
-  areSearchMatchOptionsEqual,
+  areDocumentFindCriteriaEqual,
+  areDocumentFindResultReportsEqual,
   clampActiveMatchIndex,
+  type DocumentFindCriteria,
   type DocumentFindHighlightQuery,
+  type DocumentFindResultReport,
   extractSingleLineFindQuery,
-  readDomSingleLineSelection,
+  inspectDomSingleLineSelection,
   scrollMatchElementIntoView
 } from './documentFind'
 
-export interface ProseMirrorSearchMatch {
+interface ProseMirrorSearchMatch {
   from: number
   to: number
 }
 
-export interface WysiwygSearchPluginState {
+export interface WysiwygSearchSnapshot {
   isActive: boolean
-  query: string
-  options: SearchMatchOptions
+  activeIndex: number
+  report: DocumentFindResultReport
+}
+
+interface WysiwygSearchPluginState {
+  isActive: boolean
+  criteria: DocumentFindCriteria
   activeIndex: number
   matches: readonly ProseMirrorSearchMatch[]
   errorMessage: string | null
@@ -35,8 +42,7 @@ export interface WysiwygSearchPluginState {
 
 interface WysiwygSearchMeta {
   isActive: boolean
-  query: string
-  options: SearchMatchOptions
+  criteria: DocumentFindCriteria
   activeIndex: number
 }
 
@@ -47,21 +53,39 @@ interface TextRunSegment {
   endOffset: number
 }
 
-export const wysiwygSearchHighlightPluginKey = new PluginKey<WysiwygSearchPluginState>(
+const wysiwygSearchHighlightPluginKey = new PluginKey<WysiwygSearchPluginState>(
   'wysiwygSearchHighlight'
 )
 
+function createDefaultCriteria(): DocumentFindCriteria {
+  return {
+    query: '',
+    options: { ...DEFAULT_SEARCH_MATCH_OPTIONS }
+  }
+}
+
 function createEmptyPluginState(
-  overrides: Partial<Pick<WysiwygSearchPluginState, 'isActive' | 'query' | 'options'>> = {}
+  overrides: Partial<Pick<WysiwygSearchPluginState, 'isActive' | 'criteria'>> = {}
 ): WysiwygSearchPluginState {
   return {
     isActive: overrides.isActive ?? false,
-    query: overrides.query ?? '',
-    options: overrides.options ?? { ...DEFAULT_SEARCH_MATCH_OPTIONS },
+    criteria: overrides.criteria ?? createDefaultCriteria(),
     activeIndex: -1,
     matches: [],
     errorMessage: null,
     decorations: DecorationSet.empty
+  }
+}
+
+function toWysiwygSearchSnapshot(state: WysiwygSearchPluginState): WysiwygSearchSnapshot {
+  return {
+    isActive: state.isActive,
+    activeIndex: state.activeIndex,
+    report: {
+      criteria: state.criteria,
+      matchCount: state.matches.length,
+      errorMessage: state.errorMessage
+    }
   }
 }
 
@@ -94,13 +118,12 @@ function flushTextRun(
 
 function findProseMirrorMatches(
   doc: ProseMirrorNode,
-  query: string,
-  options: SearchMatchOptions
+  criteria: DocumentFindCriteria
 ): { matches: ProseMirrorSearchMatch[]; errorMessage: string | null } {
-  if (query.length === 0) {
+  if (criteria.query.length === 0) {
     return { matches: [], errorMessage: null }
   }
-  const compiled = compileSearchMatcher(query, options)
+  const compiled = compileSearchMatcher(criteria.query, criteria.options)
   if (!compiled.ok) {
     return { matches: [], errorMessage: compiled.error }
   }
@@ -175,19 +198,17 @@ function computePluginStateForQuery(
   doc: ProseMirrorNode,
   meta: WysiwygSearchMeta
 ): WysiwygSearchPluginState {
-  if (!meta.isActive || meta.query.length === 0) {
+  if (!meta.isActive || meta.criteria.query.length === 0) {
     return createEmptyPluginState({
       isActive: meta.isActive,
-      query: meta.query,
-      options: meta.options
+      criteria: meta.criteria
     })
   }
-  const { matches, errorMessage } = findProseMirrorMatches(doc, meta.query, meta.options)
+  const { matches, errorMessage } = findProseMirrorMatches(doc, meta.criteria)
   const activeIndex = clampActiveMatchIndex(meta.activeIndex, matches.length)
   return {
     isActive: true,
-    query: meta.query,
-    options: meta.options,
+    criteria: meta.criteria,
     activeIndex,
     matches,
     errorMessage,
@@ -212,8 +233,7 @@ export const WysiwygSearchHighlight = Extension.create({
                 !tr.docChanged &&
                 meta.isActive &&
                 prev.isActive &&
-                prev.query === meta.query &&
-                areSearchMatchOptionsEqual(prev.options, meta.options)
+                areDocumentFindCriteriaEqual(prev.criteria, meta.criteria)
               ) {
                 const nextActive = clampActiveMatchIndex(meta.activeIndex, prev.matches.length)
                 if (nextActive === prev.activeIndex) {
@@ -231,8 +251,7 @@ export const WysiwygSearchHighlight = Extension.create({
             if (tr.docChanged && prev.isActive) {
               return computePluginStateForQuery(tr.doc, {
                 isActive: prev.isActive,
-                query: prev.query,
-                options: prev.options,
+                criteria: prev.criteria,
                 activeIndex: prev.activeIndex
               })
             }
@@ -251,46 +270,74 @@ export const WysiwygSearchHighlight = Extension.create({
 })
 
 /**
+ * Extracts an immutable search snapshot from the WYSIWYG ProseMirror plugin state.
+ */
+export function getWysiwygSearchSnapshot(editor: Editor): WysiwygSearchSnapshot | null {
+  const state = wysiwygSearchHighlightPluginKey.getState(editor.state)
+  return state ? toWysiwygSearchSnapshot(state) : null
+}
+
+/**
+ * Compares two `WysiwygSearchSnapshot` values for structural equality.
+ */
+export function areWysiwygSearchSnapshotsEqual(
+  prev: WysiwygSearchSnapshot | null,
+  next: WysiwygSearchSnapshot | null
+): boolean {
+  if (prev === next) {
+    return true
+  }
+  if (!prev || !next) {
+    return false
+  }
+  return (
+    prev.isActive === next.isActive &&
+    prev.activeIndex === next.activeIndex &&
+    areDocumentFindResultReportsEqual(prev.report, next.report)
+  )
+}
+
+/**
  * Synchronizes the WYSIWYG ProseMirror search plugin with the active Find Bar query/index
  * without mutating the document or appending undo history.
  */
 export function syncWysiwygSearchHighlights(
   editor: Editor,
   request: DocumentFindHighlightQuery | null
-): WysiwygSearchPluginState | undefined {
+): WysiwygSearchSnapshot | null {
   const current = wysiwygSearchHighlightPluginKey.getState(editor.state)
   if (!current) {
-    return undefined
+    return null
   }
 
   const nextIsActive = Boolean(request?.isActive)
-  const nextQuery = request?.isActive ? request.query : ''
-  const nextOptions = request?.options ?? DEFAULT_SEARCH_MATCH_OPTIONS
+  const nextCriteria: DocumentFindCriteria = request?.isActive
+    ? request.criteria
+    : request
+      ? { query: '', options: request.criteria.options }
+      : createDefaultCriteria()
   const nextRawIndex = request?.isActive ? request.activeIndex : -1
 
   const sameQuery =
-    current.isActive === nextIsActive &&
-    current.query === nextQuery &&
-    areSearchMatchOptionsEqual(current.options, nextOptions)
+    current.isActive === nextIsActive && areDocumentFindCriteriaEqual(current.criteria, nextCriteria)
   const expectedActiveIndex =
     sameQuery && nextIsActive
       ? clampActiveMatchIndex(nextRawIndex, current.matches.length)
       : nextRawIndex
 
   if (sameQuery && current.activeIndex === expectedActiveIndex) {
-    return current
+    return toWysiwygSearchSnapshot(current)
   }
 
   const meta: WysiwygSearchMeta = {
     isActive: nextIsActive,
-    query: nextQuery,
-    options: nextOptions,
+    criteria: nextCriteria,
     activeIndex: nextRawIndex
   }
   editor.view.dispatch(
     editor.state.tr.setMeta(wysiwygSearchHighlightPluginKey, meta).setMeta('addToHistory', false)
   )
-  return wysiwygSearchHighlightPluginKey.getState(editor.state)
+  return getWysiwygSearchSnapshot(editor)
 }
 
 /**
@@ -327,34 +374,14 @@ export function readWysiwygSingleLineSelection(editor: Editor | null): string | 
     return null
   }
 
-  if (typeof window !== 'undefined') {
-    const domSelection = window.getSelection()
-    if (domSelection && domSelection.rangeCount > 0 && !domSelection.isCollapsed) {
-      const range = domSelection.getRangeAt(0)
-      const shell = editor.view.dom.closest('.wysiwyg-shell') ?? editor.view.dom
-      if (shell.contains(range.startContainer) || shell.contains(range.endContainer)) {
-        const startEl =
-          range.startContainer instanceof Element
-            ? range.startContainer
-            : range.startContainer.parentElement
-        const endEl =
-          range.endContainer instanceof Element
-            ? range.endContainer
-            : range.endContainer.parentElement
-        if (
-          startEl?.closest(WYSIWYG_SEARCH_CHROME_SELECTOR) ||
-          endEl?.closest(WYSIWYG_SEARCH_CHROME_SELECTOR)
-        ) {
-          return null
-        }
-        if (
-          editor.view.dom.contains(range.startContainer) &&
-          editor.view.dom.contains(range.endContainer)
-        ) {
-          return readDomSingleLineSelection(editor.view.dom, WYSIWYG_SEARCH_CHROME_SELECTOR)
-        }
-      }
-    }
+  const shell = editor.view.dom.closest('.wysiwyg-shell') ?? editor.view.dom
+  const domResult = inspectDomSingleLineSelection(
+    editor.view.dom,
+    WYSIWYG_SEARCH_CHROME_SELECTOR,
+    shell
+  )
+  if (domResult.status !== 'absent') {
+    return domResult.value
   }
 
   const { from, to, empty, $from, $to } = editor.state.selection

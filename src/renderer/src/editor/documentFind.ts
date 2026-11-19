@@ -26,29 +26,59 @@ export interface DocumentFindMatchResult {
   errorMessage: string | null
 }
 
-export interface DocumentFindHighlightQuery {
-  isActive: boolean
+export interface DocumentFindCriteria {
   query: string
   options: SearchMatchOptions
+}
+
+export interface DocumentFindHighlightQuery {
+  isActive: boolean
+  criteria: DocumentFindCriteria
   activeIndex: number
   scrollNonce: number
 }
 
 export interface DocumentFindResultReport {
-  query: string
-  options: SearchMatchOptions
+  criteria: DocumentFindCriteria
   matchCount: number
   errorMessage: string | null
 }
 
-/**
- * Returns true when two `SearchMatchOptions` objects share identical flag values.
- */
-export function areSearchMatchOptionsEqual(a: SearchMatchOptions, b: SearchMatchOptions): boolean {
+function areSearchMatchOptionsEqual(a: SearchMatchOptions, b: SearchMatchOptions): boolean {
   return (
     a.caseSensitive === b.caseSensitive &&
     a.wholeWord === b.wholeWord &&
     a.useRegex === b.useRegex
+  )
+}
+
+/**
+ * Returns true when two `DocumentFindCriteria` objects share identical query text and flags.
+ */
+export function areDocumentFindCriteriaEqual(
+  a: DocumentFindCriteria,
+  b: DocumentFindCriteria
+): boolean {
+  return a.query === b.query && areSearchMatchOptionsEqual(a.options, b.options)
+}
+
+/**
+ * Returns true when two `DocumentFindResultReport` payloads represent the same criteria, match count, and error.
+ */
+export function areDocumentFindResultReportsEqual(
+  a: DocumentFindResultReport | null,
+  b: DocumentFindResultReport | null
+): boolean {
+  if (a === b) {
+    return true
+  }
+  if (!a || !b) {
+    return false
+  }
+  return (
+    a.matchCount === b.matchCount &&
+    a.errorMessage === b.errorMessage &&
+    areDocumentFindCriteriaEqual(a.criteria, b.criteria)
   )
 }
 
@@ -283,23 +313,31 @@ const SINGLE_LINE_BLOCK_SELECTOR =
 export const PREVIEW_SEARCH_CHROME_SELECTOR =
   '.code-block-header, .mermaid-diagram-block, .markdown-preview-empty'
 
+export type DomSingleLineSelectionResult =
+  | { status: 'absent'; value: null }
+  | { status: 'blocked'; value: null }
+  | { status: 'resolved'; value: string | null }
+
 /**
- * Reads a single-line DOM selection contained within `container`, excluding UI chrome and cross-block ranges.
+ * Inspects the active browser DOM selection relative to `container` and `guardBoundary`,
+ * distinguishing selections absent from `guardBoundary` from selections blocked by `excludedSelector`.
  */
-export function readDomSingleLineSelection(
-  container: HTMLElement | null,
-  excludedSelector: string = PREVIEW_SEARCH_CHROME_SELECTOR
-): string | null {
+export function inspectDomSingleLineSelection(
+  container: Element | null,
+  excludedSelector: string = PREVIEW_SEARCH_CHROME_SELECTOR,
+  guardBoundary: Element | null = container
+): DomSingleLineSelectionResult {
   if (!container || typeof window === 'undefined') {
-    return null
+    return { status: 'absent', value: null }
   }
   const selection = window.getSelection()
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-    return null
+    return { status: 'absent', value: null }
   }
   const range = selection.getRangeAt(0)
-  if (!container.contains(range.startContainer) || !container.contains(range.endContainer)) {
-    return null
+  const boundary = guardBoundary ?? container
+  if (!boundary.contains(range.startContainer) && !boundary.contains(range.endContainer)) {
+    return { status: 'absent', value: null }
   }
 
   const startEl =
@@ -309,24 +347,37 @@ export function readDomSingleLineSelection(
   const endEl =
     range.endContainer instanceof Element ? range.endContainer : range.endContainer.parentElement
   if (startEl?.closest(excludedSelector) || endEl?.closest(excludedSelector)) {
-    return null
+    return { status: 'blocked', value: null }
+  }
+  if (!container.contains(range.startContainer) || !container.contains(range.endContainer)) {
+    return { status: 'blocked', value: null }
   }
 
   const startBlock = startEl?.closest(SINGLE_LINE_BLOCK_SELECTOR) ?? null
   const endBlock = endEl?.closest(SINGLE_LINE_BLOCK_SELECTOR) ?? null
   if (startBlock !== endBlock) {
-    return null
+    return { status: 'resolved', value: null }
   }
 
   const fragment = range.cloneContents()
   if (fragment.querySelector('br')) {
-    return null
+    return { status: 'resolved', value: null }
   }
   if (!startBlock && fragment.querySelector(SINGLE_LINE_BLOCK_SELECTOR)) {
-    return null
+    return { status: 'resolved', value: null }
   }
 
-  return extractSingleLineFindQuery(range.toString())
+  return { status: 'resolved', value: extractSingleLineFindQuery(range.toString()) }
+}
+
+/**
+ * Reads a single-line DOM selection contained within `container`, excluding UI chrome and cross-block ranges.
+ */
+export function readDomSingleLineSelection(
+  container: HTMLElement | null,
+  excludedSelector: string = PREVIEW_SEARCH_CHROME_SELECTOR
+): string | null {
+  return inspectDomSingleLineSelection(container, excludedSelector).value
 }
 
 /**

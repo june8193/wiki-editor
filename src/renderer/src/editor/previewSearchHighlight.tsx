@@ -1,11 +1,11 @@
 import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
-import {
-  compileSearchMatcher,
-  type CompiledSearchMatcher,
-  type SearchMatchOptions
-} from '@shared/search'
+import { compileSearchMatcher, type CompiledSearchMatcher } from '@shared/search'
 import type { CodeBlockHighlightSpan } from './codeBlockHighlight'
-import { areSearchMatchOptionsEqual, type DocumentFindHighlightQuery } from './documentFind'
+import {
+  areDocumentFindCriteriaEqual,
+  type DocumentFindCriteria,
+  type DocumentFindHighlightQuery
+} from './documentFind'
 
 export interface PreviewSearchMatchSpan {
   start: number
@@ -146,8 +146,7 @@ const EMPTY_SEARCH_PLAN: PreviewSearchPlan = {
 
 let cachedSearchPlan: {
   baseTree: ReactNode
-  query: string
-  options: SearchMatchOptions
+  criteria: DocumentFindCriteria
   plan: PreviewSearchPlan
 } | null = null
 
@@ -395,24 +394,22 @@ function flushPreviewTextRun(
 function buildPreviewSearchPlan(
   baseTree: ReactNode,
   isBlankDocument: boolean,
-  query: string,
-  options: SearchMatchOptions,
+  criteria: DocumentFindCriteria,
   classify: PreviewElementClassifier
 ): PreviewSearchPlan {
-  if (query.length === 0) {
+  if (criteria.query.length === 0) {
     return EMPTY_SEARCH_PLAN
   }
   if (!isBlankDocument && cachedSearchPlan) {
     if (
       cachedSearchPlan.baseTree === baseTree &&
-      cachedSearchPlan.query === query &&
-      areSearchMatchOptionsEqual(cachedSearchPlan.options, options)
+      areDocumentFindCriteriaEqual(cachedSearchPlan.criteria, criteria)
     ) {
       return cachedSearchPlan.plan
     }
   }
 
-  const compiled = compileSearchMatcher(query, options)
+  const compiled = compileSearchMatcher(criteria.query, criteria.options)
   if (!compiled.ok) {
     const errorPlan: PreviewSearchPlan = {
       matchCount: 0,
@@ -421,7 +418,7 @@ function buildPreviewSearchPlan(
       codePatches: new Map()
     }
     if (!isBlankDocument) {
-      cachedSearchPlan = { baseTree, query, options, plan: errorPlan }
+      cachedSearchPlan = { baseTree, criteria, plan: errorPlan }
     }
     return errorPlan
   }
@@ -486,7 +483,7 @@ function buildPreviewSearchPlan(
     textPatches,
     codePatches
   }
-  cachedSearchPlan = { baseTree, query, options, plan }
+  cachedSearchPlan = { baseTree, criteria, plan }
   return plan
 }
 
@@ -591,11 +588,10 @@ function applyPreviewSearchPlan(
 export function evaluatePreviewSearchMatches(
   baseTree: ReactNode,
   isBlankDocument: boolean,
-  query: string,
-  options: SearchMatchOptions,
+  criteria: DocumentFindCriteria,
   classify: PreviewElementClassifier
 ): PreviewSearchMatchResult {
-  const plan = buildPreviewSearchPlan(baseTree, isBlankDocument, query, options, classify)
+  const plan = buildPreviewSearchPlan(baseTree, isBlankDocument, criteria, classify)
   return {
     matchCount: plan.matchCount,
     errorMessage: plan.errorMessage
@@ -612,15 +608,9 @@ export function highlightPreviewTree(
   findHighlight: DocumentFindHighlightQuery | null | undefined,
   classify: PreviewElementClassifier
 ): ReactNode {
-  if (!findHighlight?.isActive || findHighlight.query.length === 0 || isBlankDocument) {
+  if (!findHighlight?.isActive || findHighlight.criteria.query.length === 0 || isBlankDocument) {
     return baseTree
   }
-  const plan = buildPreviewSearchPlan(
-    baseTree,
-    false,
-    findHighlight.query,
-    findHighlight.options,
-    classify
-  )
+  const plan = buildPreviewSearchPlan(baseTree, false, findHighlight.criteria, classify)
   return applyPreviewSearchPlan(baseTree, plan, findHighlight.activeIndex, classify)
 }

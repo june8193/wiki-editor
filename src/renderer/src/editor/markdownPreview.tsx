@@ -9,7 +9,6 @@ import {
 } from 'react'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import type { ThemeMode } from '@shared/config'
-import type { SearchMatchOptions } from '@shared/search'
 import type { Element as HastElement, Root as HastRoot, RootContent as HastRootContent } from 'hast'
 import rehypeRaw from 'rehype-raw'
 import rehypeReact from 'rehype-react'
@@ -26,7 +25,7 @@ import {
   getCodeBlockHighlightSpans,
   isMermaidLanguage
 } from './codeBlockHighlight'
-import type { DocumentFindHighlightQuery } from './documentFind'
+import type { DocumentFindCriteria, DocumentFindHighlightQuery } from './documentFind'
 import { MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 import { createHeadingSlugTracker, decodeSlugSafely } from './MarkdownTocEngine'
 import type { MermaidRenderer } from './mermaidRenderer'
@@ -483,20 +482,18 @@ function classifyCustomPreviewElement(
 
 /**
  * Counts rendered Preview matches (excluding Mermaid diagrams and code block UI chrome)
- * for `markdown` under the supplied search `query` and `options`.
+ * for `markdown` under the supplied search `criteria`.
  */
 export function findPreviewSearchMatches(
   markdown: string,
-  query: string,
-  options: SearchMatchOptions
+  criteria: DocumentFindCriteria
 ): PreviewSearchMatchResult {
   const isBlankDocument = markdown.trim().length === 0
   const baseTree = isBlankDocument ? null : processPreviewBaseTree(markdown)
   return evaluatePreviewSearchMatches(
     baseTree,
     isBlankDocument,
-    query,
-    options,
+    criteria,
     classifyCustomPreviewElement
   )
 }
