@@ -284,7 +284,7 @@ function GitAccordionSection({
   )
 }
 
-interface GitSourceControlHeaderProps {
+interface GitPanelHeaderProps {
   workspaceRootPath: string | null
   isRepo: boolean
   isBusy: boolean
@@ -301,9 +301,9 @@ interface GitSourceControlHeaderProps {
 }
 
 /**
- * Renders the top Source Control header with refresh and the overflow (...) actions menu.
+ * Renders the top Git panel header ("Source Control") with refresh and the overflow (...) actions menu.
  */
-function GitSourceControlHeader({
+function GitPanelHeader({
   workspaceRootPath,
   isRepo,
   isBusy,
@@ -317,7 +317,7 @@ function GitSourceControlHeader({
   onStageAll,
   onUnstageAll,
   onDiscardAll
-}: GitSourceControlHeaderProps) {
+}: GitPanelHeaderProps) {
   const isMoreDisabled = !workspaceRootPath || !isRepo || isBusy
   const moreMenu = useMenuPopover(isMoreDisabled, workspaceRootPath)
 
@@ -395,7 +395,7 @@ function GitSourceControlHeader({
             <div
               className="git-popover-menu git-more-menu"
               role="menu"
-              aria-label="Source Control 추가 작업"
+              aria-label="Git 패널 추가 작업"
             >
               {moreMenuEntries.map((entry) =>
                 entry.kind === 'separator' ? (
@@ -542,7 +542,7 @@ function GitBranchSubrow({
 }
 
 /**
- * Sidebar panel for Source Control header, branch subrow, and collapsible Changes and Graph sections.
+ * Sidebar panel for the Git panel header ("Source Control"), 26px branch subrow, and collapsible Changes and Graph sections.
  */
 export const GitSidebarPanel = memo(function GitSidebarPanel({
   workspaceRootPath,
@@ -645,7 +645,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
 
   return (
     <section className="git-sidebar" aria-label="Git 소스 제어">
-      <GitSourceControlHeader
+      <GitPanelHeader
         workspaceRootPath={workspaceRootPath}
         isRepo={Boolean(status?.isRepo)}
         isBusy={isBusy}

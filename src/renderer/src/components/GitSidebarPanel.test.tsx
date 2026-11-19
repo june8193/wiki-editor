@@ -899,7 +899,7 @@ describe('GitSidebarPanel', () => {
     expect(onToggleCommitDetail).not.toHaveBeenCalled()
   })
 
-  it('renders Source Control fixed non-collapsible header, 26px branch subrow, and always keeps the body visible', async () => {
+  it('renders Git panel fixed "Source Control" header, 26px branch subrow, and always keeps the body visible', async () => {
     const user = userEvent.setup()
     const onRefresh = vi.fn()
 
@@ -995,7 +995,7 @@ describe('GitSidebarPanel', () => {
     // 2. ... menu lists all 7 items with separator, disables Unstage All Changes when staged=0, and dismisses on Escape / outside click
     const moreBtn = within(region).getByRole('button', { name: '더 보기' })
     await user.click(moreBtn)
-    const moreMenu = within(region).getByRole('menu', { name: 'Source Control 추가 작업' })
+    const moreMenu = within(region).getByRole('menu', { name: 'Git 패널 추가 작업' })
     expect(within(moreMenu).getByRole('separator')).toBeInTheDocument()
     expect(within(moreMenu).getByRole('menuitem', { name: 'Pull' })).toBeEnabled()
     expect(within(moreMenu).getByRole('menuitem', { name: 'Push' })).toBeEnabled()
@@ -1006,12 +1006,12 @@ describe('GitSidebarPanel', () => {
     expect(within(moreMenu).getByRole('menuitem', { name: 'Discard All Changes' })).toBeEnabled()
 
     await user.keyboard('{Escape}')
-    expect(within(region).queryByRole('menu', { name: 'Source Control 추가 작업' })).not.toBeInTheDocument()
+    expect(within(region).queryByRole('menu', { name: 'Git 패널 추가 작업' })).not.toBeInTheDocument()
 
     await user.click(moreBtn)
-    expect(within(region).getByRole('menu', { name: 'Source Control 추가 작업' })).toBeInTheDocument()
+    expect(within(region).getByRole('menu', { name: 'Git 패널 추가 작업' })).toBeInTheDocument()
     fireEvent.mouseDown(document.body)
-    expect(within(region).queryByRole('menu', { name: 'Source Control 추가 작업' })).not.toBeInTheDocument()
+    expect(within(region).queryByRole('menu', { name: 'Git 패널 추가 작업' })).not.toBeInTheDocument()
 
     await user.click(moreBtn)
     await user.click(within(region).getByRole('menuitem', { name: 'Stage All Changes' }))

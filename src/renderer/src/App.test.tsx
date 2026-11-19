@@ -3713,7 +3713,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     )
   })
 
-  it('supports Source Control ... menu (Fetch without dirty prompt, Stage/Unstage/Discard All with danger dialog) and 26px branch subrow publish/sync transitions', async () => {
+  it('supports Git panel ... menu (Fetch without dirty prompt, Stage/Unstage/Discard All with danger dialog) and 26px branch subrow publish/sync transitions', async () => {
     const user = userEvent.setup()
     let hasUpstream = false
     let ahead = 0
