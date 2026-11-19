@@ -1,5 +1,9 @@
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
+import {
+  type DocumentFindHighlightQuery,
+  scrollMatchElementIntoView
+} from '../editor/documentFind'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
 import {
   type MermaidHeightChangeHandler,
@@ -26,6 +30,7 @@ interface MarkdownPreviewProps {
   mermaidHeights?: MermaidDiagramHeightMap
   onMermaidHeightChange?: MermaidHeightChangeHandler
   scrollRequest?: PreviewScrollRequest | null
+  findHighlight?: DocumentFindHighlightQuery | null
   isActive?: boolean
   scrollContainerRef?: { current: HTMLDivElement | null }
   testId?: string
@@ -50,6 +55,7 @@ export function MarkdownPreview({
   mermaidHeights,
   onMermaidHeightChange,
   scrollRequest,
+  findHighlight = null,
   isActive = true,
   scrollContainerRef,
   testId = 'document-editor',
@@ -58,6 +64,7 @@ export function MarkdownPreview({
   onLinkNavigate
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const lastScrolledFindNonceRef = useRef(findHighlight?.scrollNonce ?? 0)
 
   const scrollToHeading = useCallback((slug?: string, index?: number): void => {
     const container = containerRef.current
@@ -102,11 +109,44 @@ export function MarkdownPreview({
         documentPath,
         mermaidRenderer,
         documentTitle,
+        findHighlight,
         onAnchorNavigate: onLinkNavigate ? undefined : handleAnchorNavigate,
         onLinkNavigate
       }),
-    [content, documentPath, documentTitle, handleAnchorNavigate, mermaidRenderer, onLinkNavigate, theme]
+    [
+      content,
+      documentPath,
+      documentTitle,
+      findHighlight,
+      handleAnchorNavigate,
+      mermaidRenderer,
+      onLinkNavigate,
+      theme
+    ]
   )
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container || !findHighlight?.isActive) {
+      return
+    }
+    if (
+      findHighlight.scrollNonce > 0 &&
+      findHighlight.scrollNonce !== lastScrolledFindNonceRef.current
+    ) {
+      if (findHighlight.activeIndex < 0) {
+        lastScrolledFindNonceRef.current = findHighlight.scrollNonce
+        return
+      }
+      const activeEl = container.querySelector(
+        `[data-search-match-index="${findHighlight.activeIndex}"]`
+      )
+      if (activeEl) {
+        lastScrolledFindNonceRef.current = findHighlight.scrollNonce
+        scrollMatchElementIntoView(activeEl, container)
+      }
+    }
+  }, [content, findHighlight])
 
   const setPreviewContainerRef = useCallback(
     (el: HTMLDivElement | null): void => {

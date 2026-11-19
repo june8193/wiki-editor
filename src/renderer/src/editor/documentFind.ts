@@ -26,6 +26,64 @@ export interface DocumentFindMatchResult {
   errorMessage: string | null
 }
 
+export interface DocumentFindHighlightQuery {
+  isActive: boolean
+  query: string
+  options: SearchMatchOptions
+  activeIndex: number
+  scrollNonce: number
+}
+
+export interface DocumentFindResultReport {
+  query: string
+  options: SearchMatchOptions
+  matchCount: number
+  errorMessage: string | null
+}
+
+/**
+ * Returns true when two `SearchMatchOptions` objects share identical flag values.
+ */
+export function areSearchMatchOptionsEqual(a: SearchMatchOptions, b: SearchMatchOptions): boolean {
+  return (
+    a.caseSensitive === b.caseSensitive &&
+    a.wholeWord === b.wholeWord &&
+    a.useRegex === b.useRegex
+  )
+}
+
+/**
+ * Scrolls a matched DOM element into the center of its scroll container, falling back to
+ * `scrollTop` math when `scrollIntoView` is unavailable in test DOM environments.
+ */
+export function scrollMatchElementIntoView(
+  target: Element | null,
+  scrollContainer?: HTMLElement | null
+): void {
+  if (!target) {
+    return
+  }
+  if (typeof target.scrollIntoView === 'function') {
+    target.scrollIntoView({ block: 'center' })
+    return
+  }
+  if (!scrollContainer || scrollContainer.scrollHeight <= scrollContainer.clientHeight) {
+    return
+  }
+  const containerRect = scrollContainer.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  if (containerRect.height <= 0 && targetRect.height <= 0) {
+    return
+  }
+  const targetCenter =
+    targetRect.top - containerRect.top + scrollContainer.scrollTop + targetRect.height / 2
+  const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight)
+  scrollContainer.scrollTop = Math.max(
+    0,
+    Math.min(maxScrollTop, targetCenter - scrollContainer.clientHeight / 2)
+  )
+}
+
 export interface DocumentFindKeyboardEvent extends KeyboardEventLike {
   preventDefault?: () => void
   stopPropagation?: () => void
@@ -206,7 +264,7 @@ export function extractSingleLineFindQuery(selectedText: string | null | undefin
 }
 
 /**
- * Reads the current single-line selection from a mounted CodeMirror 6 EditorView, or `null` if none/multi-line.
+ * Reads a single-line non-empty selection from a CodeMirror 6 EditorView, or `null` if none/multi-line.
  */
 export function readRawEditorSingleLineSelection(view: EditorView | null): string | null {
   if (!view) {
@@ -217,6 +275,58 @@ export function readRawEditorSingleLineSelection(view: EditorView | null): strin
     return null
   }
   return extractSingleLineFindQuery(view.state.doc.sliceString(from, to))
+}
+
+const SINGLE_LINE_BLOCK_SELECTOR =
+  'p, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, pre, dt, dd, summary'
+
+export const PREVIEW_SEARCH_CHROME_SELECTOR =
+  '.code-block-header, .mermaid-diagram-block, .markdown-preview-empty'
+
+/**
+ * Reads a single-line DOM selection contained within `container`, excluding UI chrome and cross-block ranges.
+ */
+export function readDomSingleLineSelection(
+  container: HTMLElement | null,
+  excludedSelector: string = PREVIEW_SEARCH_CHROME_SELECTOR
+): string | null {
+  if (!container || typeof window === 'undefined') {
+    return null
+  }
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return null
+  }
+  const range = selection.getRangeAt(0)
+  if (!container.contains(range.startContainer) || !container.contains(range.endContainer)) {
+    return null
+  }
+
+  const startEl =
+    range.startContainer instanceof Element
+      ? range.startContainer
+      : range.startContainer.parentElement
+  const endEl =
+    range.endContainer instanceof Element ? range.endContainer : range.endContainer.parentElement
+  if (startEl?.closest(excludedSelector) || endEl?.closest(excludedSelector)) {
+    return null
+  }
+
+  const startBlock = startEl?.closest(SINGLE_LINE_BLOCK_SELECTOR) ?? null
+  const endBlock = endEl?.closest(SINGLE_LINE_BLOCK_SELECTOR) ?? null
+  if (startBlock !== endBlock) {
+    return null
+  }
+
+  const fragment = range.cloneContents()
+  if (fragment.querySelector('br')) {
+    return null
+  }
+  if (!startBlock && fragment.querySelector(SINGLE_LINE_BLOCK_SELECTOR)) {
+    return null
+  }
+
+  return extractSingleLineFindQuery(range.toString())
 }
 
 /**

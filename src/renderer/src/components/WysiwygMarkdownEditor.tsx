@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
+import {
+  areSearchMatchOptionsEqual,
+  type DocumentFindHighlightQuery,
+  type DocumentFindResultReport
+} from '../editor/documentFind'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import {
   type MermaidHeightChangeHandler,
@@ -29,6 +34,11 @@ import {
   sanitizeHtmlWithRehype,
   syncWysiwygImageDisplaySources
 } from '../editor/wysiwygMarkdown'
+import {
+  scrollWysiwygActiveMatch,
+  syncWysiwygSearchHighlights,
+  wysiwygSearchHighlightPluginKey
+} from '../editor/wysiwygSearchHighlight'
 import { useDismissable } from '../hooks/useDismissable'
 import { useEditorImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
@@ -57,11 +67,14 @@ interface WysiwygMarkdownEditorProps {
   documentPath?: string
   enableImageInsertion?: boolean
   scrollRequest?: WysiwygScrollRequest | null
+  findHighlight?: DocumentFindHighlightQuery | null
+  editorRef?: { current: Editor | null }
   isActive?: boolean
   onChangeContent: (nextContent: string) => void
   onScrollTopChange?: (scrollTop: number) => void
   onLinkNavigate?: (href: string) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
+  onFindResultChange?: (report: DocumentFindResultReport) => void
 }
 
 interface ToolbarStateSnapshot {
@@ -241,11 +254,14 @@ export function WysiwygMarkdownEditor({
   documentPath,
   enableImageInsertion = Boolean(documentPath),
   scrollRequest,
+  findHighlight = null,
+  editorRef: externalEditorRef,
   isActive = true,
   onChangeContent,
   onScrollTopChange,
   onLinkNavigate,
-  onActiveHeadingChange
+  onActiveHeadingChange,
+  onFindResultChange
 }: WysiwygMarkdownEditorProps) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
@@ -255,6 +271,10 @@ export function WysiwygMarkdownEditor({
   const lastSyncedContentPropRef = useRef(content)
   const onChangeContentRef = useRef(onChangeContent)
   onChangeContentRef.current = onChangeContent
+  const onFindResultChangeRef = useRef(onFindResultChange)
+  onFindResultChangeRef.current = onFindResultChange
+  const lastScrolledFindNonceRef = useRef(findHighlight?.scrollNonce ?? 0)
+  const lastReportedFindRef = useRef<DocumentFindResultReport | null>(null)
   const enableLinkAutocompleteRef = useRef(enableLinkAutocomplete)
   enableLinkAutocompleteRef.current = enableLinkAutocomplete
   const isShortcutDisabledRef = useRef(isShortcutDisabled)
@@ -409,6 +429,17 @@ export function WysiwygMarkdownEditor({
     []
   )
   editorRef.current = editor
+  if (externalEditorRef) {
+    externalEditorRef.current = editor
+  }
+
+  useEffect(() => {
+    return () => {
+      if (externalEditorRef) {
+        externalEditorRef.current = null
+      }
+    }
+  }, [externalEditorRef])
 
   useEffect(() => {
     documentPathRef.current = documentPath
@@ -471,6 +502,75 @@ export function WysiwygMarkdownEditor({
     onScrollTopChange,
     onActiveHeadingChange
   })
+
+  const wysiwygSearchSnapshot = useEditorState({
+    editor,
+    selector: ({ editor: instance }) => {
+      const state = wysiwygSearchHighlightPluginKey.getState(instance.state)
+      return state
+        ? {
+            isActive: state.isActive,
+            query: state.query,
+            options: state.options,
+            matchCount: state.matches.length,
+            errorMessage: state.errorMessage,
+            activeIndex: state.activeIndex
+          }
+        : null
+    },
+    equalityFn: (prev, next) =>
+      prev === next ||
+      (prev !== null &&
+        next !== null &&
+        prev.isActive === next.isActive &&
+        prev.query === next.query &&
+        areSearchMatchOptionsEqual(prev.options, next.options) &&
+        prev.matchCount === next.matchCount &&
+        prev.errorMessage === next.errorMessage &&
+        prev.activeIndex === next.activeIndex)
+  })
+
+  useLayoutEffect(() => {
+    if (!editor || editor.isDestroyed) {
+      return
+    }
+
+    const nextState = syncWysiwygSearchHighlights(editor, findHighlight ?? null)
+    if (!findHighlight?.isActive || !nextState) {
+      lastReportedFindRef.current = null
+      return
+    }
+
+    const prevReported = lastReportedFindRef.current
+    if (
+      !prevReported ||
+      prevReported.query !== nextState.query ||
+      !areSearchMatchOptionsEqual(prevReported.options, nextState.options) ||
+      prevReported.matchCount !== nextState.matches.length ||
+      prevReported.errorMessage !== nextState.errorMessage
+    ) {
+      const report: DocumentFindResultReport = {
+        query: nextState.query,
+        options: nextState.options,
+        matchCount: nextState.matches.length,
+        errorMessage: nextState.errorMessage
+      }
+      lastReportedFindRef.current = report
+      onFindResultChangeRef.current?.(report)
+    }
+
+    if (
+      findHighlight.scrollNonce > 0 &&
+      findHighlight.scrollNonce !== lastScrolledFindNonceRef.current
+    ) {
+      if (nextState.matches.length === 0) {
+        lastScrolledFindNonceRef.current = findHighlight.scrollNonce
+      } else if (nextState.activeIndex >= 0) {
+        lastScrolledFindNonceRef.current = findHighlight.scrollNonce
+        scrollWysiwygActiveMatch(editor, scrollContainerRef.current)
+      }
+    }
+  }, [editor, findHighlight, wysiwygSearchSnapshot])
 
   const toolbarState = useEditorState({
     editor,

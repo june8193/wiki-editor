@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { EditorView } from '@codemirror/view'
 import { describe, expect, it, vi } from 'vitest'
 import type { DocumentBuffer } from '@shared/documentBuffer'
+import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import {
   collectPreviewSourceBlocks,
   computePreviewScrollTopFromRaw,
@@ -546,5 +547,717 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
     fireEvent.keyDown(keptInput, { key: 'Enter' })
     expect(within(keptBar).getByText('1 / 2')).toBeInTheDocument()
     expect(container.querySelector('.cm-search-match-active')?.textContent).toBe('SplitTarget')
+  })
+
+  it('highlights matches across headings, paragraphs, marks, lists, tables, and code blocks in 위지윅 mode, supports options/scroll/live edits without polluting content, and clears on close', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewMock = vi.fn()
+    const origScrollIntoView = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollIntoViewMock
+
+    try {
+      const initialMd = [
+        '# Alpha Heading',
+        '',
+        'Alpha **bold** and [alpha link](https://alpha.example.com) and **world**wide Hello **world**',
+        '',
+        '- list alpha item',
+        '- [ ] task Alpha item',
+        '',
+        '| Header Alpha | Notes |',
+        '| --- | --- |',
+        '| Cell alpha | 검색 및 검색어 |',
+        '',
+        '```ts',
+        'const alphaCode = "item-42"',
+        'const betaCode = "item-99"',
+        '```'
+      ].join('\n')
+
+      let doc = createDoc({
+        content: initialMd,
+        savedContent: initialMd
+      })
+      const onChangeContent = vi.fn((nextContent: string) => {
+        doc = { ...doc, content: nextContent, isDirty: true }
+        rerender(renderWysiwyg(doc))
+      })
+
+      const renderWysiwyg = (targetDoc: DocumentBuffer) => (
+        <DocumentEditor
+          document={targetDoc}
+          tab={{ ...createTab('wysiwyg'), bufferKey: targetDoc.key }}
+          theme="light"
+          autoSave={false}
+          onChangeContent={onChangeContent}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      const { container, rerender } = render(renderWysiwyg(doc))
+      const editorEl = screen.getByTestId('document-editor')
+
+      await user.click(screen.getByRole('button', { name: '문서 내 찾기' }))
+      const findBar = screen.getByRole('region', { name: '문서 내 찾기 바' })
+      const findInput = within(findBar).getByRole('textbox', { name: '문서 내 검색어 입력' })
+      const caseBtn = within(findBar).getByRole('button', { name: /대소문자 구분/ })
+      const wholeWordBtn = within(findBar).getByRole('button', { name: /단어 단위/ })
+      const regexBtn = within(findBar).getByRole('button', { name: /정규식/ })
+      const nextBtn = within(findBar).getByRole('button', { name: '다음 일치' })
+      const prevBtn = within(findBar).getByRole('button', { name: '이전 일치' })
+
+      // 1. Case-insensitive partial search across heading, paragraph, link text (not URL), list, task, table, code block
+      await user.type(findInput, 'alpha')
+      expect(within(findBar).getByText('1 / 8')).toBeInTheDocument()
+      expect(container.querySelectorAll('.pm-search-match')).toHaveLength(8)
+      const firstActive = container.querySelector('.pm-search-match-active')
+      expect(firstActive?.textContent).toBe('Alpha')
+      expect(firstActive?.closest('h1')).not.toBeNull()
+      expect(onChangeContent).not.toHaveBeenCalled()
+      expect(doc.isDirty).toBe(false)
+
+      // Active match scrolled into view on search activation
+      expect(scrollIntoViewMock).toHaveBeenCalled()
+      expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ block: 'center' })
+      expect(scrollIntoViewMock.mock.instances[scrollIntoViewMock.mock.instances.length - 1]).toBe(
+        firstActive
+      )
+
+      // 2. Cyclic navigation via Enter, F3, Next/Prev buttons updates active highlight and scrolls
+      scrollIntoViewMock.mockClear()
+      fireEvent.keyDown(findInput, { key: 'Enter' })
+      expect(within(findBar).getByText('2 / 8')).toBeInTheDocument()
+      const secondActive = container.querySelector('.pm-search-match-active')
+      expect(container.querySelectorAll('.pm-search-match')[1]).toBe(secondActive)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(secondActive)
+
+      fireEvent.keyDown(editorEl, { key: 'F3' })
+      expect(within(findBar).getByText('3 / 8')).toBeInTheDocument()
+      expect(container.querySelector('.pm-search-match-active')?.closest('a')).not.toBeNull()
+
+      await user.click(prevBtn)
+      expect(within(findBar).getByText('2 / 8')).toBeInTheDocument()
+      fireEvent.keyDown(findInput, { key: 'Enter', shiftKey: true })
+      expect(within(findBar).getByText('1 / 8')).toBeInTheDocument()
+      fireEvent.keyDown(findInput, { key: 'Enter', shiftKey: true })
+      expect(within(findBar).getByText('8 / 8')).toBeInTheDocument()
+      expect(container.querySelector('.pm-search-match-active')?.closest('code')).not.toBeNull()
+      await user.click(nextBtn)
+      expect(within(findBar).getByText('1 / 8')).toBeInTheDocument()
+
+      // 3. Aa (case-sensitive) -> only 'Alpha' (Heading, Paragraph, Task, Table Header) = 4
+      await user.click(caseBtn)
+      expect(within(findBar).getByText('1 / 4')).toBeInTheDocument()
+      expect(container.querySelectorAll('.pm-search-match')).toHaveLength(4)
+
+      // 4. Cross-mark matching ("Hello world" across **bold**) and ab (whole-word)
+      await user.click(caseBtn)
+      await user.clear(findInput)
+      await user.type(findInput, 'Hello world')
+      expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
+
+      await user.clear(findInput)
+      await user.type(findInput, 'world')
+      expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
+      await user.click(wholeWordBtn)
+      // '**world**wide' must NOT match whole-word 'world'; only 'Hello **world**' matches
+      expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
+
+      await user.clear(findInput)
+      await user.type(findInput, '검색')
+      expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
+      expect(container.querySelector('.pm-search-match')?.textContent).toBe('검색')
+
+      // 5. .* (regex) + empty-match '^' + inline invalid regex error
+      await user.click(wholeWordBtn)
+      await user.click(regexBtn)
+      await user.clear(findInput)
+      await user.type(findInput, 'item-\\d+')
+      expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
+      expect(
+        Array.from(container.querySelectorAll('.pm-search-match')).map((el) => el.textContent)
+      ).toEqual(['item-42', 'item-99'])
+
+      await user.clear(findInput)
+      await user.type(findInput, '^')
+      expect(within(findBar).getByText(/1 \/ \d+/)).toBeInTheDocument()
+
+      fireEvent.change(findInput, { target: { value: '[unclosed' } })
+      expect(within(findBar).getByRole('alert')).toHaveTextContent(/정규식/)
+      expect(container.querySelectorAll('.pm-search-match')).toHaveLength(0)
+
+      // 6. Searching and navigating never dirtied document
+      expect(onChangeContent).not.toHaveBeenCalled()
+
+      // 7. Live document edit updates matches and decorations without jumping scroll
+      await user.click(regexBtn)
+      await user.clear(findInput)
+      await user.type(findInput, 'alpha')
+      expect(within(findBar).getByText('1 / 8')).toBeInTheDocument()
+
+      scrollIntoViewMock.mockClear()
+      const firstParagraph = editorEl.querySelector('p')!
+      const range = document.createRange()
+      range.selectNodeContents(firstParagraph)
+      range.collapse(false)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      editorEl.focus()
+      document.dispatchEvent(new Event('selectionchange'))
+      await user.keyboard(' alpha')
+
+      expect(within(findBar).getByText('1 / 9')).toBeInTheDocument()
+      expect(container.querySelectorAll('.pm-search-match')).toHaveLength(9)
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+
+      // 8. Esc closes Find Bar, clears decorations, and returns focus to WYSIWYG editor
+      fireEvent.keyDown(findInput, { key: 'Escape' })
+      expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+      expect(container.querySelectorAll('.pm-search-match')).toHaveLength(0)
+      expect(editorEl).toHaveFocus()
+    } finally {
+      Element.prototype.scrollIntoView = origScrollIntoView
+    }
+  })
+
+  it('highlights rendered markdown DOM text in Preview mode across blocks/code tokens, supports options/scroll, excludes placeholder, and clears on close', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewMock = vi.fn()
+    const origScrollIntoView = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollIntoViewMock
+
+    try {
+      const md = [
+        '# Alpha Heading',
+        '',
+        'Alpha **bold** and [alpha link](https://alpha.example.com) and **world**wide Hello **world**',
+        '',
+        '- list alpha item',
+        '- [x] task Alpha item',
+        '',
+        '| Header Alpha | Notes |',
+        '| --- | --- |',
+        '| Cell alpha | 검색 및 검색어 |',
+        '',
+        '```ts',
+        'const alphaCode = "item-42"',
+        'const betaCode = "item-99"',
+        '```'
+      ].join('\n')
+
+      const doc = createDoc({ content: md, savedContent: md })
+      const { container, rerender } = render(
+        <DocumentEditor
+          document={doc}
+          tab={createTab('preview')}
+          theme="light"
+          autoSave={false}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      const previewEl = screen.getByTestId('document-editor')
+      await user.click(screen.getByRole('button', { name: '문서 내 찾기' }))
+      const findBar = screen.getByRole('region', { name: '문서 내 찾기 바' })
+      const findInput = within(findBar).getByRole('textbox', { name: '문서 내 검색어 입력' })
+      const caseBtn = within(findBar).getByRole('button', { name: /대소문자 구분/ })
+      const wholeWordBtn = within(findBar).getByRole('button', { name: /단어 단위/ })
+      const regexBtn = within(findBar).getByRole('button', { name: /정규식/ })
+      const prevBtn = within(findBar).getByRole('button', { name: '이전 일치' })
+      const nextBtn = within(findBar).getByRole('button', { name: '다음 일치' })
+
+      // 1. Default search across rendered blocks & code body (excluding link URL)
+      await user.type(findInput, 'alpha')
+      expect(within(findBar).getByText('1 / 8')).toBeInTheDocument()
+      expect(container.querySelectorAll('.preview-search-match')).toHaveLength(8)
+      const firstActive = container.querySelector('.preview-search-match-active')
+      expect(firstActive?.textContent).toBe('Alpha')
+      expect(firstActive?.closest('h1')).not.toBeNull()
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'center' })
+      expect(scrollIntoViewMock.mock.instances[scrollIntoViewMock.mock.instances.length - 1]).toBe(
+        firstActive
+      )
+
+      // 2. Cyclic navigation & active scroll
+      scrollIntoViewMock.mockClear()
+      fireEvent.keyDown(findInput, { key: 'Enter' })
+      expect(within(findBar).getByText('2 / 8')).toBeInTheDocument()
+      const secondActive = container.querySelector('.preview-search-match-active')
+      expect(container.querySelectorAll('.preview-search-match')[1]).toBe(secondActive)
+      expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
+      expect(scrollIntoViewMock.mock.instances[0]).toBe(secondActive)
+
+      fireEvent.keyDown(previewEl, { key: 'F3', shiftKey: true })
+      expect(within(findBar).getByText('1 / 8')).toBeInTheDocument()
+      await user.click(prevBtn)
+      expect(within(findBar).getByText('8 / 8')).toBeInTheDocument()
+      expect(container.querySelector('.preview-search-match-active')?.closest('code')).not.toBeNull()
+      await user.click(nextBtn)
+      expect(within(findBar).getByText('1 / 8')).toBeInTheDocument()
+
+      // 3. Cross-token match inside syntax-highlighted code block ("const alphaCode") counts as 1 logical match
+      await user.clear(findInput)
+      await user.type(findInput, 'const alphaCode')
+      expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
+      expect(
+        Array.from(container.querySelectorAll('.preview-search-match'))
+          .map((el) => el.textContent)
+          .join('')
+      ).toBe('const alphaCode')
+
+      // 4. Cross-mark match ("Hello world") & ab whole-word boundary across inline marks & Korean text
+      await user.clear(findInput)
+      await user.type(findInput, 'Hello world')
+      expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
+
+      await user.clear(findInput)
+      await user.type(findInput, 'world')
+      expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
+      await user.click(wholeWordBtn)
+      expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
+
+      await user.clear(findInput)
+      await user.type(findInput, '검색')
+      expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
+
+      // 5. Aa (case-sensitive)
+      await user.click(wholeWordBtn)
+      await user.click(caseBtn)
+      await user.clear(findInput)
+      await user.type(findInput, 'Alpha')
+      expect(within(findBar).getByText('1 / 4')).toBeInTheDocument()
+
+      // 6. .* (regex) + empty match '^' + invalid regex alert
+      await user.click(caseBtn)
+      await user.click(regexBtn)
+      await user.clear(findInput)
+      await user.type(findInput, 'item-\\d+')
+      expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
+      expect(
+        Array.from(container.querySelectorAll('.preview-search-match')).map((el) => el.textContent)
+      ).toEqual(['item-42', 'item-99'])
+
+      await user.clear(findInput)
+      await user.type(findInput, '^')
+      expect(within(findBar).getByText(/1 \/ \d+/)).toBeInTheDocument()
+
+      fireEvent.change(findInput, { target: { value: '[bad' } })
+      expect(within(findBar).getByRole('alert')).toHaveTextContent(/정규식/)
+      expect(container.querySelectorAll('.preview-search-match')).toHaveLength(0)
+
+      // 7. Empty Preview placeholder text ("미리 볼 내용이 없습니다.") is NOT searched
+      await user.click(regexBtn)
+      await user.clear(findInput)
+      await user.type(findInput, '미리')
+      const emptyDoc = createDoc({ content: '   ', savedContent: '   ' })
+      rerender(
+        <DocumentEditor
+          document={emptyDoc}
+          tab={createTab('preview')}
+          theme="light"
+          autoSave={false}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+      expect(screen.getByText('미리 볼 내용이 없습니다.')).toBeInTheDocument()
+      expect(within(findBar).getByText('결과 없음')).toBeInTheDocument()
+      expect(container.querySelectorAll('.preview-search-match')).toHaveLength(0)
+
+      // 8. Esc closes Find Bar and returns focus to Preview container
+      rerender(
+        <DocumentEditor
+          document={doc}
+          tab={createTab('preview')}
+          theme="light"
+          autoSave={false}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+      await user.clear(findInput)
+      await user.type(findInput, 'alpha')
+      expect(container.querySelectorAll('.preview-search-match')).toHaveLength(8)
+      fireEvent.keyDown(findInput, { key: 'Escape' })
+      expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+      expect(container.querySelectorAll('.preview-search-match')).toHaveLength(0)
+      expect(screen.getByTestId('document-editor')).toHaveFocus()
+    } finally {
+      Element.prototype.scrollIntoView = origScrollIntoView
+    }
+  })
+
+  it('excludes code block header controls and Mermaid SVG/action chrome from search matches in both Preview and 위지윅 modes', async () => {
+    const user = userEvent.setup()
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg data-testid="rendered-mermaid-svg"><text>MermaidSvgLabel</text></svg>'
+      }))
+    }
+    const mermaidRenderer = createMermaidRenderer(driver)
+    const md = [
+      '# Diagram Doc',
+      '',
+      'Visible body text',
+      '',
+      '```ts',
+      'const visibleCode = 42',
+      '```',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  NodeAlpha --> NodeBeta',
+      '```'
+    ].join('\n')
+    const doc = createDoc({ content: md, savedContent: md })
+
+    const renderWithMode = (mode: EditorMode) => (
+      <DocumentEditor
+        document={doc}
+        tab={createTab(mode)}
+        theme="light"
+        autoSave={false}
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const { container, rerender } = render(renderWithMode('preview'))
+    expect(await screen.findByTestId('mermaid-svg')).toHaveTextContent('MermaidSvgLabel')
+
+    await user.click(screen.getByRole('button', { name: '문서 내 찾기' }))
+    const findBar = screen.getByRole('region', { name: '문서 내 찾기 바' })
+    const findInput = within(findBar).getByRole('textbox', { name: '문서 내 검색어 입력' })
+
+    for (const chromeToken of ['TypeScript', '코드 복사', '100%', 'MermaidSvgLabel', 'NodeAlpha']) {
+      fireEvent.change(findInput, { target: { value: chromeToken } })
+      expect(within(findBar).getByText('결과 없음')).toBeInTheDocument()
+      expect(container.querySelectorAll('.preview-search-match')).toHaveLength(0)
+    }
+
+    // Mermaid diagram stays mounted and real body/code text still matches
+    fireEvent.change(findInput, { target: { value: 'visible' } })
+    expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
+    expect(screen.getByTestId('mermaid-svg')).toHaveTextContent('MermaidSvgLabel')
+
+    // Verify same exclusion in 위지윅 mode (including toolbar, code header, Mermaid header/SVG/hidden source)
+    rerender(renderWithMode('wysiwyg'))
+    expect(await screen.findByTestId('mermaid-svg')).toHaveTextContent('MermaidSvgLabel')
+
+    const wysiwygFindBar = screen.getByRole('region', { name: '문서 내 찾기 바' })
+    const wysiwygInput = within(wysiwygFindBar).getByRole('textbox', {
+      name: '문서 내 검색어 입력'
+    })
+
+    for (const chromeToken of [
+      'TypeScript',
+      '코드 복사',
+      '100%',
+      'MermaidSvgLabel',
+      'NodeAlpha',
+      '코드 편집',
+      '표 삽입'
+    ]) {
+      fireEvent.change(wysiwygInput, { target: { value: chromeToken } })
+      expect(within(wysiwygFindBar).getByText('결과 없음')).toBeInTheDocument()
+      expect(container.querySelectorAll('.pm-search-match')).toHaveLength(0)
+    }
+
+    fireEvent.change(wysiwygInput, { target: { value: 'visible' } })
+    expect(within(wysiwygFindBar).getByText('1 / 2')).toBeInTheDocument()
+  })
+
+  it('simultaneously highlights right Preview matches in Split mode while left Raw drives navigation and syncs live edits', async () => {
+    const user = userEvent.setup()
+    const driver: MermaidDriver = {
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({
+        svg: '<svg><text>MermaidTarget</text></svg>'
+      }))
+    }
+    const mermaidRenderer = createMermaidRenderer(driver)
+    const initialMd = [
+      '# Split Alpha',
+      '',
+      'Link [alpha text](https://alpha.example.com) and exact word only',
+      '',
+      '```ts',
+      'const alphaVar = 1',
+      '```',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  AlphaNode --> BetaNode',
+      '```'
+    ].join('\n')
+
+    let doc = createDoc({ content: initialMd, savedContent: initialMd })
+    const renderSplit = (targetDoc: DocumentBuffer) => (
+      <DocumentEditor
+        document={targetDoc}
+        tab={{ ...createTab('split', 0.5), bufferKey: targetDoc.key }}
+        theme="light"
+        autoSave={false}
+        mermaidRenderer={mermaidRenderer}
+        onChangeContent={(nextContent) => {
+          doc = { ...doc, content: nextContent, isDirty: true }
+          rerender(renderSplit(doc))
+        }}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const { container, rerender } = render(renderSplit(doc))
+    expect(await screen.findByTestId('mermaid-svg')).toHaveTextContent('MermaidTarget')
+
+    await user.click(screen.getByRole('button', { name: '문서 내 찾기' }))
+    const findBar = screen.getByRole('region', { name: '문서 내 찾기 바' })
+    const findInput = within(findBar).getByRole('textbox', { name: '문서 내 검색어 입력' })
+    const rawRegion = container.querySelector('.editor-split-region.is-raw') as HTMLElement
+    const previewRegion = screen.getByTestId('split-markdown-preview')
+
+    // Raw drives count (5 occurrences in raw markdown incl. URL & mermaid source),
+    // while right Preview simultaneously highlights the 3 visible Preview occurrences (excluding URL & Mermaid)
+    await user.type(findInput, 'alpha')
+    expect(within(findBar).getByText('1 / 5')).toBeInTheDocument()
+    expect(rawRegion.querySelectorAll('.cm-search-match')).toHaveLength(5)
+    expect(rawRegion.querySelectorAll('.cm-search-match-active')).toHaveLength(1)
+    expect(previewRegion.querySelectorAll('.preview-search-match')).toHaveLength(3)
+    expect(previewRegion.querySelectorAll('.preview-search-match-active')).toHaveLength(0)
+
+    // Toggling Aa updates both Raw and right Preview simultaneously (3 lowercase raw, 2 lowercase preview)
+    await user.click(within(findBar).getByRole('button', { name: /대소문자 구분/ }))
+    expect(within(findBar).getByText('1 / 3')).toBeInTheDocument()
+    expect(rawRegion.querySelectorAll('.cm-search-match')).toHaveLength(3)
+    expect(previewRegion.querySelectorAll('.preview-search-match')).toHaveLength(2)
+
+    // Live edit in left Raw editor updates right Preview highlights simultaneously
+    await user.click(within(findBar).getByRole('button', { name: /대소문자 구분/ }))
+    const cmView = EditorView.findFromDOM(rawRegion.querySelector('[data-testid="document-editor"]')!)!
+    act(() => {
+      const end = cmView.state.doc.length
+      cmView.dispatch({ changes: { from: end, to: end, insert: '\nExtra alpha line' } })
+    })
+    expect(within(findBar).getByText('1 / 6')).toBeInTheDocument()
+    expect(previewRegion.querySelectorAll('.preview-search-match')).toHaveLength(4)
+
+    // Closing Find Bar clears highlights on both sides
+    fireEvent.keyDown(findInput, { key: 'Escape' })
+    expect(rawRegion.querySelectorAll('.cm-search-match')).toHaveLength(0)
+    expect(previewRegion.querySelectorAll('.preview-search-match')).toHaveLength(0)
+  })
+
+  it('auto-fills Find Bar from single-line selections and ignores multi-line, multi-block, and chrome selections on Ctrl+F in 위지윅 and Preview modes', async () => {
+    const user = userEvent.setup()
+    const md = [
+      '# Heading Title',
+      '',
+      'First **bold word** line',
+      '',
+      'Second paragraph',
+      '',
+      '```ts',
+      'const firstLine = 1',
+      'const secondLine = 2',
+      '```'
+    ].join('\n')
+    const doc = createDoc({ content: md, savedContent: md })
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={doc}
+        tab={createTab('wysiwyg')}
+        theme="light"
+        autoSave={false}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    // 1. 위지윅 single-line selection via DOM selection -> Ctrl+F auto-fills
+    const wysiwygEl = screen.getByTestId('document-editor')
+    const strongEl = wysiwygEl.querySelector('strong')!
+    const singleRange = document.createRange()
+    singleRange.selectNodeContents(strongEl)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(singleRange)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    fireEvent.keyDown(wysiwygEl, { key: 'f', ctrlKey: true })
+    const wysiwygBar = screen.getByRole('region', { name: '문서 내 찾기 바' })
+    const wysiwygInput = within(wysiwygBar).getByRole('textbox', {
+      name: '문서 내 검색어 입력'
+    }) as HTMLInputElement
+    expect(wysiwygInput.value).toBe('bold word')
+    expect(wysiwygInput).toHaveFocus()
+
+    // Multi-block selection across two paragraphs in 위지윅 must NOT overwrite existing query
+    const paragraphs = wysiwygEl.querySelectorAll('p')
+    const crossBlockRange = document.createRange()
+    crossBlockRange.setStart(paragraphs[0].firstChild!, 0)
+    crossBlockRange.setEnd(paragraphs[1].firstChild!, 6)
+    selection.removeAllRanges()
+    selection.addRange(crossBlockRange)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    fireEvent.keyDown(wysiwygEl, { key: 'f', ctrlKey: true })
+    expect(wysiwygInput.value).toBe('bold word')
+
+    // Multi-line selection inside code block must NOT overwrite query
+    const codeBlock = await screen.findByTestId('wysiwyg-code-block')
+    const codeEl = codeBlock.querySelector('pre code')!
+    const multiLineCodeRange = document.createRange()
+    multiLineCodeRange.selectNodeContents(codeEl)
+    selection.removeAllRanges()
+    selection.addRange(multiLineCodeRange)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    fireEvent.keyDown(wysiwygEl, { key: 'f', ctrlKey: true })
+    expect(wysiwygInput.value).toBe('bold word')
+
+    await user.click(within(wysiwygBar).getByRole('button', { name: '찾기 바 닫기' }))
+
+    // 2. Preview single-line selection -> Ctrl+F auto-fills, multi-block and chrome ignored
+    rerender(
+      <DocumentEditor
+        document={doc}
+        tab={createTab('preview')}
+        theme="light"
+        autoSave={false}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    const previewEl = screen.getByTestId('document-editor')
+    const previewParagraphs = previewEl.querySelectorAll('p')
+    const previewSingleRange = document.createRange()
+    previewSingleRange.setStart(previewParagraphs[0].firstChild!, 0)
+    previewSingleRange.setEnd(previewParagraphs[0].querySelector('strong')!.firstChild!, 4)
+    selection.removeAllRanges()
+    selection.addRange(previewSingleRange)
+
+    fireEvent.keyDown(previewEl, { key: 'f', ctrlKey: true })
+    const previewBar = screen.getByRole('region', { name: '문서 내 찾기 바' })
+    const previewInput = within(previewBar).getByRole('textbox', {
+      name: '문서 내 검색어 입력'
+    }) as HTMLInputElement
+    expect(previewInput.value).toBe('First bold')
+    expect(previewInput).toHaveFocus()
+
+    // Selection inside code block header ('코드 복사' / language label) must NOT overwrite query
+    const copyBtn = previewEl.querySelector('.code-block-copy-btn')!
+    const chromeRange = document.createRange()
+    chromeRange.selectNodeContents(copyBtn)
+    selection.removeAllRanges()
+    selection.addRange(chromeRange)
+
+    fireEvent.keyDown(previewEl, { key: 'f', ctrlKey: true })
+    expect(previewInput.value).toBe('First bold')
+
+    // Cross-block selection across <p> elements in Preview must NOT overwrite query
+    const previewCrossRange = document.createRange()
+    previewCrossRange.setStart(previewParagraphs[0].firstChild!, 0)
+    previewCrossRange.setEnd(previewParagraphs[1].firstChild!, 6)
+    selection.removeAllRanges()
+    selection.addRange(previewCrossRange)
+
+    fireEvent.keyDown(previewEl, { key: 'f', ctrlKey: true })
+    expect(previewInput.value).toBe('First bold')
+    selection.removeAllRanges()
+  })
+
+  it('preserves Find Bar state, query, options, and active match across Raw <-> 위지윅 <-> Preview <-> Split switches without polluting markdown', async () => {
+    const user = userEvent.setup()
+    const md = [
+      '# Target Heading',
+      '',
+      'See [link](https://target.example.com) and final target word'
+    ].join('\n')
+    const doc = createDoc({ content: md, savedContent: md })
+    let tab = createTab('raw', 0.5)
+    const onChangeContent = vi.fn()
+
+    const renderEditor = () => (
+      <DocumentEditor
+        document={doc}
+        tab={tab}
+        theme="light"
+        autoSave={false}
+        onChangeContent={onChangeContent}
+        onSave={vi.fn()}
+        onUpdateViewState={(patch) => {
+          tab = { ...tab, ...patch }
+          rerender(renderEditor())
+        }}
+      />
+    )
+
+    const { container, rerender } = render(renderEditor())
+    const modeGroup = () => screen.getByRole('group', { name: '에디터 모드 전환' })
+
+    // 1. Start in Raw mode, open Find Bar, search 'target', toggle whole-word (ab), advance to 2 / 3
+    await user.click(screen.getByRole('button', { name: '문서 내 찾기' }))
+    const findBar = () => screen.getByRole('region', { name: '문서 내 찾기 바' })
+    const findInput = () =>
+      within(findBar()).getByRole('textbox', { name: '문서 내 검색어 입력' }) as HTMLInputElement
+
+    await user.type(findInput(), 'target')
+    await user.click(within(findBar()).getByRole('button', { name: /단어 단위/ }))
+    expect(within(findBar()).getByText('1 / 3')).toBeInTheDocument()
+    fireEvent.keyDown(findInput(), { key: 'Enter' })
+    expect(within(findBar()).getByText('2 / 3')).toBeInTheDocument()
+
+    // 2. Switch Raw -> 위지윅: preserves query & ab, clamps into 2 rendered matches ('2 / 2')
+    await user.click(within(modeGroup()).getByRole('button', { name: '위지윅' }))
+    expect(findInput().value).toBe('target')
+    expect(within(findBar()).getByRole('button', { name: /단어 단위/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(within(findBar()).getByText('2 / 2')).toBeInTheDocument()
+    expect(container.querySelectorAll('.pm-search-match')).toHaveLength(2)
+    expect(container.querySelectorAll('.pm-search-match')[1]).toHaveClass('pm-search-match-active')
+
+    // 3. Switch 위지윅 -> Preview: preserves query & ab, highlights 2 Preview matches ('2 / 2')
+    await user.click(within(modeGroup()).getByRole('button', { name: 'Preview' }))
+    expect(findInput().value).toBe('target')
+    expect(within(findBar()).getByRole('button', { name: /단어 단위/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(within(findBar()).getByText('2 / 2')).toBeInTheDocument()
+    expect(container.querySelectorAll('.preview-search-match')).toHaveLength(2)
+    expect(container.querySelectorAll('.preview-search-match')[1]).toHaveClass(
+      'preview-search-match-active'
+    )
+
+    // 4. Switch Preview -> Split: Raw drives '2 / 3', right Preview simultaneously highlights 2 matches
+    await user.click(within(modeGroup()).getByRole('button', { name: 'Split' }))
+    expect(findInput().value).toBe('target')
+    expect(within(findBar()).getByText('2 / 3')).toBeInTheDocument()
+    expect(container.querySelectorAll('.cm-search-match')).toHaveLength(3)
+    expect(
+      screen.getByTestId('split-markdown-preview').querySelectorAll('.preview-search-match')
+    ).toHaveLength(2)
+
+    // 5. Switch Split -> Raw: preserves '2 / 3' and never mutated markdown
+    await user.click(within(modeGroup()).getByRole('button', { name: 'Raw' }))
+    expect(findInput().value).toBe('target')
+    expect(within(findBar()).getByText('2 / 3')).toBeInTheDocument()
+    expect(onChangeContent).not.toHaveBeenCalled()
   })
 })

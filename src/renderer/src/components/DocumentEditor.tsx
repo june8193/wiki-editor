@@ -1,5 +1,6 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef } from 'react'
 import { Search } from 'lucide-react'
+import type { Editor } from '@tiptap/core'
 import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import {
@@ -106,6 +107,8 @@ export function DocumentEditor({
     : null
   const editorBodyRef = useRef<HTMLDivElement | null>(null)
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
+  const wysiwygEditorRef = useRef<Editor | null>(null)
+  const previewContainerRef = useRef<HTMLDivElement | null>(null)
   const {
     rawEditorViewRef,
     splitPreviewContainerRef,
@@ -123,6 +126,9 @@ export function DocumentEditor({
     isImage,
     findControl,
     rawEditorViewRef,
+    wysiwygEditorRef,
+    previewContainerRef,
+    splitPreviewContainerRef,
     editorBodyRef
   })
 
@@ -352,16 +358,20 @@ export function DocumentEditor({
                     ? { index: matchedScrollRequest.index, nonce: matchedScrollRequest.nonce }
                     : null
                 }
+                findHighlight={docFind.wysiwygFindHighlight}
+                editorRef={wysiwygEditorRef}
                 isActive={isActive}
                 onChangeContent={onChangeContent}
                 onScrollTopChange={handleScrollTopChange}
                 onLinkNavigate={onNavigateLink}
                 onActiveHeadingChange={modeHeadingChangeHandlers?.wysiwyg}
+                onFindResultChange={docFind.handleWysiwygFindResultChange}
               />
             )}
 
             {effectiveMode === 'preview' && (
               <MarkdownPreview
+                scrollContainerRef={previewContainerRef}
                 content={activeDoc.content}
                 scrollTop={tab.scrollTop}
                 theme={theme}
@@ -371,6 +381,7 @@ export function DocumentEditor({
                 mermaidHeights={tab.mermaidHeights}
                 onMermaidHeightChange={handleMermaidHeightChange}
                 scrollRequest={previewScrollRequest}
+                findHighlight={docFind.previewFindHighlight}
                 isActive={isActive}
                 onScrollTopChange={handleScrollTopChange}
                 onLinkNavigate={onNavigateLink}
@@ -406,6 +417,7 @@ export function DocumentEditor({
                     mermaidHeights={tab.mermaidHeights}
                     onMermaidHeightChange={handleMermaidHeightChange}
                     scrollRequest={previewScrollRequest}
+                    findHighlight={docFind.previewFindHighlight}
                     isActive={isActive}
                     onScrollTopChange={handleSplitPreviewScroll}
                     onLinkNavigate={onNavigateLink}

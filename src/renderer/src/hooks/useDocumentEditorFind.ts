@@ -9,20 +9,28 @@ import {
   useState
 } from 'react'
 import type { EditorView } from '@codemirror/view'
+import type { Editor } from '@tiptap/core'
 import type { SearchMatchOptions } from '@shared/search'
 import type { DocumentFindBarProps } from '../components/DocumentFindBar'
 import {
+  areSearchMatchOptionsEqual,
   clampActiveMatchIndex,
   createDefaultDocumentFindState,
   createDocumentFindActions,
   dispatchFindBarKeyAction,
   type DocumentFindActionHandlers,
+  type DocumentFindHighlightQuery,
+  type DocumentFindResultReport,
   type DocumentFindState,
   findTextMatchesInDocument,
+  PREVIEW_SEARCH_CHROME_SELECTOR,
+  readDomSingleLineSelection,
   readRawEditorSingleLineSelection,
   stepActiveMatchIndex
 } from '../editor/documentFind'
+import { findPreviewSearchMatches } from '../editor/markdownPreview'
 import type { RawFindHighlightRequest } from '../editor/rawSearchHighlight'
+import { readWysiwygSingleLineSelection } from '../editor/wysiwygSearchHighlight'
 import type { EditorMode } from '../stores/PaneTabStore'
 import { isDocumentFindShortcut } from '../utils/workspaceSearch'
 
@@ -51,11 +59,42 @@ function didFindCriteriaActivateOrChange(
   if (!prev.isOpen && next.isOpen) {
     return true
   }
-  return next.isOpen && (prev.query !== next.query || prev.options !== next.options)
+  return (
+    next.isOpen &&
+    (prev.query !== next.query || !areSearchMatchOptionsEqual(prev.options, next.options))
+  )
 }
 
 function areCriteriaEqual(a: FindCriteriaSnapshot, b: FindCriteriaSnapshot): boolean {
-  return a.isOpen === b.isOpen && a.query === b.query && a.options === b.options
+  return (
+    a.isOpen === b.isOpen &&
+    a.query === b.query &&
+    areSearchMatchOptionsEqual(a.options, b.options)
+  )
+}
+
+function resolveActiveMatchIndex(params: {
+  isFindActive: boolean
+  isWysiwygFindPending: boolean
+  criteriaActivatedOrChanged: boolean
+  criteriaEqual: boolean
+  hasQuery: boolean
+  cursorIndex: number
+  findMatchCount: number
+}): number {
+  if (!params.isFindActive) {
+    return -1
+  }
+  if (params.isWysiwygFindPending) {
+    if (!params.criteriaActivatedOrChanged && params.cursorIndex >= 0) {
+      return params.cursorIndex
+    }
+    return params.hasQuery ? 0 : -1
+  }
+  if (!params.criteriaEqual) {
+    return params.findMatchCount > 0 ? 0 : -1
+  }
+  return clampActiveMatchIndex(params.cursorIndex, params.findMatchCount)
 }
 
 export interface UseDocumentEditorFindOptions {
@@ -64,12 +103,15 @@ export interface UseDocumentEditorFindOptions {
   isImage: boolean
   findControl?: DocumentEditorFindControl
   rawEditorViewRef: RefObject<EditorView | null>
+  wysiwygEditorRef?: RefObject<Editor | null>
+  previewContainerRef?: RefObject<HTMLDivElement | null>
+  splitPreviewContainerRef?: RefObject<HTMLDivElement | null>
   editorBodyRef: RefObject<HTMLDivElement | null>
 }
 
 /**
  * Coordinates controlled/uncontrolled Find Bar state, active match cursor tracking,
- * Raw/Split search decorations, and in-editor `Ctrl+F`/`F3`/`Escape` shortcuts.
+ * Raw/Split/위지윅/Preview search decorations, and in-editor `Ctrl+F`/`F3`/`Escape` shortcuts.
  */
 export function useDocumentEditorFind({
   content,
@@ -77,6 +119,9 @@ export function useDocumentEditorFind({
   isImage,
   findControl,
   rawEditorViewRef,
+  wysiwygEditorRef,
+  previewContainerRef,
+  splitPreviewContainerRef,
   editorBodyRef
 }: UseDocumentEditorFindOptions) {
   const localFocusNonceRef = useRef(0)
@@ -98,15 +143,21 @@ export function useDocumentEditorFind({
   const activeControl = findControl ?? fallbackControl
   const effectiveFindState = activeControl.state
   const isRawBasedMode = effectiveMode === 'raw' || effectiveMode === 'split'
+  const isWysiwygMode = effectiveMode === 'wysiwyg'
+  const isPreviewMode = effectiveMode === 'preview'
 
   const focusActiveEditorBody = useCallback((): void => {
     if (isRawBasedMode) {
       rawEditorViewRef.current?.focus()
       return
     }
+    if (isWysiwygMode && wysiwygEditorRef?.current && !wysiwygEditorRef.current.isDestroyed) {
+      wysiwygEditorRef.current.view.focus()
+      return
+    }
     const target = editorBodyRef.current?.querySelector<HTMLElement>('[data-testid="document-editor"]')
     target?.focus()
-  }, [editorBodyRef, isRawBasedMode, rawEditorViewRef])
+  }, [editorBodyRef, isRawBasedMode, isWysiwygMode, rawEditorViewRef, wysiwygEditorRef])
 
   const closeFind = useCallback((): void => {
     activeControl.onClose()
@@ -116,10 +167,37 @@ export function useDocumentEditorFind({
   const readSingleLineSelection = useCallback((): string | null => {
     if (isImage) return null
     if (isRawBasedMode) {
-      return readRawEditorSingleLineSelection(rawEditorViewRef.current)
+      return (
+        readRawEditorSingleLineSelection(rawEditorViewRef.current) ??
+        (effectiveMode === 'split'
+          ? readDomSingleLineSelection(
+              splitPreviewContainerRef?.current ?? null,
+              PREVIEW_SEARCH_CHROME_SELECTOR
+            )
+          : null)
+      )
+    }
+    if (isWysiwygMode) {
+      return readWysiwygSingleLineSelection(wysiwygEditorRef?.current ?? null)
+    }
+    if (isPreviewMode) {
+      return readDomSingleLineSelection(
+        previewContainerRef?.current ?? null,
+        PREVIEW_SEARCH_CHROME_SELECTOR
+      )
     }
     return null
-  }, [isImage, isRawBasedMode, rawEditorViewRef])
+  }, [
+    effectiveMode,
+    isImage,
+    isPreviewMode,
+    isRawBasedMode,
+    isWysiwygMode,
+    previewContainerRef,
+    rawEditorViewRef,
+    splitPreviewContainerRef,
+    wysiwygEditorRef
+  ])
 
   const registerSelectionReader = findControl?.onRegisterSelectionReader
   useEffect(() => {
@@ -132,6 +210,9 @@ export function useDocumentEditorFind({
 
   const isFindActive = !isImage && effectiveFindState.isOpen
   const isRawFindMode = isFindActive && isRawBasedMode
+  const isWysiwygFindMode = isFindActive && isWysiwygMode
+  const isPreviewFindMode = isFindActive && isPreviewMode
+  const [wysiwygFindReport, setWysiwygFindReport] = useState<DocumentFindResultReport | null>(null)
   const rawFindResult = useMemo(
     () =>
       isRawFindMode
@@ -139,10 +220,49 @@ export function useDocumentEditorFind({
         : { matches: [], errorMessage: null },
     [content, effectiveFindState.options, effectiveFindState.query, isRawFindMode]
   )
+  const previewFindResult = useMemo(
+    () =>
+      isPreviewFindMode
+        ? findPreviewSearchMatches(content, effectiveFindState.query, effectiveFindState.options)
+        : { matchCount: 0, errorMessage: null },
+    [content, effectiveFindState.options, effectiveFindState.query, isPreviewFindMode]
+  )
+
+  const resolvedWysiwygReport =
+    isWysiwygFindMode &&
+    wysiwygFindReport !== null &&
+    wysiwygFindReport.query === effectiveFindState.query &&
+    areSearchMatchOptionsEqual(wysiwygFindReport.options, effectiveFindState.options)
+      ? wysiwygFindReport
+      : null
+  const isWysiwygFindPending = isWysiwygFindMode && resolvedWysiwygReport === null
 
   const findMatches = rawFindResult.matches
-  const findMatchCount = findMatches.length
-  const findErrorMessage = rawFindResult.errorMessage
+  const { matchCount: findMatchCount, errorMessage: findErrorMessage } = useMemo(() => {
+    if (!isFindActive) {
+      return { matchCount: 0, errorMessage: null }
+    }
+    if (isRawFindMode) {
+      return { matchCount: rawFindResult.matches.length, errorMessage: rawFindResult.errorMessage }
+    }
+    if (isPreviewFindMode) {
+      return previewFindResult
+    }
+    return resolvedWysiwygReport
+      ? {
+          matchCount: resolvedWysiwygReport.matchCount,
+          errorMessage: resolvedWysiwygReport.errorMessage
+        }
+      : { matchCount: 0, errorMessage: null }
+  }, [
+    isFindActive,
+    isPreviewFindMode,
+    isRawFindMode,
+    previewFindResult,
+    rawFindResult.errorMessage,
+    rawFindResult.matches.length,
+    resolvedWysiwygReport
+  ])
 
   const currentCriteria = useMemo<FindCriteriaSnapshot>(
     () => ({
@@ -159,19 +279,28 @@ export function useDocumentEditorFind({
     criteria: currentCriteria
   }))
 
-  const resolvedActiveMatchIndex = !isFindActive
-    ? -1
-    : !areCriteriaEqual(matchCursor.criteria, currentCriteria)
-      ? findMatchCount > 0
-        ? 0
-        : -1
-      : clampActiveMatchIndex(matchCursor.index, findMatchCount)
+  const resolvedActiveMatchIndex = resolveActiveMatchIndex({
+    isFindActive,
+    isWysiwygFindPending,
+    criteriaActivatedOrChanged: didFindCriteriaActivateOrChange(matchCursor.criteria, currentCriteria),
+    criteriaEqual: areCriteriaEqual(matchCursor.criteria, currentCriteria),
+    hasQuery: effectiveFindState.query.length > 0,
+    cursorIndex: matchCursor.index,
+    findMatchCount
+  })
 
   useLayoutEffect(() => {
+    if (!isWysiwygFindMode && wysiwygFindReport !== null) {
+      setWysiwygFindReport(null)
+    }
+
     if (didFindCriteriaActivateOrChange(matchCursor.criteria, currentCriteria)) {
+      const hasPendingOrMatches = isWysiwygFindMode
+        ? currentCriteria.query.length > 0
+        : findMatchCount > 0
       setMatchCursor((prev) => ({
-        index: findMatchCount > 0 ? 0 : -1,
-        scrollNonce: findMatchCount > 0 ? prev.scrollNonce + 1 : prev.scrollNonce,
+        index: hasPendingOrMatches ? 0 : -1,
+        scrollNonce: hasPendingOrMatches ? prev.scrollNonce + 1 : prev.scrollNonce,
         criteria: currentCriteria
       }))
       return
@@ -186,14 +315,23 @@ export function useDocumentEditorFind({
       return
     }
 
-    if (resolvedActiveMatchIndex !== matchCursor.index) {
+    if (!isWysiwygFindPending && resolvedActiveMatchIndex !== matchCursor.index) {
       setMatchCursor((prev) => ({
         ...prev,
         index: resolvedActiveMatchIndex,
         criteria: currentCriteria
       }))
     }
-  }, [currentCriteria, findMatchCount, matchCursor.criteria, matchCursor.index, resolvedActiveMatchIndex])
+  }, [
+    currentCriteria,
+    findMatchCount,
+    isWysiwygFindMode,
+    isWysiwygFindPending,
+    matchCursor.criteria,
+    matchCursor.index,
+    resolvedActiveMatchIndex,
+    wysiwygFindReport
+  ])
 
   const stepActiveMatch = useCallback(
     (direction: 'next' | 'prev'): void => {
@@ -228,6 +366,49 @@ export function useDocumentEditorFind({
         : null,
     [findMatches, isRawFindMode, matchCursor.scrollNonce, resolvedActiveMatchIndex]
   )
+
+  const buildRichHighlight = useCallback(
+    (activeIndex: number, scrollNonce: number): DocumentFindHighlightQuery => ({
+      isActive: true,
+      query: effectiveFindState.query,
+      options: effectiveFindState.options,
+      activeIndex,
+      scrollNonce
+    }),
+    [effectiveFindState.options, effectiveFindState.query]
+  )
+
+  const wysiwygFindHighlight = useMemo<DocumentFindHighlightQuery | null>(
+    () =>
+      isWysiwygFindMode
+        ? buildRichHighlight(resolvedActiveMatchIndex, matchCursor.scrollNonce)
+        : null,
+    [buildRichHighlight, isWysiwygFindMode, matchCursor.scrollNonce, resolvedActiveMatchIndex]
+  )
+
+  const previewFindHighlight = useMemo<DocumentFindHighlightQuery | null>(() => {
+    if (!isFindActive) {
+      return null
+    }
+    if (isPreviewMode) {
+      return buildRichHighlight(resolvedActiveMatchIndex, matchCursor.scrollNonce)
+    }
+    if (effectiveMode === 'split') {
+      return buildRichHighlight(-1, 0)
+    }
+    return null
+  }, [
+    buildRichHighlight,
+    effectiveMode,
+    isFindActive,
+    isPreviewMode,
+    matchCursor.scrollNonce,
+    resolvedActiveMatchIndex
+  ])
+
+  const handleWysiwygFindResultChange = useCallback((report: DocumentFindResultReport): void => {
+    setWysiwygFindReport(report)
+  }, [])
 
   const handleEditorFindKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>): boolean => {
@@ -293,6 +474,9 @@ export function useDocumentEditorFind({
   return {
     isFindActive,
     rawFindHighlight,
+    wysiwygFindHighlight,
+    previewFindHighlight,
+    handleWysiwygFindResultChange,
     findBarProps,
     handleHeaderToggle,
     handleEditorFindKeyDown

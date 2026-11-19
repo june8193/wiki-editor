@@ -4683,7 +4683,7 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     })
     expect(auxRendered.container.querySelectorAll('.cm-search-match')).toHaveLength(3)
 
-    // Aux window switches to Split mode -> Find Bar persists and cycles matches
+    // Aux window switches to Split mode -> Find Bar persists, Raw drives count, right Preview simultaneously highlights
     await user.click(
       within(within(auxRendered.container).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
         'button',
@@ -4694,8 +4694,49 @@ describe('Multi-main-window workspace opening (<App />)', () => {
       name: '문서 내 찾기 바'
     })
     expect(within(auxSplitBar).getByText('1 / 3')).toBeInTheDocument()
+    expect(
+      within(auxRendered.container)
+        .getByTestId('split-markdown-preview')
+        .querySelectorAll('.preview-search-match')
+    ).toHaveLength(3)
     await user.click(within(auxSplitBar).getByRole('button', { name: '다음 일치' }))
     expect(within(auxSplitBar).getByText('2 / 3')).toBeInTheDocument()
+
+    // Aux window switches to 위지윅 and Preview -> Find Bar persists and highlights matches live
+    await user.click(
+      within(within(auxRendered.container).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: '위지윅' }
+      )
+    )
+    expect(within(auxSplitBar).getByText('2 / 3')).toBeInTheDocument()
+    expect(auxRendered.container.querySelectorAll('.pm-search-match')).toHaveLength(3)
+
+    await user.click(
+      within(within(auxRendered.container).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Preview' }
+      )
+    )
+    expect(within(auxSplitBar).getByText('2 / 3')).toBeInTheDocument()
+    expect(auxRendered.container.querySelectorAll('.preview-search-match')).toHaveLength(3)
+
+    // Main window edits shared.md while Aux window is in Preview -> Aux Preview highlights & count sync live
+    setRawEditorText(
+      mainSharedEditor,
+      '# Shared Doc\nAuxTarget one\nAuxTarget two\nAuxTarget three\nAuxTarget four'
+    )
+    await waitFor(() => {
+      expect(within(auxSplitBar).getByText('2 / 4')).toBeInTheDocument()
+    })
+    expect(auxRendered.container.querySelectorAll('.preview-search-match')).toHaveLength(4)
+
+    await user.click(
+      within(within(auxRendered.container).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Split' }
+      )
+    )
 
     // Main window Ctrl+F opens independent Find Bar in mainWin without affecting auxWin
     fireEvent.keyDown(mainSharedEditor, { key: 'f', ctrlKey: true })

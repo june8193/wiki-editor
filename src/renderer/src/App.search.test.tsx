@@ -10,6 +10,15 @@ import {
   triggerMenuCommand
 } from './test/inMemoryWikiHarness'
 
+vi.mock('mermaid', () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn(async (_id: string, text: string) => ({
+      svg: `<svg data-code="${text.trim()}"><text>MermaidDiagramSvg</text></svg>`
+    }))
+  }
+}))
+
 describe('Workspace Search View (<App />)', () => {
   beforeEach(() => {
     document.documentElement.removeAttribute('data-theme')
@@ -904,5 +913,121 @@ describe('In-Document Find Bar Pane State & Integration (<App />)', () => {
     })
     expect(within(primaryPane).queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
     expect(within(secondaryPane).getByRole('region', { name: '문서 내 찾기 바' })).toBeInTheDocument()
+  })
+
+  it('supports in-document Find Bar across 위지윅, Preview, Split, and Raw modes in <App /> with selection auto-fill, live edit sync, and non-pollution', async () => {
+    const user = userEvent.setup()
+    const md = [
+      '# Main Topic',
+      '',
+      'Topic body [topic link](https://topic.example.com)',
+      '',
+      '```ts',
+      'const topicCode = 1',
+      '```',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  TopicA --> TopicB',
+      '```'
+    ].join('\n')
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'guide.md': md
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { container } = render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('guide.md'))
+
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+
+    // 1. Switch to 위지윅 mode, select 'Topic' in heading, press Ctrl+F -> auto-fills and highlights 3 rendered matches
+    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+    const wysiwygEl = await screen.findByTestId('document-editor')
+    const h1Text = wysiwygEl.querySelector('h1')!.firstChild!
+    const selection = window.getSelection()!
+    const h1Range = document.createRange()
+    h1Range.setStart(h1Text, 5)
+    h1Range.setEnd(h1Text, 10)
+    selection.removeAllRanges()
+    selection.addRange(h1Range)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    fireEvent.keyDown(wysiwygEl, { key: 'f', ctrlKey: true })
+    const findBar = await screen.findByRole('region', { name: '문서 내 찾기 바' })
+    const findInput = within(findBar).getByRole('textbox', {
+      name: '문서 내 검색어 입력'
+    }) as HTMLInputElement
+    expect(findInput.value).toBe('Topic')
+    expect(within(findBar).getByText('1 / 4')).toBeInTheDocument()
+    expect(container.querySelectorAll('.pm-search-match')).toHaveLength(4)
+    expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+
+    // 2. Edit directly in 위지윅 mode -> count updates live to 1 / 5 and marks dirty
+    const pEl = wysiwygEl.querySelector('p')!
+    const caretRange = document.createRange()
+    caretRange.selectNodeContents(pEl)
+    caretRange.collapse(false)
+    selection.removeAllRanges()
+    selection.addRange(caretRange)
+    wysiwygEl.focus()
+    document.dispatchEvent(new Event('selectionchange'))
+    await user.keyboard(' topic')
+    expect(within(findBar).getByText('1 / 5')).toBeInTheDocument()
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    // 3. Switch to Split -> Raw counts 8 (incl. URL and mermaid source) & right Preview simultaneously highlights 5
+    await user.click(within(modeGroup).getByRole('button', { name: 'Split' }))
+    expect(within(findBar).getByText('1 / 8')).toBeInTheDocument()
+    expect(container.querySelectorAll('.cm-search-match')).toHaveLength(8)
+    expect(
+      screen.getByTestId('split-markdown-preview').querySelectorAll('.preview-search-match')
+    ).toHaveLength(5)
+
+    // 4. Switch to Preview -> preserves Find Bar, highlights 5 rendered matches, and excludes code header & Mermaid chrome
+    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+    expect(within(findBar).getByText('1 / 5')).toBeInTheDocument()
+    expect(container.querySelectorAll('.preview-search-match')).toHaveLength(5)
+    expect(await screen.findByTestId('mermaid-svg')).toHaveTextContent('MermaidDiagramSvg')
+
+    // Searching code block header / Mermaid SVG / source text returns '결과 없음'
+    await user.clear(findInput)
+    await user.type(findInput, '코드 복사')
+    expect(within(findBar).getByText('결과 없음')).toBeInTheDocument()
+    await user.clear(findInput)
+    await user.type(findInput, 'MermaidDiagramSvg')
+    expect(within(findBar).getByText('결과 없음')).toBeInTheDocument()
+
+    // Close Find Bar, select 'topicCode' in Preview code block body, press window Ctrl+F -> auto-fills
+    fireEvent.keyDown(findInput, { key: 'Escape' })
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+
+    const previewEl = screen.getByTestId('document-editor')
+    const codeTextNode = Array.from(previewEl.querySelectorAll('pre code *')).find((el) =>
+      el.textContent?.includes('topicCode')
+    )!.firstChild!
+    const codeRange = document.createRange()
+    codeRange.selectNodeContents(codeTextNode)
+    selection.removeAllRanges()
+    selection.addRange(codeRange)
+
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const reopenedBar = await screen.findByRole('region', { name: '문서 내 찾기 바' })
+    expect(
+      (within(reopenedBar).getByRole('textbox', { name: '문서 내 검색어 입력' }) as HTMLInputElement).value
+    ).toBe('topicCode')
+    expect(within(reopenedBar).getByText('1 / 1')).toBeInTheDocument()
+    selection.removeAllRanges()
   })
 })

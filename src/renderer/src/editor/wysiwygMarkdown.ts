@@ -29,6 +29,7 @@ import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 import { CodeBlockNodeView } from '../components/CodeBlockNodeView'
 import { getCodeBlockHighlightSpans, isMermaidLanguage } from './codeBlockHighlight'
+import { WysiwygSearchHighlight } from './wysiwygSearchHighlight'
 import {
   detectLinkQueryFromSegments,
   getLinkCandidateAutoLabel,
@@ -670,7 +671,8 @@ export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): 
     TaskItem.configure({
       nested: true
     }),
-    WysiwygExternalTextPaste
+    WysiwygExternalTextPaste,
+    WysiwygSearchHighlight
   ]
 }
 

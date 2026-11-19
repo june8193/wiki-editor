@@ -3502,3 +3502,24 @@ body.is-resizing-git-sections * {
   background-color: var(--search-match-active-bg);
   outline: 1px solid var(--search-match-active-outline);
 }
+
+.pm-search-match {
+  background-color: var(--search-match-bg);
+  border-radius: 2px;
+}
+
+.pm-search-match.pm-search-match-active {
+  background-color: var(--search-match-active-bg);
+  outline: 1px solid var(--search-match-active-outline);
+}
+
+.preview-search-match {
+  background-color: var(--search-match-bg);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.preview-search-match.preview-search-match-active {
+  background-color: var(--search-match-active-bg);
+  outline: 1px solid var(--search-match-active-outline);
+}
