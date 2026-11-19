@@ -18,6 +18,22 @@ import {
 
 export type GitFileRowActionKind = 'stage' | 'unstage'
 
+const STAGE_ACTION_LABEL: Record<GitFileRowActionKind, 'Stage' | 'Unstage'> = {
+  stage: 'Stage',
+  unstage: 'Unstage'
+}
+
+/**
+ * Renders the Plus/Minus Lucide icon corresponding to a `stage` or `unstage` action.
+ */
+export function GitStageActionIcon({ action }: { action: GitFileRowActionKind }) {
+  return action === 'stage' ? (
+    <Plus size={13} strokeWidth={1.75} aria-hidden="true" />
+  ) : (
+    <Minus size={13} strokeWidth={1.75} aria-hidden="true" />
+  )
+}
+
 export interface GitChangedFileRowProps {
   file: GitChangedFile
   displayMode: 'list' | 'tree'
@@ -77,7 +93,7 @@ export function GitChangedFileRow({
   const dirPath = listDisplay?.dirPath ?? ''
   const tooltip = listDisplay ? listDisplay.tooltip : formatGitFileLabel(file)
   const indentStyle = getGitTreeIndentStyle(indentDepth)
-  const itemActionLabel = itemAction === 'stage' ? 'Stage' : 'Unstage'
+  const itemActionLabel = itemAction ? STAGE_ACTION_LABEL[itemAction] : undefined
   const showActions =
     (canOpenFile && onOpenWorkspaceFile !== undefined) ||
     onDiscardFile !== undefined ||
@@ -124,7 +140,7 @@ export function GitChangedFileRow({
               <Undo2 size={13} strokeWidth={1.75} aria-hidden="true" />
             </button>
           )}
-          {itemAction && onItemAction && (
+          {itemAction && itemActionLabel && onItemAction && (
             <button
               type="button"
               className="git-hover-icon-btn"
@@ -133,11 +149,7 @@ export function GitChangedFileRow({
               disabled={isBusy}
               onClick={() => onItemAction(file)}
             >
-              {itemAction === 'stage' ? (
-                <Plus size={13} strokeWidth={1.75} aria-hidden="true" />
-              ) : (
-                <Minus size={13} strokeWidth={1.75} aria-hidden="true" />
-              )}
+              <GitStageActionIcon action={itemAction} />
             </button>
           )}
         </div>

@@ -7,22 +7,20 @@ import {
   FolderOpen,
   FolderTree,
   List,
-  Minus,
-  Plus,
   RefreshCw,
   Undo2
 } from 'lucide-react'
 import type { GitChangedFile } from '@shared/git'
+import type {
+  GitChangesGroupKey,
+  GitChangesViewMode,
+  GitChangesViewState
+} from '../utils/gitChangesView'
 import { canOpenGitChangedFile } from '../utils/gitFilePresentation'
-import {
-  buildCompressedGitFileTree,
-  type GitChangesGroupKey,
-  type GitChangesViewMode,
-  type GitChangesViewState,
-  type GitFileTreeNode
-} from '../utils/gitFileTree'
+import { buildCompressedGitFileTree, type GitFileTreeNode } from '../utils/gitFileTree'
 import {
   GitChangedFileRow,
+  GitStageActionIcon,
   getGitTreeIndentStyle,
   type GitFileRowActionKind
 } from './GitChangedFileRow'
@@ -241,11 +239,7 @@ function GitChangesSubgroup({
             disabled={isBusy || files.length === 0}
             onClick={onBulkAction}
           >
-            {itemAction === 'stage' ? (
-              <Plus size={13} strokeWidth={1.75} aria-hidden="true" />
-            ) : (
-              <Minus size={13} strokeWidth={1.75} aria-hidden="true" />
-            )}
+            <GitStageActionIcon action={itemAction} />
           </button>
         </div>
 

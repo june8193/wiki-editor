@@ -31,7 +31,7 @@ import {
 import { type DismissReason, useDismissable } from '../hooks/useDismissable'
 import type { GitGraphState } from '../hooks/useGitGraphLog'
 import { toGitDiffRequest } from '../utils/gitFilePresentation'
-import type { GitChangesGroupKey, GitChangesViewState } from '../utils/gitFileTree'
+import type { GitChangesGroupKey, GitChangesViewState } from '../utils/gitChangesView'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
 import {
   formatGitCommitPlaceholder,

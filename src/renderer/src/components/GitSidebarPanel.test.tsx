@@ -17,7 +17,7 @@ import {
   toggleGitChangesTreeDirCollapsed,
   toggleGitChangesViewMode,
   type GitChangesViewState
-} from '../utils/gitFileTree'
+} from '../utils/gitChangesView'
 import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,

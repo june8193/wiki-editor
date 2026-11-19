@@ -33,7 +33,7 @@ import {
   toggleGitChangesViewMode,
   type GitChangesGroupKey,
   type GitChangesViewState
-} from '../utils/gitFileTree'
+} from '../utils/gitChangesView'
 import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
