@@ -57,8 +57,6 @@ const SEARCH_SNIPPET_MAX_LENGTH = 240
 const SEARCH_SNIPPET_LEAD_CONTEXT = 60
 
 export interface CompiledSearchMatcher {
-  readonly query: string
-  readonly options: SearchMatchOptions
   findMatches(text: string): TextMatchSpan[]
 }
 
@@ -113,8 +111,6 @@ export function compileSearchMatcher(
     return {
       ok: true,
       matcher: {
-        query,
-        options: resolved,
         findMatches: () => []
       }
     }
@@ -140,8 +136,6 @@ export function compileSearchMatcher(
   return {
     ok: true,
     matcher: {
-      query,
-      options: resolved,
       findMatches(text: string): TextMatchSpan[] {
         compiledRegex.lastIndex = 0
         const spans: TextMatchSpan[] = []
