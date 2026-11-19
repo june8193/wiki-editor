@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createEmptyGitStatus } from '@shared/git'
 import { App } from './App'
 import {
   createInMemoryWikiApi,
+  setRawEditorSelection,
   setRawEditorText,
   triggerMenuCommand
 } from './test/inMemoryWikiHarness'
@@ -675,5 +677,232 @@ describe('Workspace Search View (<App />)', () => {
     for (const [, update] of saveWorkspaceStateSpy.mock.calls) {
       expect(JSON.stringify(update)).not.toContain('AlphaTarget')
     }
+  })
+})
+
+describe('In-Document Find Bar Pane State & Integration (<App />)', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('persists Find Bar state per pane across text tabs, hides/suppresses on Diff and Image tabs, suppresses during modals, shows inline regex errors, and resets on workspace switch', async () => {
+    const user = userEvent.setup()
+    const gitStatus = {
+      ...createEmptyGitStatus(true, 'C:/wiki/alpha'),
+      branch: 'main',
+      unstaged: [{ path: 'notes.md', status: 'M' as const }]
+    }
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {
+        autoSave: false,
+        theme: 'light',
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+      },
+      {
+        selectedFolder: 'C:\\wiki\\alpha',
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'notes.md': '# Notes\nAlpha note\nalpha lower',
+            'guide.txt': 'Plain text alpha only',
+            'diagram.png': '<binary-png>'
+          },
+          'C:\\wiki\\beta': {
+            'beta.md': '# Beta\nAlpha in beta'
+          }
+        },
+        git: {
+          status: vi.fn(async () => gitStatus),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [{ name: 'main', current: true, upstream: null }]
+          })),
+          diff: vi.fn(async () => ({
+            path: 'notes.md',
+            status: 'M' as const,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: '@@ -1 +1 @@\n-# Notes\n+# Notes updated'
+          }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { container } = render(<App />)
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('notes.md'))
+
+    const editor = await screen.findByTestId('document-editor')
+    const alphaText = '# Notes\nAlpha note\nalpha lower'
+    const alphaStart = alphaText.indexOf('Alpha')
+    setRawEditorSelection(editor, alphaStart, alphaStart + 5)
+
+    // Ctrl+F from pane-workspace (outside CodeMirror) still reads active pane selection and opens Find Bar
+    fireEvent.keyDown(screen.getByTestId('pane-workspace'), { key: 'f', ctrlKey: true })
+    const findBar = await screen.findByRole('region', { name: '문서 내 찾기 바' })
+    const findInput = within(findBar).getByRole('textbox', {
+      name: '문서 내 검색어 입력'
+    }) as HTMLInputElement
+    expect(findInput.value).toBe('Alpha')
+    expect(findInput).toHaveFocus()
+    expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
+
+    // Toggle Aa (caseSensitive) -> '1 / 1'
+    await user.click(within(findBar).getByRole('button', { name: /대소문자 구분/ }))
+    expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
+
+    // Switch to guide.txt in the same pane -> Find Bar stays open with query 'Alpha' and Aa active, immediately re-searches ('결과 없음')
+    await user.click(within(explorer).getByText('guide.txt'))
+    const txtFindBar = screen.getByRole('region', { name: '문서 내 찾기 바' })
+    expect(
+      (within(txtFindBar).getByRole('textbox', { name: '문서 내 검색어 입력' }) as HTMLInputElement).value
+    ).toBe('Alpha')
+    expect(within(txtFindBar).getByRole('button', { name: /대소문자 구분/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(within(txtFindBar).getByText('결과 없음')).toBeInTheDocument()
+
+    // Toggle Aa off -> matches 'alpha' in guide.txt ('1 / 1') and highlights in Raw mode
+    await user.click(within(txtFindBar).getByRole('button', { name: /대소문자 구분/ }))
+    expect(within(txtFindBar).getByText('1 / 1')).toBeInTheDocument()
+    expect(container.querySelectorAll('.cm-search-match')).toHaveLength(1)
+
+    // Switch to diagram.png (image tab) -> Find Bar temporarily hides, header button disabled, Ctrl+F suppressed
+    await user.click(within(explorer).getByText('diagram.png'))
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '문서 내 찾기' })).toBeDisabled()
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+
+    // Switch back to notes.md -> Find Bar reappears with preserved query ('Alpha', Aa off) -> '1 / 2'
+    await user.click(screen.getByRole('tab', { name: 'notes.md' }))
+    const restoredBar1 = await screen.findByRole('region', { name: '문서 내 찾기 바' })
+    expect(within(restoredBar1).getByText('1 / 2')).toBeInTheDocument()
+    expect(container.querySelectorAll('.cm-search-match')).toHaveLength(2)
+
+    // Open Git Diff tab -> Find Bar hides, Ctrl+F suppressed
+    const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
+    await user.click(within(activityBar).getByRole('button', { name: 'Git' }))
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(await within(gitRegion).findByText('notes.md'))
+    expect(await screen.findByText('Working Tree')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+
+    // Switch back to notes.md -> Find Bar reappears
+    await user.click(screen.getByRole('tab', { name: 'notes.md' }))
+    const restoredBar2 = await screen.findByRole('region', { name: '문서 내 찾기 바' })
+    expect(within(restoredBar2).getByText('1 / 2')).toBeInTheDocument()
+
+    // Invalid regex inside Find Bar shows inline alert without global .error-banner
+    const liveInput = within(restoredBar2).getByRole('textbox', { name: '문서 내 검색어 입력' })
+    await user.click(within(restoredBar2).getByRole('button', { name: /정규식/ }))
+    await user.clear(liveInput)
+    await user.type(liveInput, '[[bad')
+    expect(within(restoredBar2).getByRole('alert')).toHaveTextContent(/정규식/)
+    expect(container.querySelector('.error-banner')).toBeNull()
+
+    // Close Find Bar, open SettingsPanel -> Ctrl+F suppressed; open ConfirmDialog -> Ctrl+F suppressed
+    await user.click(within(restoredBar2).getByRole('button', { name: '찾기 바 닫기' }))
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(await screen.findByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    await user.click(within(screen.getByRole('dialog', { name: '전역 설정 패널' })).getByRole('button', { name: '닫기' }))
+
+    setRawEditorText(await screen.findByTestId('document-editor'), 'Dirty change')
+    await user.click(screen.getAllByRole('button', { name: 'notes.md 탭 닫기' })[0])
+    const dirtyDialog = await screen.findByRole('alertdialog')
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    await user.click(within(dirtyDialog).getByRole('button', { name: '취소' }))
+
+    // Open Find Bar again, then switch workspace -> Find Bar state resets
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    expect(await screen.findByRole('region', { name: '문서 내 찾기 바' })).toBeInTheDocument()
+    api.workspace.selectFolder = async () => 'C:/wiki/beta'
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const confirmSwitch = await screen.findByRole('alertdialog')
+    await user.click(within(confirmSwitch).getByRole('button', { name: '버리고 이동' }))
+    await user.click(within(activityBar).getByRole('button', { name: '탐색기' }))
+    await waitFor(() => {
+      expect(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('beta.md')).toBeInTheDocument()
+    })
+    await user.click(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('beta.md'))
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+  })
+
+  it('maintains independent Find Bar states for primary and secondary split panes', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'first.md': 'FirstToken one\nFirstToken two',
+            'second.md': 'SecondToken exact SecondTokenMore'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('first.md'))
+    await user.click(within(explorer).getByText('second.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { name: 'second.md' }))
+    await user.click(
+      within(screen.getByRole('menu', { name: '탭 작업 메뉴' })).getByRole('menuitem', {
+        name: '분할 영역으로 이동'
+      })
+    )
+    const secondaryPane = screen.getByTestId('pane-secondary')
+
+    // Open Find Bar in primaryPane via header button -> secondaryPane stays closed
+    await user.click(within(primaryPane).getByRole('button', { name: '문서 내 찾기' }))
+    const primaryBar = within(primaryPane).getByRole('region', { name: '문서 내 찾기 바' })
+    await user.type(
+      within(primaryBar).getByRole('textbox', { name: '문서 내 검색어 입력' }),
+      'FirstToken'
+    )
+    expect(within(primaryBar).getByText('1 / 2')).toBeInTheDocument()
+    expect(within(secondaryPane).queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+
+    // Focus secondaryPane editor and press Ctrl+F -> opens independent Find Bar in secondaryPane
+    const secondaryEditor = within(secondaryPane).getByTestId('document-editor')
+    fireEvent.keyDown(secondaryEditor, { key: 'f', ctrlKey: true })
+    const secondaryBar = within(secondaryPane).getByRole('region', { name: '문서 내 찾기 바' })
+    await user.type(
+      within(secondaryBar).getByRole('textbox', { name: '문서 내 검색어 입력' }),
+      'SecondToken'
+    )
+    expect(within(secondaryBar).getByText('1 / 2')).toBeInTheDocument()
+
+    await user.click(within(secondaryBar).getByRole('button', { name: /단어 단위/ }))
+    expect(within(secondaryBar).getByText('1 / 1')).toBeInTheDocument()
+    expect(within(primaryBar).getByText('1 / 2')).toBeInTheDocument()
+    expect(within(primaryBar).getByRole('button', { name: /단어 단위/ })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+
+    // Close primaryPane Find Bar via Esc -> secondaryPane Find Bar stays open
+    fireEvent.keyDown(within(primaryBar).getByRole('textbox', { name: '문서 내 검색어 입력' }), {
+      key: 'Escape'
+    })
+    expect(within(primaryPane).queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    expect(within(secondaryPane).getByRole('region', { name: '문서 내 찾기 바' })).toBeInTheDocument()
   })
 })

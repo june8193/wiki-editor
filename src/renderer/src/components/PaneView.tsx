@@ -5,7 +5,7 @@ import type { WorkspaceEntry } from '@shared/workspace'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
-import { DocumentEditor } from './DocumentEditor'
+import { DocumentEditor, type DocumentEditorFindControl } from './DocumentEditor'
 import { type GitDiffContentState, GitDiffViewer } from './GitDiffViewer'
 import {
   allowWikiTabDragOver,
@@ -28,6 +28,7 @@ interface PaneViewProps {
   buffers: DocumentBufferSnapshot
   diffsByKey: Record<string, GitDiffContentState>
   dragState: TabDragUiState
+  findControl?: DocumentEditorFindControl
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
   actions: PaneInteractionActions
 }
@@ -45,6 +46,7 @@ export function PaneView({
   buffers,
   diffsByKey,
   dragState,
+  findControl,
   onActiveHeadingChange,
   actions
 }: PaneViewProps) {
@@ -117,6 +119,7 @@ export function PaneView({
           isActive={isActivePane}
           isShortcutDisabled={isShortcutDisabled}
           workspaceMarkdownFiles={workspaceMarkdownFiles}
+          findControl={findControl}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}

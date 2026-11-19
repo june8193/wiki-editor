@@ -1,4 +1,32 @@
-import type { TextMatchSpan } from '@shared/search'
+import type { SearchMatchOptions, TextMatchSpan } from '@shared/search'
+
+export interface SearchOptionDescriptor {
+  key: keyof SearchMatchOptions
+  shortLabel: string
+  ariaLabel: string
+  title: string
+}
+
+export const SEARCH_OPTION_BUTTONS: readonly SearchOptionDescriptor[] = [
+  {
+    key: 'caseSensitive',
+    shortLabel: 'Aa',
+    ariaLabel: '대소문자 구분 (Aa)',
+    title: '대소문자 구분'
+  },
+  {
+    key: 'wholeWord',
+    shortLabel: 'ab',
+    ariaLabel: '단어 단위 (ab)',
+    title: '단어 단위'
+  },
+  {
+    key: 'useRegex',
+    shortLabel: '.*',
+    ariaLabel: '정규식 (.*)',
+    title: '정규식'
+  }
+]
 
 export interface KeyboardEventLike {
   key: string

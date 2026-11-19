@@ -7,33 +7,11 @@ import type {
   WorkspaceSearchResponse
 } from '@shared/search'
 import { getWorkspacePathKey } from '@shared/workspace'
-import { type SearchFocusRequest, splitTextByMatchSpans } from '../utils/workspaceSearch'
-
-const SEARCH_OPTION_BUTTONS: ReadonlyArray<{
-  key: keyof SearchMatchOptions
-  shortLabel: string
-  ariaLabel: string
-  title: string
-}> = [
-  {
-    key: 'caseSensitive',
-    shortLabel: 'Aa',
-    ariaLabel: '대소문자 구분 (Aa)',
-    title: '대소문자 구분'
-  },
-  {
-    key: 'wholeWord',
-    shortLabel: 'ab',
-    ariaLabel: '단어 단위 (ab)',
-    title: '단어 단위'
-  },
-  {
-    key: 'useRegex',
-    shortLabel: '.*',
-    ariaLabel: '정규식 (.*)',
-    title: '정규식'
-  }
-]
+import {
+  SEARCH_OPTION_BUTTONS,
+  type SearchFocusRequest,
+  splitTextByMatchSpans
+} from '../utils/workspaceSearch'
 
 function renderHighlightedText(text: string, spans: readonly TextMatchSpan[]): ReactNode {
   const segments = splitTextByMatchSpans(text, spans)

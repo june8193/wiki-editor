@@ -16,7 +16,13 @@ import {
 import { tags } from '@lezer/highlight'
 import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
+import { normalizeRawDocText } from '../editor/documentFind'
 import { formatRawMarkdownImages } from '../editor/imageIngestion'
+import {
+  createRawSearchExtensions,
+  type RawFindHighlightRequest,
+  syncRawSearchHighlights
+} from '../editor/rawSearchHighlight'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
 import { detectTableAtOffset } from '../editor/TableMarkdownManipulator'
 import {
@@ -59,13 +65,15 @@ export interface UseRawCodeMirrorEditorOptions {
   documentPath?: string
   enableImageInsertion?: boolean
   scrollRequest?: RawScrollRequest | null
+  findHighlight?: RawFindHighlightRequest | null
   isActive?: boolean
   editorViewRef?: { current: EditorView | null }
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onLinkNavigate?: (href: string) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
-  onRawScroll?: () => void}
+  onRawScroll?: () => void
+}
 
 const markdownHighlightStyle = HighlightStyle.define([
   { tag: [tags.heading, tags.heading1, tags.heading2, tags.heading3], color: 'var(--cm-heading)', fontWeight: '700' },
@@ -81,10 +89,6 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: [tags.comment, tags.meta, tags.processingInstruction], color: 'var(--text-secondary)' },
   { tag: tags.propertyName, color: 'var(--cm-heading)' }
 ])
-
-function normalizeDocText(text: string): string {
-  return text.replace(/\r\n?/g, '\n')
-}
 
 function resolveRawClickOffset(view: EditorView, event: MouseEvent): number | null {
   if (event.clientX !== 0 || event.clientY !== 0) {
@@ -206,6 +210,7 @@ export function useRawCodeMirrorEditor({
   documentPath,
   enableImageInsertion = language === 'markdown' && Boolean(documentPath),
   scrollRequest,
+  findHighlight = null,
   isActive = true,
   editorViewRef,
   onChangeContent,
@@ -217,6 +222,7 @@ export function useRawCodeMirrorEditor({
   const shellRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const lastScrolledFindNonceRef = useRef(0)
   const outlineSpyRef = useRef<{
     attachScrollElement: (element: HTMLElement) => () => void
   }>({
@@ -236,6 +242,7 @@ export function useRawCodeMirrorEditor({
     showTableToolbar,
     enableLinkAutocomplete,
     isShortcutDisabled,
+    findHighlight,
     onChangeContent,
     onUpdateViewState,
     onLinkNavigate,
@@ -250,6 +257,7 @@ export function useRawCodeMirrorEditor({
     showTableToolbar,
     enableLinkAutocomplete,
     isShortcutDisabled,
+    findHighlight,
     onChangeContent,
     onUpdateViewState,
     onLinkNavigate,
@@ -308,7 +316,7 @@ export function useRawCodeMirrorEditor({
 
   const [inTable, setInTable] = useState(() => {
     if (!showTableToolbar) return false
-    const normalized = normalizeDocText(content)
+    const normalized = normalizeRawDocText(content)
     const { anchor } = clampSelection(normalized.length, cursor)
     return detectTableAtOffset(normalized, anchor) !== null
   })
@@ -319,7 +327,7 @@ export function useRawCodeMirrorEditor({
 
     const initial = runtimeRef.current
     const compartments = compartmentsRef.current
-    const normalizedInitial = normalizeDocText(initial.content)
+    const normalizedInitial = normalizeRawDocText(initial.content)
     const initialSelection = clampSelection(normalizedInitial.length, initial.cursor)
     lastCursorPropRef.current = initial.cursor
 
@@ -355,6 +363,7 @@ export function useRawCodeMirrorEditor({
         bracketMatching(),
         EditorView.lineWrapping,
         syntaxHighlighting(markdownHighlightStyle),
+        createRawSearchExtensions(),
         compartments.language.of(createLanguageExtension(initial.language)),
         compartments.theme.of(createEditorThemeExtension(initial.theme)),
         compartments.tableKeymap.of(initial.showTableToolbar ? rawTableKeymap : []),
@@ -485,6 +494,18 @@ export function useRawCodeMirrorEditor({
     if (editorViewRef) {
       editorViewRef.current = view
     }
+    if (initial.findHighlight) {
+      lastScrolledFindNonceRef.current = initial.findHighlight.scrollNonce
+      if (initial.findHighlight.isActive && initial.findHighlight.matches.length > 0) {
+        syncRawSearchHighlights(view, {
+          isActive: true,
+          matches: initial.findHighlight.matches,
+          activeIndex: initial.findHighlight.activeIndex,
+          scrollToActive: false,
+          externalAnnotation: externalSyncAnnotation.of(true)
+        })
+      }
+    }
 
     const detachOutlineScroll = outlineSpyRef.current.attachScrollElement(view.scrollDOM)
 
@@ -537,7 +558,7 @@ export function useRawCodeMirrorEditor({
     const view = viewRef.current
     if (!view) return
 
-    const normalizedPropDoc = normalizeDocText(content)
+    const normalizedPropDoc = normalizeRawDocText(content)
     const currentDoc = view.state.doc.toString()
     const docChanged = currentDoc !== normalizedPropDoc
     if (docChanged && (content.includes('\n') || content.includes('\r'))) {
@@ -577,6 +598,44 @@ export function useRawCodeMirrorEditor({
     if (!view) return
     syncElementScrollTop(view.scrollDOM, scrollTop)
   }, [scrollTop])
+
+  useLayoutEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    if (!findHighlight) {
+      syncRawSearchHighlights(view, {
+        isActive: false,
+        matches: [],
+        activeIndex: -1,
+        scrollToActive: false,
+        externalAnnotation: externalSyncAnnotation.of(true)
+      })
+      return
+    }
+
+    const shouldScroll =
+      findHighlight.isActive &&
+      findHighlight.matches.length > 0 &&
+      findHighlight.scrollNonce > 0 &&
+      findHighlight.scrollNonce !== lastScrolledFindNonceRef.current
+    if (shouldScroll) {
+      lastScrolledFindNonceRef.current = findHighlight.scrollNonce
+    }
+
+    syncRawSearchHighlights(view, {
+      isActive: findHighlight.isActive,
+      matches: findHighlight.matches,
+      activeIndex: findHighlight.activeIndex,
+      scrollToActive: shouldScroll,
+      externalAnnotation: externalSyncAnnotation.of(true),
+      onScrolled: (nextScrollTop, didSetScrollTop) => {
+        if (didSetScrollTop) {
+          runtimeRef.current.onUpdateViewState({ scrollTop: nextScrollTop })
+        }
+        runtimeRef.current.onRawScroll?.()
+      }
+    })
+  }, [content, findHighlight])
 
   const outlineSpy = useEditorOutlineSpy({
     content,

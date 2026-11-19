@@ -4609,4 +4609,140 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     ).toBe('SharedToken')
     expect(within(alphaSearchAfterFocus).getByText(/alpha-doc\.md/)).toBeInTheDocument()
   })
+
+  it('supports in-document Find Bar, Ctrl+F selection auto-fill, Split/Raw navigation, and window isolation across main and auxiliary windows with live shared-buffer sync', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'shared.md': '# Shared Doc\nAuxTarget one\nAuxTarget two',
+            'other.md': '# Other\nMainTarget only'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    activeDisposers.push(() => mainRendered.unmount())
+
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+    const mainExplorer = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(mainExplorer).findByText('shared.md'))
+    await user.click(within(mainExplorer).getByText('other.md'))
+    await waitFor(() => {
+      expect(within(mainRendered.container).getByRole('tab', { name: 'shared.md' })).toBeInTheDocument()
+    })
+
+    // Detach shared.md into an auxiliary window
+    await detachTabViaContextMenu(user, mainRendered.container, /shared\.md/)
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows(mainWin.windowId)).toHaveLength(1)
+    })
+    const auxWin = harness.getAuxiliaryWindows(mainWin.windowId)[0]
+    const auxRendered = render(<App wikiApi={auxWin.api} />)
+    activeDisposers.push(() => auxRendered.unmount())
+
+    const auxEditor = await within(auxRendered.container).findByTestId('document-editor')
+
+    // Aux window still ignores Ctrl+Shift+F
+    fireEvent.keyDown(auxEditor, { key: 'F', ctrlKey: true, shiftKey: true })
+    expect(within(auxRendered.container).queryByRole('region', { name: '검색 뷰' })).toBeNull()
+
+    // Select 'AuxTarget' in auxEditor and press Ctrl+F -> opens Find Bar ONLY in auxWin, NOT in mainWin
+    const sharedText = '# Shared Doc\nAuxTarget one\nAuxTarget two'
+    const targetStart = sharedText.indexOf('AuxTarget')
+    setRawEditorSelection(auxEditor, targetStart, targetStart + 'AuxTarget'.length)
+    fireEvent.keyDown(auxEditor, { key: 'f', ctrlKey: true })
+
+    const auxFindBar = await within(auxRendered.container).findByRole('region', {
+      name: '문서 내 찾기 바'
+    })
+    expect(
+      (within(auxFindBar).getByRole('textbox', { name: '문서 내 검색어 입력' }) as HTMLInputElement).value
+    ).toBe('AuxTarget')
+    expect(within(auxFindBar).getByText('1 / 2')).toBeInTheDocument()
+    expect(auxRendered.container.querySelectorAll('.cm-search-match')).toHaveLength(2)
+    expect(
+      within(mainRendered.container).queryByRole('region', { name: '문서 내 찾기 바' })
+    ).not.toBeInTheDocument()
+
+    // Main window opens shared.md and edits it -> auxWin Find Bar match count & highlights update in real time
+    await user.click(await within(mainExplorer).findByText('shared.md'))
+    const mainSharedEditor = await within(mainRendered.container).findByTestId('document-editor')
+    setRawEditorText(
+      mainSharedEditor,
+      '# Shared Doc\nAuxTarget one\nAuxTarget two\nAuxTarget three'
+    )
+    await waitFor(() => {
+      expect(within(auxFindBar).getByText('1 / 3')).toBeInTheDocument()
+    })
+    expect(auxRendered.container.querySelectorAll('.cm-search-match')).toHaveLength(3)
+
+    // Aux window switches to Split mode -> Find Bar persists and cycles matches
+    await user.click(
+      within(within(auxRendered.container).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Split' }
+      )
+    )
+    const auxSplitBar = within(auxRendered.container).getByRole('region', {
+      name: '문서 내 찾기 바'
+    })
+    expect(within(auxSplitBar).getByText('1 / 3')).toBeInTheDocument()
+    await user.click(within(auxSplitBar).getByRole('button', { name: '다음 일치' }))
+    expect(within(auxSplitBar).getByText('2 / 3')).toBeInTheDocument()
+
+    // Main window Ctrl+F opens independent Find Bar in mainWin without affecting auxWin
+    fireEvent.keyDown(mainSharedEditor, { key: 'f', ctrlKey: true })
+    const mainFindBar = await within(mainRendered.container).findByRole('region', {
+      name: '문서 내 찾기 바'
+    })
+    await user.type(
+      within(mainFindBar).getByRole('textbox', { name: '문서 내 검색어 입력' }),
+      'Shared'
+    )
+    expect(within(mainFindBar).getByText('1 / 1')).toBeInTheDocument()
+    expect(
+      (within(auxSplitBar).getByRole('textbox', { name: '문서 내 검색어 입력' }) as HTMLInputElement).value
+    ).toBe('AuxTarget')
+
+    // Aux window header button closes Find Bar; Ctrl+F from aux pane-workspace reopens with preserved query, and dirty tab close dialog suppresses Ctrl+F in auxWin
+    await user.click(within(auxRendered.container).getByRole('button', { name: '문서 내 찾기' }))
+    expect(
+      within(auxRendered.container).queryByRole('region', { name: '문서 내 찾기 바' })
+    ).not.toBeInTheDocument()
+
+    fireEvent.keyDown(within(auxRendered.container).getByTestId('pane-workspace'), {
+      key: 'f',
+      ctrlKey: true
+    })
+    expect(
+      within(auxRendered.container).getByRole('region', { name: '문서 내 찾기 바' })
+    ).toBeInTheDocument()
+    expect(
+      within(mainRendered.container).getByRole('region', { name: '문서 내 찾기 바' })
+    ).toBeInTheDocument()
+    await user.click(within(auxRendered.container).getByRole('button', { name: '문서 내 찾기' }))
+
+    // Close shared.md in mainWin first so auxWin holds the sole remaining dirty tab -> ConfirmDialog opens
+    await user.click(within(mainRendered.container).getByRole('button', { name: 'shared.md 탭 닫기' }))
+    await waitFor(() => {
+      expect(mainWin.hub.getSnapshot().tabCounts['c:/wiki/docs/shared.md']).toBe(1)
+    })
+    await user.click(within(auxRendered.container).getByRole('button', { name: 'shared.md 탭 닫기' }))
+    const auxConfirm = await within(auxRendered.container).findByRole('alertdialog')
+    fireEvent.keyDown(within(auxRendered.container).getByTestId('pane-workspace'), {
+      key: 'f',
+      ctrlKey: true
+    })
+    expect(
+      within(auxRendered.container).queryByRole('region', { name: '문서 내 찾기 바' })
+    ).not.toBeInTheDocument()
+    await user.click(within(auxConfirm).getByRole('button', { name: '취소' }))
+  })
 })

@@ -24,6 +24,7 @@ import {
   isExternalTabDragEvent,
   type TabDragUiState
 } from '../stores/tabDragDrop'
+import type { DocumentEditorFindControl } from './DocumentEditor'
 import type { GitDiffContentState } from './GitDiffViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
@@ -39,6 +40,7 @@ export interface PaneWorkspaceProps {
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   dragState: TabDragUiState
+  getPaneFindControl?: (paneId: PaneId) => DocumentEditorFindControl
   onSetSplitRatio: (ratio: number) => void
   onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
@@ -66,6 +68,7 @@ export function PaneWorkspace({
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   dragState,
+  getPaneFindControl,
   onSetSplitRatio,
   onSplitWithTab,
   onActiveHeadingChange,
@@ -215,6 +218,7 @@ export function PaneWorkspace({
         pane={layout.panes.primary}
         isActivePane={layout.activePaneId === 'primary'}
         flexRatio={isSplit ? layout.splitRatio : undefined}
+        findControl={getPaneFindControl?.('primary')}
         {...sharedPaneProps}
       />
 
@@ -254,6 +258,7 @@ export function PaneWorkspace({
             pane={layout.panes.secondary}
             isActivePane={layout.activePaneId === 'secondary'}
             flexRatio={1 - layout.splitRatio}
+            findControl={getPaneFindControl?.('secondary')}
             {...sharedPaneProps}
           />
         </>

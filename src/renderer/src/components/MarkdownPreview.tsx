@@ -108,18 +108,23 @@ export function MarkdownPreview({
     [content, documentPath, documentTitle, handleAnchorNavigate, mermaidRenderer, onLinkNavigate, theme]
   )
 
+  const setPreviewContainerRef = useCallback(
+    (el: HTMLDivElement | null): void => {
+      containerRef.current = el
+      if (scrollContainerRef) {
+        scrollContainerRef.current = el
+      }
+    },
+    [scrollContainerRef]
+  )
+
   return (
     <MermaidHeightSessionProvider
       mermaidHeights={mermaidHeights}
       onMermaidHeightChange={onMermaidHeightChange}
     >
       <div
-        ref={(el) => {
-          containerRef.current = el
-          if (scrollContainerRef) {
-            scrollContainerRef.current = el
-          }
-        }}
+        ref={setPreviewContainerRef}
         className="markdown-preview"
         data-testid={testId}
         aria-label="마크다운 미리보기"

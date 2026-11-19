@@ -1,4 +1,4 @@
-import { type ReactNode, type Ref, useCallback, useMemo, useState } from 'react'
+import { type ReactNode, type Ref, useCallback, useMemo, useRef, useState } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
@@ -12,6 +12,7 @@ import {
   useMarkdownLinkNavigation,
   type UseMarkdownLinkNavigationOptions
 } from '../hooks/useMarkdownLinkNavigation'
+import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
 import {
   clampSidebarWidth,
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
@@ -33,7 +34,7 @@ interface RightSidebarState {
 
 export type WindowFramePaneWorkspaceProps = Omit<
   PaneWorkspaceProps,
-  'scrollRequest' | 'onActiveHeadingChange'
+  'scrollRequest' | 'onActiveHeadingChange' | 'getPaneFindControl'
 >
 
 export function buildPaneWorkspaceProps(
@@ -106,6 +107,18 @@ export function EditorWindowFrame({
     isCollapsed: initialRightSidebarCollapsed,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
   }))
+  const localShellRef = useRef<HTMLDivElement | null>(null)
+  const setMergedShellRef = useCallback(
+    (node: HTMLDivElement | null): void => {
+      localShellRef.current = node
+      if (typeof shellRef === 'function') {
+        shellRef(node)
+      } else if (shellRef && 'current' in shellRef) {
+        ;(shellRef as { current: HTMLDivElement | null }).current = node
+      }
+    },
+    [shellRef]
+  )
 
   const handleCollapseRightSidebar = useCallback((): void => {
     setRightSidebar((prev) => (prev.isCollapsed ? prev : { ...prev, isCollapsed: true }))
@@ -121,6 +134,14 @@ export function EditorWindowFrame({
       prev.width === clampedWidth ? prev : { ...prev, width: clampedWidth }
     )
   }, [])
+
+  const paneFind = usePaneDocumentFind({
+    layout: paneWorkspaceProps.layout,
+    buffers: paneWorkspaceProps.buffers,
+    workspaceRootPath,
+    isShortcutDisabled: Boolean(paneWorkspaceProps.isShortcutDisabled),
+    shellRef: localShellRef
+  })
 
   const outline = useDocumentOutline(
     paneWorkspaceProps.layout,
@@ -146,7 +167,7 @@ export function EditorWindowFrame({
   )
 
   return (
-    <div ref={shellRef} className="app-shell" data-theme={paneWorkspaceProps.theme}>
+    <div ref={setMergedShellRef} className="app-shell" data-theme={paneWorkspaceProps.theme}>
       {errorMessage && (
         <div className="error-banner" role="alert">
           {errorMessage}
@@ -162,6 +183,7 @@ export function EditorWindowFrame({
           <PaneWorkspace
             {...paneWorkspaceProps}
             scrollRequest={outline.scrollRequest}
+            getPaneFindControl={paneFind.getPaneFindControl}
             onActiveHeadingChange={outline.handleActiveHeadingChange}
             actions={paneActions}
           />
