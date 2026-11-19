@@ -157,6 +157,120 @@ describe('WysiwygMarkdownEditor', () => {
     expect(screen.queryByRole('toolbar', { name: '표 편집 툴바' })).not.toBeInTheDocument()
   })
 
+  it('renders floating table toolbar as compact icon buttons with dividers, instant tooltips, danger tones, and preserves formatting toolbar & context menu text', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <WysiwygMarkdownEditor
+        content={'# Heading\n\nParagraph text'}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+      />
+    )
+
+    // Formatting toolbar (including 표 삽입) stays text buttons without SVG icons
+    const mainToolbar = screen.getByRole('toolbar', { name: '위지윅 서식 툴바' })
+    const mainButtons = within(mainToolbar).getAllByRole('button')
+    expect(mainButtons.length).toBeGreaterThan(0)
+    for (const btn of mainButtons) {
+      expect(btn.querySelector('svg')).toBeNull()
+      expect(btn.textContent?.trim().length).toBeGreaterThan(0)
+    }
+    const insertTableBtn = within(mainToolbar).getByRole('button', { name: '표 삽입' })
+    expect(insertTableBtn).toHaveTextContent('표 삽입')
+    expect(insertTableBtn.querySelector('svg')).toBeNull()
+
+    await user.click(insertTableBtn)
+
+    const tableToolbar = await screen.findByRole('toolbar', { name: '표 편집 툴바' })
+    expect(tableToolbar.querySelector('.table-toolbar-label')).toBeNull()
+    expect(within(tableToolbar).queryByText('표 편집')).not.toBeInTheDocument()
+
+    const expectedActions = [
+      { label: '행 위 추가', edge: 'left', tone: null },
+      { label: '행 아래 추가', edge: null, tone: null },
+      { label: '열 좌 추가', edge: null, tone: null },
+      { label: '열 우 추가', edge: null, tone: null },
+      { label: '현재 행 삭제', edge: null, tone: 'subtle-danger' },
+      { label: '현재 열 삭제', edge: null, tone: 'subtle-danger' },
+      { label: '표 삭제', edge: 'right', tone: 'danger' }
+    ] as const
+
+    const toolbarButtons = within(tableToolbar).getAllByRole('button')
+    expect(toolbarButtons).toHaveLength(7)
+
+    toolbarButtons.forEach((btn, index) => {
+      const expected = expectedActions[index]
+      expect(btn).toHaveClass('table-toolbar-icon-btn')
+      expect(btn).toHaveAttribute('aria-label', expected.label)
+      expect(btn).toHaveAttribute('data-tooltip', expected.label)
+      expect(btn).not.toHaveAttribute('title')
+      expect(btn.textContent?.trim()).toBe('')
+
+      const svg = btn.querySelector('svg')
+      expect(svg).not.toBeNull()
+      expect(svg).toHaveAttribute('aria-hidden', 'true')
+
+      if (expected.edge) {
+        expect(btn).toHaveAttribute('data-tooltip-edge', expected.edge)
+      } else {
+        expect(btn).not.toHaveAttribute('data-tooltip-edge')
+      }
+
+      expect(btn.classList.contains('is-danger')).toBe(expected.tone === 'danger')
+      expect(btn.classList.contains('is-subtle-danger')).toBe(expected.tone === 'subtle-danger')
+    })
+
+    const dividers = tableToolbar.querySelectorAll('.table-toolbar-divider[aria-hidden="true"]')
+    expect(dividers).toHaveLength(3)
+
+    const childStructure = Array.from(tableToolbar.children).map((el) =>
+      el.matches('button.table-toolbar-icon-btn')
+        ? 'btn'
+        : el.matches('span.table-toolbar-divider')
+          ? 'divider'
+          : el.tagName.toLowerCase()
+    )
+    expect(childStructure).toEqual([
+      'btn',
+      'btn',
+      'divider',
+      'btn',
+      'btn',
+      'divider',
+      'btn',
+      'btn',
+      'divider',
+      'btn'
+    ])
+
+    // Cell right-click context menu remains text-only without SVG icons
+    const editorEl = screen.getByTestId('document-editor')
+    const cell = editorEl.querySelector('td, th')!
+    fireEvent.contextMenu(cell, { clientX: 40, clientY: 60 })
+    const cellMenu = await screen.findByRole('menu', { name: '표 셀 작업 메뉴' })
+    const menuItems = within(cellMenu).getAllByRole('menuitem')
+    expect(menuItems.map((item) => item.textContent?.trim())).toEqual(
+      expectedActions.map((action) => action.label)
+    )
+    for (const item of menuItems) {
+      expect(item.querySelector('svg')).toBeNull()
+    }
+
+    // Theme CSS contract for compact floating bar, instant tooltips, and theme tokens
+    const floatingRule = themeCss.match(/\.editor-table-toolbar\.is-floating\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(floatingRule).toMatch(/width:\s*fit-content/)
+    expect(themeCss).toMatch(/\.table-toolbar-icon-btn\[data-tooltip\]::after\s*\{/)
+
+    const lightBlock = themeCss.match(/:root,\s*\[data-theme='light'\]\s*\{[^}]*\}/)?.[0] ?? ''
+    const darkBlock = themeCss.match(/\[data-theme='dark'\]\s*\{[^}]*\}/)?.[0] ?? ''
+    for (const block of [lightBlock, darkBlock]) {
+      expect(block).toContain('--tooltip-bg:')
+      expect(block).toContain('--tooltip-fg:')
+      expect(block).toContain('--danger-subtle-bg:')
+    }
+  })
+
   it('prevents Electron window navigation when clicking links inside WYSIWYG content', () => {
     render(
       <WysiwygMarkdownEditor
