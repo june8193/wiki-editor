@@ -9,7 +9,8 @@ import {
   Copy,
   GitBranch,
   RefreshCw,
-  Tag
+  Tag,
+  type LucideIcon
 } from 'lucide-react'
 import type {
   GitCommitDetail,
@@ -96,13 +97,37 @@ function getDisplayRefKey(displayRef: GitGraphDisplayRef): string {
   return displayRef.kind === 'head' ? 'head' : `${displayRef.kind}:${displayRef.name}`
 }
 
+function GitGraphRefBadgeChip({
+  variantClass,
+  title,
+  label,
+  Icon,
+  strokeWidth = 1.75
+}: {
+  variantClass: string
+  title: string
+  label: string
+  Icon: LucideIcon
+  strokeWidth?: number
+}) {
+  return (
+    <span className={`git-ref-badge ${variantClass}`} title={title}>
+      <Icon size={10} strokeWidth={strokeWidth} className="git-ref-icon" aria-hidden="true" />
+      <span className="git-ref-label">{label}</span>
+    </span>
+  )
+}
+
 function GitGraphRefBadgeItem({ displayRef }: { displayRef: GitGraphDisplayRef }) {
   if (displayRef.kind === 'head') {
     return (
-      <span className="git-ref-badge is-head" title="HEAD (detached)">
-        <CircleDot size={10} strokeWidth={2} className="git-ref-icon" aria-hidden="true" />
-        <span className="git-ref-label">HEAD</span>
-      </span>
+      <GitGraphRefBadgeChip
+        variantClass="is-head"
+        title="HEAD (detached)"
+        label="HEAD"
+        Icon={CircleDot}
+        strokeWidth={2}
+      />
     )
   }
 
@@ -110,17 +135,13 @@ function GitGraphRefBadgeItem({ displayRef }: { displayRef: GitGraphDisplayRef }
     const remoteTooltip = displayRef.syncedRemotes.join(', ')
     return (
       <span className="git-ref-branch-group">
-        <span
-          className={`git-ref-badge is-local-branch${displayRef.isCurrentHead ? ' is-current-head' : ''}`}
+        <GitGraphRefBadgeChip
+          variantClass={`is-local-branch${displayRef.isCurrentHead ? ' is-current-head' : ''}`}
           title={displayRef.name}
-        >
-          {displayRef.isCurrentHead ? (
-            <CircleDot size={10} strokeWidth={2} className="git-ref-icon" aria-hidden="true" />
-          ) : (
-            <GitBranch size={10} strokeWidth={1.75} className="git-ref-icon" aria-hidden="true" />
-          )}
-          <span className="git-ref-label">{displayRef.name}</span>
-        </span>
+          label={displayRef.name}
+          Icon={displayRef.isCurrentHead ? CircleDot : GitBranch}
+          strokeWidth={displayRef.isCurrentHead ? 2 : 1.75}
+        />
         {displayRef.syncedRemotes.length > 0 && (
           <span
             className="git-ref-badge is-synced-remote"
@@ -134,20 +155,14 @@ function GitGraphRefBadgeItem({ displayRef }: { displayRef: GitGraphDisplayRef }
     )
   }
 
-  if (displayRef.kind === 'remote') {
-    return (
-      <span className="git-ref-badge is-remote-branch" title={displayRef.name}>
-        <Cloud size={10} strokeWidth={1.75} className="git-ref-icon" aria-hidden="true" />
-        <span className="git-ref-label">{displayRef.name}</span>
-      </span>
-    )
-  }
-
+  const isRemote = displayRef.kind === 'remote'
   return (
-    <span className="git-ref-badge is-tag" title={displayRef.name}>
-      <Tag size={10} strokeWidth={1.75} className="git-ref-icon" aria-hidden="true" />
-      <span className="git-ref-label">{displayRef.name}</span>
-    </span>
+    <GitGraphRefBadgeChip
+      variantClass={isRemote ? 'is-remote-branch' : 'is-tag'}
+      title={displayRef.name}
+      label={displayRef.name}
+      Icon={isRemote ? Cloud : Tag}
+    />
   )
 }
 

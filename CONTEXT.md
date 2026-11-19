@@ -65,7 +65,7 @@ Git 뷰에 표시되며 UI 최상단 헤더 타이틀 `"Source Control"`(접근�
 _Avoid_: 소스 제어 패널, 버전 관리 뷰
 
 **Changes 섹션 (Changes Section)**:
-Git 패널 상단 아코디언 섹션으로, 헤더 우측 아이콘 툴바(`리스트/트리 보기 전환`, `Commit`, `새로고침`)와 총 변경 파일 수 배지, 1줄 자동 높이 조절 커밋 메시지 입력창(`메시지 (Ctrl+Enter로 "<branch>"에 커밋)`) 및 상태별 스마트 기본 CTA(`✓ Commit | ▾` 스플릿 드롭다운: `Commit`/`Commit & Push`/`Commit & Sync` 및 `Staged = 0` 자동 Stage 확인, 클린 상태에서 `☁ Publish Branch` / `↻ Sync Changes N↓ M↑`), 0건일 때 자동 숨겨지는 `Staged Changes`·`Changes` 접기/펼치기 하위 그룹(우측 카운트 배지 및 호버/포커스 일괄 `-` · `↶` · `+`), 리스트 보기와 세션 메모리 기반 단일 하위 경로 압축(`a/b/c`) 폴더 트리 보기, VS Code 컴팩트 파일 행(파일 아이콘, 파일명·삭제 취소선, 리스트 모드 흐린 상대 디렉토리 경로, 호버/포커스 `파일 열기`(워크스페이스 내 비삭제 파일 일반 편집 탭 열기)·`롤백`·`Stage`/`Unstage`, 우측 끝 VS Code 상태 문자 `M`/`A`/`D`/`R`/`C`/`U`), 행 클릭 **Diff 탭** 열기, 미추적 파일 OS 휴지통 이동, 열린 문서 버퍼·unstaged Diff 탭 동기화를 독립 스크롤 영역에 제공합니다.
+Git 패널 상단 아코디언 섹션으로, 헤더 우측 아이콘 툴바(`리스트/트리 보기 전환`, `Commit`, `새로고침`)와 총 변경 파일 수 배지, 1줄 자동 높이 조절 커밋 메시지 입력창(`메시지 (Ctrl+Enter로 "<branch>"에 커밋)`) 및 상태별 스마트 기본 CTA(`✓ Commit | ▾` 스플릿 드롭다운: `Commit`/`Commit & Push`/`Commit & Sync` 및 `Staged = 0` 자동 Stage 확인, 클린 상태에서 `☁ Publish Branch` / `↻ Sync Changes N↓ M↑`), 0건일 때 자동 숨겨지는 `Staged Changes`·`Changes` 접기/펼치기 하위 그룹(우측 카운트 배지 및 호버/포커스 일괄 `-` · `↶` · `+`), 리스트 보기와 세션 메모리 기반 단일 하위 경로 압축(`a/b/c`) 폴더 트리 보기, VS Code 컴팩트 파일 행(파일 아이콘, 파일명·삭제 취소선, 리스트 모드 흐린 상대 디렉토리 경로, 호버/포커스 `파일 열기`(워크스페이스 내 비삭제 파일을 편집 가능한 일반 탭으로 열기)·`롤백`·`Stage`/`Unstage`, 우측 끝 VS Code 상태 문자 `M`/`A`/`D`/`R`/`C`/`U`), 행 클릭 **Diff 탭** 열기, 미추적 파일 OS 휴지통 이동, 열린 문서 버퍼·unstaged Diff 탭 동기화를 독립 스크롤 영역에 제공합니다.
 _Avoid_: 스테이징 영역 패널, 변경 목록 탭
 
 **Graph 섹션 (Graph Section)**:
