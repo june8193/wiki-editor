@@ -3,10 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import { DEFAULT_SEARCH_MATCH_OPTIONS, type WorkspaceSearchResponse } from '@shared/search'
 import { ConfigService } from '../config/ConfigService'
 import { LogService } from '../logging/LogService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import { createFakeIpcMain } from './ipcTestHelpers'
+import { createSharedDocumentBufferHub } from './registerBufferIpc'
 import type { WebContentsLike } from './registerConfigIpc'
 import { registerWorkspaceIpc } from './registerWorkspaceIpc'
 
@@ -275,5 +277,47 @@ describe('registerWorkspaceIpc', () => {
     expect(mainEvents.length).toBe(countAfterMainUnwatch)
 
     dispose()
+  })
+
+  it('routes workspace:search with shared buffer hub priority and redacts raw query in audit logs', async () => {
+    const logService = new LogService(join(tempDir, 'logs'))
+    const configService = new ConfigService(configPath)
+    await configService.get()
+    const bufferHub = createSharedDocumentBufferHub({ workspaceService, configService })
+    const ipcMain = createFakeIpcMain()
+
+    const dispose = registerWorkspaceIpc({
+      ipcMain,
+      workspaceService,
+      configService,
+      bufferHub,
+      selectDirectory: async () => workspaceDir,
+      getTargets: () => [],
+      logService
+    })
+
+    const opened = (await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.open, workspaceDir)) as {
+      rootPath: string
+    }
+    const docPath = join(opened.rootPath, 'secret.md')
+    await writeFile(docPath, 'disk content only', 'utf8')
+    const buf = await bufferHub.openWorkspaceFile(docPath, 'secret.md')
+    bufferHub.syncWindowTabs(1, [buf.key])
+    bufferHub.updateContent(buf.key, 'PRIVATE_QUERY_MATCH_IN_BUFFER')
+
+    const result = await ipcMain.invoke<WorkspaceSearchResponse>(WORKSPACE_IPC_CHANNELS.search, {
+      query: 'PRIVATE_QUERY_MATCH',
+      options: DEFAULT_SEARCH_MATCH_OPTIONS
+    })
+
+    expect(result.totalFileCount).toBe(1)
+    expect(result.totalMatchCount).toBe(1)
+    expect(result.files[0].relativePath).toBe('secret.md')
+
+    const serializedLogs = JSON.stringify(await logService.readEntries())
+    expect(serializedLogs).not.toContain('PRIVATE_QUERY_MATCH')
+
+    dispose()
+    bufferHub.dispose()
   })
 })

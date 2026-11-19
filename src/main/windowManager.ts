@@ -55,6 +55,7 @@ import {
   tryResolveRealWorkspacePath,
   WorkspaceFsService
 } from './workspace/WorkspaceFsService'
+import { WorkspaceSearchService } from './workspace/WorkspaceSearchService'
 
 export interface WindowWebContentsLike extends BufferWebContentsLike {
   on?: (
@@ -113,6 +114,7 @@ export interface CreateMainWindowOptions {
 
 export interface WorkspaceSessionHandle extends BufferIpcSession, WorkspaceIpcSession {
   readonly workspaceService: WorkspaceFsService
+  readonly searchService: WorkspaceSearchService
   getTargets: () => WindowWebContentsLike[]
 }
 
@@ -135,6 +137,7 @@ interface WorkspaceSession {
   sessionId: number
   mainWebContentsId: number
   workspaceService: WorkspaceFsService
+  searchService: WorkspaceSearchService
   bufferHub: SharedDocumentBufferHub
   dragCoordinator: TabDragCoordinator
   ownsBufferHub: boolean
@@ -304,6 +307,10 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   ): WorkspaceSession {
     const sessionId = this.nextSessionId++
     const { workspaceService, bufferHub, ownsBufferHub } = this.createSessionServices()
+    const searchService = new WorkspaceSearchService({
+      workspaceService,
+      getOpenBuffers: () => Object.values(bufferHub.getSnapshot().buffers)
+    })
     const dragCoordinator = new TabDragCoordinator({
       nextDragSessionId: () => `drag-${++this.dragSessionCounter}`
     })
@@ -314,6 +321,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
       sessionId,
       mainWebContentsId: 0,
       workspaceService,
+      searchService,
       bufferHub,
       dragCoordinator,
       ownsBufferHub,
@@ -329,6 +337,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
       handle: {
         hub: bufferHub,
         workspaceService,
+        searchService,
         getTargets,
         resolveWindowId: (sender) => {
           const live = this.resolveLiveWindowSession(sender)
@@ -472,6 +481,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     if (session.ownsBufferHub) {
       session.bufferHub.dispose()
     }
+    session.searchService.dispose()
     session.workspaceService.dispose()
 
     this.sessions.delete(session.sessionId)
@@ -727,6 +737,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
         throw new Error('Only the main window can open a workspace')
       }
       try {
+        session.searchService.cancelActiveSearch()
         const info = await session.workspaceService.openWorkspace(realRoot)
         session.pendingInitialWorkspacePath = null
         if (!this.getLiveMainRecord(session)) {

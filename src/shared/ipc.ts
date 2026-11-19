@@ -36,6 +36,7 @@ import type {
   WindowRole
 } from './window'
 import type { RendererLogPayload } from './logging'
+import type { WorkspaceSearchRequest, WorkspaceSearchResponse } from './search'
 import type {
   ActivateOrOpenWorkspaceResult,
   FocusOpenWorkspaceResult,
@@ -75,6 +76,7 @@ export const WORKSPACE_IPC_CHANNELS = {
   focusIfOpen: 'workspace:focus-if-open',
   readDir: 'workspace:read-dir',
   listMarkdownFiles: 'workspace:list-markdown-files',
+  search: 'workspace:search',
   readFile: 'workspace:read-file',
   writeFile: 'workspace:write-file',
   createEntry: 'workspace:create-entry',
@@ -195,6 +197,7 @@ export interface WikiWorkspaceApi {
   focusIfOpen?(rootPath: string): Promise<FocusOpenWorkspaceResult>
   readDir(dirPath?: string): Promise<WorkspaceEntry[]>
   listMarkdownFiles(): Promise<WorkspaceEntry[]>
+  search?(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse>
   readFile(filePath: string): Promise<string>
   writeFile(filePath: string, content: string): Promise<void>
   createEntry(
