@@ -5,6 +5,16 @@
 
 ---
 
+## [1.6.0] - 2026-11-20
+
+### Added
+- `git:fetch` 서비스·IPC 연동 및 Git 패널 스마트 커밋·트리 보기 기능 추가: 원격 참조 갱신(`Fetch`), 저장소 상태별 스마트 기본 CTA(`Commit` / `Commit & Push` / `Commit & Sync` 스플릿 드롭다운, 클린 상태 `Publish Branch` / `Sync Changes N↓ M↑` 자동 전환, `Staged = 0` 시 전체 자동 Stage 확인 다이얼로그), `Changes` 섹션 경로 압축 폴더 트리 보기(`a/b/c`) 및 파일 행 호버 `파일 열기` 액션 지원 ([상세 스펙](.backlog/done/git-panel-vscode-style/spec.md), [티켓 01](.backlog/done/git-panel-vscode-style/issues/01-git-fetch-and-header-branch-subrow.md), [티켓 02](.backlog/done/git-panel-vscode-style/issues/02-smart-commit-cta-and-auto-stage.md), [티켓 03](.backlog/done/git-panel-vscode-style/issues/03-changes-file-list-tree-view-and-hover-actions.md))
+
+### Changed
+- Git 패널을 단일 저장소 VS Code 스타일로 전면 개편: 기존 상단 고정 공통 영역을 제거하고 `"Source Control"` 헤더(`새로고침`, `...` 더 보기 메뉴) + 26px 브랜치 서브행(클릭 즉시 전환 브랜치 피커, `↓N ↑M` Sync / `☁ 미게시` Publish 트리거)으로 전환, 1줄 자동 확장 커밋 입력창·`Staged Changes` 0건 자동 숨김·22~24px 컴팩트 파일 행(VS Code 상태 문자·색상 및 삭제 취소선)·`lucide-react` 아이콘 통일, `Graph` 섹션 범위 전환(`Auto`/`현재 브랜치`) + `Fetch`·`Pull`·`Push`·`새로고침` 아이콘 툴바 및 우측 정렬 병합 Ref 배지(`◎ branch` + `☁`, 중복 `HEAD` 생략, 태그 배지)·인라인 커밋 상세 파일 행 스타일 통일 ([상세 스펙](.backlog/done/git-panel-vscode-style/spec.md), [티켓 01](.backlog/done/git-panel-vscode-style/issues/01-git-fetch-and-header-branch-subrow.md), [티켓 03](.backlog/done/git-panel-vscode-style/issues/03-changes-file-list-tree-view-and-hover-actions.md), [티켓 04](.backlog/done/git-panel-vscode-style/issues/04-graph-vscode-toolbar-ref-badges-and-domain-docs.md))
+- 위지윅(WYSIWYG) 모드 마크다운 링크 UX 개선: 링크에 포인터 커서(`cursor: pointer`)를 표시하고 기존 `Ctrl`/`Cmd+클릭` 외 일반 클릭으로도 문서·섹션 링크 이동 지원(텍스트 드래그 선택 및 `Alt+클릭` 시 이동 방지)
+- 위지윅(WYSIWYG) 플로팅 표 편집 툴바를 텍스트 버튼에서 그룹 구분선·즉시 표시 툴팁·삭제 위험 톤이 적용된 컴팩트 아이콘 버튼으로 개편(서식 툴바 및 표 셀 우클릭 컨텍스트 메뉴 텍스트 유지)
+
 ## [1.5.0] - 2026-11-19
 
 ### Added
