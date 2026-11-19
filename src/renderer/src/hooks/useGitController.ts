@@ -6,6 +6,21 @@ import { getGitPrimaryActionState, type GitCommitActionMode } from '../utils/git
 import { useGitGraphLog } from './useGitGraphLog'
 import { useWikiApi } from './useWikiApi'
 
+interface GitRequestContext {
+  rootPath: string
+  epoch: number
+}
+
+interface GitActionExecutionOptions {
+  affectsWorkspaceFiles?: boolean
+  fetchRepoMetadata?: boolean
+  discardTarget?: WorkspaceDiscardTarget
+  fallbackError: string
+  fallbackStatusOnFailure?: GitStatus
+  onConfirmCanceled?: () => Promise<void> | void
+  run: (rootPath: string) => Promise<GitStatus>
+}
+
 export interface WorkspaceDiscardTarget {
   scope: 'all' | 'paths'
   paths: readonly string[]
@@ -199,17 +214,16 @@ export function useGitController({
 
   const reportGitActionError = useCallback(
     (
-      rootPath: string,
-      epoch: number,
+      ctx: GitRequestContext,
       actionLabel: string,
       error: unknown,
       fallbackError: string
     ): void => {
-      if (!isCurrentRequest(rootPath, epoch)) return
+      if (!isCurrentRequest(ctx.rootPath, ctx.epoch)) return
       const message = toErrorMessage(error, fallbackError)
       setErrorMessage(message)
       logRendererError('git', 'Git action failed', {
-        data: { action: actionLabel, workspaceRootPath: rootPath, errorMessage: message },
+        data: { action: actionLabel, workspaceRootPath: ctx.rootPath, errorMessage: message },
         error
       })
     },
@@ -217,13 +231,13 @@ export function useGitController({
   )
 
   const applyWorkspaceMutationWarnings = useCallback(
-    async (rootPath: string, epoch: number, actionLabel: string): Promise<void> => {
+    async (ctx: GitRequestContext, actionLabel: string): Promise<void> => {
       const warnings = (await callbacksRef.current.onWorkspaceMutated?.()) ?? []
-      if (warnings.length > 0 && isCurrentRequest(rootPath, epoch)) {
+      if (warnings.length > 0 && isCurrentRequest(ctx.rootPath, ctx.epoch)) {
         const message = warnings.join(' ')
         setErrorMessage(message)
         logRendererWarn('git', 'Git workspace mutation completed with warnings', {
-          data: { action: actionLabel, workspaceRootPath: rootPath, warningMessage: message }
+          data: { action: actionLabel, workspaceRootPath: ctx.rootPath, warningMessage: message }
         })
       }
     },
@@ -231,7 +245,7 @@ export function useGitController({
   )
 
   const withMutationLock = useCallback(
-    async (run: (ctx: { rootPath: string; epoch: number }) => Promise<boolean>): Promise<boolean> => {
+    async (run: (ctx: GitRequestContext) => Promise<boolean>): Promise<boolean> => {
       const rootPath = activeWorkspaceRef.current
       if (!rootPath || mutationTokenRef.current !== null) return false
 
@@ -256,158 +270,107 @@ export function useGitController({
     []
   )
 
-  const runGitAction = useCallback(
+  const executeGitActionBody = useCallback(
     async (
+      ctx: GitRequestContext,
       actionLabel: string,
-      options: {
-        affectsWorkspaceFiles?: boolean
-        fetchRepoMetadata?: boolean
-        discardTarget?: WorkspaceDiscardTarget
-        fallbackError: string
-        run: (rootPath: string) => Promise<GitStatus>
-      }
+      options: GitActionExecutionOptions
     ): Promise<boolean> => {
-      return withMutationLock(async ({ rootPath, epoch }) => {
-        let preparedDiscard = false
-        let workspaceEffectsCompleted = false
+      let preparedDiscard = false
+      let workspaceEffectsCompleted = false
 
-        const completeWorkspaceEffects = async (succeeded: boolean): Promise<void> => {
-          if (!options.affectsWorkspaceFiles || workspaceEffectsCompleted) return
-          workspaceEffectsCompleted = true
-          if (options.discardTarget) {
-            if (succeeded || preparedDiscard) {
-              await callbacksRef.current.onAfterWorkspaceDiscard?.(options.discardTarget, succeeded)
-            }
-            return
+      const completeWorkspaceEffects = async (succeeded: boolean): Promise<void> => {
+        if (!options.affectsWorkspaceFiles || workspaceEffectsCompleted) return
+        workspaceEffectsCompleted = true
+        if (options.discardTarget) {
+          if (succeeded || preparedDiscard) {
+            await callbacksRef.current.onAfterWorkspaceDiscard?.(options.discardTarget, succeeded)
           }
-          if (succeeded) {
-            await applyWorkspaceMutationWarnings(rootPath, epoch, actionLabel)
-          } else {
-            await callbacksRef.current.onWorkspaceMutated?.()
-          }
-        }
-
-        try {
-          if (options.affectsWorkspaceFiles && callbacksRef.current.confirmBeforeWorkspaceMutation) {
-            const confirmed = await callbacksRef.current.confirmBeforeWorkspaceMutation(
-              actionLabel,
-              options.discardTarget?.paths
-            )
-            if (!confirmed || !isCurrentRequest(rootPath, epoch)) {
-              return false
-            }
-          }
-
-          if (mountedRef.current) {
-            setPendingAction(actionLabel)
-          }
-
-          if (options.discardTarget && callbacksRef.current.onBeforeWorkspaceDiscard) {
-            preparedDiscard = true
-            await callbacksRef.current.onBeforeWorkspaceDiscard(options.discardTarget)
-            if (!isCurrentRequest(rootPath, epoch)) {
-              return false
-            }
-          }
-
-          const nextStatus = await options.run(rootPath)
-          await applyWorkspaceGitState(
-            rootPath,
-            epoch,
-            nextStatus,
-            options.fetchRepoMetadata ?? false
-          )
-
-          if (isCurrentRequest(rootPath, epoch)) {
-            await completeWorkspaceEffects(true)
-          }
-
-          return true
-        } catch (error: unknown) {
-          reportGitActionError(rootPath, epoch, actionLabel, error, options.fallbackError)
-          if (isCurrentRequest(rootPath, epoch) && options.affectsWorkspaceFiles) {
-            await wikiApi.git
-              .status(rootPath)
-              .then((fresh) => applyWorkspaceGitState(rootPath, epoch, fresh, true))
-              .catch(() => undefined)
-            await completeWorkspaceEffects(false).catch(() => undefined)
-          }
-          return false
-        } finally {
-          if (preparedDiscard && !workspaceEffectsCompleted) {
-            await completeWorkspaceEffects(false).catch(() => undefined)
-          }
-        }
-      })
-    },
-    [
-      applyWorkspaceGitState,
-      applyWorkspaceMutationWarnings,
-      isCurrentRequest,
-      reportGitActionError,
-      wikiApi,
-      withMutationLock
-    ]
-  )
-
-  const executePostCommitRemoteStep = useCallback(
-    async (
-      rootPath: string,
-      epoch: number,
-      mode: GitCommitActionMode,
-      committedStatus: GitStatus
-    ): Promise<void> => {
-      if (mode === 'commit') {
-        await applyWorkspaceGitState(rootPath, epoch, committedStatus, true)
-        return
-      }
-
-      if (mode === 'commit-push') {
-        if (mountedRef.current) {
-          setPendingAction('Push')
-        }
-        try {
-          const pushedStatus = await wikiApi.git.push(rootPath)
-          await applyWorkspaceGitState(rootPath, epoch, pushedStatus, true)
-        } catch (error: unknown) {
-          reportGitActionError(rootPath, epoch, 'Push', error, 'Push에 실패했습니다.')
-          await applyWorkspaceGitState(rootPath, epoch, committedStatus, true)
-        }
-        return
-      }
-
-      if (callbacksRef.current.confirmBeforeWorkspaceMutation) {
-        if (mountedRef.current) {
-          setPendingAction(null)
-        }
-        const confirmed = await callbacksRef.current.confirmBeforeWorkspaceMutation('Sync')
-        if (!isCurrentRequest(rootPath, epoch)) {
           return
         }
-        if (!confirmed) {
-          setErrorMessage('미저장 문서 확인이 취소되어 Sync를 실행하지 않았습니다.')
-          await applyWorkspaceGitState(rootPath, epoch, committedStatus, true)
-          return
+        if (succeeded) {
+          await applyWorkspaceMutationWarnings(ctx, actionLabel)
+        } else {
+          await callbacksRef.current.onWorkspaceMutated?.()
         }
       }
 
-      if (mountedRef.current) {
-        setPendingAction('Sync')
-      }
       try {
-        const syncResult = await wikiApi.git.sync(rootPath)
-        await applyWorkspaceGitState(rootPath, epoch, syncResult.status, true)
-        if (isCurrentRequest(rootPath, epoch)) {
-          await applyWorkspaceMutationWarnings(rootPath, epoch, 'Sync')
+        if (options.affectsWorkspaceFiles && callbacksRef.current.confirmBeforeWorkspaceMutation) {
+          if (mountedRef.current) {
+            setPendingAction(null)
+          }
+          const confirmed = options.discardTarget
+            ? await callbacksRef.current.confirmBeforeWorkspaceMutation(
+                actionLabel,
+                options.discardTarget.paths
+              )
+            : await callbacksRef.current.confirmBeforeWorkspaceMutation(actionLabel)
+          if (!isCurrentRequest(ctx.rootPath, ctx.epoch)) {
+            return false
+          }
+          if (!confirmed) {
+            await options.onConfirmCanceled?.()
+            return false
+          }
         }
+
+        if (mountedRef.current) {
+          setPendingAction(actionLabel)
+        }
+
+        if (options.discardTarget && callbacksRef.current.onBeforeWorkspaceDiscard) {
+          preparedDiscard = true
+          await callbacksRef.current.onBeforeWorkspaceDiscard(options.discardTarget)
+          if (!isCurrentRequest(ctx.rootPath, ctx.epoch)) {
+            return false
+          }
+        }
+
+        const nextStatus = await options.run(ctx.rootPath)
+        await applyWorkspaceGitState(
+          ctx.rootPath,
+          ctx.epoch,
+          nextStatus,
+          options.fetchRepoMetadata ?? false
+        )
+
+        if (isCurrentRequest(ctx.rootPath, ctx.epoch)) {
+          await completeWorkspaceEffects(true)
+        }
+
+        return true
       } catch (error: unknown) {
-        reportGitActionError(rootPath, epoch, 'Sync', error, 'Sync에 실패했습니다.')
-        if (isCurrentRequest(rootPath, epoch)) {
-          await wikiApi.git
-            .status(rootPath)
-            .then((fresh) => applyWorkspaceGitState(rootPath, epoch, fresh, true))
-            .catch(() => applyWorkspaceGitState(rootPath, epoch, committedStatus, true))
-          await callbacksRef.current.onWorkspaceMutated?.().catch(() => undefined)
+        reportGitActionError(ctx, actionLabel, error, options.fallbackError)
+        if (isCurrentRequest(ctx.rootPath, ctx.epoch)) {
+          if (options.affectsWorkspaceFiles) {
+            await wikiApi.git
+              .status(ctx.rootPath)
+              .then((fresh) => applyWorkspaceGitState(ctx.rootPath, ctx.epoch, fresh, true))
+              .catch(() =>
+                options.fallbackStatusOnFailure
+                  ? applyWorkspaceGitState(
+                      ctx.rootPath,
+                      ctx.epoch,
+                      options.fallbackStatusOnFailure,
+                      true
+                    )
+                  : undefined
+              )
+            await completeWorkspaceEffects(false).catch(() => undefined)
+          } else if (options.fallbackStatusOnFailure) {
+            await applyWorkspaceGitState(
+              ctx.rootPath,
+              ctx.epoch,
+              options.fallbackStatusOnFailure,
+              options.fetchRepoMetadata ?? false
+            )
+          }
+        }
+        return false
+      } finally {
+        if (preparedDiscard && !workspaceEffectsCompleted) {
+          await completeWorkspaceEffects(false).catch(() => undefined)
         }
       }
     },
@@ -418,6 +381,47 @@ export function useGitController({
       reportGitActionError,
       wikiApi
     ]
+  )
+
+  const runGitAction = useCallback(
+    (actionLabel: string, options: GitActionExecutionOptions): Promise<boolean> =>
+      withMutationLock((ctx) => executeGitActionBody(ctx, actionLabel, options)),
+    [executeGitActionBody, withMutationLock]
+  )
+
+  const executePostCommitRemoteStep = useCallback(
+    async (
+      ctx: GitRequestContext,
+      mode: GitCommitActionMode,
+      committedStatus: GitStatus
+    ): Promise<void> => {
+      if (mode === 'commit') {
+        return
+      }
+
+      if (mode === 'commit-push') {
+        await executeGitActionBody(ctx, 'Push', {
+          fetchRepoMetadata: true,
+          fallbackError: 'Push에 실패했습니다.',
+          fallbackStatusOnFailure: committedStatus,
+          run: (rootPath) => wikiApi.git.push(rootPath)
+        })
+        return
+      }
+
+      await executeGitActionBody(ctx, 'Sync', {
+        affectsWorkspaceFiles: true,
+        fetchRepoMetadata: true,
+        fallbackError: 'Sync에 실패했습니다.',
+        fallbackStatusOnFailure: committedStatus,
+        onConfirmCanceled: async () => {
+          setErrorMessage('미저장 문서 확인이 취소되어 Sync를 실행하지 않았습니다.')
+          await applyWorkspaceGitState(ctx.rootPath, ctx.epoch, committedStatus, true)
+        },
+        run: async (rootPath) => (await wikiApi.git.sync(rootPath)).status
+      })
+    },
+    [applyWorkspaceGitState, executeGitActionBody, wikiApi]
   )
 
   const initRepo = useCallback(async (): Promise<void> => {
@@ -505,60 +509,45 @@ export function useGitController({
       const needsAutoStage =
         primaryAction.kind === 'commit' && primaryAction.requiresAutoStageConfirm
 
-      return withMutationLock(async ({ rootPath, epoch }) => {
+      return withMutationLock(async (ctx) => {
         if (needsAutoStage && callbacksRef.current.confirmAutoStageCommit) {
           const approved = await callbacksRef.current.confirmAutoStageCommit()
-          if (!approved || !isCurrentRequest(rootPath, epoch)) {
+          if (!approved || !isCurrentRequest(ctx.rootPath, ctx.epoch)) {
             return false
           }
         }
 
         if (needsAutoStage) {
-          if (mountedRef.current) {
-            setPendingAction('전체 Stage')
-          }
-          let stagedStatus: GitStatus
-          try {
-            stagedStatus = await wikiApi.git.stageAll(rootPath)
-          } catch (error: unknown) {
-            reportGitActionError(
-              rootPath,
-              epoch,
-              '전체 Stage',
-              error,
-              '전체 파일을 Stage하지 못했습니다.'
-            )
+          const stagedOk = await executeGitActionBody(ctx, '전체 Stage', {
+            fallbackError: '전체 파일을 Stage하지 못했습니다.',
+            run: (rootPath) => wikiApi.git.stageAll(rootPath)
+          })
+          if (!stagedOk || !isCurrentRequest(ctx.rootPath, ctx.epoch)) {
             return false
           }
-          if (!isCurrentRequest(rootPath, epoch)) {
-            return false
-          }
-          await applyWorkspaceGitState(rootPath, epoch, stagedStatus, false)
         }
 
-        if (mountedRef.current) {
-          setPendingAction('Commit')
-        }
-        let committedStatus: GitStatus
-        try {
-          committedStatus = await wikiApi.git.commit(rootPath, trimmed)
-        } catch (error: unknown) {
-          reportGitActionError(rootPath, epoch, 'Commit', error, '커밋에 실패했습니다.')
-          return false
-        }
-        if (!isCurrentRequest(rootPath, epoch)) {
+        let committedStatus: GitStatus | null = null
+        const committedOk = await executeGitActionBody(ctx, 'Commit', {
+          fetchRepoMetadata: mode === 'commit',
+          fallbackError: '커밋에 실패했습니다.',
+          run: async (rootPath) => {
+            committedStatus = await wikiApi.git.commit(rootPath, trimmed)
+            return committedStatus
+          }
+        })
+        if (!committedOk || !committedStatus || !isCurrentRequest(ctx.rootPath, ctx.epoch)) {
           return false
         }
 
-        await executePostCommitRemoteStep(rootPath, epoch, mode, committedStatus)
+        await executePostCommitRemoteStep(ctx, mode, committedStatus)
         return true
       })
     },
     [
-      applyWorkspaceGitState,
+      executeGitActionBody,
       executePostCommitRemoteStep,
       isCurrentRequest,
-      reportGitActionError,
       wikiApi,
       withMutationLock
     ]

@@ -94,7 +94,8 @@ export function MainAppShell() {
     dismissDialog,
     isDialogOpenRef,
     confirmCloseDirtyTab,
-    confirmUnsavedChanges
+    confirmUnsavedChanges,
+    confirmAction
   } = useConfirmDialog()
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
@@ -394,6 +395,17 @@ export function MainAppShell() {
     return resolved
   }, [])
 
+  const awaitGitConfirm = useCallback(
+    (openDialog: (onResolve: (approved: boolean) => void) => () => void): Promise<boolean> =>
+      new Promise<boolean>((resolve) => {
+        pendingGitConfirmCancelRef.current = openDialog((approved) => {
+          pendingGitConfirmCancelRef.current = null
+          resolve(approved)
+        })
+      }),
+    []
+  )
+
   const promptUnsavedWorkspaceChanges = useCallback(
     (options: {
       targetPaths?: readonly string[]
@@ -406,20 +418,18 @@ export function MainAppShell() {
         return Promise.resolve(true)
       }
 
-      return new Promise<boolean>((resolve) => {
-        pendingGitConfirmCancelRef.current = confirmUnsavedChanges({
+      return awaitGitConfirm((onResolve) =>
+        confirmUnsavedChanges({
           message: options.message(dirtySummary),
           confirmLabel: options.confirmLabel,
           secondaryLabel: options.secondaryLabel,
           onSave: () => ensureAllWorkspaceBuffersSaved(options.targetPaths),
-          onResolve: (accepted) => {
-            pendingGitConfirmCancelRef.current = null
-            resolve(accepted)
-          }
+          onResolve
         })
-      })
+      )
     },
     [
+      awaitGitConfirm,
       confirmUnsavedChanges,
       ensureAllWorkspaceBuffersSaved,
       getDirtyWorkspaceSummary
@@ -442,32 +452,19 @@ export function MainAppShell() {
     [promptUnsavedWorkspaceChanges, resolveTargetWorkspacePaths]
   )
 
-  const confirmAutoStageCommit = useCallback((): Promise<boolean> => {
-    if (isDialogOpenRef.current) {
-      return Promise.resolve(false)
-    }
-    return new Promise<boolean>((resolve) => {
-      let settled = false
-      const settle = (approved: boolean): void => {
-        if (settled) return
-        settled = true
-        pendingGitConfirmCancelRef.current = null
-        resolve(approved)
-      }
-      pendingGitConfirmCancelRef.current = () => settle(false)
-      setPendingDialog({
-        title: '자동 Stage 후 커밋',
-        message:
-          '스테이지된 변경 사항이 없습니다. 모든 변경 사항을 자동으로 Stage하고 커밋할까요?',
-        confirmLabel: 'Stage 후 커밋',
-        onConfirm: () => {
-          setPendingDialog(null)
-          settle(true)
-        },
-        onCancel: () => settle(false)
-      })
-    })
-  }, [isDialogOpenRef, setPendingDialog])
+  const confirmAutoStageCommit = useCallback(
+    (): Promise<boolean> =>
+      awaitGitConfirm((onResolve) =>
+        confirmAction({
+          title: '자동 Stage 후 커밋',
+          message:
+            '스테이지된 변경 사항이 없습니다. 모든 변경 사항을 자동으로 Stage하고 커밋할까요?',
+          confirmLabel: 'Stage 후 커밋',
+          onResolve
+        })
+      ),
+    [awaitGitConfirm, confirmAction]
+  )
 
   const handleBeforeWorkspaceDiscard = useCallback(
     async (target: WorkspaceDiscardTarget): Promise<void> => {
