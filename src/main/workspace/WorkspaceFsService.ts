@@ -20,6 +20,7 @@ import {
   WorkspaceImageIngestInput,
   WorkspaceImageIngestResult
 } from '@shared/assets'
+import { WORKSPACE_SEARCH_MAX_FILE_BYTES } from '@shared/search'
 import {
   compareWorkspaceEntriesByRelativePath,
   filterTopLevelWorkspaceItems,
@@ -64,7 +65,6 @@ const INVALID_IMAGE_STEM_CHARS_RE = new RegExp(`${INVALID_ENTRY_NAME_RE.source}+
 const WINDOWS_RESERVED_IMAGE_STEM_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
 const DEFAULT_WATCH_DEBOUNCE_MS = 120
 const MAX_IMAGE_COLLISION_INDEX = 10000
-const DEFAULT_SEARCH_MAX_FILE_BYTES = 2 * 1024 * 1024
 const DEFAULT_SEARCH_BINARY_PROBE_BYTES = 8 * 1024
 
 export interface ListWorkspaceFilesOptions {
@@ -369,7 +369,7 @@ export class WorkspaceFsService {
       }
 
       const fileStats = await handle.stat()
-      if (!fileStats.isFile() || fileStats.size > DEFAULT_SEARCH_MAX_FILE_BYTES) {
+      if (!fileStats.isFile() || fileStats.size > WORKSPACE_SEARCH_MAX_FILE_BYTES) {
         return null
       }
       if (fileStats.size === 0) {
@@ -403,16 +403,16 @@ export class WorkspaceFsService {
 
       const chunks: Buffer[] = [validProbe]
       let totalRead = probeRead
-      while (totalRead <= DEFAULT_SEARCH_MAX_FILE_BYTES) {
+      while (totalRead <= WORKSPACE_SEARCH_MAX_FILE_BYTES) {
         if (signal?.aborted) {
           return null
         }
-        const chunkSize = Math.min(64 * 1024, DEFAULT_SEARCH_MAX_FILE_BYTES + 1 - totalRead)
+        const chunkSize = Math.min(64 * 1024, WORKSPACE_SEARCH_MAX_FILE_BYTES + 1 - totalRead)
         const chunk = Buffer.allocUnsafe(chunkSize)
         const { bytesRead } = await handle.read(chunk, 0, chunkSize, totalRead)
         if (bytesRead === 0) break
         totalRead += bytesRead
-        if (totalRead > DEFAULT_SEARCH_MAX_FILE_BYTES) {
+        if (totalRead > WORKSPACE_SEARCH_MAX_FILE_BYTES) {
           return null
         }
         chunks.push(chunk.subarray(0, bytesRead))

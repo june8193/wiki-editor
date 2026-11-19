@@ -8,21 +8,17 @@ import {
 import { getWorkspacePathKey } from '@shared/workspace'
 import { useWikiApi } from './useWikiApi'
 
-export const DEFAULT_WORKSPACE_SEARCH_DEBOUNCE_MS = 200
+const WORKSPACE_SEARCH_DEBOUNCE_MS = 200
 
 export interface UseWorkspaceSearchOptions {
   workspaceRootPath: string | null
-  debounceMs?: number
 }
 
 /**
  * Manages workspace search query, matching options, 200ms IME-safe debounced IPC search,
  * per-file result collapse state, and automatic reset when switching workspaces.
  */
-export function useWorkspaceSearch({
-  workspaceRootPath,
-  debounceMs = DEFAULT_WORKSPACE_SEARCH_DEBOUNCE_MS
-}: UseWorkspaceSearchOptions) {
+export function useWorkspaceSearch({ workspaceRootPath }: UseWorkspaceSearchOptions) {
   const wikiApi = useWikiApi()
   const [query, setQuery] = useState('')
   const [options, setOptions] = useState<SearchMatchOptions>(DEFAULT_SEARCH_MATCH_OPTIONS)
@@ -53,13 +49,17 @@ export function useWorkspaceSearch({
     }
   }, [])
 
-  const resetResults = useCallback((): void => {
-    searchSeqRef.current += 1
+  const applyClearedResults = useCallback((nextError: string | null = null): void => {
     setResponse(null)
-    setErrorMessage(null)
+    setErrorMessage(nextError)
     setIsSearching(false)
     setCollapsedFileKeys(new Set())
   }, [])
+
+  const resetResults = useCallback((): void => {
+    searchSeqRef.current += 1
+    applyClearedResults()
+  }, [applyClearedResults])
 
   useEffect(() => {
     mountedRef.current = true
@@ -77,17 +77,13 @@ export function useWorkspaceSearch({
     }
     prevWorkspaceKeyRef.current = nextKey
     clearDebounceTimer()
-    searchSeqRef.current += 1
     isComposingRef.current = false
     queryRef.current = ''
     optionsRef.current = DEFAULT_SEARCH_MATCH_OPTIONS
     setQuery('')
     setOptions(DEFAULT_SEARCH_MATCH_OPTIONS)
-    setResponse(null)
-    setErrorMessage(null)
-    setIsSearching(false)
-    setCollapsedFileKeys(new Set())
-  }, [clearDebounceTimer, workspaceRootPath])
+    resetResults()
+  }, [clearDebounceTimer, resetResults, workspaceRootPath])
 
   const executeSearch = useCallback(
     async (targetQuery: string, targetOptions: SearchMatchOptions): Promise<void> => {
@@ -101,10 +97,7 @@ export function useWorkspaceSearch({
       const searchApi = wikiApi.workspace.search
       if (!searchApi) {
         searchSeqRef.current += 1
-        setResponse(null)
-        setErrorMessage('워크스페이스 검색 기능을 사용할 수 없습니다.')
-        setIsSearching(false)
-        setCollapsedFileKeys(new Set())
+        applyClearedResults('워크스페이스 검색 기능을 사용할 수 없습니다.')
         return
       }
 
@@ -124,13 +117,11 @@ export function useWorkspaceSearch({
         ) {
           return
         }
-        setIsSearching(false)
         if (nextResponse.error) {
-          setResponse(null)
-          setErrorMessage(nextResponse.error)
-          setCollapsedFileKeys(new Set())
+          applyClearedResults(nextResponse.error)
           return
         }
+        setIsSearching(false)
         setResponse(nextResponse)
         setErrorMessage(null)
         setCollapsedFileKeys(new Set())
@@ -142,13 +133,10 @@ export function useWorkspaceSearch({
         ) {
           return
         }
-        setIsSearching(false)
-        setResponse(null)
-        setErrorMessage(toErrorMessage(error, '워크스페이스 검색에 실패했습니다.'))
-        setCollapsedFileKeys(new Set())
+        applyClearedResults(toErrorMessage(error, '워크스페이스 검색에 실패했습니다.'))
       }
     },
-    [clearDebounceTimer, resetResults, wikiApi]
+    [applyClearedResults, clearDebounceTimer, resetResults, wikiApi]
   )
 
   const scheduleDebouncedSearch = useCallback(
@@ -164,9 +152,9 @@ export function useWorkspaceSearch({
           return
         }
         void executeSearch(queryRef.current, optionsRef.current)
-      }, debounceMs)
+      }, WORKSPACE_SEARCH_DEBOUNCE_MS)
     },
-    [clearDebounceTimer, debounceMs, executeSearch, resetResults]
+    [clearDebounceTimer, executeSearch, resetResults]
   )
 
   const onQueryChange = useCallback(
