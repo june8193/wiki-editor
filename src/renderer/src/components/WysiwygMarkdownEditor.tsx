@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
@@ -36,6 +36,16 @@ import { useLinkMenu } from '../hooks/useLinkMenu'
 import type { MermaidDiagramHeightMap } from '../stores/PaneTabStore'
 import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
 import { WysiwygMermaidContext } from './MermaidCodeBlockNodeView'
+import {
+  AddColumnAfterIcon,
+  AddColumnBeforeIcon,
+  AddRowAfterIcon,
+  AddRowBeforeIcon,
+  DeleteColumnIcon,
+  DeleteRowIcon,
+  DeleteTableIcon,
+  type TableToolbarIconComponent
+} from './TableToolbarIcons'
 
 export interface WysiwygScrollRequest {
   index: number
@@ -182,46 +192,67 @@ const FORMAT_TOOLBAR_ITEMS: readonly FormatItemDescriptor[] = [
   }
 ]
 
+type TableActionGroup = 'rowAdd' | 'colAdd' | 'delItem' | 'delTable'
+type TableActionTone = 'danger' | 'subtle-danger'
+
 const TABLE_ACTION_ITEMS: ReadonlyArray<{
   id: string
   label: string
-  danger?: boolean
+  group: TableActionGroup
+  Icon: TableToolbarIconComponent
+  tone?: TableActionTone
   run: (editor: Editor) => boolean
 }> = [
   {
     id: 'addRowBefore',
     label: '행 위 추가',
+    group: 'rowAdd',
+    Icon: AddRowBeforeIcon,
     run: (editor) => addTableRowBeforeSafely(editor)
   },
   {
     id: 'addRowAfter',
     label: '행 아래 추가',
+    group: 'rowAdd',
+    Icon: AddRowAfterIcon,
     run: (editor) => editor.chain().focus().addRowAfter().run()
   },
   {
     id: 'addColumnBefore',
     label: '열 좌 추가',
+    group: 'colAdd',
+    Icon: AddColumnBeforeIcon,
     run: (editor) => editor.chain().focus().addColumnBefore().run()
   },
   {
     id: 'addColumnAfter',
     label: '열 우 추가',
+    group: 'colAdd',
+    Icon: AddColumnAfterIcon,
     run: (editor) => editor.chain().focus().addColumnAfter().run()
   },
   {
     id: 'deleteRow',
     label: '현재 행 삭제',
+    group: 'delItem',
+    Icon: DeleteRowIcon,
+    tone: 'subtle-danger',
     run: (editor) => deleteTableRowPreservingHeader(editor)
   },
   {
     id: 'deleteColumn',
     label: '현재 열 삭제',
+    group: 'delItem',
+    Icon: DeleteColumnIcon,
+    tone: 'subtle-danger',
     run: (editor) => editor.chain().focus().deleteColumn().run()
   },
   {
     id: 'deleteTable',
     label: '표 삭제',
-    danger: true,
+    group: 'delTable',
+    Icon: DeleteTableIcon,
+    tone: 'danger',
     run: (editor) => editor.chain().focus().deleteTable().run()
   }
 ]
@@ -626,17 +657,32 @@ export function WysiwygMarkdownEditor({
             role="toolbar"
             aria-label="표 편집 툴바"
           >
-            <span className="table-toolbar-label">표 편집</span>
-            {TABLE_ACTION_ITEMS.map((action) => (
-              <button
-                key={action.id}
-                type="button"
-                className={`toolbar-btn${action.danger ? ' is-danger' : ''}`}
-                onClick={() => action.run(editor)}
-              >
-                {action.label}
-              </button>
-            ))}
+            {TABLE_ACTION_ITEMS.map((action, index) => {
+              const Icon = action.Icon
+              const showDivider = index > 0 && TABLE_ACTION_ITEMS[index - 1].group !== action.group
+              const toneClass = action.tone ? ` is-${action.tone}` : ''
+              const edgeAttr =
+                index === 0
+                  ? 'left'
+                  : index === TABLE_ACTION_ITEMS.length - 1
+                    ? 'right'
+                    : undefined
+              return (
+                <Fragment key={action.id}>
+                  {showDivider && <span className="table-toolbar-divider" aria-hidden="true" />}
+                  <button
+                    type="button"
+                    className={`table-toolbar-icon-btn${toneClass}`}
+                    aria-label={action.label}
+                    data-tooltip={action.label}
+                    data-tooltip-edge={edgeAttr}
+                    onClick={() => action.run(editor)}
+                  >
+                    <Icon />
+                  </button>
+                </Fragment>
+              )
+            })}
           </div>
         )}
 
@@ -663,7 +709,7 @@ export function WysiwygMarkdownEditor({
               key={action.id}
               type="button"
               role="menuitem"
-              className={`context-menu-item${action.danger ? ' is-danger' : ''}`}
+              className={`context-menu-item${action.tone === 'danger' ? ' is-danger' : ''}`}
               onClick={() => {
                 action.run(editor)
                 closeCellMenu()
