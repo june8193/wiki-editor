@@ -61,6 +61,7 @@ function installMockGitWikiApi(overrides: Partial<WikiApi['git']> = {}): void {
       checkout: vi.fn(),
       pull: vi.fn(),
       push: vi.fn(),
+      fetch: vi.fn(),
       sync: vi.fn(),
       log: vi.fn(async () => ({ commits: [], hasMore: false })),
       commitDetail: vi.fn(async (_ws: string, hash: string) => makeCommitDetail(hash)),
@@ -846,5 +847,94 @@ describe('useGitController', () => {
     })
     expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith({ scope: 'all', paths: [] }, false)
     expect(result.current.errorMessage).toBe('discardAll failed')
+  })
+
+  it('runs fetch without dirty workspace confirm or workspace mutation callbacks, updates status/branches/graph, and reports errors', async () => {
+    const initialStatus = makeStatus('main', 0)
+    const fetchedStatus: GitStatus = { ...initialStatus, behind: 2 }
+
+    let resolveFetch!: (value: GitStatus) => void
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<GitStatus>((resolve) => {
+            resolveFetch = resolve
+          })
+      )
+      .mockRejectedValueOnce(new Error('원격 저장소(remote)가 설정되어 있지 않습니다.'))
+      .mockRejectedValueOnce('unknown error')
+
+    const branchesMock = vi
+      .fn()
+      .mockResolvedValueOnce({ current: 'main', isDetached: false, branches: [] })
+      .mockResolvedValueOnce({
+        current: 'main',
+        isDetached: false,
+        branches: [
+          { name: 'main', current: true, upstream: 'origin/main' },
+          { name: 'release', current: false, upstream: null }
+        ]
+      })
+
+    let fetchedOnce = false
+    const logMock = vi.fn(async () => ({
+      commits: fetchedOnce ? [makeCommit('remote222'), makeCommit('local111')] : [makeCommit('local111')],
+      hasMore: false
+    }))
+
+    installMockGitWikiApi({
+      status: vi.fn(async () => initialStatus),
+      fetch: fetchMock,
+      branches: branchesMock,
+      log: logMock
+    })
+
+    const confirmBeforeWorkspaceMutation = vi.fn(async () => true)
+    const onWorkspaceMutated = vi.fn(async () => [])
+
+    const { result } = renderHook(() =>
+      useGitController({
+        workspaceRootPath: 'C:/wiki',
+        confirmBeforeWorkspaceMutation,
+        onWorkspaceMutated
+      })
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.branch).toBe('main')
+    })
+
+    let pendingFetch!: Promise<void>
+    act(() => {
+      pendingFetch = result.current.fetch()
+    })
+    await waitFor(() => {
+      expect(result.current.pendingAction).toBe('Fetch')
+    })
+
+    fetchedOnce = true
+    await act(async () => {
+      resolveFetch(fetchedStatus)
+      await pendingFetch
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('C:/wiki')
+    expect(confirmBeforeWorkspaceMutation).not.toHaveBeenCalled()
+    expect(onWorkspaceMutated).not.toHaveBeenCalled()
+    expect(result.current.pendingAction).toBeNull()
+    expect(result.current.status?.behind).toBe(2)
+    expect(result.current.branchList?.branches.map((b) => b.name)).toEqual(['main', 'release'])
+    expect(result.current.graphState.commits.map((c) => c.hash)).toEqual(['remote222', 'local111'])
+
+    await act(async () => {
+      await result.current.fetch()
+    })
+    expect(result.current.errorMessage).toBe('원격 저장소(remote)가 설정되어 있지 않습니다.')
+
+    await act(async () => {
+      await result.current.fetch()
+    })
+    expect(result.current.errorMessage).toBe('Fetch에 실패했습니다.')
   })
 })

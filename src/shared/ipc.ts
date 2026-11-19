@@ -106,6 +106,7 @@ export const GIT_IPC_CHANNELS = {
   checkout: 'git:checkout',
   pull: 'git:pull',
   push: 'git:push',
+  fetch: 'git:fetch',
   sync: 'git:sync',
   log: 'git:log',
   commitDetail: 'git:commit-detail',
@@ -227,6 +228,7 @@ export interface WikiGitApi {
   checkout(workspacePath: string, branchName: string): Promise<GitStatus>
   pull(workspacePath: string): Promise<GitStatus>
   push(workspacePath: string): Promise<GitStatus>
+  fetch(workspacePath: string): Promise<GitStatus>
   sync(workspacePath: string): Promise<GitSyncResult>
   log(workspacePath: string, options?: GitLogOptions): Promise<GitLogResult>
   commitDetail(workspacePath: string, commitHash: string): Promise<GitCommitDetail>

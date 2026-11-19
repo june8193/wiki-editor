@@ -238,6 +238,8 @@ export function createWikiApi(
         ipcRenderer.invoke(GIT_IPC_CHANNELS.pull, workspacePath) as Promise<GitStatus>,
       push: (workspacePath) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.push, workspacePath) as Promise<GitStatus>,
+      fetch: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.fetch, workspacePath) as Promise<GitStatus>,
       sync: (workspacePath) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.sync, workspacePath) as Promise<GitSyncResult>,
       log: (workspacePath, options) =>

@@ -412,6 +412,14 @@ export function useGitController({
     })
   }, [runGitAction, wikiApi])
 
+  const fetch = useCallback(async (): Promise<void> => {
+    await runGitAction('Fetch', {
+      fetchRepoMetadata: true,
+      fallbackError: 'Fetch에 실패했습니다.',
+      run: (rootPath) => wikiApi.git.fetch(rootPath)
+    })
+  }, [runGitAction, wikiApi])
+
   const sync = useCallback(async (): Promise<void> => {
     await runGitAction('Sync', {
       affectsWorkspaceFiles: true,
@@ -447,6 +455,7 @@ export function useGitController({
     checkoutBranch,
     pull,
     push,
+    fetch,
     sync
   }
 }

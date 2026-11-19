@@ -1153,6 +1153,7 @@ export function createMultiWindowWikiHarness(
         checkout: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         pull: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         push: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+        fetch: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         sync: async (workspacePath) => ({
           status: createEmptyGitStatus(true, workspacePath),
           pulled: true,

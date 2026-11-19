@@ -2844,7 +2844,8 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     expect(discardAllSpy).not.toHaveBeenCalled()
 
     // 5. Disabled while another Git action is running
-    await user.click(within(gitPanel).getByRole('button', { name: 'Pull' }))
+    await user.click(within(gitPanel).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitPanel).getByRole('menuitem', { name: 'Pull' }))
     await waitFor(() => {
       expect(within(gitPanel).getByRole('button', { name: '전체 변경 사항 롤백' })).toBeDisabled()
     })

@@ -862,6 +862,7 @@ export function MainAppShell() {
                 onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
                 onPull={() => void git.pull()}
                 onPush={() => void git.push()}
+                onFetch={() => void git.fetch()}
                 onSync={() => void git.sync()}
                 onOpenFileDiff={handleOpenFileDiff}
                 onToggleChangesCollapsed={handleToggleGitChangesCollapsed}

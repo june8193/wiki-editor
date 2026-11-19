@@ -581,7 +581,8 @@ describe('App shell, theme persistence, and settings panel', () => {
 
     await clickActivityBarButton(user, 'Git')
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
-    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    await user.click(within(gitRegion).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'Pull' }))
     const gitDialog = await screen.findByRole('alertdialog')
 
     // Native menu commands triggered while modal ConfirmDialog is active should be ignored
@@ -3586,7 +3587,8 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
 
     await clickActivityBarButton(user, 'Git')
     const gitRegionAfterOpen = screen.getByRole('region', { name: 'Git 소스 제어' })
-    await user.click(within(gitRegionAfterOpen).getByRole('button', { name: 'Pull' }))
+    await user.click(within(gitRegionAfterOpen).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitRegionAfterOpen).getByRole('menuitem', { name: 'Pull' }))
 
     await waitFor(() => {
       expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe('# Pulled From Remote')
@@ -3596,12 +3598,12 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('pulled.md')
     ).toBeInTheDocument()
 
-    // Edit guide.md without saving -> Checkout prompts confirmation
+    // Edit guide.md without saving -> Checkout via branch picker prompts confirmation
     appendRawEditorText(screen.getByTestId('document-editor'), '\nUnsaved draft line')
     await clickActivityBarButton(user, 'Git')
     const gitRegionForBranch = screen.getByRole('region', { name: 'Git 소스 제어' })
-    await user.selectOptions(within(gitRegionForBranch).getByLabelText('브랜치 선택'), 'docs-v2')
-    await user.click(within(gitRegionForBranch).getByRole('button', { name: '브랜치 전환' }))
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: '현재 브랜치 main' }))
+    await user.click(within(gitRegionForBranch).getByRole('menuitem', { name: 'docs-v2' }))
 
     const confirmDialog = await screen.findByRole('alertdialog')
     expect(within(confirmDialog).getByText(/guide.md/)).toBeInTheDocument()
@@ -3611,7 +3613,8 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(gitMocks.checkout).not.toHaveBeenCalled()
 
     // Trigger checkout again and proceed without saving -> dirty edit is preserved & conflict warning appears
-    await user.click(within(gitRegionForBranch).getByRole('button', { name: '브랜치 전환' }))
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: '현재 브랜치 main' }))
+    await user.click(within(gitRegionForBranch).getByRole('menuitem', { name: 'docs-v2' }))
     const secondDialog = await screen.findByRole('alertdialog')
     await user.click(within(secondDialog).getByRole('button', { name: '저장 없이 진행' }))
 
@@ -3629,7 +3632,8 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
 
     // Save dirty edits via saving dialog path, then test Git pull failure
     pullFailure = new Error('원격 저장소 인증에 실패했습니다.')
-    await user.click(within(gitRegionForBranch).getByRole('button', { name: 'Pull' }))
+    await user.click(within(gitRegionForBranch).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitRegionForBranch).getByRole('menuitem', { name: 'Pull' }))
     const saveDialog = await screen.findByRole('alertdialog')
     await user.click(within(saveDialog).getByRole('button', { name: '저장 후 진행' }))
 
@@ -3692,10 +3696,10 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     await user.click(within(explorer).getByText('keep-dirty.md'))
     appendRawEditorText(await screen.findByTestId('document-editor'), '\nImportant local edit')
 
-    // Switch to Git view and click Sync -> proceed without saving -> obsolete.md clean tab closes, dirty keep-dirty.md stays open with warning
+    // Switch to Git view and click Sync in 26px branch subrow -> proceed without saving -> obsolete.md clean tab closes, dirty keep-dirty.md stays open with warning
     await clickActivityBarButton(user, 'Git')
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
-    await user.click(within(gitRegion).getByRole('button', { name: 'Sync' }))
+    await user.click(within(gitRegion).getByRole('button', { name: /Sync/ }))
     const dialog = await screen.findByRole('alertdialog')
     await user.click(within(dialog).getByRole('button', { name: '저장 없이 진행' }))
 
@@ -3707,6 +3711,183 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(await within(gitRegion).findByRole('alert')).toHaveTextContent(
       /삭제되었으나 미저장 편집 내용이 남아 있습니다 \(keep-dirty\.md\)/
     )
+  })
+
+  it('supports Source Control ... menu (Fetch without dirty prompt, Stage/Unstage/Discard All with danger dialog) and 26px branch subrow publish/sync transitions', async () => {
+    const user = userEvent.setup()
+    let hasUpstream = false
+    let ahead = 0
+    let behind = 0
+    let staged: Array<{ path: string; status: GitFileStatusCode }> = []
+    let unstaged: Array<{ path: string; status: GitFileStatusCode }> = [{ path: 'note.md', status: 'M' }]
+    let untracked: Array<{ path: string; status: GitFileStatusCode }> = [{ path: 'draft.md', status: '?' }]
+    let commits: GitGraphCommit[] = [
+      {
+        hash: '1111111111111111111111111111111111111111',
+        shortHash: '1111111',
+        parents: [],
+        subject: 'Local commit',
+        authorName: 'Alice',
+        committedAt: '2026-11-18T10:00:00+09:00',
+        refs: [{ name: 'main', kind: 'local-branch', isCurrentHead: true }]
+      }
+    ]
+
+    const buildStatus = () => ({
+      ...createEmptyGitStatus(true, 'C:/wiki/subrow-app'),
+      branch: 'main',
+      hasUpstream,
+      ahead,
+      behind,
+      staged,
+      unstaged,
+      untracked
+    })
+
+    const fetchSpy = vi.fn(async () => {
+      behind = 2
+      commits = [
+        {
+          hash: '2222222222222222222222222222222222222222',
+          shortHash: '2222222',
+          parents: ['1111111111111111111111111111111111111111'],
+          subject: 'Fetched remote commit',
+          authorName: 'Bob',
+          committedAt: '2026-11-18T11:00:00+09:00',
+          refs: [{ name: 'origin/main', kind: 'remote-branch' }]
+        },
+        ...commits
+      ]
+      return buildStatus()
+    })
+    const pushSpy = vi.fn(async () => {
+      hasUpstream = true
+      ahead = 0
+      return buildStatus()
+    })
+    const syncSpy = vi.fn(async () => {
+      behind = 0
+      ahead = 0
+      return { status: buildStatus(), pulled: true, pushed: true, summary: '동기화 완료' }
+    })
+    const stageAllSpy = vi.fn(async () => {
+      staged = [...unstaged, ...untracked].map((f) => ({
+        path: f.path,
+        status: (f.status === '?' ? 'A' : f.status) as GitFileStatusCode
+      }))
+      unstaged = []
+      untracked = []
+      return buildStatus()
+    })
+    const unstageAllSpy = vi.fn(async () => {
+      unstaged = [{ path: 'note.md', status: 'M' }]
+      untracked = [{ path: 'draft.md', status: '?' }]
+      staged = []
+      return buildStatus()
+    })
+    const discardAllSpy = vi.fn(async () => {
+      unstaged = []
+      untracked = []
+      return buildStatus()
+    })
+
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/subrow-app',
+        workspaces: {
+          'C:/wiki/subrow-app': {
+            'note.md': '# Note',
+            'draft.md': '# Draft'
+          }
+        },
+        git: {
+          status: vi.fn(async () => buildStatus()),
+          branches: vi.fn(async () => ({
+            current: 'main',
+            isDetached: false,
+            branches: [
+              { name: 'main', current: true, upstream: hasUpstream ? 'origin/main' : null },
+              { name: 'topic', current: false, upstream: null }
+            ]
+          })),
+          fetch: fetchSpy,
+          push: pushSpy,
+          sync: syncSpy,
+          stageAll: stageAllSpy,
+          unstageAll: unstageAllSpy,
+          discardAll: discardAllSpy,
+          log: vi.fn(async () => ({ commits, hasMore: false }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    // Dirty buffer in editor before switching to Git view
+    await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('note.md'))
+    appendRawEditorText(await screen.findByTestId('document-editor'), '\nUnsaved draft')
+
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+
+    // 1. Unpublished branch shows 미게시 trigger; clicking executes Push/Publish without upstream
+    const publishBtn = within(gitRegion).getByRole('button', { name: /미게시/ })
+    await user.click(publishBtn)
+    await waitFor(() => {
+      expect(pushSpy).toHaveBeenCalledWith('C:/wiki/subrow-app')
+    })
+    expect(await within(gitRegion).findByRole('button', { name: /Sync.*↓0 ↑0/ })).toBeInTheDocument()
+
+    // 2. Fetch via ... menu runs WITHOUT prompting dirty buffer ConfirmDialog and updates behind + Graph
+    await user.click(within(gitRegion).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'Fetch' }))
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith('C:/wiki/subrow-app')
+    })
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(await within(gitRegion).findByRole('button', { name: /Sync.*↓2 ↑0/ })).toBeInTheDocument()
+    expect(await within(gitRegion).findByText('Fetched remote commit')).toBeInTheDocument()
+
+    // 3. Clicking ↓2 ↑0 triggers Sync with dirty buffer ConfirmDialog
+    await user.click(within(gitRegion).getByRole('button', { name: /Sync.*↓2 ↑0/ }))
+    const syncConfirm = await screen.findByRole('alertdialog')
+    await user.click(within(syncConfirm).getByRole('button', { name: '저장 없이 진행' }))
+    await waitFor(() => {
+      expect(syncSpy).toHaveBeenCalledWith('C:/wiki/subrow-app')
+    })
+    expect(await within(gitRegion).findByRole('button', { name: /Sync.*↓0 ↑0/ })).toBeInTheDocument()
+
+    // 4. Stage All Changes & Unstage All Changes via ... menu
+    await user.click(within(gitRegion).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'Stage All Changes' }))
+    await waitFor(() => {
+      expect(stageAllSpy).toHaveBeenCalledWith('C:/wiki/subrow-app')
+    })
+
+    await user.click(within(gitRegion).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'Unstage All Changes' }))
+    await waitFor(() => {
+      expect(unstageAllSpy).toHaveBeenCalledWith('C:/wiki/subrow-app')
+    })
+
+    // 5. Discard All Changes via ... menu opens danger ConfirmDialog distinguishing tracked & untracked counts
+    await user.click(within(gitRegion).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'Discard All Changes' }))
+    const dangerDialog = await screen.findByRole('alertdialog')
+    expect(dangerDialog).toHaveTextContent('2')
+    expect(dangerDialog).toHaveTextContent(/복구/)
+    expect(dangerDialog).toHaveTextContent(/휴지통/)
+    expect(within(dangerDialog).getByRole('button', { name: '전체 롤백' })).toHaveClass('btn-danger')
+    await user.click(within(dangerDialog).getByRole('button', { name: '전체 롤백' }))
+
+    const dirtyDiscardDialog = await screen.findByRole('alertdialog')
+    await user.click(within(dirtyDiscardDialog).getByRole('button', { name: '저장 없이 진행' }))
+    await waitFor(() => {
+      expect(discardAllSpy).toHaveBeenCalledWith('C:/wiki/subrow-app')
+    })
   })
 
   it('supports fixed common branch/sync controls while Changes is collapsed, Changes/Graph accordion transitions, section resizer keyboard/double-click, and session-only preservation across view switches', async () => {
@@ -3764,7 +3945,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     await clickActivityBarButton(user, 'Git')
 
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
-    expect(within(gitRegion).queryByRole('button', { name: /Git.*main/i })).not.toBeInTheDocument()
+    expect(within(gitRegion).getByText('Source Control').closest('button')).toBeNull()
 
     const changesToggle = within(gitRegion).getByRole('button', { name: /Changes/i })
     const graphToggle = within(gitRegion).getByRole('button', { name: /Graph/i })
@@ -3778,7 +3959,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(resizer).toHaveAttribute('aria-valuemax', '80')
     expect(resizer).toHaveAttribute('aria-valuenow', '50')
 
-    // Collapse Changes -> separator hides, Graph fills height, branch switch & Sync in fixed common area still work
+    // Collapse Changes -> separator hides, Graph fills height, branch switch & Sync in 26px branch subrow still work
     await user.click(changesToggle)
     expect(changesToggle).toHaveAttribute('aria-expanded', 'false')
     expect(
@@ -3789,14 +3970,14 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       flex: '1 1 0%'
     })
 
-    await user.selectOptions(within(gitRegion).getByLabelText('브랜치 선택'), 'docs-v2')
-    await user.click(within(gitRegion).getByRole('button', { name: '브랜치 전환' }))
+    await user.click(within(gitRegion).getByRole('button', { name: '현재 브랜치 main' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'docs-v2' }))
     await waitFor(() => {
       expect(checkoutSpy).toHaveBeenCalledWith('C:/wiki/split-git', 'docs-v2')
       expect(within(gitRegion).getByLabelText('현재 브랜치 docs-v2')).toBeInTheDocument()
     })
 
-    await user.click(within(gitRegion).getByRole('button', { name: 'Sync' }))
+    await user.click(within(gitRegion).getByRole('button', { name: /Sync/ }))
     await waitFor(() => {
       expect(syncSpy).toHaveBeenCalledTimes(1)
     })
@@ -4451,7 +4632,8 @@ describe('Renderer error logging & UI breadcrumbs', () => {
 
     await clickActivityBarButton(user, 'Git')
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
-    await user.click(within(gitRegion).getByRole('button', { name: 'Push' }))
+    await user.click(within(gitRegion).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'Push' }))
     expect(await within(gitRegion).findByRole('alert')).toHaveTextContent('Remote auth failed')
 
     const errorEntries = entries.filter((entry) => entry.level === 'error')
@@ -4901,17 +5083,19 @@ describe('Activity bar and left sidebar view switching', () => {
     await user.click(within(contextMenu).getByRole('menuitem', { name: '열기' }))
     expect(await screen.findByRole('tab', { name: 'intro.md' })).toBeInTheDocument()
 
-    // Switch to Git view -> Git state & branch dropdown work, stage notes.md
+    // Switch to Git view -> Git state & branch picker work, stage notes.md
     const statusCallsBeforeSwitch = gitStatusSpy.mock.calls.length
     await clickActivityBarButton(user, 'Git')
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
-    const branchSelect = within(gitRegion).getByLabelText('브랜치 선택') as HTMLSelectElement
-    expect(Array.from(branchSelect.options).map((o) => o.value)).toEqual([
-      'main',
-      'feature/sidebar'
-    ])
-    await user.selectOptions(branchSelect, 'feature/sidebar')
-    expect(branchSelect.value).toBe('feature/sidebar')
+    await user.click(within(gitRegion).getByRole('button', { name: '현재 브랜치 main' }))
+    const branchMenu = within(gitRegion).getByRole('menu', { name: '브랜치 선택' })
+    expect(
+      within(branchMenu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent)
+    ).toEqual(['main', 'feature/sidebar'])
+    await user.keyboard('{Escape}')
+    expect(within(gitRegion).queryByRole('menu', { name: '브랜치 선택' })).not.toBeInTheDocument()
 
     await user.click(within(gitRegion).getByRole('button', { name: 'notes.md Stage' }))
     expect(await within(gitRegion).findByRole('button', { name: 'notes.md Unstage' })).toBeInTheDocument()
@@ -6414,12 +6598,16 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
       // 2. Git view (Git Panel)
       await clickActivityBarButton(user, 'Git')
       const gitPanel = screen.getByRole('region', { name: 'Git 소스 제어' })
-      const gitHeader = within(gitPanel).getByText('Git').closest('.git-header') as HTMLElement
-      for (const btn of within(gitHeader).getAllByRole('button')) {
-        expect(btn).not.toHaveAttribute('aria-expanded')
-      }
-      const gitCommonArea = gitPanel.querySelector('.git-common-area') as HTMLElement
-      expect(getComputedStyle(gitCommonArea).flexShrink).toBe('0')
+      const gitTitle = within(gitPanel).getByText('Source Control')
+      expect(gitTitle.closest('button')).toBeNull()
+      const gitHeader = gitTitle.closest('.git-header') as HTMLElement
+      expect(
+        within(gitHeader).getByRole('button', { name: 'Git 상태 새로고침' })
+      ).not.toHaveAttribute('aria-expanded')
+      expect(gitPanel.querySelector('.git-common-area')).toBeNull()
+      const gitBranchSubrow = gitPanel.querySelector('.git-branch-subrow') as HTMLElement
+      expect(getComputedStyle(gitBranchSubrow).flexShrink).toBe('0')
+      expect(getComputedStyle(gitBranchSubrow).height).toBe('26px')
       const gitSplitContainer = gitPanel.querySelector('.git-split-container') as HTMLElement
       expect(isZeroCssLength(getComputedStyle(gitSplitContainer).minHeight)).toBe(true)
       expect(getComputedStyle(gitSplitContainer).overflow).toBe('hidden')
@@ -6431,9 +6619,8 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
         assertSidebarPanelIsolation(gitPanel, gitHeader, accordionBody)
       }
 
-      const branchSelect = within(gitPanel).getByLabelText('브랜치 선택') as HTMLSelectElement
-      await user.selectOptions(branchSelect, 'feature/layout')
-      await user.click(within(gitPanel).getByRole('button', { name: '브랜치 전환' }))
+      await user.click(within(gitPanel).getByRole('button', { name: '현재 브랜치 main' }))
+      await user.click(within(gitPanel).getByRole('menuitem', { name: 'feature/layout' }))
       await waitFor(() => {
         expect(checkoutSpy).toHaveBeenCalledWith('C:/wiki/sidebar-overflow', 'feature/layout')
       })
@@ -8108,7 +8295,8 @@ describe('Read-only image preview tabs', () => {
     // 6. Git workspace mutation refreshes open image cache without readFile
     await clickActivityBarButton(user, 'Git')
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
-    await user.click(within(gitRegion).getByRole('button', { name: 'Pull' }))
+    await user.click(within(gitRegion).getByRole('button', { name: '더 보기' }))
+    await user.click(within(gitRegion).getByRole('menuitem', { name: 'Pull' }))
     await waitFor(() => {
       expect(
         within(screen.getByTestId('image-preview')).getByRole('img', { name: 'brand.png' })

@@ -99,6 +99,7 @@ export function registerGitIpc({
     ],
     [GIT_IPC_CHANNELS.pull, withWorkspace((rootPath) => gitService.pull(rootPath))],
     [GIT_IPC_CHANNELS.push, withWorkspace((rootPath) => gitService.push(rootPath))],
+    [GIT_IPC_CHANNELS.fetch, withWorkspace((rootPath) => gitService.fetch(rootPath))],
     [GIT_IPC_CHANNELS.sync, withWorkspace((rootPath) => gitService.sync(rootPath))],
     [
       GIT_IPC_CHANNELS.log,
