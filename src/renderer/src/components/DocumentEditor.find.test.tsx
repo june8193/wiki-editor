@@ -145,9 +145,9 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
     )
     expect(screen.getByRole('button', { name: '문서 내 찾기' })).toBeDisabled()
     expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
-    const paneEl = screen.getByRole('region', { name: '문서 편집 영역' })
+    const documentEditorEl = screen.getByRole('region', { name: '문서 편집 영역' })
     const ctrlFEvent = new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true })
-    paneEl.dispatchEvent(ctrlFEvent)
+    documentEditorEl.dispatchEvent(ctrlFEvent)
     expect(ctrlFEvent.defaultPrevented).toBe(true)
     expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
 

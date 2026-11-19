@@ -7,11 +7,8 @@ import type {
   WorkspaceSearchResponse
 } from '@shared/search'
 import { getWorkspacePathKey } from '@shared/workspace'
-import {
-  SEARCH_OPTION_BUTTONS,
-  type SearchFocusRequest,
-  splitTextByMatchSpans
-} from '../utils/workspaceSearch'
+import { type SearchFocusRequest, splitTextByMatchSpans } from '../utils/workspaceSearch'
+import { SearchOptionGroup } from './SearchOptionGroup'
 
 function renderHighlightedText(text: string, spans: readonly TextMatchSpan[]): ReactNode {
   const segments = splitTextByMatchSpans(text, spans)
@@ -270,24 +267,11 @@ export function SearchSidebarPanel({
             onCompositionEnd={(event) => onCompositionEnd(event.currentTarget.value)}
             onKeyDown={handleInputKeyDown}
           />
-          <div className="search-options-group" role="group" aria-label="검색 옵션">
-            {SEARCH_OPTION_BUTTONS.map((btn) => {
-              const isActive = options[btn.key]
-              return (
-                <button
-                  key={btn.key}
-                  type="button"
-                  className={`search-option-btn${isActive ? ' is-active' : ''}`}
-                  aria-label={btn.ariaLabel}
-                  title={btn.title}
-                  aria-pressed={isActive}
-                  onClick={() => onToggleOption(btn.key)}
-                >
-                  {btn.shortLabel}
-                </button>
-              )
-            })}
-          </div>
+          <SearchOptionGroup
+            options={options}
+            ariaLabel="검색 옵션"
+            onToggleOption={onToggleOption}
+          />
         </div>
       </div>
 

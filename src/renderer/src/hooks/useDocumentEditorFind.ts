@@ -45,7 +45,10 @@ interface MatchCursorState {
   criteria: FindCriteriaSnapshot
 }
 
-function areQueryOrOpenChanged(prev: FindCriteriaSnapshot, next: FindCriteriaSnapshot): boolean {
+function didFindCriteriaActivateOrChange(
+  prev: FindCriteriaSnapshot,
+  next: FindCriteriaSnapshot
+): boolean {
   if (!prev.isOpen && next.isOpen) {
     return true
   }
@@ -171,7 +174,7 @@ export function useDocumentEditorFind({
       : clampActiveMatchIndex(matchCursor.index, findMatchCount)
 
   useLayoutEffect(() => {
-    if (areQueryOrOpenChanged(matchCursor.criteria, currentCriteria)) {
+    if (didFindCriteriaActivateOrChange(matchCursor.criteria, currentCriteria)) {
       setMatchCursor((prev) => ({
         index: findMatchCount > 0 ? 0 : -1,
         scrollNonce: findMatchCount > 0 ? prev.scrollNonce + 1 : prev.scrollNonce,

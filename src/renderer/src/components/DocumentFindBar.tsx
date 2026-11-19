@@ -2,7 +2,8 @@ import { type KeyboardEvent, useEffect, useRef } from 'react'
 import { ChevronDown, ChevronUp, X } from 'lucide-react'
 import type { SearchMatchOptions } from '@shared/search'
 import { dispatchFindBarKeyAction } from '../editor/documentFind'
-import { SEARCH_OPTION_BUTTONS, type SearchFocusRequest } from '../utils/workspaceSearch'
+import type { SearchFocusRequest } from '../utils/workspaceSearch'
+import { SearchOptionGroup } from './SearchOptionGroup'
 
 export interface DocumentFindBarProps {
   query: string
@@ -91,24 +92,11 @@ export function DocumentFindBar({
           onKeyDown={handleInputKeyDown}
         />
 
-        <div className="search-options-group" role="group" aria-label="문서 내 찾기 옵션">
-          {SEARCH_OPTION_BUTTONS.map((btn) => {
-            const isActive = options[btn.key]
-            return (
-              <button
-                key={btn.key}
-                type="button"
-                className={`search-option-btn${isActive ? ' is-active' : ''}`}
-                aria-label={btn.ariaLabel}
-                title={btn.title}
-                aria-pressed={isActive}
-                onClick={() => onToggleOption(btn.key)}
-              >
-                {btn.shortLabel}
-              </button>
-            )
-          })}
-        </div>
+        <SearchOptionGroup
+          options={options}
+          ariaLabel="문서 내 찾기 옵션"
+          onToggleOption={onToggleOption}
+        />
 
         <span
           className={`document-find-count${query.length > 0 && errorMessage === null && matchCount === 0 ? ' is-empty' : ''}`}
