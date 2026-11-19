@@ -12,14 +12,11 @@ import type { EditorView } from '@codemirror/view'
 import type { SearchMatchOptions } from '@shared/search'
 import type { DocumentFindBarProps } from '../components/DocumentFindBar'
 import {
-  applyCloseDocumentFind,
-  applyOpenDocumentFind,
-  applyQueryDocumentFind,
-  applyToggleDocumentFind,
-  applyToggleOptionDocumentFind,
   clampActiveMatchIndex,
   createDefaultDocumentFindState,
+  createDocumentFindActions,
   dispatchFindBarKeyAction,
+  type DocumentFindActionHandlers,
   type DocumentFindState,
   findTextMatchesInDocument,
   isDocumentFindShortcut,
@@ -29,19 +26,14 @@ import {
 import type { RawFindHighlightRequest } from '../editor/rawSearchHighlight'
 import type { EditorMode } from '../stores/PaneTabStore'
 
-export interface DocumentEditorFindControl {
+export interface DocumentEditorFindControl extends DocumentFindActionHandlers {
   state: DocumentFindState
-  onOpen: (initialQuery?: string | null) => void
-  onToggle: () => void
-  onClose: () => void
-  onChangeQuery: (query: string) => void
-  onToggleOption: (optionKey: keyof SearchMatchOptions) => void
   onRegisterSelectionReader?: (reader: (() => string | null) | null) => void
   onConsumeFocusNonce?: (nonce: number) => boolean
 }
 
 interface FindCriteriaSnapshot {
-  wasOpen: boolean
+  isOpen: boolean
   query: string
   options: SearchMatchOptions
   mode: EditorMode
@@ -54,15 +46,15 @@ interface MatchCursorState {
 }
 
 function areQueryOrOpenChanged(prev: FindCriteriaSnapshot, next: FindCriteriaSnapshot): boolean {
-  if (!prev.wasOpen && next.wasOpen) {
+  if (!prev.isOpen && next.isOpen) {
     return true
   }
-  return next.wasOpen && (prev.query !== next.query || prev.options !== next.options)
+  return next.isOpen && (prev.query !== next.query || prev.options !== next.options)
 }
 
 function areCriteriaEqual(a: FindCriteriaSnapshot, b: FindCriteriaSnapshot): boolean {
   return (
-    a.wasOpen === b.wasOpen &&
+    a.isOpen === b.isOpen &&
     a.query === b.query &&
     a.options === b.options &&
     a.mode === b.mode
@@ -94,30 +86,20 @@ export function useDocumentEditorFind({
   const [localFindState, setLocalFindState] = useState<DocumentFindState>(
     createDefaultDocumentFindState
   )
-  const effectiveFindState = findControl?.state ?? localFindState
-
-  const openFind = useCallback(
-    (initialQuery?: string | null): void => {
-      if (findControl) {
-        findControl.onOpen(initialQuery)
-        return
-      }
-      localFocusNonceRef.current += 1
-      const nonce = localFocusNonceRef.current
-      setLocalFindState((prev) => applyOpenDocumentFind(prev, nonce, initialQuery))
-    },
-    [findControl]
+  const fallbackActions = useMemo(
+    () =>
+      createDocumentFindActions(() => {
+        localFocusNonceRef.current += 1
+        return localFocusNonceRef.current
+      }, setLocalFindState),
+    []
   )
-
-  const toggleFind = useCallback((): void => {
-    if (findControl) {
-      findControl.onToggle()
-      return
-    }
-    localFocusNonceRef.current += 1
-    const nonce = localFocusNonceRef.current
-    setLocalFindState((prev) => applyToggleDocumentFind(prev, nonce))
-  }, [findControl])
+  const fallbackControl = useMemo<DocumentEditorFindControl>(
+    () => ({ state: localFindState, ...fallbackActions }),
+    [fallbackActions, localFindState]
+  )
+  const activeControl = findControl ?? fallbackControl
+  const effectiveFindState = activeControl.state
 
   const focusActiveEditorBody = useCallback((): void => {
     if (effectiveMode === 'raw' || effectiveMode === 'split') {
@@ -129,35 +111,9 @@ export function useDocumentEditorFind({
   }, [editorBodyRef, effectiveMode, rawEditorViewRef])
 
   const closeFind = useCallback((): void => {
-    if (findControl) {
-      findControl.onClose()
-    } else {
-      setLocalFindState(applyCloseDocumentFind)
-    }
+    activeControl.onClose()
     focusActiveEditorBody()
-  }, [findControl, focusActiveEditorBody])
-
-  const changeFindQuery = useCallback(
-    (nextQuery: string): void => {
-      if (findControl) {
-        findControl.onChangeQuery(nextQuery)
-        return
-      }
-      setLocalFindState((prev) => applyQueryDocumentFind(prev, nextQuery))
-    },
-    [findControl]
-  )
-
-  const toggleFindOption = useCallback(
-    (optionKey: keyof SearchMatchOptions): void => {
-      if (findControl) {
-        findControl.onToggleOption(optionKey)
-        return
-      }
-      setLocalFindState((prev) => applyToggleOptionDocumentFind(prev, optionKey))
-    },
-    [findControl]
-  )
+  }, [activeControl, focusActiveEditorBody])
 
   const readSingleLineSelection = useCallback((): string | null => {
     if (isImage) return null
@@ -192,7 +148,7 @@ export function useDocumentEditorFind({
 
   const currentCriteria = useMemo<FindCriteriaSnapshot>(
     () => ({
-      wasOpen: isFindActive,
+      isOpen: isFindActive,
       query: effectiveFindState.query,
       options: effectiveFindState.options,
       mode: effectiveMode
@@ -224,7 +180,7 @@ export function useDocumentEditorFind({
       return
     }
 
-    if (matchCursor.criteria.wasOpen && !currentCriteria.wasOpen) {
+    if (matchCursor.criteria.isOpen && !currentCriteria.isOpen) {
       setMatchCursor((prev) => ({
         ...prev,
         index: -1,
@@ -285,7 +241,7 @@ export function useDocumentEditorFind({
         event.preventDefault()
         event.stopPropagation()
         if (!isImage) {
-          openFind(readSingleLineSelection())
+          activeControl.onOpen(readSingleLineSelection())
         }
         return true
       }
@@ -304,8 +260,22 @@ export function useDocumentEditorFind({
 
       return false
     },
-    [closeFind, handleNextMatch, handlePreviousMatch, isFindActive, isImage, openFind, readSingleLineSelection]
+    [
+      activeControl,
+      closeFind,
+      handleNextMatch,
+      handlePreviousMatch,
+      isFindActive,
+      isImage,
+      readSingleLineSelection
+    ]
   )
+
+  const handleHeaderToggle = useCallback((): void => {
+    if (!isImage) {
+      activeControl.onToggle()
+    }
+  }, [activeControl, isImage])
 
   const findBarProps: DocumentFindBarProps | null = isFindActive
     ? {
@@ -315,9 +285,9 @@ export function useDocumentEditorFind({
         activeMatchIndex: resolvedActiveMatchIndex,
         errorMessage: findErrorMessage,
         focusRequest: effectiveFindState.focusRequest,
-        onConsumeFocusNonce: findControl?.onConsumeFocusNonce,
-        onQueryChange: changeFindQuery,
-        onToggleOption: toggleFindOption,
+        onConsumeFocusNonce: activeControl.onConsumeFocusNonce,
+        onQueryChange: activeControl.onChangeQuery,
+        onToggleOption: activeControl.onToggleOption,
         onNextMatch: handleNextMatch,
         onPreviousMatch: handlePreviousMatch,
         onClose: closeFind
@@ -328,11 +298,7 @@ export function useDocumentEditorFind({
     isFindActive,
     rawFindHighlight,
     findBarProps,
-    handleHeaderToggle: () => {
-      if (!isImage) {
-        toggleFind()
-      }
-    },
+    handleHeaderToggle,
     handleEditorFindKeyDown
   }
 }

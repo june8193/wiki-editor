@@ -34,6 +34,14 @@ export interface FindBarKeyHandlers {
   onClose: () => void
 }
 
+export interface DocumentFindActionHandlers {
+  onOpen: (initialQuery?: string | null) => void
+  onToggle: () => void
+  onClose: () => void
+  onChangeQuery: (query: string) => void
+  onToggleOption: (optionKey: keyof SearchMatchOptions) => void
+}
+
 function isEventComposing(event: DocumentFindKeyboardEvent): boolean {
   return Boolean(event.isComposing || event.nativeEvent?.isComposing || event.keyCode === 229)
 }
@@ -73,9 +81,7 @@ export function applyToggleDocumentFind(
   state: DocumentFindState,
   focusNonce: number
 ): DocumentFindState {
-  return state.isOpen
-    ? { ...state, isOpen: false }
-    : { ...state, isOpen: true, focusRequest: { nonce: focusNonce, selectAll: true } }
+  return state.isOpen ? applyCloseDocumentFind(state) : applyOpenDocumentFind(state, focusNonce)
 }
 
 /**
@@ -110,6 +116,31 @@ export function applyToggleOptionDocumentFind(
       ...state.options,
       [optionKey]: !state.options[optionKey]
     }
+  }
+}
+
+/**
+ * Binds standard Find Bar state actions (`onOpen`, `onToggle`, `onClose`, `onChangeQuery`, `onToggleOption`)
+ * onto a caller-supplied focus nonce generator and state updater.
+ */
+export function createDocumentFindActions(
+  nextFocusNonce: () => number,
+  updateState: (updater: (current: DocumentFindState) => DocumentFindState) => void
+): DocumentFindActionHandlers {
+  return {
+    onOpen: (initialQuery) => {
+      const nonce = nextFocusNonce()
+      updateState((current) => applyOpenDocumentFind(current, nonce, initialQuery))
+    },
+    onToggle: () => {
+      const nonce = nextFocusNonce()
+      updateState((current) => applyToggleDocumentFind(current, nonce))
+    },
+    onClose: () => updateState(applyCloseDocumentFind),
+    onChangeQuery: (nextQuery) =>
+      updateState((current) => applyQueryDocumentFind(current, nextQuery)),
+    onToggleOption: (optionKey) =>
+      updateState((current) => applyToggleOptionDocumentFind(current, optionKey))
   }
 }
 

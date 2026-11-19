@@ -1,14 +1,10 @@
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
-import type { SearchMatchOptions } from '@shared/search'
 import { getWorkspacePathKey } from '@shared/workspace'
 import {
   applyCloseDocumentFind,
-  applyOpenDocumentFind,
-  applyQueryDocumentFind,
-  applyToggleDocumentFind,
-  applyToggleOptionDocumentFind,
   createDefaultDocumentFindState,
+  createDocumentFindActions,
   type DocumentFindState,
   isDocumentFindShortcut
 } from '../editor/documentFind'
@@ -76,8 +72,8 @@ export function usePaneDocumentFind({
     setPaneStates((prev) => {
       let nextPrimary = prev.primary
       let nextSecondary = prev.secondary
-      if (layout.panes.primary.tabs.length === 0 && prev.primary.isOpen) {
-        nextPrimary = { ...prev.primary, isOpen: false }
+      if (layout.panes.primary.tabs.length === 0) {
+        nextPrimary = applyCloseDocumentFind(prev.primary)
       }
       if (layout.panes.secondary.tabs.length === 0 && (prev.secondary.isOpen || prev.secondary.query.length > 0)) {
         handledFocusNoncesRef.current.secondary = 0
@@ -108,43 +104,21 @@ export function usePaneDocumentFind({
     []
   )
 
-  const openPaneFind = useCallback(
-    (paneId: PaneId, initialQuery?: string | null): void => {
-      focusNonceRef.current += 1
-      const nonce = focusNonceRef.current
-      updatePaneState(paneId, (current) => applyOpenDocumentFind(current, nonce, initialQuery))
-    },
-    [updatePaneState]
-  )
+  const nextFocusNonce = useCallback((): number => {
+    focusNonceRef.current += 1
+    return focusNonceRef.current
+  }, [])
 
-  const togglePaneFind = useCallback(
-    (paneId: PaneId): void => {
-      focusNonceRef.current += 1
-      const nonce = focusNonceRef.current
-      updatePaneState(paneId, (current) => applyToggleDocumentFind(current, nonce))
-    },
-    [updatePaneState]
-  )
-
-  const closePaneFind = useCallback(
-    (paneId: PaneId): void => {
-      updatePaneState(paneId, applyCloseDocumentFind)
-    },
-    [updatePaneState]
-  )
-
-  const changePaneFindQuery = useCallback(
-    (paneId: PaneId, nextQuery: string): void => {
-      updatePaneState(paneId, (current) => applyQueryDocumentFind(current, nextQuery))
-    },
-    [updatePaneState]
-  )
-
-  const togglePaneFindOption = useCallback(
-    (paneId: PaneId, optionKey: keyof SearchMatchOptions): void => {
-      updatePaneState(paneId, (current) => applyToggleOptionDocumentFind(current, optionKey))
-    },
-    [updatePaneState]
+  const paneActions = useMemo(
+    () => ({
+      primary: createDocumentFindActions(nextFocusNonce, (updater) =>
+        updatePaneState('primary', updater)
+      ),
+      secondary: createDocumentFindActions(nextFocusNonce, (updater) =>
+        updatePaneState('secondary', updater)
+      )
+    }),
+    [nextFocusNonce, updatePaneState]
   )
 
   const registerSelectionReader = useCallback(
@@ -194,36 +168,23 @@ export function usePaneDocumentFind({
       }
 
       const selectedText = selectionReadersRef.current[activePaneId]?.() ?? null
-      openPaneFind(activePaneId, selectedText)
+      paneActions[activePaneId].onOpen(selectedText)
     }
 
     window.addEventListener('keydown', handleWindowKeyDown)
     return () => {
       window.removeEventListener('keydown', handleWindowKeyDown)
     }
-  }, [openPaneFind, shellRef])
+  }, [paneActions, shellRef])
 
   const buildPaneFindControl = useCallback(
     (paneId: PaneId): DocumentEditorFindControl => ({
       state: paneStates[paneId],
-      onOpen: (initialQuery) => openPaneFind(paneId, initialQuery),
-      onToggle: () => togglePaneFind(paneId),
-      onClose: () => closePaneFind(paneId),
-      onChangeQuery: (query) => changePaneFindQuery(paneId, query),
-      onToggleOption: (optionKey) => togglePaneFindOption(paneId, optionKey),
+      ...paneActions[paneId],
       onRegisterSelectionReader: (reader) => registerSelectionReader(paneId, reader),
       onConsumeFocusNonce: (nonce) => markFocusNonceHandled(paneId, nonce)
     }),
-    [
-      changePaneFindQuery,
-      closePaneFind,
-      markFocusNonceHandled,
-      openPaneFind,
-      paneStates,
-      registerSelectionReader,
-      togglePaneFind,
-      togglePaneFindOption
-    ]
+    [markFocusNonceHandled, paneActions, paneStates, registerSelectionReader]
   )
 
   const primaryFindControl = useMemo(
