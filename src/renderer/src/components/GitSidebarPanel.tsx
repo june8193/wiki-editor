@@ -26,7 +26,7 @@ import {
   type GitLogScope,
   type GitStatus
 } from '@shared/git'
-import { useDismissable } from '../hooks/useDismissable'
+import { type DismissReason, useDismissable } from '../hooks/useDismissable'
 import type { GitGraphState } from '../hooks/useGitGraphLog'
 import { toGitDiffRequest } from '../utils/gitFilePresentation'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
@@ -74,8 +74,11 @@ function useMenuPopover(isDisabled: boolean, resetKey: string | null) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
 
-  const close = useCallback((): void => {
+  const close = useCallback((reason?: DismissReason): void => {
     setIsOpen(false)
+    if (reason === 'escape' && containerRef.current?.contains(document.activeElement)) {
+      triggerRef.current?.focus()
+    }
   }, [])
 
   useDismissable(isOpen, containerRef, close)
@@ -90,18 +93,7 @@ function useMenuPopover(isDisabled: boolean, resetKey: string | null) {
     setIsOpen(false)
   }, [resetKey])
 
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>): void => {
-      if (event.key === 'Escape' && isOpen) {
-        event.stopPropagation()
-        setIsOpen(false)
-        triggerRef.current?.focus()
-      }
-    },
-    [isOpen]
-  )
-
-  return { isOpen, setIsOpen, close, containerRef, triggerRef, handleKeyDown }
+  return { isOpen, setIsOpen, close, containerRef, triggerRef }
 }
 
 function getSectionFlexStyle(flexRatio: number | null): CSSProperties | undefined {
@@ -284,78 +276,35 @@ function GitAccordionSection({
   )
 }
 
+type GitMoreMenuEntry =
+  | { kind: 'separator'; key: string }
+  | {
+      kind: 'item'
+      label: string
+      disabled: boolean
+      danger?: boolean
+      onSelect: () => void
+    }
+
 interface GitPanelHeaderProps {
   workspaceRootPath: string | null
-  isRepo: boolean
-  isBusy: boolean
-  hasStaged: boolean
-  hasUnstagedOrUntracked: boolean
+  isRefreshDisabled: boolean
+  isMoreDisabled: boolean
   onRefresh: () => void
-  onPull: () => void
-  onPush: () => void
-  onFetch: () => void
-  onSync: () => void
-  onStageAll: () => void
-  onUnstageAll: () => void
-  onDiscardAll: () => void
+  moreMenuEntries: readonly GitMoreMenuEntry[]
 }
 
 /**
- * Renders the top Git panel header ("Source Control") with refresh and the overflow (...) actions menu.
+ * Renders the top Git panel header with refresh and the overflow (...) actions menu.
  */
 function GitPanelHeader({
   workspaceRootPath,
-  isRepo,
-  isBusy,
-  hasStaged,
-  hasUnstagedOrUntracked,
+  isRefreshDisabled,
+  isMoreDisabled,
   onRefresh,
-  onPull,
-  onPush,
-  onFetch,
-  onSync,
-  onStageAll,
-  onUnstageAll,
-  onDiscardAll
+  moreMenuEntries
 }: GitPanelHeaderProps) {
-  const isMoreDisabled = !workspaceRootPath || !isRepo || isBusy
   const moreMenu = useMenuPopover(isMoreDisabled, workspaceRootPath)
-
-  const moreMenuEntries: ReadonlyArray<
-    | { kind: 'separator'; key: string }
-    | {
-        kind: 'item'
-        label: string
-        disabled: boolean
-        danger?: boolean
-        onSelect: () => void
-      }
-  > = [
-    { kind: 'item', label: 'Pull', disabled: isBusy, onSelect: onPull },
-    { kind: 'item', label: 'Push', disabled: isBusy, onSelect: onPush },
-    { kind: 'item', label: 'Fetch', disabled: isBusy, onSelect: onFetch },
-    { kind: 'item', label: 'Sync', disabled: isBusy, onSelect: onSync },
-    { kind: 'separator', key: 'remote-changes-divider' },
-    {
-      kind: 'item',
-      label: 'Stage All Changes',
-      disabled: isBusy || !hasUnstagedOrUntracked,
-      onSelect: onStageAll
-    },
-    {
-      kind: 'item',
-      label: 'Unstage All Changes',
-      disabled: isBusy || !hasStaged,
-      onSelect: onUnstageAll
-    },
-    {
-      kind: 'item',
-      label: 'Discard All Changes',
-      disabled: isBusy || !hasUnstagedOrUntracked,
-      danger: true,
-      onSelect: onDiscardAll
-    }
-  ]
 
   return (
     <div className="git-header">
@@ -366,17 +315,13 @@ function GitPanelHeader({
           className="git-icon-btn"
           aria-label="Git 상태 새로고침"
           title="Git 상태 새로고침"
-          disabled={!workspaceRootPath || isBusy}
+          disabled={isRefreshDisabled}
           onClick={onRefresh}
         >
           <RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />
         </button>
 
-        <div
-          ref={moreMenu.containerRef}
-          className="git-menu-anchor"
-          onKeyDown={moreMenu.handleKeyDown}
-        >
+        <div ref={moreMenu.containerRef} className="git-menu-anchor">
           <button
             ref={moreMenu.triggerRef}
             type="button"
@@ -460,11 +405,7 @@ function GitBranchSubrow({
 
   return (
     <div className="git-branch-subrow">
-      <div
-        ref={branchMenu.containerRef}
-        className="git-branch-picker-wrap"
-        onKeyDown={branchMenu.handleKeyDown}
-      >
+      <div ref={branchMenu.containerRef} className="git-branch-picker-wrap">
         <button
           ref={branchMenu.triggerRef}
           type="button"
@@ -542,7 +483,7 @@ function GitBranchSubrow({
 }
 
 /**
- * Sidebar panel for the Git panel header ("Source Control"), 26px branch subrow, and collapsible Changes and Graph sections.
+ * Sidebar panel for the Git panel header, 26px branch subrow, and collapsible Changes and Graph sections.
  */
 export const GitSidebarPanel = memo(function GitSidebarPanel({
   workspaceRootPath,
@@ -643,22 +584,43 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
     )
   }
 
+  const hasStaged = Boolean(status && status.staged.length > 0)
+  const hasUnstagedOrUntracked = unstagedAndUntracked.length > 0
+  const moreMenuEntries: readonly GitMoreMenuEntry[] = [
+    { kind: 'item', label: 'Pull', disabled: isBusy, onSelect: onPull },
+    { kind: 'item', label: 'Push', disabled: isBusy, onSelect: onPush },
+    { kind: 'item', label: 'Fetch', disabled: isBusy, onSelect: onFetch },
+    { kind: 'item', label: 'Sync', disabled: isBusy, onSelect: onSync },
+    { kind: 'separator', key: 'remote-changes-divider' },
+    {
+      kind: 'item',
+      label: 'Stage All Changes',
+      disabled: isBusy || !hasUnstagedOrUntracked,
+      onSelect: onStageAll
+    },
+    {
+      kind: 'item',
+      label: 'Unstage All Changes',
+      disabled: isBusy || !hasStaged,
+      onSelect: onUnstageAll
+    },
+    {
+      kind: 'item',
+      label: 'Discard All Changes',
+      disabled: isBusy || !hasUnstagedOrUntracked,
+      danger: true,
+      onSelect: onDiscardAll
+    }
+  ]
+
   return (
     <section className="git-sidebar" aria-label="Git 소스 제어">
       <GitPanelHeader
         workspaceRootPath={workspaceRootPath}
-        isRepo={Boolean(status?.isRepo)}
-        isBusy={isBusy}
-        hasStaged={Boolean(status && status.staged.length > 0)}
-        hasUnstagedOrUntracked={unstagedAndUntracked.length > 0}
+        isRefreshDisabled={!workspaceRootPath || isBusy}
+        isMoreDisabled={!workspaceRootPath || !status?.isRepo || isBusy}
         onRefresh={onRefresh}
-        onPull={onPull}
-        onPush={onPush}
-        onFetch={onFetch}
-        onSync={onSync}
-        onStageAll={onStageAll}
-        onUnstageAll={onUnstageAll}
-        onDiscardAll={onDiscardAll}
+        moreMenuEntries={moreMenuEntries}
       />
 
       {!workspaceRootPath || !status || !status.isRepo ? (

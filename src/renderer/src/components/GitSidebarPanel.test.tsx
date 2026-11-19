@@ -899,7 +899,7 @@ describe('GitSidebarPanel', () => {
     expect(onToggleCommitDetail).not.toHaveBeenCalled()
   })
 
-  it('renders Git panel fixed "Source Control" header, 26px branch subrow, and always keeps the body visible', async () => {
+  it('renders Git panel fixed non-collapsible header, 26px branch subrow, and always keeps the body visible', async () => {
     const user = userEvent.setup()
     const onRefresh = vi.fn()
 
