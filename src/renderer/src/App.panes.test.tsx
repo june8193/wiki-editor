@@ -6,7 +6,7 @@ import { createEmptyGitStatus } from '@shared/git'
 import { addFavoriteWorkspace } from '@shared/workspace'
 import { App } from './App'
 import { clickActivityBarButton } from './test/appTestHelpers'
-import { mountThemeStylesAndRoot } from './test/domLayoutStub'
+import { mockElementBoundingRect, mountThemeStylesAndRoot } from './test/domLayoutStub'
 import {
   appendRawEditorText,
   createInMemoryWikiApi,
@@ -182,17 +182,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     fireEvent.keyDown(divider, { key: 'ArrowDown' })
     expect(divider).toHaveAttribute('aria-valuenow', '55')
 
-    vi.spyOn(workspaceEl, 'getBoundingClientRect').mockReturnValue({
-      left: 0,
-      top: 0,
-      right: 800,
-      bottom: 600,
-      width: 800,
-      height: 600,
-      x: 0,
-      y: 0,
-      toJSON: () => ({})
-    })
+    mockElementBoundingRect(workspaceEl, { width: 800, height: 600 })
     fireEvent.mouseDown(divider, { clientY: 330 })
     fireEvent.mouseMove(window, { clientY: 180 })
     fireEvent.mouseUp(window)

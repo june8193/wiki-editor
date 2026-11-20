@@ -1279,9 +1279,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
 
     // 1. Reselect active workspace from Recent list in Workspace View
-    await clickActivityBarButton(user, '워크스페이스')
-    const workspaceView1 = screen.getByRole('region', { name: '워크스페이스 뷰' })
-    await user.click(within(workspaceView1).getByRole('button', { name: /^alpha$/i }))
+    await switchWorkspaceFromView(user, /^alpha$/i)
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     const explorerAfterRecent = await screen.findByLabelText('워크스페이스 탐색기')
@@ -1293,9 +1291,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     expect(clearSpy).not.toHaveBeenCalled()
 
     // 2. Reselect active workspace from Favorites list in Workspace View
-    await clickActivityBarButton(user, '워크스페이스')
-    const workspaceView2 = screen.getByRole('region', { name: '워크스페이스 뷰' })
-    await user.click(within(workspaceView2).getByRole('button', { name: /★\s*alpha/i }))
+    await switchWorkspaceFromView(user, /★\s*alpha/i)
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     const explorerAfterFav = await screen.findByLabelText('워크스페이스 탐색기')
@@ -1376,12 +1372,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     expect(within(explorer).queryByText('hidden.md')).not.toBeInTheDocument()
 
     // Switch to beta -> beta's expandedDirs restore independently
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^beta$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^beta$/i)
 
     const betaExplorer = await screen.findByLabelText('워크스페이스 탐색기')
     expect(await within(betaExplorer).findByText('guide.md')).toBeInTheDocument()
@@ -1392,12 +1383,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     expect(within(betaExplorer).queryByText('deep.md')).not.toBeInTheDocument()
 
     // Switch back to alpha -> alpha's expandedDirs restore again
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^alpha$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^alpha$/i)
 
     const alphaExplorerAgain = await screen.findByLabelText('워크스페이스 탐색기')
     expect(await within(alphaExplorerAgain).findByText('deep.md')).toBeInTheDocument()
@@ -1596,12 +1582,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     })
 
     // Immediately switch to beta before 250ms debounce fires -> alpha's state flushes immediately
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^beta$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^beta$/i)
     const betaExplorer = await screen.findByLabelText('워크스페이스 탐색기')
     expect(await within(betaExplorer).findByText('beta.md')).toBeInTheDocument()
 
@@ -1613,12 +1594,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     ])
 
     // Switch back to alpha -> archive/guides/sub restored expanded
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^alpha$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^alpha$/i)
     const alphaRestored = await screen.findByLabelText('워크스페이스 탐색기')
     expect(await within(alphaRestored).findByText('leaf.md')).toBeInTheDocument()
 
@@ -1674,12 +1650,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     })
 
     // Attempt switching to failing workspace -> error banner shown, alpha stays active
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^broken-ws$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^broken-ws$/i)
     expect(await screen.findByRole('alert')).toHaveTextContent('Workspace open failed')
 
     // Return to Explorer, expand sub, switch to beta -> sub expansion is still tracked & persisted
@@ -1688,12 +1659,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     await user.click(within(resumedExplorer).getByText('sub'))
     expect(await within(resumedExplorer).findByText('leaf.md')).toBeInTheDocument()
 
-    await clickActivityBarButton(user, '워크스페이스')
-    await user.click(
-      within(screen.getByRole('region', { name: '워크스페이스 뷰' })).getByRole('button', {
-        name: /^beta$/i
-      })
-    )
+    await switchWorkspaceFromView(user, /^beta$/i)
     expect(await within(await screen.findByLabelText('워크스페이스 탐색기')).findByText('beta.md')).toBeInTheDocument()
 
     const savedAlpha = await api.workspaceState!.get('C:/wiki/alpha')

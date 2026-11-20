@@ -5,7 +5,7 @@ import { type AppConfig, cloneAppConfig, DEFAULT_APP_CONFIG } from '@shared/conf
 import { createEmptyGitStatus, type GitFileStatusCode } from '@shared/git'
 import type { RendererLogPayload } from '@shared/logging'
 import { App } from './App'
-import { clickActivityBarButton } from './test/appTestHelpers'
+import { clickActivityBarButton, switchPaneEditorMode } from './test/appTestHelpers'
 import { mountThemeStylesAndRoot } from './test/domLayoutStub'
 import {
   appendRawEditorText,
@@ -804,10 +804,9 @@ describe('Renderer error logging & UI breadcrumbs', () => {
     await user.click(within(primaryPane).getByRole('tab', { name: /alpha\.md/ }))
 
     // 4. Switch editor modes: Raw -> 위지윅 -> Preview -> Raw
-    const modeGroup = within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })
-    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
-    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
-    await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+    await switchPaneEditorMode(user, primaryPane, '위지윅')
+    await switchPaneEditorMode(user, primaryPane, 'Preview')
+    await switchPaneEditorMode(user, primaryPane, 'Raw')
 
     // 5. Drag beta.md onto horizontal split drop zone, then drag onto vertical drop zone
     fireEvent.dragStart(within(primaryPane).getByRole('tab', { name: /beta\.md/ }))
@@ -2067,19 +2066,11 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
       assertPaneIsolation(primaryPane, 'raw')
 
       // Switch to 위지윅 mode in single pane
-      await user.click(
-        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
-          name: '위지윅'
-        })
-      )
+      await switchPaneEditorMode(user, primaryPane, '위지윅')
       assertPaneIsolation(primaryPane, 'wysiwyg')
 
       // Switch to Preview mode in single pane
-      await user.click(
-        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
-          name: 'Preview'
-        })
-      )
+      await switchPaneEditorMode(user, primaryPane, 'Preview')
       assertPaneIsolation(primaryPane, 'preview')
 
       // Open second file and split horizontally (좌우 분할)
@@ -2090,11 +2081,7 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
       expect(paneWorkspace).toHaveAttribute('data-split-mode', 'horizontal')
 
       const secondaryPane = screen.getByRole('region', { name: '보조 편집기 영역' })
-      await user.click(
-        within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
-          name: '위지윅'
-        })
-      )
+      await switchPaneEditorMode(user, secondaryPane, '위지윅')
       assertPaneIsolation(primaryPane, 'preview')
       assertPaneIsolation(secondaryPane, 'wysiwyg')
 

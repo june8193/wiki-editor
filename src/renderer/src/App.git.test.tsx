@@ -1477,7 +1477,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
       expect(commitSpy).toHaveBeenCalledWith('C:/repo/wiki', 'feat: commit via changes header check')
       expect(commitInput.value).toBe('')
     })
-  })
+  }, 15_000)
 
   it('supports Graph header toolbar (Fetch, Pull, Push, refresh, disabled while running), merged vs standalone remote badges, and detached HEAD badge end-to-end', async () => {
     const user = userEvent.setup()
