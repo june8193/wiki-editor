@@ -329,14 +329,15 @@ export class WindowManager
   ): WorkspaceSession {
     const sessionId = this.nextSessionId++
     const { workspaceService, bufferHub, ownsBufferHub } = this.createSessionServices()
-    const searchService = new WorkspaceSearchService({
-      workspaceService,
-      getOpenBuffers: () => Object.values(bufferHub.getSnapshot().buffers)
-    })
     const frontmatterSchemaService = new FrontmatterSchemaService({
       workspaceService,
       watchDebounceMs: this.watchDebounceMs,
       logService: this.logService
+    })
+    const searchService = new WorkspaceSearchService({
+      workspaceService,
+      frontmatterSchemaService,
+      getOpenBuffers: () => Object.values(bufferHub.getSnapshot().buffers)
     })
     const dragCoordinator = new TabDragCoordinator({
       nextDragSessionId: () => `drag-${++this.dragSessionCounter}`
@@ -775,7 +776,7 @@ export class WindowManager
         throw new Error('Only the main window can open a workspace')
       }
       try {
-        session.searchService.cancelActiveSearch()
+        session.searchService.cancelAllScans()
         const info = await session.workspaceService.openWorkspace(realRoot)
         session.pendingInitialWorkspacePath = null
         if (!this.getLiveMainRecord(session)) {

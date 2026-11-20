@@ -1,6 +1,7 @@
 import { types } from 'node:util'
 import type {
   FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterFieldValuesResponse,
   WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
 import type { GitDiffRequest } from '@shared/git'
@@ -48,11 +49,14 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
     const req =
       request && typeof request === 'object' ? (request as Partial<WorkspaceSearchRequest>) : {}
     const opts = req.options && typeof req.options === 'object' ? req.options : undefined
+    const fm = req.frontmatter && typeof req.frontmatter === 'object' ? req.frontmatter : undefined
     return {
       queryLength: typeof req.query === 'string' ? req.query.length : 0,
       caseSensitive: Boolean(opts?.caseSensitive),
       wholeWord: Boolean(opts?.wholeWord),
-      useRegex: Boolean(opts?.useRegex)
+      useRegex: Boolean(opts?.useRegex),
+      frontmatterConditionCount: Array.isArray(fm?.conditions) ? fm.conditions.length : 0,
+      sortBy: fm?.sort?.by === 'frontmatter' ? 'frontmatter' : 'path'
     }
   },
   [WORKSPACE_IPC_CHANNELS.createEntry]: ([parentDirPath, name, kind, initialContent]) => ({
@@ -160,7 +164,10 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
     return {
       fieldCount: Array.isArray(candidate?.fields) ? candidate.fields.length : 0
     }
-  }
+  },
+  [FRONTMATTER_IPC_CHANNELS.getFieldValues]: ([fieldKeys]) => ({
+    fieldKeyCount: Array.isArray(fieldKeys) ? fieldKeys.length : 0
+  })
 }
 
 function extractFrontmatterResultMetadata(result: unknown): Record<string, unknown> {
@@ -180,6 +187,17 @@ const CHANNEL_RESULT_METADATA_EXTRACTORS: Record<
   [FRONTMATTER_IPC_CHANNELS.getSchema]: extractFrontmatterResultMetadata,
   [FRONTMATTER_IPC_CHANNELS.createDefaultSchema]: extractFrontmatterResultMetadata,
   [FRONTMATTER_IPC_CHANNELS.saveSchema]: extractFrontmatterResultMetadata,
+  [FRONTMATTER_IPC_CHANNELS.getFieldValues]: (result) => {
+    const res =
+      result && typeof result === 'object'
+        ? (result as Partial<WorkspaceFrontmatterFieldValuesResponse>)
+        : {}
+    const valuesByField =
+      res.valuesByField && typeof res.valuesByField === 'object' ? res.valuesByField : {}
+    return {
+      fieldCount: Object.keys(valuesByField).length
+    }
+  },
   [DIAGRAM_IPC_CHANNELS.saveFile]: (result) => {
     const res = result as Partial<DiagramSaveResult> | undefined
     return typeof res?.canceled === 'boolean' ? { canceled: res.canceled } : {}

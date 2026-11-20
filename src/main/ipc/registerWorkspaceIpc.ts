@@ -11,6 +11,7 @@ import type {
 } from '@shared/workspace'
 import { ConfigService } from '../config/ConfigService'
 import type { LogService } from '../logging/LogService'
+import { FrontmatterSchemaService } from '../workspace/FrontmatterSchemaService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import { WorkspaceSearchService } from '../workspace/WorkspaceSearchService'
 import {
@@ -56,6 +57,7 @@ export interface RegisterWorkspaceIpcOptions {
   selectDirectory: (sender?: WebContentsLike) => Promise<string | null>
   coordinator?: WorkspaceIpcCoordinator
   workspaceService?: WorkspaceFsService
+  frontmatterSchemaService?: FrontmatterSchemaService
   bufferHub?: SharedDocumentBufferHub
   getTargets?: () => WebContentsLike[]
   isMainWindowSender?: (sender: WebContentsLike | undefined) => boolean
@@ -68,6 +70,7 @@ export interface RegisterWorkspaceIpcOptions {
 export function registerWorkspaceIpc({
   ipcMain,
   workspaceService,
+  frontmatterSchemaService,
   bufferHub,
   configService,
   selectDirectory,
@@ -78,6 +81,7 @@ export function registerWorkspaceIpc({
 }: RegisterWorkspaceIpcOptions): () => void {
   const watchersByService = new Map<WorkspaceFsService, () => void>()
   let ownedSearchService: WorkspaceSearchService | undefined
+  let ownedSchemaService: FrontmatterSchemaService | undefined
 
   let activeCoordinator: WorkspaceIpcCoordinator
   if (coordinator) {
@@ -88,8 +92,12 @@ export function registerWorkspaceIpc({
         'registerWorkspaceIpc requires either coordinator or workspaceService and getTargets'
       )
     }
+    const effectiveSchemaService =
+      frontmatterSchemaService ??
+      (ownedSchemaService = new FrontmatterSchemaService({ workspaceService, logService }))
     ownedSearchService = new WorkspaceSearchService({
       workspaceService,
+      frontmatterSchemaService: effectiveSchemaService,
       getOpenBuffers: bufferHub ? () => Object.values(bufferHub.getSnapshot().buffers) : () => []
     })
     const singleSession: WorkspaceIpcSession = {
@@ -161,7 +169,7 @@ export function registerWorkspaceIpc({
     session: WorkspaceIpcSession,
     rootPath: string
   ): Promise<WorkspaceInfo> => {
-    session.searchService.cancelActiveSearch()
+    session.searchService.cancelAllScans()
     return session.workspaceService.openWorkspace(rootPath)
   }
 
@@ -305,6 +313,7 @@ export function registerWorkspaceIpc({
     unsubscribeSessionDisposed?.()
     clearAllWatchers()
     ownedSearchService?.dispose()
+    ownedSchemaService?.dispose()
     removeHandlers()
   }
 }

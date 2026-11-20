@@ -13,6 +13,7 @@ import type {
 } from '@shared/documentBuffer'
 import type {
   FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterFieldValuesResponse,
   WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
 import type {
@@ -232,6 +233,11 @@ export function createWikiApi(
           FRONTMATTER_IPC_CHANNELS.saveSchema,
           schema
         ) as Promise<FrontmatterSchemaLoadResult>,
+      getFieldValues: (fieldKeys?: string[]) =>
+        ipcRenderer.invoke(
+          FRONTMATTER_IPC_CHANNELS.getFieldValues,
+          ...(fieldKeys !== undefined ? [fieldKeys] : [])
+        ) as Promise<WorkspaceFrontmatterFieldValuesResponse>,
       onSchemaChanged: (listener) =>
         subscribeChannel<FrontmatterSchemaLoadResult>(
           ipcRenderer,

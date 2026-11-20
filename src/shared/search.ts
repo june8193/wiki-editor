@@ -1,6 +1,13 @@
 import { isSupportedImageFile } from './assets'
+import type {
+  FrontmatterFieldValue,
+  FrontmatterFilterCondition,
+  WorkspaceSearchSortSpec
+} from './frontmatterFilter'
 import type { PaneId } from './window'
 import { compareWorkspaceEntriesByRelativePath } from './workspace'
+
+export type { WorkspaceSearchSortSpec } from './frontmatterFilter'
 
 export interface SearchMatchOptions {
   caseSensitive: boolean
@@ -13,9 +20,15 @@ export interface TextMatchSpan {
   end: number // UTF-16 code unit offset (exclusive)
 }
 
+export interface WorkspaceSearchFrontmatterQuery {
+  conditions: FrontmatterFilterCondition[]
+  sort?: WorkspaceSearchSortSpec
+}
+
 export interface WorkspaceSearchRequest {
   query: string
   options: SearchMatchOptions
+  frontmatter?: WorkspaceSearchFrontmatterQuery
   maxTotalMatches?: number // 기본 1000
   maxMatchesPerFile?: number // 기본 100
 }
@@ -35,6 +48,7 @@ export interface WorkspaceSearchFileResult {
   lineMatches: WorkspaceSearchLineMatch[]
   totalMatchCount: number // 해당 파일의 전체 본문 일치 수 (상한 절단 전)
   truncatedInFile: boolean
+  frontmatterSummary?: Record<string, FrontmatterFieldValue>
 }
 
 export interface WorkspaceSearchResponse {
@@ -515,9 +529,14 @@ export function commitSearchCandidateSlot(
     relativePath: string
     name: string
     nameMatches: TextMatchSpan[]
+    frontmatterSummary?: Record<string, FrontmatterFieldValue>
   },
   slot: SearchCandidateScanResult
 ): void {
+  const summaryField =
+    candidate.frontmatterSummary !== undefined
+      ? { frontmatterSummary: candidate.frontmatterSummary }
+      : {}
   const remainingBudget = accumulator.maxTotalMatches - accumulator.committedMatchCount
   if (remainingBudget <= 0) {
     if (slot.totalMatchCount > 0) {
@@ -532,7 +551,8 @@ export function commitSearchCandidateSlot(
         nameMatches: candidate.nameMatches,
         lineMatches: [],
         totalMatchCount: slot.totalMatchCount,
-        truncatedInFile: slot.totalMatchCount > 0
+        truncatedInFile: slot.totalMatchCount > 0,
+        ...summaryField
       })
     }
     return
@@ -550,7 +570,8 @@ export function commitSearchCandidateSlot(
       nameMatches: candidate.nameMatches,
       lineMatches: trimmed.lineMatches,
       totalMatchCount: slot.totalMatchCount,
-      truncatedInFile: true
+      truncatedInFile: true,
+      ...summaryField
     })
     return
   }
@@ -564,7 +585,8 @@ export function commitSearchCandidateSlot(
       nameMatches: candidate.nameMatches,
       lineMatches: slot.lineMatches,
       totalMatchCount: slot.totalMatchCount,
-      truncatedInFile: slot.truncatedInFile
+      truncatedInFile: slot.truncatedInFile,
+      ...summaryField
     })
   }
 }

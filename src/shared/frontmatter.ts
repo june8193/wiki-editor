@@ -3,6 +3,8 @@ import type {
   FrontmatterFieldDefinition,
   WorkspaceFrontmatterSchema
 } from './frontmatterSchema'
+import { isValidIsoCalendarDate } from './frontmatterSchema'
+import type { FrontmatterFieldValue } from './frontmatterFilter'
 
 export {
   cloneFrontmatterSchema,
@@ -14,6 +16,7 @@ export {
   FRONTMATTER_SCHEMA_RELATIVE_PATH,
   FRONTMATTER_SCHEMA_VERSION,
   isValidFrontmatterFieldKey,
+  isValidIsoCalendarDate,
   parseFrontmatterSchema,
   parseFrontmatterSchemaJson,
   requiresFrontmatterFieldOptions,
@@ -25,6 +28,31 @@ export {
   type FrontmatterSchemaValidationResult,
   type WorkspaceFrontmatterSchema
 } from './frontmatterSchema'
+
+export {
+  appendDocumentValuesToFieldCollector,
+  collectAllowCustomMultiSelectFields,
+  compareFrontmatterFieldValues,
+  compareWorkspaceSearchEntriesBySort,
+  createFrontmatterFieldValuesCollector,
+  evaluateFrontmatterCondition,
+  extractFrontmatterSummary,
+  finalizeCollectedFrontmatterFieldValues,
+  FRONTMATTER_OPERATORS_BY_TYPE,
+  isExcludedFrontmatterRelativePath,
+  isFrontmatterDocumentFileName,
+  isFrontmatterOperatorForType,
+  isFrontmatterValueEmpty,
+  matchesFrontmatterConditions,
+  mergeCollectedFrontmatterFieldValues,
+  type FrontmatterFieldValue,
+  type FrontmatterFilterCondition,
+  type FrontmatterFilterOperator,
+  type FrontmatterScalarValue,
+  type FrontmatterSortableEntry,
+  type WorkspaceFrontmatterFieldValuesResponse,
+  type WorkspaceSearchSortSpec
+} from './frontmatterFilter'
 
 export type FrontmatterValidationCode =
   | 'yaml-syntax-error'
@@ -38,9 +66,6 @@ export interface FrontmatterValidationIssue {
   code: FrontmatterValidationCode
   message: string
 }
-
-export type FrontmatterScalarValue = string | number | boolean
-export type FrontmatterFieldValue = FrontmatterScalarValue | string[]
 
 export interface ParsedFrontmatterDocument {
   hasFrontmatter: boolean
@@ -93,24 +118,6 @@ interface FrontmatterSplit {
 
 const OPENING_DELIMITER_RE = /^---[ \t]*$/
 const CLOSING_DELIMITER_RE = /^(?:---|\.\.\.)[ \t]*$/
-const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/
-
-export function isValidIsoCalendarDate(value: string): boolean {
-  const match = ISO_DATE_RE.exec(value)
-  if (!match) return false
-  const year = Number(match[1])
-  const month = Number(match[2])
-  const day = Number(match[3])
-  if (year < 1 || month < 1 || month > 12 || day < 1 || day > 31) {
-    return false
-  }
-  const date = new Date(Date.UTC(year, month - 1, day))
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
-  )
-}
 
 function toRepresentableFieldValue(raw: unknown): FrontmatterFieldValue | undefined {
   if (typeof raw === 'string' || typeof raw === 'boolean') {

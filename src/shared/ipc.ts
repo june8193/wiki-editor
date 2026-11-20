@@ -14,6 +14,7 @@ import type {
 } from './documentBuffer'
 import type {
   FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterFieldValuesResponse,
   WorkspaceFrontmatterSchema
 } from './frontmatter'
 import type {
@@ -102,6 +103,7 @@ export const FRONTMATTER_IPC_CHANNELS = {
   getSchema: 'frontmatter:get-schema',
   createDefaultSchema: 'frontmatter:create-default-schema',
   saveSchema: 'frontmatter:save-schema',
+  getFieldValues: 'frontmatter:get-field-values',
   schemaChanged: 'frontmatter:schema-changed'
 } as const
 
@@ -321,6 +323,7 @@ export interface WikiFrontmatterApi {
   getSchema(): Promise<FrontmatterSchemaLoadResult>
   createDefaultSchema(): Promise<FrontmatterSchemaLoadResult>
   saveSchema(schema: WorkspaceFrontmatterSchema): Promise<FrontmatterSchemaLoadResult>
+  getFieldValues?(fieldKeys?: string[]): Promise<WorkspaceFrontmatterFieldValuesResponse>
   onSchemaChanged(listener: (result: FrontmatterSchemaLoadResult) => void): () => void
 }
 

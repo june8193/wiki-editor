@@ -17,7 +17,11 @@ import {
   type FocusOpenWorkspaceResult,
   type OpenWorkspaceInNewWindowResult
 } from '@shared/ipc'
-import type { FrontmatterSchemaLoadResult, WorkspaceFrontmatterSchema } from '@shared/frontmatter'
+import type {
+  FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterFieldValuesResponse,
+  WorkspaceFrontmatterSchema
+} from '@shared/frontmatter'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
   WINDOW_BASE_TITLE,
@@ -2877,5 +2881,139 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       BUFFER_IPC_CHANNELS.getSnapshot
     )) as { buffers: Record<string, DocumentBuffer> }
     expect(finalSnapshot.buffers[mdBuf.key]?.content).toBe(mdBuf.content)
+  })
+
+  it('isolates frontmatter workspace:search and frontmatter:get-field-values per main-window session with aux dirty buffer priority and security exclusions', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
+    const main2 = factory.createdWindows[1]
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+
+    await ipc.invokeFrom(main1.webContents, FRONTMATTER_IPC_CHANNELS.createDefaultSchema)
+    await ipc.invokeFrom(main2.webContents, FRONTMATTER_IPC_CHANNELS.createDefaultSchema)
+
+    await writeFile(
+      join(wsAlpha, 'a.md'),
+      '---\nstatus: todo\npriority: low\nlabels: [backend]\n---\nAlpha body',
+      'utf8'
+    )
+    await writeFile(
+      join(wsAlpha, 'z.md'),
+      '---\nstatus: in-progress\npriority: high\nlabels: [security, alpha-disk-tag]\n---\nZeta body',
+      'utf8'
+    )
+    await writeFile(
+      join(wsBeta, 'b.md'),
+      '---\nstatus: in-progress\npriority: medium\nlabels: [beta-only-tag]\n---\nBeta body',
+      'utf8'
+    )
+    await writeFile(
+      join(wsAlpha, '.wiki-editor', 'leak.md'),
+      '---\nstatus: in-progress\nlabels: [internal-leak]\n---\nLeak',
+      'utf8'
+    )
+
+    // Detach a.md to aux1 under Session 1 and make unsaved edit changing status/priority/labels
+    const bufA = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, 'a.md'),
+      'a.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufA.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux1 = factory.createdWindows[2]
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key], {
+      releasePending: true
+    })
+    await ipc.invokeFrom(
+      aux1.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      bufA.key,
+      '---\nstatus: in-progress\npriority: highest\nlabels: [security, aux1-custom-tag]\n---\nAlpha body'
+    )
+
+    // Dirty config.json in Session 1 must NOT leak into frontmatter search or getFieldValues
+    const configBuf1 = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openConfigDocument
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [configBuf1.key])
+    await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      configBuf1.key,
+      '---\nstatus: in-progress\nlabels: [config-leak-tag]\n---\n'
+    )
+
+    // Session 1 attribute-only search sorted by priority asc -> a.md (highest from aux1) before z.md (high)
+    const session1Search = await ipc.invokeFrom<WorkspaceSearchResponse>(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.search,
+      {
+        query: '',
+        options: DEFAULT_SEARCH_MATCH_OPTIONS,
+        frontmatter: {
+          conditions: [
+            { fieldKey: 'status', operator: 'in', values: ['in-progress'] },
+            { fieldKey: 'labels', operator: 'any-of', values: ['security'] }
+          ],
+          sort: { by: 'frontmatter', fieldKey: 'priority', direction: 'asc' }
+        }
+      }
+    )
+    expect(session1Search.files.map((f) => f.relativePath)).toEqual(['a.md', 'z.md'])
+    expect(session1Search.files[0].frontmatterSummary).toEqual({
+      status: 'in-progress',
+      priority: 'highest',
+      labels: ['security', 'aux1-custom-tag']
+    })
+
+    // Session 1 getFieldValues from aux1 sees aux1-custom-tag & alpha-disk-tag, NOT beta-only-tag/internal-leak/config-leak-tag
+    const session1Values = await ipc.invokeFrom<WorkspaceFrontmatterFieldValuesResponse>(
+      aux1.webContents,
+      FRONTMATTER_IPC_CHANNELS.getFieldValues,
+      ['labels']
+    )
+    expect(session1Values.valuesByField.labels).toEqual([
+      'alpha-disk-tag',
+      'aux1-custom-tag',
+      'backend',
+      'docs',
+      'frontend',
+      'security'
+    ])
+
+    // Session 2 is completely isolated from Session 1's aux1 edits and documents
+    const session2Values = await ipc.invokeFrom<WorkspaceFrontmatterFieldValuesResponse>(
+      main2.webContents,
+      FRONTMATTER_IPC_CHANNELS.getFieldValues
+    )
+    expect(session2Values.valuesByField.labels).toEqual([
+      'backend',
+      'beta-only-tag',
+      'docs',
+      'frontend',
+      'security'
+    ])
+
+    const session2Search = await ipc.invokeFrom<WorkspaceSearchResponse>(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.search,
+      {
+        query: '',
+        options: DEFAULT_SEARCH_MATCH_OPTIONS,
+        frontmatter: {
+          conditions: [{ fieldKey: 'labels', operator: 'any-of', values: ['aux1-custom-tag'] }]
+        }
+      }
+    )
+    expect(session2Search.files).toEqual([])
   })
 })

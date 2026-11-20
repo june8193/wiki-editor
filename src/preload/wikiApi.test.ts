@@ -495,11 +495,16 @@ describe('createWikiApi', () => {
     await api.frontmatter.getSchema()
     await api.frontmatter.createDefaultSchema()
     await api.frontmatter.saveSchema(sampleSchema)
+    expect(api.frontmatter.getFieldValues).toBeDefined()
+    await api.frontmatter.getFieldValues?.()
+    await api.frontmatter.getFieldValues?.(['labels'])
 
     expect(ipc.lastInvoked).toEqual([
       { channel: FRONTMATTER_IPC_CHANNELS.getSchema, args: [] },
       { channel: FRONTMATTER_IPC_CHANNELS.createDefaultSchema, args: [] },
-      { channel: FRONTMATTER_IPC_CHANNELS.saveSchema, args: [sampleSchema] }
+      { channel: FRONTMATTER_IPC_CHANNELS.saveSchema, args: [sampleSchema] },
+      { channel: FRONTMATTER_IPC_CHANNELS.getFieldValues, args: [] },
+      { channel: FRONTMATTER_IPC_CHANNELS.getFieldValues, args: [['labels']] }
     ])
 
     const received: FrontmatterSchemaLoadResult[] = []

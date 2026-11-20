@@ -2,11 +2,16 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { FrontmatterSchemaLoadResult, WorkspaceFrontmatterSchema } from '@shared/frontmatter'
+import type {
+  FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterFieldValuesResponse,
+  WorkspaceFrontmatterSchema
+} from '@shared/frontmatter'
 import { FRONTMATTER_IPC_CHANNELS } from '@shared/ipc'
 import { LogService } from '../logging/LogService'
 import { FrontmatterSchemaService } from '../workspace/FrontmatterSchemaService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
+import { WorkspaceSearchService } from '../workspace/WorkspaceSearchService'
 import type { WebContentsLike } from './ipcHelpers'
 import { createFakeIpcMain } from './ipcTestHelpers'
 import { registerFrontmatterIpc } from './registerFrontmatterIpc'
@@ -122,5 +127,63 @@ describe('registerFrontmatterIpc', () => {
     expect(ipcMain.hasHandler(FRONTMATTER_IPC_CHANNELS.getSchema)).toBe(false)
     expect(ipcMain.hasHandler(FRONTMATTER_IPC_CHANNELS.createDefaultSchema)).toBe(false)
     expect(ipcMain.hasHandler(FRONTMATTER_IPC_CHANNELS.saveSchema)).toBe(false)
+    expect(ipcMain.hasHandler(FRONTMATTER_IPC_CHANNELS.getFieldValues)).toBe(false)
+  })
+
+  it('handles frontmatter:get-field-values and redacts field values from audit logs', async () => {
+    const logService = new LogService(join(tempDir, 'logs'))
+    const searchService = new WorkspaceSearchService({
+      workspaceService,
+      frontmatterSchemaService: schemaService
+    })
+    const ipcMain = createFakeIpcMain()
+
+    const dispose = registerFrontmatterIpc({
+      ipcMain,
+      frontmatterSchemaService: schemaService,
+      searchService,
+      getTargets: () => [],
+      logService
+    })
+
+    await expect(ipcMain.invoke(FRONTMATTER_IPC_CHANNELS.getFieldValues)).rejects.toThrow(
+      /워크스페이스/
+    )
+
+    await workspaceService.openWorkspace(workspaceDir)
+    await schemaService.saveSchema({
+      version: 1,
+      fields: [
+        {
+          key: 'labels',
+          label: '라벨',
+          type: 'multi-select',
+          allowCustom: true,
+          options: [{ value: 'backend' }]
+        }
+      ]
+    })
+    await writeFile(
+      join(workspaceDir, 'note.md'),
+      '---\nlabels: [SECRET_TAG, backend]\n---\n# Note',
+      'utf8'
+    )
+
+    const result = await ipcMain.invoke<WorkspaceFrontmatterFieldValuesResponse>(
+      FRONTMATTER_IPC_CHANNELS.getFieldValues,
+      ['labels']
+    )
+    expect(result).toEqual({
+      valuesByField: {
+        labels: ['backend', 'SECRET_TAG']
+      }
+    })
+
+    const serializedLogs = JSON.stringify(await logService.readEntries())
+    expect(serializedLogs).not.toContain('SECRET_TAG')
+    expect(serializedLogs).toContain(FRONTMATTER_IPC_CHANNELS.getFieldValues)
+
+    searchService.dispose()
+    dispose()
   })
 })
