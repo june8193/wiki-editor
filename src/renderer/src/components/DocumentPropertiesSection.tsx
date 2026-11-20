@@ -420,6 +420,18 @@ function DocumentPropertiesForm({
   const schema = schemaResult?.schema ?? null
   const { documentIssues, fieldIssuesByKey } = groupIssuesByField(parsed.issues)
 
+  const renderManageSchemaButton = (primary: boolean) =>
+    onOpenSchemaModal ? (
+      <button
+        type="button"
+        className={`btn btn-sm${primary ? ' btn-primary' : ''}`}
+        disabled={!canManageSchema}
+        onClick={onOpenSchemaModal}
+      >
+        스키마 관리
+      </button>
+    ) : null
+
   const renderSchemaNotice = () => {
     if (isSchemaLoading && !schemaResult) {
       return <p className="properties-empty-text">스키마를 불러오는 중...</p>
@@ -438,16 +450,7 @@ function DocumentPropertiesForm({
             >
               스키마 생성
             </button>
-            {onOpenSchemaModal && (
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={!canManageSchema}
-                onClick={onOpenSchemaModal}
-              >
-                스키마 관리
-              </button>
-            )}
+            {renderManageSchemaButton(false)}
           </div>
         </div>
       )
@@ -459,16 +462,7 @@ function DocumentPropertiesForm({
           <p className="properties-warning-text">{schemaResult.error}</p>
           {(onOpenSchemaModal || onOpenSchemaRawJson) && (
             <div className="properties-notice-actions">
-              {onOpenSchemaModal && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  disabled={!canManageSchema}
-                  onClick={onOpenSchemaModal}
-                >
-                  스키마 관리
-                </button>
-              )}
+              {renderManageSchemaButton(true)}
               {onOpenSchemaRawJson && (
                 <button
                   type="button"

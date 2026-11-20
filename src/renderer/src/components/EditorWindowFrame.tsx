@@ -96,9 +96,9 @@ export interface EditorWindowFrameProps {
   errorMessage: string | null
   pendingDialog: ConfirmDialogState | null
   onDismissDialog: () => void
-  isSchemaModalOpen?: boolean
-  onOpenSchemaModal?: () => void
-  onCloseSchemaModal?: () => void
+  isSchemaModalOpen: boolean
+  onOpenSchemaModal: () => void
+  onCloseSchemaModal: () => void
   leftSidebarSlot?: ReactNode
   settingsPanelSlot?: ReactNode
 }
@@ -122,28 +122,12 @@ export function EditorWindowFrame({
   errorMessage,
   pendingDialog,
   onDismissDialog,
-  isSchemaModalOpen: controlledSchemaModalOpen,
-  onOpenSchemaModal: controlledOpenSchemaModal,
-  onCloseSchemaModal: controlledCloseSchemaModal,
+  isSchemaModalOpen,
+  onOpenSchemaModal,
+  onCloseSchemaModal,
   leftSidebarSlot,
   settingsPanelSlot
 }: EditorWindowFrameProps) {
-  const [uncontrolledSchemaModalOpen, setUncontrolledSchemaModalOpen] = useState(false)
-  const isSchemaModalOpen = controlledSchemaModalOpen ?? uncontrolledSchemaModalOpen
-  const handleOpenSchemaModal = useCallback((): void => {
-    if (controlledOpenSchemaModal) {
-      controlledOpenSchemaModal()
-    } else {
-      setUncontrolledSchemaModalOpen(true)
-    }
-  }, [controlledOpenSchemaModal])
-  const handleCloseSchemaModal = useCallback((): void => {
-    if (controlledCloseSchemaModal) {
-      controlledCloseSchemaModal()
-    } else {
-      setUncontrolledSchemaModalOpen(false)
-    }
-  }, [controlledCloseSchemaModal])
   const [rightSidebar, setRightSidebar] = useState<RightSidebarState>(() => ({
     isCollapsed: initialRightSidebarCollapsed,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
@@ -209,8 +193,8 @@ export function EditorWindowFrame({
     const targetPath = await ensureSchemaFilePath()
     if (!targetPath) return
     await openWorkspaceFile(targetPath, undefined, FRONTMATTER_SCHEMA_FILE)
-    handleCloseSchemaModal()
-  }, [ensureSchemaFilePath, handleCloseSchemaModal, openWorkspaceFile])
+    onCloseSchemaModal()
+  }, [ensureSchemaFilePath, onCloseSchemaModal, openWorkspaceFile])
 
   const paneFind = usePaneDocumentFind({
     layout: paneWorkspaceProps.layout,
@@ -324,7 +308,7 @@ export function EditorWindowFrame({
                   canManageSchema,
                   onChangeContent: handlePropertiesChangeContent,
                   onCreateDefaultSchema: createDefaultSchema,
-                  onOpenSchemaModal: handleOpenSchemaModal,
+                  onOpenSchemaModal,
                   onOpenSchemaRawJson: () => void handleOpenSchemaRawJson()
                 }}
               />
@@ -350,7 +334,7 @@ export function EditorWindowFrame({
           shellRef={localShellRef}
           onSaveSchema={saveSchema}
           onOpenRawJson={handleOpenSchemaRawJson}
-          onClose={handleCloseSchemaModal}
+          onClose={onCloseSchemaModal}
         />
       )}
 

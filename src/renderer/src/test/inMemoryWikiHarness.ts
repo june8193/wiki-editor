@@ -525,17 +525,25 @@ export function createMultiWindowWikiHarness(
     }
   }
 
-  const refreshSessionSchemaIfChanged = (session: HarnessSession): void => {
-    if (!session.activeRoot) return
-    const { result, fingerprint } = readSessionSchema(session)
-    if (session.lastSchemaFingerprint === fingerprint) {
-      return
-    }
-    session.lastSchemaFingerprint = fingerprint
-    notifySessionSchemaListeners(session, result)
-    if (session.hub.hasBuffer(result.path)) {
+  const commitAndBroadcastSessionSchema = (
+    session: HarnessSession,
+    readResult: { result: FrontmatterSchemaLoadResult; fingerprint: string }
+  ): FrontmatterSchemaLoadResult => {
+    session.lastSchemaFingerprint = readResult.fingerprint
+    notifySessionSchemaListeners(session, readResult.result)
+    if (session.hub.hasBuffer(readResult.result.path)) {
       void session.hub.reconcileWorkspaceBuffersWithDisk().catch(() => undefined)
     }
+    return cloneSchemaResult(readResult.result)
+  }
+
+  const refreshSessionSchemaIfChanged = (session: HarnessSession): void => {
+    if (!session.activeRoot) return
+    const nextRead = readSessionSchema(session)
+    if (session.lastSchemaFingerprint === nextRead.fingerprint) {
+      return
+    }
+    commitAndBroadcastSessionSchema(session, nextRead)
   }
 
   const writeAndNotifySessionSchema = (
@@ -548,13 +556,7 @@ export function createMultiWindowWikiHarness(
     const schemaPath = `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`
     dirs.add(`${session.activeRoot}/${FRONTMATTER_SCHEMA_DIR}`)
     files.set(schemaPath, serializeFrontmatterSchema(schema))
-    const { result, fingerprint } = readSessionSchema(session)
-    session.lastSchemaFingerprint = fingerprint
-    notifySessionSchemaListeners(session, result)
-    if (session.hub.hasBuffer(schemaPath)) {
-      void session.hub.reconcileWorkspaceBuffersWithDisk().catch(() => undefined)
-    }
-    return cloneSchemaResult(result)
+    return commitAndBroadcastSessionSchema(session, readSessionSchema(session))
   }
 
   const defaultSession = createSession()

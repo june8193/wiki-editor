@@ -34,6 +34,58 @@ export interface FrontmatterSchemaModalProps {
 
 const EMPTY_FIELD_ERRORS: SchemaFieldValidationErrors = { optionErrors: {} }
 
+interface SchemaReorderDeleteActionsProps {
+  labelPrefix: '필드' | '옵션'
+  iconSize: number
+  index: number
+  totalCount: number
+  onMove: (direction: -1 | 1) => void
+  onDelete: () => void
+}
+
+function SchemaReorderDeleteActions({
+  labelPrefix,
+  iconSize,
+  index,
+  totalCount,
+  onMove,
+  onDelete
+}: SchemaReorderDeleteActionsProps) {
+  return (
+    <div className="schema-row-actions">
+      <button
+        type="button"
+        className="icon-btn"
+        aria-label={`${labelPrefix} 위로 이동`}
+        title="위로 이동"
+        disabled={index === 0}
+        onClick={() => onMove(-1)}
+      >
+        <ArrowUp size={iconSize} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        aria-label={`${labelPrefix} 아래로 이동`}
+        title="아래로 이동"
+        disabled={index === totalCount - 1}
+        onClick={() => onMove(1)}
+      >
+        <ArrowDown size={iconSize} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="icon-btn schema-delete-btn"
+        aria-label={`${labelPrefix} 삭제`}
+        title={`${labelPrefix} 삭제`}
+        onClick={onDelete}
+      >
+        <Trash2 size={iconSize} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+    </div>
+  )
+}
+
 interface SchemaOptionRowProps {
   option: SchemaOptionDraft
   index: number
@@ -80,37 +132,14 @@ function SchemaOptionRow({
           value={option.color}
           onChange={(event) => onChange({ color: event.target.value })}
         />
-        <div className="schema-row-actions">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="옵션 위로 이동"
-            title="위로 이동"
-            disabled={index === 0}
-            onClick={() => onMove(-1)}
-          >
-            <ArrowUp size={13} strokeWidth={1.75} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="옵션 아래로 이동"
-            title="아래로 이동"
-            disabled={index === totalCount - 1}
-            onClick={() => onMove(1)}
-          >
-            <ArrowDown size={13} strokeWidth={1.75} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-btn schema-delete-btn"
-            aria-label="옵션 삭제"
-            title="옵션 삭제"
-            onClick={onDelete}
-          >
-            <Trash2 size={13} strokeWidth={1.75} aria-hidden="true" />
-          </button>
-        </div>
+        <SchemaReorderDeleteActions
+          labelPrefix="옵션"
+          iconSize={13}
+          index={index}
+          totalCount={totalCount}
+          onMove={onMove}
+          onDelete={onDelete}
+        />
       </div>
       {error && <p className="schema-inline-error">{error}</p>}
     </div>
@@ -153,37 +182,14 @@ function SchemaFieldCard({
       <div className="schema-field-card-header">
         <span className="schema-field-index">#{index + 1}</span>
         <span className="schema-field-summary">{trimmedLabel || field.key || '새 필드'}</span>
-        <div className="schema-row-actions">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="필드 위로 이동"
-            title="위로 이동"
-            disabled={index === 0}
-            onClick={() => onMove(-1)}
-          >
-            <ArrowUp size={14} strokeWidth={1.75} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="필드 아래로 이동"
-            title="아래로 이동"
-            disabled={index === totalCount - 1}
-            onClick={() => onMove(1)}
-          >
-            <ArrowDown size={14} strokeWidth={1.75} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-btn schema-delete-btn"
-            aria-label="필드 삭제"
-            title="필드 삭제"
-            onClick={onDelete}
-          >
-            <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
-          </button>
-        </div>
+        <SchemaReorderDeleteActions
+          labelPrefix="필드"
+          iconSize={14}
+          index={index}
+          totalCount={totalCount}
+          onMove={onMove}
+          onDelete={onDelete}
+        />
       </div>
 
       <div className="schema-field-grid">
@@ -438,6 +444,16 @@ export function FrontmatterSchemaModal({
     }
   }
 
+  const templateBanner = !schemaResult?.exists
+    ? {
+        message:
+          '아직 스키마 파일(.wiki-editor/frontmatter.json)이 없습니다. 필드를 추가하거나 기본 템플릿을 불러와 저장할 수 있습니다.',
+        isError: false
+      }
+    : schemaResult.error
+      ? { message: schemaResult.error, isError: true }
+      : null
+
   return (
     <div
       className="modal-backdrop schema-modal-backdrop"
@@ -470,26 +486,12 @@ export function FrontmatterSchemaModal({
         </div>
 
         <div className="schema-modal-body">
-          {!schemaResult?.exists && (
-            <div className="schema-modal-banner">
-              <span>
-                아직 스키마 파일(.wiki-editor/frontmatter.json)이 없습니다. 필드를 추가하거나 기본
-                템플릿을 불러와 저장할 수 있습니다.
-              </span>
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={isSaving}
-                onClick={handleLoadDefaultTemplate}
-              >
-                기본 템플릿 불러오기
-              </button>
-            </div>
-          )}
-
-          {schemaResult?.error && (
-            <div className="schema-modal-banner is-error" role="alert">
-              <span>{schemaResult.error}</span>
+          {templateBanner && (
+            <div
+              className={`schema-modal-banner${templateBanner.isError ? ' is-error' : ''}`}
+              role={templateBanner.isError ? 'alert' : undefined}
+            >
+              <span>{templateBanner.message}</span>
               <button
                 type="button"
                 className="btn btn-sm"
