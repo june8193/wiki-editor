@@ -690,4 +690,70 @@ describe('App frontmatter properties & right sidebar 2-tier accordion integratio
     })
     expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(docContent)
   })
+
+  it('keeps 스키마 관리 모달 open with inline error and preserves unsaved draft when JSON 파일로 열기 fails', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, dispose } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\raw-open-error',
+        workspaces: {
+          'C:\\wiki\\raw-open-error': {
+            'guide.md': '# Guide\n\nBody'
+          }
+        }
+      }
+    )
+    disposers.push(dispose)
+
+    const origCreateDefault = api.frontmatter!.createDefaultSchema
+    const origOpenWorkspaceFile = api.buffer.openWorkspaceFile
+    let failCreateDefault = true
+    let failOpenRaw = true
+    api.frontmatter!.createDefaultSchema = async () => {
+      if (failCreateDefault) {
+        throw new Error('스키마 기본 템플릿 쓰기 권한이 없습니다.')
+      }
+      return origCreateDefault()
+    }
+    api.buffer.openWorkspaceFile = async (filePath, name, initialContent) => {
+      if (failOpenRaw && filePath.endsWith('frontmatter.json')) {
+        throw new Error('JSON 파일 열기에 실패했습니다.')
+      }
+      return origOpenWorkspaceFile(filePath, name, initialContent)
+    }
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('guide.md'))
+    const properties = screen.getByRole('region', { name: '문서 속성' })
+    const manageBtns = await within(properties).findAllByRole('button', { name: '스키마 관리' })
+    await user.click(manageBtns[0])
+
+    const modal = screen.getByRole('dialog', { name: '프론트매터 스키마 관리' })
+    await user.click(within(modal).getByRole('button', { name: '+ 필드 추가' }))
+    const draftCard = within(modal).getByRole('group', { name: '새 필드 1' })
+    await user.type(within(draftCard).getByLabelText('키'), 'draft_key')
+
+    // Case 1: createDefaultSchema fails -> inline modal alert, modal & unsaved draft remain open
+    await user.click(within(modal).getByRole('button', { name: 'JSON 파일로 열기' }))
+    await waitFor(() => {
+      expect(within(modal).getByRole('alert')).toHaveTextContent(
+        /스키마 기본 템플릿 쓰기 권한이 없습니다/
+      )
+    })
+    expect(within(modal).getByDisplayValue('draft_key')).toBeInTheDocument()
+
+    // Case 2: createDefaultSchema succeeds, openWorkspaceFile fails -> modal & unsaved draft still remain open with inline alert
+    failCreateDefault = false
+    await user.click(within(modal).getByRole('button', { name: 'JSON 파일로 열기' }))
+    await waitFor(() => {
+      expect(within(modal).getByRole('alert')).toHaveTextContent(/스키마 JSON 파일을 열지 못했습니다/)
+    })
+    expect(screen.getByRole('dialog', { name: '프론트매터 스키마 관리' })).toBeInTheDocument()
+    expect(within(modal).getByDisplayValue('draft_key')).toBeInTheDocument()
+  })
 })

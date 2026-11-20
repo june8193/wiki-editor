@@ -192,14 +192,31 @@ export function EditorWindowFrame({
   const workspaceRootRef = useRef(workspaceRootPath)
   workspaceRootRef.current = workspaceRootPath
 
-  const handleOpenSchemaRawJson = useCallback(async (): Promise<void> => {
-    const startedRoot = workspaceRootRef.current
-    const targetPath = await ensureSchemaFilePath()
-    if (!targetPath || startedRoot !== workspaceRootRef.current) return
-    await openWorkspaceFile(targetPath, undefined, FRONTMATTER_SCHEMA_FILE)
-    if (startedRoot !== workspaceRootRef.current) return
-    onCloseSchemaModal()
-  }, [ensureSchemaFilePath, onCloseSchemaModal, openWorkspaceFile])
+  const openSchemaRawJsonFile = useCallback(
+    async (fromModal: boolean): Promise<void> => {
+      const startedRoot = workspaceRootRef.current
+      const targetPath = await ensureSchemaFilePath({ throwOnError: fromModal })
+      if (startedRoot !== workspaceRootRef.current) return
+      if (!targetPath) {
+        if (fromModal) {
+          throw new Error('프론트매터 스키마 파일을 준비하지 못했습니다.')
+        }
+        return
+      }
+      const opened = await openWorkspaceFile(targetPath, undefined, FRONTMATTER_SCHEMA_FILE)
+      if (startedRoot !== workspaceRootRef.current) return
+      if (!opened) {
+        if (fromModal) {
+          throw new Error('스키마 JSON 파일을 열지 못했습니다.')
+        }
+        return
+      }
+      if (fromModal) {
+        onCloseSchemaModal()
+      }
+    },
+    [ensureSchemaFilePath, onCloseSchemaModal, openWorkspaceFile]
+  )
 
   const paneFind = usePaneDocumentFind({
     layout: paneWorkspaceProps.layout,
@@ -314,7 +331,7 @@ export function EditorWindowFrame({
                   onChangeContent: handlePropertiesChangeContent,
                   onCreateDefaultSchema: createDefaultSchema,
                   onOpenSchemaModal,
-                  onOpenSchemaRawJson: () => void handleOpenSchemaRawJson()
+                  onOpenSchemaRawJson: () => void openSchemaRawJsonFile(false)
                 }}
               />
             </aside>
@@ -338,7 +355,7 @@ export function EditorWindowFrame({
           isDismissDisabled={pendingDialog !== null}
           shellRef={localShellRef}
           onSaveSchema={saveSchema}
-          onOpenRawJson={handleOpenSchemaRawJson}
+          onOpenRawJson={() => openSchemaRawJsonFile(true)}
           onClose={onCloseSchemaModal}
         />
       )}
