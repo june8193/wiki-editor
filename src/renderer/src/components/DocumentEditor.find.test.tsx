@@ -1271,4 +1271,117 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
     expect(within(findBar()).getByText('2 / 3')).toBeInTheDocument()
     expect(onChangeContent).not.toHaveBeenCalled()
   })
+
+  it('scopes In-Document Find Bar counts and highlights to body in Preview/위지윅 vs full raw in Raw/Split across frontmatter variants', async () => {
+    const user = userEvent.setup()
+    const frontmatterDoc = [
+      '---',
+      'yamlOnlyKey: yamlOnlySecretValue',
+      'sharedToken: yaml-entry',
+      '# yamlOnlyComment',
+      '---',
+      '# Title with sharedToken',
+      '',
+      'Body paragraph with sharedToken and bodyOnlyToken.'
+    ].join('\n')
+
+    let doc = createDoc({ content: frontmatterDoc, savedContent: frontmatterDoc })
+    let tab = createTab('raw', 0.5)
+    const onChangeContent = vi.fn()
+
+    const renderEditor = () => (
+      <DocumentEditor
+        document={doc}
+        tab={tab}
+        theme="light"
+        autoSave={false}
+        onChangeContent={onChangeContent}
+        onSave={vi.fn()}
+        onUpdateViewState={(patch) => {
+          tab = { ...tab, ...patch }
+          rerender(renderEditor())
+        }}
+      />
+    )
+
+    const { container, rerender } = render(renderEditor())
+    const modeGroup = () => screen.getByRole('group', { name: '에디터 모드 전환' })
+    const findBar = () => screen.getByRole('region', { name: '문서 내 찾기 바' })
+    const findInput = () =>
+      within(findBar()).getByRole('textbox', { name: '문서 내 검색어 입력' }) as HTMLInputElement
+
+    // 1. Raw mode searches full raw markdown (1 in YAML + 2 in body = 3)
+    await user.click(screen.getByRole('button', { name: '문서 내 찾기' }))
+    await user.type(findInput(), 'sharedToken')
+    expect(within(findBar()).getByText('1 / 3')).toBeInTheDocument()
+    expect(container.querySelectorAll('.cm-search-match')).toHaveLength(3)
+
+    // 2. Split mode counts full raw (3 in Raw) while right Preview highlights only body matches (2)
+    await user.click(within(modeGroup()).getByRole('button', { name: 'Split' }))
+    expect(within(findBar()).getByText('1 / 3')).toBeInTheDocument()
+    expect(container.querySelectorAll('.cm-search-match')).toHaveLength(3)
+    expect(
+      screen.getByTestId('split-markdown-preview').querySelectorAll('.preview-search-match')
+    ).toHaveLength(2)
+
+    // 3. Preview mode counts and highlights body only (2)
+    await user.click(within(modeGroup()).getByRole('button', { name: 'Preview' }))
+    expect(within(findBar()).getByText('1 / 2')).toBeInTheDocument()
+    expect(container.querySelectorAll('.preview-search-match')).toHaveLength(2)
+
+    // 4. 위지윅 mode counts and highlights body only (2)
+    await user.click(within(modeGroup()).getByRole('button', { name: '위지윅' }))
+    expect(within(findBar()).getByText('1 / 2')).toBeInTheDocument()
+    expect(container.querySelectorAll('.pm-search-match')).toHaveLength(2)
+
+    // 5. Query matching only YAML frontmatter returns no matches ('결과 없음') in 위지윅 and Preview, 1 in Raw/Split
+    await user.clear(findInput())
+    await user.type(findInput(), 'yamlOnlySecretValue')
+    expect(within(findBar()).getByText('결과 없음')).toBeInTheDocument()
+    expect(container.querySelectorAll('.pm-search-match')).toHaveLength(0)
+
+    await user.click(within(modeGroup()).getByRole('button', { name: 'Preview' }))
+    expect(within(findBar()).getByText('결과 없음')).toBeInTheDocument()
+    expect(container.querySelectorAll('.preview-search-match')).toHaveLength(0)
+
+    await user.click(within(modeGroup()).getByRole('button', { name: 'Split' }))
+    expect(within(findBar()).getByText('1 / 1')).toBeInTheDocument()
+    expect(container.querySelectorAll('.cm-search-match')).toHaveLength(1)
+    expect(
+      screen.getByTestId('split-markdown-preview').querySelectorAll('.preview-search-match')
+    ).toHaveLength(0)
+
+    // 6. Frontmatter-only doc renders empty placeholder in Preview without matching YAML or placeholder
+    const fmOnlyDoc = ['---', 'yamlOnlySecretValue: true', '---', ''].join('\n')
+    doc = createDoc({ content: fmOnlyDoc, savedContent: fmOnlyDoc })
+    await user.click(within(modeGroup()).getByRole('button', { name: 'Preview' }))
+    expect(screen.getByText('미리 볼 내용이 없습니다.')).toBeInTheDocument()
+    expect(within(findBar()).getByText('결과 없음')).toBeInTheDocument()
+
+    // 7. Closed frontmatter with YAML syntax error still separates body cleanly for Preview & 위지윅
+    const syntaxErrDoc = ['---', 'broken: [', '---', 'Body fallback content'].join('\n')
+    doc = createDoc({ content: syntaxErrDoc, savedContent: syntaxErrDoc })
+    rerender(renderEditor())
+    await user.clear(findInput())
+    await user.type(findInput(), 'broken')
+    expect(within(findBar()).getByText('결과 없음')).toBeInTheDocument()
+
+    await user.clear(findInput())
+    await user.type(findInput(), 'fallback')
+    expect(within(findBar()).getByText('1 / 1')).toBeInTheDocument()
+    await user.click(within(modeGroup()).getByRole('button', { name: '위지윅' }))
+    expect(within(findBar()).getByText('1 / 1')).toBeInTheDocument()
+
+    // 8. Unclosed '---' falls back to normal markdown in all modes
+    const unclosedDoc = ['---', 'broken: unclosed', 'Body line'].join('\n')
+    doc = createDoc({ content: unclosedDoc, savedContent: unclosedDoc })
+    rerender(renderEditor())
+    await user.clear(findInput())
+    await user.type(findInput(), 'broken')
+    expect(within(findBar()).getByText('1 / 1')).toBeInTheDocument()
+    await user.click(within(modeGroup()).getByRole('button', { name: 'Preview' }))
+    expect(within(findBar()).getByText('1 / 1')).toBeInTheDocument()
+
+    expect(onChangeContent).not.toHaveBeenCalled()
+  })
 })

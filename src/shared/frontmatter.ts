@@ -61,6 +61,15 @@ export interface FrontmatterMutationResult {
   error?: string
 }
 
+export interface FrontmatterBodySlice {
+  hasFrontmatter: boolean
+  rawBlock: string
+  body: string
+  bodyStartLine: number
+  bodyStartOffset: number
+  lineEnding: '\r\n' | '\n'
+}
+
 interface LineSpan {
   lineNumber: number
   start: number
@@ -835,4 +844,60 @@ export function removeFrontmatterBlock(markdown: string): FrontmatterMutationRes
     applied: true,
     content: `${prefix}${guard.state.split.body}`
   }
+}
+
+const LEADING_BLANK_LINES_RE = /^(?:[ \t]*\r?\n)+/
+
+/**
+ * Splits top-of-document YAML frontmatter boundaries from markdown body without running full YAML AST parsing.
+ */
+export function extractFrontmatterBody(markdown: string): FrontmatterBodySlice {
+  const split = splitFrontmatterRegion(markdown)
+  return {
+    hasFrontmatter: split.hasFrontmatter,
+    rawBlock: split.rawBlock,
+    body: split.body,
+    bodyStartLine: split.bodyStartLine,
+    bodyStartOffset: split.bodyStartOffset,
+    lineEnding: split.lineEnding
+  }
+}
+
+/**
+ * Recombines the original document's frontmatter prefix (BOM, rawBlock, comments, unknown keys,
+ * closing delimiter, trailing separator, and leading body blank lines/line endings) with an updated body.
+ */
+export function replaceFrontmatterBody(originalMarkdown: string, nextBody: string): string {
+  const split = splitFrontmatterRegion(originalMarkdown)
+  const prefix = getBomPrefix(split.hasBom)
+  if (!split.hasFrontmatter) {
+    if (split.hasBom && !nextBody.startsWith('\uFEFF')) {
+      return `\uFEFF${nextBody}`
+    }
+    return nextBody
+  }
+
+  if (nextBody === split.body) {
+    return originalMarkdown
+  }
+
+  const separatorAfterClosing = sliceSeparatorAfterClosing(originalMarkdown, split)
+  const effectiveSeparator =
+    separatorAfterClosing || (nextBody.length > 0 ? split.lineEnding : '')
+
+  if (nextBody.length === 0) {
+    return `${prefix}${split.rawBlock}${effectiveSeparator}`
+  }
+
+  const bodyLineEnding: '\r\n' | '\n' = split.body.includes('\r\n')
+    ? '\r\n'
+    : split.body.includes('\n')
+      ? '\n'
+      : split.lineEnding
+  const normalizedBody = convertLfToLineEnding(nextBody.replace(/\r\n?/g, '\n'), bodyLineEnding)
+  const leadingBlankMatch = LEADING_BLANK_LINES_RE.exec(split.body)
+  const leadingBlank =
+    leadingBlankMatch && !LEADING_BLANK_LINES_RE.test(normalizedBody) ? leadingBlankMatch[0] : ''
+
+  return `${prefix}${split.rawBlock}${effectiveSeparator}${leadingBlank}${normalizedBody}`
 }

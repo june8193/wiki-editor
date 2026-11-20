@@ -979,4 +979,184 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView
     }
   })
+
+  it('jumps accurately to body lines across all 4 modes and safely handles frontmatter line jumps, syntax errors, and unclosed blocks', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewSpy = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy
+
+    try {
+      const mdLines = [
+        '---',
+        'title: FrontmatterSharedToken note',
+        '# yamlHeadingLikeComment JumpOnlyYaml',
+        'tags: [alpha, beta]',
+        '---',
+        '# FrontmatterSharedToken Body Heading',
+        '',
+        'First paragraph mentions JumpBodyToken clearly.',
+        '',
+        '```ts',
+        'const codeMatch = "JumpCodeToken"',
+        '```',
+        '- List with JumpListToken item'
+      ]
+      const md = mdLines.join('\n')
+      let doc = createDoc({ content: md, savedContent: md })
+      let tab = createTab('raw', 0.5)
+      let currentJump: DocumentSearchJumpRequest | null = null
+
+      const renderEditor = () => (
+        <DocumentEditor
+          document={doc}
+          tab={tab}
+          theme="light"
+          autoSave={false}
+          searchJumpRequest={currentJump}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={(patch) => {
+            tab = { ...tab, ...patch }
+            rerender(renderEditor())
+          }}
+        />
+      )
+
+      const { container, rerender } = render(renderEditor())
+      const modeGroup = () => screen.getByRole('group', { name: '에디터 모드 전환' })
+
+      // 1. Raw: frontmatter line jump (line 2) -> selects exact YAML column & applies cm jump highlight
+      currentJump = createLineTokenJumpRequest(mdLines, 2, 'FrontmatterSharedToken', 1)
+      rerender(renderEditor())
+      expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe(
+        'FrontmatterSharedToken'
+      )
+      const rawEl = screen.getByTestId('document-editor')
+      const expectedYamlColStart = md.indexOf('FrontmatterSharedToken')
+      expect(Number(rawEl.getAttribute('data-selection-start'))).toBe(expectedYamlColStart)
+
+      // Raw: body line jump (line 8) -> exact body column
+      currentJump = createLineTokenJumpRequest(mdLines, 8, 'JumpBodyToken', 2)
+      rerender(renderEditor())
+      expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe('JumpBodyToken')
+      expect(Number(rawEl.getAttribute('data-selection-start'))).toBe(md.indexOf('JumpBodyToken'))
+
+      // 2. Split: body jump highlights both Raw & right Preview accurately; YAML jump highlights Raw ONLY (0 in Preview)
+      await user.click(within(modeGroup()).getByRole('button', { name: 'Split' }))
+      const splitPreview = () => screen.getByTestId('split-markdown-preview')
+
+      currentJump = createLineTokenJumpRequest(mdLines, 11, 'JumpCodeToken', 3)
+      scrollIntoViewSpy.mockClear()
+      rerender(renderEditor())
+      expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe('JumpCodeToken')
+      expect(splitPreview().querySelector('.preview-search-jump-highlight')?.textContent).toBe(
+        'JumpCodeToken'
+      )
+      expect(splitPreview().querySelector('[data-source-line="10"]')).not.toBeNull()
+
+      // Jump inside frontmatter while in Split -> Raw jumps to line 3, right Preview has 0 jump highlights (and syncs toward top when geometry exists)
+      const splitRawScroller = container.querySelector('.cm-scroller') as HTMLElement
+      Object.defineProperty(splitRawScroller, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(splitRawScroller, 'scrollHeight', { configurable: true, value: 800 })
+      Object.defineProperty(splitPreview(), 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(splitPreview(), 'scrollHeight', { configurable: true, value: 800 })
+      splitPreview().scrollTop = 240
+      currentJump = createLineTokenJumpRequest(mdLines, 3, 'JumpOnlyYaml', 4)
+      scrollIntoViewSpy.mockClear()
+      rerender(renderEditor())
+      expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe('JumpOnlyYaml')
+      expect(splitPreview().querySelectorAll('.preview-search-jump-highlight')).toHaveLength(0)
+      expect(splitPreview().scrollTop).toBeLessThan(240)
+
+      // 3. Preview: body jump (even when token also appears in YAML!) highlights body heading; frontmatter jump resets top cleanly
+      await user.click(within(modeGroup()).getByRole('button', { name: 'Preview' }))
+      const previewEl = () => screen.getByLabelText('마크다운 미리보기')
+
+      currentJump = createLineTokenJumpRequest(mdLines, 6, 'FrontmatterSharedToken', 5)
+      scrollIntoViewSpy.mockClear()
+      rerender(renderEditor())
+      const previewHeadingMarks = previewEl().querySelectorAll('.preview-search-jump-highlight')
+      expect(previewHeadingMarks).toHaveLength(1)
+      expect(previewHeadingMarks[0].closest('h1[data-source-line="6"]')).not.toBeNull()
+      expect(scrollIntoViewSpy).toHaveBeenCalled()
+
+      currentJump = createLineTokenJumpRequest(mdLines, 13, 'JumpListToken', 6)
+      scrollIntoViewSpy.mockClear()
+      rerender(renderEditor())
+      const previewListMarks = previewEl().querySelectorAll('.preview-search-jump-highlight')
+      expect(previewListMarks).toHaveLength(1)
+      expect(previewListMarks[0].closest('li')).not.toBeNull()
+
+      // Jump to frontmatter line 2 containing token that ALSO appears in body -> must NOT highlight body, resets scrollTop = 0
+      previewEl().scrollTop = 180
+      currentJump = createLineTokenJumpRequest(mdLines, 2, 'FrontmatterSharedToken', 7)
+      scrollIntoViewSpy.mockClear()
+      rerender(renderEditor())
+      expect(previewEl().querySelectorAll('.preview-search-jump-highlight')).toHaveLength(0)
+      expect(previewEl().scrollTop).toBe(0)
+
+      // 4. 위지윅: body jump highlights body blocks accurately; frontmatter jump resets scrollTop = 0 with 0 highlights
+      await user.click(within(modeGroup()).getByRole('button', { name: '위지윅' }))
+      const wysiwygSurface = () => screen.getByLabelText('위지윅 문서 에디터')
+      const wysiwygScroller = () => container.querySelector('.wysiwyg-scroll-container') as HTMLElement
+
+      currentJump = createLineTokenJumpRequest(mdLines, 6, 'FrontmatterSharedToken', 8)
+      scrollIntoViewSpy.mockClear()
+      rerender(renderEditor())
+      const wysiwygHeadingMarks = wysiwygSurface().querySelectorAll('.pm-search-jump-highlight')
+      expect(wysiwygHeadingMarks).toHaveLength(1)
+      expect(wysiwygHeadingMarks[0].closest('h1')).not.toBeNull()
+      expect(scrollIntoViewSpy).toHaveBeenCalled()
+
+      currentJump = createLineTokenJumpRequest(mdLines, 8, 'JumpBodyToken', 9)
+      scrollIntoViewSpy.mockClear()
+      rerender(renderEditor())
+      expect(wysiwygSurface().querySelector('.pm-search-jump-highlight')?.textContent).toBe(
+        'JumpBodyToken'
+      )
+
+      // Jump to frontmatter line 2 with shared token in 위지윅 -> 0 highlights, scrollTop = 0
+      wysiwygScroller().scrollTop = 160
+      currentJump = createLineTokenJumpRequest(mdLines, 2, 'FrontmatterSharedToken', 10)
+      scrollIntoViewSpy.mockClear()
+      rerender(renderEditor())
+      expect(wysiwygSurface().querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      expect(wysiwygScroller().scrollTop).toBe(0)
+
+      // 5. Frontmatter-only doc + closed YAML syntax error + unclosed '---' safety checks
+      const fmOnlyLines = ['---', 'yamlOnlyJump: SecretVal', '---', '']
+      doc = createDoc({ content: fmOnlyLines.join('\n'), savedContent: fmOnlyLines.join('\n') })
+      wysiwygScroller().scrollTop = 90
+      currentJump = createLineTokenJumpRequest(fmOnlyLines, 2, 'SecretVal', 11)
+      rerender(renderEditor())
+      expect(wysiwygSurface().querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      expect(wysiwygScroller().scrollTop).toBe(0)
+
+      await user.click(within(modeGroup()).getByRole('button', { name: 'Preview' }))
+      previewEl().scrollTop = 75
+      currentJump = createLineTokenJumpRequest(fmOnlyLines, 2, 'SecretVal', 12)
+      rerender(renderEditor())
+      expect(previewEl().querySelectorAll('.preview-search-jump-highlight')).toHaveLength(0)
+      expect(previewEl().scrollTop).toBe(0)
+
+      const syntaxErrLines = ['---', 'broken: [', '---', 'Recovered BodyJumpToken']
+      doc = createDoc({ content: syntaxErrLines.join('\n'), savedContent: syntaxErrLines.join('\n') })
+      currentJump = createLineTokenJumpRequest(syntaxErrLines, 4, 'BodyJumpToken', 13)
+      rerender(renderEditor())
+      expect(previewEl().querySelector('.preview-search-jump-highlight')?.textContent).toBe(
+        'BodyJumpToken'
+      )
+
+      const unclosedLines = ['---', 'unclosedKey: UnclosedJumpToken', 'Paragraph text']
+      doc = createDoc({ content: unclosedLines.join('\n'), savedContent: unclosedLines.join('\n') })
+      currentJump = createLineTokenJumpRequest(unclosedLines, 2, 'UnclosedJumpToken', 14)
+      rerender(renderEditor())
+      expect(previewEl().querySelector('.preview-search-jump-highlight')?.textContent).toBe(
+        'UnclosedJumpToken'
+      )
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    }
+  })
 })

@@ -1,3 +1,4 @@
+import { extractFrontmatterBody } from '@shared/frontmatter'
 import {
   compareWorkspaceEntriesByRelativePath,
   getWorkspacePathKey,
@@ -271,7 +272,8 @@ export function detectLinkQuery(text: string, cursorOffset: number): LinkQueryMa
   if (cursorOffset < 0 || cursorOffset > text.length) {
     return null
   }
-  if (isOffsetInCodeFence(text, cursorOffset)) {
+  const { bodyStartOffset } = extractFrontmatterBody(text)
+  if (cursorOffset < bodyStartOffset || isOffsetInCodeFence(text, cursorOffset)) {
     return null
   }
 

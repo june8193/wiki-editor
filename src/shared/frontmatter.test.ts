@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   applyFrontmatterValues,
   createDefaultFrontmatterSchema,
+  extractFrontmatterBody,
   FRONTMATTER_SCHEMA_RELATIVE_PATH,
   parseFrontmatterDocument,
   parseFrontmatterSchema,
   parseFrontmatterSchemaJson,
   removeFrontmatterBlock,
+  replaceFrontmatterBody,
   serializeFrontmatterSchema,
   type WorkspaceFrontmatterSchema
 } from './frontmatter'
@@ -651,5 +653,79 @@ describe('workspace frontmatter schema validation and starter template', () => {
       fields: [{ key: 'tags', label: '태그', type: 'multi-select', allowCustom: true }]
     })
     expect(customMultiSelectOnly.ok).toBe(true)
+  })
+})
+
+describe('frontmatter body extraction and lossless recombination', () => {
+  it('extracts body, bodyStartLine, and bodyStartOffset across valid, syntax-error, unclosed, and non-frontmatter documents', () => {
+    const valid = '\uFEFF---\r\n# comment\r\ntitle: Doc\r\n...\r\n\r\n# Heading'
+    const validSlice = extractFrontmatterBody(valid)
+    expect(validSlice.hasFrontmatter).toBe(true)
+    expect(validSlice.rawBlock).toBe('---\r\n# comment\r\ntitle: Doc\r\n...')
+    expect(validSlice.body).toBe('\r\n# Heading')
+    expect(validSlice.bodyStartLine).toBe(5)
+    expect(validSlice.bodyStartOffset).toBe('\uFEFF---\r\n# comment\r\ntitle: Doc\r\n...\r\n'.length)
+    expect(validSlice.lineEnding).toBe('\r\n')
+
+    const closedSyntaxError = '---\nbad: [unclosed\n---\n# Body'
+    const syntaxSlice = extractFrontmatterBody(closedSyntaxError)
+    expect(syntaxSlice.hasFrontmatter).toBe(true)
+    expect(syntaxSlice.rawBlock).toBe('---\nbad: [unclosed\n---')
+    expect(syntaxSlice.body).toBe('# Body')
+    expect(syntaxSlice.bodyStartLine).toBe(4)
+
+    const unclosed = '---\ntitle: open\n# Body'
+    const unclosedSlice = extractFrontmatterBody(unclosed)
+    expect(unclosedSlice.hasFrontmatter).toBe(false)
+    expect(unclosedSlice.body).toBe(unclosed)
+    expect(unclosedSlice.bodyStartLine).toBe(1)
+    expect(unclosedSlice.bodyStartOffset).toBe(0)
+  })
+
+  it('recombines edited body with original frontmatter losslessly including comments, unknown keys, nested YAML, BOM, CRLF, and blank separators', () => {
+    const originalCrlf = [
+      '\uFEFF---',
+      '# top comment',
+      'customMeta:',
+      '  nested: true',
+      'tags: [a, b]',
+      '---',
+      '',
+      '# Title',
+      '',
+      'Old body'
+    ].join('\r\n')
+
+    const recombinedCrlf = replaceFrontmatterBody(originalCrlf, '# Title\n\nNew body')
+    expect(recombinedCrlf).toBe(
+      [
+        '\uFEFF---',
+        '# top comment',
+        'customMeta:',
+        '  nested: true',
+        'tags: [a, b]',
+        '---',
+        '',
+        '# Title',
+        '',
+        'New body'
+      ].join('\r\n')
+    )
+
+    // Closed YAML syntax error block is preserved verbatim when body changes
+    const brokenFrontmatter = '---\n# keep\nbroken: [\n---\n# Old'
+    expect(replaceFrontmatterBody(brokenFrontmatter, '# New')).toBe(
+      '---\n# keep\nbroken: [\n---\n# New'
+    )
+
+    // Closing delimiter without trailing newline inserts separator when non-empty body is written
+    expect(replaceFrontmatterBody('---\ntitle: Only\n---', 'Typed body')).toBe(
+      '---\ntitle: Only\n---\nTyped body'
+    )
+    expect(replaceFrontmatterBody('---\ntitle: Only\n---', '')).toBe('---\ntitle: Only\n---')
+
+    // Documents without frontmatter pass through edited body (preserving BOM if present)
+    expect(replaceFrontmatterBody('\uFEFF# Plain', '# Edited')).toBe('\uFEFF# Edited')
+    expect(replaceFrontmatterBody('# Plain', '# Edited')).toBe('# Edited')
   })
 })

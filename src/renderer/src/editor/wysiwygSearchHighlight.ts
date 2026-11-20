@@ -70,6 +70,7 @@ const wysiwygSearchHighlightPluginKey = new PluginKey<WysiwygSearchPluginState>(
 interface WysiwygJumpPluginState {
   nonce: number
   fallbackBlockPos: number | null
+  scrollToTop: boolean
   decorations: DecorationSet
 }
 
@@ -79,6 +80,7 @@ function createEmptyJumpPluginState(): WysiwygJumpPluginState {
   return {
     nonce: 0,
     fallbackBlockPos: null,
+    scrollToTop: false,
     decorations: DecorationSet.empty
   }
 }
@@ -320,18 +322,37 @@ function computeJumpPluginState(
   rawContent: string,
   jump: DocumentJumpHighlightTarget
 ): WysiwygJumpPluginState {
+  const plan = analyzeMarkdownSearchJump(rawContent, jump)
+  if (plan.isInFrontmatter) {
+    return {
+      nonce: jump.nonce,
+      fallbackBlockPos: null,
+      scrollToTop: true,
+      decorations: DecorationSet.empty
+    }
+  }
+
   const pmBlocks = collectTopLevelPmBlocks(doc)
   if (pmBlocks.length === 0) {
-    return { nonce: jump.nonce, fallbackBlockPos: null, decorations: DecorationSet.empty }
+    return {
+      nonce: jump.nonce,
+      fallbackBlockPos: null,
+      scrollToTop: false,
+      decorations: DecorationSet.empty
+    }
   }
 
   const mdBlocks = collectTopLevelMarkdownBlocks(rawContent)
   const alignedBlocks = alignRenderedBlocksToMarkdown(pmBlocks, mdBlocks)
-  const plan = analyzeMarkdownSearchJump(rawContent, jump)
   const targetLine = plan.targetBlock?.startLine ?? plan.lineNumber
   const targetBlock = pickClosestLineBlock(alignedBlocks, targetLine)
   if (!targetBlock) {
-    return { nonce: jump.nonce, fallbackBlockPos: null, decorations: DecorationSet.empty }
+    return {
+      nonce: jump.nonce,
+      fallbackBlockPos: null,
+      scrollToTop: false,
+      decorations: DecorationSet.empty
+    }
   }
 
   const candidateBlocks = alignedBlocks.filter(
@@ -343,6 +364,7 @@ function computeJumpPluginState(
     return {
       nonce: jump.nonce,
       fallbackBlockPos,
+      scrollToTop: false,
       decorations: DecorationSet.empty
     }
   }
@@ -385,6 +407,7 @@ function computeJumpPluginState(
     return {
       nonce: jump.nonce,
       fallbackBlockPos,
+      scrollToTop: false,
       decorations: DecorationSet.empty
     }
   }
@@ -392,6 +415,7 @@ function computeJumpPluginState(
   return {
     nonce: jump.nonce,
     fallbackBlockPos,
+    scrollToTop: false,
     decorations: DecorationSet.create(doc, [
       Decoration.inline(chosenRange.from, chosenRange.to, {
         class: 'pm-search-jump-highlight',
@@ -662,30 +686,40 @@ export function syncWysiwygSearchJump(
 /**
  * Scrolls the WYSIWYG container to the active temporary jump highlight or its fallback block element.
  */
-export function scrollWysiwygSearchJump(editor: Editor, scrollContainer: HTMLElement | null): void {
+export function scrollWysiwygSearchJump(
+  editor: Editor,
+  scrollContainer: HTMLElement | null
+): { scrolledToTop: boolean } {
   if (editor.isDestroyed) {
-    return
+    return { scrolledToTop: false }
+  }
+  const state = wysiwygSearchJumpPluginKey.getState(editor.state)
+  if (state?.scrollToTop) {
+    if (scrollContainer) {
+      scrollContainer.scrollTop = 0
+    }
+    return { scrolledToTop: true }
   }
   const highlightEl = editor.view.dom.querySelector('.pm-search-jump-highlight[data-search-jump="true"]')
   if (highlightEl) {
     scrollMatchElementIntoView(highlightEl, scrollContainer)
-    return
+    return { scrolledToTop: false }
   }
 
-  const state = wysiwygSearchJumpPluginKey.getState(editor.state)
   if (!state || state.fallbackBlockPos === null) {
-    return
+    return { scrolledToTop: false }
   }
 
   const blockDom = editor.view.nodeDOM(state.fallbackBlockPos)
   if (blockDom instanceof Element) {
     scrollMatchElementIntoView(blockDom, scrollContainer)
-    return
+    return { scrolledToTop: false }
   }
   const safePos = Math.min(state.fallbackBlockPos + 1, editor.state.doc.content.size)
   const domPos = editor.view.domAtPos(safePos)
   const target = domPos.node instanceof Element ? domPos.node : domPos.node.parentElement
   scrollMatchElementIntoView(target, scrollContainer)
+  return { scrolledToTop: false }
 }
 
 const WYSIWYG_SEARCH_CHROME_SELECTOR =
