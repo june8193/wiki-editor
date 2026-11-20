@@ -2,8 +2,7 @@ import { isSupportedImageFile } from './assets'
 import {
   createFrontmatterFieldComparator,
   type FrontmatterFieldValue,
-  type FrontmatterFilterCondition,
-  type FrontmatterValueComparator
+  type FrontmatterFilterCondition
 } from './frontmatterFilter'
 import type { WorkspaceFrontmatterSchema } from './frontmatterSchema'
 import type { PaneId } from './window'
@@ -19,6 +18,11 @@ export interface FrontmatterSortableSearchEntry {
   relativePath: string
   nameMatches: TextMatchSpan[]
   values?: Readonly<Record<string, FrontmatterFieldValue | undefined>>
+}
+
+export interface WorkspaceSearchSortPlan {
+  requiresFrontmatterValues: boolean
+  compare: (a: FrontmatterSortableSearchEntry, b: FrontmatterSortableSearchEntry) => number
 }
 
 export interface SearchMatchOptions {
@@ -380,30 +384,54 @@ export function compareWorkspaceSearchFileResults(
 }
 
 /**
+ * Resolves a reusable sort plan for `WorkspaceSearchSortSpec`, caching any frontmatter field
+ * comparator once up front and falling back to default path order when invalid or omitted.
+ */
+export function createWorkspaceSearchSortPlan(
+  sort: WorkspaceSearchSortSpec | undefined,
+  schema: WorkspaceFrontmatterSchema | null | undefined
+): WorkspaceSearchSortPlan {
+  if (!sort || (sort.by === 'path' && sort.direction === 'asc')) {
+    return {
+      requiresFrontmatterValues: false,
+      compare: compareWorkspaceSearchFileResults
+    }
+  }
+  if (sort.by === 'path') {
+    return {
+      requiresFrontmatterValues: false,
+      compare: (a, b) => compareWorkspaceEntriesByRelativePath(b, a)
+    }
+  }
+
+  const field = sort.fieldKey ? schema?.fields.find((item) => item.key === sort.fieldKey) : undefined
+  if (!field) {
+    return {
+      requiresFrontmatterValues: false,
+      compare: compareWorkspaceSearchFileResults
+    }
+  }
+
+  const compareValues = createFrontmatterFieldComparator(field, sort.direction)
+  return {
+    requiresFrontmatterValues: true,
+    compare: (a, b) => {
+      const cmp = compareValues(a.values?.[field.key], b.values?.[field.key])
+      return cmp !== 0 ? cmp : compareWorkspaceEntriesByRelativePath(a, b)
+    }
+  }
+}
+
+/**
  * Compares search result entries by `WorkspaceSearchSortSpec`, falling back to `relativePath` asc on ties.
  */
 export function compareWorkspaceSearchEntriesBySort(
   a: FrontmatterSortableSearchEntry,
   b: FrontmatterSortableSearchEntry,
   sort: WorkspaceSearchSortSpec | undefined,
-  schema: WorkspaceFrontmatterSchema | null | undefined,
-  fieldComparator?: FrontmatterValueComparator
+  schema: WorkspaceFrontmatterSchema | null | undefined
 ): number {
-  if (!sort || (sort.by === 'path' && sort.direction === 'asc')) {
-    return compareWorkspaceSearchFileResults(a, b)
-  }
-  if (sort.by === 'path') {
-    return compareWorkspaceEntriesByRelativePath(b, a)
-  }
-
-  const field = sort.fieldKey ? schema?.fields.find((item) => item.key === sort.fieldKey) : undefined
-  if (!field) {
-    return compareWorkspaceSearchFileResults(a, b)
-  }
-
-  const comparator = fieldComparator ?? createFrontmatterFieldComparator(field, sort.direction)
-  const cmp = comparator(a.values?.[field.key], b.values?.[field.key])
-  return cmp !== 0 ? cmp : compareWorkspaceEntriesByRelativePath(a, b)
+  return createWorkspaceSearchSortPlan(sort, schema).compare(a, b)
 }
 
 /** Builds a `WorkspaceSearchFileResult`, omitting `frontmatterSummary` when undefined. */

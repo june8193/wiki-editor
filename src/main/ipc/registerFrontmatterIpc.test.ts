@@ -9,9 +9,9 @@ import type {
 } from '@shared/frontmatter'
 import { FRONTMATTER_IPC_CHANNELS } from '@shared/ipc'
 import { LogService } from '../logging/LogService'
+import { FrontmatterFieldValuesService } from '../workspace/FrontmatterFieldValuesService'
 import { FrontmatterSchemaService } from '../workspace/FrontmatterSchemaService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
-import { WorkspaceSearchService } from '../workspace/WorkspaceSearchService'
 import type { WebContentsLike } from './ipcHelpers'
 import { createFakeIpcMain } from './ipcTestHelpers'
 import { registerFrontmatterIpc } from './registerFrontmatterIpc'
@@ -132,7 +132,7 @@ describe('registerFrontmatterIpc', () => {
 
   it('handles frontmatter:get-field-values and redacts field values from audit logs', async () => {
     const logService = new LogService(join(tempDir, 'logs'))
-    const searchService = new WorkspaceSearchService({
+    const fieldValuesService = new FrontmatterFieldValuesService({
       workspaceService,
       frontmatterSchemaService: schemaService
     })
@@ -141,7 +141,7 @@ describe('registerFrontmatterIpc', () => {
     const dispose = registerFrontmatterIpc({
       ipcMain,
       frontmatterSchemaService: schemaService,
-      searchService,
+      frontmatterFieldValuesService: fieldValuesService,
       getTargets: () => [],
       logService
     })
@@ -183,7 +183,7 @@ describe('registerFrontmatterIpc', () => {
     expect(serializedLogs).not.toContain('SECRET_TAG')
     expect(serializedLogs).toContain(FRONTMATTER_IPC_CHANNELS.getFieldValues)
 
-    searchService.dispose()
+    fieldValuesService.dispose()
     dispose()
   })
 })

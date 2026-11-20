@@ -169,7 +169,7 @@ export function registerWorkspaceIpc({
     session: WorkspaceIpcSession,
     rootPath: string
   ): Promise<WorkspaceInfo> => {
-    session.searchService.cancelAllScans()
+    session.searchService.cancelActiveSearch()
     return session.workspaceService.openWorkspace(rootPath)
   }
 

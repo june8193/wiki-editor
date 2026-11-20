@@ -1,7 +1,7 @@
 import { FRONTMATTER_IPC_CHANNELS } from '@shared/ipc'
 import type { LogService } from '../logging/LogService'
+import type { FrontmatterFieldValuesService } from '../workspace/FrontmatterFieldValuesService'
 import type { FrontmatterSchemaService } from '../workspace/FrontmatterSchemaService'
-import type { WorkspaceSearchService } from '../workspace/WorkspaceSearchService'
 import {
   broadcastIpcEvent,
   type IpcHandlerTuple,
@@ -16,7 +16,7 @@ import {
 
 export interface FrontmatterIpcSession {
   frontmatterSchemaService: FrontmatterSchemaService
-  searchService?: WorkspaceSearchService
+  frontmatterFieldValuesService?: FrontmatterFieldValuesService
   getTargets: () => WebContentsLike[]
 }
 
@@ -26,7 +26,7 @@ export interface RegisterFrontmatterIpcOptions {
   ipcMain: IpcMainLike
   sessionSource?: FrontmatterIpcSessionSource
   frontmatterSchemaService?: FrontmatterSchemaService
-  searchService?: WorkspaceSearchService
+  frontmatterFieldValuesService?: FrontmatterFieldValuesService
   getTargets?: () => WebContentsLike[]
   logService?: LogService
 }
@@ -39,14 +39,14 @@ export function registerFrontmatterIpc({
   ipcMain,
   sessionSource,
   frontmatterSchemaService,
-  searchService,
+  frontmatterFieldValuesService,
   getTargets,
   logService
 }: RegisterFrontmatterIpcOptions): () => void {
   const source = resolveIpcSessionSource(
     sessionSource,
     frontmatterSchemaService && getTargets
-      ? { frontmatterSchemaService, searchService, getTargets }
+      ? { frontmatterSchemaService, frontmatterFieldValuesService, getTargets }
       : undefined,
     'registerFrontmatterIpc requires either sessionSource or frontmatterSchemaService and getTargets'
   )
@@ -86,13 +86,13 @@ export function registerFrontmatterIpc({
       FRONTMATTER_IPC_CHANNELS.getFieldValues,
       (event, fieldKeys) => {
         const session = requireSession(event)
-        if (!session.searchService) {
-          throw new Error('Workspace search service is not configured for frontmatter field values')
+        if (!session.frontmatterFieldValuesService) {
+          throw new Error('Frontmatter field values service is not configured')
         }
         const normalizedKeys = Array.isArray(fieldKeys)
           ? fieldKeys.filter((item): item is string => typeof item === 'string')
           : undefined
-        return session.searchService.collectFrontmatterFieldValues(normalizedKeys)
+        return session.frontmatterFieldValuesService.collectFieldValues(normalizedKeys)
       }
     ]
   ]

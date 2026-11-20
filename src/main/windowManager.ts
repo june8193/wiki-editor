@@ -54,6 +54,7 @@ import type {
 } from './ipc/registerWorkspaceIpc'
 import type { LogService } from './logging/LogService'
 import { createAuxiliaryWindowOptions, createMainWindowOptions } from './window'
+import { FrontmatterFieldValuesService } from './workspace/FrontmatterFieldValuesService'
 import { FrontmatterSchemaService } from './workspace/FrontmatterSchemaService'
 import {
   resolveValidWorkspaceDirectory,
@@ -125,6 +126,7 @@ export interface WorkspaceSessionHandle
   readonly workspaceService: WorkspaceFsService
   readonly searchService: WorkspaceSearchService
   readonly frontmatterSchemaService: FrontmatterSchemaService
+  readonly frontmatterFieldValuesService: FrontmatterFieldValuesService
   getTargets: () => WindowWebContentsLike[]
 }
 
@@ -149,6 +151,7 @@ interface WorkspaceSession {
   workspaceService: WorkspaceFsService
   searchService: WorkspaceSearchService
   frontmatterSchemaService: FrontmatterSchemaService
+  frontmatterFieldValuesService: FrontmatterFieldValuesService
   bufferHub: SharedDocumentBufferHub
   dragCoordinator: TabDragCoordinator
   ownsBufferHub: boolean
@@ -334,10 +337,17 @@ export class WindowManager
       watchDebounceMs: this.watchDebounceMs,
       logService: this.logService
     })
+    const getOpenBuffers = (): ReturnType<typeof Object.values<ReturnType<typeof bufferHub.getSnapshot>['buffers'][string]>> =>
+      Object.values(bufferHub.getSnapshot().buffers)
     const searchService = new WorkspaceSearchService({
       workspaceService,
       frontmatterSchemaService,
-      getOpenBuffers: () => Object.values(bufferHub.getSnapshot().buffers)
+      getOpenBuffers
+    })
+    const frontmatterFieldValuesService = new FrontmatterFieldValuesService({
+      workspaceService,
+      frontmatterSchemaService,
+      getOpenBuffers
     })
     const dragCoordinator = new TabDragCoordinator({
       nextDragSessionId: () => `drag-${++this.dragSessionCounter}`
@@ -351,6 +361,7 @@ export class WindowManager
       workspaceService,
       searchService,
       frontmatterSchemaService,
+      frontmatterFieldValuesService,
       bufferHub,
       dragCoordinator,
       ownsBufferHub,
@@ -368,6 +379,7 @@ export class WindowManager
         workspaceService,
         searchService,
         frontmatterSchemaService,
+        frontmatterFieldValuesService,
         getTargets,
         resolveWindowId: (sender) => {
           const live = this.resolveLiveWindowSession(sender)
@@ -520,6 +532,7 @@ export class WindowManager
       session.bufferHub.dispose()
     }
     session.frontmatterSchemaService.dispose()
+    session.frontmatterFieldValuesService.dispose()
     session.searchService.dispose()
     session.workspaceService.dispose()
 
@@ -776,7 +789,8 @@ export class WindowManager
         throw new Error('Only the main window can open a workspace')
       }
       try {
-        session.searchService.cancelAllScans()
+        session.searchService.cancelActiveSearch()
+        session.frontmatterFieldValuesService.cancelActiveScan()
         const info = await session.workspaceService.openWorkspace(realRoot)
         session.pendingInitialWorkspacePath = null
         if (!this.getLiveMainRecord(session)) {

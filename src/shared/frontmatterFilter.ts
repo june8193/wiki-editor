@@ -364,18 +364,6 @@ export function createFrontmatterFieldComparator(
 }
 
 /**
- * Compares two values for a frontmatter field, placing empty/invalid values last in both directions.
- */
-export function compareFrontmatterFieldValues(
-  rawA: FrontmatterFieldValue | undefined,
-  rawB: FrontmatterFieldValue | undefined,
-  field: FrontmatterFieldDefinition,
-  direction: 'asc' | 'desc'
-): number {
-  return createFrontmatterFieldComparator(field, direction)(rawA, rawB)
-}
-
-/**
  * Extracts compact frontmatter summary values for search results (`showInSearchBadge` fields, or up to
  * three non-excluded schema fields when none specify `showInSearchBadge`).
  */

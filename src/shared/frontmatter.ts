@@ -31,7 +31,6 @@ export {
 
 export {
   collectAllowCustomMultiSelectFields,
-  compareFrontmatterFieldValues,
   createFrontmatterFieldComparator,
   createFrontmatterFieldValuesCollector,
   evaluateFrontmatterCondition,
