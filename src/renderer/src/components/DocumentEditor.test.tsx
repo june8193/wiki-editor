@@ -2250,10 +2250,12 @@ describe('DocumentEditor frontmatter integration (<DocumentEditor />)', () => {
             onUpdateViewState={(patch) => setTab((prev) => ({ ...prev, ...patch }))}
           />
           <DocumentPropertiesSection
-            documentName={doc.name}
-            documentKey={doc.key}
-            content={doc.content}
-            isMarkdownDocument
+            document={{
+              documentName: doc.name,
+              documentKey: doc.key,
+              content: doc.content,
+              isMarkdownDocument: true
+            }}
             schemaResult={{
               exists: true,
               path: 'C:/wiki/.wiki-editor/frontmatter.json',

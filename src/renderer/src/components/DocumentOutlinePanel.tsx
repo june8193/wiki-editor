@@ -5,13 +5,11 @@ import {
   type MarkdownHeading,
   parseMarkdownHeadings
 } from '../editor/MarkdownTocEngine'
+import type { SidebarDocumentContext } from '../hooks/useDocumentOutline'
 import { SidebarAccordionSection } from './SidebarAccordionSection'
 
 export interface DocumentOutlinePanelProps {
-  documentName: string | null
-  documentKey?: string | null
-  content: string
-  isMarkdownDocument: boolean
+  document: SidebarDocumentContext
   activeHeadingIndex?: number | null
   showHeadingNumbers: boolean
   isExpanded?: boolean
@@ -33,10 +31,7 @@ interface ActiveOutlineScrollTarget {
  * sidebar collapse trigger, optional accordion toggle, and click-to-scroll triggers.
  */
 export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
-  documentName,
-  documentKey,
-  content,
-  isMarkdownDocument,
+  document,
   activeHeadingIndex = null,
   showHeadingNumbers,
   isExpanded = true,
@@ -46,6 +41,7 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   onSelectHeading,
   onCollapse
 }: DocumentOutlinePanelProps) {
+  const { documentName, documentKey, content, isMarkdownDocument } = document
   const itemButtonRefs = useRef<Map<number, HTMLButtonElement>>(new Map())
   const prevScrollTargetRef = useRef<ActiveOutlineScrollTarget | null>(null)
 

@@ -158,9 +158,11 @@ describe('SidebarAccordionSection & HorizontalSectionResizer', () => {
 
     const { rerender } = render(
       <DocumentOutlinePanel
-        documentName="note.md"
-        content={'# Title'}
-        isMarkdownDocument
+        document={{
+          documentName: 'note.md',
+          content: '# Title',
+          isMarkdownDocument: true
+        }}
         showHeadingNumbers
         isExpanded
         flexRatio={0.35}
@@ -185,9 +187,11 @@ describe('SidebarAccordionSection & HorizontalSectionResizer', () => {
 
     rerender(
       <DocumentOutlinePanel
-        documentName="note.md"
-        content={'# Title'}
-        isMarkdownDocument
+        document={{
+          documentName: 'note.md',
+          content: '# Title',
+          isMarkdownDocument: true
+        }}
         showHeadingNumbers
         isExpanded={false}
         flexRatio={null}

@@ -81,9 +81,11 @@ describe('DocumentPropertiesSection', () => {
   it('shows empty and markdown-only notices for no-doc, non-markdown, diff tab, and image preview', () => {
     const { rerender } = render(
       <DocumentPropertiesSection
-        documentName={null}
-        content=""
-        isMarkdownDocument={false}
+        document={{
+          documentName: null,
+          content: '',
+          isMarkdownDocument: false
+        }}
         schemaResult={makeSchemaResult()}
         isExpanded
         onToggleExpanded={vi.fn()}
@@ -99,9 +101,11 @@ describe('DocumentPropertiesSection', () => {
     // Non-markdown .txt
     rerender(
       <DocumentPropertiesSection
-        documentName="notes.txt"
-        content="plain"
-        isMarkdownDocument={false}
+        document={{
+          documentName: 'notes.txt',
+          content: 'plain',
+          isMarkdownDocument: false
+        }}
         schemaResult={makeSchemaResult()}
         isExpanded
         onToggleExpanded={vi.fn()}
@@ -114,9 +118,11 @@ describe('DocumentPropertiesSection', () => {
     // Diff tab
     rerender(
       <DocumentPropertiesSection
-        documentName="guide.md"
-        content=""
-        isMarkdownDocument={false}
+        document={{
+          documentName: 'guide.md',
+          content: '',
+          isMarkdownDocument: false
+        }}
         schemaResult={makeSchemaResult()}
         isExpanded
         onToggleExpanded={vi.fn()}
@@ -129,9 +135,11 @@ describe('DocumentPropertiesSection', () => {
     // Image preview tab
     rerender(
       <DocumentPropertiesSection
-        documentName="diagram.png"
-        content=""
-        isMarkdownDocument={false}
+        document={{
+          documentName: 'diagram.png',
+          content: '',
+          isMarkdownDocument: false
+        }}
         schemaResult={makeSchemaResult()}
         isExpanded
         onToggleExpanded={vi.fn()}
@@ -148,9 +156,11 @@ describe('DocumentPropertiesSection', () => {
 
     const { rerender } = render(
       <DocumentPropertiesSection
-        documentName="guide.md"
-        content="# Guide"
-        isMarkdownDocument
+        document={{
+          documentName: 'guide.md',
+          content: '# Guide',
+          isMarkdownDocument: true
+        }}
         schemaResult={{
           exists: false,
           path: 'C:/wiki/.wiki-editor/frontmatter.json',
@@ -168,9 +178,11 @@ describe('DocumentPropertiesSection', () => {
 
     rerender(
       <DocumentPropertiesSection
-        documentName="guide.md"
-        content="# Guide"
-        isMarkdownDocument
+        document={{
+          documentName: 'guide.md',
+          content: '# Guide',
+          isMarkdownDocument: true
+        }}
         schemaResult={{
           exists: true,
           path: 'C:/wiki/.wiki-editor/frontmatter.json',
@@ -195,10 +207,12 @@ describe('DocumentPropertiesSection', () => {
       const [content, setContent] = useState('# Title\n\nBody text')
       return (
         <DocumentPropertiesSection
-          documentName="guide.md"
-          documentKey="c:/wiki/guide.md"
-          content={content}
-          isMarkdownDocument
+          document={{
+            documentName: 'guide.md',
+            documentKey: 'c:/wiki/guide.md',
+            content,
+            isMarkdownDocument: true
+          }}
           schemaResult={makeSchemaResult(createDefaultFrontmatterSchema())}
           isExpanded
           onToggleExpanded={vi.fn()}
@@ -251,10 +265,12 @@ describe('DocumentPropertiesSection', () => {
       latestContent = content
       return (
         <DocumentPropertiesSection
-          documentName="spec.md"
-          documentKey="c:/wiki/spec.md"
-          content={content}
-          isMarkdownDocument
+          document={{
+            documentName: 'spec.md',
+            documentKey: 'c:/wiki/spec.md',
+            content,
+            isMarkdownDocument: true
+          }}
           schemaResult={makeSchemaResult(FULL_SCHEMA)}
           isExpanded
           onToggleExpanded={vi.fn()}
@@ -332,9 +348,11 @@ describe('DocumentPropertiesSection', () => {
 
     const { rerender } = render(
       <DocumentPropertiesSection
-        documentName="bad.md"
-        content={invalidFieldsDoc}
-        isMarkdownDocument
+        document={{
+          documentName: 'bad.md',
+          content: invalidFieldsDoc,
+          isMarkdownDocument: true
+        }}
         schemaResult={makeSchemaResult(FULL_SCHEMA)}
         isExpanded
         onToggleExpanded={vi.fn()}
@@ -354,9 +372,11 @@ describe('DocumentPropertiesSection', () => {
     const onChangeContent = vi.fn()
     rerender(
       <DocumentPropertiesSection
-        documentName="broken.md"
-        content={'---\nbroken: [unclosed\n---\n# Body'}
-        isMarkdownDocument
+        document={{
+          documentName: 'broken.md',
+          content: '---\nbroken: [unclosed\n---\n# Body',
+          isMarkdownDocument: true
+        }}
         schemaResult={makeSchemaResult(FULL_SCHEMA)}
         isExpanded
         onToggleExpanded={vi.fn()}

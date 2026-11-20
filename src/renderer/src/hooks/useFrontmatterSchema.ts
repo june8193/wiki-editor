@@ -37,17 +37,15 @@ export function useFrontmatterSchema({
     }
   }, [])
 
+  const commitSchemaResult = useCallback((result: FrontmatterSchemaLoadResult | null): void => {
+    loadSeqRef.current += 1
+    setSchemaResult(result)
+    setIsSchemaLoading(false)
+  }, [])
+
   useEffect(() => {
-    if (!frontmatterApi) {
-      loadSeqRef.current += 1
-      setSchemaResult(null)
-      setIsSchemaLoading(false)
-      return
-    }
-    if (!isAuxiliary && !workspaceRootPath) {
-      loadSeqRef.current += 1
-      setSchemaResult(null)
-      setIsSchemaLoading(false)
+    if (!frontmatterApi || (!isAuxiliary && !workspaceRootPath)) {
+      commitSchemaResult(null)
       return
     }
 
@@ -72,18 +70,16 @@ export function useFrontmatterSchema({
         }
       }
     )
-  }, [frontmatterApi, isAuxiliary, workspaceRootPath])
+  }, [commitSchemaResult, frontmatterApi, isAuxiliary, workspaceRootPath])
 
   useEffect(() => {
     if (!frontmatterApi) return
     return frontmatterApi.onSchemaChanged((nextResult) => {
       if (!isMountedRef.current) return
       if (!isAuxiliary && !workspaceRootRef.current) return
-      loadSeqRef.current += 1
-      setSchemaResult(nextResult)
-      setIsSchemaLoading(false)
+      commitSchemaResult(nextResult)
     })
-  }, [frontmatterApi, isAuxiliary])
+  }, [commitSchemaResult, frontmatterApi, isAuxiliary])
 
   const createDefaultSchema = useCallback((): void => {
     if (!frontmatterApi) return
@@ -95,9 +91,7 @@ export function useFrontmatterSchema({
       (created) => {
         if (!isMountedRef.current) return
         if (!isAuxiliary && workspaceRootRef.current !== capturedRoot) return
-        loadSeqRef.current += 1
-        setSchemaResult(created)
-        setIsSchemaLoading(false)
+        commitSchemaResult(created)
       },
       (error: unknown) => {
         if (!isMountedRef.current) return
@@ -108,7 +102,7 @@ export function useFrontmatterSchema({
         )
       }
     )
-  }, [frontmatterApi, isAuxiliary])
+  }, [commitSchemaResult, frontmatterApi, isAuxiliary])
 
   return {
     schemaResult,

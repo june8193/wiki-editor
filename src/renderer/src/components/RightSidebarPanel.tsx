@@ -12,8 +12,6 @@ import {
 } from './DocumentPropertiesSection'
 import { HorizontalSectionResizer } from './HorizontalSectionResizer'
 
-type DocumentContextField = keyof SidebarDocumentContext
-
 export interface RightSidebarPanelProps {
   document: SidebarDocumentContext
   splitState: RightSidebarSplitState
@@ -22,11 +20,11 @@ export interface RightSidebarPanelProps {
   onResizeOutlineRatio: (nextRatio: number) => void
   outlineProps: Omit<
     DocumentOutlinePanelProps,
-    DocumentContextField | 'isExpanded' | 'flexRatio' | 'onToggleExpanded'
+    'document' | 'isExpanded' | 'flexRatio' | 'onToggleExpanded'
   >
   propertiesProps: Omit<
     DocumentPropertiesSectionProps,
-    DocumentContextField | 'isExpanded' | 'flexRatio' | 'onToggleExpanded'
+    'document' | 'isExpanded' | 'flexRatio' | 'onToggleExpanded'
   >
 }
 
@@ -54,7 +52,7 @@ export const RightSidebarPanel = memo(function RightSidebarPanel({
   return (
     <div ref={splitContainerRef} className="right-sidebar-split-container">
       <DocumentOutlinePanel
-        {...document}
+        document={document}
         {...outlineProps}
         isExpanded={layout.showTopBody}
         flexRatio={layout.topFlexRatio}
@@ -74,7 +72,7 @@ export const RightSidebarPanel = memo(function RightSidebarPanel({
       )}
 
       <DocumentPropertiesSection
-        {...document}
+        document={document}
         {...propertiesProps}
         isExpanded={layout.showBottomBody}
         flexRatio={layout.bottomFlexRatio}

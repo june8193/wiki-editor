@@ -253,8 +253,8 @@ export function EditorWindowFrame({
                 onTogglePropertiesCollapsed={handleTogglePropertiesCollapsed}
                 onResizeOutlineRatio={handleResizeOutlineRatio}
                 outlineProps={{
-                  activeHeadingIndex: outline.documentOutlineProps.activeHeadingIndex,
-                  onSelectHeading: outline.documentOutlineProps.onSelectHeading,
+                  activeHeadingIndex: outline.activeHeadingIndex,
+                  onSelectHeading: outline.selectHeading,
                   showHeadingNumbers,
                   onToggleHeadingNumbers,
                   onCollapse: handleCollapseRightSidebar

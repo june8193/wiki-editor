@@ -13,13 +13,11 @@ import {
   type FrontmatterValidationIssue,
   type ParsedFrontmatterDocument
 } from '@shared/frontmatter'
+import type { SidebarDocumentContext } from '../hooks/useDocumentOutline'
 import { SidebarAccordionSection } from './SidebarAccordionSection'
 
 export interface DocumentPropertiesSectionProps {
-  documentName: string | null
-  documentKey?: string | null
-  content: string
-  isMarkdownDocument: boolean
+  document: SidebarDocumentContext
   schemaResult: FrontmatterSchemaLoadResult | null
   isSchemaLoading?: boolean
   isExpanded?: boolean
@@ -79,17 +77,17 @@ function groupIssuesByField(issues: readonly FrontmatterValidationIssue[]): {
 interface FieldInputProps {
   field: FrontmatterFieldDefinition
   inputId: string
-  rawValue: FrontmatterFieldValue | undefined
+  value: FrontmatterFieldValue | undefined
   onUpdateField: (key: string, nextValue: FrontmatterFieldValue | null) => void
 }
 
 function NumberPropertyInput({
   field,
   inputId,
-  rawValue,
+  value,
   onUpdateField
 }: FieldInputProps) {
-  const canonicalText = typeof rawValue === 'number' && Number.isFinite(rawValue) ? String(rawValue) : ''
+  const canonicalText = typeof value === 'number' && Number.isFinite(value) ? String(value) : ''
   const [draftState, setDraftState] = useState<{ base: string; text: string } | null>(null)
   const displayValue =
     draftState !== null && draftState.base === canonicalText ? draftState.text : canonicalText
@@ -126,17 +124,17 @@ function NumberPropertyInput({
 function MultiSelectPropertyInput({
   field,
   inputId,
-  rawValue,
+  value,
   onUpdateField
 }: FieldInputProps) {
   const [customDraft, setCustomDraft] = useState('')
-  const selectedItems = Array.isArray(rawValue) ? rawValue : []
+  const selectedItems = Array.isArray(value) ? value : []
   const selectedSet = new Set(selectedItems)
   const schemaOptionValues = new Set((field.options ?? []).map((opt) => opt.value))
 
   const availableSuggestions = (field.options ?? [])
     .map((opt) => opt.value)
-    .filter((value) => Boolean(value) && !selectedSet.has(value))
+    .filter((optionValue) => Boolean(optionValue) && !selectedSet.has(optionValue))
 
   const normalizedQuery = customDraft.trim().toLowerCase()
   const visibleSuggestions =
@@ -144,7 +142,7 @@ function MultiSelectPropertyInput({
       ? availableSuggestions.filter((item) => item.toLowerCase().includes(normalizedQuery))
       : availableSuggestions
 
-  const addValues = (incoming: string): void => {
+  const addValue = (incoming: string): void => {
     const trimmed = incoming.trim()
     if (!trimmed) return
     if (!field.allowCustom && !schemaOptionValues.has(trimmed)) {
@@ -166,7 +164,7 @@ function MultiSelectPropertyInput({
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
     event.preventDefault()
-    addValues(customDraft)
+    addValue(customDraft)
   }
 
   return (
@@ -217,7 +215,7 @@ function MultiSelectPropertyInput({
               key={optionValue}
               type="button"
               className="properties-suggestion-btn"
-              onClick={() => addValues(optionValue)}
+              onClick={() => addValue(optionValue)}
             >
               <OptionColorDot color={findOptionColor(field.options, optionValue)} />
               <span>+ {optionValue}</span>
@@ -229,7 +227,7 @@ function MultiSelectPropertyInput({
   )
 }
 
-function PropertyFieldWidget({ field, inputId, rawValue, onUpdateField }: FieldInputProps) {
+function PropertyFieldWidget({ field, inputId, value, onUpdateField }: FieldInputProps) {
   switch (field.type) {
     case 'text':
       return (
@@ -239,7 +237,7 @@ function PropertyFieldWidget({ field, inputId, rawValue, onUpdateField }: FieldI
           className="properties-input"
           placeholder={field.placeholder}
           aria-required={field.required || undefined}
-          value={typeof rawValue === 'string' ? rawValue : ''}
+          value={typeof value === 'string' ? value : ''}
           onChange={(event) => {
             const nextText = event.target.value
             onUpdateField(field.key, nextText === '' ? null : nextText)
@@ -252,21 +250,21 @@ function PropertyFieldWidget({ field, inputId, rawValue, onUpdateField }: FieldI
         <NumberPropertyInput
           field={field}
           inputId={inputId}
-          rawValue={rawValue}
+          value={value}
           onUpdateField={onUpdateField}
         />
       )
 
     case 'boolean': {
-      const hasBooleanValue = typeof rawValue === 'boolean'
-      const stateLabel = rawValue === true ? '예' : rawValue === false ? '아니오' : '미지정'
+      const hasBooleanValue = typeof value === 'boolean'
+      const stateLabel = value === true ? '예' : value === false ? '아니오' : '미지정'
       return (
         <div className="properties-boolean-row">
           <div className="properties-boolean-toggle">
             <input
               id={inputId}
               type="checkbox"
-              checked={rawValue === true}
+              checked={value === true}
               aria-required={field.required || undefined}
               onChange={(event) => onUpdateField(field.key, event.target.checked)}
             />
@@ -288,7 +286,7 @@ function PropertyFieldWidget({ field, inputId, rawValue, onUpdateField }: FieldI
     }
 
     case 'date': {
-      const validDate = typeof rawValue === 'string' && isValidIsoCalendarDate(rawValue) ? rawValue : ''
+      const validDate = typeof value === 'string' && isValidIsoCalendarDate(value) ? value : ''
       return (
         <input
           id={inputId}
@@ -305,7 +303,7 @@ function PropertyFieldWidget({ field, inputId, rawValue, onUpdateField }: FieldI
     }
 
     case 'select': {
-      const currentValue = typeof rawValue === 'string' ? rawValue : ''
+      const currentValue = typeof value === 'string' ? value : ''
       const optionList = field.options ?? []
       const hasKnownOption = optionList.some((opt) => opt.value === currentValue)
       const selectedColor = findOptionColor(optionList, currentValue)
@@ -342,7 +340,7 @@ function PropertyFieldWidget({ field, inputId, rawValue, onUpdateField }: FieldI
         <MultiSelectPropertyInput
           field={field}
           inputId={inputId}
-          rawValue={rawValue}
+          value={value}
           onUpdateField={onUpdateField}
         />
       )
@@ -504,7 +502,7 @@ function DocumentPropertiesForm({
                 <PropertyFieldWidget
                   field={field}
                   inputId={inputId}
-                  rawValue={parsed.values[field.key]}
+                  value={parsed.values[field.key]}
                   onUpdateField={onUpdateField}
                 />
 
@@ -546,10 +544,7 @@ function DocumentPropertiesForm({
  * against the workspace schema.
  */
 export const DocumentPropertiesSection = memo(function DocumentPropertiesSection({
-  documentName,
-  documentKey,
-  content,
-  isMarkdownDocument,
+  document,
   schemaResult,
   isSchemaLoading = false,
   isExpanded = true,
@@ -558,6 +553,7 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
   onChangeContent,
   onCreateDefaultSchema
 }: DocumentPropertiesSectionProps) {
+  const { documentName, documentKey, content, isMarkdownDocument } = document
   const idPrefix = useId()
   const hasActiveDocument = documentName !== null
   const isEditableMarkdown = Boolean(hasActiveDocument && isMarkdownDocument)
@@ -649,10 +645,6 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
       badge={headerBadges}
       isExpanded={isExpanded}
       flexRatio={flexRatio}
-      sectionClassName="properties-section"
-      headerClassName="properties-header"
-      toggleClassName="properties-accordion-toggle"
-      bodyClassName="properties-body"
       onToggle={onToggleExpanded}
     >
       {renderBody()}
