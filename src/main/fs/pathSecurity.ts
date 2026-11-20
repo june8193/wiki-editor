@@ -1,6 +1,10 @@
 import { lstat, realpath } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 
+export const WORKSPACE_OUTSIDE_ERROR_MESSAGE = '워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.'
+export const WORKSPACE_SYMLINK_ERROR_MESSAGE =
+  '유효하지 않거나 워크스페이스 루트 밖을 가리키는 심볼릭 링크에는 접근할 수 없습니다.'
+
 export interface ResolveRealPathOptions {
   outsideMessage?: string
   danglingSymlinkMessage?: string

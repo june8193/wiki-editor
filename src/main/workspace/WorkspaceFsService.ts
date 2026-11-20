@@ -41,7 +41,9 @@ import {
   isErrnoCode,
   isMissingPathError,
   isPathInsideRoot,
-  resolveRealPathWithAncestor
+  resolveRealPathWithAncestor,
+  WORKSPACE_OUTSIDE_ERROR_MESSAGE,
+  WORKSPACE_SYMLINK_ERROR_MESSAGE
 } from '../fs/pathSecurity'
 
 export const IGNORED_ENTRY_NAMES: ReadonlySet<string> = new Set([
@@ -932,9 +934,8 @@ export class WorkspaceFsService {
     candidate: string
   ): Promise<{ resolvedReal: string; exists: boolean }> {
     return resolveRealPathWithAncestor(candidate, {
-      outsideMessage: '워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.',
-      danglingSymlinkMessage:
-        '유효하지 않거나 워크스페이스 루트 밖을 가리키는 심볼릭 링크에는 접근할 수 없습니다.',
+      outsideMessage: WORKSPACE_OUTSIDE_ERROR_MESSAGE,
+      danglingSymlinkMessage: WORKSPACE_SYMLINK_ERROR_MESSAGE,
       assertResolved: (resolvedReal) => this.assertWithinWorkspaceAndAllowed(root, resolvedReal)
     })
   }

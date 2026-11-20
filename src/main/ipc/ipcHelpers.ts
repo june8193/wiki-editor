@@ -279,3 +279,75 @@ export function broadcastIpcEvent(
     }
   }
 }
+
+export interface IpcSessionSource<
+  TSession,
+  TWebContents extends WebContentsLike = WebContentsLike
+> {
+  resolveSession: (sender: TWebContents | undefined) => TSession | undefined
+  forEachSession: (visitor: (session: TSession) => void) => void
+  onSessionCreated?: (listener: (session: TSession) => (() => void) | void) => () => void
+}
+
+/**
+ * Uses sessionSource when provided, or wraps a single-session fallback adapter.
+ */
+export function resolveIpcSessionSource<
+  TSession,
+  TWebContents extends WebContentsLike = WebContentsLike
+>(
+  sessionSource: IpcSessionSource<TSession, TWebContents> | undefined,
+  fallbackSession: TSession | undefined,
+  missingError: string
+): IpcSessionSource<TSession, TWebContents> {
+  if (sessionSource) {
+    return sessionSource
+  }
+  if (!fallbackSession) {
+    throw new Error(missingError)
+  }
+  return {
+    resolveSession: () => fallbackSession,
+    forEachSession: (visitor) => visitor(fallbackSession)
+  }
+}
+
+/**
+ * Attaches an event subscription to all existing and future sessions without duplicate bindings.
+ */
+export function subscribeIpcSessions<
+  TSession,
+  TKey,
+  TWebContents extends WebContentsLike = WebContentsLike
+>(
+  source: IpcSessionSource<TSession, TWebContents>,
+  getKey: (session: TSession) => TKey,
+  subscribe: (session: TSession) => () => void
+): () => void {
+  const unsubscribers = new Map<TKey, () => void>()
+  const attachSession = (session: TSession): (() => void) | undefined => {
+    const key = getKey(session)
+    if (unsubscribers.has(key)) {
+      return undefined
+    }
+    const unsubscribe = subscribe(session)
+    unsubscribers.set(key, unsubscribe)
+    return () => {
+      unsubscribers.get(key)?.()
+      unsubscribers.delete(key)
+    }
+  }
+
+  const unsubscribeSessionCreated = source.onSessionCreated?.((session) => attachSession(session))
+  source.forEachSession((session) => {
+    attachSession(session)
+  })
+
+  return () => {
+    unsubscribeSessionCreated?.()
+    for (const unsubscribe of unsubscribers.values()) {
+      unsubscribe()
+    }
+    unsubscribers.clear()
+  }
+}

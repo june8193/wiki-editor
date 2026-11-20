@@ -11,18 +11,21 @@ import {
   parseFrontmatterSchemaJson,
   serializeFrontmatterSchema,
   type WorkspaceFrontmatterSchema
-} from '@shared/frontmatter'
+} from '@shared/frontmatterSchema'
 import { isSameWorkspacePath } from '@shared/workspace'
 import { createAsyncQueue } from '../asyncQueue'
 import { writeFileAtomic } from '../fs/atomicFile'
-import { isErrnoCode, isPathInsideRoot, resolveRealPathWithAncestor } from '../fs/pathSecurity'
+import {
+  isErrnoCode,
+  isPathInsideRoot,
+  resolveRealPathWithAncestor,
+  WORKSPACE_OUTSIDE_ERROR_MESSAGE,
+  WORKSPACE_SYMLINK_ERROR_MESSAGE
+} from '../fs/pathSecurity'
 import type { LogService } from '../logging/LogService'
 import type { WorkspaceFsService } from './WorkspaceFsService'
 
 const DEFAULT_WATCH_DEBOUNCE_MS = 60
-const OUTSIDE_ERROR_MESSAGE = '워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.'
-const SYMLINK_ERROR_MESSAGE =
-  '유효하지 않거나 워크스페이스 루트 밖을 가리키는 심볼릭 링크에는 접근할 수 없습니다.'
 
 export type FrontmatterSchemaChangedListener = (result: FrontmatterSchemaLoadResult) => void
 
@@ -305,6 +308,23 @@ export class FrontmatterSchemaService {
     this.watchedRoot = null
   }
 
+  private rejectOrReportNonFile(
+    schemaPath: string,
+    resolvedReal: string,
+    message: string,
+    writable: boolean
+  ): {
+    schemaPath: string
+    resolvedReal: string
+    exists: boolean
+    nonFileError: string
+  } {
+    if (writable) {
+      throw new Error(message)
+    }
+    return { schemaPath, resolvedReal, exists: true, nonFileError: message }
+  }
+
   private async resolveSchemaTarget(
     root: string,
     options: { writable: boolean }
@@ -323,18 +343,15 @@ export class FrontmatterSchemaService {
     })
     if (dirStats) {
       if (dirStats.isSymbolicLink()) {
-        throw new Error(SYMLINK_ERROR_MESSAGE)
+        throw new Error(WORKSPACE_SYMLINK_ERROR_MESSAGE)
       }
       if (!dirStats.isDirectory()) {
-        if (options.writable) {
-          throw new Error('`.wiki-editor` 경로가 폴더가 아닙니다.')
-        }
-        return {
+        return this.rejectOrReportNonFile(
           schemaPath,
-          resolvedReal: schemaPath,
-          exists: true,
-          nonFileError: '`.wiki-editor` 경로가 폴더가 아닙니다.'
-        }
+          schemaPath,
+          '`.wiki-editor` 경로가 폴더가 아닙니다.',
+          options.writable
+        )
       }
     }
 
@@ -343,15 +360,15 @@ export class FrontmatterSchemaService {
       throw error
     })
     if (fileStats?.isSymbolicLink()) {
-      throw new Error(SYMLINK_ERROR_MESSAGE)
+      throw new Error(WORKSPACE_SYMLINK_ERROR_MESSAGE)
     }
 
     const { resolvedReal, exists } = await resolveRealPathWithAncestor(schemaPath, {
-      outsideMessage: OUTSIDE_ERROR_MESSAGE,
-      danglingSymlinkMessage: SYMLINK_ERROR_MESSAGE,
+      outsideMessage: WORKSPACE_OUTSIDE_ERROR_MESSAGE,
+      danglingSymlinkMessage: WORKSPACE_SYMLINK_ERROR_MESSAGE,
       assertResolved: (candidateReal) => {
         if (!isPathInsideRoot(root, candidateReal)) {
-          throw new Error(OUTSIDE_ERROR_MESSAGE)
+          throw new Error(WORKSPACE_OUTSIDE_ERROR_MESSAGE)
         }
       }
     })
@@ -359,15 +376,12 @@ export class FrontmatterSchemaService {
     if (exists) {
       const targetStats = await stat(resolvedReal)
       if (!targetStats.isFile()) {
-        if (options.writable) {
-          throw new Error('스키마 경로가 파일이 아닙니다.')
-        }
-        return {
+        return this.rejectOrReportNonFile(
           schemaPath,
           resolvedReal,
-          exists: true,
-          nonFileError: '스키마 경로가 파일이 아닙니다.'
-        }
+          '스키마 경로가 파일이 아닙니다.',
+          options.writable
+        )
       }
     }
 

@@ -392,6 +392,57 @@ describe('frontmatter non-destructive serialization and safety guards', () => {
     )
   })
 
+  it('preserves YAML block scalar indicators (|-) and comments when writing multiline text over multiline or inline-commented values', () => {
+    const doc = [
+      '---',
+      'notes:',
+      '  - old',
+      'summary: # header comment',
+      '  - old summary',
+      'detail: old inline # keep inline',
+      '---',
+      '# Body'
+    ].join('\n')
+
+    const updated = applyFrontmatterValues(doc, {
+      notes: 'line1\nline2',
+      summary: 'sum1\nsum2',
+      detail: 'd1\nd2'
+    })
+    expect(updated.applied).toBe(true)
+    expect(updated.content).toBe(
+      [
+        '---',
+        'notes: |-',
+        '  line1',
+        '  line2',
+        'summary: |- # header comment',
+        '  sum1',
+        '  sum2',
+        'detail: |- # keep inline',
+        '  d1',
+        '  d2',
+        '---',
+        '# Body'
+      ].join('\n')
+    )
+
+    const schema: WorkspaceFrontmatterSchema = {
+      version: 1,
+      fields: [
+        { key: 'notes', label: 'Notes', type: 'text' },
+        { key: 'summary', label: 'Summary', type: 'text' },
+        { key: 'detail', label: 'Detail', type: 'text' }
+      ]
+    }
+    const reparsed = parseFrontmatterDocument(updated.content, schema)
+    expect(reparsed.values).toEqual({
+      notes: 'line1\nline2',
+      summary: 'sum1\nsum2',
+      detail: 'd1\nd2'
+    })
+  })
+
   it('preserves ... closing delimiter, flow root maps, and adds frontmatter to body-only documents', () => {
     const dotsDoc = '---\n# keep\nstatus: todo\n...\nBody'
     const updatedDots = applyFrontmatterValues(dotsDoc, { status: 'done' })

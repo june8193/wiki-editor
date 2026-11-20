@@ -5,8 +5,11 @@ import {
   broadcastIpcEvent,
   type IpcHandlerTuple,
   type IpcMainLike,
+  type IpcSessionSource,
   registerIpcHandlers,
+  resolveIpcSessionSource,
   resolveSenderWebContents,
+  subscribeIpcSessions,
   type WebContentsLike
 } from './ipcHelpers'
 
@@ -15,13 +18,7 @@ export interface FrontmatterIpcSession {
   getTargets: () => WebContentsLike[]
 }
 
-export interface FrontmatterIpcSessionSource {
-  resolveSession: (sender: WebContentsLike | undefined) => FrontmatterIpcSession | undefined
-  forEachSession: (visitor: (session: FrontmatterIpcSession) => void) => void
-  onSessionCreated?: (
-    listener: (session: FrontmatterIpcSession) => (() => void) | void
-  ) => () => void
-}
+export type FrontmatterIpcSessionSource = IpcSessionSource<FrontmatterIpcSession>
 
 export interface RegisterFrontmatterIpcOptions {
   ipcMain: IpcMainLike
@@ -42,44 +39,22 @@ export function registerFrontmatterIpc({
   getTargets,
   logService
 }: RegisterFrontmatterIpcOptions): () => void {
-  let source: FrontmatterIpcSessionSource
-  if (sessionSource) {
-    source = sessionSource
-  } else {
-    if (!frontmatterSchemaService || !getTargets) {
-      throw new Error(
-        'registerFrontmatterIpc requires either sessionSource or frontmatterSchemaService and getTargets'
-      )
-    }
-    const singleSession: FrontmatterIpcSession = {
-      frontmatterSchemaService,
-      getTargets
-    }
-    source = {
-      resolveSession: () => singleSession,
-      forEachSession: (visitor) => visitor(singleSession)
-    }
-  }
+  const source = resolveIpcSessionSource(
+    sessionSource,
+    frontmatterSchemaService && getTargets
+      ? { frontmatterSchemaService, getTargets }
+      : undefined,
+    'registerFrontmatterIpc requires either sessionSource or frontmatterSchemaService and getTargets'
+  )
 
-  const schemaUnsubscribers = new Map<FrontmatterSchemaService, () => void>()
-  const attachSession = (session: FrontmatterIpcSession): (() => void) | undefined => {
-    if (schemaUnsubscribers.has(session.frontmatterSchemaService)) {
-      return undefined
-    }
-    const unsubscribe = session.frontmatterSchemaService.onSchemaChanged((result) => {
-      broadcastIpcEvent(session.getTargets, FRONTMATTER_IPC_CHANNELS.schemaChanged, result)
-    })
-    schemaUnsubscribers.set(session.frontmatterSchemaService, unsubscribe)
-    return () => {
-      schemaUnsubscribers.get(session.frontmatterSchemaService)?.()
-      schemaUnsubscribers.delete(session.frontmatterSchemaService)
-    }
-  }
-
-  const unsubscribeSessionCreated = source.onSessionCreated?.((session) => attachSession(session))
-  source.forEachSession((session) => {
-    attachSession(session)
-  })
+  const unsubscribeSessions = subscribeIpcSessions(
+    source,
+    (session) => session.frontmatterSchemaService,
+    (session) =>
+      session.frontmatterSchemaService.onSchemaChanged((result) => {
+        broadcastIpcEvent(session.getTargets, FRONTMATTER_IPC_CHANNELS.schemaChanged, result)
+      })
+  )
 
   const requireSession = (event: unknown): FrontmatterIpcSession => {
     const sender = resolveSenderWebContents(event)
@@ -108,11 +83,7 @@ export function registerFrontmatterIpc({
   const removeHandlers = registerIpcHandlers(ipcMain, handlers, { logService })
 
   return () => {
-    unsubscribeSessionCreated?.()
-    for (const unsubscribe of schemaUnsubscribers.values()) {
-      unsubscribe()
-    }
-    schemaUnsubscribers.clear()
+    unsubscribeSessions()
     removeHandlers()
   }
 }
