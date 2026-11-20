@@ -2,13 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand, WikiApi } from '@shared/ipc'
 import { getGitChangedCount, type GitDiffRequest } from '@shared/git'
-import type {
-  DocumentSearchJumpRequest,
-  WorkspaceSearchFileResult,
-  WorkspaceSearchLineMatch
-} from '@shared/search'
-import type { EditorMode, PaneId } from '@shared/window'
-import { getPaneActiveTab } from '../stores/PaneTabStore'
+import type { WorkspaceSearchFileResult } from '@shared/search'
 import {
   filterTopLevelWorkspaceEntries,
   formatAbsoluteEntryPath,
@@ -30,6 +24,7 @@ import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
 import { useWindowWidth } from '../hooks/useWindowWidth'
 import { useWorkspaceSearch } from '../hooks/useWorkspaceSearch'
+import { useWorkspaceSearchJump } from '../hooks/useWorkspaceSearchJump'
 import { useWorkspaceStatePersistence } from '../hooks/useWorkspaceStatePersistence'
 import { type RestoredWorkspaceContext, useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import { buildDiscardAllConfirmMessage, getGitFileBaseName } from '../utils/gitFilePresentation'
@@ -121,9 +116,6 @@ export function MainAppShell() {
   )
   const [isGitWorkspaceMutating, setIsGitWorkspaceMutating] = useState(false)
   const [searchFocusRequest, setSearchFocusRequest] = useState<SearchFocusRequest | null>(null)
-  const [searchJumpRequest, setSearchJumpRequest] = useState<DocumentSearchJumpRequest | null>(
-    null
-  )
 
   const shellRef = useRef<HTMLDivElement | null>(null)
   const searchFocusNonceRef = useRef<number>(0)
@@ -257,13 +249,6 @@ export function MainAppShell() {
   const hadOpenWorkspaceRef = useRef<boolean>(false)
   const isMountedRef = useRef<boolean>(true)
   const switchWorkspaceSeqRef = useRef<number>(0)
-  const searchJumpSeqRef = useRef<number>(0)
-  const searchJumpContextRef = useRef<{
-    workspaceRootPath: string | null
-    paneId: PaneId
-    tabId: string
-    mode: EditorMode
-  } | null>(null)
   const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const reconcileBuffersRef = useRef<
     (changeEvent?: WorkspaceChangeEvent) => Promise<readonly string[]>
@@ -736,38 +721,17 @@ export function MainAppShell() {
   }, [handleSwitchWorkspace, isDialogOpenRef, reportErrorBanner, wikiApi])
 
   const { openWorkspaceFile, openConfigDocument, openDiffTab } = editor
-
-  const invalidatePendingSearchJumps = useCallback((): void => {
-    searchJumpSeqRef.current += 1
-    searchJumpContextRef.current = null
-    setSearchJumpRequest(null)
-  }, [])
-
-  useEffect(() => {
-    invalidatePendingSearchJumps()
-  }, [invalidatePendingSearchJumps, workspace?.rootPath])
-
-  useEffect(() => {
-    if (!searchJumpRequest) {
-      return
-    }
-    const targetPane = editor.layout.panes[searchJumpRequest.paneId]
-    const activeTab = targetPane ? getPaneActiveTab(targetPane) : null
-    const ctx = searchJumpContextRef.current
-    const currentWorkspaceRootPath = workspace?.rootPath ?? null
-    if (
-      !ctx ||
-      ctx.workspaceRootPath !== currentWorkspaceRootPath ||
-      ctx.paneId !== searchJumpRequest.paneId ||
-      ctx.tabId !== searchJumpRequest.tabId ||
-      !activeTab ||
-      !('mode' in activeTab) ||
-      activeTab.id !== searchJumpRequest.tabId ||
-      ctx.mode !== activeTab.mode
-    ) {
-      invalidatePendingSearchJumps()
-    }
-  }, [editor.layout, invalidatePendingSearchJumps, searchJumpRequest, workspace?.rootPath])
+  const { searchJumpRequest, openSearchLineMatch, invalidatePendingSearchJumps } =
+    useWorkspaceSearchJump({
+      workspaceRootPath: workspace?.rootPath ?? null,
+      layout: editor.layout,
+      query: workspaceSearch.query,
+      responseQuery: workspaceSearch.response?.query ?? null,
+      options: workspaceSearch.resultOptions,
+      isMountedRef,
+      switchWorkspaceSeqRef,
+      openWorkspaceFile
+    })
   const { diffsByKey, refreshDiffRequest } = useGitDiffTabs({
     workspaceRootPath: workspace?.rootPath ?? null,
     gitStatus: git.status,
@@ -809,55 +773,6 @@ export function MainAppShell() {
       void openWorkspaceFile(file.path, undefined, file.name)
     },
     [invalidatePendingSearchJumps, openWorkspaceFile]
-  )
-
-  const handleOpenSearchLineMatch = useCallback(
-    (file: WorkspaceSearchFileResult, line: WorkspaceSearchLineMatch): void => {
-      const jumpSeq = ++searchJumpSeqRef.current
-      const dispatchSwitchSeq = switchWorkspaceSeqRef.current
-      const dispatchWorkspaceRootPath = workspace?.rootPath ?? null
-      const dispatchQuery = workspaceSearch.response?.query ?? workspaceSearch.query
-      const dispatchOptions = workspaceSearch.resultOptions
-      searchJumpContextRef.current = null
-      setSearchJumpRequest(null)
-
-      const firstSpan = line.matches[0]
-      const columnStart = firstSpan ? Math.max(0, firstSpan.start - line.lineOffset) : 0
-      const columnEnd = firstSpan ? Math.max(columnStart, firstSpan.end - line.lineOffset) : 0
-      const isCancelled = (): boolean =>
-        !isMountedRef.current ||
-        searchJumpSeqRef.current !== jumpSeq ||
-        switchWorkspaceSeqRef.current !== dispatchSwitchSeq
-
-      void openWorkspaceFile(file.path, undefined, file.name, isCancelled).then((opened) => {
-        if (!opened || isCancelled()) {
-          return
-        }
-        searchJumpContextRef.current = {
-          workspaceRootPath: dispatchWorkspaceRootPath,
-          paneId: opened.paneId,
-          tabId: opened.tab.id,
-          mode: opened.tab.mode
-        }
-        setSearchJumpRequest({
-          paneId: opened.paneId,
-          tabId: opened.tab.id,
-          query: dispatchQuery,
-          options: dispatchOptions,
-          lineNumber: line.lineNumber,
-          columnStart,
-          columnEnd,
-          nonce: jumpSeq
-        })
-      })
-    },
-    [
-      openWorkspaceFile,
-      workspace?.rootPath,
-      workspaceSearch.query,
-      workspaceSearch.response?.query,
-      workspaceSearch.resultOptions
-    ]
   )
 
   const handleOpenConfigEditor = useCallback((): void => {
@@ -1032,7 +947,7 @@ export function MainAppShell() {
                 onToggleOption={workspaceSearch.onToggleOption}
                 onToggleFileCollapsed={workspaceSearch.onToggleFileCollapsed}
                 onOpenFile={handleOpenSearchResultFile}
-                onOpenLineMatch={handleOpenSearchLineMatch}
+                onOpenLineMatch={openSearchLineMatch}
               />
             )}
 

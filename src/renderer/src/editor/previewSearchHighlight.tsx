@@ -1,5 +1,9 @@
 import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
-import { compileSearchMatcher, type CompiledSearchMatcher, type SearchMatchOptions } from '@shared/search'
+import {
+  compileSearchMatcher,
+  type CompiledSearchMatcher,
+  type DocumentJumpHighlightTarget
+} from '@shared/search'
 import type { CodeBlockHighlightSpan } from './codeBlockHighlight'
 import {
   areDocumentFindCriteriaEqual,
@@ -10,12 +14,10 @@ import {
 } from './documentFind'
 import {
   analyzeMarkdownSearchJump,
-  collectRunContextualCandidates,
-  type ContextualMatchCandidate,
   type MarkdownJumpPlan,
   type NestedBlockHint,
   pickClosestLineBlock,
-  selectBestJumpCandidate
+  selectBestJumpMatchFromRuns
 } from './markdownSearchJump'
 
 export const PREVIEW_SEARCH_CHROME_SELECTOR =
@@ -28,13 +30,7 @@ export interface PreviewSearchMatchSpan {
   isJump?: boolean
 }
 
-export interface PreviewJumpHighlightQuery {
-  query: string
-  options: SearchMatchOptions
-  lineNumber: number
-  columnStart: number
-  columnEnd: number
-  nonce: number
+export interface PreviewJumpHighlightQuery extends DocumentJumpHighlightTarget {
   suppressScroll?: boolean
 }
 
@@ -693,20 +689,29 @@ type PreviewJumpPatchRef =
   | { kind: 'text'; segments: TextSlotSegment[]; span: { start: number; end: number } }
   | { kind: 'code'; codeSlotId: number; span: { start: number; end: number } }
 
-function readElementSourceRange(
-  element: ReactElement<{ children?: ReactNode }>
+type PreviewJumpRun =
+  | { kind: 'text'; text: string; segments: TextSlotSegment[] }
+  | { kind: 'code'; text: string; codeSlotId: number }
+
+function parseSourceLineRange(
+  startRaw: unknown,
+  endRaw: unknown
 ): { startLine: number; endLine: number } | null {
-  const props = element.props as Record<string, unknown>
-  const startRaw = props['data-source-line']
   if (typeof startRaw !== 'string') return null
   const startLine = Number(startRaw)
   if (!Number.isFinite(startLine) || startLine < 1) return null
-  const endRaw = props['data-source-end-line']
   const endLine = typeof endRaw === 'string' ? Number(endRaw) : startLine
   return {
     startLine,
     endLine: Number.isFinite(endLine) && endLine >= startLine ? endLine : startLine
   }
+}
+
+function readElementSourceRange(
+  element: ReactElement<{ children?: ReactNode }>
+): { startLine: number; endLine: number } | null {
+  const props = element.props as Record<string, unknown>
+  return parseSourceLineRange(props['data-source-line'], props['data-source-end-line'])
 }
 
 function buildPreviewJumpPatches(
@@ -717,21 +722,21 @@ function buildPreviewJumpPatches(
   textPatches: Map<number, PreviewSearchMatchSpan[]>
   codePatches: Map<number, PreviewSearchMatchSpan[]>
 } {
-  const empty = {
+  const patches = {
     textPatches: new Map<number, PreviewSearchMatchSpan[]>(),
     codePatches: new Map<number, PreviewSearchMatchSpan[]>()
   }
   if (target.isBlankDocument || jumpHighlight.query.length === 0) {
-    return empty
+    return patches
   }
 
   const jumpPlan: MarkdownJumpPlan = analyzeMarkdownSearchJump(markdown, jumpHighlight)
   if (!jumpPlan.renderedMatch) {
-    return empty
+    return patches
   }
   const compiled = compileSearchMatcher(jumpHighlight.query, jumpHighlight.options)
   if (!compiled.ok) {
-    return empty
+    return patches
   }
 
   const blockEntries: Array<{ element: ReactElement; startLine: number; endLine: number }> = []
@@ -756,10 +761,10 @@ function buildPreviewJumpPatches(
 
   const targetEntry = pickClosestLineBlock(blockEntries, jumpPlan.lineNumber)
   if (!targetEntry) {
-    return empty
+    return patches
   }
 
-  const candidates: ContextualMatchCandidate<PreviewJumpPatchRef>[] = []
+  const runs: PreviewJumpRun[] = []
   let targetDepth = 0
   const runSegments: TextSlotSegment[] = []
   let runLength = 0
@@ -772,14 +777,11 @@ function buildPreviewJumpPatches(
       return
     }
     const capturedSegments = [...runSegments]
-    const combined = capturedSegments.map((seg) => seg.text).join('')
-    candidates.push(
-      ...collectRunContextualCandidates(combined, compiled.matcher, (span) => ({
-        kind: 'text' as const,
-        segments: capturedSegments,
-        span
-      }))
-    )
+    runs.push({
+      kind: 'text',
+      text: capturedSegments.map((seg) => seg.text).join(''),
+      segments: capturedSegments
+    })
     runSegments.length = 0
     runLength = 0
   }
@@ -811,13 +813,7 @@ function buildPreviewJumpPatches(
     },
     onFencedCode: (_element, codeSlotId, rawCode, isMermaid) => {
       if (targetDepth === 0 || isMermaid || codeSlotId < 0) return
-      candidates.push(
-        ...collectRunContextualCandidates(rawCode, compiled.matcher, (span) => ({
-          kind: 'code' as const,
-          codeSlotId,
-          span
-        }))
-      )
+      runs.push({ kind: 'code', text: rawCode, codeSlotId })
     },
     onBlockBoundary: flushRun,
     combineArray: () => undefined,
@@ -825,19 +821,29 @@ function buildPreviewJumpPatches(
   })
   flushRun()
 
-  const chosen = selectBestJumpCandidate(candidates, jumpPlan.renderedMatch)
+  const chosen = selectBestJumpMatchFromRuns<PreviewJumpRun, PreviewJumpPatchRef>(
+    runs,
+    (run) => run.text,
+    (run, span) =>
+      run.kind === 'code'
+        ? { kind: 'code', codeSlotId: run.codeSlotId, span }
+        : { kind: 'text', segments: run.segments, span },
+    compiled.matcher,
+    jumpHighlight,
+    jumpPlan.renderedMatch
+  )
   if (!chosen) {
-    return empty
+    return patches
   }
 
   if (chosen.kind === 'code') {
-    empty.codePatches.set(chosen.codeSlotId, [
+    patches.codePatches.set(chosen.codeSlotId, [
       { start: chosen.span.start, end: chosen.span.end, matchIndex: -1, isJump: true }
     ])
   } else {
-    mapTextRunSpanToSlotPatches(chosen.segments, chosen.span, -1, true, empty.textPatches)
+    mapTextRunSpanToSlotPatches(chosen.segments, chosen.span, -1, true, patches.textPatches)
   }
-  return empty
+  return patches
 }
 
 function mergePatchMaps(
@@ -879,12 +885,11 @@ export function findClosestPreviewBlockForLine(
 
   const blocks = candidates
     .map((el) => {
-      const startLine = Number(el.getAttribute('data-source-line'))
-      if (!Number.isFinite(startLine) || startLine < 1) return null
-      const endLineRaw = Number(el.getAttribute('data-source-end-line') ?? startLine)
-      const endLine =
-        Number.isFinite(endLineRaw) && endLineRaw >= startLine ? endLineRaw : startLine
-      return { el, startLine, endLine }
+      const range = parseSourceLineRange(
+        el.getAttribute('data-source-line'),
+        el.getAttribute('data-source-end-line')
+      )
+      return range ? { el, ...range } : null
     })
     .filter((entry): entry is { el: HTMLElement; startLine: number; endLine: number } => entry !== null)
 

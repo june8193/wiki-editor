@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
+import type { DocumentJumpHighlightTarget } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
@@ -44,7 +45,6 @@ import {
   syncWysiwygSearchJump
 } from '../editor/wysiwygSearchHighlight'
 import { useDismissable } from '../hooks/useDismissable'
-import type { DocumentJumpHighlightTarget } from '../hooks/useDocumentSearchJump'
 import { useEditorImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
 import { useLinkMenu } from '../hooks/useLinkMenu'

@@ -1,10 +1,8 @@
 import { useCallback, useMemo, useState } from 'react'
-import type { DocumentSearchJumpRequest } from '@shared/search'
+import type { DocumentJumpHighlightTarget, DocumentSearchJumpRequest } from '@shared/search'
 import type { PreviewJumpHighlightQuery } from '../editor/previewSearchHighlight'
 import type { RawJumpHighlightRequest } from '../editor/rawSearchHighlight'
 import type { EditorMode } from '../stores/PaneTabStore'
-
-export type DocumentJumpHighlightTarget = Omit<DocumentSearchJumpRequest, 'paneId' | 'tabId'>
 
 interface AcceptedJumpRecord {
   nonce: number

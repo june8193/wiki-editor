@@ -5,7 +5,7 @@ import { unified } from 'unified'
 import {
   compileSearchMatcher,
   type CompiledSearchMatcher,
-  type SearchMatchOptions,
+  type DocumentJumpLocation,
   splitSearchLines,
   type TextMatchSpan
 } from '@shared/search'
@@ -15,14 +15,6 @@ import { normalizeLineEndingsToLf } from './MarkdownTocEngine'
 interface MarkdownBlockRange {
   startLine: number
   endLine: number
-}
-
-interface MarkdownJumpInput {
-  query: string
-  options: SearchMatchOptions
-  lineNumber: number
-  columnStart: number
-  columnEnd: number
 }
 
 interface MarkdownJumpCandidateMatch {
@@ -45,7 +37,7 @@ export interface MarkdownJumpPlan {
   renderedMatch: MarkdownJumpCandidateMatch | null
 }
 
-export interface ContextualMatchCandidate<TRef> {
+interface ContextualMatchCandidate<TRef> {
   ref: TRef
   contextBefore: string
   matchedText: string
@@ -436,6 +428,37 @@ function isRawSpanEndpointsInSegments(
   return startInSeg && endInSeg
 }
 
+function buildContextualSlice(
+  text: string,
+  start: number,
+  end: number
+): Pick<ContextualMatchCandidate<never>, 'contextBefore' | 'matchedText' | 'contextAfter'> {
+  return {
+    contextBefore: text.slice(Math.max(0, start - CONTEXT_SLICE_LEN), start),
+    matchedText: text.slice(start, end),
+    contextAfter: text.slice(end, end + CONTEXT_SLICE_LEN)
+  }
+}
+
+function mapRawOffsetToRun(segments: readonly InlineRunSegment[], rawOffset: number): number {
+  for (const seg of segments) {
+    if (rawOffset <= seg.rawEnd) {
+      if (rawOffset <= seg.rawStart) {
+        return seg.runOffsetStart
+      }
+      const rawSpan = seg.rawEnd - seg.rawStart
+      const localRaw = rawOffset - seg.rawStart
+      if (rawSpan === seg.text.length) {
+        return seg.runOffsetStart + localRaw
+      }
+      const ratio = rawSpan > 0 ? localRaw / rawSpan : 0
+      return seg.runOffsetStart + Math.round(ratio * seg.text.length)
+    }
+  }
+  const last = segments[segments.length - 1]
+  return last ? last.runOffsetEnd : 0
+}
+
 function resolveInlineBlockMatch(
   content: string,
   blockNode: RootContent,
@@ -463,12 +486,29 @@ function resolveInlineBlockMatch(
       if (matchesExactOrEscaped) {
         return {
           occurrenceInBlock: occurrenceCounter,
-          contextBefore: runText.slice(Math.max(0, span.start - CONTEXT_SLICE_LEN), span.start),
-          matchedText: runText.slice(span.start, span.end),
-          contextAfter: runText.slice(span.end, span.end + CONTEXT_SLICE_LEN)
+          ...buildContextualSlice(runText, span.start, span.end)
         }
       }
       occurrenceCounter += 1
+    }
+  }
+
+  // Fallback for line-anchored regex matches (e.g. ^foo / bar$) inside multi-line wrapped blocks:
+  // rendered DOM runs concatenate lines, so line-based regex anchors may not match runText directly.
+  if (rawTo > rawFrom) {
+    for (const runSegments of runs) {
+      if (!isRawSpanEndpointsInSegments(runSegments, rawFrom, rawTo)) {
+        continue
+      }
+      const runText = runSegments.map((seg) => seg.text).join('')
+      const runStart = Math.max(0, Math.min(runText.length, mapRawOffsetToRun(runSegments, rawFrom)))
+      const runEnd = Math.max(runStart, Math.min(runText.length, mapRawOffsetToRun(runSegments, rawTo)))
+      if (runEnd > runStart) {
+        return {
+          occurrenceInBlock: 0,
+          ...buildContextualSlice(runText, runStart, runEnd)
+        }
+      }
     }
   }
 
@@ -558,9 +598,7 @@ function resolveCodeBlockJumpMatch(
     if (span.start === targetCodeFrom && span.end === targetCodeTo) {
       return {
         occurrenceInBlock: i,
-        contextBefore: codeNode.value.slice(Math.max(0, span.start - CONTEXT_SLICE_LEN), span.start),
-        matchedText: codeNode.value.slice(span.start, span.end),
-        contextAfter: codeNode.value.slice(span.end, span.end + CONTEXT_SLICE_LEN),
+        ...buildContextualSlice(codeNode.value, span.start, span.end),
         codeSpan: { start: span.start, end: span.end }
       }
     }
@@ -598,7 +636,7 @@ function resolveNestedBlockHint(node: RootContent, lineNumber: number): NestedBl
  */
 export function analyzeMarkdownSearchJump(
   rawContent: string,
-  jump: MarkdownJumpInput
+  jump: DocumentJumpLocation
 ): MarkdownJumpPlan {
   const content = normalizeLineEndingsToLf(rawContent)
   const lines = splitSearchLines(content)
@@ -697,7 +735,7 @@ function commonPrefixLength(a: string, b: string): number {
  * Selects the rendered match candidate inside the target block that best aligns with
  * the target's surrounding text context and within-block occurrence index.
  */
-export function selectBestJumpCandidate<TRef>(
+function selectBestJumpCandidate<TRef>(
   candidates: readonly ContextualMatchCandidate<TRef>[],
   target: MarkdownJumpCandidateMatch
 ): TRef | null {
@@ -816,10 +854,7 @@ export function alignRenderedBlocksToMarkdown<T extends RenderedBlockSummary>(
   return aligned
 }
 
-/**
- * Collects contextually-annotated matches from a text run using the shared search matcher.
- */
-export function collectRunContextualCandidates<TRef>(
+function collectRunContextualCandidates<TRef>(
   runText: string,
   matcher: CompiledSearchMatcher,
   makeRef: (span: TextMatchSpan) => TRef
@@ -828,10 +863,47 @@ export function collectRunContextualCandidates<TRef>(
   for (const span of matcher.findMatches(runText)) {
     results.push({
       ref: makeRef(span),
-      contextBefore: runText.slice(Math.max(0, span.start - CONTEXT_SLICE_LEN), span.start),
-      matchedText: runText.slice(span.start, span.end),
-      contextAfter: runText.slice(span.end, span.end + CONTEXT_SLICE_LEN)
+      ...buildContextualSlice(runText, span.start, span.end)
     })
   }
   return results
+}
+
+/**
+ * Selects the best contextual match across rendered runs, falling back to literal matching
+ * of `renderedMatch.matchedText` when line-anchored regexes cannot match across wrapped runs.
+ */
+export function selectBestJumpMatchFromRuns<TRun, TRef>(
+  runs: readonly TRun[],
+  getText: (run: TRun) => string,
+  makeRef: (run: TRun, span: TextMatchSpan) => TRef,
+  matcher: CompiledSearchMatcher,
+  jump: DocumentJumpLocation,
+  renderedMatch: NonNullable<MarkdownJumpPlan['renderedMatch']>
+): TRef | null {
+  const collectForMatcher = (
+    activeMatcher: CompiledSearchMatcher
+  ): ContextualMatchCandidate<TRef>[] => {
+    const found: ContextualMatchCandidate<TRef>[] = []
+    for (const run of runs) {
+      found.push(
+        ...collectRunContextualCandidates(getText(run), activeMatcher, (span) => makeRef(run, span))
+      )
+    }
+    return found
+  }
+
+  let candidates = collectForMatcher(matcher)
+  if (candidates.length === 0 && jump.options.useRegex && renderedMatch.matchedText.length > 0) {
+    const literal = compileSearchMatcher(renderedMatch.matchedText, {
+      caseSensitive: jump.options.caseSensitive,
+      wholeWord: false,
+      useRegex: false
+    })
+    if (literal.ok) {
+      candidates = collectForMatcher(literal.matcher)
+    }
+  }
+
+  return selectBestJumpCandidate(candidates, renderedMatch)
 }

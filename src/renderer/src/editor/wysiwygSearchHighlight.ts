@@ -5,19 +5,17 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import {
   compileSearchMatcher,
   DEFAULT_SEARCH_MATCH_OPTIONS,
-  type CompiledSearchMatcher
+  type CompiledSearchMatcher,
+  type DocumentJumpHighlightTarget
 } from '@shared/search'
-import type { DocumentJumpHighlightTarget } from '../hooks/useDocumentSearchJump'
 import { isMermaidLanguage } from './codeBlockHighlight'
 import {
   alignRenderedBlocksToMarkdown,
   analyzeMarkdownSearchJump,
-  collectRunContextualCandidates,
   collectTopLevelMarkdownBlocks,
   pickClosestLineBlock,
-  selectBestJumpCandidate,
+  selectBestJumpMatchFromRuns,
   type AlignedBlock,
-  type ContextualMatchCandidate,
   type MarkdownTopBlockKind,
   type NestedBlockHint
 } from './markdownSearchJump'
@@ -269,6 +267,20 @@ function collectTopLevelPmBlocks(doc: ProseMirrorNode): TopLevelPmBlockSummary[]
   return blocks
 }
 
+function resolveBlockChildPos(
+  blockNode: ProseMirrorNode,
+  blockPos: number,
+  targetIndex: number
+): number {
+  let targetPos = blockPos
+  blockNode.forEach((_child, relOffset, childIndex) => {
+    if (childIndex === targetIndex) {
+      targetPos = blockPos + 1 + relOffset
+    }
+  })
+  return targetPos
+}
+
 function resolveWysiwygFallbackPos(
   candidateBlocks: readonly AlignedBlock<TopLevelPmBlockSummary>[],
   nestedHint: NestedBlockHint | null
@@ -281,13 +293,7 @@ function resolveWysiwygFallbackPos(
         continue
       }
       if (remaining >= 0 && remaining < block.node.childCount) {
-        let targetPos = block.pos
-        block.node.forEach((_child, relOffset, childIndex) => {
-          if (childIndex === remaining) {
-            targetPos = block.pos + 1 + relOffset
-          }
-        })
-        return targetPos
+        return resolveBlockChildPos(block.node, block.pos, remaining)
       }
       remaining -= block.node.childCount
     }
@@ -297,13 +303,7 @@ function resolveWysiwygFallbackPos(
     nestedHint.index >= 0 &&
     nestedHint.index < firstBlock.node.childCount
   ) {
-    let targetPos = firstBlock.pos
-    firstBlock.node.forEach((_child, relOffset, childIndex) => {
-      if (childIndex === nestedHint.index) {
-        targetPos = firstBlock.pos + 1 + relOffset
-      }
-    })
-    return targetPos
+    return resolveBlockChildPos(firstBlock.node, firstBlock.pos, nestedHint.index)
   }
   return firstBlock.pos
 }
@@ -341,7 +341,7 @@ function computeJumpPluginState(
   }
 
   let exactCodeRange: ProseMirrorSearchMatch | null = null
-  const contextualCandidates: ContextualMatchCandidate<ProseMirrorSearchMatch>[] = []
+  const runs: Array<{ text: string; segments: PmTextRunSegment[] }> = []
 
   for (const block of candidateBlocks) {
     walkSubtreeTextRuns(block.node, block.pos, false, (segments) => {
@@ -362,17 +362,24 @@ function computeJumpPluginState(
         exactCodeRange = { from, to }
         return
       }
-      contextualCandidates.push(
-        ...collectRunContextualCandidates(runText, compiled.matcher, (span) => {
-          const from = resolveSegmentPmPosition(segments, span.start)
-          const to = Math.max(from, resolveSegmentPmPosition(segments, span.end))
-          return { from, to }
-        })
-      )
+      runs.push({ text: runText, segments })
     })
   }
 
-  const chosenRange = exactCodeRange ?? selectBestJumpCandidate(contextualCandidates, plan.renderedMatch)
+  const chosenRange =
+    exactCodeRange ??
+    selectBestJumpMatchFromRuns(
+      runs,
+      (run) => run.text,
+      (run, span) => {
+        const from = resolveSegmentPmPosition(run.segments, span.start)
+        const to = Math.max(from, resolveSegmentPmPosition(run.segments, span.end))
+        return { from, to }
+      },
+      compiled.matcher,
+      jump,
+      plan.renderedMatch
+    )
   if (!chosenRange || chosenRange.from >= chosenRange.to) {
     return {
       nonce: jump.nonce,

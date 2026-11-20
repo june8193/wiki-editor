@@ -1040,7 +1040,7 @@ describe('Workspace Search Match Jump (<App />)', () => {
 
   it('opens or activates the tab in active Pane without changing Raw/Split mode or opening Find Bar, jumps to exact column including long-line lineOffset, and clears jump highlight on edit/mode/tab switch', async () => {
     const user = userEvent.setup()
-    const longPrefix = 'x'.repeat(160)
+    const longPrefix = 'x'.repeat(280)
     const targetLine = `${longPrefix} LongJumpTarget end`
     const notesContent = `# Notes\n${targetLine}\nTrailing line`
     const splitContent = `# Split Doc\nFirst line\nSplitTarget line`
@@ -1376,7 +1376,8 @@ describe('Workspace Search Match Jump (<App />)', () => {
         selectedFolder: 'C:\\wiki\\alpha',
         workspaces: {
           'C:\\wiki\\alpha': {
-            'slow.md': '# Slow\nSlowJumpTarget unique line',
+            'slow.md': '# Slow\nSlowOneJumpTarget unique line',
+            'slow-second.md': '# Slow2\nSecondDeferredJumpTarget line',
             'fast.md': '# Fast\nFastJumpTarget line',
             'nameMatch.md': 'Plain doc without jump targets'
           },
@@ -1388,16 +1389,23 @@ describe('Workspace Search Match Jump (<App />)', () => {
     )
 
     const originalOpenWorkspaceFile = api.buffer.openWorkspaceFile.bind(api.buffer)
-    const deferredSlowOpens: Array<{ resolve: () => Promise<void> }> = []
+    const deferredSlowOpens: Array<{ path: string; resolve: () => Promise<void> }> = []
     api.buffer.openWorkspaceFile = (filePath, name) => {
-      if (filePath.toLowerCase().endsWith('slow.md')) {
+      if (filePath.toLowerCase().includes('slow')) {
         return new Promise((resolve, reject) => {
           deferredSlowOpens.push({
+            path: filePath,
             resolve: () => originalOpenWorkspaceFile(filePath, name).then(resolve, reject)
           })
         })
       }
       return originalOpenWorkspaceFile(filePath, name)
+    }
+    const originalSyncWindowTabs = api.buffer.syncWindowTabs.bind(api.buffer)
+    const syncWindowTabCalls: Array<{ keys: readonly string[]; releasePending?: boolean }> = []
+    api.buffer.syncWindowTabs = (keys, options) => {
+      syncWindowTabCalls.push({ keys: [...keys], releasePending: options?.releasePending })
+      return originalSyncWindowTabs(keys, options)
     }
     window.wikiApi = api
 
@@ -1418,7 +1426,10 @@ describe('Workspace Search Match Jump (<App />)', () => {
     await user.type(searchInput, 'JumpTarget')
     fireEvent.keyDown(searchInput, { key: 'Enter' })
 
-    const slowBtn1 = await within(searchView).findByRole('button', { name: /SlowJumpTarget/ })
+    const slowBtn1 = await within(searchView).findByRole('button', { name: /SlowOneJumpTarget/ })
+    const slowSecondBtn = await within(searchView).findByRole('button', {
+      name: /SecondDeferredJumpTarget/
+    })
     const fastBtn = await within(searchView).findByRole('button', { name: /FastJumpTarget/ })
 
     await user.click(slowBtn1)
@@ -1440,9 +1451,29 @@ describe('Workspace Search Match Jump (<App />)', () => {
     expect(screen.getByRole('tab', { name: 'fast.md' })).toHaveAttribute('aria-selected', 'true')
     expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe('JumpTarget')
 
+    // Race A2: overlapping uncached opens where cancelled A resolves BEFORE B settles -> releasePending flushes once B settles
+    await user.click(slowBtn1)
+    await user.click(slowSecondBtn)
+    expect(deferredSlowOpens).toHaveLength(3)
+    await act(async () => {
+      await deferredSlowOpens[1].resolve()
+    })
+    expect(screen.queryByRole('tab', { name: 'slow.md' })).not.toBeInTheDocument()
+    syncWindowTabCalls.length = 0
+    await act(async () => {
+      await deferredSlowOpens[2].resolve()
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'slow-second.md' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    })
+    expect(syncWindowTabCalls.some((call) => call.releasePending === true)).toBe(true)
+
     // Race B: slow Result A superseded by filename-only click (nameMatch.md)
     await user.click(slowBtn1)
-    expect(deferredSlowOpens).toHaveLength(2)
+    expect(deferredSlowOpens).toHaveLength(4)
 
     await user.clear(searchInput)
     await user.type(searchInput, 'nameMatch')
@@ -1459,7 +1490,7 @@ describe('Workspace Search Match Jump (<App />)', () => {
     expect(container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
 
     await act(async () => {
-      await deferredSlowOpens[1].resolve()
+      await deferredSlowOpens[3].resolve()
     })
     expect(screen.queryByRole('tab', { name: 'slow.md' })).not.toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'nameMatch.md' })).toHaveAttribute(
@@ -1470,11 +1501,11 @@ describe('Workspace Search Match Jump (<App />)', () => {
 
     // Race C: slow Result A superseded by workspace switch (alpha -> beta)
     await user.clear(searchInput)
-    await user.type(searchInput, 'SlowJumpTarget')
+    await user.type(searchInput, 'SlowOneJumpTarget')
     fireEvent.keyDown(searchInput, { key: 'Enter' })
-    const slowBtn3 = await within(searchView).findByRole('button', { name: /SlowJumpTarget/ })
+    const slowBtn3 = await within(searchView).findByRole('button', { name: /SlowOneJumpTarget/ })
     await user.click(slowBtn3)
-    expect(deferredSlowOpens).toHaveLength(3)
+    expect(deferredSlowOpens).toHaveLength(5)
 
     await user.click(
       within(screen.getByRole('navigation', { name: '액티비티 바' })).getByRole('button', {
@@ -1488,7 +1519,7 @@ describe('Workspace Search Match Jump (<App />)', () => {
     })
 
     await act(async () => {
-      await deferredSlowOpens[2].resolve()
+      await deferredSlowOpens[4].resolve()
     })
     expect(screen.queryByRole('tab', { name: 'slow.md' })).not.toBeInTheDocument()
     expect(container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)

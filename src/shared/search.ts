@@ -46,15 +46,21 @@ export interface WorkspaceSearchResponse {
   error?: string // 잘못된 정규식 등 검색식 오류
 }
 
-export interface DocumentSearchJumpRequest {
-  paneId: PaneId
-  tabId: string
+export interface DocumentJumpLocation {
   query: string
   options: SearchMatchOptions
   lineNumber: number // 1-based
   columnStart: number // 0-based UTF-16 offset within line
   columnEnd: number // 0-based UTF-16 offset within line
+}
+
+export interface DocumentJumpHighlightTarget extends DocumentJumpLocation {
   nonce: number
+}
+
+export interface DocumentSearchJumpRequest extends DocumentJumpHighlightTarget {
+  paneId: PaneId
+  tabId: string
 }
 
 export const DEFAULT_SEARCH_MATCH_OPTIONS: SearchMatchOptions = {

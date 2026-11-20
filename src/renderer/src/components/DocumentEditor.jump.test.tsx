@@ -594,7 +594,7 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
     }
   })
 
-  it('highlights rendered 위지윅 matches without mutating content, coexists with Find Bar, scrolls fallback blocks, and clears on edit/mode/tab/new jump', async () => {
+  it('highlights rendered 위지윅 matches accurately across markdown constructs without mutating content', () => {
     const scrollIntoViewSpy = vi.fn()
     const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
     HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy
@@ -605,39 +605,24 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
         '',
         'Paragraph with **boldMark** and `codeToken` and targetWord once and targetWord twice.', // line 3
         '',
-        'Visit [Docs Label](https://example.com/secret-url-token) for info.', // line 5
+        '- Bullet first item', // line 5
+        '- Bullet item with listToken inside', // line 6
         '',
-        '- Bullet first item', // line 7
-        '- Bullet item with listToken inside', // line 8
+        '- [x] Task item with taskToken inside', // line 8
         '',
-        '- [x] Task item with taskToken inside', // line 10
+        '| ColA | ColB |', // line 10
+        '|---|---|', // line 11
+        '| cellOne | cellTarget |', // line 12
         '',
-        '| ColA | ColB |', // line 12
-        '|---|---|', // line 13
-        '| cellOne | cellTarget |', // line 14
-        '',
-        '```ts', // line 16
-        'const insideCode = "codeLineTarget"', // line 17
-        '```', // line 18
-        '',
-        '```mermaid', // line 20
-        'graph TD', // line 21
-        'A[AlphaNode] --> B[BetaNode]', // line 22
-        '```', // line 23
-        '',
-        '<!-- hiddenCommentToken -->', // line 25
-        '[hiddenRef]: https://ref-only.example/path', // line 26
-        '',
-        'Trailing rendered paragraph' // line 28
+        '```ts', // line 14
+        'const insideCode = "codeLineTarget"', // line 15
+        '```' // line 16
       ]
       const content = mdLines.join('\n')
-      let doc = createDoc({ content, savedContent: content })
-      let tab = createTab('wysiwyg')
+      const doc = createDoc({ content, savedContent: content })
+      const tab = createTab('wysiwyg')
       let currentJump: DocumentSearchJumpRequest | null = null
-      const onChangeSpy = vi.fn((nextContent: string) => {
-        doc = { ...doc, content: nextContent, isDirty: true }
-        rerender(renderWysiwyg())
-      })
+      const onChangeSpy = vi.fn()
 
       const renderWysiwyg = () => (
         <DocumentEditor
@@ -648,14 +633,11 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
           searchJumpRequest={currentJump}
           onChangeContent={onChangeSpy}
           onSave={vi.fn()}
-          onUpdateViewState={(patch) => {
-            tab = { ...tab, ...patch }
-            rerender(renderWysiwyg())
-          }}
+          onUpdateViewState={vi.fn()}
         />
       )
 
-      const { container, rerender } = render(renderWysiwyg())
+      const { rerender } = render(renderWysiwyg())
       const wysiwygSurface = screen.getByLabelText('위지윅 문서 에디터')
 
       const jumpToToken = (lineNumber: number, token: string, occurrence = 0, nonce: number) => {
@@ -679,23 +661,19 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
         rerender(renderWysiwyg())
       }
 
-      // 1. Heading match
       jumpToToken(1, 'targetWord', 0, 1)
       let marks = Array.from(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight'))
       expect(marks).toHaveLength(1)
       expect(marks[0].textContent).toBe('targetWord')
       expect(marks[0].closest('h2')).not.toBeNull()
       expect(scrollIntoViewSpy).toHaveBeenCalled()
-      expect(onChangeSpy).not.toHaveBeenCalled()
 
-      // 2. Second occurrence on line 3
       jumpToToken(3, 'targetWord', 1, 2)
       marks = Array.from(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight'))
       expect(marks).toHaveLength(1)
       expect(marks[0].closest('p')).not.toBeNull()
       expect(marks[0].previousSibling?.textContent?.endsWith('targetWord once and ')).toBe(true)
 
-      // 3. Bold, inlineCode, list item, task item, table cell, code block
       jumpToToken(3, 'boldMark', 0, 3)
       marks = Array.from(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight'))
       expect(marks).toHaveLength(1)
@@ -706,135 +684,86 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
       expect(marks).toHaveLength(1)
       expect(marks[0].closest('code')).not.toBeNull()
 
-      jumpToToken(8, 'listToken', 0, 5)
+      jumpToToken(6, 'listToken', 0, 5)
       marks = Array.from(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight'))
       expect(marks).toHaveLength(1)
       expect(marks[0].closest('li')).not.toBeNull()
 
-      jumpToToken(10, 'taskToken', 0, 6)
+      jumpToToken(8, 'taskToken', 0, 6)
       marks = Array.from(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight'))
       expect(marks).toHaveLength(1)
       expect(marks[0].closest('li')).not.toBeNull()
 
-      jumpToToken(14, 'cellTarget', 0, 7)
+      jumpToToken(12, 'cellTarget', 0, 7)
       marks = Array.from(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight'))
       expect(marks).toHaveLength(1)
       expect(marks[0].closest('td')).not.toBeNull()
 
-      jumpToToken(17, 'codeLineTarget', 0, 8)
+      jumpToToken(15, 'codeLineTarget', 0, 8)
       marks = Array.from(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight'))
       expect(marks).toHaveLength(1)
       expect(marks[0].closest('.node-codeBlock, pre')).not.toBeNull()
       expect(onChangeSpy).not.toHaveBeenCalled()
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    }
+  })
 
-      // 4. Coexists with Find Bar highlights
+  it('coexists with Find Bar in 위지윅 mode and clears jump highlight on mode switch or tab switch', async () => {
+    const scrollIntoViewSpy = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy
+
+    try {
+      const content = '## Heading targetWord\n\nParagraph with **boldMark** and targetWord inside.'
+      const doc = createDoc({ content, savedContent: content })
+      let tab = createTab('wysiwyg')
+      let currentJump: DocumentSearchJumpRequest | null = null
+
+      const renderWysiwyg = () => (
+        <DocumentEditor
+          document={doc}
+          tab={tab}
+          theme="light"
+          autoSave={false}
+          searchJumpRequest={currentJump}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={(patch) => {
+            tab = { ...tab, ...patch }
+            rerender(renderWysiwyg())
+          }}
+        />
+      )
+
+      const { container, rerender } = render(renderWysiwyg())
+      const wysiwygSurface = screen.getByLabelText('위지윅 문서 에디터')
+
       fireEvent.click(screen.getByRole('button', { name: '문서 내 찾기' }))
       const findBar = await screen.findByRole('region', { name: '문서 내 찾기 바' })
       const findInput = within(findBar).getByRole('textbox', { name: '문서 내 검색어 입력' })
       fireEvent.change(findInput, { target: { value: 'targetWord' } })
       await waitFor(() => {
         expect(wysiwygSurface.querySelectorAll('.pm-search-match').length).toBeGreaterThanOrEqual(
-          3
+          2
         )
       })
-      jumpToToken(3, 'boldMark', 0, 9)
-      expect(wysiwygSurface.querySelectorAll('.pm-search-match').length).toBeGreaterThanOrEqual(3)
+
+      const boldIdx = 'Paragraph with **boldMark** and targetWord inside.'.indexOf('boldMark')
+      currentJump = createJumpRequest({
+        query: 'boldMark',
+        lineNumber: 3,
+        columnStart: boldIdx,
+        columnEnd: boldIdx + 'boldMark'.length,
+        nonce: 1
+      })
+      rerender(renderWysiwyg())
+      expect(wysiwygSurface.querySelectorAll('.pm-search-match').length).toBeGreaterThanOrEqual(2)
       expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(1)
       expect(wysiwygSurface.querySelector('.pm-search-jump-highlight')?.textContent).toBe('boldMark')
       fireEvent.click(screen.getByRole('button', { name: '문서 내 찾기' }))
 
-      // 5. Non-rendered syntax fallbacks -> zero fake highlights + closest PM block scroll
-      currentJump = createJumpRequest({
-        query: '##',
-        lineNumber: 1,
-        columnStart: 0,
-        columnEnd: 2,
-        nonce: 10
-      })
-      scrollIntoViewSpy.mockClear()
-      rerender(renderWysiwyg())
-      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
-      expect(scrollIntoViewSpy).toHaveBeenCalled()
-      expect((scrollIntoViewSpy.mock.instances[0] as Element).closest('h2') ?? scrollIntoViewSpy.mock.instances[0]).toBe(
-        wysiwygSurface.querySelector('h2')
-      )
-
-      const boldMarkerStart = mdLines[2].indexOf('**')
-      currentJump = createJumpRequest({
-        query: '**',
-        lineNumber: 3,
-        columnStart: boldMarkerStart,
-        columnEnd: boldMarkerStart + 2,
-        nonce: 11
-      })
-      scrollIntoViewSpy.mockClear()
-      rerender(renderWysiwyg())
-      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
-      expect(scrollIntoViewSpy).toHaveBeenCalled()
-      expect(scrollIntoViewSpy.mock.instances[0]).toBe(
-        Array.from(wysiwygSurface.querySelectorAll('.ProseMirror > p')).find((el) =>
-          el.textContent?.includes('boldMark')
-        )
-      )
-
-      jumpToToken(5, 'secret-url-token', 0, 12)
-      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
-      expect(scrollIntoViewSpy).toHaveBeenCalled()
-      expect(scrollIntoViewSpy.mock.instances[0]).toBe(
-        Array.from(wysiwygSurface.querySelectorAll('.ProseMirror > p')).find((el) =>
-          el.textContent?.includes('Docs Label')
-        )
-      )
-
-      jumpToToken(13, '|---|', 0, 13)
-      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
-      expect(scrollIntoViewSpy).toHaveBeenCalled()
-      expect((scrollIntoViewSpy.mock.instances[0] as HTMLElement).querySelector('table') ?? scrollIntoViewSpy.mock.instances[0]).toBeTruthy()
-      const scrolledTableTarget = scrollIntoViewSpy.mock.instances[0] as HTMLElement
-      expect(
-        scrolledTableTarget.tagName === 'TABLE' ||
-          scrolledTableTarget.querySelector('table') !== null ||
-          scrolledTableTarget.closest('table') !== null
-      ).toBe(true)
-
-      currentJump = createJumpRequest({
-        query: '```ts',
-        lineNumber: 16,
-        columnStart: 0,
-        columnEnd: 5,
-        nonce: 14
-      })
-      scrollIntoViewSpy.mockClear()
-      rerender(renderWysiwyg())
-      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
-      expect(scrollIntoViewSpy).toHaveBeenCalled()
-      const scrolledCodeTarget = scrollIntoViewSpy.mock.instances[0] as HTMLElement
-      expect(
-        scrolledCodeTarget.classList.contains('node-codeBlock') ||
-          scrolledCodeTarget.querySelector('.node-codeBlock, pre') !== null ||
-          scrolledCodeTarget.tagName === 'PRE'
-      ).toBe(true)
-
-      jumpToToken(21, 'graph', 0, 15)
-      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
-      expect(scrollIntoViewSpy).toHaveBeenCalled()
-
-      jumpToToken(25, 'hiddenCommentToken', 0, 16)
-      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
-      expect(scrollIntoViewSpy).toHaveBeenCalled()
-
-      jumpToToken(26, 'ref-only.example', 0, 17)
-      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
-      expect(scrollIntoViewSpy).toHaveBeenCalled()
-      expect(scrollIntoViewSpy.mock.instances[0]).toBe(
-        Array.from(wysiwygSurface.querySelectorAll('.ProseMirror > p')).find((el) =>
-          el.textContent?.includes('Trailing rendered paragraph')
-        )
-      )
-
-      // 6. Mode switch clears 위지윅 jump highlight
-      jumpToToken(1, 'targetWord', 0, 18)
-      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(1)
+      // Mode switch clears 위지윅 jump highlight
       fireEvent.click(
         within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
           name: 'Raw'
@@ -850,8 +779,9 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
         screen.getByLabelText('위지윅 문서 에디터').querySelectorAll('.pm-search-jump-highlight')
       ).toHaveLength(0)
 
-      // 7. Tab switch clears 위지윅 jump highlight
-      jumpToToken(1, 'targetWord', 0, 19)
+      // Tab switch clears 위지윅 jump highlight
+      currentJump = { ...currentJump, nonce: 2 }
+      rerender(renderWysiwyg())
       expect(
         screen.getByLabelText('위지윅 문서 에디터').querySelectorAll('.pm-search-jump-highlight')
       ).toHaveLength(1)
@@ -860,6 +790,192 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
       expect(
         screen.getByLabelText('위지윅 문서 에디터').querySelectorAll('.pm-search-jump-highlight')
       ).toHaveLength(0)
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    }
+  })
+
+  it('safely falls back to closest rendered 위지윅 block scroll for non-rendered markdown syntax, Mermaid, comments, and definitions', () => {
+    const scrollIntoViewSpy = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy
+
+    try {
+      const mdLines = [
+        '## Wysiwyg Heading targetWord', // line 1
+        '',
+        'Paragraph with **boldMark** inside.', // line 3
+        '',
+        'Visit [Docs Label](https://example.com/secret-url-token) for info.', // line 5
+        '',
+        '| ColA | ColB |', // line 7
+        '|---|---|', // line 8
+        '| cellOne | cellTarget |', // line 9
+        '',
+        '```ts', // line 11
+        'const insideCode = "codeLineTarget"', // line 12
+        '```', // line 13
+        '',
+        '```mermaid', // line 15
+        'graph TD', // line 16
+        'A[AlphaNode] --> B[BetaNode]', // line 17
+        '```', // line 18
+        '',
+        '<!-- hiddenCommentToken -->', // line 20
+        '[hiddenRef]: https://ref-only.example/path', // line 21
+        '',
+        'Trailing rendered paragraph' // line 23
+      ]
+      const content = mdLines.join('\n')
+      const doc = createDoc({ content, savedContent: content })
+      const tab = createTab('wysiwyg')
+      let currentJump: DocumentSearchJumpRequest | null = null
+
+      const renderWysiwyg = () => (
+        <DocumentEditor
+          document={doc}
+          tab={tab}
+          theme="light"
+          autoSave={false}
+          searchJumpRequest={currentJump}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+
+      const { rerender } = render(renderWysiwyg())
+      const wysiwygSurface = screen.getByLabelText('위지윅 문서 에디터')
+
+      const jumpToToken = (lineNumber: number, token: string, nonce: number) => {
+        const idx = mdLines[lineNumber - 1].indexOf(token)
+        if (idx === -1) throw new Error(`Missing ${token} on line ${lineNumber}`)
+        currentJump = createJumpRequest({
+          query: token,
+          lineNumber,
+          columnStart: idx,
+          columnEnd: idx + token.length,
+          nonce
+        })
+        scrollIntoViewSpy.mockClear()
+        rerender(renderWysiwyg())
+      }
+
+      jumpToToken(1, '##', 1)
+      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      expect(
+        (scrollIntoViewSpy.mock.instances[0] as Element).closest('h2') ??
+          scrollIntoViewSpy.mock.instances[0]
+      ).toBe(wysiwygSurface.querySelector('h2'))
+
+      jumpToToken(3, '**', 2)
+      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      expect(scrollIntoViewSpy.mock.instances[0]).toBe(
+        Array.from(wysiwygSurface.querySelectorAll('.ProseMirror > p')).find((el) =>
+          el.textContent?.includes('boldMark')
+        )
+      )
+
+      jumpToToken(5, 'secret-url-token', 3)
+      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      expect(scrollIntoViewSpy.mock.instances[0]).toBe(
+        Array.from(wysiwygSurface.querySelectorAll('.ProseMirror > p')).find((el) =>
+          el.textContent?.includes('Docs Label')
+        )
+      )
+
+      jumpToToken(8, '|---|', 4)
+      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      const scrolledTableTarget = scrollIntoViewSpy.mock.instances[0] as HTMLElement
+      expect(
+        scrolledTableTarget.tagName === 'TABLE' ||
+          scrolledTableTarget.querySelector('table') !== null ||
+          scrolledTableTarget.closest('table') !== null
+      ).toBe(true)
+
+      jumpToToken(11, '```ts', 5)
+      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      const scrolledCodeTarget = scrollIntoViewSpy.mock.instances[0] as HTMLElement
+      expect(
+        scrolledCodeTarget.classList.contains('node-codeBlock') ||
+          scrolledCodeTarget.querySelector('.node-codeBlock, pre') !== null ||
+          scrolledCodeTarget.tagName === 'PRE'
+      ).toBe(true)
+
+      jumpToToken(16, 'graph', 6)
+      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      expect(scrollIntoViewSpy).toHaveBeenCalled()
+
+      jumpToToken(20, 'hiddenCommentToken', 7)
+      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      expect(scrollIntoViewSpy).toHaveBeenCalled()
+
+      jumpToToken(21, 'ref-only.example', 8)
+      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      expect(scrollIntoViewSpy.mock.instances[0]).toBe(
+        Array.from(wysiwygSurface.querySelectorAll('.ProseMirror > p')).find((el) =>
+          el.textContent?.includes('Trailing rendered paragraph')
+        )
+      )
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    }
+  })
+
+  it('highlights line-anchored regex matches inside multi-line paragraphs across Preview and 위지윅 modes', () => {
+    const scrollIntoViewSpy = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy
+
+    try {
+      const content = 'LineOneParagraph text\nLineTwoAnchorToken repeated and LineTwoAnchorToken end'
+      const doc = createDoc({ content, savedContent: content })
+      let currentJump = createJumpRequest({
+        query: '^LineTwoAnchorToken',
+        options: { ...DEFAULT_SEARCH_MATCH_OPTIONS, useRegex: true },
+        lineNumber: 2,
+        columnStart: 0,
+        columnEnd: 'LineTwoAnchorToken'.length,
+        nonce: 1
+      })
+
+      const { unmount } = render(
+        <DocumentEditor
+          document={doc}
+          tab={createTab('preview')}
+          theme="light"
+          autoSave={false}
+          searchJumpRequest={currentJump}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+      const previewMarks = screen
+        .getByLabelText('마크다운 미리보기')
+        .querySelectorAll('.preview-search-jump-highlight')
+      expect(previewMarks).toHaveLength(1)
+      expect(previewMarks[0].textContent).toBe('LineTwoAnchorToken')
+      unmount()
+
+      currentJump = { ...currentJump, nonce: 2 }
+      render(
+        <DocumentEditor
+          document={doc}
+          tab={createTab('wysiwyg')}
+          theme="light"
+          autoSave={false}
+          searchJumpRequest={currentJump}
+          onChangeContent={vi.fn()}
+          onSave={vi.fn()}
+          onUpdateViewState={vi.fn()}
+        />
+      )
+      const wysiwygMarks = screen
+        .getByLabelText('위지윅 문서 에디터')
+        .querySelectorAll('.pm-search-jump-highlight')
+      expect(wysiwygMarks).toHaveLength(1)
+      expect(wysiwygMarks[0].textContent).toBe('LineTwoAnchorToken')
     } finally {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView
     }

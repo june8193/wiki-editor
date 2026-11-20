@@ -148,6 +148,7 @@ export class RendererBufferSyncClient {
   private readonly activeRemoteOpens = new Set<Set<string>>()
   private readonly remappedKeys = new Map<string, string>()
   private lastSyncedTabKeys: readonly string[] | null = null
+  private needsPendingOpenRelease = false
   private mounted = false
 
   constructor(options: RendererBufferSyncClientOptions) {
@@ -418,22 +419,21 @@ export class RendererBufferSyncClient {
     try {
       const buf = await loadBuffer()
       if (!this.mounted) {
+        this.needsPendingOpenRelease = false
         this.releasePendingWindowTabs()
         return null
       }
       if (isCancelled?.()) {
-        if (this.activeRemoteOpens.size === 1) {
-          void this.bufferApi
-            .syncWindowTabs(this.tabStore.getBufferKeys(), { releasePending: true })
-            .catch(() => undefined)
-        }
+        this.needsPendingOpenRelease = true
         return null
       }
       const targetKey = this.resolveLatestKey(buf.key)
       if (closedDuringOpen.has(buf.key) || closedDuringOpen.has(targetKey)) {
+        this.needsPendingOpenRelease = true
         return null
       }
       if (targetKey !== buf.key && !this.latestHubBuffers[targetKey]) {
+        this.needsPendingOpenRelease = true
         return null
       }
       this.remappedKeys.delete(buf.key)
@@ -444,12 +444,26 @@ export class RendererBufferSyncClient {
       this.syncCurrentLayoutTabs()
       return { buffer: this.bufferStore.getBuffer(targetKey) ?? buf, tab, paneId }
     } catch (error: unknown) {
+      this.needsPendingOpenRelease = true
       if (this.mounted && !isCancelled?.()) {
         this.onError(toErrorMessage(error, fallbackError), error)
       }
       return null
     } finally {
       this.activeRemoteOpens.delete(closedDuringOpen)
+      if (this.mounted && this.activeRemoteOpens.size === 0 && this.needsPendingOpenRelease) {
+        this.needsPendingOpenRelease = false
+        const keys = this.tabStore.getBufferKeys()
+        this.lastSyncedTabKeys = [...keys]
+        void this.bufferApi
+          .syncWindowTabs(keys, { releasePending: true })
+          .then((snapshot) => {
+            if (this.mounted) {
+              this.applyHubSnapshot(snapshot)
+            }
+          })
+          .catch(() => undefined)
+      }
     }
   }
 
