@@ -587,6 +587,16 @@ export function MainAppShell() {
     [prepareWorkspacePathsForDiscard, resolveTargetWorkspacePaths]
   )
 
+  const refreshTreeAndUnstagedDiffTabs = useCallback(
+    async (nextStatus?: GitStatus | null): Promise<void> => {
+      if (nextStatus) {
+        closeUnstagedDiffTabsExcept(new Set(collectGitUnstagedPaths(nextStatus, true)))
+      }
+      await refreshTree()
+    },
+    [closeUnstagedDiffTabsExcept, refreshTree]
+  )
+
   const handleAfterWorkspaceBufferMutation = useCallback(
     async (
       target: WorkspaceBufferMutationTarget,
@@ -602,32 +612,31 @@ export function MainAppShell() {
       if (!succeeded) return
       if (target.kind === 'discard-all') {
         closeAllUnstagedDiffTabs()
-      } else if (target.kind === 'discard-paths') {
-        closeUnstagedDiffTabsForPaths(target.paths)
-      } else if (nextStatus) {
-        closeUnstagedDiffTabsExcept(new Set(collectGitUnstagedPaths(nextStatus, true)))
+        await refreshTreeAndUnstagedDiffTabs()
+        return
       }
-      await refreshTree()
+      if (target.kind === 'discard-paths') {
+        closeUnstagedDiffTabsForPaths(target.paths)
+        await refreshTreeAndUnstagedDiffTabs()
+        return
+      }
+      await refreshTreeAndUnstagedDiffTabs(nextStatus)
     },
     [
       closeAllUnstagedDiffTabs,
-      closeUnstagedDiffTabsExcept,
       closeUnstagedDiffTabsForPaths,
       finishWorkspacePathsDiscard,
-      refreshTree,
+      refreshTreeAndUnstagedDiffTabs,
       resolveTargetWorkspacePaths
     ]
   )
 
   const handleGitWorkspaceMutated = useCallback(
     async (nextStatus?: GitStatus | null): Promise<readonly string[]> => {
-      if (nextStatus) {
-        closeUnstagedDiffTabsExcept(new Set(collectGitUnstagedPaths(nextStatus, true)))
-      }
-      await refreshTree()
+      await refreshTreeAndUnstagedDiffTabs(nextStatus)
       return await reconcileBuffersRef.current()
     },
-    [closeUnstagedDiffTabsExcept, refreshTree]
+    [refreshTreeAndUnstagedDiffTabs]
   )
 
   const git = useGitController({

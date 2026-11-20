@@ -2906,7 +2906,8 @@ body.is-resizing-git-sections * {
 }
 
 .git-section-actions,
-.git-file-actions {
+.git-file-actions,
+.git-stash-actions {
   display: inline-flex;
   align-items: center;
   gap: 1px;
@@ -2917,12 +2918,23 @@ body.is-resizing-git-sections * {
   transition: opacity 0.12s ease;
 }
 
+.git-stash-actions {
+  gap: 3px;
+}
+
 .git-section-header:hover .git-section-actions,
 .git-section-header:focus-within .git-section-actions,
 .git-file-item:hover .git-file-actions,
-.git-file-item:focus-within .git-file-actions {
+.git-file-item:focus-within .git-file-actions,
+.git-stash-item:hover .git-stash-actions,
+.git-stash-item:focus-within .git-stash-actions {
   opacity: 1;
   max-width: 80px;
+}
+
+.git-stash-item:hover .git-stash-actions,
+.git-stash-item:focus-within .git-stash-actions {
+  max-width: 140px;
 }
 
 .git-stash-list {
@@ -2991,23 +3003,6 @@ body.is-resizing-git-sections * {
 .git-stash-time {
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.git-stash-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-  opacity: 0;
-  max-width: 0;
-  overflow: hidden;
-  transition: opacity 0.12s ease;
-}
-
-.git-stash-item:hover .git-stash-actions,
-.git-stash-item:focus-within .git-stash-actions {
-  opacity: 1;
-  max-width: 140px;
 }
 
 .git-stash-action-btn {
