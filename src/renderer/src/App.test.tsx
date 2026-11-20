@@ -1264,7 +1264,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     // While dirty-confirmation dialog is open, auto-save is paused and must not auto-write before choice
     const closeTopLevelBtn = screen.getByRole('button', { name: 'top-level.md 탭 닫기' })
     appendRawEditorText(editor, ' unsaved')
-    await user.click(closeTopLevelBtn)
+    fireEvent.click(closeTopLevelBtn)
     const dirtyDialog = await screen.findByRole('alertdialog')
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 120))
