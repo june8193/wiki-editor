@@ -77,10 +77,10 @@ describe('Multi-main-window workspace opening (<App />)', () => {
 
   async function openConfigEditorInWindow(
     user: ReturnType<typeof userEvent.setup>,
-    win: InMemoryWindowHandle,
-    container: HTMLElement
+    container: HTMLElement,
+    emitMenuCommand: InMemoryWindowHandle['emitMenuCommand']
   ): Promise<HTMLElement> {
-    await openConfigFromSettings(user, container, win.emitMenuCommand)
+    await openConfigFromSettings(user, container, emitMenuCommand)
     await waitFor(() => {
       expect(within(container).getByRole('tab', { name: /config\.json/ })).toHaveAttribute(
         'aria-selected',
@@ -519,24 +519,14 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     expect(await within(explorer1).findByText('a1.md')).toBeInTheDocument()
 
     // Open Beta in Main Window 2 via Workspace View button
-    const activityBar1 = within(rendered1.container).getByRole('navigation', { name: '액티비티 바' })
-    await user.click(within(activityBar1).getByRole('button', { name: '워크스페이스' }))
-    await user.click(
-      within(rendered1.container).getByRole('button', { name: 'beta 새 창에서 열기' })
-    )
-    await waitFor(() => {
-      expect(harness.getMainWindows()).toHaveLength(2)
-    })
+    const { main2, rendered2 } = await openBetaMainWindowFrom(user, harness, rendered1.container)
 
-    const main2 = harness.getMainWindows()[1]
-    const rendered2 = render(<App wikiApi={main2.api} />)
-    trackDisposer(() => rendered2.unmount())
-
-    const explorer2 = await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
+    const explorer2 = within(rendered2.container).getByLabelText('워크스페이스 탐색기')
     expect(await within(explorer2).findByText('b1.md')).toBeInTheDocument()
     expect(within(explorer2).queryByText('a1.md')).toBeNull()
 
     // Switch Main Window 1 back to Explorer and open tabs + detach auxiliary windows in both sessions
+    const activityBar1 = within(rendered1.container).getByRole('navigation', { name: '액티비티 바' })
     await user.click(within(activityBar1).getByRole('button', { name: '탐색기' }))
     const resumedExplorer1 = await within(rendered1.container).findByLabelText('워크스페이스 탐색기')
     await user.click(await within(resumedExplorer1).findByText('a1.md'))
@@ -973,8 +963,16 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     })
 
     // 4. Direct config.json edit & save in Main 1 updates clean config.json buffer and theme/autoSave in Main 1, Main 2, Aux 1, Aux 2
-    const configEditor1 = await openConfigEditorInWindow(user, main1, rendered1.container)
-    const configEditor2 = await openConfigEditorInWindow(user, main2, rendered2.container)
+    const configEditor1 = await openConfigEditorInWindow(
+      user,
+      rendered1.container,
+      main1.emitMenuCommand
+    )
+    const configEditor2 = await openConfigEditorInWindow(
+      user,
+      rendered2.container,
+      main2.emitMenuCommand
+    )
     await waitFor(() => {
       expect(getRawEditorText(configEditor1)).toContain('"theme": "dark"')
       expect(getRawEditorText(configEditor2)).toContain('"theme": "dark"')
@@ -1095,23 +1093,11 @@ describe('Multi-main-window workspace opening (<App />)', () => {
       await within(renderedAlpha.container).findByLabelText('워크스페이스 탐색기')
 
       // Open second main window on beta
-      await user.click(
-        within(
-          within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })
-        ).getByRole('button', { name: '워크스페이스' })
+      const { rendered2: renderedBeta } = await openBetaMainWindowFrom(
+        user,
+        harness,
+        renderedAlpha.container
       )
-      await user.click(
-        within(
-          within(renderedAlpha.container).getByRole('region', { name: '워크스페이스 뷰' })
-        ).getByRole('button', { name: 'beta 새 창에서 열기' })
-      )
-      await waitFor(() => {
-        expect(harness.getMainWindows()).toHaveLength(2)
-      })
-      const mainBeta = harness.getMainWindows()[1]
-      const renderedBeta = render(<App wikiApi={mainBeta.api} />)
-      trackDisposer(() => renderedBeta.unmount())
-      await within(renderedBeta.container).findByLabelText('워크스페이스 탐색기')
 
       // Back to Explorer in mainAlpha: set alpha-second.md to Preview, switch to alpha-plain.md, and detach alpha-doc.md to Auxiliary Window
       await user.click(
@@ -1251,23 +1237,11 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     await within(renderedAlpha.container).findByLabelText('워크스페이스 탐색기')
 
     // Open second main window on beta via Workspace View '새 창에서 열기'
-    await user.click(
-      within(within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })).getByRole(
-        'button',
-        { name: '워크스페이스' }
-      )
+    const { main2: mainBeta, rendered2: renderedBeta } = await openBetaMainWindowFrom(
+      user,
+      harness,
+      renderedAlpha.container
     )
-    const alphaWorkspaceView = within(renderedAlpha.container).getByRole('region', {
-      name: '워크스페이스 뷰'
-    })
-    await user.click(within(alphaWorkspaceView).getByRole('button', { name: 'beta 새 창에서 열기' }))
-    await waitFor(() => {
-      expect(harness.getMainWindows()).toHaveLength(2)
-    })
-    const mainBeta = harness.getMainWindows()[1]
-    const renderedBeta = render(<App wikiApi={mainBeta.api} />)
-    trackDisposer(() => renderedBeta.unmount())
-    await within(renderedBeta.container).findByLabelText('워크스페이스 탐색기')
 
     // Open alpha-doc.md in mainAlpha and detach it to an auxiliary window
     await user.click(

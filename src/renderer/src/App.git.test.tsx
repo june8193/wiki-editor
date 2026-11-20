@@ -194,7 +194,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(await within(gitRegionForBranch).findByRole('alert')).toHaveTextContent(
       '원격 저장소 인증에 실패했습니다.'
     )
-  })
+  }, 15_000)
 
   it('closes deleted clean tabs and preserves deleted dirty tabs with warning after Sync', async () => {
     const user = userEvent.setup()

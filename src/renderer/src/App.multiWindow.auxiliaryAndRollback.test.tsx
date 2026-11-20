@@ -74,6 +74,24 @@ function createRollbackHistoryGitMocks(): Pick<WikiGitApi, 'log' | 'commitDetail
   }
 }
 
+async function openAndDirtyConfigDocument(
+  user: ReturnType<typeof userEvent.setup>,
+  container: HTMLElement,
+  emitMenuCommand: InMemoryWindowHandle['emitMenuCommand']
+): Promise<void> {
+  await openConfigFromSettings(user, container, emitMenuCommand)
+  await within(container).findByRole('tab', { name: /config\.json/ })
+  await waitFor(() => {
+    expect(getRawEditorText(within(container).getByTestId('document-editor'))).toContain(
+      '"autoSave"'
+    )
+  })
+  setRawEditorText(
+    within(container).getByTestId('document-editor'),
+    '{"autoSave":false,"theme":"dark"}'
+  )
+}
+
 describe('Auxiliary window shell, tab detach/merge, and close guards (<App />)', () => {
   it('renders stripped auxiliary editing shell, collapsed right sidebar, dynamic title, and preserves main watch ownership', async () => {
     const user = userEvent.setup()
@@ -1384,17 +1402,7 @@ describe('Multi-window Git discard rollback integration (<App />)', () => {
     })
     setRawEditorText(within(rendered.container).getByTestId('document-editor'), '# Dirty Other')
 
-    await openConfigFromSettings(user, rendered.container, mainWin.emitMenuCommand)
-    await within(rendered.container).findByRole('tab', { name: /config\.json/ })
-    await waitFor(() => {
-      expect(getRawEditorText(within(rendered.container).getByTestId('document-editor'))).toContain(
-        '"autoSave"'
-      )
-    })
-    setRawEditorText(
-      within(rendered.container).getByTestId('document-editor'),
-      '{"autoSave":false,"theme":"dark"}'
-    )
+    await openAndDirtyConfigDocument(user, rendered.container, mainWin.emitMenuCommand)
     await waitFor(() => {
       expect(within(rendered.container).getAllByTestId('tab-dirty-indicator')).toHaveLength(2)
     })
@@ -2004,17 +2012,7 @@ describe('Multi-window Git discard rollback integration (<App />)', () => {
       setRawEditorText(within(mainRendered.container).getByTestId('document-editor'), dirtyText)
     }
 
-    await openConfigFromSettings(user, mainRendered.container, mainWin.emitMenuCommand)
-    await within(mainRendered.container).findByRole('tab', { name: /config\.json/ })
-    await waitFor(() => {
-      expect(getRawEditorText(within(mainRendered.container).getByTestId('document-editor'))).toContain(
-        '"autoSave"'
-      )
-    })
-    setRawEditorText(
-      within(mainRendered.container).getByTestId('document-editor'),
-      '{"autoSave":false,"theme":"dark"}'
-    )
+    await openAndDirtyConfigDocument(user, mainRendered.container, mainWin.emitMenuCommand)
 
     await waitFor(() => {
       expect(harness.getAuxiliaryWindows()).toHaveLength(2)
@@ -2203,10 +2201,7 @@ describe('Multi-window workspaceState exclusion and close flush (<App />)', () =
     // Open two tabs and detach note.md into an auxiliary window -> aux window never touches workspaceState
     await user.click(within(explorer).getByText('note.md'))
     await user.click(within(explorer).getByText('extra.md'))
-    const noteTab = within(mainRendered.container).getByRole('tab', { name: /note\.md/ })
-    fireEvent.contextMenu(noteTab)
-    const tabMenu = await within(mainRendered.container).findByRole('menu')
-    await user.click(within(tabMenu).getByRole('menuitem', { name: '새 창으로 이동' }))
+    await detachTabViaContextMenu(user, mainRendered.container, /note\.md/)
 
     await waitFor(() => {
       expect(harness.getAuxiliaryWindows()).toHaveLength(1)
@@ -2308,13 +2303,7 @@ describe('Multi-window workspaceState exclusion and close flush (<App />)', () =
     await user.click(within(explorer).getByText('detached.md'))
 
     // Detach detached.md to auxiliary window, and set split + wysiwyg in auxiliary -> never persisted
-    const detachedTab = within(mainRendered.container).getByRole('tab', { name: /detached\.md/ })
-    fireEvent.contextMenu(detachedTab)
-    await user.click(
-      within(await within(mainRendered.container).findByRole('menu')).getByRole('menuitem', {
-        name: '새 창으로 이동'
-      })
-    )
+    await detachTabViaContextMenu(user, mainRendered.container, /detached\.md/)
     await waitFor(() => {
       expect(harness.getAuxiliaryWindows()).toHaveLength(1)
     })
