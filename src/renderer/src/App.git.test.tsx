@@ -1735,7 +1735,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
 
     render(<App />)
     await triggerMenuCommand(emitMenuCommand, 'open-folder')
-    await user.click(screen.getByRole('button', { name: 'Git' }))
+    await clickActivityBarButton(user, 'Git')
 
     const gitPanel = await screen.findByLabelText('Git 소스 제어')
 
@@ -1873,7 +1873,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('doc.md'))
     await screen.findByTestId('document-editor')
 
-    await user.click(screen.getByRole('button', { name: 'Git' }))
+    await clickActivityBarButton(user, 'Git')
     const gitPanel = await screen.findByLabelText('Git 소스 제어')
 
     // Open Staged diff for doc.md in primary pane -> move it to secondary pane
@@ -2090,7 +2090,7 @@ describe('Git Graph commit file diff integration', () => {
     await user.click(await within(screen.getByLabelText('워크스페이스 탐색기')).findByText('notes.md'))
     await screen.findByTestId('document-editor')
 
-    await user.click(screen.getByRole('button', { name: 'Git' }))
+    await clickActivityBarButton(user, 'Git')
 
     const gitPanel = await screen.findByLabelText('Git 소스 제어')
     const graphRegion = within(gitPanel).getByRole('region', { name: 'Graph' })

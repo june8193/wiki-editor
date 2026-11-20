@@ -23,6 +23,24 @@ import {
 
 vi.mock('mermaid', async () => (await import('./test/appTestHelpers')).createMermaidMockState().module)
 
+function createTreeDataTransfer() {
+  const store = new Map<string, string>()
+  return {
+    effectAllowed: 'none',
+    dropEffect: 'none',
+    get types() {
+      return [...store.keys()]
+    },
+    files: [] as unknown as FileList,
+    setData(type: string, value: string) {
+      store.set(type, value)
+    },
+    getData(type: string) {
+      return store.get(type) ?? ''
+    }
+  }
+}
+
 describe('Workspace folder tree, favorites, editing, and saving', () => {
   beforeEach(() => {
     document.documentElement.removeAttribute('data-theme')
@@ -880,36 +898,6 @@ describe('Folder tree multi-select and drag-and-drop move', () => {
     vi.useRealTimers()
   })
 
-  function createTreeDataTransfer() {
-    const store = new Map<string, string>()
-    let dropEffect = 'none'
-    let effectAllowed = 'none'
-    return {
-      get effectAllowed() {
-        return effectAllowed
-      },
-      set effectAllowed(val: string) {
-        effectAllowed = val
-      },
-      get dropEffect() {
-        return dropEffect
-      },
-      set dropEffect(val: string) {
-        dropEffect = val
-      },
-      get types() {
-        return [...store.keys()]
-      },
-      files: [] as unknown as FileList,
-      setData(type: string, value: string) {
-        store.set(type, value)
-      },
-      getData(type: string) {
-        return store.get(type) ?? ''
-      }
-    }
-  }
-
   it('supports Ctrl/Cmd+click toggle, Shift+click visible range selection, multi-select context menu, F2 guard, and batch Delete', async () => {
     const user = userEvent.setup()
     const { api, emitMenuCommand, copiedTexts, getFilesSnapshot } = createInMemoryWikiApi(
@@ -1488,23 +1476,6 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
 
   it('persists expandedDirs on expand, collapse, rename, drag-and-drop move, delete, immediate workspace switch, and app restart', async () => {
     const user = userEvent.setup()
-    const createDnDTransfer = () => {
-      const store = new Map<string, string>()
-      return {
-        effectAllowed: 'none',
-        dropEffect: 'none',
-        get types() {
-          return [...store.keys()]
-        },
-        files: [] as unknown as FileList,
-        setData(type: string, value: string) {
-          store.set(type, value)
-        },
-        getData(type: string) {
-          return store.get(type) ?? ''
-        }
-      }
-    }
 
     const { api } = createInMemoryWikiApi(
       {
@@ -1555,7 +1526,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
 
     // Move guides into archive via drag-and-drop and expand archive
     const archiveItem = within(explorer).getByRole('treeitem', { name: 'archive' })
-    const dtMove = createDnDTransfer()
+    const dtMove = createTreeDataTransfer()
     fireEvent.dragStart(guidesItem, { dataTransfer: dtMove })
     fireEvent.dragOver(archiveItem, { dataTransfer: dtMove })
     fireEvent.drop(archiveItem, { dataTransfer: dtMove })
@@ -1812,23 +1783,6 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
 
   it('persists and restores per-tab mode, cursor, scrollTop, splitPreviewRatio, image preview tabs, duplicated split tabs, and rename/move/delete path updates', async () => {
     const user = userEvent.setup()
-    const createDnDTransfer = () => {
-      const store = new Map<string, string>()
-      return {
-        effectAllowed: 'none',
-        dropEffect: 'none',
-        get types() {
-          return [...store.keys()]
-        },
-        files: [] as unknown as FileList,
-        setData(type: string, value: string) {
-          store.set(type, value)
-        },
-        getData(type: string) {
-          return store.get(type) ?? ''
-        }
-      }
-    }
 
     const { api } = createInMemoryWikiApi(
       {
@@ -1928,7 +1882,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
     // Move docs folder into archive via drag-and-drop -> docs/preview-doc.md updates to archive/docs/preview-doc.md
     const docsTreeItem = within(explorer).getByRole('treeitem', { name: 'docs' })
     const archiveTreeItem = within(explorer).getByRole('treeitem', { name: 'archive' })
-    const dtMove = createDnDTransfer()
+    const dtMove = createTreeDataTransfer()
     fireEvent.dragStart(docsTreeItem, { dataTransfer: dtMove })
     fireEvent.dragOver(archiveTreeItem, { dataTransfer: dtMove })
     fireEvent.drop(archiveTreeItem, { dataTransfer: dtMove })
