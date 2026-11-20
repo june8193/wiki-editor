@@ -41,7 +41,7 @@ export interface SearchSidebarPanelProps {
   onToggleOption: (optionKey: keyof SearchMatchOptions) => void
   onToggleFileCollapsed: (filePath: string) => void
   onOpenFile: (file: WorkspaceSearchFileResult) => void
-  onOpenLineMatch?: (file: WorkspaceSearchFileResult, line: WorkspaceSearchLineMatch) => void
+  onOpenLineMatch: (file: WorkspaceSearchFileResult, line: WorkspaceSearchLineMatch) => void
 }
 
 /**
@@ -198,9 +198,7 @@ export function SearchSidebarPanel({
                             <button
                               type="button"
                               className="search-line-btn"
-                              onClick={() =>
-                                onOpenLineMatch ? onOpenLineMatch(file, line) : onOpenFile(file)
-                              }
+                              onClick={() => onOpenLineMatch(file, line)}
                             >
                               <span className="search-line-number">{line.lineNumber}</span>
                               <span className="search-line-text">

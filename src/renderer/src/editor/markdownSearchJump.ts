@@ -33,7 +33,7 @@ export interface NestedBlockHint {
 export interface MarkdownJumpPlan {
   lineNumber: number
   targetBlock: MarkdownBlockRange | null
-  nestedItemIndex: NestedBlockHint | null
+  nestedBlockHint: NestedBlockHint | null
   renderedMatch: MarkdownJumpCandidateMatch | null
 }
 
@@ -676,24 +676,24 @@ export function analyzeMarkdownSearchJump(
   const targetBlock = closestBlock
     ? { startLine: closestBlock.startLine, endLine: closestBlock.endLine }
     : null
-  const nestedItemIndex = containingBlock
+  const nestedBlockHint = containingBlock
     ? resolveNestedBlockHint(containingBlock.node, lineNumber)
     : null
 
   if (!containingBlock || jump.query.length === 0) {
-    return { lineNumber, targetBlock, nestedItemIndex, renderedMatch: null }
+    return { lineNumber, targetBlock, nestedBlockHint, renderedMatch: null }
   }
 
   const compiled = compileSearchMatcher(jump.query, jump.options)
   if (!compiled.ok) {
-    return { lineNumber, targetBlock, nestedItemIndex, renderedMatch: null }
+    return { lineNumber, targetBlock, nestedBlockHint, renderedMatch: null }
   }
 
   if (containingBlock.node.type === 'code') {
     return {
       lineNumber,
       targetBlock,
-      nestedItemIndex: null,
+      nestedBlockHint: null,
       renderedMatch: resolveCodeBlockJumpMatch(
         content,
         lines,
@@ -710,13 +710,13 @@ export function analyzeMarkdownSearchJump(
     containingBlock.node.type === 'thematicBreak' ||
     (containingBlock.node as RootContent | Definition).type === 'definition'
   ) {
-    return { lineNumber, targetBlock, nestedItemIndex: null, renderedMatch: null }
+    return { lineNumber, targetBlock, nestedBlockHint: null, renderedMatch: null }
   }
 
   return {
     lineNumber,
     targetBlock,
-    nestedItemIndex,
+    nestedBlockHint,
     renderedMatch: resolveInlineBlockMatch(
       content,
       containingBlock.node,

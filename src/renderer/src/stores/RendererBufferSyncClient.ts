@@ -348,19 +348,24 @@ export class RendererBufferSyncClient {
     this.bufferStore.replaceSnapshot(merged)
   }
 
-  syncWindowTabs = (keys: string[]): void => {
-    if (areStringArraysEqual(this.lastSyncedTabKeys, keys)) {
-      return
-    }
-    this.lastSyncedTabKeys = [...keys]
+  private dispatchWindowTabSync(keys: readonly string[], releasePending = false): void {
+    const nextKeys = [...keys]
+    this.lastSyncedTabKeys = nextKeys
     void this.bufferApi
-      .syncWindowTabs(keys)
+      .syncWindowTabs(nextKeys, releasePending ? { releasePending: true } : undefined)
       .then((snapshot) => {
         if (this.mounted) {
           this.applyHubSnapshot(snapshot)
         }
       })
       .catch(() => undefined)
+  }
+
+  syncWindowTabs = (keys: string[]): void => {
+    if (areStringArraysEqual(this.lastSyncedTabKeys, keys)) {
+      return
+    }
+    this.dispatchWindowTabSync(keys)
   }
 
   private syncCurrentLayoutTabs(): void {
@@ -453,16 +458,7 @@ export class RendererBufferSyncClient {
       this.activeRemoteOpens.delete(closedDuringOpen)
       if (this.mounted && this.activeRemoteOpens.size === 0 && this.needsPendingOpenRelease) {
         this.needsPendingOpenRelease = false
-        const keys = this.tabStore.getBufferKeys()
-        this.lastSyncedTabKeys = [...keys]
-        void this.bufferApi
-          .syncWindowTabs(keys, { releasePending: true })
-          .then((snapshot) => {
-            if (this.mounted) {
-              this.applyHubSnapshot(snapshot)
-            }
-          })
-          .catch(() => undefined)
+        this.dispatchWindowTabSync(this.tabStore.getBufferKeys(), true)
       }
     }
   }

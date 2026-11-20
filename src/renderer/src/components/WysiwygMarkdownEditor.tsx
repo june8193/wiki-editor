@@ -282,6 +282,8 @@ export function WysiwygMarkdownEditor({
   onFindResultChangeRef.current = onFindResultChange
   const lastScrolledFindNonceRef = useRef(findHighlight?.scrollNonce ?? 0)
   const lastHandledJumpNonceRef = useRef(0)
+  const jumpHighlightRef = useRef(jumpHighlight)
+  jumpHighlightRef.current = jumpHighlight
   const lastReportedFindRef = useRef<DocumentFindResultReport | null>(null)
   const enableLinkAutocompleteRef = useRef(enableLinkAutocomplete)
   enableLinkAutocompleteRef.current = enableLinkAutocomplete
@@ -477,13 +479,34 @@ export function WysiwygMarkdownEditor({
       dismissLinkMenu()
     }
   }, [dismissLinkMenu, enableLinkAutocomplete])
+  const applyJumpHighlight = useCallback(
+    (targetJump: DocumentJumpHighlightTarget | null): void => {
+      if (!editor || editor.isDestroyed) {
+        return
+      }
+      if (!targetJump) {
+        lastHandledJumpNonceRef.current = 0
+        syncWysiwygSearchJump(editor, content, null)
+        return
+      }
+      syncWysiwygSearchJump(editor, content, targetJump)
+      if (lastHandledJumpNonceRef.current !== targetJump.nonce) {
+        lastHandledJumpNonceRef.current = targetJump.nonce
+        scrollWysiwygSearchJump(editor, scrollContainerRef.current)
+      }
+    },
+    [content, editor]
+  )
+
   useEffect(() => {
     if (!editor) return
     if (content === lastSyncedContentPropRef.current) return
     lastSyncedContentPropRef.current = content
-    if (content === lastEmittedMarkdownRef.current) return
-    syncEditorContent(content)
-  }, [content, editor, syncEditorContent])
+    if (content !== lastEmittedMarkdownRef.current) {
+      syncEditorContent(content)
+    }
+    applyJumpHighlight(jumpHighlightRef.current)
+  }, [applyJumpHighlight, content, editor, syncEditorContent])
 
   useContainerOutlineSpy({
     containerRef: scrollContainerRef,
@@ -545,21 +568,12 @@ export function WysiwygMarkdownEditor({
     })
   }, [editor, findHighlight, wysiwygSearchSnapshot])
 
-  useEffect(() => {
-    if (!editor || editor.isDestroyed) {
+  useLayoutEffect(() => {
+    if (content !== lastSyncedContentPropRef.current && content !== lastEmittedMarkdownRef.current) {
       return
     }
-    if (!jumpHighlight) {
-      lastHandledJumpNonceRef.current = 0
-      syncWysiwygSearchJump(editor, content, null)
-      return
-    }
-    syncWysiwygSearchJump(editor, content, jumpHighlight)
-    if (lastHandledJumpNonceRef.current !== jumpHighlight.nonce) {
-      lastHandledJumpNonceRef.current = jumpHighlight.nonce
-      scrollWysiwygSearchJump(editor, scrollContainerRef.current)
-    }
-  }, [content, editor, jumpHighlight])
+    applyJumpHighlight(jumpHighlight)
+  }, [applyJumpHighlight, content, jumpHighlight])
 
   const toolbarState = useEditorState({
     editor,

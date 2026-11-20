@@ -56,6 +56,32 @@ function createJumpRequest(
   }
 }
 
+function createLineTokenJumpRequest(
+  mdLines: readonly string[],
+  lineNumber: number,
+  token: string,
+  nonce: number,
+  occurrence = 0
+): DocumentSearchJumpRequest {
+  const lineText = mdLines[lineNumber - 1]
+  let from = 0
+  for (let i = 0; i <= occurrence; i++) {
+    const idx = lineText.indexOf(token, from)
+    if (idx === -1) throw new Error(`Missing ${token} on line ${lineNumber}`)
+    if (i === occurrence) {
+      return createJumpRequest({
+        query: token,
+        lineNumber,
+        columnStart: idx,
+        columnEnd: idx + token.length,
+        nonce
+      })
+    }
+    from = idx + token.length
+  }
+  throw new Error(`Missing ${token} occurrence ${occurrence} on line ${lineNumber}`)
+}
+
 describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
   it('moves cursor/selection, applies temporary jump highlight distinct from Find Bar, scrolls in Raw mode, handles CRLF/zero-length spans, and clears on edit, mode switch, tab switch, or new jump', async () => {
     const user = userEvent.setup()
@@ -371,23 +397,8 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
       const { container, rerender } = render(renderPreview())
       const preview = screen.getByLabelText('마크다운 미리보기')
 
-      const jumpToToken = (lineNumber: number, token: string, occurrence = 0, nonce: number) => {
-        const lineText = mdLines[lineNumber - 1]
-        let from = 0
-        for (let i = 0; i <= occurrence; i++) {
-          const idx = lineText.indexOf(token, from)
-          if (idx === -1) throw new Error(`Missing ${token} on line ${lineNumber}`)
-          if (i === occurrence) {
-            currentJump = createJumpRequest({
-              query: token,
-              lineNumber,
-              columnStart: idx,
-              columnEnd: idx + token.length,
-              nonce
-            })
-          }
-          from = idx + token.length
-        }
+      const jumpToToken = (lineNumber: number, token: string, occurrence = 0, nonce = 1) => {
+        currentJump = createLineTokenJumpRequest(mdLines, lineNumber, token, nonce, occurrence)
         scrollIntoViewSpy.mockClear()
         rerender(renderPreview())
       }
@@ -537,15 +548,7 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
       const preview = screen.getByLabelText('마크다운 미리보기')
 
       const jumpToToken = (lineNumber: number, token: string, nonce: number) => {
-        const idx = mdLines[lineNumber - 1].indexOf(token)
-        if (idx === -1) throw new Error(`Missing ${token} on line ${lineNumber}`)
-        currentJump = createJumpRequest({
-          query: token,
-          lineNumber,
-          columnStart: idx,
-          columnEnd: idx + token.length,
-          nonce
-        })
+        currentJump = createLineTokenJumpRequest(mdLines, lineNumber, token, nonce)
         scrollIntoViewSpy.mockClear()
         rerender(renderPreview())
       }
@@ -640,23 +643,8 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
       const { rerender } = render(renderWysiwyg())
       const wysiwygSurface = screen.getByLabelText('위지윅 문서 에디터')
 
-      const jumpToToken = (lineNumber: number, token: string, occurrence = 0, nonce: number) => {
-        const lineText = mdLines[lineNumber - 1]
-        let from = 0
-        for (let i = 0; i <= occurrence; i++) {
-          const idx = lineText.indexOf(token, from)
-          if (idx === -1) throw new Error(`Missing ${token} on line ${lineNumber}`)
-          if (i === occurrence) {
-            currentJump = createJumpRequest({
-              query: token,
-              lineNumber,
-              columnStart: idx,
-              columnEnd: idx + token.length,
-              nonce
-            })
-          }
-          from = idx + token.length
-        }
+      const jumpToToken = (lineNumber: number, token: string, occurrence = 0, nonce = 1) => {
+        currentJump = createLineTokenJumpRequest(mdLines, lineNumber, token, nonce, occurrence)
         scrollIntoViewSpy.mockClear()
         rerender(renderWysiwyg())
       }
@@ -848,15 +836,7 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
       const wysiwygSurface = screen.getByLabelText('위지윅 문서 에디터')
 
       const jumpToToken = (lineNumber: number, token: string, nonce: number) => {
-        const idx = mdLines[lineNumber - 1].indexOf(token)
-        if (idx === -1) throw new Error(`Missing ${token} on line ${lineNumber}`)
-        currentJump = createJumpRequest({
-          query: token,
-          lineNumber,
-          columnStart: idx,
-          columnEnd: idx + token.length,
-          nonce
-        })
+        currentJump = createLineTokenJumpRequest(mdLines, lineNumber, token, nonce)
         scrollIntoViewSpy.mockClear()
         rerender(renderWysiwyg())
       }

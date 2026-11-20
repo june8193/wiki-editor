@@ -128,15 +128,22 @@ function resolveSegmentPmPosition(
   return last.pmFrom + last.text.length
 }
 
+function resolveSegmentPmRange(
+  segments: readonly PmTextRunSegment[],
+  span: { start: number; end: number }
+): ProseMirrorSearchMatch {
+  const from = resolveSegmentPmPosition(segments, span.start)
+  const to = resolveSegmentPmPosition(segments, span.end)
+  return { from, to: Math.max(from, to) }
+}
+
 function flushTextRun(
   segments: PmTextRunSegment[],
   matcher: CompiledSearchMatcher,
   matches: ProseMirrorSearchMatch[]
 ): void {
   consumeMatchedTextRun(segments, matcher, (span, runSegments) => {
-    const from = resolveSegmentPmPosition(runSegments, span.start)
-    const to = resolveSegmentPmPosition(runSegments, span.end)
-    matches.push({ from, to: Math.max(from, to) })
+    matches.push(resolveSegmentPmRange(runSegments, span))
   })
 }
 
@@ -330,7 +337,7 @@ function computeJumpPluginState(
   const candidateBlocks = alignedBlocks.filter(
     (block) => block.startLine === targetBlock.startLine && block.endLine === targetBlock.endLine
   )
-  const fallbackBlockPos = resolveWysiwygFallbackPos(candidateBlocks, plan.nestedItemIndex)
+  const fallbackBlockPos = resolveWysiwygFallbackPos(candidateBlocks, plan.nestedBlockHint)
   const compiled = compileSearchMatcher(jump.query, jump.options)
   if (!plan.renderedMatch || targetBlock.isMermaid || !compiled.ok) {
     return {
@@ -357,9 +364,7 @@ function computeJumpPluginState(
         runText.slice(plan.renderedMatch.codeSpan.start, plan.renderedMatch.codeSpan.end) ===
           plan.renderedMatch.matchedText
       ) {
-        const from = resolveSegmentPmPosition(segments, plan.renderedMatch.codeSpan.start)
-        const to = Math.max(from, resolveSegmentPmPosition(segments, plan.renderedMatch.codeSpan.end))
-        exactCodeRange = { from, to }
+        exactCodeRange = resolveSegmentPmRange(segments, plan.renderedMatch.codeSpan)
         return
       }
       runs.push({ text: runText, segments })
@@ -371,11 +376,7 @@ function computeJumpPluginState(
     selectBestJumpMatchFromRuns(
       runs,
       (run) => run.text,
-      (run, span) => {
-        const from = resolveSegmentPmPosition(run.segments, span.start)
-        const to = Math.max(from, resolveSegmentPmPosition(run.segments, span.end))
-        return { from, to }
-      },
+      (run, span) => resolveSegmentPmRange(run.segments, span),
       compiled.matcher,
       jump,
       plan.renderedMatch

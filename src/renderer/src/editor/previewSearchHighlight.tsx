@@ -628,7 +628,7 @@ function applyPreviewSearchPlan(
   activeMatchIndex: number,
   classify: PreviewElementClassifier
 ): ReactNode {
-  if (plan.matchCount === 0) {
+  if (plan.textPatches.size === 0 && plan.codePatches.size === 0) {
     return baseTree
   }
 
@@ -899,7 +899,7 @@ export function findClosestPreviewBlockForLine(
   }
 
   if (jumpHighlight && lineNumber >= best.startLine && lineNumber <= best.endLine) {
-    const hint: NestedBlockHint | null = analyzeMarkdownSearchJump(markdown, jumpHighlight).nestedItemIndex
+    const hint: NestedBlockHint | null = analyzeMarkdownSearchJump(markdown, jumpHighlight).nestedBlockHint
     if (hint?.kind === 'list-item') {
       const listItem = best.el.querySelectorAll(':scope > li')[hint.index]
       if (listItem) return listItem
@@ -961,7 +961,7 @@ export function highlightPreviewTree(
   return applyPreviewSearchPlan(
     target.baseTree,
     {
-      matchCount: mergedTextPatches.size + mergedCodePatches.size,
+      matchCount: findPlan.matchCount,
       errorMessage: null,
       textPatches: mergedTextPatches,
       codePatches: mergedCodePatches

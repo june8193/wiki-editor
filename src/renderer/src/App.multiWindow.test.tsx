@@ -4581,10 +4581,10 @@ describe('Multi-main-window workspace opening (<App />)', () => {
       const alphaSearchInput = within(alphaSearchView).getByRole('textbox', { name: '검색어 입력' })
 
       // 1. Jump to alpha-second.md -> preserves Preview mode, highlights without opening Find Bar
-      await user.type(alphaSearchInput, 'AlphaSecondToken')
+      fireEvent.change(alphaSearchInput, { target: { value: 'AlphaSecondToken' } })
       fireEvent.keyDown(alphaSearchInput, { key: 'Enter' })
       scrollIntoViewSpy.mockClear()
-      await user.click(
+      fireEvent.click(
         await within(alphaSearchView).findByRole('button', { name: /AlphaSecondToken/ })
       )
 
@@ -4609,10 +4609,9 @@ describe('Multi-main-window workspace opening (<App />)', () => {
       expect(renderedBeta.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
 
       // 2. Jump to unsaved edit from Auxiliary Window buffer -> opens alpha-doc.md in mainAlpha, jumps accurately without touching auxRendered or mainBeta
-      await user.clear(alphaSearchInput)
-      await user.type(alphaSearchInput, 'AuxUnsavedJumpToken')
+      fireEvent.change(alphaSearchInput, { target: { value: 'AuxUnsavedJumpToken' } })
       fireEvent.keyDown(alphaSearchInput, { key: 'Enter' })
-      await user.click(
+      fireEvent.click(
         await within(alphaSearchView).findByRole('button', { name: /AuxUnsavedJumpToken/ })
       )
 
