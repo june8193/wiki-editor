@@ -755,5 +755,6 @@ describe('App frontmatter properties & right sidebar 2-tier accordion integratio
     })
     expect(screen.getByRole('dialog', { name: '프론트매터 스키마 관리' })).toBeInTheDocument()
     expect(within(modal).getByDisplayValue('draft_key')).toBeInTheDocument()
+    expect(document.querySelector('.error-banner')).not.toBeInTheDocument()
   })
 })

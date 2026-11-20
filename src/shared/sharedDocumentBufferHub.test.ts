@@ -381,4 +381,42 @@ describe('SharedDocumentBufferHub race guards', () => {
       hub.dispose()
     }
   })
+
+  it('ignores a slower refreshCleanWorkspaceFile read after a newer clean version has already settled', async () => {
+    const filePath = 'C:/wiki/.wiki-editor/frontmatter.json'
+    const firstRead = createDeferred<string>()
+    const secondRead = createDeferred<string>()
+    let readIndex = 0
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async () => {
+          readIndex += 1
+          return readIndex === 1 ? firstRead.promise : secondRead.promise
+        },
+        writeWorkspaceFile: async () => undefined,
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+
+    try {
+      const opened = await hub.openWorkspaceFile(filePath, 'frontmatter.json', 'initial', 1)
+      hub.syncWindowTabs(1, [opened.key])
+
+      const slowRefresh = hub.refreshCleanWorkspaceFile(filePath)
+      const fastRefresh = hub.refreshCleanWorkspaceFile(filePath)
+
+      secondRead.resolve('newer')
+      await fastRefresh
+      expect(hub.getBuffer(opened.key)?.content).toBe('newer')
+
+      firstRead.resolve('stale')
+      await slowRefresh
+      expect(hub.getBuffer(opened.key)?.content).toBe('newer')
+    } finally {
+      hub.dispose()
+    }
+  })
 })

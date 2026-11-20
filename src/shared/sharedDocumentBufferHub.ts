@@ -373,7 +373,7 @@ export class SharedDocumentBufferHub {
     readRaw: (buffer: DocumentBuffer) => Promise<string>
   ): Promise<DocumentBuffer | null> {
     const existing = getBuffer()
-    if (!existing || existing.isDirty) {
+    if (!existing || existing.isDirty || existing.isSaving || this.inFlightSaves.has(existing.key)) {
       return existing ? { ...existing } : null
     }
 
@@ -382,7 +382,14 @@ export class SharedDocumentBufferHub {
       return null
     }
     const latest = getBuffer()
-    if (!latest || latest.isDirty || latest.key !== existing.key) {
+    if (
+      !latest ||
+      latest.isDirty ||
+      latest.key !== existing.key ||
+      latest.version !== existing.version ||
+      latest.isSaving ||
+      this.inFlightSaves.has(latest.key)
+    ) {
       return latest ? { ...latest } : null
     }
 

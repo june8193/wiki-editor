@@ -358,6 +358,7 @@ export function EditorWindowFrame({
             const opened = await openSchemaRawJsonFile()
             if (startedRoot !== workspaceRootRef.current) return
             if (!opened) {
+              reportErrorBanner(null)
               throw new Error('스키마 JSON 파일을 열지 못했습니다.')
             }
             onCloseSchemaModal()

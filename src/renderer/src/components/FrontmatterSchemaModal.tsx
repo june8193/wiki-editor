@@ -371,13 +371,11 @@ export function FrontmatterSchemaModal({
   )
   const isDraftDirtyRef = useRef(false)
   const [hasAttemptedSave, setHasAttemptedSave] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const [isOpeningRawJson, setIsOpeningRawJson] = useState(false)
+  const [isBusy, setIsBusy] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const isMountedRef = useRef(true)
   const inFlightActionRef = useRef(false)
-  const isBusy = isSaving || isOpeningRawJson
 
   useEffect(() => {
     isMountedRef.current = true
@@ -416,6 +414,27 @@ export function FrontmatterSchemaModal({
     setHasAttemptedSave(false)
   }
 
+  const runLockedAction = async (
+    action: () => Promise<void> | void,
+    fallbackMessage: string
+  ): Promise<void> => {
+    if (inFlightActionRef.current) return
+    inFlightActionRef.current = true
+    setIsBusy(true)
+    setSaveError(null)
+    try {
+      await action()
+    } catch (error: unknown) {
+      if (!isMountedRef.current) return
+      setSaveError(toErrorMessage(error, fallbackMessage))
+    } finally {
+      inFlightActionRef.current = false
+      if (isMountedRef.current) {
+        setIsBusy(false)
+      }
+    }
+  }
+
   const handleSave = async (): Promise<void> => {
     if (inFlightActionRef.current) return
     setHasAttemptedSave(true)
@@ -424,39 +443,16 @@ export function FrontmatterSchemaModal({
       return
     }
 
-    inFlightActionRef.current = true
-    setIsSaving(true)
-    try {
+    await runLockedAction(async () => {
       await onSaveSchema(validation.schema)
       if (!isMountedRef.current) return
       isDraftDirtyRef.current = false
-      setIsSaving(false)
       onClose()
-    } catch (error: unknown) {
-      if (!isMountedRef.current) return
-      setIsSaving(false)
-      setSaveError(toErrorMessage(error, '프론트매터 스키마를 저장하지 못했습니다.'))
-    } finally {
-      inFlightActionRef.current = false
-    }
+    }, '프론트매터 스키마를 저장하지 못했습니다.')
   }
 
   const handleOpenRawJson = async (): Promise<void> => {
-    if (inFlightActionRef.current) return
-    inFlightActionRef.current = true
-    setIsOpeningRawJson(true)
-    setSaveError(null)
-    try {
-      await onOpenRawJson()
-    } catch (error: unknown) {
-      if (!isMountedRef.current) return
-      setSaveError(toErrorMessage(error, '스키마 JSON 파일을 열지 못했습니다.'))
-    } finally {
-      inFlightActionRef.current = false
-      if (isMountedRef.current) {
-        setIsOpeningRawJson(false)
-      }
-    }
+    await runLockedAction(() => onOpenRawJson(), '스키마 JSON 파일을 열지 못했습니다.')
   }
 
   const templateBanner = !schemaResult?.exists
