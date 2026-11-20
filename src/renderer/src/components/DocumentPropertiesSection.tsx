@@ -1,5 +1,5 @@
 import { memo, useId, useState, type KeyboardEvent } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, Settings } from 'lucide-react'
 import {
   applyFrontmatterValues,
   isValidIsoCalendarDate,
@@ -20,11 +20,14 @@ export interface DocumentPropertiesSectionProps {
   document: SidebarDocumentContext
   schemaResult: FrontmatterSchemaLoadResult | null
   isSchemaLoading?: boolean
+  canManageSchema?: boolean
   isExpanded?: boolean
   flexRatio?: number | null
   onToggleExpanded: () => void
   onChangeContent: (nextContent: string) => void
   onCreateDefaultSchema: () => void
+  onOpenSchemaModal?: () => void
+  onOpenSchemaRawJson?: () => void
 }
 
 function isFieldValueFilled(value: FrontmatterFieldValue | undefined): boolean {
@@ -390,8 +393,11 @@ interface DocumentPropertiesFormProps {
   parsed: ParsedFrontmatterDocument
   schemaResult: FrontmatterSchemaLoadResult | null
   isSchemaLoading: boolean
+  canManageSchema: boolean
   hasYamlSyntaxError: boolean
   onCreateDefaultSchema: () => void
+  onOpenSchemaModal?: () => void
+  onOpenSchemaRawJson?: () => void
   onAddFrontmatter: () => void
   onRemoveFrontmatter: () => void
   onUpdateField: (key: string, nextValue: FrontmatterFieldValue | null) => void
@@ -402,8 +408,11 @@ function DocumentPropertiesForm({
   parsed,
   schemaResult,
   isSchemaLoading,
+  canManageSchema,
   hasYamlSyntaxError,
   onCreateDefaultSchema,
+  onOpenSchemaModal,
+  onOpenSchemaRawJson,
   onAddFrontmatter,
   onRemoveFrontmatter,
   onUpdateField
@@ -421,13 +430,25 @@ function DocumentPropertiesForm({
           <p className="properties-notice-text">
             워크스페이스 프론트매터 스키마(.wiki-editor/frontmatter.json)가 없습니다.
           </p>
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            onClick={onCreateDefaultSchema}
-          >
-            스키마 생성
-          </button>
+          <div className="properties-notice-actions">
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={onCreateDefaultSchema}
+            >
+              스키마 생성
+            </button>
+            {onOpenSchemaModal && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={!canManageSchema}
+                onClick={onOpenSchemaModal}
+              >
+                스키마 관리
+              </button>
+            )}
+          </div>
         </div>
       )
     }
@@ -436,6 +457,30 @@ function DocumentPropertiesForm({
         <div className="properties-warning-card">
           <p className="properties-warning-title">스키마 오류</p>
           <p className="properties-warning-text">{schemaResult.error}</p>
+          {(onOpenSchemaModal || onOpenSchemaRawJson) && (
+            <div className="properties-notice-actions">
+              {onOpenSchemaModal && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={!canManageSchema}
+                  onClick={onOpenSchemaModal}
+                >
+                  스키마 관리
+                </button>
+              )}
+              {onOpenSchemaRawJson && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={!canManageSchema}
+                  onClick={onOpenSchemaRawJson}
+                >
+                  JSON 파일로 열기
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )
     }
@@ -547,11 +592,14 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
   document,
   schemaResult,
   isSchemaLoading = false,
+  canManageSchema = true,
   isExpanded = true,
   flexRatio = null,
   onToggleExpanded,
   onChangeContent,
-  onCreateDefaultSchema
+  onCreateDefaultSchema,
+  onOpenSchemaModal,
+  onOpenSchemaRawJson
 }: DocumentPropertiesSectionProps) {
   const { documentName, documentKey, content, isMarkdownDocument } = document
   const idPrefix = useId()
@@ -614,6 +662,24 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
       </span>
     ) : undefined
 
+  const headerActions = onOpenSchemaModal ? (
+    <div className="properties-header-actions">
+      <button
+        type="button"
+        className="icon-btn properties-manage-btn"
+        aria-label="스키마 관리"
+        title={canManageSchema ? '스키마 관리' : '워크스페이스를 먼저 열어주세요.'}
+        disabled={!canManageSchema}
+        onClick={(event) => {
+          event.stopPropagation()
+          onOpenSchemaModal()
+        }}
+      >
+        <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+    </div>
+  ) : undefined
+
   const renderBody = () => {
     if (!hasActiveDocument) {
       return <p className="properties-empty-text">열린 문서가 없습니다.</p>
@@ -629,8 +695,11 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
         parsed={parsed}
         schemaResult={schemaResult}
         isSchemaLoading={isSchemaLoading}
+        canManageSchema={canManageSchema}
         hasYamlSyntaxError={hasYamlSyntaxError}
         onCreateDefaultSchema={onCreateDefaultSchema}
+        onOpenSchemaModal={onOpenSchemaModal}
+        onOpenSchemaRawJson={onOpenSchemaRawJson}
         onAddFrontmatter={handleAddFrontmatter}
         onRemoveFrontmatter={handleRemoveFrontmatter}
         onUpdateField={handleUpdateField}
@@ -643,6 +712,7 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
       title="문서 속성"
       ariaLabel="문서 속성"
       badge={headerBadges}
+      headerActions={headerActions}
       isExpanded={isExpanded}
       flexRatio={flexRatio}
       onToggle={onToggleExpanded}

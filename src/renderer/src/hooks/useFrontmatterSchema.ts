@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toErrorMessage } from '@shared/errors'
-import type { FrontmatterSchemaLoadResult } from '@shared/frontmatter'
+import type {
+  FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterSchema
+} from '@shared/frontmatter'
 import { useWikiApi } from './useWikiApi'
 
 export interface UseFrontmatterSchemaOptions {
@@ -9,7 +12,7 @@ export interface UseFrontmatterSchemaOptions {
 }
 
 /**
- * Loads, subscribes to session-scoped broadcasts for, and initializes
+ * Loads, subscribes to session-scoped broadcasts for, and initializes/saves
  * `.wiki-editor/frontmatter.json` across both main and auxiliary windows.
  */
 export function useFrontmatterSchema({
@@ -25,6 +28,8 @@ export function useFrontmatterSchema({
 
   const isMountedRef = useRef(true)
   const loadSeqRef = useRef(0)
+  const schemaResultRef = useRef(schemaResult)
+  schemaResultRef.current = schemaResult
   const workspaceRootRef = useRef(workspaceRootPath)
   workspaceRootRef.current = workspaceRootPath
   const onErrorRef = useRef(onError)
@@ -104,9 +109,59 @@ export function useFrontmatterSchema({
     )
   }, [commitSchemaResult, frontmatterApi, isAuxiliary])
 
+  const saveSchema = useCallback(
+    async (nextSchema: WorkspaceFrontmatterSchema): Promise<FrontmatterSchemaLoadResult> => {
+      if (!frontmatterApi) {
+        throw new Error('프론트매터 스키마 API를 사용할 수 없습니다.')
+      }
+      const capturedRoot = workspaceRootRef.current
+      if (!isAuxiliary && !capturedRoot) {
+        throw new Error('열린 워크스페이스가 없습니다.')
+      }
+      const saved = await frontmatterApi.saveSchema(nextSchema)
+      if (isMountedRef.current && (isAuxiliary || workspaceRootRef.current === capturedRoot)) {
+        commitSchemaResult(saved)
+      }
+      return saved
+    },
+    [commitSchemaResult, frontmatterApi, isAuxiliary]
+  )
+
+  const ensureSchemaFilePath = useCallback(async (): Promise<string | null> => {
+    if (!frontmatterApi) return null
+    const capturedRoot = workspaceRootRef.current
+    if (!isAuxiliary && !capturedRoot) return null
+
+    const current = schemaResultRef.current
+    if (current?.exists && current.path) {
+      return current.path
+    }
+
+    onErrorRef.current(null)
+    try {
+      const result = current?.exists
+        ? await frontmatterApi.getSchema()
+        : await frontmatterApi.createDefaultSchema()
+      if (!isMountedRef.current) return null
+      if (!isAuxiliary && workspaceRootRef.current !== capturedRoot) return null
+      commitSchemaResult(result)
+      return result.exists && result.path ? result.path : null
+    } catch (error: unknown) {
+      if (isMountedRef.current && (isAuxiliary || workspaceRootRef.current === capturedRoot)) {
+        onErrorRef.current(
+          toErrorMessage(error, '프론트매터 스키마 파일을 준비하지 못했습니다.'),
+          error
+        )
+      }
+      return null
+    }
+  }, [commitSchemaResult, frontmatterApi, isAuxiliary])
+
   return {
     schemaResult,
     isSchemaLoading,
-    createDefaultSchema
+    createDefaultSchema,
+    saveSchema,
+    ensureSchemaFilePath
   }
 }

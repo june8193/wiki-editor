@@ -2809,4 +2809,73 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       )
     ).rejects.toThrow(/워크스페이스/)
   })
+
+  it('refreshes open clean frontmatter.json buffer on saveSchema and broadcasts error without corrupting markdown buffers on invalid Raw JSON save', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+
+    await ipc.invokeFrom<FrontmatterSchemaLoadResult>(
+      main1.webContents,
+      FRONTMATTER_IPC_CHANNELS.createDefaultSchema
+    )
+
+    const schemaPath = join(wsAlpha, '.wiki-editor', 'frontmatter.json')
+    const schemaBuf = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      schemaPath,
+      'frontmatter.json'
+    )) as DocumentBuffer
+    const mdBuf = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, 'a.md'),
+      'a.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      schemaBuf.key,
+      mdBuf.key
+    ])
+
+    // Saving via GUI modal IPC (saveSchema) updates open clean frontmatter.json buffer
+    const nextSchema: WorkspaceFrontmatterSchema = {
+      version: 1,
+      fields: [{ key: 'reviewer', label: '리뷰어', type: 'text', required: true }]
+    }
+    await ipc.invokeFrom(main1.webContents, FRONTMATTER_IPC_CHANNELS.saveSchema, nextSchema)
+
+    await vi.waitFor(async () => {
+      const snapshot = (await ipc.invokeFrom(
+        main1.webContents,
+        BUFFER_IPC_CHANNELS.getSnapshot
+      )) as { buffers: Record<string, DocumentBuffer> }
+      expect(snapshot.buffers[schemaBuf.key]?.content).toContain('"reviewer"')
+      expect(snapshot.buffers[schemaBuf.key]?.isDirty).toBe(false)
+    })
+
+    // Saving invalid JSON via frontmatter.json buffer broadcasts schema error while preserving a.md buffer
+    await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      schemaBuf.key,
+      '{ broken json'
+    )
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.saveBuffer, schemaBuf.key)
+
+    await vi.waitFor(() => {
+      const schemaEvents = main1.sentMessages.filter(
+        (m) => m.channel === FRONTMATTER_IPC_CHANNELS.schemaChanged
+      )
+      const latest = schemaEvents.at(-1)?.payload as FrontmatterSchemaLoadResult | undefined
+      expect(latest?.exists).toBe(true)
+      expect(latest?.schema).toBeNull()
+      expect(latest?.error).toBeTruthy()
+    })
+
+    const finalSnapshot = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.getSnapshot
+    )) as { buffers: Record<string, DocumentBuffer> }
+    expect(finalSnapshot.buffers[mdBuf.key]?.content).toBe(mdBuf.content)
+  })
 })

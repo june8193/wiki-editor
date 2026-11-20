@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createEmptyGitStatus } from '@shared/git'
@@ -402,5 +402,292 @@ describe('App frontmatter properties & right sidebar 2-tier accordion integratio
     const gitPanel = await screen.findByRole('region', { name: 'Git 소스 제어' })
     await user.click(await within(gitPanel).findByText('warn.md'))
     expect(within(properties).getByText('마크다운 문서에서만 문서 속성을 지원합니다.')).toBeInTheDocument()
+  })
+
+  it('opens and closes 스키마 관리 모달 from ⚙ header button and missing-schema notice, and suppresses editor and global shortcuts while open', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, getFilesSnapshot, dispose } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\modal-shell',
+        workspaces: {
+          'C:\\wiki\\modal-shell': {
+            'guide.md': '# Guide\n\nBody'
+          }
+        }
+      }
+    )
+    disposers.push(dispose)
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('guide.md'))
+
+    const editor = await screen.findByTestId('document-editor')
+    setRawEditorText(editor, '# Guide\n\nBody edited')
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+
+    // 1. Open from missing-schema notice card and close with 닫기 button
+    const properties = screen.getByRole('region', { name: '문서 속성' })
+    const noticeManageBtn = within(properties).getAllByRole('button', { name: '스키마 관리' })[1]
+    await user.click(noticeManageBtn)
+
+    const modal1 = screen.getByRole('dialog', { name: '프론트매터 스키마 관리' })
+    expect(modal1).toHaveAttribute('aria-modal', 'true')
+    await user.click(within(modal1).getByRole('button', { name: '닫기' }))
+    expect(screen.queryByRole('dialog', { name: '프론트매터 스키마 관리' })).not.toBeInTheDocument()
+
+    // 2. Open from ⚙ header button without collapsing the accordion
+    const headerManageBtn = within(properties).getAllByRole('button', { name: '스키마 관리' })[0]
+    await user.click(headerManageBtn)
+    const modal2 = screen.getByRole('dialog', { name: '프론트매터 스키마 관리' })
+    expect(within(properties).getByRole('button', { name: '스키마 생성' })).toBeInTheDocument()
+
+    // 3. Editor & global shortcuts are suppressed while modal is open
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(editor, { key: '2', ctrlKey: true })
+    fireEvent.keyDown(editor, { key: 'f', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true, shiftKey: true })
+
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
+    expect(getFilesSnapshot().get('C:/wiki/modal-shell/guide.md')).toBe('# Guide\n\nBody')
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '검색 뷰' })).not.toBeInTheDocument()
+
+    // 4. Close with Esc key, then Ctrl+S works again
+    fireEvent.keyDown(modal2, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '프론트매터 스키마 관리' })).not.toBeInTheDocument()
+
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+      expect(getFilesSnapshot().get('C:/wiki/modal-shell/guide.md')).toBe('# Guide\n\nBody edited')
+    })
+  })
+
+  it('saves modal schema edits atomically, updates properties & warnings immediately without mutating markdown, and syncs open clean frontmatter.json tab', async () => {
+    const user = userEvent.setup()
+    const initialSchema: WorkspaceFrontmatterSchema = {
+      version: 1,
+      fields: [
+        {
+          key: 'status',
+          label: '상태',
+          type: 'select',
+          options: [{ value: 'todo' }, { value: 'done' }]
+        }
+      ]
+    }
+    const noteContent = '---\nstatus: todo\n---\n# Note\n\nBody'
+
+    const { api, emitMenuCommand, getFilesSnapshot, dispose } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:\\wiki\\schema-save',
+        workspaces: {
+          'C:\\wiki\\schema-save': {
+            [FRONTMATTER_SCHEMA_RELATIVE_PATH]: serializeFrontmatterSchema(initialSchema),
+            'note.md': noteContent
+          }
+        }
+      }
+    )
+    disposers.push(dispose)
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('note.md'))
+    const properties = screen.getByRole('region', { name: '문서 속성' })
+    await waitFor(() => {
+      expect(within(properties).getByLabelText('상태')).toHaveValue('todo')
+    })
+
+    // Also open frontmatter.json tab via modal 'JSON 파일로 열기' so we verify clean tab stays synced on later modal save
+    await user.click(within(properties).getByRole('button', { name: '스키마 관리' }))
+    await user.click(
+      within(screen.getByRole('dialog', { name: '프론트매터 스키마 관리' })).getByRole('button', {
+        name: 'JSON 파일로 열기'
+      })
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /frontmatter\.json/ })).toBeInTheDocument()
+    })
+
+    // Switch back to note.md tab, open modal via ⚙, remove 'todo' option from status, add required 'reviewer' field
+    await user.click(screen.getByRole('tab', { name: /note\.md/ }))
+    await user.click(within(properties).getByRole('button', { name: '스키마 관리' }))
+    const modal = screen.getByRole('dialog', { name: '프론트매터 스키마 관리' })
+
+    const statusGroup = within(modal).getByRole('group', { name: '필드 상태' })
+    const todoOptionRow = within(statusGroup).getByRole('group', { name: '옵션 1' })
+    await user.click(within(todoOptionRow).getByRole('button', { name: '옵션 삭제' }))
+
+    await user.click(within(modal).getByRole('button', { name: '+ 필드 추가' }))
+    const newField = within(modal).getByRole('group', { name: '새 필드 2' })
+    await user.type(within(newField).getByLabelText('키'), 'reviewer')
+    await user.type(within(newField).getByLabelText('라벨'), '리뷰어')
+    const reviewerField = within(modal).getByRole('group', { name: '필드 리뷰어' })
+    await user.click(within(reviewerField).getByRole('checkbox', { name: '필수 항목' }))
+
+    await user.click(within(modal).getByRole('button', { name: '저장' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '프론트매터 스키마 관리' })).not.toBeInTheDocument()
+      expect(within(properties).getByLabelText('리뷰어')).toBeInTheDocument()
+      expect(within(properties).getByLabelText('유효성 경고 2건')).toHaveTextContent('⚠ 2')
+    })
+
+    // Markdown document content remains untouched & clean
+    expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(noteContent)
+
+    // Disk frontmatter.json & open clean frontmatter.json tab both reflect the updated schema
+    expect(getFilesSnapshot().get(`C:/wiki/schema-save/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`)).toContain(
+      '"reviewer"'
+    )
+    await user.click(screen.getByRole('tab', { name: /frontmatter\.json/ }))
+    await waitFor(() => {
+      expect(getRawEditorText(screen.getByTestId('document-editor'))).toContain('"reviewer"')
+    })
+  })
+
+  it('opens frontmatter.json in Raw JSON tab when missing, reloads on Ctrl+S & external changes, and handles invalid JSON/schema recovery safely while preserving markdown frontmatter', async () => {
+    const user = userEvent.setup()
+    const docContent = [
+      '---',
+      '# keep this yaml comment',
+      'status: todo',
+      '---',
+      '# Guide',
+      '',
+      'Body'
+    ].join('\n')
+
+    const { api, emitMenuCommand, emitWorkspaceChange, getFilesSnapshot, dispose } =
+      createInMemoryWikiApi(
+        { theme: 'light', autoSave: false },
+        {
+          selectedFolder: 'C:\\wiki\\raw-sync',
+          workspaces: {
+            'C:\\wiki\\raw-sync': {
+              'guide.md': docContent
+            }
+          }
+        }
+      )
+    disposers.push(dispose)
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('guide.md'))
+
+    const properties = screen.getByRole('region', { name: '문서 속성' })
+    const headerManageBtn = within(properties).getAllByRole('button', { name: '스키마 관리' })[0]
+    await user.click(headerManageBtn)
+
+    // 1. When schema file is missing, 'JSON 파일로 열기' creates starter file & opens Raw JSON tab
+    const modal = screen.getByRole('dialog', { name: '프론트매터 스키마 관리' })
+    await user.click(within(modal).getByRole('button', { name: 'JSON 파일로 열기' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '프론트매터 스키마 관리' })).not.toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: /frontmatter\.json/ })).toBeInTheDocument()
+    })
+    const schemaPath = `C:/wiki/raw-sync/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`
+    expect(getFilesSnapshot().has(schemaPath)).toBe(true)
+
+    const schemaRawEditor = screen.getByTestId('document-editor')
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    expect(within(modeGroup).getByRole('button', { name: '위지윅' })).toBeDisabled()
+    expect(within(modeGroup).getByRole('button', { name: 'Preview' })).toBeDisabled()
+    expect(within(modeGroup).getByRole('button', { name: 'Split' })).toBeDisabled()
+
+    // 2. Edit Raw JSON to add required 'owner' field & save via Ctrl+S -> updates guide.md properties
+    const updatedSchemaJson = JSON.stringify(
+      {
+        version: 1,
+        fields: [
+          { key: 'status', label: '상태', type: 'select', options: [{ value: 'todo' }] },
+          { key: 'owner', label: '소유자', type: 'text', required: true }
+        ]
+      },
+      null,
+      2
+    )
+    setRawEditorText(schemaRawEditor, updatedSchemaJson)
+    fireEvent.keyDown(schemaRawEditor, { key: 's', ctrlKey: true })
+
+    await user.click(screen.getByRole('tab', { name: /guide\.md/ }))
+    await waitFor(() => {
+      expect(within(properties).getByLabelText('소유자')).toBeInTheDocument()
+      expect(within(properties).getByLabelText('유효성 경고 1건')).toHaveTextContent('⚠ 1')
+    })
+
+    // 3. Save invalid JSON in Raw JSON tab -> clear error + recovery buttons, markdown frontmatter preserved
+    await user.click(screen.getByRole('tab', { name: /frontmatter\.json/ }))
+    const brokenEditor = screen.getByTestId('document-editor')
+    setRawEditorText(brokenEditor, '{ invalid json')
+    fireEvent.keyDown(brokenEditor, { key: 's', ctrlKey: true })
+
+    await user.click(screen.getByRole('tab', { name: /guide\.md/ }))
+    await waitFor(() => {
+      expect(within(properties).getByText('스키마 오류')).toBeInTheDocument()
+      expect(within(properties).getByText(/frontmatter\.json 구문 오류/)).toBeInTheDocument()
+      expect(within(properties).getByRole('button', { name: 'JSON 파일로 열기' })).toBeInTheDocument()
+    })
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(docContent)
+
+    // 4. External schema repair via filesystem change auto-reloads and clears error
+    await api.workspace.writeFile(
+      schemaPath,
+      JSON.stringify({
+        version: 1,
+        fields: [{ key: 'status', label: '상태', type: 'select', options: [{ value: 'todo' }] }]
+      })
+    )
+    act(() => {
+      emitWorkspaceChange({
+        rootPath: 'C:/wiki/raw-sync',
+        eventType: 'change',
+        relativePath: FRONTMATTER_SCHEMA_RELATIVE_PATH
+      })
+    })
+
+    await waitFor(() => {
+      expect(within(properties).queryByText('스키마 오류')).not.toBeInTheDocument()
+      expect(within(properties).getByLabelText('상태')).toHaveValue('todo')
+    })
+
+    // 5. External invalid schema -> recover by clicking 'JSON 파일로 열기' from error notice
+    await api.workspace.writeFile(schemaPath, JSON.stringify({ version: 2, fields: [] }))
+    await waitFor(() => {
+      expect(within(properties).getByText('스키마 오류')).toBeInTheDocument()
+      expect(within(properties).getByText(/지원하지 않는 스키마 version/)).toBeInTheDocument()
+    })
+
+    await user.click(within(properties).getByRole('button', { name: 'JSON 파일로 열기' }))
+    await waitFor(() => {
+      const activeEditor = screen.getByTestId('document-editor')
+      expect(getRawEditorText(activeEditor)).toContain('"version":2')
+    })
+    const recoveryEditor = screen.getByTestId('document-editor')
+    setRawEditorText(recoveryEditor, updatedSchemaJson)
+    fireEvent.keyDown(recoveryEditor, { key: 's', ctrlKey: true })
+
+    await user.click(screen.getByRole('tab', { name: /guide\.md/ }))
+    await waitFor(() => {
+      expect(within(properties).queryByText('스키마 오류')).not.toBeInTheDocument()
+      expect(within(properties).getByLabelText('소유자')).toBeInTheDocument()
+    })
+    expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(docContent)
   })
 })

@@ -1,6 +1,7 @@
 import { type ReactNode, type Ref, useCallback, useMemo, useRef, useState } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
+import { FRONTMATTER_SCHEMA_FILE } from '@shared/frontmatter'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { isMarkdownDocument, type SidebarDocumentContext } from '../editor/editorModes'
@@ -31,6 +32,7 @@ import {
   RIGHT_SIDEBAR_WIDTH_BOUNDS
 } from '../utils/sidebarWidth'
 import { ConfirmDialog } from './ConfirmDialog'
+import { FrontmatterSchemaModal } from './FrontmatterSchemaModal'
 import type { GitDiffContentState } from './GitDiffViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneWorkspace, type PaneWorkspaceProps } from './PaneWorkspace'
@@ -94,6 +96,9 @@ export interface EditorWindowFrameProps {
   errorMessage: string | null
   pendingDialog: ConfirmDialogState | null
   onDismissDialog: () => void
+  isSchemaModalOpen?: boolean
+  onOpenSchemaModal?: () => void
+  onCloseSchemaModal?: () => void
   leftSidebarSlot?: ReactNode
   settingsPanelSlot?: ReactNode
 }
@@ -101,7 +106,7 @@ export interface EditorWindowFrameProps {
 /**
  * Shared window frame rendering the error banner, optional activity bar and left sidebar slot,
  * pane workspace, collapsible right sidebar (document outline), optional settings panel slot,
- * and confirm dialog.
+ * schema management modal, and confirm dialog.
  */
 export function EditorWindowFrame({
   shellRef,
@@ -117,9 +122,28 @@ export function EditorWindowFrame({
   errorMessage,
   pendingDialog,
   onDismissDialog,
+  isSchemaModalOpen: controlledSchemaModalOpen,
+  onOpenSchemaModal: controlledOpenSchemaModal,
+  onCloseSchemaModal: controlledCloseSchemaModal,
   leftSidebarSlot,
   settingsPanelSlot
 }: EditorWindowFrameProps) {
+  const [uncontrolledSchemaModalOpen, setUncontrolledSchemaModalOpen] = useState(false)
+  const isSchemaModalOpen = controlledSchemaModalOpen ?? uncontrolledSchemaModalOpen
+  const handleOpenSchemaModal = useCallback((): void => {
+    if (controlledOpenSchemaModal) {
+      controlledOpenSchemaModal()
+    } else {
+      setUncontrolledSchemaModalOpen(true)
+    }
+  }, [controlledOpenSchemaModal])
+  const handleCloseSchemaModal = useCallback((): void => {
+    if (controlledCloseSchemaModal) {
+      controlledCloseSchemaModal()
+    } else {
+      setUncontrolledSchemaModalOpen(false)
+    }
+  }, [controlledCloseSchemaModal])
   const [rightSidebar, setRightSidebar] = useState<RightSidebarState>(() => ({
     isCollapsed: initialRightSidebarCollapsed,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
@@ -169,10 +193,24 @@ export function EditorWindowFrame({
     )
   }, [])
 
-  const { schemaResult, isSchemaLoading, createDefaultSchema } = useFrontmatterSchema({
+  const {
+    schemaResult,
+    isSchemaLoading,
+    createDefaultSchema,
+    saveSchema,
+    ensureSchemaFilePath
+  } = useFrontmatterSchema({
     workspaceRootPath,
     onError: reportErrorBanner
   })
+  const canManageSchema = Boolean(workspaceRootPath || schemaResult !== null)
+
+  const handleOpenSchemaRawJson = useCallback(async (): Promise<void> => {
+    const targetPath = await ensureSchemaFilePath()
+    if (!targetPath) return
+    await openWorkspaceFile(targetPath, undefined, FRONTMATTER_SCHEMA_FILE)
+    handleCloseSchemaModal()
+  }, [ensureSchemaFilePath, handleCloseSchemaModal, openWorkspaceFile])
 
   const paneFind = usePaneDocumentFind({
     layout: paneWorkspaceProps.layout,
@@ -283,8 +321,11 @@ export function EditorWindowFrame({
                 propertiesProps={{
                   schemaResult,
                   isSchemaLoading,
+                  canManageSchema,
                   onChangeContent: handlePropertiesChangeContent,
-                  onCreateDefaultSchema: createDefaultSchema
+                  onCreateDefaultSchema: createDefaultSchema,
+                  onOpenSchemaModal: handleOpenSchemaModal,
+                  onOpenSchemaRawJson: () => void handleOpenSchemaRawJson()
                 }}
               />
             </aside>
@@ -301,6 +342,17 @@ export function EditorWindowFrame({
           </button>
         )}
       </main>
+
+      {isSchemaModalOpen && canManageSchema && (
+        <FrontmatterSchemaModal
+          schemaResult={schemaResult}
+          isDismissDisabled={pendingDialog !== null}
+          shellRef={localShellRef}
+          onSaveSchema={saveSchema}
+          onOpenRawJson={handleOpenSchemaRawJson}
+          onClose={handleCloseSchemaModal}
+        />
+      )}
 
       {settingsPanelSlot}
 

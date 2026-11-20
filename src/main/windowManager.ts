@@ -386,6 +386,15 @@ export class WindowManager
     session.unsubscribeHub = bufferHub.subscribe((event) => {
       this.handleHubEvent(session, event)
     })
+    session.disposeCleanups.push(
+      frontmatterSchemaService.onSchemaChanged(() => {
+        const schemaPath = frontmatterSchemaService.getSchemaPath()
+        if (!schemaPath || !bufferHub.hasBuffer(schemaPath)) {
+          return
+        }
+        void bufferHub.reconcileWorkspaceBuffersWithDisk().catch(() => undefined)
+      })
+    )
     session.unsubscribeDrag = dragCoordinator.onStateChanged((dragSession) => {
       if (this.disposed || session.disposed) return
       const targets = getTargets()

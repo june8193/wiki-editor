@@ -116,6 +116,7 @@ export function MainAppShell() {
     confirmAction
   } = useConfirmDialog()
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
+  const [isSchemaModalOpen, setIsSchemaModalOpen] = useState<boolean>(false)
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
     activeView: 'workspace',
     isCollapsed: false,
@@ -170,7 +171,7 @@ export function MainAppShell() {
     onInitialConfigLoaded: (loadedConfig) => onInitialConfigLoadedRef.current(loadedConfig)
   })
 
-  const isEditorShortcutDisabled = pendingDialog !== null || isSettingsOpen
+  const isEditorShortcutDisabled = pendingDialog !== null || isSettingsOpen || isSchemaModalOpen
   const isEditorShortcutDisabledRef = useRef<boolean>(isEditorShortcutDisabled)
   isEditorShortcutDisabledRef.current = isEditorShortcutDisabled
   const editor = useEditorWorkspace({
@@ -335,6 +336,7 @@ export function MainAppShell() {
   const activeWorkspaceRoot = workspace?.rootPath ?? null
   useEffect(() => {
     setGitChangesView(resetGitChangesTreeCollapsedDirs)
+    setIsSchemaModalOpen(false)
   }, [activeWorkspaceRoot])
 
   const workspaceSearch = useWorkspaceSearch({
@@ -838,7 +840,10 @@ export function MainAppShell() {
   menuHandlersRef.current = {
     'open-folder': handleSelectFolder,
     'toggle-theme': toggleTheme,
-    'toggle-settings': () => setIsSettingsOpen((open) => !open)
+    'toggle-settings': () => {
+      setIsSchemaModalOpen(false)
+      setIsSettingsOpen((open) => !open)
+    }
   }
 
   useEffect(() => {
@@ -1092,6 +1097,12 @@ export function MainAppShell() {
       )}
       leftSidebarSlot={leftSidebarSlot}
       settingsPanelSlot={settingsPanelSlot}
+      isSchemaModalOpen={isSchemaModalOpen}
+      onOpenSchemaModal={() => {
+        setIsSettingsOpen(false)
+        setIsSchemaModalOpen(true)
+      }}
+      onCloseSchemaModal={() => setIsSchemaModalOpen(false)}
       searchJumpRequest={searchJumpRequest}
     />
   )

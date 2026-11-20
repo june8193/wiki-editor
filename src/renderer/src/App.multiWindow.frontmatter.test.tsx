@@ -177,4 +177,123 @@ describe('Multi-window frontmatter right sidebar & shared buffer synchronization
     })
     expect(within(betaProps).getByRole('button', { name: '스키마 생성' })).toBeInTheDocument()
   })
+
+  it('propagates modal schema saves, Raw JSON tab edits, and invalid schema error/recovery between main and auxiliary windows while keeping other sessions isolated', async () => {
+    const user = userEvent.setup()
+    const alphaContent = '---\nstatus: todo\n---\n# Alpha\n\nBody'
+    const harness = createHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\alpha',
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            [FRONTMATTER_SCHEMA_RELATIVE_PATH]: serializeFrontmatterSchema(TEAM_SCHEMA),
+            'alpha.md': alphaContent
+          },
+          'C:\\wiki\\beta': {
+            [FRONTMATTER_SCHEMA_RELATIVE_PATH]: serializeFrontmatterSchema(TEAM_SCHEMA),
+            'beta.md': '---\nstatus: todo\n---\n# Beta'
+          }
+        }
+      }
+    )
+
+    const alphaMain = harness.createWindow({ role: 'main' })
+    const alphaRendered = render(<App wikiApi={alphaMain.api} />)
+    await openFolderAndNoteInWindow(user, alphaRendered.container, alphaMain.emitMenuCommand, 'alpha.md')
+
+    await detachTabViaContextMenu(user, alphaRendered.container, /alpha\.md/)
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows(alphaMain.windowId)).toHaveLength(1)
+    })
+    const alphaAux = harness.getAuxiliaryWindows(alphaMain.windowId)[0]
+    const alphaAuxRendered = render(<App wikiApi={alphaAux.api} />)
+    await user.click(within(alphaAuxRendered.container).getByRole('button', { name: '문서 목차 펼치기' }))
+
+    // Re-open alpha.md in alphaMain as well
+    const alphaExplorer = within(alphaRendered.container).getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(alphaExplorer).findByText('alpha.md'))
+
+    // Open isolated Beta main window
+    const openedBeta = await alphaMain.api.workspace.openInNewWindow!('C:\\wiki\\beta')
+    const betaMain = harness.getMainWindows().find((w) => w.windowId === openedBeta.windowId)!
+    const betaRendered = render(<App wikiApi={betaMain.api} />)
+    const betaExplorer = await within(betaRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(betaExplorer).findByText('beta.md'))
+
+    const alphaProps = within(alphaRendered.container).getByRole('region', { name: '문서 속성' })
+    const auxProps = within(alphaAuxRendered.container).getByRole('region', { name: '문서 속성' })
+    const betaProps = within(betaRendered.container).getByRole('region', { name: '문서 속성' })
+
+    await waitFor(() => {
+      expect(within(alphaProps).getByLabelText('상태')).toHaveValue('todo')
+      expect(within(auxProps).getByLabelText('상태')).toHaveValue('todo')
+      expect(within(betaProps).getByLabelText('상태')).toHaveValue('todo')
+    })
+
+    // 1. Edit & save schema in Alpha Main modal -> immediately updates BOTH Alpha Main & Alpha Auxiliary (Beta stays isolated)
+    await user.click(within(alphaProps).getByRole('button', { name: '스키마 관리' }))
+    const mainModal = within(alphaRendered.container).getByRole('dialog', {
+      name: '프론트매터 스키마 관리'
+    })
+    await user.click(within(mainModal).getByRole('button', { name: '+ 필드 추가' }))
+    const newField = within(mainModal).getByRole('group', { name: '새 필드 3' })
+    await user.type(within(newField).getByLabelText('키'), 'reviewer')
+    await user.type(within(newField).getByLabelText('라벨'), '리뷰어')
+    await user.click(
+      within(within(mainModal).getByRole('group', { name: '필드 리뷰어' })).getByRole('checkbox', {
+        name: '필수 항목'
+      })
+    )
+    await user.click(within(mainModal).getByRole('button', { name: '저장' }))
+
+    await waitFor(() => {
+      expect(within(alphaProps).getByLabelText('리뷰어')).toBeInTheDocument()
+      expect(within(auxProps).getByLabelText('리뷰어')).toBeInTheDocument()
+      expect(within(alphaProps).getByLabelText('유효성 경고 1건')).toHaveTextContent('⚠ 1')
+      expect(within(auxProps).getByLabelText('유효성 경고 1건')).toHaveTextContent('⚠ 1')
+    })
+    expect(within(betaProps).queryByLabelText('리뷰어')).not.toBeInTheDocument()
+
+    // 2. In Auxiliary Window, open frontmatter.json in Raw JSON tab & save invalid JSON -> both Main & Aux show error while preserving alpha.md
+    await user.click(within(auxProps).getByRole('button', { name: '스키마 관리' }))
+    const auxModal = within(alphaAuxRendered.container).getByRole('dialog', {
+      name: '프론트매터 스키마 관리'
+    })
+    await user.click(within(auxModal).getByRole('button', { name: 'JSON 파일로 열기' }))
+    await waitFor(() => {
+      expect(
+        within(alphaAuxRendered.container).getByRole('tab', { name: /frontmatter\.json/ })
+      ).toBeInTheDocument()
+    })
+
+    const auxRawEditor = within(alphaAuxRendered.container).getByTestId('document-editor')
+    setRawEditorText(auxRawEditor, '{ invalid json')
+    fireEvent.keyDown(auxRawEditor, { key: 's', ctrlKey: true })
+
+    await user.click(within(alphaAuxRendered.container).getByRole('tab', { name: /alpha\.md/ }))
+    await waitFor(() => {
+      expect(within(alphaProps).getByText('스키마 오류')).toBeInTheDocument()
+      expect(within(auxProps).getByText('스키마 오류')).toBeInTheDocument()
+    })
+    expect(within(betaProps).queryByText('스키마 오류')).not.toBeInTheDocument()
+    expect(getRawEditorText(within(alphaRendered.container).getByTestId('document-editor'))).toBe(
+      alphaContent
+    )
+
+    // 3. Recover via Main Window schema modal -> restores both Alpha Main & Alpha Auxiliary
+    await user.click(within(alphaProps).getAllByRole('button', { name: '스키마 관리' })[1])
+    const recoveryModal = within(alphaRendered.container).getByRole('dialog', {
+      name: '프론트매터 스키마 관리'
+    })
+    await user.click(within(recoveryModal).getByRole('button', { name: '기본 템플릿 불러오기' }))
+    await user.click(within(recoveryModal).getByRole('button', { name: '저장' }))
+
+    await waitFor(() => {
+      expect(within(alphaProps).queryByText('스키마 오류')).not.toBeInTheDocument()
+      expect(within(auxProps).queryByText('스키마 오류')).not.toBeInTheDocument()
+      expect(within(alphaProps).getByLabelText('상태')).toHaveValue('todo')
+      expect(within(auxProps).getByLabelText('상태')).toHaveValue('todo')
+    })
+  })
 })

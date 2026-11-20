@@ -533,6 +533,9 @@ export function createMultiWindowWikiHarness(
     }
     session.lastSchemaFingerprint = fingerprint
     notifySessionSchemaListeners(session, result)
+    if (session.hub.hasBuffer(result.path)) {
+      void session.hub.reconcileWorkspaceBuffersWithDisk().catch(() => undefined)
+    }
   }
 
   const writeAndNotifySessionSchema = (
@@ -542,14 +545,15 @@ export function createMultiWindowWikiHarness(
     if (!session.activeRoot) {
       throw new Error('열린 워크스페이스가 없습니다.')
     }
+    const schemaPath = `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`
     dirs.add(`${session.activeRoot}/${FRONTMATTER_SCHEMA_DIR}`)
-    files.set(
-      `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`,
-      serializeFrontmatterSchema(schema)
-    )
+    files.set(schemaPath, serializeFrontmatterSchema(schema))
     const { result, fingerprint } = readSessionSchema(session)
     session.lastSchemaFingerprint = fingerprint
     notifySessionSchemaListeners(session, result)
+    if (session.hub.hasBuffer(schemaPath)) {
+      void session.hub.reconcileWorkspaceBuffersWithDisk().catch(() => undefined)
+    }
     return cloneSchemaResult(result)
   }
 

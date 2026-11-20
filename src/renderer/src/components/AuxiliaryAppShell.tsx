@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { formatWindowTitle } from '@shared/window'
 import { useConfigController } from '../hooks/useConfigController'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
@@ -21,10 +21,12 @@ export function AuxiliaryAppShell() {
   const { config, toggleShowHeadingNumbers } = useConfigController({
     onError: reportErrorBanner
   })
+  const [isSchemaModalOpen, setIsSchemaModalOpen] = useState(false)
   const isDialogOpen = pendingDialog !== null
+  const isShortcutDisabled = isDialogOpen || isSchemaModalOpen
   const editor = useEditorWorkspace({
     isAutoSavePaused: isDialogOpen,
-    isShortcutDisabled: isDialogOpen,
+    isShortcutDisabled,
     onError: reportErrorBanner,
     onConfirmCloseDirtyTab: confirmCloseDirtyTab
   })
@@ -57,11 +59,14 @@ export function AuxiliaryAppShell() {
       errorMessage={errorMessage}
       pendingDialog={pendingDialog}
       onDismissDialog={dismissDialog}
+      isSchemaModalOpen={isSchemaModalOpen}
+      onOpenSchemaModal={() => setIsSchemaModalOpen(true)}
+      onCloseSchemaModal={() => setIsSchemaModalOpen(false)}
       showHeadingNumbers={config.showHeadingNumbers}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
       openWorkspaceFile={editor.openWorkspaceFile}
       reportErrorBanner={reportErrorBanner}
-      paneWorkspaceProps={buildPaneWorkspaceProps(config, editor, isDialogOpen)}
+      paneWorkspaceProps={buildPaneWorkspaceProps(config, editor, isShortcutDisabled)}
     />
   )
 }

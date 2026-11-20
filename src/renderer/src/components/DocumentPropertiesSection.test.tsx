@@ -393,4 +393,75 @@ describe('DocumentPropertiesSection', () => {
     expect(within(section).queryByRole('button', { name: '+ 속성 추가' })).not.toBeInTheDocument()
     expect(onChangeContent).not.toHaveBeenCalled()
   })
+
+  it('renders ⚙ header button without toggling accordion and exposes schema management / raw JSON recovery triggers', async () => {
+    const user = userEvent.setup()
+    const onToggleExpanded = vi.fn()
+    const onOpenSchemaModal = vi.fn()
+    const onOpenSchemaRawJson = vi.fn()
+
+    const { rerender } = render(
+      <DocumentPropertiesSection
+        document={{
+          documentName: 'guide.md',
+          content: '# Guide',
+          isMarkdownDocument: true
+        }}
+        schemaResult={{
+          exists: false,
+          path: 'C:/wiki/.wiki-editor/frontmatter.json',
+          schema: null
+        }}
+        isExpanded
+        onToggleExpanded={onToggleExpanded}
+        onChangeContent={vi.fn()}
+        onCreateDefaultSchema={vi.fn()}
+        onOpenSchemaModal={onOpenSchemaModal}
+        onOpenSchemaRawJson={onOpenSchemaRawJson}
+      />
+    )
+
+    const section = screen.getByRole('region', { name: '문서 속성' })
+    const headerManageBtn = within(section).getAllByRole('button', { name: '스키마 관리' })[0]
+    await user.click(headerManageBtn)
+    expect(onOpenSchemaModal).toHaveBeenCalledTimes(1)
+    expect(onToggleExpanded).not.toHaveBeenCalled()
+
+    // Missing schema notice also offers 스키마 관리
+    const noticeButtons = within(section).getAllByRole('button', { name: '스키마 관리' })
+    expect(noticeButtons).toHaveLength(2)
+    await user.click(noticeButtons[1])
+    expect(onOpenSchemaModal).toHaveBeenCalledTimes(2)
+
+    // Schema error notice offers 스키마 관리 & JSON 파일로 열기 recovery entry points
+    rerender(
+      <DocumentPropertiesSection
+        document={{
+          documentName: 'guide.md',
+          content: '---\nstatus: todo\n---\n# Guide',
+          isMarkdownDocument: true
+        }}
+        schemaResult={{
+          exists: true,
+          path: 'C:/wiki/.wiki-editor/frontmatter.json',
+          schema: null,
+          error: 'frontmatter.json 구문 오류: Unexpected token'
+        }}
+        isExpanded
+        onToggleExpanded={onToggleExpanded}
+        onChangeContent={vi.fn()}
+        onCreateDefaultSchema={vi.fn()}
+        onOpenSchemaModal={onOpenSchemaModal}
+        onOpenSchemaRawJson={onOpenSchemaRawJson}
+      />
+    )
+
+    const errorButtons = within(section).getAllByRole('button', { name: '스키마 관리' })
+    expect(errorButtons).toHaveLength(2)
+    await user.click(errorButtons[1])
+    expect(onOpenSchemaModal).toHaveBeenCalledTimes(3)
+
+    await user.click(within(section).getByRole('button', { name: 'JSON 파일로 열기' }))
+    expect(onOpenSchemaRawJson).toHaveBeenCalledTimes(1)
+  })
 })

@@ -2299,4 +2299,64 @@ describe('DocumentEditor frontmatter integration (<DocumentEditor />)', () => {
     expect(splitPreview.textContent).not.toContain('status:')
     expect(within(splitPreview).getByRole('heading', { level: 1, name: 'Heading' })).toBeInTheDocument()
   })
+
+  it('locks .wiki-editor/frontmatter.json to Raw JSON mode and suppresses editor shortcuts when modal disables shortcuts', () => {
+    const onSave = vi.fn()
+    const onUpdateViewState = vi.fn()
+    const schemaJson = JSON.stringify({ version: 1, fields: [{ key: 'status', label: '상태', type: 'text' }] }, null, 2)
+    const schemaDoc = createDoc({
+      key: 'c:/wiki/.wiki-editor/frontmatter.json',
+      kind: 'workspace',
+      path: 'C:/wiki/.wiki-editor/frontmatter.json',
+      name: 'frontmatter.json',
+      content: schemaJson,
+      savedContent: schemaJson,
+      isDirty: true
+    })
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={schemaDoc}
+        tab={{ ...createTab('split'), bufferKey: schemaDoc.key }}
+        theme="light"
+        autoSave={false}
+        isShortcutDisabled={false}
+        onChangeContent={vi.fn()}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    expect(within(modeGroup).getByRole('button', { name: 'Raw' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(modeGroup).getByRole('button', { name: '위지윅' })).toBeDisabled()
+    expect(within(modeGroup).getByRole('button', { name: 'Preview' })).toBeDisabled()
+    expect(within(modeGroup).getByRole('button', { name: 'Split' })).toBeDisabled()
+    expect(screen.queryByRole('toolbar', { name: 'Raw 표 편집 툴바' })).not.toBeInTheDocument()
+    expect(EditorView.findFromDOM(screen.getByTestId('document-editor'))!.state.doc.toString()).toBe(schemaJson)
+
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 's', ctrlKey: true })
+    expect(onSave).toHaveBeenCalledTimes(1)
+
+    // When modal disables shortcuts, Ctrl+S / Ctrl+F / Ctrl+1..4 are suppressed
+    rerender(
+      <DocumentEditor
+        document={schemaDoc}
+        tab={{ ...createTab('raw'), bufferKey: schemaDoc.key }}
+        theme="light"
+        autoSave={false}
+        isShortcutDisabled
+        onChangeContent={vi.fn()}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 's', ctrlKey: true })
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'f', ctrlKey: true })
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: '2', ctrlKey: true })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    expect(onUpdateViewState).not.toHaveBeenCalled()
+  })
 })
