@@ -1,6 +1,7 @@
 import {
   isFrontmatterOperatorForType,
   isFrontmatterValueEmpty,
+  isValidIsoCalendarDate,
   type FrontmatterFieldDefinition,
   type FrontmatterFieldType,
   type FrontmatterFieldValue,
@@ -185,36 +186,34 @@ export interface SelectableFilterOption {
  */
 export function buildFilterSelectableOptions(
   field: FrontmatterFieldDefinition,
-  fieldValuesByKey?: Readonly<Record<string, readonly string[]>>,
+  liveCustomValues?: readonly string[],
   currentValues?: readonly string[]
 ): SelectableFilterOption[] {
   const result: SelectableFilterOption[] = []
   const seen = new Set<string>()
   const colorByValue = new Map<string, string | undefined>()
 
+  const pushUnique = (value: string): void => {
+    if (!value || seen.has(value)) return
+    seen.add(value)
+    const color = colorByValue.get(value)
+    result.push({ value, ...(color ? { color } : {}) })
+  }
+
   for (const opt of field.options ?? []) {
     if (!opt.value) continue
     colorByValue.set(opt.value, opt.color)
-    if (!seen.has(opt.value)) {
-      seen.add(opt.value)
-      result.push({ value: opt.value, ...(opt.color ? { color: opt.color } : {}) })
-    }
+    pushUnique(opt.value)
   }
 
-  if (field.type === 'multi-select' && field.allowCustom && fieldValuesByKey) {
-    for (const liveVal of fieldValuesByKey[field.key] ?? []) {
-      if (!liveVal || seen.has(liveVal)) continue
-      seen.add(liveVal)
-      const color = colorByValue.get(liveVal)
-      result.push({ value: liveVal, ...(color ? { color } : {}) })
+  if (field.type === 'multi-select' && field.allowCustom && liveCustomValues) {
+    for (const liveVal of liveCustomValues) {
+      pushUnique(liveVal)
     }
   }
 
   for (const selectedVal of currentValues ?? []) {
-    if (!selectedVal || seen.has(selectedVal)) continue
-    seen.add(selectedVal)
-    const color = colorByValue.get(selectedVal)
-    result.push({ value: selectedVal, ...(color ? { color } : {}) })
+    pushUnique(selectedVal)
   }
 
   return result
@@ -230,6 +229,22 @@ export interface DisplaySummaryBadge {
   color?: string
   ariaLabel: string
   title: string
+}
+
+function createOptionSummaryBadge(
+  field: FrontmatterFieldDefinition,
+  optionValue: string
+): DisplaySummaryBadge {
+  const color = field.options?.find((opt) => opt.value === optionValue)?.color
+  return {
+    id: `${field.key}:${optionValue}`,
+    field,
+    badgeValue: optionValue,
+    displayText: optionValue,
+    ...(color ? { color } : {}),
+    ariaLabel: `${field.label}: ${optionValue} 필터 추가`,
+    title: `${field.label}: ${optionValue} (클릭하여 필터 추가)`
+  }
 }
 
 /** Formats `frontmatterSummary` values in schema declaration order into clickable badge descriptors. */
@@ -249,18 +264,11 @@ export function extractDisplaySummaryBadges(
     }
 
     if (field.type === 'multi-select' && Array.isArray(raw)) {
+      const seenItems = new Set<string>()
       for (const item of raw) {
-        if (!item) continue
-        const color = field.options?.find((opt) => opt.value === item)?.color
-        badges.push({
-          id: `${field.key}:${item}`,
-          field,
-          badgeValue: item,
-          displayText: item,
-          ...(color ? { color } : {}),
-          ariaLabel: `${field.label}: ${item} 필터 추가`,
-          title: `${field.label}: ${item} (클릭하여 필터 추가)`
-        })
+        if (!item || seenItems.has(item)) continue
+        seenItems.add(item)
+        badges.push(createOptionSummaryBadge(field, item))
       }
       continue
     }
@@ -270,16 +278,7 @@ export function extractDisplaySummaryBadges(
     }
 
     if (field.type === 'select' && typeof raw === 'string') {
-      const color = field.options?.find((opt) => opt.value === raw)?.color
-      badges.push({
-        id: `${field.key}:${raw}`,
-        field,
-        badgeValue: raw,
-        displayText: raw,
-        ...(color ? { color } : {}),
-        ariaLabel: `${field.label}: ${raw} 필터 추가`,
-        title: `${field.label}: ${raw} (클릭하여 필터 추가)`
-      })
+      badges.push(createOptionSummaryBadge(field, raw))
       continue
     }
 
@@ -370,5 +369,166 @@ export function upsertBadgeFilterCondition(
       { fieldKey: field.key, operator: 'equals', value: badgeValue }
     ],
     changed: true
+  }
+}
+
+export type FilterPopoverStep = 'field' | 'operator' | 'value'
+
+export interface FilterPopoverDraft {
+  mode: 'add' | 'edit'
+  editIndex: number | null
+  step: FilterPopoverStep
+  fieldKey: string | null
+  operator: FrontmatterFilterOperator | null
+  selectedValues: string[]
+  textValue: string
+  minValue: string
+  maxValue: string
+}
+
+/** Creates an initial draft for adding a new frontmatter filter condition. */
+export function createInitialFilterAddDraft(): FilterPopoverDraft {
+  return {
+    mode: 'add',
+    editIndex: null,
+    step: 'field',
+    fieldKey: null,
+    operator: null,
+    selectedValues: [],
+    textValue: '',
+    minValue: '',
+    maxValue: ''
+  }
+}
+
+/** Creates a pre-populated draft for editing an existing frontmatter filter condition. */
+export function createFilterEditDraft(
+  condition: FrontmatterFilterCondition,
+  index: number
+): FilterPopoverDraft {
+  return {
+    mode: 'edit',
+    editIndex: index,
+    step: condition.operator === 'is-empty' ? 'operator' : 'value',
+    fieldKey: condition.fieldKey,
+    operator: condition.operator,
+    selectedValues: condition.values ? [...condition.values] : [],
+    textValue:
+      condition.value !== undefined && condition.value !== null ? String(condition.value) : '',
+    minValue: condition.min !== undefined ? String(condition.min) : '',
+    maxValue: condition.max !== undefined ? String(condition.max) : ''
+  }
+}
+
+/** Advances a cyclic listbox highlight index safely within `[0, totalCount - 1]`. */
+export function cycleListboxIndex(
+  currentIndex: number,
+  totalCount: number,
+  delta: 1 | -1
+): number {
+  if (totalCount <= 0) return -1
+  const clamped = Math.max(0, Math.min(currentIndex, totalCount - 1))
+  return (clamped + delta + totalCount) % totalCount
+}
+
+/** Validates and constructs a `FrontmatterFilterCondition` from a popover draft state. */
+export function buildConditionFromDraft(
+  field: FrontmatterFieldDefinition,
+  draft: FilterPopoverDraft
+): { ok: true; condition: FrontmatterFilterCondition } | { ok: false; error?: string } {
+  const operator = draft.operator
+  if (!operator) return { ok: false }
+  if (operator === 'is-empty') {
+    return { ok: true, condition: { fieldKey: field.key, operator } }
+  }
+
+  switch (field.type) {
+    case 'select':
+    case 'multi-select':
+      if (draft.selectedValues.length === 0) {
+        return { ok: false }
+      }
+      return {
+        ok: true,
+        condition: {
+          fieldKey: field.key,
+          operator,
+          values: [...draft.selectedValues]
+        }
+      }
+
+    case 'text': {
+      const trimmed = draft.textValue.trim()
+      if (!trimmed) return { ok: false }
+      return {
+        ok: true,
+        condition: {
+          fieldKey: field.key,
+          operator,
+          value: trimmed
+        }
+      }
+    }
+
+    case 'number': {
+      if (operator === 'between') {
+        if (draft.minValue.trim() === '' || draft.maxValue.trim() === '') {
+          return { ok: false }
+        }
+        const minNum = Number(draft.minValue)
+        const maxNum = Number(draft.maxValue)
+        if (!Number.isFinite(minNum) || !Number.isFinite(maxNum)) {
+          return { ok: false, error: '유효한 숫자를 입력하세요.' }
+        }
+        if (minNum > maxNum) {
+          return { ok: false, error: '최솟값은 최댓값보다 클 수 없습니다.' }
+        }
+        return {
+          ok: true,
+          condition: { fieldKey: field.key, operator, min: minNum, max: maxNum }
+        }
+      }
+      if (draft.textValue.trim() === '') return { ok: false }
+      const numVal = Number(draft.textValue)
+      if (!Number.isFinite(numVal)) {
+        return { ok: false, error: '유효한 숫자를 입력하세요.' }
+      }
+      return {
+        ok: true,
+        condition: { fieldKey: field.key, operator, value: numVal }
+      }
+    }
+
+    case 'date': {
+      if (operator === 'between') {
+        if (!draft.minValue || !draft.maxValue) return { ok: false }
+        if (!isValidIsoCalendarDate(draft.minValue) || !isValidIsoCalendarDate(draft.maxValue)) {
+          return { ok: false, error: '유효한 YYYY-MM-DD 날짜를 입력하세요.' }
+        }
+        if (draft.minValue > draft.maxValue) {
+          return { ok: false, error: '시작일은 종료일보다 늦을 수 없습니다.' }
+        }
+        return {
+          ok: true,
+          condition: {
+            fieldKey: field.key,
+            operator,
+            min: draft.minValue,
+            max: draft.maxValue
+          }
+        }
+      }
+      if (!draft.textValue) return { ok: false }
+      if (!isValidIsoCalendarDate(draft.textValue)) {
+        return { ok: false, error: '유효한 YYYY-MM-DD 날짜를 입력하세요.' }
+      }
+      return {
+        ok: true,
+        condition: { fieldKey: field.key, operator, value: draft.textValue }
+      }
+    }
+
+    case 'boolean':
+      return { ok: false }
   }
 }

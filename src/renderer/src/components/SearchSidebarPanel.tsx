@@ -1,17 +1,12 @@
 import { type KeyboardEvent, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, FileText, RotateCw } from 'lucide-react'
-import type {
-  FrontmatterFieldDefinition,
-  FrontmatterFilterCondition,
-  FrontmatterSchemaLoadResult
-} from '@shared/frontmatter'
+import type { FrontmatterFieldDefinition, WorkspaceFrontmatterSchema } from '@shared/frontmatter'
 import type {
   SearchMatchOptions,
   TextMatchSpan,
   WorkspaceSearchFileResult,
   WorkspaceSearchLineMatch,
-  WorkspaceSearchResponse,
-  WorkspaceSearchSortSpec
+  WorkspaceSearchResponse
 } from '@shared/search'
 import { getWorkspacePathKey } from '@shared/workspace'
 import { useSearchInputFocus } from '../hooks/useSearchInputFocus'
@@ -20,7 +15,6 @@ import {
   type SummaryBadgeValue
 } from '../utils/frontmatterFilterBar'
 import { type SearchFocusRequest, splitTextByMatchSpans } from '../utils/workspaceSearch'
-import { FrontmatterFilterBar } from './FrontmatterFilterBar'
 import { SearchOptionGroup } from './SearchOptionGroup'
 
 function renderHighlightedText(text: string, spans: readonly TextMatchSpan[]): ReactNode {
@@ -40,10 +34,9 @@ export interface SearchSidebarPanelProps {
   workspaceRootPath: string | null
   query: string
   options: SearchMatchOptions
-  conditions: readonly FrontmatterFilterCondition[]
-  sort: WorkspaceSearchSortSpec
-  schemaResult: FrontmatterSchemaLoadResult | null
-  fieldValuesByKey?: Readonly<Record<string, readonly string[]>>
+  hasFilterConditions: boolean
+  schema: WorkspaceFrontmatterSchema | null
+  filterBarSlot?: ReactNode
   response: WorkspaceSearchResponse | null
   errorMessage: string | null
   isSearching: boolean
@@ -57,15 +50,7 @@ export interface SearchSidebarPanelProps {
   onToggleFileCollapsed: (filePath: string) => void
   onOpenFile: (file: WorkspaceSearchFileResult) => void
   onOpenLineMatch: (file: WorkspaceSearchFileResult, line: WorkspaceSearchLineMatch) => void
-  onCreateDefaultSchema: () => void
-  onOpenSchemaModal?: () => void
-  onRequestFieldValues?: () => void
-  onAddCondition: (condition: FrontmatterFilterCondition) => void
-  onUpdateCondition: (index: number, nextCondition: FrontmatterFilterCondition) => void
-  onRemoveCondition: (index: number) => void
-  onClearConditions: () => void
   onClickSummaryBadge: (field: FrontmatterFieldDefinition, value: SummaryBadgeValue) => void
-  onChangeSort: (nextSort: WorkspaceSearchSortSpec) => void
 }
 
 /**
@@ -76,10 +61,9 @@ export function SearchSidebarPanel({
   workspaceRootPath,
   query,
   options,
-  conditions,
-  sort,
-  schemaResult,
-  fieldValuesByKey,
+  hasFilterConditions,
+  schema,
+  filterBarSlot,
   response,
   errorMessage,
   isSearching,
@@ -93,19 +77,10 @@ export function SearchSidebarPanel({
   onToggleFileCollapsed,
   onOpenFile,
   onOpenLineMatch,
-  onCreateDefaultSchema,
-  onOpenSchemaModal,
-  onRequestFieldValues,
-  onAddCondition,
-  onUpdateCondition,
-  onRemoveCondition,
-  onClearConditions,
-  onClickSummaryBadge,
-  onChangeSort
+  onClickSummaryBadge
 }: SearchSidebarPanelProps) {
   const inputRef = useSearchInputFocus(focusRequest)
-  const hasActiveCriteria = query.length > 0 || conditions.length > 0
-  const schema = schemaResult?.schema ?? null
+  const hasActiveCriteria = query.length > 0 || hasFilterConditions
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key !== 'Enter') return
@@ -335,21 +310,7 @@ export function SearchSidebarPanel({
           />
         </div>
 
-        <FrontmatterFilterBar
-          workspaceRootPath={workspaceRootPath}
-          schemaResult={schemaResult}
-          fieldValuesByKey={fieldValuesByKey}
-          conditions={conditions}
-          sort={sort}
-          onCreateDefaultSchema={onCreateDefaultSchema}
-          onOpenSchemaModal={onOpenSchemaModal}
-          onRequestFieldValues={onRequestFieldValues}
-          onAddCondition={onAddCondition}
-          onUpdateCondition={onUpdateCondition}
-          onRemoveCondition={onRemoveCondition}
-          onClearConditions={onClearConditions}
-          onChangeSort={onChangeSort}
-        />
+        {filterBarSlot}
       </div>
 
       {renderBody()}

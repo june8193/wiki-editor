@@ -14,6 +14,7 @@ import {
   type ParsedFrontmatterDocument
 } from '@shared/frontmatter'
 import type { SidebarDocumentContext } from '../editor/editorModes'
+import { buildFilterSelectableOptions } from '../utils/frontmatterFilterBar'
 import { SidebarAccordionSection } from './SidebarAccordionSection'
 
 export interface DocumentPropertiesSectionProps {
@@ -141,22 +142,9 @@ function MultiSelectPropertyInput({
   const selectedSet = new Set(selectedItems)
   const schemaOptionValues = new Set((field.options ?? []).map((opt) => opt.value))
 
-  const seenSuggestions = new Set<string>()
-  const availableSuggestions: string[] = []
-  for (const option of field.options ?? []) {
-    if (option.value && !selectedSet.has(option.value) && !seenSuggestions.has(option.value)) {
-      seenSuggestions.add(option.value)
-      availableSuggestions.push(option.value)
-    }
-  }
-  if (field.allowCustom && suggestedValues) {
-    for (const item of suggestedValues) {
-      if (item && !selectedSet.has(item) && !seenSuggestions.has(item)) {
-        seenSuggestions.add(item)
-        availableSuggestions.push(item)
-      }
-    }
-  }
+  const availableSuggestions = buildFilterSelectableOptions(field, suggestedValues)
+    .map((option) => option.value)
+    .filter((optionValue) => !selectedSet.has(optionValue))
 
   const normalizedQuery = customDraft.trim().toLowerCase()
   const visibleSuggestions =

@@ -59,6 +59,7 @@ import {
 import { ActivityBar, type LeftSidebarView } from './ActivityBar'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 import { type EntryPathCopyMode, FolderTreeSidebar } from './FolderTreeSidebar'
+import { FrontmatterFilterBar } from './FrontmatterFilterBar'
 import { GitSidebarPanel } from './GitSidebarPanel'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { SearchSidebarPanel } from './SearchSidebarPanel'
@@ -1007,10 +1008,28 @@ export function MainAppShell() {
                 workspaceRootPath={workspace?.rootPath ?? null}
                 query={workspaceSearch.query}
                 options={workspaceSearch.options}
-                conditions={workspaceSearch.conditions}
-                sort={workspaceSearch.sort}
-                schemaResult={frontmatterSchema.schemaResult}
-                fieldValuesByKey={frontmatterFieldValues.valuesByField}
+                hasFilterConditions={workspaceSearch.conditions.length > 0}
+                schema={frontmatterSchema.schemaResult?.schema ?? null}
+                filterBarSlot={
+                  <FrontmatterFilterBar
+                    workspaceRootPath={workspace?.rootPath ?? null}
+                    schemaResult={frontmatterSchema.schemaResult}
+                    fieldValuesByKey={frontmatterFieldValues.valuesByField}
+                    conditions={workspaceSearch.conditions}
+                    sort={workspaceSearch.sort}
+                    onCreateDefaultSchema={frontmatterSchema.createDefaultSchema}
+                    onOpenSchemaModal={() => {
+                      setIsSettingsOpen(false)
+                      setIsSchemaModalOpen(true)
+                    }}
+                    onRequestFieldValues={frontmatterFieldValues.refreshFieldValues}
+                    onAddCondition={workspaceSearch.onAddCondition}
+                    onUpdateCondition={workspaceSearch.onUpdateCondition}
+                    onRemoveCondition={workspaceSearch.onRemoveCondition}
+                    onClearConditions={workspaceSearch.onClearConditions}
+                    onChangeSort={workspaceSearch.onChangeSort}
+                  />
+                }
                 response={workspaceSearch.response}
                 errorMessage={workspaceSearch.errorMessage}
                 isSearching={workspaceSearch.isSearching}
@@ -1024,18 +1043,7 @@ export function MainAppShell() {
                 onToggleFileCollapsed={workspaceSearch.onToggleFileCollapsed}
                 onOpenFile={handleOpenSearchResultFile}
                 onOpenLineMatch={openSearchLineMatch}
-                onCreateDefaultSchema={frontmatterSchema.createDefaultSchema}
-                onOpenSchemaModal={() => {
-                  setIsSettingsOpen(false)
-                  setIsSchemaModalOpen(true)
-                }}
-                onRequestFieldValues={frontmatterFieldValues.refreshFieldValues}
-                onAddCondition={workspaceSearch.onAddCondition}
-                onUpdateCondition={workspaceSearch.onUpdateCondition}
-                onRemoveCondition={workspaceSearch.onRemoveCondition}
-                onClearConditions={workspaceSearch.onClearConditions}
                 onClickSummaryBadge={workspaceSearch.onUpsertBadgeCondition}
-                onChangeSort={workspaceSearch.onChangeSort}
               />
             )}
 

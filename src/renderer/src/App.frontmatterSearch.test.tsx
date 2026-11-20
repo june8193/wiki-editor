@@ -649,4 +649,127 @@ describe('Search View Frontmatter Filter Bar, Summary Badges & Sort (<App />)', 
       expect(JSON.stringify(update)).not.toContain('priority')
     }
   })
+
+  it('keeps filter popover state consistent across chip removal, cross-chip edit switch, and live schema field deletion', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, dispose } = createInMemoryWikiApi(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\popover-guards',
+        workspaces: {
+          'C:\\wiki\\popover-guards': {
+            [FRONTMATTER_SCHEMA_RELATIVE_PATH]: serializeFrontmatterSchema(FULL_SEARCH_SCHEMA),
+            'a.md': '---\nstatus: in-progress\npriority: high\nassignee: kim\n---\nAlpha',
+            'b.md': '---\nstatus: done\npriority: low\npublished: true\n---\nBeta'
+          }
+        }
+      }
+    )
+    disposers.push(dispose)
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await waitFor(() => {
+      expect(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('a.md')).toBeInTheDocument()
+    })
+
+    await user.click(
+      within(screen.getByRole('navigation', { name: '액티비티 바' })).getByRole('button', {
+        name: '검색'
+      })
+    )
+    const searchView = screen.getByRole('region', { name: '검색 뷰' })
+    const filterBar = within(searchView).getByRole('region', { name: '프론트매터 필터 바' })
+
+    // 1. Removing chip 0 while editing chip 1 closes stale edit popover without corrupting chip 1
+    await user.click(within(filterBar).getByRole('button', { name: '+ 필터 추가' }))
+    let popover = within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })
+    await user.click(within(popover).getByRole('option', { name: /상태/ }))
+    await user.click(within(popover).getByRole('option', { name: '포함' }))
+    await user.click(within(popover).getByLabelText('in-progress'))
+    await user.click(within(popover).getByRole('button', { name: '적용' }))
+
+    await user.click(within(filterBar).getByRole('button', { name: '+ 필터 추가' }))
+    popover = within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })
+    await user.click(within(popover).getByRole('option', { name: /우선순위/ }))
+    await user.click(within(popover).getByRole('option', { name: '포함' }))
+    await user.click(within(popover).getByLabelText('high'))
+    await user.click(within(popover).getByRole('button', { name: '적용' }))
+
+    await user.click(within(filterBar).getByRole('button', { name: /우선순위 필터 수정/ }))
+    expect(within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })).toBeInTheDocument()
+
+    await user.click(within(filterBar).getByRole('button', { name: '상태 필터 제거' }))
+    expect(within(filterBar).queryByRole('dialog', { name: '프론트매터 필터 설정' })).not.toBeInTheDocument()
+    expect(within(filterBar).queryByRole('button', { name: /상태 필터 수정/ })).not.toBeInTheDocument()
+    expect(within(filterBar).getByRole('button', { name: /우선순위 필터 수정/ })).toBeInTheDocument()
+
+    await user.click(within(filterBar).getByRole('button', { name: /우선순위 필터 수정/ }))
+    popover = within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })
+    await user.click(within(popover).getByLabelText('high'))
+    await user.click(within(popover).getByLabelText('low'))
+    await user.click(within(popover).getByRole('button', { name: '적용' }))
+    await waitFor(() => {
+      const list = within(searchView).getByRole('list', { name: '검색 결과 목록' })
+      expect(within(list).getByText('b.md')).toBeInTheDocument()
+      expect(within(list).queryByText('a.md')).not.toBeInTheDocument()
+    })
+
+    // 2. Switching directly from editing a 3-operator field (상태 · 비어 있음) to a 2-operator field (공개 여부 · 비어 있음)
+    await user.click(within(filterBar).getByRole('button', { name: '필터 전체 초기화' }))
+
+    await user.click(within(filterBar).getByRole('button', { name: '+ 필터 추가' }))
+    popover = within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })
+    await user.click(within(popover).getByRole('option', { name: /상태/ }))
+    await user.click(within(popover).getByRole('option', { name: '비어 있음' }))
+
+    await user.click(within(filterBar).getByRole('button', { name: '+ 필터 추가' }))
+    popover = within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })
+    await user.click(within(popover).getByRole('option', { name: /공개 여부/ }))
+    await user.click(within(popover).getByRole('option', { name: '비어 있음' }))
+
+    await user.click(within(filterBar).getByRole('button', { name: /상태 필터 수정/ }))
+    await user.click(within(filterBar).getByRole('button', { name: /공개 여부 필터 수정/ }))
+    popover = within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })
+    const operatorList = within(popover).getByRole('listbox', { name: '필터 연산자 목록' })
+    fireEvent.keyDown(operatorList, { key: 'Enter' })
+    expect(within(filterBar).queryByRole('dialog', { name: '프론트매터 필터 설정' })).not.toBeInTheDocument()
+    expect(within(filterBar).getByRole('button', { name: /공개 여부 필터 수정/ })).toHaveTextContent(
+      '공개 여부 · 비어 있음'
+    )
+
+    await user.click(within(filterBar).getByRole('button', { name: /공개 여부 필터 수정/ }))
+    const switchedOperatorList = within(filterBar).getByRole('listbox', {
+      name: '필터 연산자 목록'
+    })
+    fireEvent.keyDown(switchedOperatorList, { key: 'ArrowDown' })
+    fireEvent.keyDown(switchedOperatorList, { key: 'Enter' })
+    await user.click(within(filterBar).getByRole('option', { name: '예' }))
+    expect(within(filterBar).getByRole('button', { name: /공개 여부 필터 수정/ })).toHaveTextContent(
+      '공개 여부: 예'
+    )
+
+    // 3. Deleting the currently edited field from schema closes the popover cleanly
+    await user.click(within(filterBar).getByRole('button', { name: '필터 전체 초기화' }))
+    await user.click(within(filterBar).getByRole('button', { name: '+ 필터 추가' }))
+    popover = within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })
+    await user.click(within(popover).getByRole('option', { name: /담당자/ }))
+    await user.click(within(popover).getByRole('option', { name: '포함' }))
+    await user.type(within(popover).getByLabelText('필터 값 입력'), 'kim')
+    await user.click(within(popover).getByRole('button', { name: '적용' }))
+
+    await user.click(within(filterBar).getByRole('button', { name: /담당자 필터 수정/ }))
+    expect(within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })).toBeInTheDocument()
+
+    await api.frontmatter!.saveSchema({
+      version: 1,
+      fields: FULL_SEARCH_SCHEMA.fields.filter((field) => field.key !== 'assignee')
+    })
+
+    await waitFor(() => {
+      expect(within(filterBar).queryByRole('dialog', { name: '프론트매터 필터 설정' })).not.toBeInTheDocument()
+      expect(within(filterBar).queryByRole('button', { name: /담당자 필터 수정/ })).not.toBeInTheDocument()
+    })
+  })
 })

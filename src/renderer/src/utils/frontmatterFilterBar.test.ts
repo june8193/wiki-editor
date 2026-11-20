@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkspaceFrontmatterSchema } from '@shared/frontmatter'
 import {
+  buildConditionFromDraft,
   buildFilterSelectableOptions,
+  createFilterEditDraft,
+  cycleListboxIndex,
   DEFAULT_WORKSPACE_SEARCH_SORT,
   extractDisplaySummaryBadges,
   formatFilterChipLabel,
@@ -123,7 +126,7 @@ describe('frontmatterFilterBar utils', () => {
     expect(
       buildFilterSelectableOptions(
         labelsField,
-        { labels: ['alpha', 'backend', 'zebra'], strictTags: ['should-ignore'] },
+        ['alpha', 'backend', 'zebra'],
         ['selected-old']
       )
     ).toEqual([
@@ -134,7 +137,7 @@ describe('frontmatterFilterBar utils', () => {
     ])
 
     expect(
-      buildFilterSelectableOptions(strictField, { strictTags: ['should-ignore'] })
+      buildFilterSelectableOptions(strictField, ['should-ignore'])
     ).toEqual([{ value: 'core' }])
   })
 
@@ -182,5 +185,38 @@ describe('frontmatterFilterBar utils', () => {
     const scalar1 = upsertBadgeFilterCondition([], scoreField, 4)
     expect(scalar1.nextConditions).toEqual([{ fieldKey: 'score', operator: 'equals', value: 4 }])
     expect(upsertBadgeFilterCondition(scalar1.nextConditions, scoreField, 4).changed).toBe(false)
+  })
+
+  it('deduplicates repeated multi-select values in display summary badges', () => {
+    const badges = extractDisplaySummaryBadges(
+      {
+        labels: ['backend', 'backend', 'custom', 'custom']
+      },
+      SCHEMA
+    )
+    expect(badges.map((badge) => badge.id)).toEqual(['labels:backend', 'labels:custom'])
+  })
+
+  it('cycles listbox indices cleanly and creates/validates popover filter drafts', () => {
+    expect(cycleListboxIndex(0, 0, 1)).toBe(-1)
+    expect(cycleListboxIndex(0, 3, -1)).toBe(2)
+    expect(cycleListboxIndex(2, 3, 1)).toBe(0)
+
+    const scoreField = SCHEMA.fields[3]
+    const editDraft = createFilterEditDraft(
+      { fieldKey: 'score', operator: 'between', min: 10, max: 2 },
+      1
+    )
+    expect(editDraft.step).toBe('value')
+    expect(buildConditionFromDraft(scoreField, editDraft)).toEqual({
+      ok: false,
+      error: '최솟값은 최댓값보다 클 수 없습니다.'
+    })
+
+    const validDraft = { ...editDraft, minValue: '2', maxValue: '10' }
+    expect(buildConditionFromDraft(scoreField, validDraft)).toEqual({
+      ok: true,
+      condition: { fieldKey: 'score', operator: 'between', min: 2, max: 10 }
+    })
   })
 })
