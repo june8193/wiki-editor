@@ -151,36 +151,29 @@ export function useGitController({
       }
       if (!fetchRepoMetadata && !refreshStashes) return
 
+      const runNonFatalQuery = <T,>(
+        query: Promise<T>,
+        applyResult: (value: T) => void
+      ): Promise<void> =>
+        query
+          .then((value) => {
+            if (!isCurrentRequest(rootPath, epoch) || requestSeqRef.current !== applySeq) {
+              return
+            }
+            applyResult(value)
+          })
+          .catch(() => {
+            // Auxiliary metadata lookups are non-fatal when Git status already succeeded
+          })
+
       const tasks: Array<Promise<unknown>> = []
       if (refreshStashes) {
-        tasks.push(
-          wikiApi.git
-            .stashList(rootPath)
-            .then((nextStashes) => {
-              if (!isCurrentRequest(rootPath, epoch) || requestSeqRef.current !== applySeq) {
-                return
-              }
-              setStashes(nextStashes)
-            })
-            .catch(() => {
-              // Stash lookup failures are non-fatal if status succeeded cleanly
-            })
-        )
+        tasks.push(runNonFatalQuery(wikiApi.git.stashList(rootPath), setStashes))
       }
 
       if (fetchRepoMetadata) {
         tasks.push(
-          wikiApi.git
-            .branches(rootPath)
-            .then((nextBranches) => {
-              if (!isCurrentRequest(rootPath, epoch) || requestSeqRef.current !== applySeq) {
-                return
-              }
-              setBranchList(nextBranches)
-            })
-            .catch(() => {
-              // Branch lookup failures are non-fatal if status succeeded cleanly
-            }),
+          runNonFatalQuery(wikiApi.git.branches(rootPath), setBranchList),
           refreshGraph(rootPath, epoch)
         )
       }
