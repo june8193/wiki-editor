@@ -419,4 +419,42 @@ describe('SharedDocumentBufferHub race guards', () => {
       hub.dispose()
     }
   })
+
+  it('ignores a slower refreshCleanWorkspaceFile read even when a faster read matched the initial content without bumping version (ABA race)', async () => {
+    const filePath = 'C:/wiki/.wiki-editor/frontmatter.json'
+    const firstRead = createDeferred<string>()
+    const secondRead = createDeferred<string>()
+    let readIndex = 0
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async () => {
+          readIndex += 1
+          return readIndex === 1 ? firstRead.promise : secondRead.promise
+        },
+        writeWorkspaceFile: async () => undefined,
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+
+    try {
+      const opened = await hub.openWorkspaceFile(filePath, 'frontmatter.json', 'A', 1)
+      hub.syncWindowTabs(1, [opened.key])
+
+      const slowRefresh = hub.refreshCleanWorkspaceFile(filePath)
+      const fastRefresh = hub.refreshCleanWorkspaceFile(filePath)
+
+      secondRead.resolve('A')
+      await fastRefresh
+      expect(hub.getBuffer(opened.key)?.content).toBe('A')
+
+      firstRead.resolve('B')
+      await slowRefresh
+      expect(hub.getBuffer(opened.key)?.content).toBe('A')
+    } finally {
+      hub.dispose()
+    }
+  })
 })

@@ -68,11 +68,13 @@ export class SharedDocumentBufferHub {
   private readonly inFlightOpens = new Map<string, InFlightOpenEntry>()
   private readonly inFlightSaves = new Map<string, InFlightSaveEntry>()
   private readonly discardingRefCounts = new Map<string, number>()
+  private readonly cleanRefreshTokens = new Map<string, number>()
   private readonly autoSaveScheduler: BufferAutoSaveScheduler
   private readonly storage: SharedDocumentBufferStorage
   private readonly logError?: (message: string, details?: Record<string, unknown>) => void
 
   private revision = 0
+  private nextCleanRefreshToken = 0
   private disposed = false
 
   constructor(options: SharedDocumentBufferHubOptions) {
@@ -193,6 +195,9 @@ export class SharedDocumentBufferHub {
     const keyList = [...keys]
     this.autoSaveScheduler.clearForKeys(keyList)
     this.tabTracker.clearPendingForKeys(keyList)
+    for (const key of keyList) {
+      this.cleanRefreshTokens.delete(key)
+    }
   }
 
   private removeOrphanedBuffers(
@@ -377,12 +382,16 @@ export class SharedDocumentBufferHub {
       return existing ? { ...existing } : null
     }
 
+    const refreshToken = ++this.nextCleanRefreshToken
+    this.cleanRefreshTokens.set(existing.key, refreshToken)
+
     const freshRaw = await readRaw(existing)
     if (this.disposed) {
       return null
     }
     const latest = getBuffer()
     if (
+      this.cleanRefreshTokens.get(existing.key) !== refreshToken ||
       !latest ||
       latest.isDirty ||
       latest.key !== existing.key ||
@@ -1011,5 +1020,6 @@ export class SharedDocumentBufferHub {
     this.inFlightOpens.clear()
     this.inFlightSaves.clear()
     this.discardingRefCounts.clear()
+    this.cleanRefreshTokens.clear()
   }
 }

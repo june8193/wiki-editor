@@ -13,12 +13,13 @@ import {
   type ImageTransferContextValue
 } from '../hooks/useEditorImageTransfer'
 import { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
+import type { OpenedWorkspaceDocument } from '../hooks/useEditorWorkspace'
 import {
   useMarkdownLinkNavigation,
   type UseMarkdownLinkNavigationOptions
 } from '../hooks/useMarkdownLinkNavigation'
 import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
-import { getPaneActiveTab } from '../stores/PaneTabStore'
+import { getPaneActiveTab, type PaneId } from '../stores/PaneTabStore'
 import {
   createTwoSectionSplitState,
   toggleBottomSectionCollapsed,
@@ -90,7 +91,12 @@ export interface EditorWindowFrameProps {
   showHeadingNumbers: boolean
   onToggleHeadingNumbers: () => void
   workspaceRootPath?: string | null
-  openWorkspaceFile: UseMarkdownLinkNavigationOptions['openWorkspaceFile']
+  openWorkspaceFile: (
+    filePath: string,
+    targetPaneId?: PaneId,
+    explicitName?: string,
+    isCancelled?: () => boolean
+  ) => Promise<OpenedWorkspaceDocument | null>
   reportErrorBanner: UseMarkdownLinkNavigationOptions['reportErrorBanner']
   imageTransferContextValue?: ImageTransferContextValue
   initialRightSidebarCollapsed?: boolean
@@ -200,7 +206,12 @@ export function EditorWindowFrame({
     if (!targetPath) {
       throw new Error('프론트매터 스키마 파일을 준비하지 못했습니다.')
     }
-    const opened = await openWorkspaceFile(targetPath, undefined, FRONTMATTER_SCHEMA_FILE)
+    const opened = await openWorkspaceFile(
+      targetPath,
+      undefined,
+      FRONTMATTER_SCHEMA_FILE,
+      () => startedRoot !== workspaceRootRef.current
+    )
     if (startedRoot !== workspaceRootRef.current) return false
     return Boolean(opened)
   }, [ensureSchemaFilePath, openWorkspaceFile])
