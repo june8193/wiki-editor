@@ -98,6 +98,32 @@ export type GitDiffRequest =
       commitHash: string
       shortHash: string
     } & GitChangedFile)
+  | ({
+      kind: 'stash'
+      stashRef: string
+      stashHash: string
+    } & GitChangedFile)
+
+export type GitStashScope = 'unstaged' | 'all' | 'paths'
+
+export interface GitStashEntry {
+  ref: string
+  hash: string
+  branch: string | null
+  message: string
+  createdAt: string
+}
+
+export interface GitStashDetail extends GitStashEntry {
+  files: GitChangedFile[]
+}
+
+export interface GitStashCreateOptions {
+  scope: GitStashScope
+  message?: string
+  includeUntracked?: boolean
+  paths?: string[]
+}
 
 export interface GitFileDiff extends GitChangedFile {
   isBinary: boolean
@@ -128,4 +154,37 @@ export function getGitChangedCount(status: GitStatus | null): number {
     return 0
   }
   return status.staged.length + status.unstaged.length + status.untracked.length
+}
+
+/**
+ * Collects unique repo-relative paths present in `Staged Changes` (including rename origins).
+ */
+export function collectGitStagedPaths(status: GitStatus): string[] {
+  return [
+    ...new Set(
+      status.staged.flatMap((item) => (item.origPath ? [item.path, item.origPath] : [item.path]))
+    )
+  ]
+}
+
+/**
+ * Collects unique repo-relative paths present in `Changes` (`unstaged` + optional `untracked`).
+ */
+export function collectGitUnstagedPaths(status: GitStatus, includeUntracked: boolean): string[] {
+  const paths = new Set(status.unstaged.map((item) => item.path))
+  if (includeUntracked) {
+    for (const item of status.untracked) {
+      paths.add(item.path)
+    }
+  }
+  return [...paths]
+}
+
+/**
+ * Collects all unique repo-relative paths present in `status` (`staged`, `unstaged`, optional `untracked`).
+ */
+export function collectGitStatusPaths(status: GitStatus, includeUntracked: boolean): string[] {
+  return [
+    ...new Set([...collectGitStagedPaths(status), ...collectGitUnstagedPaths(status, includeUntracked)])
+  ]
 }

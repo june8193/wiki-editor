@@ -1,5 +1,6 @@
 import { memo, useMemo } from 'react'
 import {
+  Archive,
   Check,
   ChevronDown,
   ChevronRight,
@@ -102,11 +103,13 @@ interface GitChangesSubgroupProps {
   onToggleCollapsed: () => void
   onToggleTreeDir: (dirKey: string) => void
   onBulkAction: () => void
+  onBulkStash?: () => void
   onBulkDiscard?: () => void
   onSelectFile: (file: GitChangedFile) => void
   onOpenWorkspaceFile: (repoRelativePath: string) => void
   onItemAction: (file: GitChangedFile) => void
   onDiscardFile?: (file: GitChangedFile) => void
+  onStashFile?: (file: GitChangedFile) => void
 }
 
 function GitChangesSubgroup({
@@ -125,11 +128,13 @@ function GitChangesSubgroup({
   onToggleCollapsed,
   onToggleTreeDir,
   onBulkAction,
+  onBulkStash,
   onBulkDiscard,
   onSelectFile,
   onOpenWorkspaceFile,
   onItemAction,
-  onDiscardFile
+  onDiscardFile,
+  onStashFile
 }: GitChangesSubgroupProps) {
   const treeNodes = useMemo(
     () => (viewMode === 'tree' ? buildCompressedGitFileTree(files) : []),
@@ -152,6 +157,7 @@ function GitChangesSubgroup({
       onSelectFile={onSelectFile}
       onOpenWorkspaceFile={onOpenWorkspaceFile}
       onDiscardFile={onDiscardFile}
+      onStashFile={onStashFile}
       onItemAction={onItemAction}
     />
   )
@@ -219,6 +225,18 @@ function GitChangesSubgroup({
         </button>
 
         <div className="git-section-actions">
+          {onBulkStash && (
+            <button
+              type="button"
+              className="git-hover-icon-btn"
+              aria-label="Changes만 Stash"
+              title="Changes만 Stash"
+              disabled={isBusy || files.length === 0}
+              onClick={onBulkStash}
+            >
+              <Archive size={13} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+          )}
           {onBulkDiscard && (
             <button
               type="button"
@@ -271,6 +289,7 @@ export interface GitChangesFileGroupsProps {
   onToggleTreeDir: (dirKey: string) => void
   onStageAll: () => void
   onUnstageAll: () => void
+  onStashChanges: () => void
   onDiscardAll: () => void
   onSelectStagedFile: (file: GitChangedFile) => void
   onSelectWorkingFile: (file: GitChangedFile) => void
@@ -278,6 +297,7 @@ export interface GitChangesFileGroupsProps {
   onStageFile: (file: GitChangedFile) => void
   onUnstageFile: (file: GitChangedFile) => void
   onDiscardFile: (file: GitChangedFile) => void
+  onStashFile: (file: GitChangedFile) => void
 }
 
 /**
@@ -295,13 +315,15 @@ export const GitChangesFileGroups = memo(function GitChangesFileGroups({
   onToggleTreeDir,
   onStageAll,
   onUnstageAll,
+  onStashChanges,
   onDiscardAll,
   onSelectStagedFile,
   onSelectWorkingFile,
   onOpenWorkspaceFile,
   onStageFile,
   onUnstageFile,
-  onDiscardFile
+  onDiscardFile,
+  onStashFile
 }: GitChangesFileGroupsProps) {
   return (
     <>
@@ -343,11 +365,13 @@ export const GitChangesFileGroups = memo(function GitChangesFileGroups({
         onToggleCollapsed={() => onToggleGroupCollapsed('changes')}
         onToggleTreeDir={onToggleTreeDir}
         onBulkAction={onStageAll}
+        onBulkStash={onStashChanges}
         onBulkDiscard={onDiscardAll}
         onSelectFile={onSelectWorkingFile}
         onOpenWorkspaceFile={onOpenWorkspaceFile}
         onItemAction={onStageFile}
         onDiscardFile={onDiscardFile}
+        onStashFile={onStashFile}
       />
     </>
   )

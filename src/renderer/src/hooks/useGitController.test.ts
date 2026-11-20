@@ -5,6 +5,8 @@ import {
   type GitCommitDetail,
   type GitGraphCommit,
   type GitLogResult,
+  type GitStashDetail,
+  type GitStashEntry,
   type GitStatus
 } from '@shared/git'
 import type { WikiApi } from '@shared/ipc'
@@ -74,6 +76,20 @@ function installMockGitWikiApi(overrides: Partial<WikiApi['git']> = {}): void {
         existsInWorkspace: true,
         rawPatch: ''
       })),
+      stashList: vi.fn(async () => []),
+      stashDetail: vi.fn(async (_ws: string, stashRef: string) => ({
+        ref: stashRef,
+        hash: '0000000000000000000000000000000000000000',
+        branch: null,
+        message: '',
+        createdAt: '',
+        files: []
+      })),
+      stashCreate: vi.fn(),
+      stashApply: vi.fn(),
+      stashPop: vi.fn(),
+      stashDrop: vi.fn(async () => []),
+      stashClear: vi.fn(async () => []),
       ...overrides
     }
   } as unknown as WikiApi
@@ -115,7 +131,8 @@ describe('useGitController', () => {
         pull: pullMock,
         push: vi.fn(),
         sync: vi.fn(),
-        log: vi.fn(async () => ({ commits: [], hasMore: false }))
+        log: vi.fn(async () => ({ commits: [], hasMore: false })),
+        stashList: vi.fn(async () => [])
       }
     } as unknown as WikiApi
 
@@ -187,7 +204,8 @@ describe('useGitController', () => {
         pull: vi.fn(),
         push: vi.fn(),
         sync: vi.fn(),
-        log: vi.fn(async () => ({ commits: [], hasMore: false }))
+        log: vi.fn(async () => ({ commits: [], hasMore: false })),
+        stashList: vi.fn(async () => [])
       }
     } as unknown as WikiApi
 
@@ -246,7 +264,8 @@ describe('useGitController', () => {
         pull: pullMock,
         push: vi.fn(),
         sync: vi.fn(),
-        log: vi.fn(async () => ({ commits: [], hasMore: false }))
+        log: vi.fn(async () => ({ commits: [], hasMore: false })),
+        stashList: vi.fn(async () => [])
       }
     } as unknown as WikiApi
 
@@ -335,7 +354,8 @@ describe('useGitController', () => {
         pull: vi.fn(async () => nextStatus),
         push: vi.fn(async () => nextStatus),
         sync: vi.fn(async () => nextStatus),
-        log: logMock
+        log: logMock,
+        stashList: vi.fn(async () => [])
       }
     } as unknown as WikiApi
 
@@ -437,7 +457,8 @@ describe('useGitController', () => {
         pull: vi.fn(),
         push: vi.fn(),
         sync: vi.fn(),
-        log: logMock
+        log: logMock,
+        stashList: vi.fn(async () => [])
       }
     } as unknown as WikiApi
 
@@ -704,8 +725,8 @@ describe('useGitController', () => {
 
     let confirmDecision = false
     const confirmBeforeWorkspaceMutation = vi.fn(async () => confirmDecision)
-    const onBeforeWorkspaceDiscard = vi.fn(async () => undefined)
-    const onAfterWorkspaceDiscard = vi.fn(async () => undefined)
+    const onBeforeWorkspaceBufferMutation = vi.fn(async () => undefined)
+    const onAfterWorkspaceBufferMutation = vi.fn(async () => undefined)
     const onWorkspaceMutated = vi.fn(async () => [])
     const activeTransitions: boolean[] = []
 
@@ -713,8 +734,8 @@ describe('useGitController', () => {
       useGitController({
         workspaceRootPath: 'C:/wiki',
         confirmBeforeWorkspaceMutation,
-        onBeforeWorkspaceDiscard,
-        onAfterWorkspaceDiscard,
+        onBeforeWorkspaceBufferMutation,
+        onAfterWorkspaceBufferMutation,
         onWorkspaceMutated,
         onWorkspaceMutationActiveChange: (active) => activeTransitions.push(active)
       })
@@ -730,9 +751,9 @@ describe('useGitController', () => {
       await result.current.discardFile('notes.md')
     })
     expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledWith('변경 사항 롤백', ['notes.md'])
-    expect(onBeforeWorkspaceDiscard).not.toHaveBeenCalled()
+    expect(onBeforeWorkspaceBufferMutation).not.toHaveBeenCalled()
     expect(discardMock).not.toHaveBeenCalled()
-    expect(onAfterWorkspaceDiscard).not.toHaveBeenCalled()
+    expect(onAfterWorkspaceBufferMutation).not.toHaveBeenCalled()
     expect(onWorkspaceMutated).not.toHaveBeenCalled()
     expect(activeTransitions).toEqual([true, false])
 
@@ -741,11 +762,15 @@ describe('useGitController', () => {
     await act(async () => {
       await result.current.discardFile('notes.md')
     })
-    expect(onBeforeWorkspaceDiscard).toHaveBeenCalledWith({ scope: 'paths', paths: ['notes.md'] })
+    expect(onBeforeWorkspaceBufferMutation).toHaveBeenCalledWith({
+      kind: 'discard-paths',
+      paths: ['notes.md']
+    })
     expect(discardMock).toHaveBeenCalledWith('C:/wiki', ['notes.md'])
-    expect(onAfterWorkspaceDiscard).toHaveBeenCalledWith(
-      { scope: 'paths', paths: ['notes.md'] },
-      true
+    expect(onAfterWorkspaceBufferMutation).toHaveBeenCalledWith(
+      { kind: 'discard-paths', paths: ['notes.md'] },
+      true,
+      cleanStatus
     )
     expect(onWorkspaceMutated).not.toHaveBeenCalled()
     expect(result.current.status?.unstaged).toEqual([])
@@ -755,9 +780,10 @@ describe('useGitController', () => {
     await act(async () => {
       await result.current.discardFile('notes.md')
     })
-    expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith(
-      { scope: 'paths', paths: ['notes.md'] },
-      false
+    expect(onAfterWorkspaceBufferMutation).toHaveBeenLastCalledWith(
+      { kind: 'discard-paths', paths: ['notes.md'] },
+      false,
+      dirtyStatus
     )
     expect(result.current.errorMessage).toBe('discard failed')
   })
@@ -789,16 +815,16 @@ describe('useGitController', () => {
 
     let confirmDecision = false
     const confirmBeforeWorkspaceMutation = vi.fn(async () => confirmDecision)
-    const onBeforeWorkspaceDiscard = vi.fn(async () => undefined)
-    const onAfterWorkspaceDiscard = vi.fn(async () => undefined)
+    const onBeforeWorkspaceBufferMutation = vi.fn(async () => undefined)
+    const onAfterWorkspaceBufferMutation = vi.fn(async () => undefined)
     const onWorkspaceMutated = vi.fn(async () => [])
 
     const { result } = renderHook(() =>
       useGitController({
         workspaceRootPath: 'C:/wiki',
         confirmBeforeWorkspaceMutation,
-        onBeforeWorkspaceDiscard,
-        onAfterWorkspaceDiscard,
+        onBeforeWorkspaceBufferMutation,
+        onAfterWorkspaceBufferMutation,
         onWorkspaceMutated
       })
     )
@@ -817,23 +843,24 @@ describe('useGitController', () => {
       '전체 변경 사항 롤백',
       expectedTargets
     )
-    expect(onBeforeWorkspaceDiscard).not.toHaveBeenCalled()
+    expect(onBeforeWorkspaceBufferMutation).not.toHaveBeenCalled()
     expect(discardAllMock).not.toHaveBeenCalled()
-    expect(onAfterWorkspaceDiscard).not.toHaveBeenCalled()
+    expect(onAfterWorkspaceBufferMutation).not.toHaveBeenCalled()
 
     // 2. Approved confirmation runs discardAll, skips log refetch, and passes scope=all
     confirmDecision = true
     await act(async () => {
       await result.current.discardAll()
     })
-    expect(onBeforeWorkspaceDiscard).toHaveBeenCalledWith({
-      scope: 'all',
+    expect(onBeforeWorkspaceBufferMutation).toHaveBeenCalledWith({
+      kind: 'discard-all',
       paths: expectedTargets
     })
     expect(discardAllMock).toHaveBeenCalledWith('C:/wiki')
-    expect(onAfterWorkspaceDiscard).toHaveBeenCalledWith(
-      { scope: 'all', paths: expectedTargets },
-      true
+    expect(onAfterWorkspaceBufferMutation).toHaveBeenCalledWith(
+      { kind: 'discard-all', paths: expectedTargets },
+      true,
+      cleanAfterStatus
     )
     expect(onWorkspaceMutated).not.toHaveBeenCalled()
     expect(result.current.status?.unstaged).toEqual([])
@@ -845,7 +872,11 @@ describe('useGitController', () => {
     await act(async () => {
       await result.current.discardAll()
     })
-    expect(onAfterWorkspaceDiscard).toHaveBeenLastCalledWith({ scope: 'all', paths: [] }, false)
+    expect(onAfterWorkspaceBufferMutation).toHaveBeenLastCalledWith(
+      { kind: 'discard-all', paths: [] },
+      false,
+      mixedStatus
+    )
     expect(result.current.errorMessage).toBe('discardAll failed')
   })
 
@@ -1258,5 +1289,489 @@ describe('useGitController', () => {
     expect(failResult).toBe(true)
     expect(onWorkspaceMutated).toHaveBeenCalledTimes(2)
     expect(result.current.errorMessage).toBe('원격 Sync 충돌 발생')
+  })
+
+  it('loads stashes, runs stashChanges with target-scoped confirm/sync & auto-expand, and runs stashApply/stashPop with full confirm & conflict preservation', async () => {
+    const stash0: GitStashEntry = {
+      ref: 'stash@{0}',
+      hash: '1111111111111111111111111111111111111111',
+      branch: 'main',
+      message: 'WIP on main: seed',
+      createdAt: '2026-11-20T10:00:00+09:00'
+    }
+    const initialStatus: GitStatus = {
+      ...makeStatus('main', 0),
+      staged: [{ path: 'staged.md', status: 'A' }],
+      unstaged: [{ path: 'dirty.md', status: 'M' }],
+      untracked: [{ path: 'draft.md', status: '?' }]
+    }
+    const afterStashStatus: GitStatus = {
+      ...makeStatus('main', 0),
+      staged: [{ path: 'staged.md', status: 'A' }]
+    }
+    const afterApplyStatus: GitStatus = {
+      ...afterStashStatus,
+      unstaged: [{ path: 'dirty.md', status: 'M' }],
+      untracked: [{ path: 'draft.md', status: '?' }]
+    }
+    const conflictStatus: GitStatus = {
+      ...afterStashStatus,
+      hasConflicts: true,
+      unstaged: [{ path: 'dirty.md', status: 'U' }]
+    }
+
+    let currentStatus = initialStatus
+    let currentStashes: GitStashEntry[] = []
+
+    const stashListMock = vi.fn(async () => currentStashes)
+    const stashCreateMock = vi.fn(async () => {
+      currentStatus = afterStashStatus
+      currentStashes = [stash0]
+      return currentStatus
+    })
+    const stashApplyMock = vi.fn(async () => {
+      currentStatus = afterApplyStatus
+      return currentStatus
+    })
+    const stashPopMock = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        currentStatus = conflictStatus
+        currentStashes = [stash0]
+        throw new Error('병합 충돌(Conflict)이 발생했습니다.')
+      })
+      .mockImplementationOnce(async () => {
+        currentStatus = afterApplyStatus
+        currentStashes = []
+        return currentStatus
+      })
+    const logMock = vi.fn(async () => ({ commits: [], hasMore: false }))
+
+    installMockGitWikiApi({
+      status: vi.fn(async () => currentStatus),
+      log: logMock,
+      stashList: stashListMock,
+      stashCreate: stashCreateMock,
+      stashApply: stashApplyMock,
+      stashPop: stashPopMock
+    })
+
+    let confirmDecision = false
+    const confirmBeforeWorkspaceMutation = vi.fn(async () => confirmDecision)
+    const onBeforeWorkspaceBufferMutation = vi.fn(async () => undefined)
+    const onAfterWorkspaceBufferMutation = vi.fn(async () => undefined)
+    const onWorkspaceMutated = vi.fn(async () => [])
+    const onStashCreated = vi.fn()
+
+    const { result, rerender } = renderHook(
+      ({ ws }: { ws: string | null }) =>
+        useGitController({
+          workspaceRootPath: ws,
+          confirmBeforeWorkspaceMutation,
+          onBeforeWorkspaceBufferMutation,
+          onAfterWorkspaceBufferMutation,
+          onWorkspaceMutated,
+          onStashCreated
+        }),
+      { initialProps: { ws: 'C:/wiki' as string | null } }
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.unstaged).toHaveLength(1)
+    })
+    expect(result.current.stashes).toEqual([])
+    const logCallsInitial = logMock.mock.calls.length
+
+    // 1. Canceled confirmation aborts stashChanges cleanly without calling git or expanding
+    await act(async () => {
+      await result.current.stashChanges()
+    })
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledWith('Changes Stash', [
+      'dirty.md',
+      'draft.md'
+    ])
+    expect(stashCreateMock).not.toHaveBeenCalled()
+    expect(onBeforeWorkspaceBufferMutation).not.toHaveBeenCalled()
+    expect(onStashCreated).not.toHaveBeenCalled()
+
+    // 2. Approved stashChanges creates stash, updates stashes, calls onStashCreated, and skips log refetch
+    confirmDecision = true
+    await act(async () => {
+      await result.current.stashChanges()
+    })
+    expect(onBeforeWorkspaceBufferMutation).toHaveBeenCalledWith({
+      kind: 'stash-create',
+      paths: ['dirty.md', 'draft.md']
+    })
+    expect(stashCreateMock).toHaveBeenCalledWith('C:/wiki', {
+      scope: 'unstaged',
+      includeUntracked: true
+    })
+    expect(onAfterWorkspaceBufferMutation).toHaveBeenCalledWith(
+      {
+        kind: 'stash-create',
+        paths: ['dirty.md', 'draft.md']
+      },
+      true,
+      afterStashStatus
+    )
+    expect(onWorkspaceMutated).not.toHaveBeenCalled()
+    expect(onStashCreated).toHaveBeenCalledTimes(1)
+    expect(result.current.stashes).toEqual([stash0])
+    expect(result.current.status?.unstaged).toEqual([])
+    expect(logMock).toHaveBeenCalledTimes(logCallsInitial)
+
+    // 3. stashApply checks full workspace (undefined paths), reconciles via onWorkspaceMutated (not force-discard), and preserves stash entry
+    await act(async () => {
+      await result.current.stashApply('stash@{0}')
+    })
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenLastCalledWith('Stash Apply')
+    expect(onBeforeWorkspaceBufferMutation).toHaveBeenCalledTimes(1)
+    expect(stashApplyMock).toHaveBeenCalledWith('C:/wiki', 'stash@{0}')
+    expect(onWorkspaceMutated).toHaveBeenLastCalledWith(afterApplyStatus)
+    expect(result.current.stashes).toEqual([stash0])
+
+    // 4. stashPop conflict refreshes fresh status & preserves stash list, reconciles with conflictStatus while keeping conflict error
+    currentStatus = conflictStatus
+    await act(async () => {
+      await result.current.stashPop('stash@{0}')
+    })
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenLastCalledWith('Stash Pop')
+    expect(result.current.errorMessage).toMatch(/충돌/)
+    expect(result.current.stashes).toEqual([stash0])
+    expect(onWorkspaceMutated).toHaveBeenLastCalledWith(conflictStatus)
+
+    // 5. Clean stashPop clears stash list
+    await act(async () => {
+      await result.current.stashPop('stash@{0}')
+    })
+    expect(result.current.stashes).toEqual([])
+    expect(logMock).toHaveBeenCalledTimes(logCallsInitial)
+
+    // 6. Switching workspace clears stashes immediately
+    currentStashes = [stash0]
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    expect(result.current.stashes).toEqual([stash0])
+    rerender({ ws: null })
+    expect(result.current.stashes).toEqual([])
+  })
+
+  it('supports single-file stash, options-based stashCreate, stashDrop, and stashClear', async () => {
+    const baseStatus = makeStatus('main')
+    const initialStatus: GitStatus = {
+      ...baseStatus,
+      staged: [{ path: 'staged.md', status: 'M' }],
+      unstaged: [{ path: 'target.md', status: 'M' }],
+      untracked: [{ path: 'draft.md', status: '?' }]
+    }
+    const stash0: GitStashEntry = {
+      ref: 'stash@{0}',
+      hash: '1111111111111111111111111111111111111111',
+      branch: 'main',
+      message: 'target only',
+      createdAt: '2026-11-20T12:00:00Z'
+    }
+    const stash1: GitStashEntry = {
+      ref: 'stash@{1}',
+      hash: '2222222222222222222222222222222222222222',
+      branch: 'main',
+      message: 'WIP release',
+      createdAt: '2026-11-20T12:05:00Z'
+    }
+
+    let currentStatus = initialStatus
+    let currentStashes: GitStashEntry[] = []
+    const stashCreateMock = vi.fn(async () => {
+      currentStashes = [...currentStashes, stash0]
+      return currentStatus
+    })
+    const stashDropMock = vi.fn(async (_ws: string, stashRef: string) => {
+      if (stashRef === 'stash@{99}') {
+        throw new Error('지정한 Stash 항목을 찾을 수 없습니다.')
+      }
+      currentStashes = [
+        {
+          ...stash1,
+          ref: 'stash@{0}'
+        }
+      ]
+      return currentStashes
+    })
+    const stashClearMock = vi.fn(async () => {
+      currentStashes = []
+      return currentStashes
+    })
+    const statusMock = vi.fn(async () => currentStatus)
+
+    installMockGitWikiApi({
+      status: statusMock,
+      stashList: vi.fn(async () => currentStashes),
+      stashCreate: stashCreateMock,
+      stashDrop: stashDropMock,
+      stashClear: stashClearMock
+    })
+
+    const confirmBeforeWorkspaceMutation = vi.fn(async () => true)
+    const onBeforeWorkspaceBufferMutation = vi.fn(async () => {})
+    const onAfterWorkspaceBufferMutation = vi.fn(async () => {})
+    const onStashCreated = vi.fn()
+
+    const { result } = renderHook(() =>
+      useGitController({
+        workspaceRootPath: 'C:/wiki',
+        confirmBeforeWorkspaceMutation,
+        onBeforeWorkspaceBufferMutation,
+        onAfterWorkspaceBufferMutation,
+        onStashCreated
+      })
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.branch).toBe('main')
+    })
+
+    // 1. stashFile scopes dirty buffer check & stashCreate to the single target path
+    currentStatus = {
+      ...baseStatus,
+      staged: initialStatus.staged,
+      unstaged: [],
+      untracked: initialStatus.untracked
+    }
+    await act(async () => {
+      await expect(result.current.stashFile('target.md')).resolves.toBe(true)
+    })
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenLastCalledWith('파일 Stash', ['target.md'])
+    expect(onBeforeWorkspaceBufferMutation).toHaveBeenLastCalledWith({
+      kind: 'stash-create',
+      paths: ['target.md']
+    })
+    expect(stashCreateMock).toHaveBeenLastCalledWith('C:/wiki', {
+      scope: 'paths',
+      includeUntracked: true,
+      paths: ['target.md']
+    })
+    expect(onStashCreated).toHaveBeenCalledTimes(1)
+    expect(result.current.stashes).toEqual([stash0])
+
+    // 2. stashWithOptions with scope: 'all' and includeUntracked: false excludes untracked paths from buffer target
+    currentStatus = initialStatus
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    currentStatus = {
+      ...baseStatus,
+      staged: [],
+      unstaged: [],
+      untracked: initialStatus.untracked
+    }
+    await act(async () => {
+      await expect(
+        result.current.stashWithOptions({
+          scope: 'all',
+          message: 'WIP release',
+          includeUntracked: false
+        })
+      ).resolves.toBe(true)
+    })
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenLastCalledWith('전체 변경 사항 Stash', [
+      'staged.md',
+      'target.md'
+    ])
+    expect(stashCreateMock).toHaveBeenLastCalledWith('C:/wiki', {
+      scope: 'all',
+      message: 'WIP release',
+      includeUntracked: false
+    })
+    expect(onStashCreated).toHaveBeenCalledTimes(2)
+
+    // 3. stashDrop skips buffer confirm/mutation hooks and updates stashes directly from return value
+    const confirmCountBeforeDrop = confirmBeforeWorkspaceMutation.mock.calls.length
+    const bufferBeforeCountBeforeDrop = onBeforeWorkspaceBufferMutation.mock.calls.length
+    await act(async () => {
+      await expect(result.current.stashDrop('stash@{0}')).resolves.toBe(true)
+    })
+    expect(stashDropMock).toHaveBeenCalledWith('C:/wiki', 'stash@{0}')
+    expect(result.current.stashes).toEqual([{ ...stash1, ref: 'stash@{0}' }])
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledTimes(confirmCountBeforeDrop)
+    expect(onBeforeWorkspaceBufferMutation).toHaveBeenCalledTimes(bufferBeforeCountBeforeDrop)
+
+    // 4. stashDrop surfaces errors without triggering workspace buffer prompts
+    await act(async () => {
+      await expect(result.current.stashDrop('stash@{99}')).resolves.toBe(false)
+    })
+    expect(result.current.errorMessage).toBe('지정한 Stash 항목을 찾을 수 없습니다.')
+
+    // 5. stashClear empties stashes and skips buffer confirm/mutation hooks
+    await act(async () => {
+      await expect(result.current.stashClear()).resolves.toBe(true)
+    })
+    expect(stashClearMock).toHaveBeenCalledWith('C:/wiki')
+    expect(result.current.stashes).toEqual([])
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledTimes(confirmCountBeforeDrop)
+    expect(onBeforeWorkspaceBufferMutation).toHaveBeenCalledTimes(bufferBeforeCountBeforeDrop)
+  })
+
+  it('toggles single inline stashDetail (loading/loaded/error/collapse), drops stale responses, prunes removed stash details, and notifies onStashesUpdated', async () => {
+    const stash0: GitStashEntry = {
+      ref: 'stash@{0}',
+      hash: '1111111111111111111111111111111111111111',
+      branch: 'main',
+      message: 'first draft',
+      createdAt: '2026-11-20T10:00:00Z'
+    }
+    const stash1: GitStashEntry = {
+      ref: 'stash@{1}',
+      hash: '2222222222222222222222222222222222222222',
+      branch: 'main',
+      message: 'second draft',
+      createdAt: '2026-11-20T09:00:00Z'
+    }
+    const detail0: GitStashDetail = {
+      ...stash0,
+      files: [{ path: 'draft.md', status: '?' }]
+    }
+    const detail1: GitStashDetail = {
+      ...stash1,
+      files: [{ path: 'notes.md', status: 'M' }]
+    }
+
+    let currentStashes: GitStashEntry[] = [stash0, stash1]
+    let resolveDelayed0!: (value: GitStashDetail) => void
+    let failSecondDetail = false
+    const stashDetailMock = vi.fn(async (_ws: string, stashRef: string) => {
+      if (stashRef === 'stash@{0}') {
+        return new Promise<GitStashDetail>((resolve) => {
+          resolveDelayed0 = resolve
+        })
+      }
+      if (failSecondDetail) {
+        throw new Error('Stash 상세 조회 실패')
+      }
+      return detail1
+    })
+
+    const status = makeStatus('main')
+    const stashApplyMock = vi.fn(async () => status)
+    const stashDropMock = vi.fn(async (_ws: string, stashRef: string) => {
+      currentStashes = currentStashes
+        .filter((entry) => entry.ref !== stashRef)
+        .map((entry, idx) => ({ ...entry, ref: `stash@{${idx}}` }))
+      return currentStashes
+    })
+    const stashClearMock = vi.fn(async () => {
+      currentStashes = []
+      return currentStashes
+    })
+
+    installMockGitWikiApi({
+      status: vi.fn(async () => status),
+      stashList: vi.fn(async () => currentStashes),
+      stashDetail: stashDetailMock,
+      stashApply: stashApplyMock,
+      stashDrop: stashDropMock,
+      stashClear: stashClearMock
+    })
+
+    const onStashesUpdated = vi.fn()
+    const { result, rerender } = renderHook(
+      ({ ws }: { ws: string | null }) =>
+        useGitController({
+          workspaceRootPath: ws,
+          onStashesUpdated
+        }),
+      { initialProps: { ws: 'C:/wiki' as string | null } }
+    )
+
+    await waitFor(() => {
+      expect(result.current.stashes).toHaveLength(2)
+    })
+    expect(result.current.stashDetail).toEqual({ status: 'idle' })
+    expect(onStashesUpdated).toHaveBeenLastCalledWith([stash0, stash1])
+
+    // 1. Start loading stash0, then immediately switch to stash1 -> stale stash0 response is ignored
+    let p0!: Promise<void>
+    act(() => {
+      p0 = result.current.toggleStashDetail(stash0)
+    })
+    expect(result.current.stashDetail).toEqual({ status: 'loading', selectedHash: stash0.hash })
+
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail).toEqual({
+      status: 'loaded',
+      selectedHash: stash1.hash,
+      detail: detail1
+    })
+
+    await act(async () => {
+      resolveDelayed0(detail0)
+      await p0
+    })
+    expect(result.current.stashDetail).toEqual({
+      status: 'loaded',
+      selectedHash: stash1.hash,
+      detail: detail1
+    })
+
+    // 2. Clicking the same expanded stash collapses it to idle
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail).toEqual({ status: 'idle' })
+
+    // 3. Error state when stashDetail fails, then clicking again collapses back to idle
+    failSecondDetail = true
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail).toEqual({
+      status: 'error',
+      selectedHash: stash1.hash,
+      errorMessage: 'Stash 상세 조회 실패'
+    })
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail).toEqual({ status: 'idle' })
+
+    // 4. Reload stash1 cleanly, then stashApply keeps it open; dropping stash0 keeps stash1 open; dropping remaining stash1 resets to idle
+    failSecondDetail = false
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail.status).toBe('loaded')
+
+    await act(async () => {
+      await result.current.stashApply('stash@{1}')
+    })
+    expect(result.current.stashDetail).toEqual({
+      status: 'loaded',
+      selectedHash: stash1.hash,
+      detail: detail1
+    })
+
+    await act(async () => {
+      await result.current.stashDrop('stash@{0}')
+    })
+    // stash1 survived (now at stash@{0}), so detail stays expanded and onStashesUpdated received renumbered list
+    expect(result.current.stashDetail.status).toBe('loaded')
+    expect(onStashesUpdated).toHaveBeenLastCalledWith([{ ...stash1, ref: 'stash@{0}' }])
+
+    await act(async () => {
+      await result.current.stashClear()
+    })
+    expect(result.current.stashDetail).toEqual({ status: 'idle' })
+    expect(onStashesUpdated).toHaveBeenLastCalledWith([])
+
+    // 5. Workspace switch resets stashDetail to idle
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail.status).toBe('loaded')
+    rerender({ ws: null })
+    expect(result.current.stashDetail).toEqual({ status: 'idle' })
   })
 })

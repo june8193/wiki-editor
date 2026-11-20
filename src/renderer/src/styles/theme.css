@@ -2596,6 +2596,15 @@ body.is-resizing-mermaid * {
   flex: 0 0 auto;
 }
 
+.git-accordion-section.is-compact {
+  flex: 0 1 auto;
+}
+
+.git-accordion-section.is-compact .git-accordion-body {
+  flex: 0 1 auto;
+  max-height: 180px;
+}
+
 .git-accordion-header {
   flex-shrink: 0;
   display: flex;
@@ -2897,7 +2906,8 @@ body.is-resizing-git-sections * {
 }
 
 .git-section-actions,
-.git-file-actions {
+.git-file-actions,
+.git-stash-actions {
   display: inline-flex;
   align-items: center;
   gap: 1px;
@@ -2908,12 +2918,170 @@ body.is-resizing-git-sections * {
   transition: opacity 0.12s ease;
 }
 
+.git-stash-actions {
+  gap: 3px;
+}
+
 .git-section-header:hover .git-section-actions,
 .git-section-header:focus-within .git-section-actions,
 .git-file-item:hover .git-file-actions,
-.git-file-item:focus-within .git-file-actions {
+.git-file-item:focus-within .git-file-actions,
+.git-stash-item:hover .git-stash-actions,
+.git-stash-item:focus-within .git-stash-actions {
   opacity: 1;
+}
+
+.git-section-header:hover .git-section-actions,
+.git-section-header:focus-within .git-section-actions {
   max-width: 80px;
+}
+
+.git-file-item:hover .git-file-actions,
+.git-file-item:focus-within .git-file-actions {
+  max-width: 100px;
+}
+
+.git-stash-item:hover .git-stash-actions,
+.git-stash-item:focus-within .git-stash-actions {
+  max-width: 180px;
+}
+
+.git-stash-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.git-stash-item {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: 4px;
+}
+
+.git-stash-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 4px;
+  border-radius: 4px;
+}
+
+.git-stash-item:hover .git-stash-row,
+.git-stash-item:focus-within .git-stash-row,
+.git-stash-item.is-expanded .git-stash-row {
+  background-color: var(--bg-elevated);
+}
+
+.git-stash-trigger {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.git-stash-trigger:focus-visible {
+  outline: 1px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.git-stash-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.git-stash-message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.git-stash-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.git-stash-ref {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.git-stash-time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-stash-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.git-stash-action-btn:hover:not(:disabled) {
+  background-color: var(--bg-app);
+  border-color: var(--text-secondary);
+}
+
+.git-stash-action-btn.is-danger {
+  color: var(--danger-color);
+}
+
+.git-stash-action-btn.is-danger:hover:not(:disabled) {
+  border-color: var(--danger-color);
+}
+
+.git-stash-action-btn.is-header {
+  padding: 0 5px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.git-stash-action-btn.is-header:hover:not(:disabled) {
+  background-color: var(--bg-elevated);
+}
+
+.git-stash-action-btn:focus-visible {
+  outline: 1px solid var(--accent-color);
+  outline-offset: -1px;
+}
+
+.git-stash-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .git-section-badge {
@@ -3317,7 +3485,7 @@ body.is-resizing-git-sections * {
   cursor: default;
 }
 
-.git-commit-detail {
+.git-detail {
   margin: 2px 4px 6px 14px;
   padding: 8px 10px;
   border: 1px solid var(--border-color);
@@ -3330,19 +3498,23 @@ body.is-resizing-git-sections * {
   min-width: 0;
 }
 
-.git-commit-detail-status,
-.git-commit-detail-empty-files,
-.git-commit-detail-error {
+.git-stash-detail {
+  margin: 2px 4px 4px 8px;
+}
+
+.git-detail-status,
+.git-detail-empty-files,
+.git-detail-error {
   margin: 0;
   font-size: 11px;
 }
 
-.git-commit-detail-status,
-.git-commit-detail-empty-files {
+.git-detail-status,
+.git-detail-empty-files {
   color: var(--text-secondary);
 }
 
-.git-commit-detail-error {
+.git-detail-error {
   color: var(--danger-color);
 }
 
@@ -3407,20 +3579,20 @@ body.is-resizing-git-sections * {
   white-space: nowrap;
 }
 
-.git-commit-detail-files-section {
+.git-detail-files-section {
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
 }
 
-.git-commit-detail-files-header {
+.git-detail-files-header {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
 }
 
-.git-commit-detail-files {
+.git-detail-files {
   gap: 1px;
 }
 
@@ -3994,4 +4166,72 @@ body.is-resizing-git-sections * {
   color: inherit;
   border-radius: 2px;
   outline: 1px solid var(--search-match-active-outline);
+}
+
+.git-stash-dialog {
+  width: min(440px, 100%);
+}
+
+.git-stash-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.git-stash-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.git-stash-dialog-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.git-stash-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.git-stash-dialog-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.git-stash-dialog-fieldset {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.git-stash-scope-option,
+.git-stash-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.git-stash-scope-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.git-stash-dialog-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger-color);
 }

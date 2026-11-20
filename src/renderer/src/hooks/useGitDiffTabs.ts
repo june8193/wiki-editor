@@ -28,7 +28,7 @@ function resolveEffectiveDiffRequest(
   request: GitDiffRequest,
   status: GitStatus | null
 ): GitDiffRequest {
-  if (request.kind === 'commit' || !status || !status.isRepo) {
+  if (request.kind === 'commit' || request.kind === 'stash' || !status || !status.isRepo) {
     return request
   }
 

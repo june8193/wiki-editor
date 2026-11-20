@@ -1,4 +1,4 @@
-import type { GitDiffRequest, GitLogOptions } from '@shared/git'
+import type { GitDiffRequest, GitLogOptions, GitStashCreateOptions } from '@shared/git'
 import { GIT_IPC_CHANNELS } from '@shared/ipc'
 import { isSameWorkspacePath } from '@shared/workspace'
 import type { GitService } from '../git/GitService'
@@ -118,7 +118,39 @@ export function registerGitIpc({
       withWorkspace<[GitDiffRequest], Awaited<ReturnType<GitService['diff']>>>(
         (rootPath, request) => gitService.diff(rootPath, request)
       )
-    ]
+    ],
+    [GIT_IPC_CHANNELS.stashList, withWorkspace((rootPath) => gitService.stashList(rootPath))],
+    [
+      GIT_IPC_CHANNELS.stashDetail,
+      withWorkspace<[string], Awaited<ReturnType<GitService['stashDetail']>>>(
+        (rootPath, stashRef) => gitService.stashDetail(rootPath, stashRef)
+      )
+    ],
+    [
+      GIT_IPC_CHANNELS.stashCreate,
+      withWorkspace<[GitStashCreateOptions], Awaited<ReturnType<GitService['stashCreate']>>>(
+        (rootPath, options) => gitService.stashCreate(rootPath, options)
+      )
+    ],
+    [
+      GIT_IPC_CHANNELS.stashApply,
+      withWorkspace<[string], Awaited<ReturnType<GitService['stashApply']>>>(
+        (rootPath, stashRef) => gitService.stashApply(rootPath, stashRef)
+      )
+    ],
+    [
+      GIT_IPC_CHANNELS.stashPop,
+      withWorkspace<[string], Awaited<ReturnType<GitService['stashPop']>>>((rootPath, stashRef) =>
+        gitService.stashPop(rootPath, stashRef)
+      )
+    ],
+    [
+      GIT_IPC_CHANNELS.stashDrop,
+      withWorkspace<[string], Awaited<ReturnType<GitService['stashDrop']>>>((rootPath, stashRef) =>
+        gitService.stashDrop(rootPath, stashRef)
+      )
+    ],
+    [GIT_IPC_CHANNELS.stashClear, withWorkspace((rootPath) => gitService.stashClear(rootPath))]
   ]
 
   return registerIpcHandlers(ipcMain, handlers, { logService })

@@ -751,4 +751,108 @@ describe('PaneTabStore', () => {
     expect(getDocTab('primary', docTabA.id).mermaidHeights).toBeUndefined()
     expect(getDocTab('primary', docTabB.id).mermaidHeights).toEqual({ '0': 190 })
   })
+
+  it('closeStagedDiffTabsExcept closes only staged diff tabs outside the active set across both panes', () => {
+    const store = new PaneTabStore()
+    const docTab = store.openTab('c:/wiki/docs/keep.md')
+    const keepStagedTab = store.openDiffTab({ kind: 'staged', path: 'docs/keep.md', status: 'M' })
+    store.openDiffTab({ kind: 'staged', path: 'docs/stashed.md', status: 'A' }, { paneId: 'secondary' })
+    expect(store.getSnapshot().splitMode).toBe('horizontal')
+
+    store.closeStagedDiffTabsExcept(new Set(['docs/keep.md']))
+
+    const afterFirst = store.getSnapshot()
+    expect(afterFirst.splitMode).toBe('single')
+    expect(afterFirst.panes.secondary.tabs).toHaveLength(0)
+    expect(afterFirst.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id, keepStagedTab.id])
+
+    // Primary stale staged diff tab is closed while secondary unstaged diff tab is preserved
+    store.openDiffTab({ kind: 'staged', path: 'docs/stashed.md', status: 'A' }, { paneId: 'primary' })
+    const secondaryUnstaged = store.openDiffTab(
+      { kind: 'unstaged', path: 'docs/stashed.md', status: 'M' },
+      { paneId: 'secondary' }
+    )
+    store.closeStagedDiffTabsExcept(new Set(['docs/keep.md']))
+
+    const afterSecond = store.getSnapshot()
+    expect(afterSecond.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id])
+    expect(afterSecond.panes.secondary.tabs.map((t) => t.id)).toEqual([secondaryUnstaged.id])
+  })
+
+  it('reconcileStashDiffTabs closes removed stashHash diff tabs across both panes, collapses empty split panes, and updates renumbered stashRefs', () => {
+    const store = new PaneTabStore()
+    const docTab = store.openTab('c:/wiki/docs/keep.md')
+    const hashA = '1111111111111111111111111111111111111111'
+    const hashB = '2222222222222222222222222222222222222222'
+
+    // Primary has doc + stashA; Secondary has stashB (sole tab in secondary)
+    store.openDiffTab({
+      kind: 'stash',
+      stashRef: 'stash@{0}',
+      stashHash: hashA,
+      path: 'draft-a.md',
+      status: '?'
+    })
+    store.openDiffTab(
+      {
+        kind: 'stash',
+        stashRef: 'stash@{1}',
+        stashHash: hashB,
+        path: 'notes-b.md',
+        status: 'M'
+      },
+      { paneId: 'secondary' }
+    )
+    expect(store.getSnapshot().splitMode).toBe('horizontal')
+
+    // Remove hashA (dropped stash@{0}): stashB remains and renumbers from stash@{1} to stash@{0}
+    store.reconcileStashDiffTabs([
+      {
+        ref: 'stash@{0}',
+        hash: hashB,
+        branch: 'main',
+        message: 'stash b',
+        createdAt: '2026-11-20T10:00:00Z'
+      }
+    ])
+    const afterDropA = store.getSnapshot()
+    expect(afterDropA.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id])
+    expect(afterDropA.panes.primary.activeTabId).toBe(docTab.id)
+    expect(afterDropA.splitMode).toBe('horizontal')
+    expect(afterDropA.panes.secondary.tabs[0]).toMatchObject({
+      kind: 'diff',
+      diff: {
+        request: {
+          kind: 'stash',
+          stashRef: 'stash@{0}',
+          stashHash: hashB,
+          path: 'notes-b.md',
+          status: 'M'
+        }
+      }
+    })
+
+    // Remove hashB (sole tab in secondary) -> closes tab and collapses split mode back to single
+    store.reconcileStashDiffTabs([])
+    const afterClear = store.getSnapshot()
+    expect(afterClear.splitMode).toBe('single')
+    expect(afterClear.activePaneId).toBe('primary')
+    expect(afterClear.panes.secondary.tabs).toHaveLength(0)
+    expect(afterClear.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id])
+
+    // Commit / unstaged / staged diff tabs stay preserved when stash list empties
+    const commitTab = store.openDiffTab(
+      {
+        kind: 'commit',
+        commitHash: 'abcdef1234567890',
+        shortHash: 'abcdef1',
+        path: 'commit.md',
+        status: 'M'
+      },
+      { paneId: 'secondary' }
+    )
+    store.reconcileStashDiffTabs([])
+    expect(store.getSnapshot().splitMode).toBe('horizontal')
+    expect(store.getSnapshot().panes.secondary.tabs.map((t) => t.id)).toEqual([commitTab.id])
+  })
 })

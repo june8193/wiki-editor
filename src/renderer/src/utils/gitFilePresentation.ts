@@ -1,4 +1,9 @@
-import type { GitChangedFile, GitDiffRequest, GitFileStatusCode } from '@shared/git'
+import type {
+  GitChangedFile,
+  GitDiffRequest,
+  GitFileStatusCode,
+  GitStashEntry
+} from '@shared/git'
 import { isAbsoluteOrDrivePrefix, resolveRepoFileInWorkspace } from '@shared/workspace'
 
 export type GitFileStatusTone = 'amber' | 'green' | 'red' | 'accent'
@@ -158,27 +163,47 @@ export function canOpenGitChangedFile(
   return resolveRepoFileInWorkspace(repoRoot, workspaceRootPath, file.path) !== null
 }
 
+interface GitDiffPresentationDescriptor {
+  tabLabel: string
+  contextLabel: string
+  keyScope: string
+}
+
+function describeGitDiffRequest(request: GitDiffRequest): GitDiffPresentationDescriptor {
+  const baseName = getGitFileBaseName(request.path)
+  switch (request.kind) {
+    case 'staged':
+      return { tabLabel: baseName, contextLabel: 'Staged', keyScope: 'staged' }
+    case 'unstaged':
+      return { tabLabel: baseName, contextLabel: 'Working Tree', keyScope: 'unstaged' }
+    case 'commit':
+      return {
+        tabLabel: `${baseName} (${request.shortHash})`,
+        contextLabel: `Commit ${request.shortHash}`,
+        keyScope: `commit:${request.commitHash}`
+      }
+    case 'stash':
+      return {
+        tabLabel: `${baseName} (${request.stashRef})`,
+        contextLabel: request.stashRef,
+        keyScope: `stash:${request.stashHash}`
+      }
+  }
+}
+
 /**
  * Returns the short tab display label for a Diff tab, appending the abbreviated
- * commit hash when inspecting a historical commit file.
+ * commit hash or stash ref when inspecting a historical commit or stash file.
  */
 export function getGitDiffTabLabel(request: GitDiffRequest): string {
-  const baseName = getGitFileBaseName(request.path)
-  return request.kind === 'commit' ? `${baseName} (${request.shortHash})` : baseName
+  return describeGitDiffRequest(request).tabLabel
 }
 
 /**
  * Maps a diff source request to its human-readable context badge label.
  */
 export function getGitDiffContextLabel(request: GitDiffRequest): string {
-  switch (request.kind) {
-    case 'staged':
-      return 'Staged'
-    case 'unstaged':
-      return 'Working Tree'
-    case 'commit':
-      return `Commit ${request.shortHash}`
-  }
+  return describeGitDiffRequest(request).contextLabel
 }
 
 /**
@@ -186,19 +211,17 @@ export function getGitDiffContextLabel(request: GitDiffRequest): string {
  */
 export function formatGitDiffTabKey(request: GitDiffRequest): string {
   const renamePart = request.origPath ?? ''
-  if (request.kind === 'commit') {
-    return `diff:commit:${request.commitHash}:${request.status}:${renamePart}:${request.path}`
-  }
-  return `diff:${request.kind}:${request.status}:${renamePart}:${request.path}`
+  return `diff:${describeGitDiffRequest(request).keyScope}:${request.status}:${renamePart}:${request.path}`
 }
 
 export type GitDiffTarget =
   | 'staged'
   | 'unstaged'
   | { kind: 'commit'; commitHash: string; shortHash: string }
+  | { kind: 'stash'; stashRef: string; stashHash: string }
 
 /**
- * Builds a typed GitDiffRequest from either a Working/Staged target or a Commit target.
+ * Builds a typed GitDiffRequest from a Working/Staged, Commit, or Stash target.
  */
 export function toGitDiffRequest(
   target: GitDiffTarget,
@@ -212,12 +235,40 @@ export function toGitDiffRequest(
   if (typeof target === 'string') {
     return { kind: target, ...base }
   }
+  if (target.kind === 'commit') {
+    return {
+      kind: 'commit',
+      commitHash: target.commitHash,
+      shortHash: target.shortHash,
+      ...base
+    }
+  }
   return {
-    kind: 'commit',
-    commitHash: target.commitHash,
-    shortHash: target.shortHash,
+    kind: 'stash',
+    stashRef: target.stashRef,
+    stashHash: target.stashHash,
     ...base
   }
+}
+
+function padTwo(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+/**
+ * Formats an ISO-8601 Git timestamp into local `YYYY-MM-DD HH:mm`, returning the raw input if unparseable.
+ */
+export function formatGitTimestamp(isoTimestamp: string): string {
+  const parsed = new Date(isoTimestamp)
+  if (Number.isNaN(parsed.getTime())) {
+    return isoTimestamp
+  }
+  const year = parsed.getFullYear()
+  const month = padTwo(parsed.getMonth() + 1)
+  const day = padTwo(parsed.getDate())
+  const hours = padTwo(parsed.getHours())
+  const minutes = padTwo(parsed.getMinutes())
+  return `${year}-${month}-${day} ${hours}:${minutes}`
 }
 
 /**
@@ -236,4 +287,20 @@ export function buildDiscardAllConfirmMessage(
     return `추적된 변경 파일 ${trackedCount}개를 이전 상태로 되돌립니다. 되돌린 변경 사항은 복구할 수 없습니다. 계속할까요?`
   }
   return `추적되지 않은 새 파일 ${untrackedCount}개를 OS 휴지통으로 이동합니다. 계속할까요?`
+}
+
+/**
+ * Formats the danger confirmation message for permanently dropping a single stash entry.
+ */
+export function buildStashDropConfirmMessage(
+  entry: Pick<GitStashEntry, 'ref' | 'message'>
+): string {
+  return `${entry.ref} ("${entry.message}") 항목을 영구적으로 삭제합니다. 삭제한 Stash는 복구할 수 없습니다. 계속할까요?`
+}
+
+/**
+ * Formats the danger confirmation message for permanently clearing all saved stash entries.
+ */
+export function buildStashClearConfirmMessage(count: number): string {
+  return `보관된 Stash ${count}개를 모두 영구적으로 삭제합니다. 삭제한 Stash는 복구할 수 없습니다. 계속할까요?`
 }

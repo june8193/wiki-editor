@@ -12,6 +12,9 @@ import {
   type GitFileDiff,
   type GitLogOptions,
   type GitLogResult,
+  type GitStashCreateOptions,
+  type GitStashDetail,
+  type GitStashEntry,
   type GitStatus,
   type GitSyncResult
 } from '@shared/git'
@@ -30,13 +33,23 @@ import {
   GitFormattedError
 } from './gitErrors'
 import {
-  assertValidCommitHash,
   GIT_COMMIT_DETAIL_FORMAT,
   parseCommitDetailOutput
 } from './gitCommitDetail'
-import { computeGitDiff } from './gitDiff'
+import { computeGitDiff, validateGitDiffTarget } from './gitDiff'
 import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
+import { assertValidGitHash, parseGitNameStatusZ } from './gitObjectParsing'
 import { parsePorcelainV2Z } from './gitPorcelain'
+import {
+  assertValidStashRef,
+  buildStashPushArgs,
+  GIT_STASH_LIST_FORMAT,
+  hasAllScopeStashTargets,
+  hasMatchingPathStashTargets,
+  parseStashListOutput,
+  parseStashUntrackedTreeOutput,
+  resolveUnstagedStashTargets
+} from './gitStash'
 
 export { formatGitError, parsePorcelainV2Z }
 
@@ -527,7 +540,7 @@ export class GitService {
   }
 
   async commitDetail(workspacePath: string, commitHash: string): Promise<GitCommitDetail> {
-    const validatedHash = assertValidCommitHash(commitHash)
+    const validatedHash = assertValidGitHash(commitHash, '커밋')
     const repoRoot = await this.requireRepoRoot(workspacePath)
     try {
       const raw = await this.execGit(repoRoot, [
@@ -550,24 +563,19 @@ export class GitService {
   }
 
   async diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff> {
-    if (
-      !request ||
-      (request.kind !== 'staged' && request.kind !== 'unstaged' && request.kind !== 'commit')
-    ) {
-      throw new Error('유효하지 않은 Diff 요청 형식입니다.')
-    }
-
+    const target = validateGitDiffTarget(request)
     const repoRoot = await this.requireRepoRoot(workspacePath)
     const workspaceRealRoot = await realpath(resolve(workspacePath))
     const rawPaths = request.origPath ? [request.path, request.origPath] : [request.path]
     const [safePath, safeOrigPath] = await this.validateRepoRelativePaths(repoRoot, rawPaths)
 
     try {
-      const hasHeadCommit = request.kind === 'staged' ? await this.hasHeadCommit(repoRoot) : true
+      const hasHeadCommit = target.kind === 'staged' ? await this.hasHeadCommit(repoRoot) : true
       return await computeGitDiff({
         repoRoot,
         workspaceRealRoot,
-        request,
+        target,
+        status: request.status,
         safePath,
         safeOrigPath,
         hasHeadCommit,
@@ -580,6 +588,184 @@ export class GitService {
     } catch (error) {
       throw await this.formatAndLogGitError('diff', error)
     }
+  }
+
+  async stashList(workspacePath: string): Promise<GitStashEntry[]> {
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    return this.listStashesForRepo(repoRoot)
+  }
+
+  async stashDetail(workspacePath: string, stashRef: string): Promise<GitStashDetail> {
+    const validatedRef = assertValidStashRef(stashRef)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const entries = await this.listStashesForRepo(repoRoot)
+    const entry = entries.find((item) => item.ref === validatedRef)
+    if (!entry) {
+      throw new GitFormattedError('지정한 Stash 항목을 찾을 수 없습니다.')
+    }
+
+    try {
+      const [trackedRaw, untrackedParentHash] = await Promise.all([
+        this.execGit(repoRoot, [
+          '-c',
+          'core.quotePath=false',
+          'diff',
+          '--name-status',
+          '-z',
+          '-M',
+          `${entry.hash}^1`,
+          entry.hash
+        ]),
+        this.resolveRevisionHash(repoRoot, `${entry.hash}^3`)
+      ])
+      const trackedFiles = parseGitNameStatusZ(trackedRaw)
+      const untrackedRaw = untrackedParentHash
+        ? await this.execGit(repoRoot, [
+            '-c',
+            'core.quotePath=false',
+            'ls-tree',
+            '-r',
+            '-z',
+            '--name-only',
+            `${entry.hash}^3`
+          ])
+        : ''
+      return {
+        ...entry,
+        files: [...trackedFiles, ...parseStashUntrackedTreeOutput(untrackedRaw)]
+      }
+    } catch (error) {
+      throw await this.formatAndLogGitError('stashDetail', error)
+    }
+  }
+
+  private async listStashesForRepo(repoRoot: string): Promise<GitStashEntry[]> {
+    if (!(await this.hasHeadCommit(repoRoot))) {
+      return []
+    }
+    try {
+      const raw = await this.execGit(repoRoot, ['stash', 'list', GIT_STASH_LIST_FORMAT])
+      return parseStashListOutput(raw)
+    } catch (error) {
+      throw await this.formatAndLogGitError('stashList', error)
+    }
+  }
+
+  async stashCreate(workspacePath: string, options: GitStashCreateOptions): Promise<GitStatus> {
+    if (
+      !options ||
+      (options.scope !== 'unstaged' && options.scope !== 'all' && options.scope !== 'paths')
+    ) {
+      throw new Error('유효한 Stash 범위가 아닙니다.')
+    }
+    const includeUntracked = options.includeUntracked ?? true
+    const message = typeof options.message === 'string' ? options.message.trim() : ''
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const currentStatus = await this.statusForRepo(repoRoot)
+    if (currentStatus.isUnborn) {
+      throw new Error('아직 커밋된 내역이 없어 Stash를 생성할 수 없습니다.')
+    }
+
+    const args = await this.buildValidatedStashCreateArgs(
+      repoRoot,
+      currentStatus,
+      options.scope,
+      includeUntracked,
+      message,
+      options.paths
+    )
+    try {
+      await this.execGit(repoRoot, args)
+    } catch (error) {
+      throw await this.formatAndLogGitError('stashCreate', error)
+    }
+    return this.statusForRepo(repoRoot)
+  }
+
+  private async buildValidatedStashCreateArgs(
+    repoRoot: string,
+    currentStatus: GitStatus,
+    scope: GitStashCreateOptions['scope'],
+    includeUntracked: boolean,
+    message: string,
+    paths?: readonly string[]
+  ): Promise<string[]> {
+    const emptyErrorMessage = 'Stash로 보관할 변경 사항이 없습니다.'
+
+    if (scope === 'unstaged') {
+      const { targetPaths, overlapsStaged } = resolveUnstagedStashTargets(
+        currentStatus,
+        includeUntracked
+      )
+      if (targetPaths.length === 0) {
+        throw new Error(emptyErrorMessage)
+      }
+      return overlapsStaged
+        ? buildStashPushArgs({ includeUntracked, keepIndex: true, message })
+        : buildStashPushArgs({ includeUntracked, message, pathspecs: targetPaths })
+    }
+
+    if (scope === 'all') {
+      if (!hasAllScopeStashTargets(currentStatus, includeUntracked)) {
+        throw new Error(emptyErrorMessage)
+      }
+      return buildStashPushArgs({ includeUntracked, message })
+    }
+
+    const validatedPaths = await this.validateRepoRelativePaths(repoRoot, paths ?? [])
+    if (!hasMatchingPathStashTargets(currentStatus, validatedPaths, includeUntracked)) {
+      throw new Error(emptyErrorMessage)
+    }
+    return buildStashPushArgs({ includeUntracked, message, pathspecs: validatedPaths })
+  }
+
+  async stashApply(workspacePath: string, stashRef: string): Promise<GitStatus> {
+    return this.execStashRestore(workspacePath, stashRef, 'apply')
+  }
+
+  async stashPop(workspacePath: string, stashRef: string): Promise<GitStatus> {
+    return this.execStashRestore(workspacePath, stashRef, 'pop')
+  }
+
+  async stashDrop(workspacePath: string, stashRef: string): Promise<GitStashEntry[]> {
+    return this.execStashListMutation(workspacePath, 'stashDrop', [
+      'stash',
+      'drop',
+      assertValidStashRef(stashRef)
+    ])
+  }
+
+  async stashClear(workspacePath: string): Promise<GitStashEntry[]> {
+    return this.execStashListMutation(workspacePath, 'stashClear', ['stash', 'clear'])
+  }
+
+  private async execStashListMutation(
+    workspacePath: string,
+    operation: 'stashDrop' | 'stashClear',
+    args: readonly string[]
+  ): Promise<GitStashEntry[]> {
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    try {
+      await this.execGit(repoRoot, args)
+    } catch (error) {
+      throw await this.formatAndLogGitError(operation, error)
+    }
+    return this.listStashesForRepo(repoRoot)
+  }
+
+  private async execStashRestore(
+    workspacePath: string,
+    stashRef: string,
+    mode: 'apply' | 'pop'
+  ): Promise<GitStatus> {
+    const validatedRef = assertValidStashRef(stashRef)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    try {
+      await this.execGit(repoRoot, ['stash', mode, validatedRef])
+    } catch (error) {
+      throw await this.formatAndLogGitError(mode === 'apply' ? 'stashApply' : 'stashPop', error)
+    }
+    return this.statusForRepo(repoRoot)
   }
 
   private async execUnstageTargets(repoRoot: string, targets: readonly string[]): Promise<void> {

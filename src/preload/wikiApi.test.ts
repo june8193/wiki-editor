@@ -190,6 +190,24 @@ describe('createWikiApi', () => {
     await api.git.log('C:\\wiki', { scope: 'current', limit: 50, skip: 20 })
     await api.git.commitDetail('C:\\wiki', 'abc1234')
     await api.git.diff('C:\\wiki', { kind: 'staged', path: 'a.md', status: 'M' })
+    await api.git.diff('C:\\wiki', {
+      kind: 'stash',
+      stashRef: 'stash@{0}',
+      stashHash: '1234567890abcdef1234567890abcdef12345678',
+      path: 'draft.md',
+      status: '?'
+    })
+    await api.git.stashList('C:\\wiki')
+    await api.git.stashDetail('C:\\wiki', 'stash@{0}')
+    await api.git.stashCreate('C:\\wiki', {
+      scope: 'unstaged',
+      message: 'wip draft',
+      includeUntracked: true
+    })
+    await api.git.stashApply('C:\\wiki', 'stash@{0}')
+    await api.git.stashPop('C:\\wiki', 'stash@{0}')
+    await api.git.stashDrop('C:\\wiki', 'stash@{0}')
+    await api.git.stashClear('C:\\wiki')
 
     expect(ipc.lastInvoked).toEqual([
       { channel: GIT_IPC_CHANNELS.status, args: ['C:\\wiki'] },
@@ -216,7 +234,33 @@ describe('createWikiApi', () => {
       {
         channel: GIT_IPC_CHANNELS.diff,
         args: ['C:\\wiki', { kind: 'staged', path: 'a.md', status: 'M' }]
-      }
+      },
+      {
+        channel: GIT_IPC_CHANNELS.diff,
+        args: [
+          'C:\\wiki',
+          {
+            kind: 'stash',
+            stashRef: 'stash@{0}',
+            stashHash: '1234567890abcdef1234567890abcdef12345678',
+            path: 'draft.md',
+            status: '?'
+          }
+        ]
+      },
+      { channel: GIT_IPC_CHANNELS.stashList, args: ['C:\\wiki'] },
+      { channel: GIT_IPC_CHANNELS.stashDetail, args: ['C:\\wiki', 'stash@{0}'] },
+      {
+        channel: GIT_IPC_CHANNELS.stashCreate,
+        args: [
+          'C:\\wiki',
+          { scope: 'unstaged', message: 'wip draft', includeUntracked: true }
+        ]
+      },
+      { channel: GIT_IPC_CHANNELS.stashApply, args: ['C:\\wiki', 'stash@{0}'] },
+      { channel: GIT_IPC_CHANNELS.stashPop, args: ['C:\\wiki', 'stash@{0}'] },
+      { channel: GIT_IPC_CHANNELS.stashDrop, args: ['C:\\wiki', 'stash@{0}'] },
+      { channel: GIT_IPC_CHANNELS.stashClear, args: ['C:\\wiki'] }
     ])
   })
 

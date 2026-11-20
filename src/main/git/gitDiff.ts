@@ -1,10 +1,17 @@
 import { spawn } from 'node:child_process'
 import { open, realpath, stat } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
-import { GIT_DIFF_MAX_BYTES, GIT_EMPTY_TREE_HASH, type GitDiffRequest, type GitFileDiff } from '@shared/git'
+import {
+  GIT_DIFF_MAX_BYTES,
+  GIT_EMPTY_TREE_HASH,
+  type GitChangedFile,
+  type GitDiffRequest,
+  type GitFileDiff
+} from '@shared/git'
 import { hasBlockedPathSegment, isMissingPathError, isPathInsideRoot } from '../fs/pathSecurity'
 import { IGNORED_ENTRY_NAMES } from '../workspace/WorkspaceFsService'
-import { assertValidCommitHash } from './gitCommitDetail'
+import { assertValidGitHash } from './gitObjectParsing'
+import { assertValidStashRef } from './gitStash'
 
 export interface GitBufferResult {
   buffer: Buffer
@@ -233,6 +240,43 @@ function buildUntrackedUnifiedPatch(safePath: string, text: string): string {
   return `${patchLines.join('\n')}\n`
 }
 
+function buildUntrackedBlobDiffResult(
+  safePath: string,
+  result: GitBufferResult,
+  existsInWorkspace: boolean
+): GitFileDiff {
+  if (result.hasNullByte || result.buffer.includes(0)) {
+    return {
+      path: safePath,
+      status: '?',
+      isBinary: true,
+      isTruncated: false,
+      existsInWorkspace,
+      rawPatch: ''
+    }
+  }
+
+  const { text, isTruncated: textTruncated } = truncateUtf8BufferToMaxBytes(
+    result.buffer,
+    GIT_DIFF_MAX_BYTES
+  )
+  const fullPatch = buildUntrackedUnifiedPatch(safePath, text)
+  const patchBuffer = Buffer.from(fullPatch, 'utf8')
+  const { text: boundedPatch, isTruncated: patchExceeded } = truncateUtf8BufferToMaxBytes(
+    patchBuffer,
+    GIT_DIFF_MAX_BYTES
+  )
+
+  return {
+    path: safePath,
+    status: '?',
+    isBinary: false,
+    isTruncated: result.truncated || textTruncated || patchExceeded,
+    existsInWorkspace,
+    rawPatch: boundedPatch
+  }
+}
+
 async function readUntrackedFileDiff(
   repoRoot: string,
   safePath: string,
@@ -263,43 +307,69 @@ async function readUntrackedFileDiff(
     await handle.close()
   }
 
-  const chunk = buffer.subarray(0, totalRead)
-  if (chunk.includes(0)) {
-    return {
-      path: safePath,
-      status: '?',
-      isBinary: true,
-      isTruncated: false,
-      existsInWorkspace,
-      rawPatch: ''
-    }
+  return buildUntrackedBlobDiffResult(
+    safePath,
+    {
+      buffer: buffer.subarray(0, totalRead),
+      truncated: totalRead > GIT_DIFF_MAX_BYTES,
+      hasNullByte: false
+    },
+    existsInWorkspace
+  )
+}
+
+async function readStashUntrackedFileDiff(
+  repoRoot: string,
+  validatedStashHash: string,
+  safePath: string,
+  existsInWorkspace: boolean,
+  execOptions: GitDiffExecOptions
+): Promise<GitFileDiff> {
+  const result = await execGitStdoutCapped({
+    cwd: repoRoot,
+    args: ['cat-file', '-p', `${validatedStashHash}^3:${safePath}`],
+    execOptions
+  })
+  return buildUntrackedBlobDiffResult(safePath, result, existsInWorkspace)
+}
+
+export type ValidatedGitDiffTarget =
+  | { kind: 'staged' }
+  | { kind: 'unstaged'; isUntracked: boolean }
+  | { kind: 'commit'; commitHash: string }
+  | { kind: 'stash'; stashHash: string; isUntracked: boolean }
+
+/**
+ * Validates target identifiers on a GitDiffRequest once before resolving repository paths.
+ */
+export function validateGitDiffTarget(request: GitDiffRequest): ValidatedGitDiffTarget {
+  if (!request || typeof request !== 'object') {
+    throw new Error('유효하지 않은 Diff 요청 형식입니다.')
   }
-
-  const { text, isTruncated: textTruncated } = truncateUtf8BufferToMaxBytes(
-    chunk,
-    GIT_DIFF_MAX_BYTES
-  )
-  const fullPatch = buildUntrackedUnifiedPatch(safePath, text)
-  const patchBuffer = Buffer.from(fullPatch, 'utf8')
-  const { text: boundedPatch, isTruncated: patchExceeded } = truncateUtf8BufferToMaxBytes(
-    patchBuffer,
-    GIT_DIFF_MAX_BYTES
-  )
-
-  return {
-    path: safePath,
-    status: '?',
-    isBinary: false,
-    isTruncated: textTruncated || patchExceeded,
-    existsInWorkspace,
-    rawPatch: boundedPatch
+  switch (request.kind) {
+    case 'staged':
+      return { kind: 'staged' }
+    case 'unstaged':
+      return { kind: 'unstaged', isUntracked: request.status === '?' }
+    case 'commit':
+      return { kind: 'commit', commitHash: assertValidGitHash(request.commitHash, '커밋') }
+    case 'stash':
+      assertValidStashRef(request.stashRef)
+      return {
+        kind: 'stash',
+        stashHash: assertValidGitHash(request.stashHash, 'Stash'),
+        isUntracked: request.status === '?'
+      }
+    default:
+      throw new Error('유효하지 않은 Diff 요청 형식입니다.')
   }
 }
 
 export interface ComputeGitDiffOptions {
   repoRoot: string
   workspaceRealRoot: string
-  request: GitDiffRequest
+  target: ValidatedGitDiffTarget
+  status: GitChangedFile['status']
   safePath: string
   safeOrigPath?: string
   hasHeadCommit: boolean
@@ -309,7 +379,8 @@ export interface ComputeGitDiffOptions {
 export async function computeGitDiff({
   repoRoot,
   workspaceRealRoot,
-  request,
+  target,
+  status,
   safePath,
   safeOrigPath,
   hasHeadCommit,
@@ -321,52 +392,74 @@ export async function computeGitDiff({
     safePath
   )
 
-  if (request.kind === 'unstaged' && request.status === '?') {
-    return readUntrackedFileDiff(repoRoot, safePath, existsOnDisk, existsInWorkspace)
-  }
-
   const pathArgs = safeOrigPath ? [safeOrigPath, safePath] : [safePath]
   let gitArgs: string[]
 
-  if (request.kind === 'staged') {
-    const baseTree = hasHeadCommit ? 'HEAD' : GIT_EMPTY_TREE_HASH
-    gitArgs = [
-      '-c',
-      'core.quotePath=false',
-      'diff',
-      '--cached',
-      '-M',
-      '--find-renames',
-      '--unified=3',
-      baseTree,
-      '--',
-      ...pathArgs
-    ]
-  } else if (request.kind === 'unstaged') {
-    gitArgs = [
-      '-c',
-      'core.quotePath=false',
-      'diff',
-      '--unified=3',
-      '--',
-      ...pathArgs
-    ]
-  } else {
-    const validatedHash = assertValidCommitHash(request.commitHash)
-    gitArgs = [
-      '-c',
-      'core.quotePath=false',
-      'show',
-      '--first-parent',
-      '-m',
-      '--root',
-      '-M',
-      '--format=',
-      '--unified=3',
-      `${validatedHash}^{commit}`,
-      '--',
-      ...pathArgs
-    ]
+  switch (target.kind) {
+    case 'staged': {
+      const baseTree = hasHeadCommit ? 'HEAD' : GIT_EMPTY_TREE_HASH
+      gitArgs = [
+        '-c',
+        'core.quotePath=false',
+        'diff',
+        '--cached',
+        '-M',
+        '--find-renames',
+        '--unified=3',
+        baseTree,
+        '--',
+        ...pathArgs
+      ]
+      break
+    }
+    case 'unstaged': {
+      if (target.isUntracked) {
+        return readUntrackedFileDiff(repoRoot, safePath, existsOnDisk, existsInWorkspace)
+      }
+      gitArgs = ['-c', 'core.quotePath=false', 'diff', '--unified=3', '--', ...pathArgs]
+      break
+    }
+    case 'commit': {
+      gitArgs = [
+        '-c',
+        'core.quotePath=false',
+        'show',
+        '--first-parent',
+        '-m',
+        '--root',
+        '-M',
+        '--format=',
+        '--unified=3',
+        `${target.commitHash}^{commit}`,
+        '--',
+        ...pathArgs
+      ]
+      break
+    }
+    case 'stash': {
+      if (target.isUntracked) {
+        return readStashUntrackedFileDiff(
+          repoRoot,
+          target.stashHash,
+          safePath,
+          existsInWorkspace,
+          execOptions
+        )
+      }
+      gitArgs = [
+        '-c',
+        'core.quotePath=false',
+        'diff',
+        '-M',
+        '--find-renames',
+        '--unified=3',
+        `${target.stashHash}^1`,
+        target.stashHash,
+        '--',
+        ...pathArgs
+      ]
+      break
+    }
   }
 
   const { buffer, truncated, hasNullByte } = await execGitStdoutCapped({
@@ -381,7 +474,7 @@ export async function computeGitDiff({
     return {
       path: safePath,
       ...(safeOrigPath ? { origPath: safeOrigPath } : {}),
-      status: request.status,
+      status,
       isBinary: true,
       isTruncated: false,
       existsInWorkspace,
@@ -397,7 +490,7 @@ export async function computeGitDiff({
   return {
     path: safePath,
     ...(safeOrigPath ? { origPath: safeOrigPath } : {}),
-    status: request.status,
+    status,
     isBinary: false,
     isTruncated: truncated || utf8Truncated,
     existsInWorkspace,

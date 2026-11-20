@@ -6,9 +6,11 @@ import {
   createEmptyGitStatus,
   type GitBranchList,
   type GitGraphCommit,
+  type GitStashEntry,
   type GitStatus
 } from '@shared/git'
 import { createInitialGitGraphState } from '../hooks/useGitGraphLog'
+import { createInitialGitDetailState } from '../hooks/useGitDetailSelection'
 import themeCss from '../styles/theme.css?raw'
 import {
   createDefaultGitChangesViewState,
@@ -22,6 +24,7 @@ import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
   toggleGitGraphCollapsed,
+  toggleGitStashesCollapsed,
   updateChangesHeightRatio,
   type GitPanelSplitState
 } from '../utils/gitPanelSplit'
@@ -66,21 +69,32 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onUnstageAll: vi.fn(),
     onDiscardFile: vi.fn(),
     onDiscardAll: vi.fn(),
+    onStashChanges: vi.fn(),
+    onStashFile: vi.fn(),
+    onOpenStashDialog: vi.fn(),
+    onPopStash: vi.fn(),
+    onApplyStash: vi.fn(),
+    onDropStash: vi.fn(),
+    onClearStashes: vi.fn(),
     onCommit: vi.fn(),
     onCheckoutBranch: vi.fn(),
     onPull: vi.fn(),
     onPush: vi.fn(),
     onFetch: vi.fn(),
     onSync: vi.fn(),
+    stashes: [],
+    stashDetail: createInitialGitDetailState(),
     graphState: createInitialGitGraphState(),
     onChangeLogScope: vi.fn(),
     onLoadMoreCommits: vi.fn(),
     onToggleCommitDetail: vi.fn(),
+    onToggleStashDetail: vi.fn(),
     splitState: createDefaultGitPanelSplitState(),
     changesViewState: createDefaultGitChangesViewState(),
     onOpenFileDiff: vi.fn(),
     onOpenWorkspaceFile: vi.fn(),
     onToggleChangesCollapsed: vi.fn(),
+    onToggleStashesCollapsed: vi.fn(),
     onToggleGraphCollapsed: vi.fn(),
     onResizeChangesRatio: vi.fn(),
     onToggleChangesViewMode: vi.fn(),
@@ -106,6 +120,7 @@ function StatefulGitSidebarPanel(props: GitSidebarPanelProps) {
       splitState={splitState}
       changesViewState={changesViewState}
       onToggleChangesCollapsed={() => setSplitState(toggleGitChangesCollapsed)}
+      onToggleStashesCollapsed={() => setSplitState(toggleGitStashesCollapsed)}
       onToggleGraphCollapsed={() => setSplitState(toggleGitGraphCollapsed)}
       onResizeChangesRatio={(nextRatio) =>
         setSplitState((prev) => updateChangesHeightRatio(prev, nextRatio))
@@ -1035,6 +1050,8 @@ describe('GitSidebarPanel', () => {
     const onStageAll = vi.fn()
     const onUnstageAll = vi.fn()
     const onDiscardAll = vi.fn()
+    const onOpenStashDialog = vi.fn()
+    const onClearStashes = vi.fn()
     const onCheckoutBranch = vi.fn()
 
     const { rerender } = render(
@@ -1048,6 +1065,15 @@ describe('GitSidebarPanel', () => {
             unstaged: [{ path: 'README.md', status: 'M' }],
             untracked: []
           }),
+          stashes: [
+            {
+              ref: 'stash@{0}',
+              hash: '1111111111111111111111111111111111111111',
+              branch: 'main',
+              message: 'saved wip',
+              createdAt: '2026-11-20T12:00:00Z'
+            }
+          ],
           onPull,
           onPush,
           onFetch,
@@ -1055,6 +1081,8 @@ describe('GitSidebarPanel', () => {
           onStageAll,
           onUnstageAll,
           onDiscardAll,
+          onOpenStashDialog,
+          onClearStashes,
           onCheckoutBranch
         })}
       />
@@ -1068,11 +1096,11 @@ describe('GitSidebarPanel', () => {
     await user.click(publishBtn)
     expect(onPush).toHaveBeenCalledTimes(1)
 
-    // 2. ... menu lists all 7 items with separator, disables Unstage All Changes when staged=0, and dismisses on Escape / outside click
+    // 2. ... menu lists remote, bulk changes, and stash items with separators, and dismisses on Escape / outside click
     const moreBtn = within(region).getByRole('button', { name: '더 보기' })
     await user.click(moreBtn)
     const moreMenu = within(region).getByRole('menu', { name: 'Git 패널 추가 작업' })
-    expect(within(moreMenu).getByRole('separator')).toBeInTheDocument()
+    expect(within(moreMenu).getAllByRole('separator')).toHaveLength(2)
     expect(within(moreMenu).getByRole('menuitem', { name: 'Pull' })).toBeEnabled()
     expect(within(moreMenu).getByRole('menuitem', { name: 'Push' })).toBeEnabled()
     expect(within(moreMenu).getByRole('menuitem', { name: 'Fetch' })).toBeEnabled()
@@ -1080,6 +1108,11 @@ describe('GitSidebarPanel', () => {
     expect(within(moreMenu).getByRole('menuitem', { name: 'Stage All Changes' })).toBeEnabled()
     expect(within(moreMenu).getByRole('menuitem', { name: 'Unstage All Changes' })).toBeDisabled()
     expect(within(moreMenu).getByRole('menuitem', { name: 'Discard All Changes' })).toBeEnabled()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Stash Changes...' })).toBeEnabled()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Stash All Changes...' })).toBeEnabled()
+    const clearAllMenuItem = within(moreMenu).getByRole('menuitem', { name: 'Clear All Stashes' })
+    expect(clearAllMenuItem).toBeEnabled()
+    expect(clearAllMenuItem).toHaveClass('is-danger')
 
     await user.keyboard('{Escape}')
     expect(within(region).queryByRole('menu', { name: 'Git 패널 추가 작업' })).not.toBeInTheDocument()
@@ -1097,7 +1130,19 @@ describe('GitSidebarPanel', () => {
     await user.click(within(region).getByRole('menuitem', { name: 'Discard All Changes' }))
     expect(onDiscardAll).toHaveBeenCalledTimes(1)
 
-    // 3. Staged-only repo enables Unstage All Changes and disables Stage/Discard All Changes
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Stash Changes...' }))
+    expect(onOpenStashDialog).toHaveBeenCalledWith('unstaged')
+
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Stash All Changes...' }))
+    expect(onOpenStashDialog).toHaveBeenCalledWith('all')
+
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Clear All Stashes' }))
+    expect(onClearStashes).toHaveBeenCalledTimes(1)
+
+    // 3. Staged-only repo with 0 stashes enables Unstage/Stash All Changes and disables Stage/Discard/Stash Changes.../Clear All Stashes
     rerender(
       <GitSidebarPanel
         {...buildProps({
@@ -1106,9 +1151,12 @@ describe('GitSidebarPanel', () => {
             unstaged: [],
             untracked: []
           }),
+          stashes: [],
           onStageAll,
           onUnstageAll,
           onDiscardAll,
+          onOpenStashDialog,
+          onClearStashes,
           onCheckoutBranch
         })}
       />
@@ -1116,6 +1164,9 @@ describe('GitSidebarPanel', () => {
     await user.click(moreBtn)
     expect(within(region).getByRole('menuitem', { name: 'Stage All Changes' })).toBeDisabled()
     expect(within(region).getByRole('menuitem', { name: 'Discard All Changes' })).toBeDisabled()
+    expect(within(region).getByRole('menuitem', { name: 'Stash Changes...' })).toBeDisabled()
+    expect(within(region).getByRole('menuitem', { name: 'Stash All Changes...' })).toBeEnabled()
+    expect(within(region).getByRole('menuitem', { name: 'Clear All Stashes' })).toBeDisabled()
     await user.click(within(region).getByRole('menuitem', { name: 'Unstage All Changes' }))
     expect(onUnstageAll).toHaveBeenCalledTimes(1)
 
@@ -2050,5 +2101,452 @@ describe('GitSidebarPanel', () => {
     } finally {
       styleEl.remove()
     }
+  })
+
+  it('renders 3-tier Changes -> Stashes -> Graph accordions, quick Changes stash icon left of Discard All, Stashes compact/fill layout, and Pop/Apply row actions', async () => {
+    const user = userEvent.setup()
+    const onStashChanges = vi.fn()
+    const onPopStash = vi.fn()
+    const onApplyStash = vi.fn()
+
+    const stashes: GitStashEntry[] = [
+      {
+        ref: 'stash@{0}',
+        hash: '1111111111111111111111111111111111111111',
+        branch: 'main',
+        message: 'draft notes backup',
+        createdAt: '2026-11-20T09:15:00+09:00'
+      },
+      {
+        ref: 'stash@{1}',
+        hash: '2222222222222222222222222222222222222222',
+        branch: null,
+        message: 'WIP on main: seed',
+        createdAt: '2026-11-19T18:05:00+09:00'
+      }
+    ]
+
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    try {
+      const { rerender } = render(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            stashes: [],
+            onStashChanges,
+            onPopStash,
+            onApplyStash
+          })}
+        />
+      )
+
+      const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+      const changesSection = within(region).getByRole('region', { name: 'Changes' })
+      const stashesSection = within(region).getByRole('region', { name: 'Stashes' })
+      const graphSection = within(region).getByRole('region', { name: 'Graph' })
+
+      // 1. 3-tier order: Changes -> Stashes -> Graph; Stashes defaults collapsed with badge 0
+      expect(
+        changesSection.compareDocumentPosition(stashesSection) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      expect(
+        stashesSection.compareDocumentPosition(graphSection) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+
+      const stashesToggle = within(stashesSection).getByRole('button', { name: /^Stashes/i })
+      expect(stashesToggle).toHaveAttribute('aria-expanded', 'false')
+      expect(stashesToggle).toHaveTextContent('0')
+
+      // 2. Changes subgroup quick stash button sits left of 전체 변경 사항 롤백 and is absent from Staged Changes
+      const stagedGroup = within(changesSection).getByRole('group', { name: 'Staged Changes' })
+      expect(within(stagedGroup).queryByRole('button', { name: 'Changes만 Stash' })).toBeNull()
+
+      const changesGroup = within(changesSection).getByRole('group', { name: 'Changes' })
+      const quickStashBtn = within(changesGroup).getByRole('button', { name: 'Changes만 Stash' })
+      const discardAllBtn = within(changesGroup).getByRole('button', {
+        name: '전체 변경 사항 롤백'
+      })
+      expect(
+        quickStashBtn.compareDocumentPosition(discardAllBtn) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      expect(quickStashBtn).toBeEnabled()
+      await user.click(quickStashBtn)
+      expect(onStashChanges).toHaveBeenCalledTimes(1)
+
+      // 3. Expand empty Stashes -> shows empty text and compact style while Changes/Graph expanded
+      await user.click(stashesToggle)
+      expect(stashesToggle).toHaveAttribute('aria-expanded', 'true')
+      expect(within(stashesSection).getByText('보관된 Stash가 없습니다.')).toBeInTheDocument()
+      expect(stashesSection).toHaveClass('is-compact')
+      expect(stashesSection.style.flex).toBe('')
+
+      // 4. Render stashes -> displays badge 2, message, stash@{n}, formatted timestamp, and Pop/Apply actions
+      rerender(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            stashes,
+            splitState: {
+              ...createDefaultGitPanelSplitState(),
+              isStashesCollapsed: false
+            },
+            onStashChanges,
+            onPopStash,
+            onApplyStash
+          })}
+        />
+      )
+
+      expect(within(stashesSection).getByRole('button', { name: /^Stashes/i })).toHaveTextContent(
+        '2'
+      )
+      const stashList = within(stashesSection).getByRole('list', { name: 'Stash 목록' })
+      const stashItems = within(stashList).getAllByRole('listitem')
+      expect(stashItems).toHaveLength(2)
+
+      expect(stashItems[0]).toHaveTextContent('draft notes backup')
+      expect(stashItems[0]).toHaveTextContent('stash@{0}')
+      expect(stashItems[0].textContent).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/)
+
+      const popBtn0 = within(stashItems[0]).getByRole('button', { name: /Pop/ })
+      const applyBtn0 = within(stashItems[0]).getByRole('button', { name: /Apply/ })
+      const actionsContainer = popBtn0.parentElement as HTMLElement
+      expect(getComputedStyle(actionsContainer).opacity).toBe('0')
+      popBtn0.focus()
+      expect(getComputedStyle(actionsContainer).opacity).toBe('1')
+
+      await user.click(popBtn0)
+      expect(onPopStash).toHaveBeenCalledWith('stash@{0}')
+      await user.click(applyBtn0)
+      expect(onApplyStash).toHaveBeenCalledWith('stash@{0}')
+
+      // 5. Collapsing both Changes and Graph switches Stashes from compact to fill (flex: 1 1 0%)
+      await user.click(getChangesAccordionToggle(region))
+      await user.click(within(region).getByRole('button', { name: /^Graph/i }))
+      expect(stashesSection).not.toHaveClass('is-compact')
+      expect(stashesSection).toHaveStyle({ flex: '1 1 0%' })
+
+      // Re-expand Changes so subgroup header is rendered, then verify disabled states on empty Changes & busy
+      await user.click(getChangesAccordionToggle(region))
+      rerender(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            status: buildGitStatus({ unstaged: [], untracked: [] }),
+            stashes,
+            pendingAction: 'Stash Pop',
+            onStashChanges,
+            onPopStash,
+            onApplyStash
+          })}
+        />
+      )
+      expect(within(region).getByRole('button', { name: 'Changes만 Stash' })).toBeDisabled()
+      expect(within(region).getByRole('button', { name: 'stash@{0} Pop' })).toBeDisabled()
+      expect(within(region).getByRole('button', { name: 'stash@{0} Apply' })).toBeDisabled()
+    } finally {
+      styleEl.remove()
+    }
+  })
+
+  it('renders single-file Stash only on Changes rows without clipping and wires Stashes +, Clear All, and Drop actions', async () => {
+    const user = userEvent.setup()
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    try {
+      const onStashFile = vi.fn()
+      const onOpenFileDiff = vi.fn()
+      const onOpenStashDialog = vi.fn()
+      const onDropStash = vi.fn()
+      const onClearStashes = vi.fn()
+
+      const stashes: GitStashEntry[] = [
+        {
+          ref: 'stash@{0}',
+          hash: '1111111111111111111111111111111111111111',
+          branch: 'main',
+          message: 'single file wip',
+          createdAt: '2026-11-20T12:00:00Z'
+        }
+      ]
+
+      const { rerender } = render(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            status: buildGitStatus({
+              staged: [{ path: 'staged.md', status: 'M' }],
+              unstaged: [{ path: 'docs/modified.md', status: 'M' }],
+              untracked: [{ path: 'notes/new.md', status: '?' }]
+            }),
+            stashes,
+            splitState: {
+              ...createDefaultGitPanelSplitState(),
+              isStashesCollapsed: false
+            },
+            onStashFile,
+            onOpenFileDiff,
+            onOpenStashDialog,
+            onDropStash,
+            onClearStashes
+          })}
+        />
+      )
+
+      const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+
+      // 1. Single-file Stash appears on Changes rows only (not on Staged Changes)
+      const modifiedStashBtn = within(region).getByRole('button', { name: 'docs/modified.md Stash' })
+      const untrackedStashBtn = within(region).getByRole('button', { name: 'notes/new.md Stash' })
+      expect(within(region).queryByRole('button', { name: 'staged.md Stash' })).not.toBeInTheDocument()
+
+      // Action strip stays hidden at idle (max-width: 0) and expands enough for 4 icons on focus-within
+      const fileActions = modifiedStashBtn.parentElement as HTMLElement
+      expect(getComputedStyle(fileActions).maxWidth).toBe('0px')
+      modifiedStashBtn.focus()
+      expect(getComputedStyle(fileActions).maxWidth).toBe('100px')
+
+      // Clicking single-file Stash calls onStashFile without opening Diff tab
+      await user.click(modifiedStashBtn)
+      await user.click(untrackedStashBtn)
+      expect(onStashFile).toHaveBeenNthCalledWith(1, 'docs/modified.md')
+      expect(onStashFile).toHaveBeenNthCalledWith(2, 'notes/new.md')
+      expect(onOpenFileDiff).not.toHaveBeenCalled()
+
+      // 2. Stashes header '+' and 'Clear All' work without toggling section expansion, and row 'Drop' calls onDropStash
+      const stashesSection = within(region).getByRole('region', { name: 'Stashes' })
+      const stashesToggle = within(stashesSection).getByRole('button', { name: /^Stashes/i })
+      const createStashBtn = within(stashesSection).getByRole('button', { name: '새 Stash 만들기' })
+      const clearAllBtn = within(stashesSection).getByRole('button', { name: 'Clear All' })
+      const dropBtn = within(stashesSection).getByRole('button', { name: 'stash@{0} Drop' })
+
+      expect(createStashBtn).toBeEnabled()
+      expect(clearAllBtn).toBeEnabled()
+      expect(dropBtn).toBeEnabled()
+
+      await user.click(createStashBtn)
+      expect(onOpenStashDialog).toHaveBeenCalledTimes(1)
+      expect(stashesToggle).toHaveAttribute('aria-expanded', 'true')
+
+      await user.click(clearAllBtn)
+      expect(onClearStashes).toHaveBeenCalledTimes(1)
+      expect(stashesToggle).toHaveAttribute('aria-expanded', 'true')
+
+      await user.click(dropBtn)
+      expect(onDropStash).toHaveBeenCalledWith('stash@{0}')
+
+      // 3. Staged-only repo still enables Stashes '+' while empty Changes/empty Stashes disables Clear All
+      rerender(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            status: buildGitStatus({
+              staged: [{ path: 'staged.md', status: 'M' }],
+              unstaged: [],
+              untracked: []
+            }),
+            stashes: [],
+            splitState: {
+              ...createDefaultGitPanelSplitState(),
+              isStashesCollapsed: false
+            },
+            onStashFile,
+            onOpenStashDialog,
+            onDropStash,
+            onClearStashes
+          })}
+        />
+      )
+      expect(within(stashesSection).getByRole('button', { name: '새 Stash 만들기' })).toBeEnabled()
+      expect(within(stashesSection).getByRole('button', { name: 'Clear All' })).toBeDisabled()
+
+      // 4. Clean working tree (0 changes) and busy state disable header + file actions
+      rerender(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            status: buildGitStatus({ staged: [], unstaged: [], untracked: [] }),
+            stashes,
+            pendingAction: 'Stash Drop',
+            splitState: {
+              ...createDefaultGitPanelSplitState(),
+              isStashesCollapsed: false
+            },
+            onStashFile,
+            onOpenStashDialog,
+            onDropStash,
+            onClearStashes
+          })}
+        />
+      )
+      expect(within(stashesSection).getByRole('button', { name: '새 Stash 만들기' })).toBeDisabled()
+      expect(within(stashesSection).getByRole('button', { name: 'Clear All' })).toBeDisabled()
+      expect(within(stashesSection).getByRole('button', { name: 'stash@{0} Drop' })).toBeDisabled()
+    } finally {
+      styleEl.remove()
+    }
+  })
+
+  it('toggles inline stash detail (loading/error/empty/loaded files including untracked ?), separates row click from Pop/Apply/Drop, and triggers kind=stash diff on file click', async () => {
+    const user = userEvent.setup()
+    const onToggleStashDetail = vi.fn()
+    const onPopStash = vi.fn()
+    const onApplyStash = vi.fn()
+    const onDropStash = vi.fn()
+    const onOpenFileDiff = vi.fn()
+
+    const stash0: GitStashEntry = {
+      ref: 'stash@{0}',
+      hash: '1111111111111111111111111111111111111111',
+      branch: 'main',
+      message: 'first stash summary',
+      createdAt: '2026-11-20T12:00:00Z'
+    }
+    const stash1: GitStashEntry = {
+      ref: 'stash@{1}',
+      hash: '2222222222222222222222222222222222222222',
+      branch: 'main',
+      message: 'second stash summary',
+      createdAt: '2026-11-20T11:00:00Z'
+    }
+    const baseSplit = {
+      ...createDefaultGitPanelSplitState(),
+      isStashesCollapsed: false
+    }
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          stashes: [stash0, stash1],
+          stashDetail: createInitialGitDetailState(),
+          splitState: baseSplit,
+          onToggleStashDetail,
+          onPopStash,
+          onApplyStash,
+          onDropStash,
+          onOpenFileDiff
+        })}
+      />
+    )
+
+    const stashesSection = screen.getByRole('region', { name: 'Stashes' })
+    const rowTrigger0 = within(stashesSection).getByRole('button', { name: /first stash summary/ })
+    const rowTrigger1 = within(stashesSection).getByRole('button', { name: /second stash summary/ })
+    expect(rowTrigger0).toHaveAttribute('aria-expanded', 'false')
+    expect(rowTrigger1).toHaveAttribute('aria-expanded', 'false')
+
+    // Pop / Apply / Drop must NOT trigger onToggleStashDetail
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Pop' }))
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Apply' }))
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Drop' }))
+    expect(onPopStash).toHaveBeenCalledWith('stash@{0}')
+    expect(onApplyStash).toHaveBeenCalledWith('stash@{0}')
+    expect(onDropStash).toHaveBeenCalledWith('stash@{0}')
+    expect(onToggleStashDetail).not.toHaveBeenCalled()
+
+    // Clicking stash row itself triggers onToggleStashDetail(stash0)
+    await user.click(rowTrigger0)
+    expect(onToggleStashDetail).toHaveBeenCalledWith(stash0)
+
+    // Loading state
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          stashes: [stash0, stash1],
+          stashDetail: { status: 'loading', selectedHash: stash0.hash },
+          splitState: baseSplit,
+          onToggleStashDetail,
+          onOpenFileDiff
+        })}
+      />
+    )
+    expect(rowTrigger0).toHaveAttribute('aria-expanded', 'true')
+    expect(rowTrigger1).toHaveAttribute('aria-expanded', 'false')
+    const loadingRegion = within(stashesSection).getByRole('region', { name: 'stash@{0} Stash 상세' })
+    expect(loadingRegion).toHaveTextContent('Stash 상세를 불러오는 중...')
+
+    // Error state
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          stashes: [stash0, stash1],
+          stashDetail: {
+            status: 'error',
+            selectedHash: stash0.hash,
+            errorMessage: 'Stash 상세 조회 실패'
+          },
+          splitState: baseSplit,
+          onToggleStashDetail,
+          onOpenFileDiff
+        })}
+      />
+    )
+    expect(within(stashesSection).getByRole('alert')).toHaveTextContent('Stash 상세 조회 실패')
+
+    // Empty files state
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          stashes: [stash0, stash1],
+          stashDetail: {
+            status: 'loaded',
+            selectedHash: stash0.hash,
+            detail: { ...stash0, files: [] }
+          },
+          splitState: baseSplit,
+          onToggleStashDetail,
+          onOpenFileDiff
+        })}
+      />
+    )
+    expect(
+      within(within(stashesSection).getByRole('region', { name: 'stash@{0} Stash 상세' })).getByText(
+        '변경된 파일이 없습니다.'
+      )
+    ).toBeInTheDocument()
+
+    // Loaded state with M, D, R, ? (switches to stash1 only -> single expansion)
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          stashes: [stash0, stash1],
+          stashDetail: {
+            status: 'loaded',
+            selectedHash: stash1.hash,
+            detail: {
+              ...stash1,
+              files: [
+                { path: 'docs/edited.md', status: 'M' },
+                { path: 'docs/removed.md', status: 'D' },
+                { path: 'docs/new.md', origPath: 'docs/old.md', status: 'R' },
+                { path: 'notes/untracked.md', status: '?' }
+              ]
+            }
+          },
+          splitState: baseSplit,
+          onToggleStashDetail,
+          onOpenFileDiff
+        })}
+      />
+    )
+    expect(rowTrigger0).toHaveAttribute('aria-expanded', 'false')
+    expect(rowTrigger1).toHaveAttribute('aria-expanded', 'true')
+    expect(within(stashesSection).queryByRole('region', { name: 'stash@{0} Stash 상세' })).toBeNull()
+
+    const detailRegion1 = within(stashesSection).getByRole('region', {
+      name: 'stash@{1} Stash 상세'
+    })
+    expect(detailRegion1).toHaveTextContent('변경된 파일 (4)')
+    expect(within(detailRegion1).getByText('removed.md')).toHaveClass('is-deleted')
+    expect(within(detailRegion1).getByText('old.md → new.md')).toBeInTheDocument()
+    expect(within(detailRegion1).getByText('U')).toHaveClass('git-status-letter', 'is-green')
+
+    await user.click(within(detailRegion1).getByTitle('notes/untracked.md'))
+    expect(onOpenFileDiff).toHaveBeenCalledWith({
+      kind: 'stash',
+      stashRef: stash1.ref,
+      stashHash: stash1.hash,
+      path: 'notes/untracked.md',
+      status: '?'
+    })
   })
 })

@@ -461,4 +461,289 @@ describe('GitService integration (working-tree and commit diffs)', () => {
     })
     expect(outsideSubWsDiff.existsInWorkspace).toBe(false)
   }), 60_000)
+
+  it('validates stashRef/stashHash/path security and computes kind=stash diffs for tracked A/M/D/R, ^3 untracked blobs, binary files, >1MB truncation, and existsInWorkspace', () =>
+    withGitTestSandbox(async ({ service, tempRoot, repoDir, nonGitDir, runGit }) => {
+      await expect(
+        service.diff(nonGitDir, {
+          kind: 'stash',
+          stashRef: 'stash@{0}',
+          stashHash: '1234567',
+          path: 'note.md',
+          status: 'M'
+        })
+      ).rejects.toThrow(/Git 저장소가 아닙니다/)
+
+      await service.init(repoDir)
+
+      for (const badRef of ['', 'HEAD', 'stash@{0}^', 'stash@{-1}', '--all', 'stash@{0} ', 'main']) {
+        await expect(
+          service.diff(repoDir, {
+            kind: 'stash',
+            stashRef: badRef,
+            stashHash: '1234567',
+            path: 'note.md',
+            status: 'M'
+          })
+        ).rejects.toThrow(/Stash 참조/)
+      }
+
+      for (const badHash of ['', 'abc123', '-flag', 'HEAD', 'zzzzzzzz', 'a'.repeat(65), 'abcdef12 --stat']) {
+        await expect(
+          service.diff(repoDir, {
+            kind: 'stash',
+            stashRef: 'stash@{0}',
+            stashHash: badHash,
+            path: 'note.md',
+            status: 'M'
+          })
+        ).rejects.toThrow(/Stash 해시/)
+      }
+
+      const outsideFile = join(tempRoot, 'outside-stash-diff.md')
+      await writeFile(outsideFile, 'secret\n', 'utf8')
+      await expect(
+        service.diff(repoDir, {
+          kind: 'stash',
+          stashRef: 'stash@{0}',
+          stashHash: '1234567',
+          path: '../outside-stash-diff.md',
+          status: '?'
+        })
+      ).rejects.toThrow(/저장소 밖/)
+      await expect(
+        service.diff(repoDir, {
+          kind: 'stash',
+          stashRef: 'stash@{0}',
+          stashHash: '1234567',
+          path: '.git/config',
+          status: 'M'
+        })
+      ).rejects.toThrow(/\.git/)
+      await expect(
+        service.diff(repoDir, {
+          kind: 'stash',
+          stashRef: 'stash@{0}',
+          stashHash: '1234567',
+          path: 'note.md',
+          origPath: '../outside-stash-diff.md',
+          status: 'R'
+        })
+      ).rejects.toThrow(/저장소 밖/)
+
+      try {
+        const escapeLink = join(repoDir, 'stash-escape-link.md')
+        await symlink(outsideFile, escapeLink)
+        await expect(
+          service.diff(repoDir, {
+            kind: 'stash',
+            stashRef: 'stash@{0}',
+            stashHash: '1234567',
+            path: 'stash-escape-link.md',
+            status: '?'
+          })
+        ).rejects.toThrow(/저장소 밖/)
+        await rm(escapeLink, { force: true })
+      } catch {
+        // Symlink creation may require elevated permissions on some Windows environments
+      }
+
+      // Seed repo with subws directory
+      await mkdir(join(repoDir, 'subws'), { recursive: true })
+      await writeFile(join(repoDir, 'subws', 'keep.md'), '# Subws Keep\n', 'utf8')
+      await writeFile(join(repoDir, 'mod.md'), '# Mod v1\nline 2\n', 'utf8')
+      await writeFile(join(repoDir, 'del.md'), '# Del v1\n', 'utf8')
+      await writeFile(
+        join(repoDir, '이름 변경전.md'),
+        '# Rename Base\nbody 1\nbody 2\nbody 3\n',
+        'utf8'
+      )
+      await service.stageAll(repoDir)
+      await service.commit(repoDir, 'seed stash diff')
+
+      // Stash 1: A, M, D, R, tracked binary + ^3 untracked text, empty, binary
+      await writeFile(join(repoDir, 'subws', 'added.md'), '# Staged Added\n', 'utf8')
+      await writeFile(join(repoDir, 'tracked-bin.dat'), Buffer.from([0x89, 0x50, 0x00, 0x0a]))
+      await service.stage(repoDir, ['subws/added.md', 'tracked-bin.dat'])
+      await runGit(repoDir, ['mv', '이름 변경전.md', 'subws/이름 변경후.md'])
+      await writeFile(join(repoDir, 'mod.md'), '# Mod v1\nline 2 stashed\n', 'utf8')
+      await rm(join(repoDir, 'del.md'))
+      await writeFile(join(repoDir, 'subws', '새 미추적.md'), '# Untracked Heading\n둘째 줄\n', 'utf8')
+      await writeFile(join(repoDir, 'empty-untracked.md'), '', 'utf8')
+      await writeFile(join(repoDir, 'untracked-bin.dat'), Buffer.from([0x00, 0x01, 0x02, 0x03]))
+      await service.stashCreate(repoDir, { scope: 'all', message: 'stash one' })
+
+      const [stash1] = await service.stashList(repoDir)
+
+      const modDiff = await service.diff(join(repoDir, 'subws'), {
+        kind: 'stash',
+        stashRef: stash1.ref,
+        stashHash: stash1.hash,
+        path: 'mod.md',
+        status: 'M'
+      })
+      expect(modDiff.isBinary).toBe(false)
+      // mod.md lives at repoRoot, outside subws -> existsInWorkspace=false
+      expect(modDiff.existsInWorkspace).toBe(false)
+      expect(modDiff.rawPatch).toContain('-line 2')
+      expect(modDiff.rawPatch).toContain('+line 2 stashed')
+
+      // mod.md inspected from repoRoot -> existsInWorkspace=true
+      const modRootDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash1.ref,
+        stashHash: stash1.hash,
+        path: 'mod.md',
+        status: 'M'
+      })
+      expect(modRootDiff.existsInWorkspace).toBe(true)
+
+      const renameDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash1.ref,
+        stashHash: stash1.hash,
+        path: 'subws/이름 변경후.md',
+        origPath: '이름 변경전.md',
+        status: 'R'
+      })
+      expect(renameDiff).toMatchObject({
+        path: 'subws/이름 변경후.md',
+        origPath: '이름 변경전.md',
+        status: 'R',
+        isBinary: false,
+        existsInWorkspace: false
+      })
+      expect(renameDiff.rawPatch).toContain('rename from 이름 변경전.md')
+      expect(renameDiff.rawPatch).toContain('rename to subws/이름 변경후.md')
+
+      const addedDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash1.ref,
+        stashHash: stash1.hash,
+        path: 'subws/added.md',
+        status: 'A'
+      })
+      expect(addedDiff.rawPatch).toContain('+# Staged Added')
+      expect(addedDiff.existsInWorkspace).toBe(false)
+
+      const deletedDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash1.ref,
+        stashHash: stash1.hash,
+        path: 'del.md',
+        status: 'D'
+      })
+      expect(deletedDiff.rawPatch).toContain('-# Del v1')
+      expect(deletedDiff.existsInWorkspace).toBe(true)
+
+      const trackedBinDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash1.ref,
+        stashHash: stash1.hash,
+        path: 'tracked-bin.dat',
+        status: 'A'
+      })
+      expect(trackedBinDiff).toMatchObject({
+        path: 'tracked-bin.dat',
+        status: 'A',
+        isBinary: true,
+        isTruncated: false,
+        rawPatch: ''
+      })
+
+      // ^3 untracked text, empty, binary
+      const untrackedDiff = await service.diff(join(repoDir, 'subws'), {
+        kind: 'stash',
+        stashRef: stash1.ref,
+        stashHash: stash1.hash,
+        path: 'subws/새 미추적.md',
+        status: '?'
+      })
+      expect(untrackedDiff).toMatchObject({
+        path: 'subws/새 미추적.md',
+        status: '?',
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: false
+      })
+      expect(untrackedDiff.rawPatch).toContain('+# Untracked Heading')
+      expect(untrackedDiff.rawPatch).toContain('+둘째 줄')
+
+      const emptyUntrackedDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash1.ref,
+        stashHash: stash1.hash,
+        path: 'empty-untracked.md',
+        status: '?'
+      })
+      expect(emptyUntrackedDiff).toMatchObject({
+        path: 'empty-untracked.md',
+        status: '?',
+        isBinary: false,
+        isTruncated: false,
+        rawPatch: ''
+      })
+
+      const untrackedBinDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash1.ref,
+        stashHash: stash1.hash,
+        path: 'untracked-bin.dat',
+        status: '?'
+      })
+      expect(untrackedBinDiff).toMatchObject({
+        path: 'untracked-bin.dat',
+        status: '?',
+        isBinary: true,
+        isTruncated: false,
+        rawPatch: ''
+      })
+
+      // Stash 2 (>1MB tracked + >1MB ^3 untracked UTF-8) shifts stash1 to stash@{1}, yet stash1.hash still resolves cleanly
+      await writeFile(join(repoDir, 'mod.md'), 'Z'.repeat(1024).concat('\n').repeat(1200), 'utf8')
+      await writeFile(
+        join(repoDir, 'huge-stash-untracked.md'),
+        'x'.repeat(GIT_DIFF_MAX_BYTES - 1) + '가'.repeat(20),
+        'utf8'
+      )
+      await service.stashCreate(repoDir, { scope: 'unstaged', message: 'huge stash' })
+      const [stash2] = await service.stashList(repoDir)
+
+      const hugeTrackedStashDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash2.ref,
+        stashHash: stash2.hash,
+        path: 'mod.md',
+        status: 'M'
+      })
+      expect(hugeTrackedStashDiff.isTruncated).toBe(true)
+      expect(Buffer.byteLength(hugeTrackedStashDiff.rawPatch, 'utf8')).toBeLessThanOrEqual(
+        GIT_DIFF_MAX_BYTES
+      )
+
+      const hugeUntrackedStashDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash2.ref,
+        stashHash: stash2.hash,
+        path: 'huge-stash-untracked.md',
+        status: '?'
+      })
+      expect(hugeUntrackedStashDiff.isTruncated).toBe(true)
+      expect(hugeUntrackedStashDiff.rawPatch).not.toContain('\uFFFD')
+      expect(Buffer.byteLength(hugeUntrackedStashDiff.rawPatch, 'utf8')).toBeLessThanOrEqual(
+        GIT_DIFF_MAX_BYTES
+      )
+
+      // Apply shifted stash1 (now stash@{1}) -> restored untracked file now has existsInWorkspace=true
+      await service.stashApply(repoDir, 'stash@{1}')
+      const afterApplyUntracked = await service.diff(join(repoDir, 'subws'), {
+        kind: 'stash',
+        stashRef: 'stash@{1}',
+        stashHash: stash1.hash,
+        path: 'subws/새 미추적.md',
+        status: '?'
+      })
+      expect(afterApplyUntracked.existsInWorkspace).toBe(true)
+      expect(afterApplyUntracked.rawPatch).toContain('+# Untracked Heading')
+    }), 60_000)
 })

@@ -18,10 +18,11 @@ import type {
   GitGraphCommit,
   GitLogScope
 } from '@shared/git'
-import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
-import { toGitDiffRequest } from '../utils/gitFilePresentation'
+import type { GitDetailState } from '../hooks/useGitDetailSelection'
+import type { GitGraphState } from '../hooks/useGitGraphLog'
+import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { normalizeGitGraphRefs, type GitGraphDisplayRef } from '../utils/gitGraphRefs'
-import { GitChangedFileRow } from './GitChangedFileRow'
+import { GitDetailFilesList, GitDetailPanel } from './GitDetailPanel'
 import {
   buildGitGraphConnectionPath,
   computeGitGraphLayout,
@@ -71,26 +72,9 @@ function getLaneColor(colorIndex: number): string {
   return `var(--git-graph-lane-${normalized}, ${LANE_FALLBACK_COLORS[normalized]})`
 }
 
-function padTwo(value: number): string {
-  return String(value).padStart(2, '0')
-}
-
-function formatGitCommitTimestamp(isoTimestamp: string): string {
-  const parsed = new Date(isoTimestamp)
-  if (Number.isNaN(parsed.getTime())) {
-    return isoTimestamp
-  }
-  const year = parsed.getFullYear()
-  const month = padTwo(parsed.getMonth() + 1)
-  const day = padTwo(parsed.getDate())
-  const hours = padTwo(parsed.getHours())
-  const minutes = padTwo(parsed.getMinutes())
-  return `${year}-${month}-${day} ${hours}:${minutes}`
-}
-
 /** Formats hover tooltip text (`shortHash · authorName · 날짜·시간 · subject`) for a commit row. */
 export function formatGitCommitTooltip(commit: GitGraphCommit): string {
-  return `${commit.shortHash} · ${commit.authorName} · ${formatGitCommitTimestamp(commit.committedAt)} · ${commit.subject}`
+  return `${commit.shortHash} · ${commit.authorName} · ${formatGitTimestamp(commit.committedAt)} · ${commit.subject}`
 }
 
 function getDisplayRefKey(displayRef: GitGraphDisplayRef): string {
@@ -349,48 +333,9 @@ const GitGraphLaneSvg = memo(function GitGraphLaneSvg({
   )
 })
 
-function GitCommitDetailFiles({
-  detail,
-  onOpenFileDiff
-}: {
-  detail: GitCommitDetail
-  onOpenFileDiff: (request: GitDiffRequest) => void
-}) {
-  if (detail.files.length === 0) {
-    return <p className="git-commit-detail-empty-files">변경된 파일이 없습니다.</p>
-  }
-
-  return (
-    <div className="git-commit-detail-files-section">
-      <div className="git-commit-detail-files-header">변경된 파일 ({detail.files.length})</div>
-      <ul className="git-file-list git-commit-detail-files" aria-label="변경된 파일" role="list">
-        {detail.files.map((file) => (
-          <GitChangedFileRow
-            key={`${file.status}:${file.origPath ?? ''}:${file.path}`}
-            file={file}
-            displayMode="list"
-            onSelectFile={(selectedFile) =>
-              onOpenFileDiff(
-                toGitDiffRequest(
-                  {
-                    kind: 'commit',
-                    commitHash: detail.hash,
-                    shortHash: detail.shortHash
-                  },
-                  selectedFile
-                )
-              )
-            }
-          />
-        ))}
-      </ul>
-    </div>
-  )
-}
-
 interface GitCommitDetailPanelProps {
   shortHash: string
-  detailState: GitCommitDetailState
+  detailState: GitDetailState<GitCommitDetail>
   onOpenFileDiff: (request: GitDiffRequest) => void
 }
 
@@ -432,65 +377,62 @@ function GitCommitDetailPanel({
     }
   }
 
-  const loadedDetail = detailState.status === 'loaded' ? detailState.detail : null
-  const isCopied = loadedDetail !== null && copiedHash === loadedDetail.hash
-  const hasBody = loadedDetail !== null && loadedDetail.body.trim().length > 0
-
   return (
-    <div
-      className="git-commit-detail"
-      role="region"
-      aria-label={`${shortHash} 커밋 상세`}
-      // Clear inherited commit-row tooltip while hovering inside the expanded detail box.
-      title=""
-    >
-      {detailState.status === 'loading' && (
-        <p className="git-commit-detail-status">커밋 상세를 불러오는 중...</p>
-      )}
-      {detailState.status === 'error' && (
-        <p className="git-commit-detail-error" role="alert">
-          {detailState.errorMessage}
-        </p>
-      )}
-      {loadedDetail && (
-        <>
-          <div className="git-commit-detail-top">
-            <code className="git-commit-detail-hash" title={loadedDetail.hash}>
-              {loadedDetail.shortHash}
-            </code>
-            <button
-              type="button"
-              className={`git-icon-btn git-commit-detail-copy-btn${isCopied ? ' is-copied' : ''}`}
-              aria-label="해시 복사"
-              title={isCopied ? '복사됨' : '전체 해시 복사'}
-              onClick={() => void handleCopyHash(loadedDetail.hash)}
-            >
-              {isCopied ? (
-                <>
-                  <Check size={12} strokeWidth={1.75} aria-hidden="true" />
-                  <span className="git-commit-detail-copy-status">복사됨</span>
-                </>
-              ) : (
-                <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
-              )}
-            </button>
-          </div>
-          <div className="git-commit-detail-subject">{loadedDetail.subject}</div>
-          {hasBody && <div className="git-commit-detail-body">{loadedDetail.body}</div>}
-          <div className="git-commit-detail-meta">
-            <span className="git-commit-detail-author">
-              {loadedDetail.authorEmail
-                ? `${loadedDetail.authorName} <${loadedDetail.authorEmail}>`
-                : loadedDetail.authorName}
-            </span>
-            <span className="git-commit-detail-date">
-              {formatGitCommitTimestamp(loadedDetail.committedAt)}
-            </span>
-          </div>
-          <GitCommitDetailFiles detail={loadedDetail} onOpenFileDiff={onOpenFileDiff} />
-        </>
-      )}
-    </div>
+    <GitDetailPanel
+      ariaLabel={`${shortHash} 커밋 상세`}
+      detailState={detailState}
+      loadingText="커밋 상세를 불러오는 중..."
+      renderLoaded={(loadedDetail) => {
+        const isCopied = copiedHash === loadedDetail.hash
+        const hasBody = loadedDetail.body.trim().length > 0
+        return (
+          <>
+            <div className="git-commit-detail-top">
+              <code className="git-commit-detail-hash" title={loadedDetail.hash}>
+                {loadedDetail.shortHash}
+              </code>
+              <button
+                type="button"
+                className={`git-icon-btn git-commit-detail-copy-btn${isCopied ? ' is-copied' : ''}`}
+                aria-label="해시 복사"
+                title={isCopied ? '복사됨' : '전체 해시 복사'}
+                onClick={() => void handleCopyHash(loadedDetail.hash)}
+              >
+                {isCopied ? (
+                  <>
+                    <Check size={12} strokeWidth={1.75} aria-hidden="true" />
+                    <span className="git-commit-detail-copy-status">복사됨</span>
+                  </>
+                ) : (
+                  <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
+                )}
+              </button>
+            </div>
+            <div className="git-commit-detail-subject">{loadedDetail.subject}</div>
+            {hasBody && <div className="git-commit-detail-body">{loadedDetail.body}</div>}
+            <div className="git-commit-detail-meta">
+              <span className="git-commit-detail-author">
+                {loadedDetail.authorEmail
+                  ? `${loadedDetail.authorName} <${loadedDetail.authorEmail}>`
+                  : loadedDetail.authorName}
+              </span>
+              <span className="git-commit-detail-date">
+                {formatGitTimestamp(loadedDetail.committedAt)}
+              </span>
+            </div>
+            <GitDetailFilesList
+              files={loadedDetail.files}
+              target={{
+                kind: 'commit',
+                commitHash: loadedDetail.hash,
+                shortHash: loadedDetail.shortHash
+              }}
+              onOpenFileDiff={onOpenFileDiff}
+            />
+          </>
+        )
+      }}
+    />
   )
 }
 

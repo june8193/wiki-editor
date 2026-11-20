@@ -208,5 +208,19 @@ describe('GitService helpers (unit)', () => {
     expect(
       formatGitError(Object.assign(new Error('fail'), { stderr: 'CONFLICT (content): Merge conflict in doc.md' })).message
     ).toMatch(/충돌/)
+    expect(
+      formatGitError(
+        Object.assign(new Error('fail'), {
+          stderr: 'error: Your local changes to the following files would be overwritten by merge'
+        })
+      ).message
+    ).toMatch(/커밋하거나 Stash로 임시 보관/)
+    expect(
+      formatGitError(
+        Object.assign(new Error('fail'), {
+          stderr: 'Please commit your changes or stash them before you merge.'
+        })
+      ).message
+    ).toMatch(/커밋하거나 Stash로 임시 보관/)
   })
 })

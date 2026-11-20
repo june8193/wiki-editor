@@ -17,6 +17,9 @@ import type {
   GitDiffRequest,
   GitFileDiff,
   GitLogResult,
+  GitStashCreateOptions,
+  GitStashDetail,
+  GitStashEntry,
   GitStatus,
   GitSyncResult
 } from '@shared/git'
@@ -257,7 +260,37 @@ export function createWikiApi(
           commitHash
         ) as Promise<GitCommitDetail>,
       diff: (workspacePath, request: GitDiffRequest) =>
-        ipcRenderer.invoke(GIT_IPC_CHANNELS.diff, workspacePath, request) as Promise<GitFileDiff>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.diff, workspacePath, request) as Promise<GitFileDiff>,
+      stashList: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.stashList, workspacePath) as Promise<GitStashEntry[]>,
+      stashDetail: (workspacePath, stashRef) =>
+        ipcRenderer.invoke(
+          GIT_IPC_CHANNELS.stashDetail,
+          workspacePath,
+          stashRef
+        ) as Promise<GitStashDetail>,
+      stashCreate: (workspacePath, options: GitStashCreateOptions) =>
+        ipcRenderer.invoke(
+          GIT_IPC_CHANNELS.stashCreate,
+          workspacePath,
+          options
+        ) as Promise<GitStatus>,
+      stashApply: (workspacePath, stashRef) =>
+        ipcRenderer.invoke(
+          GIT_IPC_CHANNELS.stashApply,
+          workspacePath,
+          stashRef
+        ) as Promise<GitStatus>,
+      stashPop: (workspacePath, stashRef) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.stashPop, workspacePath, stashRef) as Promise<GitStatus>,
+      stashDrop: (workspacePath, stashRef) =>
+        ipcRenderer.invoke(
+          GIT_IPC_CHANNELS.stashDrop,
+          workspacePath,
+          stashRef
+        ) as Promise<GitStashEntry[]>,
+      stashClear: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.stashClear, workspacePath) as Promise<GitStashEntry[]>
     },
     menu: {
       onCommand: (listener) =>

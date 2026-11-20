@@ -204,9 +204,16 @@ describe('registerIpcHandlers logging wrapper', () => {
       origPath: 'docs/old.md',
       status: 'R'
     })
+    await ipcMain.invoke(GIT_IPC_CHANNELS.diff, 'C:\\wiki', {
+      kind: 'stash',
+      stashRef: 'stash@{0}',
+      stashHash: '1234567890abcdef1234567890abcdef12345678',
+      path: 'docs/secret-stash.md',
+      status: '?'
+    })
 
     const entries = await logService.readEntries()
-    expect(entries).toHaveLength(1)
+    expect(entries).toHaveLength(2)
     expect(JSON.stringify(entries)).not.toContain(secretPatchBody)
     expect(entries[0]).toMatchObject({
       level: 'info',
@@ -217,6 +224,19 @@ describe('registerIpcHandlers logging wrapper', () => {
         workspacePath: 'C:\\wiki',
         kind: 'staged',
         path: 'docs/secret.md'
+      }
+    })
+    expect(entries[1]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: GIT_IPC_CHANNELS.diff,
+        success: true,
+        workspacePath: 'C:\\wiki',
+        kind: 'stash',
+        stashRef: 'stash@{0}',
+        stashHash: '1234567890abcdef1234567890abcdef12345678',
+        path: 'docs/secret-stash.md'
       }
     })
     dispose()

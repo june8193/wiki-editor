@@ -80,6 +80,22 @@ describe('registerGitIpc', () => {
       existsInWorkspace: true,
       rawPatch: '@@ -1 +1 @@\n-old\n+new\n'
     }
+    const sampleStashList = [
+      {
+        ref: 'stash@{0}',
+        hash: '1234567890abcdef1234567890abcdef12345678',
+        branch: 'main',
+        message: 'wip notes',
+        createdAt: '2026-11-20T10:00:00+09:00'
+      }
+    ]
+    const sampleStashDetail = {
+      ...sampleStashList[0],
+      files: [
+        { path: 'README.md', status: 'M' as const },
+        { path: 'draft.md', status: '?' as const }
+      ]
+    }
     const fakeGitService: Pick<
       GitService,
       | 'status'
@@ -100,6 +116,13 @@ describe('registerGitIpc', () => {
       | 'log'
       | 'commitDetail'
       | 'diff'
+      | 'stashList'
+      | 'stashDetail'
+      | 'stashCreate'
+      | 'stashApply'
+      | 'stashPop'
+      | 'stashDrop'
+      | 'stashClear'
     > = {
       status: vi.fn(async () => sampleStatus),
       init: vi.fn(async () => sampleStatus),
@@ -122,7 +145,14 @@ describe('registerGitIpc', () => {
       sync: vi.fn(async () => ({ status: sampleStatus, pulled: true, pushed: true, summary: 'done' })),
       log: vi.fn(async () => sampleLog),
       commitDetail: vi.fn(async () => sampleCommitDetail),
-      diff: vi.fn(async () => sampleDiff)
+      diff: vi.fn(async () => sampleDiff),
+      stashList: vi.fn(async () => sampleStashList),
+      stashDetail: vi.fn(async () => sampleStashDetail),
+      stashCreate: vi.fn(async () => sampleStatus),
+      stashApply: vi.fn(async () => sampleStatus),
+      stashPop: vi.fn(async () => sampleStatus),
+      stashDrop: vi.fn(async () => sampleStashList),
+      stashClear: vi.fn(async () => [])
     }
 
     const ipcMain = createFakeIpcMain()
@@ -133,6 +163,7 @@ describe('registerGitIpc', () => {
     })
 
     const diffRequest = { kind: 'staged' as const, path: 'README.md', status: 'M' as const }
+    const stashCreateOptions = { scope: 'unstaged' as const, includeUntracked: true }
 
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.fetch, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
@@ -147,6 +178,27 @@ describe('registerGitIpc', () => {
       /열린 워크스페이스/
     )
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.diff, workspaceDir, diffRequest)).rejects.toThrow(
+      /열린 워크스페이스/
+    )
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.stashList, workspaceDir)).rejects.toThrow(
+      /열린 워크스페이스/
+    )
+    await expect(
+      ipcMain.invoke(GIT_IPC_CHANNELS.stashDetail, workspaceDir, 'stash@{0}')
+    ).rejects.toThrow(/열린 워크스페이스/)
+    await expect(
+      ipcMain.invoke(GIT_IPC_CHANNELS.stashCreate, workspaceDir, stashCreateOptions)
+    ).rejects.toThrow(/열린 워크스페이스/)
+    await expect(
+      ipcMain.invoke(GIT_IPC_CHANNELS.stashApply, workspaceDir, 'stash@{0}')
+    ).rejects.toThrow(/열린 워크스페이스/)
+    await expect(
+      ipcMain.invoke(GIT_IPC_CHANNELS.stashPop, workspaceDir, 'stash@{0}')
+    ).rejects.toThrow(/열린 워크스페이스/)
+    await expect(
+      ipcMain.invoke(GIT_IPC_CHANNELS.stashDrop, workspaceDir, 'stash@{0}')
+    ).rejects.toThrow(/열린 워크스페이스/)
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.stashClear, workspaceDir)).rejects.toThrow(
       /열린 워크스페이스/
     )
 
@@ -165,6 +217,27 @@ describe('registerGitIpc', () => {
       /일치하지 않습니다/
     )
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.diff, otherDir, diffRequest)).rejects.toThrow(
+      /일치하지 않습니다/
+    )
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.stashList, otherDir)).rejects.toThrow(
+      /일치하지 않습니다/
+    )
+    await expect(
+      ipcMain.invoke(GIT_IPC_CHANNELS.stashDetail, otherDir, 'stash@{0}')
+    ).rejects.toThrow(/일치하지 않습니다/)
+    await expect(
+      ipcMain.invoke(GIT_IPC_CHANNELS.stashCreate, otherDir, stashCreateOptions)
+    ).rejects.toThrow(/일치하지 않습니다/)
+    await expect(
+      ipcMain.invoke(GIT_IPC_CHANNELS.stashApply, otherDir, 'stash@{0}')
+    ).rejects.toThrow(/일치하지 않습니다/)
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.stashPop, otherDir, 'stash@{0}')).rejects.toThrow(
+      /일치하지 않습니다/
+    )
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.stashDrop, otherDir, 'stash@{0}')).rejects.toThrow(
+      /일치하지 않습니다/
+    )
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.stashClear, otherDir)).rejects.toThrow(
       /일치하지 않습니다/
     )
 
@@ -230,6 +303,37 @@ describe('registerGitIpc', () => {
     expect(await ipcMain.invoke(GIT_IPC_CHANNELS.diff, workspaceDir, diffRequest)).toEqual(sampleDiff)
     expect(fakeGitService.diff).toHaveBeenCalledWith(opened.rootPath, diffRequest)
 
+    expect(await ipcMain.invoke(GIT_IPC_CHANNELS.stashList, workspaceDir)).toEqual(sampleStashList)
+    expect(fakeGitService.stashList).toHaveBeenCalledWith(opened.rootPath)
+
+    expect(await ipcMain.invoke(GIT_IPC_CHANNELS.stashDetail, workspaceDir, 'stash@{0}')).toEqual(
+      sampleStashDetail
+    )
+    expect(fakeGitService.stashDetail).toHaveBeenCalledWith(opened.rootPath, 'stash@{0}')
+
+    expect(
+      await ipcMain.invoke(GIT_IPC_CHANNELS.stashCreate, workspaceDir, stashCreateOptions)
+    ).toEqual(sampleStatus)
+    expect(fakeGitService.stashCreate).toHaveBeenCalledWith(opened.rootPath, stashCreateOptions)
+
+    expect(await ipcMain.invoke(GIT_IPC_CHANNELS.stashApply, workspaceDir, 'stash@{0}')).toEqual(
+      sampleStatus
+    )
+    expect(fakeGitService.stashApply).toHaveBeenCalledWith(opened.rootPath, 'stash@{0}')
+
+    expect(await ipcMain.invoke(GIT_IPC_CHANNELS.stashPop, workspaceDir, 'stash@{0}')).toEqual(
+      sampleStatus
+    )
+    expect(fakeGitService.stashPop).toHaveBeenCalledWith(opened.rootPath, 'stash@{0}')
+
+    expect(await ipcMain.invoke(GIT_IPC_CHANNELS.stashDrop, workspaceDir, 'stash@{0}')).toEqual(
+      sampleStashList
+    )
+    expect(fakeGitService.stashDrop).toHaveBeenCalledWith(opened.rootPath, 'stash@{0}')
+
+    expect(await ipcMain.invoke(GIT_IPC_CHANNELS.stashClear, workspaceDir)).toEqual([])
+    expect(fakeGitService.stashClear).toHaveBeenCalledWith(opened.rootPath)
+
     dispose()
     for (const channel of Object.values(GIT_IPC_CHANNELS)) {
       expect(ipcMain.hasHandler(channel)).toBe(false)
@@ -259,6 +363,13 @@ describe('registerGitIpc', () => {
       | 'log'
       | 'commitDetail'
       | 'diff'
+      | 'stashList'
+      | 'stashDetail'
+      | 'stashCreate'
+      | 'stashApply'
+      | 'stashPop'
+      | 'stashDrop'
+      | 'stashClear'
     > = {
       status: vi.fn(async () => sampleStatus),
       init: vi.fn(async () => sampleStatus),
@@ -294,7 +405,21 @@ describe('registerGitIpc', () => {
         isTruncated: false,
         existsInWorkspace: true,
         rawPatch: ''
-      }))
+      })),
+      stashList: vi.fn(async () => []),
+      stashDetail: vi.fn(async () => ({
+        ref: 'stash@{0}',
+        hash: '1234567',
+        branch: 'main',
+        message: '',
+        createdAt: '',
+        files: []
+      })),
+      stashCreate: vi.fn(async () => sampleStatus),
+      stashApply: vi.fn(async () => sampleStatus),
+      stashPop: vi.fn(async () => sampleStatus),
+      stashDrop: vi.fn(async () => []),
+      stashClear: vi.fn(async () => [])
     }
 
     const ipcMain = createFakeIpcMain()

@@ -1,5 +1,5 @@
 import type { BufferKeyRemap } from '@shared/documentBuffer'
-import type { GitDiffRequest } from '@shared/git'
+import type { GitDiffRequest, GitStashEntry } from '@shared/git'
 import {
   clampSplitRatio,
   type CursorPosition,
@@ -1043,8 +1043,54 @@ export class PaneTabStore {
     )
   }
 
+  private closeDiffTabsExcept = (
+    diffKind: 'staged' | 'unstaged',
+    activeRepoRelativePaths: ReadonlySet<string>
+  ): void => {
+    this.removeTabsWhere(
+      (tab) =>
+        tab.kind === 'diff' &&
+        tab.diff.request.kind === diffKind &&
+        !activeRepoRelativePaths.has(tab.diff.request.path)
+    )
+  }
+
+  closeUnstagedDiffTabsExcept = (activeRepoRelativePaths: ReadonlySet<string>): void => {
+    this.closeDiffTabsExcept('unstaged', activeRepoRelativePaths)
+  }
+
+  closeStagedDiffTabsExcept = (activeRepoRelativePaths: ReadonlySet<string>): void => {
+    this.closeDiffTabsExcept('staged', activeRepoRelativePaths)
+  }
+
   closeAllUnstagedDiffTabs = (): void => {
     this.removeTabsWhere((tab) => tab.kind === 'diff' && tab.diff.request.kind === 'unstaged')
+  }
+
+  reconcileStashDiffTabs = (activeStashes: readonly GitStashEntry[]): void => {
+    const refByHash = new Map(activeStashes.map((entry) => [entry.hash, entry.ref]))
+    this.transformPaneTabs((tab) => {
+      if (tab.kind !== 'diff' || tab.diff.request.kind !== 'stash') {
+        return tab
+      }
+      const nextRef = refByHash.get(tab.diff.request.stashHash)
+      if (!nextRef) {
+        return null
+      }
+      if (nextRef === tab.diff.request.stashRef) {
+        return tab
+      }
+      return {
+        ...tab,
+        diff: {
+          ...tab.diff,
+          request: {
+            ...tab.diff.request,
+            stashRef: nextRef
+          }
+        }
+      }
+    })
   }
 
   restoreWorkspaceLayout = (
@@ -1144,9 +1190,25 @@ export class PaneTabStore {
   }
 
   private removeTabsWhere(shouldRemove: (tab: TabItem) => boolean): void {
-    const filterPane = (pane: PaneState): { nextPane: PaneState; changed: boolean } => {
-      const nextTabs = pane.tabs.filter((tab) => !shouldRemove(tab))
-      if (nextTabs.length === pane.tabs.length) {
+    this.transformPaneTabs((tab) => (shouldRemove(tab) ? null : tab))
+  }
+
+  private transformPaneTabs(transformTab: (tab: TabItem) => TabItem | null): void {
+    const transformPane = (pane: PaneState): { nextPane: PaneState; changed: boolean } => {
+      let changed = false
+      const nextTabs: TabItem[] = []
+      for (const tab of pane.tabs) {
+        const nextTab = transformTab(tab)
+        if (nextTab === null) {
+          changed = true
+          continue
+        }
+        if (nextTab !== tab) {
+          changed = true
+        }
+        nextTabs.push(nextTab)
+      }
+      if (!changed) {
         return { nextPane: pane, changed: false }
       }
       let nextActiveTabId = pane.activeTabId
@@ -1159,8 +1221,8 @@ export class PaneTabStore {
       }
     }
 
-    const pResult = filterPane(this.state.panes.primary)
-    const sResult = filterPane(this.state.panes.secondary)
+    const pResult = transformPane(this.state.panes.primary)
+    const sResult = transformPane(this.state.panes.secondary)
     if (!pResult.changed && !sResult.changed) return
 
     const reconciled = collapseOrPromoteSplitLayout(

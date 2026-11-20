@@ -38,9 +38,19 @@ describe('gitFilePresentation', () => {
         status: 'M'
       })
     ).toBe('guide.md (a1b2c3d)')
+
+    expect(
+      getGitDiffTabLabel({
+        kind: 'stash',
+        stashRef: 'stash@{0}',
+        stashHash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+        path: 'docs/guide.md',
+        status: '?'
+      })
+    ).toBe('guide.md (stash@{0})')
   })
 
-  it('builds commit, staged, and unstaged GitDiffRequest values uniformly while preserving origPath', () => {
+  it('builds commit, stash, staged, and unstaged GitDiffRequest values uniformly while preserving origPath', () => {
     expect(
       toGitDiffRequest('staged', {
         path: 'sub/new-name.md',
@@ -75,9 +85,29 @@ describe('gitFilePresentation', () => {
       origPath: 'legacy.md',
       status: 'R'
     })
+
+    expect(
+      toGitDiffRequest(
+        {
+          kind: 'stash',
+          stashRef: 'stash@{1}',
+          stashHash: 'f9e8d7c6b5a4f9e8d7c6b5a4f9e8d7c6b5a4f9e8'
+        },
+        {
+          path: 'sub/draft.md',
+          status: '?'
+        }
+      )
+    ).toEqual({
+      kind: 'stash',
+      stashRef: 'stash@{1}',
+      stashHash: 'f9e8d7c6b5a4f9e8d7c6b5a4f9e8d7c6b5a4f9e8',
+      path: 'sub/draft.md',
+      status: '?'
+    })
   })
 
-  it('produces distinct context labels and tab keys per commit hash', () => {
+  it('produces distinct context labels and tab keys per commit hash and stash hash', () => {
     const reqA = toGitDiffRequest(
       { kind: 'commit', commitHash: 'a1b2c3d000000000000000000000000000000001', shortHash: 'a1b2c3d' },
       { path: 'guide.md', status: 'M' }
@@ -89,6 +119,24 @@ describe('gitFilePresentation', () => {
 
     expect(getGitDiffContextLabel(reqA)).toBe('Commit a1b2c3d')
     expect(formatGitDiffTabKey(reqA)).not.toBe(formatGitDiffTabKey(reqB))
+
+    const stashA = toGitDiffRequest(
+      { kind: 'stash', stashRef: 'stash@{0}', stashHash: '1111111111111111111111111111111111111111' },
+      { path: 'guide.md', status: '?' }
+    )
+    const stashAShifted = toGitDiffRequest(
+      { kind: 'stash', stashRef: 'stash@{1}', stashHash: '1111111111111111111111111111111111111111' },
+      { path: 'guide.md', status: '?' }
+    )
+    const stashB = toGitDiffRequest(
+      { kind: 'stash', stashRef: 'stash@{0}', stashHash: '2222222222222222222222222222222222222222' },
+      { path: 'guide.md', status: '?' }
+    )
+
+    expect(getGitDiffContextLabel(stashA)).toBe('stash@{0}')
+    expect(getGitDiffContextLabel(stashAShifted)).toBe('stash@{1}')
+    expect(formatGitDiffTabKey(stashA)).toBe(formatGitDiffTabKey(stashAShifted))
+    expect(formatGitDiffTabKey(stashA)).not.toBe(formatGitDiffTabKey(stashB))
   })
 
   it('maps every GitFileStatusCode to VS Code UI display char, tone, label, and strikethrough without mutating input code', () => {
