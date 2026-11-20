@@ -8,6 +8,7 @@ import {
   CONFIG_IPC_CHANNELS,
   DIAGRAM_IPC_CHANNELS,
   type DiagramSaveRequest,
+  FRONTMATTER_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
@@ -15,6 +16,7 @@ import {
   WORKSPACE_IPC_CHANNELS,
   WORKSPACE_STATE_IPC_CHANNELS
 } from '@shared/ipc'
+import type { FrontmatterSchemaLoadResult, WorkspaceFrontmatterSchema } from '@shared/frontmatter'
 import type { RendererLogPayload } from '@shared/logging'
 import { DEFAULT_SEARCH_MATCH_OPTIONS } from '@shared/search'
 import type { ActiveTabDragSession } from '@shared/window'
@@ -480,5 +482,39 @@ describe('createWikiApi', () => {
       { channel: WORKSPACE_STATE_IPC_CHANNELS.get, args: ['C:\\wiki'] },
       { channel: WORKSPACE_STATE_IPC_CHANNELS.save, args: ['C:\\wiki', update] }
     ])
+  })
+
+  it('routes frontmatter schema methods through expected IPC channels and unsubscribes schemaChanged', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+    const sampleSchema: WorkspaceFrontmatterSchema = {
+      version: 1,
+      fields: [{ key: 'status', label: '상태', type: 'text' }]
+    }
+
+    await api.frontmatter.getSchema()
+    await api.frontmatter.createDefaultSchema()
+    await api.frontmatter.saveSchema(sampleSchema)
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: FRONTMATTER_IPC_CHANNELS.getSchema, args: [] },
+      { channel: FRONTMATTER_IPC_CHANNELS.createDefaultSchema, args: [] },
+      { channel: FRONTMATTER_IPC_CHANNELS.saveSchema, args: [sampleSchema] }
+    ])
+
+    const received: FrontmatterSchemaLoadResult[] = []
+    const unsubscribe = api.frontmatter.onSchemaChanged((result) => received.push(result))
+    expect(ipc.listenerCount(FRONTMATTER_IPC_CHANNELS.schemaChanged)).toBe(1)
+
+    const sampleEvent: FrontmatterSchemaLoadResult = {
+      exists: true,
+      path: 'C:\\wiki\\.wiki-editor\\frontmatter.json',
+      schema: sampleSchema
+    }
+    ipc.emit(FRONTMATTER_IPC_CHANNELS.schemaChanged, sampleEvent)
+    expect(received).toEqual([sampleEvent])
+
+    unsubscribe()
+    expect(ipc.listenerCount(FRONTMATTER_IPC_CHANNELS.schemaChanged)).toBe(0)
   })
 })

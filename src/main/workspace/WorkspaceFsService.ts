@@ -59,6 +59,7 @@ export interface WorkspaceFsServiceOptions {
 }
 
 export type WorkspaceWatchListener = (event: WorkspaceChangeEvent) => void
+export type WorkspaceRootChangedListener = (rootPath: string | null) => Promise<void> | void
 
 const INVALID_ENTRY_NAME_RE = /[<>:"/\\|?*\x00-\x1f]/
 const INVALID_IMAGE_STEM_CHARS_RE = new RegExp(`${INVALID_ENTRY_NAME_RE.source}+`, 'g')
@@ -197,10 +198,18 @@ export class WorkspaceFsService {
   private watcher: FSWatcher | null = null
   private watchTimer: ReturnType<typeof setTimeout> | null = null
   private watchListeners = new Set<WorkspaceWatchListener>()
+  private rootChangedListeners = new Set<WorkspaceRootChangedListener>()
 
   constructor(options: WorkspaceFsServiceOptions = {}) {
     this.trashItem = options.trashItem
     this.watchDebounceMs = options.watchDebounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS
+  }
+
+  onWorkspaceRootChanged(listener: WorkspaceRootChangedListener): () => void {
+    this.rootChangedListeners.add(listener)
+    return () => {
+      this.rootChangedListeners.delete(listener)
+    }
   }
 
   async openWorkspace(rootPath: string): Promise<WorkspaceInfo> {
@@ -208,6 +217,9 @@ export class WorkspaceFsService {
 
     this.unwatch()
     this.workspaceRoot = realRoot
+    for (const listener of [...this.rootChangedListeners]) {
+      await listener(realRoot)
+    }
     const entries = await this.readDir()
     return {
       rootPath: realRoot,
@@ -709,6 +721,10 @@ export class WorkspaceFsService {
   dispose(): void {
     this.unwatch()
     this.workspaceRoot = null
+    for (const listener of [...this.rootChangedListeners]) {
+      void listener(null)
+    }
+    this.rootChangedListeners.clear()
   }
 
   getWorkspaceRoot(): string | null {

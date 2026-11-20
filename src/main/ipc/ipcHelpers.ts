@@ -1,4 +1,8 @@
 import { types } from 'node:util'
+import type {
+  FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterSchema
+} from '@shared/frontmatter'
 import type { GitDiffRequest } from '@shared/git'
 import {
   BUFFER_IPC_CHANNELS,
@@ -7,6 +11,7 @@ import {
   DIAGRAM_IPC_CHANNELS,
   type DiagramSaveRequest,
   type DiagramSaveResult,
+  FRONTMATTER_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS,
@@ -146,6 +151,25 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
       hasLayout: layout !== null,
       ...(panes ? { tabCount: countPaneTabs(panes.primary) + countPaneTabs(panes.secondary) } : {})
     }
+  },
+  [FRONTMATTER_IPC_CHANNELS.saveSchema]: ([schema]) => {
+    const candidate =
+      schema && typeof schema === 'object'
+        ? (schema as Partial<WorkspaceFrontmatterSchema>)
+        : undefined
+    return {
+      fieldCount: Array.isArray(candidate?.fields) ? candidate.fields.length : 0
+    }
+  }
+}
+
+function extractFrontmatterResultMetadata(result: unknown): Record<string, unknown> {
+  const res =
+    result && typeof result === 'object' ? (result as Partial<FrontmatterSchemaLoadResult>) : {}
+  return {
+    exists: Boolean(res.exists),
+    hasSchema: Boolean(res.schema),
+    hasError: typeof res.error === 'string' && res.error.length > 0
   }
 }
 
@@ -153,6 +177,9 @@ const CHANNEL_RESULT_METADATA_EXTRACTORS: Record<
   string,
   (result: unknown) => Record<string, unknown>
 > = {
+  [FRONTMATTER_IPC_CHANNELS.getSchema]: extractFrontmatterResultMetadata,
+  [FRONTMATTER_IPC_CHANNELS.createDefaultSchema]: extractFrontmatterResultMetadata,
+  [FRONTMATTER_IPC_CHANNELS.saveSchema]: extractFrontmatterResultMetadata,
   [DIAGRAM_IPC_CHANNELS.saveFile]: (result) => {
     const res = result as Partial<DiagramSaveResult> | undefined
     return typeof res?.canceled === 'boolean' ? { canceled: res.canceled } : {}

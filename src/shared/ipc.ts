@@ -13,6 +13,10 @@ import type {
   SyncWindowTabsOptions
 } from './documentBuffer'
 import type {
+  FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterSchema
+} from './frontmatter'
+import type {
   GitBranchList,
   GitCommitDetail,
   GitDiffRequest,
@@ -92,6 +96,13 @@ export const WORKSPACE_IPC_CHANNELS = {
 export const WORKSPACE_STATE_IPC_CHANNELS = {
   get: 'workspace-state:get',
   save: 'workspace-state:save'
+} as const
+
+export const FRONTMATTER_IPC_CHANNELS = {
+  getSchema: 'frontmatter:get-schema',
+  createDefaultSchema: 'frontmatter:create-default-schema',
+  saveSchema: 'frontmatter:save-schema',
+  schemaChanged: 'frontmatter:schema-changed'
 } as const
 
 export const GIT_IPC_CHANNELS = {
@@ -306,10 +317,18 @@ export interface WikiWorkspaceStateApi {
   save(rootPath: string, update: WorkspaceStateUpdate): Promise<PersistedWorkspaceState>
 }
 
+export interface WikiFrontmatterApi {
+  getSchema(): Promise<FrontmatterSchemaLoadResult>
+  createDefaultSchema(): Promise<FrontmatterSchemaLoadResult>
+  saveSchema(schema: WorkspaceFrontmatterSchema): Promise<FrontmatterSchemaLoadResult>
+  onSchemaChanged(listener: (result: FrontmatterSchemaLoadResult) => void): () => void
+}
+
 export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
   workspaceState?: WikiWorkspaceStateApi
+  frontmatter?: WikiFrontmatterApi
   git: WikiGitApi
   menu: WikiMenuApi
   buffer: WikiBufferApi
