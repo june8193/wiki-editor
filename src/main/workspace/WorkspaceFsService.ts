@@ -907,7 +907,7 @@ export class WorkspaceFsService {
 
   private assertWithinWorkspaceAndAllowed(root: string, targetPath: string): void {
     if (!isPathInsideRoot(root, targetPath)) {
-      throw new Error('워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.')
+      throw new Error(WORKSPACE_OUTSIDE_ERROR_MESSAGE)
     }
     if (hasBlockedPathSegment(relative(root, targetPath), IGNORED_ENTRY_NAMES)) {
       throw new Error('시스템 폴더 경로에는 접근할 수 없습니다.')

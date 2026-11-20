@@ -6,6 +6,7 @@ import {
   createDefaultFrontmatterSchema,
   FRONTMATTER_SCHEMA_DIR,
   FRONTMATTER_SCHEMA_FILE,
+  FRONTMATTER_SCHEMA_RELATIVE_PATH,
   type FrontmatterSchemaLoadResult,
   parseFrontmatterSchema,
   parseFrontmatterSchemaJson,
@@ -38,10 +39,7 @@ export interface FrontmatterSchemaServiceOptions {
 function isSchemaWatchTarget(filename: string | null): boolean {
   if (!filename) return true
   const normalized = filename.replace(/\\/g, '/').replace(/^\.\//, '')
-  return (
-    normalized === FRONTMATTER_SCHEMA_DIR ||
-    normalized === `${FRONTMATTER_SCHEMA_DIR}/${FRONTMATTER_SCHEMA_FILE}`
-  )
+  return normalized === FRONTMATTER_SCHEMA_DIR || normalized === FRONTMATTER_SCHEMA_RELATIVE_PATH
 }
 
 function cloneSchemaLoadResult(result: FrontmatterSchemaLoadResult): FrontmatterSchemaLoadResult {
@@ -151,7 +149,7 @@ export class FrontmatterSchemaService {
   createDefaultSchema(): Promise<FrontmatterSchemaLoadResult> {
     return this.queue.enqueue(async () => {
       const root = this.requireWorkspaceRoot()
-      const resolved = await this.resolveSchemaTarget(root, { writable: true })
+      const resolved = await this.resolveWritableSchemaTarget(root)
       if (resolved.exists) {
         const { result, fingerprint } = await this.readSchemaFromDisk(root)
         this.lastKnownFingerprint = fingerprint
@@ -174,7 +172,7 @@ export class FrontmatterSchemaService {
 
     return this.queue.enqueue(async () => {
       const root = this.requireWorkspaceRoot()
-      const resolved = await this.resolveSchemaTarget(root, { writable: true })
+      const resolved = await this.resolveWritableSchemaTarget(root)
       return this.persistSchema(resolved.resolvedReal, resolved.schemaPath, validation.schema)
     })
   }
@@ -308,32 +306,22 @@ export class FrontmatterSchemaService {
     this.watchedRoot = null
   }
 
-  private rejectOrReportNonFile(
-    schemaPath: string,
-    resolvedReal: string,
-    message: string,
-    writable: boolean
-  ): {
+  private async resolveWritableSchemaTarget(root: string): Promise<{
     schemaPath: string
     resolvedReal: string
     exists: boolean
-    nonFileError: string
-  } {
-    if (writable) {
-      throw new Error(message)
+  }> {
+    const resolved = await this.inspectSchemaTarget(root)
+    if (resolved.kind === 'non-file') {
+      throw new Error(resolved.error)
     }
-    return { schemaPath, resolvedReal, exists: true, nonFileError: message }
+    return resolved
   }
 
-  private async resolveSchemaTarget(
-    root: string,
-    options: { writable: boolean }
-  ): Promise<{
-    schemaPath: string
-    resolvedReal: string
-    exists: boolean
-    nonFileError?: string
-  }> {
+  private async inspectSchemaTarget(root: string): Promise<
+    | { kind: 'non-file'; schemaPath: string; error: string }
+    | { kind: 'target'; schemaPath: string; resolvedReal: string; exists: boolean }
+  > {
     const schemaDir = join(root, FRONTMATTER_SCHEMA_DIR)
     const schemaPath = join(schemaDir, FRONTMATTER_SCHEMA_FILE)
 
@@ -346,12 +334,7 @@ export class FrontmatterSchemaService {
         throw new Error(WORKSPACE_SYMLINK_ERROR_MESSAGE)
       }
       if (!dirStats.isDirectory()) {
-        return this.rejectOrReportNonFile(
-          schemaPath,
-          schemaPath,
-          '`.wiki-editor` 경로가 폴더가 아닙니다.',
-          options.writable
-        )
+        return { kind: 'non-file', schemaPath, error: '`.wiki-editor` 경로가 폴더가 아닙니다.' }
       }
     }
 
@@ -376,25 +359,20 @@ export class FrontmatterSchemaService {
     if (exists) {
       const targetStats = await stat(resolvedReal)
       if (!targetStats.isFile()) {
-        return this.rejectOrReportNonFile(
-          schemaPath,
-          resolvedReal,
-          '스키마 경로가 파일이 아닙니다.',
-          options.writable
-        )
+        return { kind: 'non-file', schemaPath, error: '스키마 경로가 파일이 아닙니다.' }
       }
     }
 
-    return { schemaPath, resolvedReal, exists }
+    return { kind: 'target', schemaPath, resolvedReal, exists }
   }
 
   private async readSchemaFromDisk(root: string): Promise<{
     result: FrontmatterSchemaLoadResult
     fingerprint: string
   }> {
-    const resolved = await this.resolveSchemaTarget(root, { writable: false })
-    if (resolved.nonFileError) {
-      return createSchemaErrorRead(resolved.schemaPath, resolved.nonFileError)
+    const resolved = await this.inspectSchemaTarget(root)
+    if (resolved.kind === 'non-file') {
+      return createSchemaErrorRead(resolved.schemaPath, resolved.error)
     }
 
     if (!resolved.exists) {

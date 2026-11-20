@@ -249,10 +249,6 @@ function readYamlNodeRange(node: unknown): [number, number, number] | undefined 
   return (node as { range?: [number, number, number] } | null)?.range
 }
 
-function leadingSeparatorGap(trailing: string): string {
-  return trailing.startsWith(' ') || trailing.startsWith('\t') ? '' : ' '
-}
-
 function extractPairKeyName(pair: Pair, yamlLf: string): string | null {
   if (YAML.isScalar(pair.key)) {
     const val = pair.key.value
@@ -347,7 +343,7 @@ function readLineSpan(text: string, start: number, lineNumber: number): LineSpan
   }
 }
 
-function createEmptyFrontmatterSplit(
+function createNonFrontmatterSplit(
   markdown: string,
   hasBom: boolean,
   lineEnding: '\r\n' | '\n',
@@ -375,16 +371,16 @@ function splitFrontmatterRegion(markdown: string): FrontmatterSplit {
   const fallbackLineEnding: '\r\n' | '\n' = markdown.includes('\r\n') ? '\r\n' : '\n'
 
   if (contentStart >= markdown.length) {
-    return createEmptyFrontmatterSplit(markdown, hasBom, fallbackLineEnding)
+    return createNonFrontmatterSplit(markdown, hasBom, fallbackLineEnding)
   }
 
   const firstLine = readLineSpan(markdown, contentStart, 1)
   if (!OPENING_DELIMITER_RE.test(firstLine.text)) {
-    return createEmptyFrontmatterSplit(markdown, hasBom, fallbackLineEnding)
+    return createNonFrontmatterSplit(markdown, hasBom, fallbackLineEnding)
   }
 
   if (firstLine.eol === '') {
-    return createEmptyFrontmatterSplit(markdown, hasBom, fallbackLineEnding, true, firstLine.text)
+    return createNonFrontmatterSplit(markdown, hasBom, fallbackLineEnding, true, firstLine.text)
   }
 
   const yamlStart = firstLine.end
@@ -421,7 +417,7 @@ function splitFrontmatterRegion(markdown: string): FrontmatterSplit {
     lineNumber += 1
   }
 
-  return createEmptyFrontmatterSplit(
+  return createNonFrontmatterSplit(
     markdown,
     hasBom,
     firstLine.eol === '\r\n' ? '\r\n' : fallbackLineEnding,
@@ -562,12 +558,6 @@ function serializeYamlPair(key: string, value: FrontmatterFieldValue): string {
   return serialized.endsWith('\n') ? serialized : `${serialized}\n`
 }
 
-function serializeYamlValueAfterColon(value: FrontmatterFieldValue): string {
-  const rendered = YAML.stringify({ _v: value }, { lineWidth: 0 })
-  const normalized = rendered.endsWith('\n') ? rendered : `${rendered}\n`
-  return normalized.slice(3)
-}
-
 interface CstTokenLike {
   type?: string
   source?: string
@@ -609,7 +599,8 @@ function extractPairTrailingComment(
     const textEnd = valLineEnd > 0 && yamlLf[valLineEnd - 1] === '\n' ? valLineEnd - 1 : valLineEnd
     const trailing = yamlLf.slice(valRange[1], textEnd)
     if (trailing.trim().length > 0) {
-      return `${leadingSeparatorGap(trailing)}${trailing}`
+      const gap = trailing.startsWith(' ') || trailing.startsWith('\t') ? '' : ' '
+      return `${gap}${trailing}`
     }
   }
   return ''
@@ -659,7 +650,8 @@ function buildPairUpdateEdit(
   }
 
   const preservedKeyAndColon = yamlLf.slice(lineStart, colonIdx + 1)
-  const valueAfterColon = serializeYamlValueAfterColon(nextVal)
+  // Prefix '_v:' is 3 ASCII chars, so slicing past it extracts the formatted value cleanly.
+  const valueAfterColon = serializeYamlPair('_v', nextVal).slice(3)
   const commentSuffix = extractPairTrailingComment(pair, yamlLf, valRange)
   const firstValLf = valueAfterColon.slice(0, -1).indexOf('\n')
 
