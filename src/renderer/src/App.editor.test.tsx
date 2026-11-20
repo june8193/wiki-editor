@@ -12,7 +12,12 @@ import {
   switchPaneEditorMode,
   switchWorkspaceFromView
 } from './test/appTestHelpers'
-import { mockElementBoundingRect, mountThemeStylesAndRoot } from './test/domLayoutStub'
+import {
+  createDomRect,
+  installScrollContainerStub,
+  mockElementBoundingRect,
+  mountThemeStylesAndRoot
+} from './test/domLayoutStub'
 import {
   appendRawEditorText,
   createInMemoryWikiApi,
@@ -32,11 +37,50 @@ const mermaidMockState = await vi.hoisted(async () =>
 
 vi.mock('mermaid', () => mermaidMockState.module)
 
+beforeEach(() => {
+  document.documentElement.removeAttribute('data-theme')
+  vi.useRealTimers()
+})
+
+function createMermaidActionDoc(
+  title: string,
+  validSource: string,
+  brokenSource = 'graph TD\n  SYNTAX_ERROR'
+): string {
+  return [
+    `# ${title}`,
+    '',
+    '```mermaid',
+    validSource,
+    '```',
+    '',
+    '```mermaid',
+    brokenSource,
+    '```',
+    '',
+    '```mermaid',
+    '   ',
+    '```'
+  ].join('\n')
+}
+
+const OUTLINE_SPY_GUIDE_DOC = [
+  'Intro preface before first heading.',
+  '',
+  '# Overview',
+  'Section 1 body',
+  '',
+  '## Architecture',
+  'Section 2 body',
+  '',
+  '### Details',
+  'Section 3 body',
+  '',
+  '## Summary',
+  'Short ending'
+].join('\n')
+
 describe('Three-mode markdown editor, split mode sync, and table editing', () => {
-  beforeEach(() => {
-    document.documentElement.removeAttribute('data-theme')
-    vi.useRealTimers()
-  })
 
   it('supports Left Raw + Right Preview live sync in split view and lossless Raw <-> WYSIWYG <-> Preview roundtrips', async () => {
     const user = userEvent.setup()
@@ -245,8 +289,6 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
 
 describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', () => {
   beforeEach(() => {
-    document.documentElement.removeAttribute('data-theme')
-    vi.useRealTimers()
     defaultMermaidRenderer.clearCache()
     mermaidMockState.reset()
   })
@@ -345,21 +387,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     const user = userEvent.setup()
     const validSource = 'graph TD\n  SECRET_APP_FLOW --> ServiceB'
     const brokenSource = 'graph TD\n  SYNTAX_ERROR'
-    const docContent = [
-      '# Mermaid Copy E2E',
-      '',
-      '```mermaid',
-      validSource,
-      '```',
-      '',
-      '```mermaid',
-      brokenSource,
-      '```',
-      '',
-      '```mermaid',
-      '   ',
-      '```'
-    ].join('\n')
+    const docContent = createMermaidActionDoc('Mermaid Copy E2E', validSource, brokenSource)
 
     const logEntries: RendererLogPayload[] = []
     let shouldFailCopy = false
@@ -511,22 +539,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
   it('supports Mermaid 2x theme-backed PNG clipboard copy across Preview, Split (live edit/error/recovery), and WYSIWYG modes with sanitized failure alerts', async () => {
     const user = userEvent.setup()
     const validSource = 'graph TD\n  SECRET_APP_IMG --> ServiceB'
-    const brokenSource = 'graph TD\n  SYNTAX_ERROR'
-    const docContent = [
-      '# Mermaid Image E2E',
-      '',
-      '```mermaid',
-      validSource,
-      '```',
-      '',
-      '```mermaid',
-      brokenSource,
-      '```',
-      '',
-      '```mermaid',
-      '   ',
-      '```'
-    ].join('\n')
+    const docContent = createMermaidActionDoc('Mermaid Image E2E', validSource)
 
     const logEntries: RendererLogPayload[] = []
     let shouldFailCopyImage = false
@@ -773,22 +786,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
   it('supports Mermaid PNG and SVG file export with sanitized document title across Preview, Split, and WYSIWYG modes', async () => {
     const user = userEvent.setup()
     const validSource = 'graph TD\n  SECRET_APP_SAVE --> ServiceC'
-    const brokenSource = 'graph TD\n  SYNTAX_ERROR'
-    const docContent = [
-      '# Mermaid Save E2E',
-      '',
-      '```mermaid',
-      validSource,
-      '```',
-      '',
-      '```mermaid',
-      brokenSource,
-      '```',
-      '',
-      '```mermaid',
-      '   ',
-      '```'
-    ].join('\n')
+    const docContent = createMermaidActionDoc('Mermaid Save E2E', validSource)
 
     const logEntries: RendererLogPayload[] = []
     let nextSaveOutcome: 'confirm' | 'cancel' | 'fail' = 'confirm'
@@ -1371,20 +1369,6 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
   })
 })
 
-function createDomRect(top: number, height: number, width = 500): DOMRect {
-  return {
-    top,
-    bottom: top + height,
-    left: 0,
-    right: width,
-    width,
-    height,
-    x: 0,
-    y: top,
-    toJSON: () => ({})
-  } as DOMRect
-}
-
 function stubScrollLayout(
   el: HTMLElement,
   getGeometry: () => { scrollTop: number; scrollHeight: number; clientHeight: number; top: number }
@@ -1402,19 +1386,12 @@ function stubScrollLayout(
     configurable: true,
     get: () => getGeometry().clientHeight
   })
-  el.getBoundingClientRect = () => createDomRect(getGeometry().top, getGeometry().clientHeight, 600)
+  el.getBoundingClientRect = () =>
+    createDomRect({ top: getGeometry().top, width: 600, height: getGeometry().clientHeight })
 }
 
-function createHeadingRect(top: number): DOMRect {
-  return createDomRect(top, 28, 500)
-}
-
-function stubHeadingTop(el: HTMLElement, getTop: () => number): void {
-  el.getBoundingClientRect = () => createHeadingRect(getTop())
-}
-
-function stubPreviewSpyLayout(
-  preview: HTMLElement,
+function stubRenderedHeadingsScrollLayout(
+  container: HTMLElement,
   docOffsets: number[],
   getScrollTop: () => number,
   {
@@ -1423,16 +1400,17 @@ function stubPreviewSpyLayout(
     top = 100
   }: { scrollHeight?: number; clientHeight?: number; top?: number } = {}
 ): HTMLElement[] {
-  stubScrollLayout(preview, () => ({
+  stubScrollLayout(container, () => ({
     scrollTop: getScrollTop(),
     scrollHeight,
     clientHeight,
     top
   }))
-  const headings = Array.from(preview.querySelectorAll('h1, h2, h3, h4, h5, h6')) as HTMLElement[]
+  const headings = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6')) as HTMLElement[]
   expect(headings).toHaveLength(docOffsets.length)
   headings.forEach((el, idx) => {
-    stubHeadingTop(el, () => top + docOffsets[idx] - getScrollTop())
+    el.getBoundingClientRect = () =>
+      createDomRect({ top: top + docOffsets[idx] - getScrollTop(), width: 500, height: 28 })
   })
   return headings
 }
@@ -1443,29 +1421,13 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
     const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
 
     try {
-      const docContent = [
-        'Intro preface before first heading.',
-        '',
-        '# Overview',
-        'Section 1 body',
-        '',
-        '## Architecture',
-        'Section 2 body',
-        '',
-        '### Details',
-        'Section 3 body',
-        '',
-        '## Summary',
-        'Short ending'
-      ].join('\n')
-
       const { api, emitMenuCommand } = createInMemoryWikiApi(
         { theme: 'light', showHeadingNumbers: false },
         {
           selectedFolder: 'C:\\wiki\\outline-spy',
           workspaces: {
             'C:\\wiki\\outline-spy': {
-              'guide.md': docContent,
+              'guide.md': OUTLINE_SPY_GUIDE_DOC,
               'plain.md': 'Just text without any headings',
               'notes.json': '{"ok":true}'
             }
@@ -1488,7 +1450,7 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
       // Stub layout: container top = 100, clientHeight = 400, scrollHeight = 1000
       let currentScrollTop = 0
       const docOffsets = [160, 340, 560, 880] // distance from document top (before scrollTop subtraction)
-      stubPreviewSpyLayout(preview, docOffsets, () => currentScrollTop)
+      stubRenderedHeadingsScrollLayout(preview, docOffsets, () => currentScrollTop)
 
       // 1. Preface before first heading -> no outline item active
       fireEvent.scroll(preview)
@@ -1542,21 +1504,6 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
     const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
 
     try {
-      const guideDoc = [
-        'Intro preface before first heading.',
-        '',
-        '# Overview',
-        'Section 1 body',
-        '',
-        '## Architecture',
-        'Section 2 body',
-        '',
-        '### Details',
-        'Section 3 body',
-        '',
-        '## Summary',
-        'Short ending'
-      ].join('\n')
       const sideDoc = ['# Side Alpha', 'Alpha body', '', '## Side Beta', 'Beta body'].join('\n')
 
       const { api, emitMenuCommand } = createInMemoryWikiApi(
@@ -1565,7 +1512,7 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
           selectedFolder: 'C:\\wiki\\outline-pin',
           workspaces: {
             'C:\\wiki\\outline-pin': {
-              'guide.md': guideDoc,
+              'guide.md': OUTLINE_SPY_GUIDE_DOC,
               'side.md': sideDoc
             }
           }
@@ -1588,7 +1535,7 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
 
       let currentScrollTop = 150
       const docOffsets = [160, 340, 560, 880]
-      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      stubRenderedHeadingsScrollLayout(primaryPreview, docOffsets, () => currentScrollTop)
       fireEvent.scroll(primaryPreview)
       expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
 
@@ -1635,7 +1582,7 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
       await user.click(within(primaryPane).getByRole('tab', { name: /side\.md/i }))
       await user.click(within(primaryPane).getByRole('tab', { name: /guide\.md/i }))
       primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
-      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      stubRenderedHeadingsScrollLayout(primaryPreview, docOffsets, () => currentScrollTop)
       expect(outlineButtons()[3]).not.toHaveAttribute('aria-current')
       fireEvent.scroll(primaryPreview)
       expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
@@ -1646,7 +1593,7 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
       fireEvent.keyDown(window, { key: '1', ctrlKey: true })
       fireEvent.keyDown(window, { key: '3', ctrlKey: true })
       primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
-      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      stubRenderedHeadingsScrollLayout(primaryPreview, docOffsets, () => currentScrollTop)
       expect(outlineButtons()[3]).not.toHaveAttribute('aria-current')
       fireEvent.scroll(primaryPreview)
       expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
@@ -1662,14 +1609,14 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
       // Keep primaryPane focused on guide.md at Overview (index 0)
       await user.click(within(primaryPane).getByRole('tab', { name: /guide\.md/i }))
       primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
-      stubPreviewSpyLayout(primaryPreview, docOffsets, () => currentScrollTop)
+      stubRenderedHeadingsScrollLayout(primaryPreview, docOffsets, () => currentScrollTop)
       fireEvent.scroll(primaryPreview)
       expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
 
       // Scroll inactive secondaryPreview to Side Beta (index 1) without activating secondaryPane
       const secondaryPreview = within(secondaryPane).getByLabelText('마크다운 미리보기')
       const secondaryScrollTop = 450
-      stubPreviewSpyLayout(secondaryPreview, [60, 460], () => secondaryScrollTop)
+      stubRenderedHeadingsScrollLayout(secondaryPreview, [60, 460], () => secondaryScrollTop)
       fireEvent.wheel(secondaryPreview)
       fireEvent.scroll(secondaryPreview)
 
@@ -1688,29 +1635,13 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
     const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
 
     try {
-      const docContent = [
-        'Intro preface before first heading.',
-        '',
-        '# Overview',
-        'Section 1 body',
-        '',
-        '## Architecture',
-        'Section 2 body',
-        '',
-        '### Details',
-        'Section 3 body',
-        '',
-        '## Summary',
-        'Short ending'
-      ].join('\n')
-
       const { api, emitMenuCommand } = createInMemoryWikiApi(
         { theme: 'light', showHeadingNumbers: false },
         {
           selectedFolder: 'C:\\wiki\\wysiwyg-spy',
           workspaces: {
             'C:\\wiki\\wysiwyg-spy': {
-              'guide.md': docContent
+              'guide.md': OUTLINE_SPY_GUIDE_DOC
             }
           }
         }
@@ -1753,7 +1684,7 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
           if (/^H[1-6]$/.test(this.tagName) && scrollContainer.contains(this)) {
             const text = this.textContent?.trim() ?? ''
             const offset = headingOffsets.get(text) ?? 0
-            return createHeadingRect(100 + offset - currentScrollTop)
+            return createDomRect({ top: 100 + offset - currentScrollTop, width: 500, height: 28 })
           }
           return originalRect.call(this)
         })
@@ -1994,7 +1925,7 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
       await switchPaneEditorMode(user, primaryPane, '위지윅')
       const wysiwygContainer = primaryPane.querySelector('.wysiwyg-scroll-container') as HTMLElement
       alphaScrollTop = 0
-      stubPreviewSpyLayout(wysiwygContainer, [120, 320, 520], () => alphaScrollTop)
+      stubRenderedHeadingsScrollLayout(wysiwygContainer, [120, 320, 520], () => alphaScrollTop)
       // Trigger measurement on stubbed WYSIWYG container -> heading 0 active on mode change vs top
       fireEvent.scroll(wysiwygContainer)
       for (const btn of outlineButtons()) {
@@ -2005,7 +1936,7 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
       await switchPaneEditorMode(user, primaryPane, 'Preview')
       const primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
       alphaScrollTop = 310
-      stubPreviewSpyLayout(primaryPreview, [120, 320, 520], () => alphaScrollTop)
+      stubRenderedHeadingsScrollLayout(primaryPreview, [120, 320, 520], () => alphaScrollTop)
       fireEvent.scroll(primaryPreview)
       expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
 
@@ -2015,7 +1946,7 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
 
       await user.click(within(primaryPane).getByRole('tab', { name: /alpha\.md/i }))
       const restoredPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
-      stubPreviewSpyLayout(restoredPreview, [120, 320, 520], () => alphaScrollTop)
+      stubRenderedHeadingsScrollLayout(restoredPreview, [120, 320, 520], () => alphaScrollTop)
       fireEvent.scroll(restoredPreview)
       expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
 
@@ -2077,11 +2008,6 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
 })
 
 describe('Split editor mode and bidirectional scroll sync', () => {
-  beforeEach(() => {
-    document.documentElement.removeAttribute('data-theme')
-    vi.useRealTimers()
-  })
-
   it('integrates Split mode live preview/Mermaid, per-tab clamped splitter ratio, 2-pane workspace independence, non-markdown lock, and split breadcrumbs', async () => {
     const user = userEvent.setup()
     const entries: RendererLogPayload[] = []
@@ -2300,13 +2226,15 @@ describe('Split editor mode and bidirectional scroll sync', () => {
         configurable: true,
         get: () => cmView.contentHeight
       })
-      Object.defineProperty(previewRegion, 'clientHeight', { configurable: true, value: 200 })
-      Object.defineProperty(previewRegion, 'scrollHeight', { configurable: true, value: 1480 })
-      mockElementBoundingRect(previewRegion, { width: 500, height: 200 })
+      installScrollContainerStub(previewRegion, {
+        clientHeight: 200,
+        initialScrollTop: 0,
+        getScrollHeight: () => 1480
+      })
 
       const mockRect = (el: HTMLElement, docTop: number, height: number) => {
         el.getBoundingClientRect = () =>
-          createDomRect(docTop - previewRegion.scrollTop, height, 500)
+          createDomRect({ top: docTop - previewRegion.scrollTop, width: 500, height })
       }
       mockRect(h1El, 0, 40)
       mockRect(mermaidEl, 60, 560)
@@ -2756,8 +2684,8 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
       expect(document.getElementById('buildtree')).not.toBeNull()
       expect(document.getElementById('a-b-표기')).not.toBeNull()
     })
-    const tocRegion = screen.getByRole('complementary', { name: '우측 사이드바' })
-    expect(within(tocRegion).getByRole('button', { name: /개요/ })).toBeInTheDocument()
+    const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
+    expect(within(rightSidebar).getByRole('button', { name: /개요/ })).toBeInTheDocument()
   })
 
   it('handles Ctrl+K wrapping/unwrapping, modal/dialog blocking, and config.json exclusion', async () => {
