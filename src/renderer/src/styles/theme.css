@@ -2929,6 +2929,10 @@ body.is-resizing-git-sections * {
 .git-stash-item:hover .git-stash-actions,
 .git-stash-item:focus-within .git-stash-actions {
   opacity: 1;
+}
+
+.git-section-header:hover .git-section-actions,
+.git-section-header:focus-within .git-section-actions {
   max-width: 80px;
 }
 
@@ -3039,35 +3043,14 @@ body.is-resizing-git-sections * {
   border-color: var(--danger-color);
 }
 
-.git-stash-header-clear-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 18px;
+.git-stash-action-btn.is-header {
   padding: 0 5px;
-  border: 1px solid transparent;
-  border-radius: 3px;
+  border-color: transparent;
   background: transparent;
-  color: var(--danger-color);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
 }
 
-.git-stash-header-clear-btn:hover:not(:disabled) {
+.git-stash-action-btn.is-header:hover:not(:disabled) {
   background-color: var(--bg-elevated);
-  border-color: var(--danger-color);
-}
-
-.git-stash-header-clear-btn:focus-visible {
-  outline: 1px solid var(--accent-color);
-  outline-offset: -1px;
-}
-
-.git-stash-header-clear-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .git-stash-action-btn:focus-visible {

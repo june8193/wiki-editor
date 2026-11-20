@@ -138,6 +138,11 @@ export function MainAppShell() {
   const [stashDialogScope, setStashDialogScope] = useState<'unstaged' | 'all' | null>(null)
   const stashDialogScopeRef = useRef<'unstaged' | 'all' | null>(stashDialogScope)
   stashDialogScopeRef.current = stashDialogScope
+  const hasActiveModalDialog = pendingDialog !== null || stashDialogScope !== null
+  const isAnyDialogOpen = useCallback(
+    (): boolean => isDialogOpenRef.current || stashDialogScopeRef.current !== null,
+    [isDialogOpenRef]
+  )
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
     activeView: 'workspace',
     isCollapsed: false,
@@ -192,13 +197,11 @@ export function MainAppShell() {
     onInitialConfigLoaded: (loadedConfig) => onInitialConfigLoadedRef.current(loadedConfig)
   })
 
-  const isEditorShortcutDisabled =
-    pendingDialog !== null || isSettingsOpen || stashDialogScope !== null
+  const isEditorShortcutDisabled = hasActiveModalDialog || isSettingsOpen
   const isEditorShortcutDisabledRef = useRef<boolean>(isEditorShortcutDisabled)
   isEditorShortcutDisabledRef.current = isEditorShortcutDisabled
   const editor = useEditorWorkspace({
-    isAutoSavePaused:
-      pendingDialog !== null || isGitWorkspaceMutating || stashDialogScope !== null,
+    isAutoSavePaused: hasActiveModalDialog || isGitWorkspaceMutating,
     isShortcutDisabled: isEditorShortcutDisabled,
     onWorkspaceSaved: () => void refreshGitStatusRef.current(),
     onError: reportErrorBanner,
@@ -674,13 +677,35 @@ export function MainAppShell() {
   activeGitRepoRootRef.current = git.status?.repoRoot ?? null
   refreshGitStatusRef.current = git.refreshStatus
 
+  const canStartInteractiveGitAction = useCallback(
+    (): boolean =>
+      !isAnyDialogOpen() && git.pendingAction === null && Boolean(git.status?.isRepo),
+    [git.pendingAction, git.status, isAnyDialogOpen]
+  )
+
+  const openDangerGitConfirm = useCallback(
+    (options: {
+      title: string
+      message: string
+      confirmLabel: string
+      onConfirm: () => void
+    }): void => {
+      setPendingDialog({
+        title: options.title,
+        message: options.message,
+        confirmLabel: options.confirmLabel,
+        confirmTone: 'danger',
+        onConfirm: () => {
+          setPendingDialog(null)
+          options.onConfirm()
+        }
+      })
+    },
+    [setPendingDialog]
+  )
+
   const handleRequestDiscardAll = useCallback((): void => {
-    if (
-      isDialogOpenRef.current ||
-      stashDialogScopeRef.current !== null ||
-      git.pendingAction !== null ||
-      !git.status?.isRepo
-    ) {
+    if (!canStartInteractiveGitAction() || !git.status) {
       return
     }
     const trackedCount = git.status.unstaged.length
@@ -688,32 +713,22 @@ export function MainAppShell() {
     if (trackedCount === 0 && untrackedCount === 0) {
       return
     }
-    setPendingDialog({
+    openDangerGitConfirm({
       title: '전체 변경 사항 롤백',
       message: buildDiscardAllConfirmMessage(trackedCount, untrackedCount),
       confirmLabel: '전체 롤백',
-      confirmTone: 'danger',
-      onConfirm: () => {
-        setPendingDialog(null)
-        void git.discardAll()
-      }
+      onConfirm: () => void git.discardAll()
     })
-  }, [git.discardAll, git.pendingAction, git.status, isDialogOpenRef, setPendingDialog])
+  }, [canStartInteractiveGitAction, git.discardAll, git.status, openDangerGitConfirm])
 
   const handleOpenStashDialog = useCallback(
     (initialScope: 'unstaged' | 'all' = 'unstaged'): void => {
-      if (
-        isDialogOpenRef.current ||
-        stashDialogScopeRef.current !== null ||
-        git.pendingAction !== null ||
-        !git.status?.isRepo ||
-        getGitChangedCount(git.status) === 0
-      ) {
+      if (!canStartInteractiveGitAction() || getGitChangedCount(git.status) === 0) {
         return
       }
       setStashDialogScope(initialScope)
     },
-    [git.pendingAction, git.status, isDialogOpenRef]
+    [canStartInteractiveGitAction, git.status]
   )
 
   const handleSubmitStashDialog = useCallback(
@@ -726,67 +741,34 @@ export function MainAppShell() {
 
   const handleRequestDropStash = useCallback(
     (stashRef: string): void => {
-      if (
-        isDialogOpenRef.current ||
-        stashDialogScopeRef.current !== null ||
-        git.pendingAction !== null ||
-        !git.status?.isRepo
-      ) {
+      if (!canStartInteractiveGitAction()) {
         return
       }
       const entry = git.stashes.find((item) => item.ref === stashRef)
       if (!entry) {
         return
       }
-      setPendingDialog({
+      openDangerGitConfirm({
         title: 'Stash 삭제',
         message: buildStashDropConfirmMessage(entry),
         confirmLabel: 'Drop',
-        confirmTone: 'danger',
-        onConfirm: () => {
-          setPendingDialog(null)
-          void git.stashDrop(stashRef)
-        }
+        onConfirm: () => void git.stashDrop(stashRef)
       })
     },
-    [
-      git.pendingAction,
-      git.stashDrop,
-      git.stashes,
-      git.status,
-      isDialogOpenRef,
-      setPendingDialog
-    ]
+    [canStartInteractiveGitAction, git.stashDrop, git.stashes, openDangerGitConfirm]
   )
 
   const handleRequestClearStashes = useCallback((): void => {
-    if (
-      isDialogOpenRef.current ||
-      stashDialogScopeRef.current !== null ||
-      git.pendingAction !== null ||
-      !git.status?.isRepo ||
-      git.stashes.length === 0
-    ) {
+    if (!canStartInteractiveGitAction() || git.stashes.length === 0) {
       return
     }
-    setPendingDialog({
+    openDangerGitConfirm({
       title: '모든 Stash 삭제',
       message: buildStashClearConfirmMessage(git.stashes.length),
       confirmLabel: 'Clear All',
-      confirmTone: 'danger',
-      onConfirm: () => {
-        setPendingDialog(null)
-        void git.stashClear()
-      }
+      onConfirm: () => void git.stashClear()
     })
-  }, [
-    git.pendingAction,
-    git.stashClear,
-    git.stashes.length,
-    git.status,
-    isDialogOpenRef,
-    setPendingDialog
-  ])
+  }, [canStartInteractiveGitAction, git.stashClear, git.stashes.length, openDangerGitConfirm])
 
   const guardUnsavedWorkspaceChanges = useCallback(
     (proceed: () => Promise<unknown>): void => {
@@ -834,7 +816,7 @@ export function MainAppShell() {
 
   const proceedSwitchAfterFocusCheck = useCallback(
     (targetPath: string, switchSeq: number): void => {
-      if (isDialogOpenRef.current) {
+      if (isAnyDialogOpen()) {
         return
       }
       if (!hadOpenWorkspaceRef.current) {
@@ -861,7 +843,7 @@ export function MainAppShell() {
     [
       focusExistingAndCheckProceed,
       guardUnsavedWorkspaceChanges,
-      isDialogOpenRef,
+      isAnyDialogOpen,
       openWorkspace,
       workspaceStatePersistence
     ]
@@ -910,7 +892,7 @@ export function MainAppShell() {
   )
 
   const handleSelectFolder = useCallback((): void => {
-    if (isDialogOpenRef.current || isSelectingFolderRef.current) {
+    if (isAnyDialogOpen() || isSelectingFolderRef.current) {
       return
     }
 
@@ -921,7 +903,7 @@ export function MainAppShell() {
     void wikiApi.workspace.selectFolder().then(
       (selectedPath) => {
         isSelectingFolderRef.current = false
-        if (selectedPath && !isDialogOpenRef.current) {
+        if (selectedPath && !isAnyDialogOpen()) {
           handleSwitchWorkspace(selectedPath)
         }
       },
@@ -930,7 +912,7 @@ export function MainAppShell() {
         reportErrorBanner(toErrorMessage(error, '폴더 선택에 실패했습니다.'), error)
       }
     )
-  }, [handleSwitchWorkspace, isDialogOpenRef, reportErrorBanner, wikiApi])
+  }, [handleSwitchWorkspace, isAnyDialogOpen, reportErrorBanner, wikiApi])
 
   const { openWorkspaceFile, openConfigDocument, openDiffTab } = editor
   const { searchJumpRequest, openSearchLineMatch, invalidatePendingSearchJumps } =
@@ -1001,12 +983,12 @@ export function MainAppShell() {
 
   useEffect(() => {
     return wikiApi.menu.onCommand((command) => {
-      if (isDialogOpenRef.current || stashDialogScopeRef.current !== null) {
+      if (isAnyDialogOpen()) {
         return
       }
       menuHandlersRef.current[command]?.()
     })
-  }, [isDialogOpenRef, wikiApi])
+  }, [isAnyDialogOpen, wikiApi])
 
   const handleRequestDelete = useCallback(
     (entries: readonly WorkspaceEntry[]): void => {
@@ -1228,7 +1210,7 @@ export function MainAppShell() {
       theme={config.theme}
       autoSave={config.autoSave}
       configPath={configPath}
-      isDismissDisabled={pendingDialog !== null || stashDialogScope !== null}
+      isDismissDisabled={hasActiveModalDialog}
       onToggleTheme={toggleTheme}
       onToggleAutoSave={toggleAutoSave}
       onOpenConfigEditor={handleOpenConfigEditor}

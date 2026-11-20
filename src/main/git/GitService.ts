@@ -687,22 +687,27 @@ export class GitService {
   }
 
   async stashDrop(workspacePath: string, stashRef: string): Promise<GitStashEntry[]> {
-    const validatedRef = assertValidStashRef(stashRef)
-    const repoRoot = await this.requireRepoRoot(workspacePath)
-    try {
-      await this.execGit(repoRoot, ['stash', 'drop', validatedRef])
-    } catch (error) {
-      throw await this.formatAndLogGitError('stashDrop', error)
-    }
-    return this.listStashesForRepo(repoRoot)
+    return this.execStashListMutation(workspacePath, 'stashDrop', [
+      'stash',
+      'drop',
+      assertValidStashRef(stashRef)
+    ])
   }
 
   async stashClear(workspacePath: string): Promise<GitStashEntry[]> {
+    return this.execStashListMutation(workspacePath, 'stashClear', ['stash', 'clear'])
+  }
+
+  private async execStashListMutation(
+    workspacePath: string,
+    operation: 'stashDrop' | 'stashClear',
+    args: readonly string[]
+  ): Promise<GitStashEntry[]> {
     const repoRoot = await this.requireRepoRoot(workspacePath)
     try {
-      await this.execGit(repoRoot, ['stash', 'clear'])
+      await this.execGit(repoRoot, args)
     } catch (error) {
-      throw await this.formatAndLogGitError('stashClear', error)
+      throw await this.formatAndLogGitError(operation, error)
     }
     return this.listStashesForRepo(repoRoot)
   }

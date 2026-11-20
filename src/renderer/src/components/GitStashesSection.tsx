@@ -35,7 +35,7 @@ export const GitStashesHeaderActions = memo(function GitStashesHeaderActions({
       </button>
       <button
         type="button"
-        className="git-stash-header-clear-btn"
+        className="git-stash-action-btn is-danger is-header"
         title="모든 Stash 삭제 (Clear All)"
         disabled={isBusy || stashCount === 0}
         onClick={onClearStashes}
