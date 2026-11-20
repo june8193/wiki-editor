@@ -338,6 +338,60 @@ describe('frontmatter non-destructive serialization and safety guards', () => {
     ])
   })
 
+  it('preserves following comments when deleting or multiline-updating an empty YAML mapping value', () => {
+    const emptyWithNextLineComment = [
+      '---',
+      'labels:',
+      '# keep comment',
+      'status: todo',
+      '---',
+      '# Body'
+    ].join('\n')
+
+    const deleted = applyFrontmatterValues(emptyWithNextLineComment, { labels: null })
+    expect(deleted.applied).toBe(true)
+    expect(deleted.content).toBe(['---', '# keep comment', 'status: todo', '---', '# Body'].join('\n'))
+
+    const updatedMultiline = applyFrontmatterValues(emptyWithNextLineComment, {
+      labels: ['alpha', 'beta']
+    })
+    expect(updatedMultiline.applied).toBe(true)
+    expect(updatedMultiline.content).toBe(
+      ['---', 'labels:', '  - alpha', '  - beta', '# keep comment', 'status: todo', '---', '# Body'].join(
+        '\n'
+      )
+    )
+
+    const emptyWithInlineAndNextComment = [
+      '---',
+      'status: # status inline',
+      '# next line comment',
+      'labels: # labels inline',
+      '# keep after labels',
+      '---',
+      '# Body'
+    ].join('\n')
+
+    const updatedInlineSingle = applyFrontmatterValues(emptyWithInlineAndNextComment, {
+      status: 'done',
+      labels: ['alpha', 'beta']
+    })
+    expect(updatedInlineSingle.applied).toBe(true)
+    expect(updatedInlineSingle.content).toBe(
+      [
+        '---',
+        'status: done # status inline',
+        '# next line comment',
+        'labels: # labels inline',
+        '  - alpha',
+        '  - beta',
+        '# keep after labels',
+        '---',
+        '# Body'
+      ].join('\n')
+    )
+  })
+
   it('preserves ... closing delimiter, flow root maps, and adds frontmatter to body-only documents', () => {
     const dotsDoc = '---\n# keep\nstatus: todo\n...\nBody'
     const updatedDots = applyFrontmatterValues(dotsDoc, { status: 'done' })

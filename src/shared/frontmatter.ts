@@ -130,6 +130,16 @@ function toRepresentableFieldValue(raw: unknown): FrontmatterFieldValue | undefi
   return undefined
 }
 
+function requiredMissingIssue(field: FrontmatterFieldDefinition): FrontmatterValidationIssue | null {
+  return field.required
+    ? {
+        key: field.key,
+        code: 'required-missing',
+        message: `필수 필드 "${field.label}" 값이 비어 있습니다.`
+      }
+    : null
+}
+
 function validateSchemaFieldValue(
   field: FrontmatterFieldDefinition,
   hasEntry: boolean,
@@ -137,13 +147,7 @@ function validateSchemaFieldValue(
 ): FrontmatterValidationIssue | null {
   const isMissing = !hasEntry || rawValue === null || rawValue === undefined
   if (isMissing) {
-    return field.required
-      ? {
-          key: field.key,
-          code: 'required-missing',
-          message: `필수 필드 "${field.label}" 값이 비어 있습니다.`
-        }
-      : null
+    return requiredMissingIssue(field)
   }
 
   switch (field.type) {
@@ -155,12 +159,8 @@ function validateSchemaFieldValue(
           message: `필드 "${field.label}" 값은 문자열이어야 합니다.`
         }
       }
-      if (field.required && rawValue.trim() === '') {
-        return {
-          key: field.key,
-          code: 'required-missing',
-          message: `필수 필드 "${field.label}" 값이 비어 있습니다.`
-        }
+      if (rawValue.trim() === '') {
+        return requiredMissingIssue(field)
       }
       return null
 
@@ -186,13 +186,7 @@ function validateSchemaFieldValue(
 
     case 'date':
       if (typeof rawValue === 'string' && rawValue.trim() === '') {
-        return field.required
-          ? {
-              key: field.key,
-              code: 'required-missing',
-              message: `필수 필드 "${field.label}" 값이 비어 있습니다.`
-            }
-          : null
+        return requiredMissingIssue(field)
       }
       if (typeof rawValue !== 'string' || !isValidIsoCalendarDate(rawValue)) {
         return {
@@ -212,13 +206,7 @@ function validateSchemaFieldValue(
         }
       }
       if (rawValue.trim() === '') {
-        return field.required
-          ? {
-              key: field.key,
-              code: 'required-missing',
-              message: `필수 필드 "${field.label}" 값이 비어 있습니다.`
-            }
-          : null
+        return requiredMissingIssue(field)
       }
       const allowed = new Set((field.options ?? []).map((opt) => opt.value))
       if (!allowed.has(rawValue)) {
@@ -240,13 +228,7 @@ function validateSchemaFieldValue(
         }
       }
       if (rawValue.length === 0) {
-        return field.required
-          ? {
-              key: field.key,
-              code: 'required-missing',
-              message: `필수 필드 "${field.label}" 값이 비어 있습니다.`
-            }
-          : null
+        return requiredMissingIssue(field)
       }
       if (!field.allowCustom) {
         const allowed = new Set((field.options ?? []).map((opt) => opt.value))
@@ -369,58 +351,44 @@ function readLineSpan(text: string, start: number, lineNumber: number): LineSpan
   }
 }
 
+function createEmptyFrontmatterSplit(
+  markdown: string,
+  hasBom: boolean,
+  lineEnding: '\r\n' | '\n',
+  hasOpeningDelimiter = false,
+  openingDelimiter = '---'
+): FrontmatterSplit {
+  return {
+    hasBom,
+    hasOpeningDelimiter,
+    hasFrontmatter: false,
+    lineEnding,
+    openingDelimiter,
+    closingDelimiter: '---',
+    yamlSource: '',
+    rawBlock: '',
+    body: markdown,
+    bodyStartLine: 1,
+    bodyStartOffset: 0
+  }
+}
+
 function splitFrontmatterRegion(markdown: string): FrontmatterSplit {
   const hasBom = markdown.startsWith('\uFEFF')
   const contentStart = hasBom ? 1 : 0
   const fallbackLineEnding: '\r\n' | '\n' = markdown.includes('\r\n') ? '\r\n' : '\n'
 
   if (contentStart >= markdown.length) {
-    return {
-      hasBom,
-      hasOpeningDelimiter: false,
-      hasFrontmatter: false,
-      lineEnding: fallbackLineEnding,
-      openingDelimiter: '---',
-      closingDelimiter: '---',
-      yamlSource: '',
-      rawBlock: '',
-      body: markdown,
-      bodyStartLine: 1,
-      bodyStartOffset: 0
-    }
+    return createEmptyFrontmatterSplit(markdown, hasBom, fallbackLineEnding)
   }
 
   const firstLine = readLineSpan(markdown, contentStart, 1)
   if (!OPENING_DELIMITER_RE.test(firstLine.text)) {
-    return {
-      hasBom,
-      hasOpeningDelimiter: false,
-      hasFrontmatter: false,
-      lineEnding: fallbackLineEnding,
-      openingDelimiter: '---',
-      closingDelimiter: '---',
-      yamlSource: '',
-      rawBlock: '',
-      body: markdown,
-      bodyStartLine: 1,
-      bodyStartOffset: 0
-    }
+    return createEmptyFrontmatterSplit(markdown, hasBom, fallbackLineEnding)
   }
 
   if (firstLine.eol === '') {
-    return {
-      hasBom,
-      hasOpeningDelimiter: true,
-      hasFrontmatter: false,
-      lineEnding: fallbackLineEnding,
-      openingDelimiter: firstLine.text,
-      closingDelimiter: '---',
-      yamlSource: '',
-      rawBlock: '',
-      body: markdown,
-      bodyStartLine: 1,
-      bodyStartOffset: 0
-    }
+    return createEmptyFrontmatterSplit(markdown, hasBom, fallbackLineEnding, true, firstLine.text)
   }
 
   const yamlStart = firstLine.end
@@ -457,19 +425,13 @@ function splitFrontmatterRegion(markdown: string): FrontmatterSplit {
     lineNumber += 1
   }
 
-  return {
+  return createEmptyFrontmatterSplit(
+    markdown,
     hasBom,
-    hasOpeningDelimiter: true,
-    hasFrontmatter: false,
-    lineEnding: firstLine.eol === '\r\n' ? '\r\n' : fallbackLineEnding,
-    openingDelimiter: firstLine.text,
-    closingDelimiter: '---',
-    yamlSource: '',
-    rawBlock: '',
-    body: markdown,
-    bodyStartLine: 1,
-    bodyStartOffset: 0
-  }
+    firstLine.eol === '\r\n' ? '\r\n' : fallbackLineEnding,
+    true,
+    firstLine.text
+  )
 }
 
 /**
@@ -612,9 +574,11 @@ function buildPairUpdateEdit(
   const pairStart = keyRange?.[0] ?? 0
   const lineStart = lastNewlineIndex(yamlLf, pairStart) + 1
   const firstLineEnd = nextLineEnd(yamlLf, keyRange?.[1] ?? pairStart)
-  const nodeEnd = valRange?.[2] ?? firstLineEnd
+  // Use valRange[1] (value end) rather than valRange[2] (node end): yaml attaches
+  // subsequent standalone `# comment` lines onto empty/null scalars in range[2].
+  const valueEnd = valRange && valRange[1] > firstLineEnd ? valRange[1] : firstLineEnd
   const blockEnd =
-    nodeEnd > lineStart && yamlLf[nodeEnd - 1] === '\n' ? nodeEnd : nextLineEnd(yamlLf, nodeEnd)
+    valueEnd > lineStart && yamlLf[valueEnd - 1] === '\n' ? valueEnd : nextLineEnd(yamlLf, valueEnd)
 
   if (nextVal === null || nextVal === undefined) {
     return { start: lineStart, end: blockEnd, replacement: '' }
@@ -623,17 +587,18 @@ function buildPairUpdateEdit(
   const serializedPair = serializeYamlPair(key, nextVal)
   const isSerializedSingleLine = !serializedPair.slice(0, -1).includes('\n')
   const colonIdx = yamlLf.indexOf(':', keyRange?.[1] ?? pairStart)
-
-  if (
-    isSerializedSingleLine &&
+  const hasSameLineValue = Boolean(
     colonIdx !== -1 &&
-    colonIdx < firstLineEnd &&
-    valRange &&
-    valRange[0] >= colonIdx &&
-    valRange[1] <= firstLineEnd
-  ) {
+      colonIdx < firstLineEnd &&
+      valRange &&
+      valRange[0] >= colonIdx &&
+      valRange[1] <= firstLineEnd
+  )
+  const trailingOnLine =
+    valRange && hasSameLineValue ? yamlLf.slice(valRange[1], firstLineEnd - 1) : ''
+
+  if (isSerializedSingleLine && hasSameLineValue && valRange) {
     const serializedVal = serializedPair.slice(serializedPair.indexOf(':') + 1, -1).trimStart()
-    const trailingOnLine = yamlLf.slice(valRange[1], firstLineEnd - 1)
     if (trailingOnLine.trim().length > 0) {
       const gap = trailingOnLine.startsWith(' ') || trailingOnLine.startsWith('\t') ? '' : ' '
       return {
@@ -649,20 +614,27 @@ function buildPairUpdateEdit(
     }
   }
 
-  if (
-    !isSerializedSingleLine &&
-    valRange &&
-    valRange[0] >= firstLineEnd &&
-    colonIdx !== -1 &&
-    colonIdx < firstLineEnd
-  ) {
+  if (!isSerializedSingleLine && colonIdx !== -1 && colonIdx < firstLineEnd) {
     const firstSerializedLf = serializedPair.indexOf('\n')
     const serializedBlockBody =
       firstSerializedLf === -1 ? serializedPair : serializedPair.slice(firstSerializedLf + 1)
-    return {
-      start: firstLineEnd,
-      end: blockEnd,
-      replacement: serializedBlockBody
+
+    if (valRange && valRange[0] >= firstLineEnd) {
+      return {
+        start: firstLineEnd,
+        end: blockEnd,
+        replacement: serializedBlockBody
+      }
+    }
+
+    if (hasSameLineValue && trailingOnLine.trim().length > 0) {
+      const gap = trailingOnLine.startsWith(' ') || trailingOnLine.startsWith('\t') ? '' : ' '
+      const preservedHeader = `${yamlLf.slice(lineStart, colonIdx + 1)}${gap}${trailingOnLine}\n`
+      return {
+        start: lineStart,
+        end: blockEnd,
+        replacement: `${preservedHeader}${serializedBlockBody}`
+      }
     }
   }
 
@@ -688,6 +660,50 @@ function patchFlowRootDocument(
   return rendered === '{}\n' || rendered === 'null\n' ? '' : rendered
 }
 
+type FrontmatterMutationGuard =
+  | { kind: 'blocked'; result: FrontmatterMutationResult }
+  | { kind: 'no-frontmatter'; split: FrontmatterSplit }
+  | { kind: 'ready'; split: FrontmatterSplit; parsedYaml: ParsedYamlMappingState }
+
+function inspectFrontmatterForMutation(markdown: string): FrontmatterMutationGuard {
+  const split = splitFrontmatterRegion(markdown)
+  if (!split.hasFrontmatter && split.hasOpeningDelimiter) {
+    return {
+      kind: 'blocked',
+      result: {
+        applied: false,
+        content: markdown,
+        error: '프론트매터 닫는 구분선(`---` 또는 `...`)이 없습니다.'
+      }
+    }
+  }
+  if (!split.hasFrontmatter) {
+    return { kind: 'no-frontmatter', split }
+  }
+
+  const parsedYaml = parseYamlMapping(split.yamlSource)
+  if (parsedYaml.syntaxError) {
+    return {
+      kind: 'blocked',
+      result: {
+        applied: false,
+        content: markdown,
+        error: `YAML 구문 오류: ${parsedYaml.syntaxError}`
+      }
+    }
+  }
+  return { kind: 'ready', split, parsedYaml }
+}
+
+function getBomPrefix(hasBom: boolean): string {
+  return hasBom ? '\uFEFF' : ''
+}
+
+function sliceSeparatorAfterClosing(markdown: string, split: FrontmatterSplit): string {
+  const contentStart = split.hasBom ? 1 : 0
+  return markdown.slice(contentStart + split.rawBlock.length, split.bodyStartOffset)
+}
+
 /**
  * Non-destructively updates, adds, or removes frontmatter fields while preserving
  * unedited fields, unknown keys, YAML comments, nested values, BOM, and line endings.
@@ -698,17 +714,14 @@ export function applyFrontmatterValues(
   patch: Record<string, FrontmatterFieldValue | null | undefined>,
   options: FrontmatterMutationOptions = {}
 ): FrontmatterMutationResult {
-  const split = splitFrontmatterRegion(markdown)
-  if (!split.hasFrontmatter && split.hasOpeningDelimiter) {
-    return {
-      applied: false,
-      content: markdown,
-      error: '프론트매터 닫는 구분선(`---` 또는 `...`)이 없습니다.'
-    }
+  const state = inspectFrontmatterForMutation(markdown)
+  if (state.kind === 'blocked') {
+    return state.result
   }
 
   const patchEntries = Object.entries(patch)
-  if (!split.hasFrontmatter) {
+  if (state.kind === 'no-frontmatter') {
+    const { split } = state
     const additions = patchEntries.filter(
       (entry): entry is [string, FrontmatterFieldValue] =>
         entry[1] !== null && entry[1] !== undefined
@@ -719,22 +732,14 @@ export function applyFrontmatterValues(
     const yamlLf = additions.map(([key, val]) => serializeYamlPair(key, val)).join('')
     const yamlBody = convertLfToLineEnding(yamlLf, split.lineEnding)
     const bodyWithoutBom = split.hasBom ? markdown.slice(1) : markdown
-    const prefix = split.hasBom ? '\uFEFF' : ''
+    const prefix = getBomPrefix(split.hasBom)
     return {
       applied: true,
       content: `${prefix}---${split.lineEnding}${yamlBody}---${split.lineEnding}${bodyWithoutBom}`
     }
   }
 
-  const parsedYaml = parseYamlMapping(split.yamlSource)
-  if (parsedYaml.syntaxError) {
-    return {
-      applied: false,
-      content: markdown,
-      error: `YAML 구문 오류: ${parsedYaml.syntaxError}`
-    }
-  }
-
+  const { split, parsedYaml } = state
   let nextYamlLf: string
   if (
     parsedYaml.doc.contents !== null &&
@@ -782,12 +787,8 @@ export function applyFrontmatterValues(
     nextYamlLf = updated
   }
 
-  const contentStart = split.hasBom ? 1 : 0
-  const separatorAfterClosing = markdown.slice(
-    contentStart + split.rawBlock.length,
-    split.bodyStartOffset
-  )
-  const prefix = split.hasBom ? '\uFEFF' : ''
+  const separatorAfterClosing = sliceSeparatorAfterClosing(markdown, split)
+  const prefix = getBomPrefix(split.hasBom)
   const nextYaml = convertLfToLineEnding(nextYamlLf, split.lineEnding)
   const nextRawBlock = `${split.openingDelimiter}${split.lineEnding}${nextYaml}${split.closingDelimiter}`
   return {
@@ -801,31 +802,18 @@ export function applyFrontmatterValues(
  * Refuses to overwrite documents that contain YAML syntax errors.
  */
 export function removeFrontmatterBlock(markdown: string): FrontmatterMutationResult {
-  const split = splitFrontmatterRegion(markdown)
-  if (!split.hasFrontmatter && split.hasOpeningDelimiter) {
-    return {
-      applied: false,
-      content: markdown,
-      error: '프론트매터 닫는 구분선(`---` 또는 `...`)이 없습니다.'
-    }
+  const state = inspectFrontmatterForMutation(markdown)
+  if (state.kind === 'blocked') {
+    return state.result
   }
-  if (!split.hasFrontmatter) {
+  if (state.kind === 'no-frontmatter') {
     return { applied: true, content: markdown }
   }
 
-  const parsedYaml = parseYamlMapping(split.yamlSource)
-  if (parsedYaml.syntaxError) {
-    return {
-      applied: false,
-      content: markdown,
-      error: `YAML 구문 오류: ${parsedYaml.syntaxError}`
-    }
-  }
-
-  const prefix = split.hasBom ? '\uFEFF' : ''
+  const prefix = getBomPrefix(state.split.hasBom)
   return {
     applied: true,
-    content: `${prefix}${split.body}`
+    content: `${prefix}${state.split.body}`
   }
 }
 
@@ -842,14 +830,10 @@ export function replaceFrontmatterBody(originalMarkdown: string, nextBody: strin
     return nextBody
   }
 
-  const contentStart = split.hasBom ? 1 : 0
-  const separatorAfterClosing = originalMarkdown.slice(
-    contentStart + split.rawBlock.length,
-    split.bodyStartOffset
-  )
+  const separatorAfterClosing = sliceSeparatorAfterClosing(originalMarkdown, split)
   const effectiveSeparator =
     separatorAfterClosing || (nextBody.length > 0 ? split.lineEnding : '')
-  const prefix = split.hasBom ? '\uFEFF' : ''
+  const prefix = getBomPrefix(split.hasBom)
   return `${prefix}${split.rawBlock}${effectiveSeparator}${nextBody}`
 }
 

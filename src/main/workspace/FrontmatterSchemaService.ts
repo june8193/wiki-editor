@@ -63,6 +63,32 @@ function computeSchemaFingerprint(
   return `${result.path}|error|${result.error ?? ''}|${rawErrorContent ?? ''}`
 }
 
+function createMissingSchemaRead(schemaPath: string): {
+  result: FrontmatterSchemaLoadResult
+  fingerprint: string
+} {
+  const result: FrontmatterSchemaLoadResult = {
+    exists: false,
+    path: schemaPath,
+    schema: null
+  }
+  return { result, fingerprint: computeSchemaFingerprint(result) }
+}
+
+function createSchemaErrorRead(
+  schemaPath: string,
+  error: string,
+  rawForFingerprint?: string
+): { result: FrontmatterSchemaLoadResult; fingerprint: string } {
+  const result: FrontmatterSchemaLoadResult = {
+    exists: true,
+    path: schemaPath,
+    schema: null,
+    error
+  }
+  return { result, fingerprint: computeSchemaFingerprint(result, rawForFingerprint) }
+}
+
 /**
  * Manages loading, strict validation, atomic creation/saving, path security,
  * and external change watching for workspace `.wiki-editor/frontmatter.json`.
@@ -129,18 +155,11 @@ export class FrontmatterSchemaService {
         return cloneSchemaLoadResult(result)
       }
 
-      const starter = createDefaultFrontmatterSchema()
-      const serialized = serializeFrontmatterSchema(starter)
-      await writeFileAtomic(resolved.resolvedReal, serialized)
-
-      const result: FrontmatterSchemaLoadResult = {
-        exists: true,
-        path: resolved.schemaPath,
-        schema: starter
-      }
-      this.lastKnownFingerprint = computeSchemaFingerprint(result)
-      this.notifyListeners(result)
-      return cloneSchemaLoadResult(result)
+      return this.persistSchema(
+        resolved.resolvedReal,
+        resolved.schemaPath,
+        createDefaultFrontmatterSchema()
+      )
     })
   }
 
@@ -153,18 +172,24 @@ export class FrontmatterSchemaService {
     return this.queue.enqueue(async () => {
       const root = this.requireWorkspaceRoot()
       const resolved = await this.resolveSchemaTarget(root, { writable: true })
-      const serialized = serializeFrontmatterSchema(validation.schema)
-      await writeFileAtomic(resolved.resolvedReal, serialized)
-
-      const result: FrontmatterSchemaLoadResult = {
-        exists: true,
-        path: resolved.schemaPath,
-        schema: validation.schema
-      }
-      this.lastKnownFingerprint = computeSchemaFingerprint(result)
-      this.notifyListeners(result)
-      return cloneSchemaLoadResult(result)
+      return this.persistSchema(resolved.resolvedReal, resolved.schemaPath, validation.schema)
     })
+  }
+
+  private async persistSchema(
+    resolvedReal: string,
+    schemaPath: string,
+    schema: WorkspaceFrontmatterSchema
+  ): Promise<FrontmatterSchemaLoadResult> {
+    await writeFileAtomic(resolvedReal, serializeFrontmatterSchema(schema))
+    const result: FrontmatterSchemaLoadResult = {
+      exists: true,
+      path: schemaPath,
+      schema
+    }
+    this.lastKnownFingerprint = computeSchemaFingerprint(result)
+    this.notifyListeners(result)
+    return cloneSchemaLoadResult(result)
   }
 
   reloadIfChanged(): Promise<FrontmatterSchemaLoadResult | null> {
@@ -355,22 +380,11 @@ export class FrontmatterSchemaService {
   }> {
     const resolved = await this.resolveSchemaTarget(root, { writable: false })
     if (resolved.nonFileError) {
-      const result: FrontmatterSchemaLoadResult = {
-        exists: true,
-        path: resolved.schemaPath,
-        schema: null,
-        error: resolved.nonFileError
-      }
-      return { result, fingerprint: computeSchemaFingerprint(result) }
+      return createSchemaErrorRead(resolved.schemaPath, resolved.nonFileError)
     }
 
     if (!resolved.exists) {
-      const result: FrontmatterSchemaLoadResult = {
-        exists: false,
-        path: resolved.schemaPath,
-        schema: null
-      }
-      return { result, fingerprint: computeSchemaFingerprint(result) }
+      return createMissingSchemaRead(resolved.schemaPath)
     }
 
     let raw: string
@@ -378,25 +392,14 @@ export class FrontmatterSchemaService {
       raw = await readFile(resolved.resolvedReal, 'utf8')
     } catch (error) {
       if (isErrnoCode(error, 'ENOENT')) {
-        const result: FrontmatterSchemaLoadResult = {
-          exists: false,
-          path: resolved.schemaPath,
-          schema: null
-        }
-        return { result, fingerprint: computeSchemaFingerprint(result) }
+        return createMissingSchemaRead(resolved.schemaPath)
       }
       throw error
     }
 
     const parsed = parseFrontmatterSchemaJson(raw)
     if (!parsed.ok) {
-      const result: FrontmatterSchemaLoadResult = {
-        exists: true,
-        path: resolved.schemaPath,
-        schema: null,
-        error: parsed.error
-      }
-      return { result, fingerprint: computeSchemaFingerprint(result, raw) }
+      return createSchemaErrorRead(resolved.schemaPath, parsed.error, raw)
     }
 
     const result: FrontmatterSchemaLoadResult = {
