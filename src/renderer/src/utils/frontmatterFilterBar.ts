@@ -108,6 +108,53 @@ export function reconcileSearchSortSpec(
   return exists ? sort : { ...DEFAULT_WORKSPACE_SEARCH_SORT }
 }
 
+/** Returns true when `condition` has both a valid operator and compatible operand types for `field`. */
+function isFrontmatterConditionValidForField(
+  condition: FrontmatterFilterCondition,
+  field: FrontmatterFieldDefinition
+): boolean {
+  if (!isFrontmatterOperatorForType(field.type, condition.operator)) {
+    return false
+  }
+  if (condition.operator === 'is-empty') {
+    return true
+  }
+
+  switch (field.type) {
+    case 'select':
+    case 'multi-select':
+      return (
+        Array.isArray(condition.values) &&
+        condition.values.length > 0 &&
+        condition.values.every((value) => typeof value === 'string')
+      )
+    case 'text':
+      return typeof condition.value === 'string' && condition.value.trim().length > 0
+    case 'number':
+      if (condition.operator === 'between') {
+        return (
+          typeof condition.min === 'number' &&
+          Number.isFinite(condition.min) &&
+          typeof condition.max === 'number' &&
+          Number.isFinite(condition.max)
+        )
+      }
+      return typeof condition.value === 'number' && Number.isFinite(condition.value)
+    case 'date':
+      if (condition.operator === 'between') {
+        return (
+          typeof condition.min === 'string' &&
+          isValidIsoCalendarDate(condition.min) &&
+          typeof condition.max === 'string' &&
+          isValidIsoCalendarDate(condition.max)
+        )
+      }
+      return typeof condition.value === 'string' && isValidIsoCalendarDate(condition.value)
+    case 'boolean':
+      return typeof condition.value === 'boolean'
+  }
+}
+
 /** Filters active filter conditions to those valid under `schema`. */
 export function reconcileFilterConditions(
   conditions: readonly FrontmatterFilterCondition[],
@@ -119,7 +166,7 @@ export function reconcileFilterConditions(
   const fieldsByKey = new Map(schema.fields.map((field) => [field.key, field]))
   return conditions.filter((cond) => {
     const field = fieldsByKey.get(cond.fieldKey)
-    return Boolean(field && isFrontmatterOperatorForType(field.type, cond.operator))
+    return Boolean(field && isFrontmatterConditionValidForField(cond, field))
   })
 }
 
@@ -379,6 +426,7 @@ export interface FilterPopoverDraft {
   editIndex: number | null
   step: FilterPopoverStep
   fieldKey: string | null
+  fieldType: FrontmatterFieldType | null
   operator: FrontmatterFilterOperator | null
   selectedValues: string[]
   textValue: string
@@ -393,6 +441,7 @@ export function createInitialFilterAddDraft(): FilterPopoverDraft {
     editIndex: null,
     step: 'field',
     fieldKey: null,
+    fieldType: null,
     operator: null,
     selectedValues: [],
     textValue: '',
@@ -401,16 +450,28 @@ export function createInitialFilterAddDraft(): FilterPopoverDraft {
   }
 }
 
+/** Creates a clean operator-step draft for the selected schema field, clearing prior field values. */
+export function createFilterFieldDraft(field: FrontmatterFieldDefinition): FilterPopoverDraft {
+  return {
+    ...createInitialFilterAddDraft(),
+    step: 'operator',
+    fieldKey: field.key,
+    fieldType: field.type
+  }
+}
+
 /** Creates a pre-populated draft for editing an existing frontmatter filter condition. */
 export function createFilterEditDraft(
   condition: FrontmatterFilterCondition,
-  index: number
+  index: number,
+  fieldType: FrontmatterFieldType | null = null
 ): FilterPopoverDraft {
   return {
     mode: 'edit',
     editIndex: index,
     step: condition.operator === 'is-empty' ? 'operator' : 'value',
     fieldKey: condition.fieldKey,
+    fieldType,
     operator: condition.operator,
     selectedValues: condition.values ? [...condition.values] : [],
     textValue:
@@ -429,6 +490,70 @@ export function cycleListboxIndex(
   if (totalCount <= 0) return -1
   const clamped = Math.max(0, Math.min(currentIndex, totalCount - 1))
   return (clamped + delta + totalCount) % totalCount
+}
+
+interface OrderedRangeDraftParser {
+  parse: (raw: string) => number | string | null
+  isEmpty: (raw: string) => boolean
+  invalidFormatError: string
+  invalidRangeError: string
+}
+
+const ORDERED_RANGE_PARSERS: Record<'number' | 'date', OrderedRangeDraftParser> = {
+  number: {
+    parse: (raw) => {
+      const n = Number(raw)
+      return Number.isFinite(n) ? n : null
+    },
+    isEmpty: (raw) => raw.trim() === '',
+    invalidFormatError: '유효한 숫자를 입력하세요.',
+    invalidRangeError: '최솟값은 최댓값보다 클 수 없습니다.'
+  },
+  date: {
+    parse: (raw) => (isValidIsoCalendarDate(raw) ? raw : null),
+    isEmpty: (raw) => raw === '',
+    invalidFormatError: '유효한 YYYY-MM-DD 날짜를 입력하세요.',
+    invalidRangeError: '시작일은 종료일보다 늦을 수 없습니다.'
+  }
+}
+
+function buildOrderedRangeCondition(
+  fieldKey: string,
+  operator: FrontmatterFilterOperator,
+  draft: FilterPopoverDraft,
+  spec: OrderedRangeDraftParser
+): { ok: true; condition: FrontmatterFilterCondition } | { ok: false; error?: string } {
+  if (operator === 'between') {
+    if (spec.isEmpty(draft.minValue) || spec.isEmpty(draft.maxValue)) {
+      return { ok: false }
+    }
+    const min = spec.parse(draft.minValue)
+    const max = spec.parse(draft.maxValue)
+    if (min === null || max === null) {
+      return { ok: false, error: spec.invalidFormatError }
+    }
+    const isInverted =
+      typeof min === 'number' && typeof max === 'number' ? min > max : String(min) > String(max)
+    if (isInverted) {
+      return { ok: false, error: spec.invalidRangeError }
+    }
+    return {
+      ok: true,
+      condition: { fieldKey, operator, min, max }
+    }
+  }
+
+  if (spec.isEmpty(draft.textValue)) {
+    return { ok: false }
+  }
+  const parsed = spec.parse(draft.textValue)
+  if (parsed === null) {
+    return { ok: false, error: spec.invalidFormatError }
+  }
+  return {
+    ok: true,
+    condition: { fieldKey, operator, value: parsed }
+  }
 }
 
 /** Validates and constructs a `FrontmatterFilterCondition` from a popover draft state. */
@@ -470,63 +595,9 @@ export function buildConditionFromDraft(
       }
     }
 
-    case 'number': {
-      if (operator === 'between') {
-        if (draft.minValue.trim() === '' || draft.maxValue.trim() === '') {
-          return { ok: false }
-        }
-        const minNum = Number(draft.minValue)
-        const maxNum = Number(draft.maxValue)
-        if (!Number.isFinite(minNum) || !Number.isFinite(maxNum)) {
-          return { ok: false, error: '유효한 숫자를 입력하세요.' }
-        }
-        if (minNum > maxNum) {
-          return { ok: false, error: '최솟값은 최댓값보다 클 수 없습니다.' }
-        }
-        return {
-          ok: true,
-          condition: { fieldKey: field.key, operator, min: minNum, max: maxNum }
-        }
-      }
-      if (draft.textValue.trim() === '') return { ok: false }
-      const numVal = Number(draft.textValue)
-      if (!Number.isFinite(numVal)) {
-        return { ok: false, error: '유효한 숫자를 입력하세요.' }
-      }
-      return {
-        ok: true,
-        condition: { fieldKey: field.key, operator, value: numVal }
-      }
-    }
-
-    case 'date': {
-      if (operator === 'between') {
-        if (!draft.minValue || !draft.maxValue) return { ok: false }
-        if (!isValidIsoCalendarDate(draft.minValue) || !isValidIsoCalendarDate(draft.maxValue)) {
-          return { ok: false, error: '유효한 YYYY-MM-DD 날짜를 입력하세요.' }
-        }
-        if (draft.minValue > draft.maxValue) {
-          return { ok: false, error: '시작일은 종료일보다 늦을 수 없습니다.' }
-        }
-        return {
-          ok: true,
-          condition: {
-            fieldKey: field.key,
-            operator,
-            min: draft.minValue,
-            max: draft.maxValue
-          }
-        }
-      }
-      if (!draft.textValue) return { ok: false }
-      if (!isValidIsoCalendarDate(draft.textValue)) {
-        return { ok: false, error: '유효한 YYYY-MM-DD 날짜를 입력하세요.' }
-      }
-      return {
-        ok: true,
-        condition: { fieldKey: field.key, operator, value: draft.textValue }
-      }
-    }
+    case 'number':
+    case 'date':
+      return buildOrderedRangeCondition(field.key, operator, draft, ORDERED_RANGE_PARSERS[field.type])
 
     case 'boolean':
       return { ok: false }

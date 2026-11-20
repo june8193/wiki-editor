@@ -98,6 +98,86 @@ function FilterPopoverFieldStep({ fields, onSelectField }: FilterPopoverFieldSte
   )
 }
 
+interface KeyboardChoiceOption<T> {
+  key: string
+  label: string
+  value: T
+}
+
+interface KeyboardChoiceListboxProps<T> {
+  options: readonly KeyboardChoiceOption<T>[]
+  initialIndex: number
+  ariaLabel: string
+  onSelect: (value: T) => void
+  onBack?: () => void
+}
+
+function KeyboardChoiceListbox<T>({
+  options,
+  initialIndex,
+  ariaLabel,
+  onSelect,
+  onBack
+}: KeyboardChoiceListboxProps<T>) {
+  const [highlightedIndex, setHighlightedIndex] = useState(() =>
+    options.length === 0 ? 0 : Math.max(0, Math.min(initialIndex, options.length - 1))
+  )
+  const listRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    listRef.current?.focus()
+  }, [])
+
+  const clampedIndex =
+    options.length === 0 ? -1 : Math.min(highlightedIndex, options.length - 1)
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const delta = event.key === 'ArrowDown' ? 1 : -1
+      setHighlightedIndex((prev) => cycleListboxIndex(prev, options.length, delta))
+      return
+    }
+    if (event.key === 'Enter' && clampedIndex >= 0) {
+      event.preventDefault()
+      onSelect(options[clampedIndex].value)
+      return
+    }
+    if (event.key === 'Backspace' && onBack) {
+      event.preventDefault()
+      onBack()
+    }
+  }
+
+  return (
+    <div
+      ref={listRef}
+      tabIndex={0}
+      className="search-filter-popover-list"
+      role="listbox"
+      aria-label={ariaLabel}
+      onKeyDown={handleKeyDown}
+    >
+      {options.map((option, index) => {
+        const isHighlighted = index === clampedIndex
+        return (
+          <button
+            key={option.key}
+            type="button"
+            role="option"
+            aria-selected={isHighlighted}
+            className={`search-filter-popover-item${isHighlighted ? ' is-highlighted' : ''}`}
+            onMouseEnter={() => setHighlightedIndex(index)}
+            onClick={() => onSelect(option.value)}
+          >
+            <span>{option.label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 interface FilterPopoverOperatorStepProps {
   field: FrontmatterFieldDefinition
   initialOperator: FrontmatterFilterOperator | null
@@ -114,37 +194,16 @@ function FilterPopoverOperatorStep({
   onSelectOperator
 }: FilterPopoverOperatorStepProps) {
   const operators = FRONTMATTER_OPERATORS_BY_TYPE[field.type]
-  const [highlightedIndex, setHighlightedIndex] = useState(() => {
-    if (!initialOperator) return 0
-    const idx = operators.indexOf(initialOperator)
-    return idx >= 0 ? idx : 0
-  })
-  const listRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    listRef.current?.focus()
-  }, [])
-
-  const clampedIndex =
-    operators.length === 0 ? -1 : Math.min(highlightedIndex, operators.length - 1)
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault()
-      const delta = event.key === 'ArrowDown' ? 1 : -1
-      setHighlightedIndex((prev) => cycleListboxIndex(prev, operators.length, delta))
-      return
-    }
-    if (event.key === 'Enter' && clampedIndex >= 0) {
-      event.preventDefault()
-      onSelectOperator(operators[clampedIndex])
-      return
-    }
-    if (event.key === 'Backspace' && canGoBack) {
-      event.preventDefault()
-      onBack()
-    }
-  }
+  const initialIndex = initialOperator ? Math.max(0, operators.indexOf(initialOperator)) : 0
+  const options = useMemo(
+    () =>
+      operators.map((op) => ({
+        key: op,
+        label: getFrontmatterOperatorLabel(field.type, op),
+        value: op
+      })),
+    [field.type, operators]
+  )
 
   return (
     <div className="search-filter-popover-step">
@@ -162,87 +221,13 @@ function FilterPopoverOperatorStep({
         <span className="search-filter-popover-title">{field.label} · 조건 선택</span>
       </div>
 
-      <div
-        ref={listRef}
-        tabIndex={0}
-        className="search-filter-popover-list"
-        role="listbox"
-        aria-label="필터 연산자 목록"
-        onKeyDown={handleKeyDown}
-      >
-        {operators.map((op, index) => {
-          const isHighlighted = index === clampedIndex
-          return (
-            <button
-              key={op}
-              type="button"
-              role="option"
-              aria-selected={isHighlighted}
-              className={`search-filter-popover-item${isHighlighted ? ' is-highlighted' : ''}`}
-              onMouseEnter={() => setHighlightedIndex(index)}
-              onClick={() => onSelectOperator(op)}
-            >
-              <span>{getFrontmatterOperatorLabel(field.type, op)}</span>
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-interface BooleanFilterChoiceListProps {
-  initialValue: boolean
-  onSelect: (value: boolean) => void
-}
-
-function BooleanFilterChoiceList({ initialValue, onSelect }: BooleanFilterChoiceListProps) {
-  const [highlightedIdx, setHighlightedIdx] = useState(initialValue ? 0 : 1)
-  const listRef = useRef<HTMLDivElement | null>(null)
-  const choices = [
-    { label: '예', value: true },
-    { label: '아니오', value: false }
-  ] as const
-
-  useEffect(() => {
-    listRef.current?.focus()
-  }, [])
-
-  const clampedIdx = Math.min(highlightedIdx, choices.length - 1)
-
-  return (
-    <div
-      ref={listRef}
-      tabIndex={0}
-      className="search-filter-popover-list"
-      role="listbox"
-      aria-label="불리언 값 선택"
-      onKeyDown={(event) => {
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-          event.preventDefault()
-          const delta = event.key === 'ArrowDown' ? 1 : -1
-          setHighlightedIdx((prev) => cycleListboxIndex(prev, choices.length, delta))
-          return
-        }
-        if (event.key === 'Enter') {
-          event.preventDefault()
-          onSelect(choices[clampedIdx].value)
-        }
-      }}
-    >
-      {choices.map((choice, index) => (
-        <button
-          key={choice.label}
-          type="button"
-          role="option"
-          aria-selected={index === clampedIdx}
-          className={`search-filter-popover-item${index === clampedIdx ? ' is-highlighted' : ''}`}
-          onMouseEnter={() => setHighlightedIdx(index)}
-          onClick={() => onSelect(choice.value)}
-        >
-          <span>{choice.label}</span>
-        </button>
-      ))}
+      <KeyboardChoiceListbox
+        options={options}
+        initialIndex={initialIndex}
+        ariaLabel="필터 연산자 목록"
+        onSelect={onSelectOperator}
+        onBack={canGoBack ? onBack : undefined}
+      />
     </div>
   )
 }
@@ -585,8 +570,13 @@ function FilterPopoverValueStep({
       )}
 
       {field.type === 'boolean' && (
-        <BooleanFilterChoiceList
-          initialValue={draft.textValue === 'false' ? false : true}
+        <KeyboardChoiceListbox
+          options={[
+            { key: 'true', label: '예', value: true },
+            { key: 'false', label: '아니오', value: false }
+          ]}
+          initialIndex={draft.textValue === 'false' ? 1 : 0}
+          ariaLabel="불리언 값 선택"
           onSelect={(value) =>
             onCommitCondition({
               fieldKey: field.key,

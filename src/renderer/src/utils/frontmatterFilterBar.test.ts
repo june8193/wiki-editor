@@ -4,6 +4,7 @@ import {
   buildConditionFromDraft,
   buildFilterSelectableOptions,
   createFilterEditDraft,
+  createFilterFieldDraft,
   cycleListboxIndex,
   DEFAULT_WORKSPACE_SEARCH_SORT,
   extractDisplaySummaryBadges,
@@ -80,6 +81,27 @@ describe('frontmatterFilterBar utils', () => {
       SCHEMA
     )
     expect(reconciled).toEqual([{ fieldKey: 'status', operator: 'in', values: ['todo'] }])
+
+    const mutatedSchema: WorkspaceFrontmatterSchema = {
+      version: 1,
+      fields: [
+        { key: 'status', label: '상태', type: 'text' },
+        { key: 'published', label: '공개 여부', type: 'text' },
+        { key: 'score', label: '점수', type: 'date' },
+        { key: 'dueDate', label: '마감일', type: 'number' }
+      ]
+    }
+    expect(
+      reconcileFilterConditions(
+        [
+          { fieldKey: 'status', operator: 'is-empty' },
+          { fieldKey: 'published', operator: 'equals', value: true },
+          { fieldKey: 'score', operator: 'equals', value: 4 },
+          { fieldKey: 'dueDate', operator: 'between', min: '2026-01-01', max: '2026-01-31' }
+        ],
+        mutatedSchema
+      )
+    ).toEqual([{ fieldKey: 'status', operator: 'is-empty' }])
   })
 
   it('formats active filter chip labels across field types and operators', () => {
@@ -217,6 +239,20 @@ describe('frontmatterFilterBar utils', () => {
     expect(buildConditionFromDraft(scoreField, validDraft)).toEqual({
       ok: true,
       condition: { fieldKey: 'score', operator: 'between', min: 2, max: 10 }
+    })
+
+    const nextFieldDraft = createFilterFieldDraft(SCHEMA.fields[1])
+    expect(nextFieldDraft).toEqual({
+      mode: 'add',
+      editIndex: null,
+      step: 'operator',
+      fieldKey: 'labels',
+      fieldType: 'multi-select',
+      operator: null,
+      selectedValues: [],
+      textValue: '',
+      minValue: '',
+      maxValue: ''
     })
   })
 })

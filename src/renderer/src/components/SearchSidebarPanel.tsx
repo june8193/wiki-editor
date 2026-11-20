@@ -137,7 +137,7 @@ export function SearchSidebarPanel({
     const summaryText =
       response.totalMatchCount > 0
         ? `${response.totalFileCount}개 파일 · ${response.totalMatchCount}건 일치`
-        : query.length > 0
+        : response.query.length > 0
           ? `${response.totalFileCount}개 파일 (파일명 일치)`
           : `${response.totalFileCount}개 파일 (속성 일치)`
 

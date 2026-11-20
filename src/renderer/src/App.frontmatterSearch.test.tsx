@@ -772,4 +772,92 @@ describe('Search View Frontmatter Filter Bar, Summary Badges & Sort (<App />)', 
       expect(within(filterBar).queryByRole('button', { name: /담당자 필터 수정/ })).not.toBeInTheDocument()
     })
   })
+
+  it('clears draft values when backing out to another field, dismisses/drops incompatible conditions on live field type changes, and keys summary label off response.query', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand, dispose } = createInMemoryWikiApi(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\draft-reset',
+        workspaces: {
+          'C:\\wiki\\draft-reset': {
+            [FRONTMATTER_SCHEMA_RELATIVE_PATH]: serializeFrontmatterSchema(FULL_SEARCH_SCHEMA),
+            'a.md': '---\nstatus: in-progress\npriority: high\npublished: true\nassignee: kim\n---\nAlpha',
+            'b.md': '---\nstatus: done\npriority: low\npublished: false\n---\nBeta'
+          }
+        }
+      }
+    )
+    disposers.push(dispose)
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await waitFor(() => {
+      expect(within(screen.getByLabelText('워크스페이스 탐색기')).getByText('a.md')).toBeInTheDocument()
+    })
+
+    await user.click(
+      within(screen.getByRole('navigation', { name: '액티비티 바' })).getByRole('button', {
+        name: '검색'
+      })
+    )
+    const searchView = screen.getByRole('region', { name: '검색 뷰' })
+    const filterBar = within(searchView).getByRole('region', { name: '프론트매터 필터 바' })
+
+    // 1. Backing out from value step to field step and picking another field clears selectedValues & textValue
+    await user.click(within(filterBar).getByRole('button', { name: '+ 필터 추가' }))
+    let popover = within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })
+    await user.click(within(popover).getByRole('option', { name: /상태/ }))
+    await user.click(within(popover).getByRole('option', { name: '포함' }))
+    await user.click(within(popover).getByLabelText('in-progress'))
+    await user.click(within(popover).getByRole('button', { name: '연산자 선택으로 돌아가기' }))
+    await user.click(within(popover).getByRole('button', { name: '필드 선택으로 돌아가기' }))
+    await user.click(within(popover).getByRole('option', { name: /우선순위/ }))
+    await user.click(within(popover).getByRole('option', { name: '포함' }))
+    expect(within(popover).queryByLabelText('in-progress')).not.toBeInTheDocument()
+
+    await user.click(within(popover).getByRole('button', { name: '연산자 선택으로 돌아가기' }))
+    await user.click(within(popover).getByRole('button', { name: '필드 선택으로 돌아가기' }))
+    await user.click(within(popover).getByRole('option', { name: /담당자/ }))
+    await user.click(within(popover).getByRole('option', { name: '일치' }))
+    await user.type(within(popover).getByLabelText('필터 값 입력'), '123')
+    await user.click(within(popover).getByRole('button', { name: '연산자 선택으로 돌아가기' }))
+    await user.click(within(popover).getByRole('button', { name: '필드 선택으로 돌아가기' }))
+    await user.click(within(popover).getByRole('option', { name: /점수/ }))
+    await user.click(within(popover).getByRole('option', { name: '같음 (=)' }))
+    expect(within(popover).getByLabelText('숫자 값 입력')).toHaveValue(null)
+    await user.click(within(filterBar).getByRole('button', { name: '+ 필터 추가' })) // close
+
+    // 2. Summary text reflects response.query during debounce rather than unsubmitted input query
+    await user.click(within(filterBar).getByRole('button', { name: '+ 필터 추가' }))
+    popover = within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })
+    await user.click(within(popover).getByRole('option', { name: /공개 여부/ }))
+    await user.click(within(popover).getByRole('option', { name: '일치' }))
+    await user.click(within(popover).getByRole('option', { name: '예' }))
+
+    await waitFor(() => {
+      expect(within(searchView).getByText('1개 파일 (속성 일치)')).toBeInTheDocument()
+    })
+    const searchInput = within(searchView).getByRole('textbox', { name: '검색어 입력' })
+    fireEvent.change(searchInput, { target: { value: 'a' } })
+    expect(within(searchView).getByText('1개 파일 (속성 일치)')).toBeInTheDocument()
+
+    // 3. Changing a field's type in schema dismisses open edit popover and reconciles incompatible conditions
+    await user.clear(searchInput)
+    await user.click(within(filterBar).getByRole('button', { name: /공개 여부 필터 수정/ }))
+    expect(within(filterBar).getByRole('dialog', { name: '프론트매터 필터 설정' })).toBeInTheDocument()
+
+    await api.frontmatter!.saveSchema({
+      version: 1,
+      fields: FULL_SEARCH_SCHEMA.fields.map((field) =>
+        field.key === 'published' ? { key: 'published', label: '공개 여부', type: 'text' } : field
+      )
+    })
+
+    await waitFor(() => {
+      expect(within(filterBar).queryByRole('dialog', { name: '프론트매터 필터 설정' })).not.toBeInTheDocument()
+      expect(within(filterBar).queryByRole('button', { name: /공개 여부 필터 수정/ })).not.toBeInTheDocument()
+    })
+  })
 })

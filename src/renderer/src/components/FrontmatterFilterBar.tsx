@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { X } from 'lucide-react'
-import type {
-  FrontmatterFieldDefinition,
-  FrontmatterFilterCondition,
-  FrontmatterFilterOperator,
-  FrontmatterSchemaLoadResult,
-  WorkspaceFrontmatterSchema
+import {
+  isFrontmatterOperatorForType,
+  type FrontmatterFieldDefinition,
+  type FrontmatterFilterCondition,
+  type FrontmatterFilterOperator,
+  type FrontmatterSchemaLoadResult,
+  type WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
 import type { WorkspaceSearchSortSpec } from '@shared/search'
 import { type DismissReason, useDismissable } from '../hooks/useDismissable'
 import {
   createFilterEditDraft,
+  createFilterFieldDraft,
   createInitialFilterAddDraft,
   type FilterPopoverDraft,
   formatFilterChipLabel,
@@ -112,9 +114,17 @@ export function FrontmatterFilterBar({
       dismissPopover(false)
       return
     }
-    if (popoverDraft.fieldKey && !fieldsByKey.has(popoverDraft.fieldKey)) {
-      dismissPopover(false)
-      return
+    if (popoverDraft.fieldKey) {
+      const targetField = fieldsByKey.get(popoverDraft.fieldKey)
+      if (
+        !targetField ||
+        (popoverDraft.fieldType !== null && targetField.type !== popoverDraft.fieldType) ||
+        (popoverDraft.operator !== null &&
+          !isFrontmatterOperatorForType(targetField.type, popoverDraft.operator))
+      ) {
+        dismissPopover(false)
+        return
+      }
     }
     if (
       popoverDraft.mode === 'edit' &&
@@ -144,8 +154,15 @@ export function FrontmatterFilterBar({
 
   const selectedField =
     popoverDraft?.fieldKey ? fieldsByKey.get(popoverDraft.fieldKey) ?? null : null
+  const isDraftIncompatibleWithField =
+    popoverDraft !== null &&
+    selectedField !== null &&
+    ((popoverDraft.fieldType !== null && selectedField.type !== popoverDraft.fieldType) ||
+      (popoverDraft.operator !== null &&
+        !isFrontmatterOperatorForType(selectedField.type, popoverDraft.operator)))
   const showPopover =
-    popoverDraft !== null && (popoverDraft.step === 'field' || selectedField !== null)
+    popoverDraft !== null &&
+    (popoverDraft.step === 'field' || (selectedField !== null && !isDraftIncompatibleWithField))
 
   const openAddPopover = (triggerEl: HTMLButtonElement): void => {
     returnFocusElRef.current = triggerEl
@@ -157,10 +174,11 @@ export function FrontmatterFilterBar({
   const openEditPopover = (index: number, triggerEl: HTMLButtonElement): void => {
     const condition = conditions[index]
     if (!condition) return
+    const field = fieldsByKey.get(condition.fieldKey)
     returnFocusElRef.current = triggerEl
     sourceConditionRef.current = condition
     onRequestFieldValues?.()
-    setPopoverDraft(createFilterEditDraft(condition, index))
+    setPopoverDraft(createFilterEditDraft(condition, index, field?.type ?? null))
   }
 
   const commitPopoverCondition = (condition: FrontmatterFilterCondition): void => {
@@ -186,9 +204,7 @@ export function FrontmatterFilterBar({
     if (field.type === 'multi-select' && field.allowCustom) {
       onRequestFieldValues?.()
     }
-    setPopoverDraft((prev) =>
-      prev ? { ...prev, step: 'operator', fieldKey: field.key, operator: null } : null
-    )
+    setPopoverDraft((prev) => (prev ? createFilterFieldDraft(field) : null))
   }
 
   const handleSelectOperator = (
@@ -310,9 +326,7 @@ export function FrontmatterFilterBar({
           onSelectField={handleSelectField}
           onSelectOperator={handleSelectOperator}
           onBackToField={() =>
-            setPopoverDraft((prev) =>
-              prev ? { ...prev, step: 'field', fieldKey: null, operator: null } : null
-            )
+            setPopoverDraft((prev) => (prev ? createInitialFilterAddDraft() : null))
           }
           onBackToOperators={() =>
             setPopoverDraft((prev) => (prev ? { ...prev, step: 'operator' } : null))
