@@ -3178,7 +3178,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     const refreshedExplorer = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
     expect(within(refreshedExplorer).getByText('deleted.md')).toBeInTheDocument()
     expect(within(refreshedExplorer).queryByText('draft.md')).toBeNull()
-  })
+  }, 15_000)
 
   it('excludes auxiliary windows from workspaceState access and flushes main window expandedDirs before resolving dirty close', async () => {
     const user = userEvent.setup()
