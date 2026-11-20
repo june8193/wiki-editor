@@ -30,6 +30,7 @@ import type { GitGraphState } from '../hooks/useGitGraphLog'
 import { toGitDiffRequest } from '../utils/gitFilePresentation'
 import type { GitChangesGroupKey, GitChangesViewState } from '../utils/gitChangesView'
 import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
+import { GIT_PANEL_DEFAULT_CHANGES_RATIO } from '../utils/gitPanelSplit'
 import {
   formatGitCommitPlaceholder,
   getGitBranchLabel,
@@ -38,7 +39,7 @@ import {
 } from '../utils/gitPrimaryAction'
 import { GitChangesFileGroups, GitChangesHeaderActions } from './GitChangesSection'
 import { GitGraphHeaderActions, GitGraphSection } from './GitGraphSection'
-import { GitSectionResizer } from './GitSectionResizer'
+import { HorizontalSectionResizer } from './HorizontalSectionResizer'
 import { SidebarAccordionSection } from './SidebarAccordionSection'
 
 const COMMIT_INPUT_MAX_HEIGHT_PX = 120
@@ -783,9 +784,14 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
             </SidebarAccordionSection>
 
             {layout.showResizer && (
-              <GitSectionResizer
-                changesHeightRatio={splitState.changesHeightRatio}
+              <HorizontalSectionResizer
+                ratio={splitState.changesHeightRatio}
+                fallbackRatio={GIT_PANEL_DEFAULT_CHANGES_RATIO}
+                resetRatio={GIT_PANEL_DEFAULT_CHANGES_RATIO}
                 containerRef={splitContainerRef}
+                ariaLabel="Git 섹션 높이 조절"
+                bodyClassName="is-resizing-git-sections"
+                className="git-section-resizer"
                 onResizeRatio={onResizeChangesRatio}
               />
             )}

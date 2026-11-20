@@ -13,6 +13,13 @@ import {
 } from '../stores/PaneTabStore'
 import { getGitFileBaseName } from '../utils/gitFilePresentation'
 
+export interface SidebarDocumentContext {
+  documentName: string | null
+  documentKey: string | null
+  content: string
+  isMarkdownDocument: boolean
+}
+
 export type DocumentOutlineContentProps = Omit<
   DocumentOutlinePanelProps,
   'showHeadingNumbers' | 'onToggleHeadingNumbers' | 'onCollapse'
@@ -84,14 +91,18 @@ export function useDocumentOutline(
     [actions, handlePaneChangeContent, handlePaneUpdateTabViewState]
   )
 
-  const documentOutlineProps: DocumentOutlineContentProps = {
+  const documentContext: SidebarDocumentContext = {
     documentName:
       activeTab?.kind === 'diff'
         ? getGitFileBaseName(activeTab.diff.request.path)
         : (activeBuffer?.name ?? null),
     documentKey: activeBuffer?.key ?? null,
     content: activeBufferContent,
-    isMarkdownDocument: isActiveMarkdown,
+    isMarkdownDocument: isActiveMarkdown
+  }
+
+  const documentOutlineProps: DocumentOutlineContentProps = {
+    ...documentContext,
     activeHeadingIndex,
     onSelectHeading: selectHeading
   }
@@ -101,6 +112,7 @@ export function useDocumentOutline(
     handleActiveHeadingChange: handleActiveHeadingReport,
     dispatchHeadingScroll,
     paneActions,
+    documentContext,
     documentOutlineProps
   }
 }

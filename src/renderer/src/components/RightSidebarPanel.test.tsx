@@ -27,11 +27,13 @@ describe('RightSidebarPanel', () => {
           onResizeOutlineRatio={(nextRatio) =>
             setSplitState((prev) => updateRightSidebarOutlineRatio(prev, nextRatio))
           }
-          outlineProps={{
+          document={{
             documentName: 'guide.md',
             documentKey: 'c:/wiki/guide.md',
             content: '---\nstatus: todo\n---\n# Intro\n\n## Details',
-            isMarkdownDocument: true,
+            isMarkdownDocument: true
+          }}
+          outlineProps={{
             activeHeadingIndex: 0,
             showHeadingNumbers: true,
             onToggleHeadingNumbers,
@@ -39,10 +41,6 @@ describe('RightSidebarPanel', () => {
             onCollapse: onCollapseSidebar
           }}
           propertiesProps={{
-            documentName: 'guide.md',
-            documentKey: 'c:/wiki/guide.md',
-            content: '---\nstatus: todo\n---\n# Intro\n\n## Details',
-            isMarkdownDocument: true,
             schemaResult: {
               exists: true,
               path: 'C:/wiki/.wiki-editor/frontmatter.json',

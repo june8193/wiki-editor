@@ -117,7 +117,6 @@ describe('DocumentPropertiesSection', () => {
         documentName="guide.md"
         content=""
         isMarkdownDocument={false}
-        isDiffTab
         schemaResult={makeSchemaResult()}
         isExpanded
         onToggleExpanded={vi.fn()}
@@ -133,7 +132,6 @@ describe('DocumentPropertiesSection', () => {
         documentName="diagram.png"
         content=""
         isMarkdownDocument={false}
-        isImageDocument
         schemaResult={makeSchemaResult()}
         isExpanded
         onToggleExpanded={vi.fn()}

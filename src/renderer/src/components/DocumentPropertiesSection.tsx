@@ -7,6 +7,7 @@ import {
   removeFrontmatterBlock,
   type FrontmatterFieldDefinition,
   type FrontmatterFieldValue,
+  type FrontmatterMutationResult,
   type FrontmatterOptionSpec,
   type FrontmatterSchemaLoadResult,
   type FrontmatterValidationIssue,
@@ -19,14 +20,11 @@ export interface DocumentPropertiesSectionProps {
   documentKey?: string | null
   content: string
   isMarkdownDocument: boolean
-  isDiffTab?: boolean
-  isImageDocument?: boolean
   schemaResult: FrontmatterSchemaLoadResult | null
   isSchemaLoading?: boolean
   isExpanded?: boolean
   flexRatio?: number | null
   headerActions?: ReactNode
-  suggestedCustomValuesByField?: Readonly<Record<string, readonly string[]>>
   onToggleExpanded: () => void
   onChangeContent: (nextContent: string) => void
   onCreateDefaultSchema: () => void
@@ -46,6 +44,17 @@ function findOptionColor(
   value: string
 ): string | undefined {
   return options?.find((opt) => opt.value === value)?.color
+}
+
+function OptionColorDot({ color }: { color: string | undefined }) {
+  if (!color) return null
+  return (
+    <span
+      className="properties-color-dot"
+      style={{ backgroundColor: color }}
+      aria-hidden="true"
+    />
+  )
 }
 
 function groupIssuesByField(issues: readonly FrontmatterValidationIssue[]): {
@@ -72,7 +81,6 @@ interface FieldInputProps {
   field: FrontmatterFieldDefinition
   inputId: string
   rawValue: FrontmatterFieldValue | undefined
-  suggestions?: readonly string[]
   onUpdateField: (key: string, nextValue: FrontmatterFieldValue | null) => void
 }
 
@@ -81,7 +89,7 @@ function NumberPropertyInput({
   inputId,
   rawValue,
   onUpdateField
-}: Pick<FieldInputProps, 'field' | 'inputId' | 'rawValue' | 'onUpdateField'>) {
+}: FieldInputProps) {
   const canonicalText = typeof rawValue === 'number' && Number.isFinite(rawValue) ? String(rawValue) : ''
   const [draftState, setDraftState] = useState<{ base: string; text: string } | null>(null)
   const displayValue =
@@ -120,23 +128,16 @@ function MultiSelectPropertyInput({
   field,
   inputId,
   rawValue,
-  suggestions = [],
   onUpdateField
-}: Pick<FieldInputProps, 'field' | 'inputId' | 'rawValue' | 'suggestions' | 'onUpdateField'>) {
+}: FieldInputProps) {
   const [customDraft, setCustomDraft] = useState('')
   const selectedItems = Array.isArray(rawValue) ? rawValue : []
   const selectedSet = new Set(selectedItems)
   const schemaOptionValues = new Set((field.options ?? []).map((opt) => opt.value))
 
-  const availableSuggestions: string[] = []
-  const seenSuggestion = new Set<string>()
-  for (const candidate of [...(field.options ?? []).map((o) => o.value), ...suggestions]) {
-    if (!candidate || selectedSet.has(candidate) || seenSuggestion.has(candidate)) {
-      continue
-    }
-    seenSuggestion.add(candidate)
-    availableSuggestions.push(candidate)
-  }
+  const availableSuggestions = (field.options ?? [])
+    .map((opt) => opt.value)
+    .filter((value) => Boolean(value) && !selectedSet.has(value))
 
   const normalizedQuery = customDraft.trim().toLowerCase()
   const visibleSuggestions =
@@ -181,13 +182,7 @@ function MultiSelectPropertyInput({
                 key={item}
                 className={`properties-chip${isDisallowed ? ' is-invalid' : ''}`}
               >
-                {color && (
-                  <span
-                    className="properties-color-dot"
-                    style={{ backgroundColor: color }}
-                    aria-hidden="true"
-                  />
-                )}
+                <OptionColorDot color={color} />
                 <span className="properties-chip-label">{item}</span>
                 <button
                   type="button"
@@ -218,39 +213,24 @@ function MultiSelectPropertyInput({
 
       {visibleSuggestions.length > 0 && (
         <div className="properties-suggestion-list" aria-label={`${field.label} 제안`}>
-          {visibleSuggestions.map((optionValue) => {
-            const color = findOptionColor(field.options, optionValue)
-            return (
-              <button
-                key={optionValue}
-                type="button"
-                className="properties-suggestion-btn"
-                onClick={() => addValues(optionValue)}
-              >
-                {color && (
-                  <span
-                    className="properties-color-dot"
-                    style={{ backgroundColor: color }}
-                    aria-hidden="true"
-                  />
-                )}
-                <span>+ {optionValue}</span>
-              </button>
-            )
-          })}
+          {visibleSuggestions.map((optionValue) => (
+            <button
+              key={optionValue}
+              type="button"
+              className="properties-suggestion-btn"
+              onClick={() => addValues(optionValue)}
+            >
+              <OptionColorDot color={findOptionColor(field.options, optionValue)} />
+              <span>+ {optionValue}</span>
+            </button>
+          ))}
         </div>
       )}
     </div>
   )
 }
 
-function PropertyFieldWidget({
-  field,
-  inputId,
-  rawValue,
-  suggestions,
-  onUpdateField
-}: FieldInputProps) {
+function PropertyFieldWidget({ field, inputId, rawValue, onUpdateField }: FieldInputProps) {
   switch (field.type) {
     case 'text':
       return (
@@ -333,13 +313,7 @@ function PropertyFieldWidget({
 
       return (
         <div className="properties-select-wrap">
-          {selectedColor && (
-            <span
-              className="properties-color-dot"
-              style={{ backgroundColor: selectedColor }}
-              aria-hidden="true"
-            />
-          )}
+          <OptionColorDot color={selectedColor} />
           <select
             id={inputId}
             className="properties-select"
@@ -370,7 +344,6 @@ function PropertyFieldWidget({
           field={field}
           inputId={inputId}
           rawValue={rawValue}
-          suggestions={suggestions}
           onUpdateField={onUpdateField}
         />
       )
@@ -421,7 +394,6 @@ interface DocumentPropertiesFormProps {
   schemaResult: FrontmatterSchemaLoadResult | null
   isSchemaLoading: boolean
   hasYamlSyntaxError: boolean
-  suggestedCustomValuesByField?: Readonly<Record<string, readonly string[]>>
   onCreateDefaultSchema: () => void
   onAddFrontmatter: () => void
   onRemoveFrontmatter: () => void
@@ -434,7 +406,6 @@ function DocumentPropertiesForm({
   schemaResult,
   isSchemaLoading,
   hasYamlSyntaxError,
-  suggestedCustomValuesByField,
   onCreateDefaultSchema,
   onAddFrontmatter,
   onRemoveFrontmatter,
@@ -520,9 +491,7 @@ function DocumentPropertiesForm({
                         {field.label}
                       </label>
                     ) : (
-                      <span className="properties-field-label">
-                        {field.label}
-                      </span>
+                      <span className="properties-field-label">{field.label}</span>
                     )}
                     {field.required && (
                       <span className="properties-required-mark" aria-hidden="true">
@@ -537,7 +506,6 @@ function DocumentPropertiesForm({
                   field={field}
                   inputId={inputId}
                   rawValue={parsed.values[field.key]}
-                  suggestions={suggestedCustomValuesByField?.[field.key]}
                   onUpdateField={onUpdateField}
                 />
 
@@ -583,23 +551,18 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
   documentKey,
   content,
   isMarkdownDocument,
-  isDiffTab = false,
-  isImageDocument = false,
   schemaResult,
   isSchemaLoading = false,
   isExpanded = true,
   flexRatio = null,
   headerActions,
-  suggestedCustomValuesByField,
   onToggleExpanded,
   onChangeContent,
   onCreateDefaultSchema
 }: DocumentPropertiesSectionProps) {
   const idPrefix = useId()
-  const hasActiveDocument = documentName !== null || isDiffTab
-  const isEditableMarkdown = Boolean(
-    hasActiveDocument && !isDiffTab && !isImageDocument && isMarkdownDocument
-  )
+  const hasActiveDocument = documentName !== null
+  const isEditableMarkdown = Boolean(hasActiveDocument && isMarkdownDocument)
 
   const schema = schemaResult?.schema ?? null
   const parsed = isEditableMarkdown ? parseFrontmatterDocument(content, schema) : null
@@ -617,29 +580,22 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
       : 0
   const issueCount = parsed ? parsed.issues.length : 0
 
-  const handleUpdateField = (key: string, nextValue: FrontmatterFieldValue | null): void => {
+  const applyMutation = (mutate: () => FrontmatterMutationResult): void => {
     if (!isEditableMarkdown || hasYamlSyntaxError) return
-    const result = applyFrontmatterValues(content, { [key]: nextValue })
+    const result = mutate()
     if (result.applied && result.content !== content) {
       onChangeContent(result.content)
     }
   }
 
-  const handleAddFrontmatter = (): void => {
-    if (!isEditableMarkdown || hasYamlSyntaxError) return
-    const result = applyFrontmatterValues(content, {}, { createIfMissing: true })
-    if (result.applied && result.content !== content) {
-      onChangeContent(result.content)
-    }
-  }
+  const handleUpdateField = (key: string, nextValue: FrontmatterFieldValue | null): void =>
+    applyMutation(() => applyFrontmatterValues(content, { [key]: nextValue }))
 
-  const handleRemoveFrontmatter = (): void => {
-    if (!isEditableMarkdown || hasYamlSyntaxError) return
-    const result = removeFrontmatterBlock(content)
-    if (result.applied && result.content !== content) {
-      onChangeContent(result.content)
-    }
-  }
+  const handleAddFrontmatter = (): void =>
+    applyMutation(() => applyFrontmatterValues(content, {}, { createIfMissing: true }))
+
+  const handleRemoveFrontmatter = (): void =>
+    applyMutation(() => removeFrontmatterBlock(content))
 
   const headerBadges =
     isEditableMarkdown && (schema !== null || issueCount > 0) ? (
@@ -680,7 +636,6 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
         schemaResult={schemaResult}
         isSchemaLoading={isSchemaLoading}
         hasYamlSyntaxError={hasYamlSyntaxError}
-        suggestedCustomValuesByField={suggestedCustomValuesByField}
         onCreateDefaultSchema={onCreateDefaultSchema}
         onAddFrontmatter={handleAddFrontmatter}
         onRemoveFrontmatter={handleRemoveFrontmatter}

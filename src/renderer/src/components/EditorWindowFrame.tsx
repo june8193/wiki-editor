@@ -3,7 +3,6 @@ import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
-import { isImageDocument, isMarkdownDocument } from '../editor/editorModes'
 import type { ConfirmDialogState } from '../hooks/useConfirmDialog'
 import { useDocumentOutline } from '../hooks/useDocumentOutline'
 import {
@@ -16,7 +15,6 @@ import {
   type UseMarkdownLinkNavigationOptions
 } from '../hooks/useMarkdownLinkNavigation'
 import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
-import { getPaneActiveTab } from '../stores/PaneTabStore'
 import {
   createDefaultRightSidebarSplitState,
   toggleRightSidebarOutlineCollapsed,
@@ -199,14 +197,7 @@ export function EditorWindowFrame({
     [handleNavigateMarkdownLink, outline.paneActions]
   )
 
-  const activePane = paneWorkspaceProps.layout.panes[paneWorkspaceProps.layout.activePaneId]
-  const activeTab = getPaneActiveTab(activePane)
-  const activeBuffer =
-    activeTab?.kind === 'document' ? paneWorkspaceProps.buffers[activeTab.bufferKey] : undefined
-  const isDiffTab = activeTab?.kind === 'diff'
-  const isActiveImage = activeBuffer ? isImageDocument(activeBuffer) : false
-  const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
-  const activeBufferKey = activeBuffer?.key ?? null
+  const activeBufferKey = outline.documentContext.documentKey
   const onOutlinePaneChangeContent = outline.paneActions.onChangeContent
 
   const handlePropertiesChangeContent = useCallback(
@@ -256,23 +247,19 @@ export function EditorWindowFrame({
               style={{ width: `${rightSidebar.width}px` }}
             >
               <RightSidebarPanel
+                document={outline.documentContext}
                 splitState={rightSidebarSplit}
                 onToggleOutlineCollapsed={handleToggleOutlineCollapsed}
                 onTogglePropertiesCollapsed={handleTogglePropertiesCollapsed}
                 onResizeOutlineRatio={handleResizeOutlineRatio}
                 outlineProps={{
-                  ...outline.documentOutlineProps,
+                  activeHeadingIndex: outline.documentOutlineProps.activeHeadingIndex,
+                  onSelectHeading: outline.documentOutlineProps.onSelectHeading,
                   showHeadingNumbers,
                   onToggleHeadingNumbers,
                   onCollapse: handleCollapseRightSidebar
                 }}
                 propertiesProps={{
-                  documentName: outline.documentOutlineProps.documentName,
-                  documentKey: activeBufferKey,
-                  content: outline.documentOutlineProps.content,
-                  isMarkdownDocument: isActiveMarkdown,
-                  isDiffTab,
-                  isImageDocument: isActiveImage,
                   schemaResult,
                   isSchemaLoading,
                   onChangeContent: handlePropertiesChangeContent,

@@ -1,7 +1,7 @@
 import { memo, useRef } from 'react'
-import { ACCORDION_RESET_RATIO } from '../utils/accordionSplit'
+import type { SidebarDocumentContext } from '../hooks/useDocumentOutline'
+import { ACCORDION_RESET_RATIO, computeTwoSectionLayout } from '../utils/accordionSplit'
 import {
-  computeRightSidebarSectionLayout,
   RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO,
   type RightSidebarSplitState
 } from '../utils/rightSidebarSplit'
@@ -12,15 +12,21 @@ import {
 } from './DocumentPropertiesSection'
 import { HorizontalSectionResizer } from './HorizontalSectionResizer'
 
+type DocumentContextField = keyof SidebarDocumentContext
+
 export interface RightSidebarPanelProps {
+  document: SidebarDocumentContext
   splitState: RightSidebarSplitState
   onToggleOutlineCollapsed: () => void
   onTogglePropertiesCollapsed: () => void
   onResizeOutlineRatio: (nextRatio: number) => void
-  outlineProps: Omit<DocumentOutlinePanelProps, 'isExpanded' | 'flexRatio' | 'onToggleExpanded'>
+  outlineProps: Omit<
+    DocumentOutlinePanelProps,
+    DocumentContextField | 'isExpanded' | 'flexRatio' | 'onToggleExpanded'
+  >
   propertiesProps: Omit<
     DocumentPropertiesSectionProps,
-    'isExpanded' | 'flexRatio' | 'onToggleExpanded'
+    DocumentContextField | 'isExpanded' | 'flexRatio' | 'onToggleExpanded'
   >
 }
 
@@ -29,6 +35,7 @@ export interface RightSidebarPanelProps {
  * Document Properties (bottom, default 65%) separated by an accessible horizontal resizer.
  */
 export const RightSidebarPanel = memo(function RightSidebarPanel({
+  document,
   splitState,
   onToggleOutlineCollapsed,
   onTogglePropertiesCollapsed,
@@ -37,11 +44,17 @@ export const RightSidebarPanel = memo(function RightSidebarPanel({
   propertiesProps
 }: RightSidebarPanelProps) {
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
-  const layout = computeRightSidebarSectionLayout(splitState)
+  const layout = computeTwoSectionLayout(
+    splitState.isOutlineCollapsed,
+    splitState.isPropertiesCollapsed,
+    splitState.outlineHeightRatio,
+    RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO
+  )
 
   return (
     <div ref={splitContainerRef} className="right-sidebar-split-container">
       <DocumentOutlinePanel
+        {...document}
         {...outlineProps}
         isExpanded={layout.showTopBody}
         flexRatio={layout.topFlexRatio}
@@ -61,6 +74,7 @@ export const RightSidebarPanel = memo(function RightSidebarPanel({
       )}
 
       <DocumentPropertiesSection
+        {...document}
         {...propertiesProps}
         isExpanded={layout.showBottomBody}
         flexRatio={layout.bottomFlexRatio}

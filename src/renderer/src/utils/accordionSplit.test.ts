@@ -5,11 +5,11 @@ import {
   ACCORDION_RATIO_STEP,
   ACCORDION_RESET_RATIO,
   clampSectionHeightRatio,
+  computeTwoSectionLayout,
   stepSectionHeightRatio,
   toSectionHeightPercent
 } from './accordionSplit'
 import {
-  computeRightSidebarSectionLayout,
   createDefaultRightSidebarSplitState,
   RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO,
   toggleRightSidebarOutlineCollapsed,
@@ -49,8 +49,16 @@ describe('accordionSplit & rightSidebarSplit', () => {
     expect(toSectionHeightPercent(Number.NaN, 0.35)).toBe(35)
   })
 
-  it('computes visibility, resizer presence, and flex distribution for all right sidebar collapse combinations', () => {
-    expect(computeRightSidebarSectionLayout(createDefaultRightSidebarSplitState())).toEqual({
+  it('computes visibility, resizer presence, and flex distribution for all collapse combinations', () => {
+    const defaultState = createDefaultRightSidebarSplitState()
+    expect(
+      computeTwoSectionLayout(
+        defaultState.isOutlineCollapsed,
+        defaultState.isPropertiesCollapsed,
+        defaultState.outlineHeightRatio,
+        RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO
+      )
+    ).toEqual({
       showTopBody: true,
       showBottomBody: true,
       showResizer: true,
@@ -58,14 +66,8 @@ describe('accordionSplit & rightSidebarSplit', () => {
       bottomFlexRatio: 0.65
     })
 
-    // Only Outline expanded -> resizer hidden, Outline takes 100% height
-    expect(
-      computeRightSidebarSectionLayout({
-        isOutlineCollapsed: false,
-        isPropertiesCollapsed: true,
-        outlineHeightRatio: 0.35
-      })
-    ).toEqual({
+    // Only top expanded -> resizer hidden, top takes 100% height
+    expect(computeTwoSectionLayout(false, true, 0.35, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)).toEqual({
       showTopBody: true,
       showBottomBody: false,
       showResizer: false,
@@ -73,14 +75,8 @@ describe('accordionSplit & rightSidebarSplit', () => {
       bottomFlexRatio: null
     })
 
-    // Only Properties expanded -> resizer hidden, Properties takes 100% height
-    expect(
-      computeRightSidebarSectionLayout({
-        isOutlineCollapsed: true,
-        isPropertiesCollapsed: false,
-        outlineHeightRatio: 0.35
-      })
-    ).toEqual({
+    // Only bottom expanded -> resizer hidden, bottom takes 100% height
+    expect(computeTwoSectionLayout(true, false, 0.35, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)).toEqual({
       showTopBody: false,
       showBottomBody: true,
       showResizer: false,
@@ -89,13 +85,7 @@ describe('accordionSplit & rightSidebarSplit', () => {
     })
 
     // Both collapsed -> resizer hidden, headers align at top
-    expect(
-      computeRightSidebarSectionLayout({
-        isOutlineCollapsed: true,
-        isPropertiesCollapsed: true,
-        outlineHeightRatio: 0.35
-      })
-    ).toEqual({
+    expect(computeTwoSectionLayout(true, true, 0.35, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)).toEqual({
       showTopBody: false,
       showBottomBody: false,
       showResizer: false,

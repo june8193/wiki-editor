@@ -1,8 +1,4 @@
-import {
-  clampSectionHeightRatio,
-  computeTwoSectionLayout,
-  type TwoSectionSplitLayout
-} from './accordionSplit'
+import { clampSectionHeightRatio } from './accordionSplit'
 
 export const RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO = 0.35
 
@@ -50,18 +46,4 @@ export function updateRightSidebarOutlineRatio(
 ): RightSidebarSplitState {
   const clamped = clampSectionHeightRatio(nextRatio, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)
   return state.outlineHeightRatio === clamped ? state : { ...state, outlineHeightRatio: clamped }
-}
-
-/**
- * Computes visibility, resizer presence, and flex distribution for the right sidebar sections.
- */
-export function computeRightSidebarSectionLayout(
-  state: RightSidebarSplitState
-): TwoSectionSplitLayout {
-  return computeTwoSectionLayout(
-    state.isOutlineCollapsed,
-    state.isPropertiesCollapsed,
-    state.outlineHeightRatio,
-    RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO
-  )
 }
