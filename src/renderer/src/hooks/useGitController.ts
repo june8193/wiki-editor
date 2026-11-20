@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type {
-  GitBranchList,
-  GitStashCreateOptions,
-  GitStashEntry,
-  GitStashScope,
-  GitStatus
+import {
+  collectGitUnstagedPaths,
+  type GitBranchList,
+  type GitStashEntry,
+  type GitStatus
 } from '@shared/git'
 import { logRendererError, logRendererWarn } from '../logging/rendererLogger'
 import { toErrorMessage } from '@shared/errors'
@@ -21,50 +20,17 @@ interface GitActionExecutionOptions {
   affectsWorkspaceFiles?: boolean
   fetchRepoMetadata?: boolean
   refreshStashes?: boolean
-  discardTarget?: WorkspaceDiscardTarget
-  stashTarget?: WorkspaceStashMutationTarget
+  bufferMutationTarget?: WorkspaceBufferMutationTarget
   fallbackError: string
   fallbackStatusOnFailure?: GitStatus
   onConfirmCanceled?: () => Promise<void> | void
   run: (rootPath: string) => Promise<GitStatus>
 }
 
-export interface WorkspaceDiscardTarget {
-  scope: 'all' | 'paths'
-  paths: readonly string[]
-}
-
-export type WorkspaceStashMutationTarget =
-  | { kind: 'create'; scope: GitStashScope; targetRepoPaths: readonly string[] }
-  | { kind: 'restore' }
-
-function dedupeRepoPaths(paths: readonly string[]): string[] {
-  return [...new Set(paths)]
-}
-
-function resolveStashCreateTargetPaths(
-  status: GitStatus | null,
-  options: GitStashCreateOptions
-): string[] {
-  const includeUntracked = options.includeUntracked ?? true
-  if (options.scope === 'paths') {
-    return dedupeRepoPaths(options.paths ?? [])
-  }
-  if (!status) {
-    return []
-  }
-  if (options.scope === 'unstaged') {
-    return dedupeRepoPaths([
-      ...status.unstaged.map((item) => item.path),
-      ...(includeUntracked ? status.untracked.map((item) => item.path) : [])
-    ])
-  }
-  return dedupeRepoPaths([
-    ...status.staged.flatMap((item) => (item.origPath ? [item.path, item.origPath] : [item.path])),
-    ...status.unstaged.map((item) => item.path),
-    ...(includeUntracked ? status.untracked.map((item) => item.path) : [])
-  ])
-}
+export type WorkspaceBufferMutationTarget =
+  | { kind: 'discard'; scope: 'all' | 'paths'; paths: readonly string[] }
+  | { kind: 'stash-create'; targetRepoPaths: readonly string[] }
+  | { kind: 'stash-restore' }
 
 interface UseGitControllerOptions {
   workspaceRootPath: string | null
@@ -73,14 +39,9 @@ interface UseGitControllerOptions {
     actionLabel: string,
     targetRepoPaths?: readonly string[]
   ) => Promise<boolean>
-  onBeforeWorkspaceDiscard?: (target: WorkspaceDiscardTarget) => Promise<void>
-  onAfterWorkspaceDiscard?: (
-    target: WorkspaceDiscardTarget,
-    succeeded: boolean
-  ) => Promise<void>
-  onBeforeWorkspaceStash?: (target: WorkspaceStashMutationTarget) => Promise<void>
-  onAfterWorkspaceStash?: (
-    target: WorkspaceStashMutationTarget,
+  onBeforeWorkspaceBufferMutation?: (target: WorkspaceBufferMutationTarget) => Promise<void>
+  onAfterWorkspaceBufferMutation?: (
+    target: WorkspaceBufferMutationTarget,
     succeeded: boolean,
     nextStatus: GitStatus | null
   ) => Promise<void>
@@ -96,10 +57,8 @@ export function useGitController({
   workspaceRootPath,
   confirmAutoStageCommit,
   confirmBeforeWorkspaceMutation,
-  onBeforeWorkspaceDiscard,
-  onAfterWorkspaceDiscard,
-  onBeforeWorkspaceStash,
-  onAfterWorkspaceStash,
+  onBeforeWorkspaceBufferMutation,
+  onAfterWorkspaceBufferMutation,
   onStashCreated,
   onWorkspaceMutated,
   onWorkspaceMutationActiveChange
@@ -122,10 +81,8 @@ export function useGitController({
   const callbacksRef = useRef({
     confirmAutoStageCommit,
     confirmBeforeWorkspaceMutation,
-    onBeforeWorkspaceDiscard,
-    onAfterWorkspaceDiscard,
-    onBeforeWorkspaceStash,
-    onAfterWorkspaceStash,
+    onBeforeWorkspaceBufferMutation,
+    onAfterWorkspaceBufferMutation,
     onStashCreated,
     onWorkspaceMutated,
     onWorkspaceMutationActiveChange
@@ -135,10 +92,8 @@ export function useGitController({
   callbacksRef.current = {
     confirmAutoStageCommit,
     confirmBeforeWorkspaceMutation,
-    onBeforeWorkspaceDiscard,
-    onAfterWorkspaceDiscard,
-    onBeforeWorkspaceStash,
-    onAfterWorkspaceStash,
+    onBeforeWorkspaceBufferMutation,
+    onAfterWorkspaceBufferMutation,
     onStashCreated,
     onWorkspaceMutated,
     onWorkspaceMutationActiveChange
@@ -359,8 +314,7 @@ export function useGitController({
       actionLabel: string,
       options: GitActionExecutionOptions
     ): Promise<boolean> => {
-      let preparedDiscard = false
-      let preparedStash = false
+      let preparedBufferMutation = false
       let workspaceEffectsCompleted = false
 
       const completeWorkspaceEffects = async (
@@ -369,16 +323,10 @@ export function useGitController({
       ): Promise<void> => {
         if (!options.affectsWorkspaceFiles || workspaceEffectsCompleted) return
         workspaceEffectsCompleted = true
-        if (options.discardTarget) {
-          if (succeeded || preparedDiscard) {
-            await callbacksRef.current.onAfterWorkspaceDiscard?.(options.discardTarget, succeeded)
-          }
-          return
-        }
-        if (options.stashTarget) {
-          if (succeeded || preparedStash) {
-            await callbacksRef.current.onAfterWorkspaceStash?.(
-              options.stashTarget,
+        if (options.bufferMutationTarget) {
+          if (succeeded || preparedBufferMutation) {
+            await callbacksRef.current.onAfterWorkspaceBufferMutation?.(
+              options.bufferMutationTarget,
               succeeded,
               latestStatus
             )
@@ -397,11 +345,12 @@ export function useGitController({
           if (mountedRef.current) {
             setPendingAction(null)
           }
-          const targetConfirmPaths = options.discardTarget
-            ? options.discardTarget.paths
-            : options.stashTarget?.kind === 'create'
-              ? options.stashTarget.targetRepoPaths
-              : undefined
+          const targetConfirmPaths =
+            options.bufferMutationTarget?.kind === 'discard'
+              ? options.bufferMutationTarget.paths
+              : options.bufferMutationTarget?.kind === 'stash-create'
+                ? options.bufferMutationTarget.targetRepoPaths
+                : undefined
           const confirmed =
             targetConfirmPaths !== undefined
               ? await callbacksRef.current.confirmBeforeWorkspaceMutation(
@@ -422,16 +371,12 @@ export function useGitController({
           setPendingAction(actionLabel)
         }
 
-        if (options.discardTarget && callbacksRef.current.onBeforeWorkspaceDiscard) {
-          preparedDiscard = true
-          await callbacksRef.current.onBeforeWorkspaceDiscard(options.discardTarget)
-          if (!isCurrentRequest(ctx.rootPath, ctx.epoch)) {
-            return false
-          }
-        }
-        if (options.stashTarget && callbacksRef.current.onBeforeWorkspaceStash) {
-          preparedStash = true
-          await callbacksRef.current.onBeforeWorkspaceStash(options.stashTarget)
+        if (
+          options.bufferMutationTarget &&
+          callbacksRef.current.onBeforeWorkspaceBufferMutation
+        ) {
+          preparedBufferMutation = true
+          await callbacksRef.current.onBeforeWorkspaceBufferMutation(options.bufferMutationTarget)
           if (!isCurrentRequest(ctx.rootPath, ctx.epoch)) {
             return false
           }
@@ -456,8 +401,7 @@ export function useGitController({
         if (isCurrentRequest(ctx.rootPath, ctx.epoch)) {
           let freshStatus: GitStatus | null = null
           const refreshMetadataOnFailure =
-            options.fetchRepoMetadata ??
-            (options.discardTarget === undefined && options.stashTarget === undefined)
+            options.fetchRepoMetadata ?? options.bufferMutationTarget === undefined
           if (options.affectsWorkspaceFiles) {
             await wikiApi.git
               .status(ctx.rootPath)
@@ -495,7 +439,7 @@ export function useGitController({
         }
         return false
       } finally {
-        if ((preparedDiscard || preparedStash) && !workspaceEffectsCompleted) {
+        if (preparedBufferMutation && !workspaceEffectsCompleted) {
           await completeWorkspaceEffects(false, null).catch(() => undefined)
         }
       }
@@ -615,7 +559,7 @@ export function useGitController({
       await runGitAction('변경 사항 롤백', {
         affectsWorkspaceFiles: true,
         fetchRepoMetadata: false,
-        discardTarget: { scope: 'paths', paths: [filePath] },
+        bufferMutationTarget: { kind: 'discard', scope: 'paths', paths: [filePath] },
         fallbackError: '변경 사항을 롤백하지 못했습니다.',
         run: (rootPath) => wikiApi.git.discard(rootPath, [filePath])
       })
@@ -625,18 +569,11 @@ export function useGitController({
 
   const discardAll = useCallback(async (): Promise<void> => {
     const current = statusRef.current
-    const paths = current
-      ? [
-          ...new Set([
-            ...current.unstaged.map((item) => item.path),
-            ...current.untracked.map((item) => item.path)
-          ])
-        ]
-      : []
+    const paths = current ? collectGitUnstagedPaths(current, true) : []
     await runGitAction('전체 변경 사항 롤백', {
       affectsWorkspaceFiles: true,
       fetchRepoMetadata: false,
-      discardTarget: { scope: 'all', paths },
+      bufferMutationTarget: { kind: 'discard', scope: 'all', paths },
       fallbackError: '전체 변경 사항을 롤백하지 못했습니다.',
       run: (rootPath) => wikiApi.git.discardAll(rootPath)
     })
@@ -731,65 +668,59 @@ export function useGitController({
     await runGitAction('Sync', syncSpec)
   }, [runGitAction, syncSpec])
 
-  const stashCreate = useCallback(
-    async (options: GitStashCreateOptions): Promise<boolean> => {
-      const targetRepoPaths = resolveStashCreateTargetPaths(statusRef.current, options)
-      const actionLabel =
-        options.scope === 'all'
-          ? '전체 Stash'
-          : options.scope === 'paths'
-            ? '파일 Stash'
-            : 'Changes Stash'
-      const succeeded = await runGitAction(actionLabel, {
+  const stashChanges = useCallback(async (): Promise<boolean> => {
+    const targetRepoPaths = statusRef.current
+      ? collectGitUnstagedPaths(statusRef.current, true)
+      : []
+    const succeeded = await runGitAction('Changes Stash', {
+      affectsWorkspaceFiles: true,
+      fetchRepoMetadata: false,
+      refreshStashes: true,
+      bufferMutationTarget: {
+        kind: 'stash-create',
+        targetRepoPaths
+      },
+      fallbackError: 'Stash를 생성하지 못했습니다.',
+      run: (rootPath) =>
+        wikiApi.git.stashCreate(rootPath, { scope: 'unstaged', includeUntracked: true })
+    })
+    if (succeeded) {
+      callbacksRef.current.onStashCreated?.()
+    }
+    return succeeded
+  }, [runGitAction, wikiApi])
+
+  const runStashRestore = useCallback(
+    async (
+      actionLabel: string,
+      fallbackError: string,
+      run: (rootPath: string) => Promise<GitStatus>
+    ): Promise<boolean> =>
+      runGitAction(actionLabel, {
         affectsWorkspaceFiles: true,
         fetchRepoMetadata: false,
         refreshStashes: true,
-        stashTarget: {
-          kind: 'create',
-          scope: options.scope,
-          targetRepoPaths
-        },
-        fallbackError: 'Stash를 생성하지 못했습니다.',
-        run: (rootPath) => wikiApi.git.stashCreate(rootPath, options)
-      })
-      if (succeeded) {
-        callbacksRef.current.onStashCreated?.()
-      }
-      return succeeded
-    },
-    [runGitAction, wikiApi]
+        bufferMutationTarget: { kind: 'stash-restore' },
+        fallbackError,
+        run
+      }),
+    [runGitAction]
   )
 
-  const stashChanges = useCallback(async (): Promise<boolean> => {
-    return stashCreate({ scope: 'unstaged', includeUntracked: true })
-  }, [stashCreate])
-
   const stashApply = useCallback(
-    async (stashRef: string): Promise<boolean> => {
-      return runGitAction('Stash Apply', {
-        affectsWorkspaceFiles: true,
-        fetchRepoMetadata: false,
-        refreshStashes: true,
-        stashTarget: { kind: 'restore' },
-        fallbackError: 'Stash를 적용하지 못했습니다.',
-        run: (rootPath) => wikiApi.git.stashApply(rootPath, stashRef)
-      })
-    },
-    [runGitAction, wikiApi]
+    async (stashRef: string): Promise<boolean> =>
+      runStashRestore('Stash Apply', 'Stash를 적용하지 못했습니다.', (rootPath) =>
+        wikiApi.git.stashApply(rootPath, stashRef)
+      ),
+    [runStashRestore, wikiApi]
   )
 
   const stashPop = useCallback(
-    async (stashRef: string): Promise<boolean> => {
-      return runGitAction('Stash Pop', {
-        affectsWorkspaceFiles: true,
-        fetchRepoMetadata: false,
-        refreshStashes: true,
-        stashTarget: { kind: 'restore' },
-        fallbackError: 'Stash를 복원(Pop)하지 못했습니다.',
-        run: (rootPath) => wikiApi.git.stashPop(rootPath, stashRef)
-      })
-    },
-    [runGitAction, wikiApi]
+    async (stashRef: string): Promise<boolean> =>
+      runStashRestore('Stash Pop', 'Stash를 복원(Pop)하지 못했습니다.', (rootPath) =>
+        wikiApi.git.stashPop(rootPath, stashRef)
+      ),
+    [runStashRestore, wikiApi]
   )
 
   const dismissError = useCallback((): void => {
@@ -815,7 +746,6 @@ export function useGitController({
     unstageAll,
     discardFile,
     discardAll,
-    stashCreate,
     stashChanges,
     stashApply,
     stashPop,

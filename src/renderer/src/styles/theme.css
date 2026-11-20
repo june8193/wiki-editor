@@ -2922,7 +2922,7 @@ body.is-resizing-git-sections * {
 .git-file-item:hover .git-file-actions,
 .git-file-item:focus-within .git-file-actions {
   opacity: 1;
-  max-width: 100px;
+  max-width: 80px;
 }
 
 .git-stash-list {

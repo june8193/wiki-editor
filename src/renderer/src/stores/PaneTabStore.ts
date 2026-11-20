@@ -1032,24 +1032,15 @@ export class PaneTabStore {
     this.removeTabsWhere((tab) => tab.kind === 'diff')
   }
 
-  closeDiffTabsForPaths = (
-    repoRelativePaths: readonly string[],
-    kinds: ReadonlyArray<'staged' | 'unstaged'> = ['unstaged']
-  ): void => {
-    if (repoRelativePaths.length === 0 || kinds.length === 0) return
+  closeUnstagedDiffTabsForPaths = (repoRelativePaths: readonly string[]): void => {
+    if (repoRelativePaths.length === 0) return
     const targetSet = new Set(repoRelativePaths)
-    const kindSet = new Set(kinds)
     this.removeTabsWhere(
       (tab) =>
         tab.kind === 'diff' &&
-        (tab.diff.request.kind === 'unstaged' || tab.diff.request.kind === 'staged') &&
-        kindSet.has(tab.diff.request.kind) &&
+        tab.diff.request.kind === 'unstaged' &&
         targetSet.has(tab.diff.request.path)
     )
-  }
-
-  closeUnstagedDiffTabsForPaths = (repoRelativePaths: readonly string[]): void => {
-    this.closeDiffTabsForPaths(repoRelativePaths, ['unstaged'])
   }
 
   closeUnstagedDiffTabsExcept = (activeRepoRelativePaths: ReadonlySet<string>): void => {

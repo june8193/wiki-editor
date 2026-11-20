@@ -1,4 +1,10 @@
-import type { GitStashEntry, GitStatus } from '@shared/git'
+import {
+  collectGitStagedPaths,
+  collectGitStatusPaths,
+  collectGitUnstagedPaths,
+  type GitStashEntry,
+  type GitStatus
+} from '@shared/git'
 
 const STASH_REF_PATTERN = /^stash@\{\d+\}$/
 const STASH_LIST_HEADER_TOKENS = ['%gd', '%H', '%gs', '%cI'] as const
@@ -44,30 +50,8 @@ export function resolveUnstagedStashTargets(
   status: GitStatus,
   includeUntracked: boolean
 ): { targetPaths: string[]; overlapsStaged: boolean } {
-  const seen = new Set<string>()
-  const targetPaths: string[] = []
-  for (const item of status.unstaged) {
-    if (!seen.has(item.path)) {
-      seen.add(item.path)
-      targetPaths.push(item.path)
-    }
-  }
-  if (includeUntracked) {
-    for (const item of status.untracked) {
-      if (!seen.has(item.path)) {
-        seen.add(item.path)
-        targetPaths.push(item.path)
-      }
-    }
-  }
-
-  const stagedPaths = new Set<string>()
-  for (const item of status.staged) {
-    stagedPaths.add(item.path)
-    if (item.origPath) {
-      stagedPaths.add(item.origPath)
-    }
-  }
+  const targetPaths = collectGitUnstagedPaths(status, includeUntracked)
+  const stagedPaths = new Set(collectGitStagedPaths(status))
   const overlapsStaged = targetPaths.some((path) => stagedPaths.has(path))
   return { targetPaths, overlapsStaged }
 }
@@ -76,11 +60,7 @@ export function resolveUnstagedStashTargets(
  * Returns true when `status` contains at least one change eligible for `scope: 'all'`.
  */
 export function hasAllScopeStashTargets(status: GitStatus, includeUntracked: boolean): boolean {
-  return (
-    status.staged.length > 0 ||
-    status.unstaged.length > 0 ||
-    (includeUntracked && status.untracked.length > 0)
-  )
+  return collectGitStatusPaths(status, includeUntracked).length > 0
 }
 
 /**
@@ -91,11 +71,7 @@ export function hasMatchingPathStashTargets(
   validatedPaths: readonly string[],
   includeUntracked: boolean
 ): boolean {
-  const stashable: string[] = [
-    ...status.staged.flatMap((item) => (item.origPath ? [item.path, item.origPath] : [item.path])),
-    ...status.unstaged.map((item) => item.path),
-    ...(includeUntracked ? status.untracked.map((item) => item.path) : [])
-  ]
+  const stashable = collectGitStatusPaths(status, includeUntracked)
   return validatedPaths.some((target) =>
     stashable.some((candidate) => candidate === target || candidate.startsWith(`${target}/`))
   )
