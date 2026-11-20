@@ -6,10 +6,10 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 호출마다 독립된 임시 디렉터리(`mkdtemp`), 작업 저장소·비저장소 폴더, 기본 브랜치(`main`) 및 기본 작성자(`user.name`, `user.email`)가 사전 설정된 격리 `.gitconfig`(`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL`), 서비스 인스턴스, 보조 Git 실행기, Windows 재시도 정리(`maxRetries`/`retryDelay`)를 제공하는 공용 Git 테스트 샌드박스 헬퍼가 구성됩니다.
-- [ ] 기본 작성자 신원만으로 충분한 테스트에서 불필요한 `git config user.name` / `git config user.email` 서브프로세스 반복 호출이 제거됩니다(다중 작성자 구분이 필요한 케이스만 명시적 설정 유지).
-- [ ] 기존 단일 Git 서비스 스위트가 (1) 초기화·상태·스테이징·브랜치 및 단위 헬퍼, (2) 베어 원격 `push`/`pull`/`sync`/`fetch`, (3) 커밋 로그·상세·오류 로깅, (4) 작업 트리 및 커밋 Diff, (5) 개별/전체 변경 사항 롤백(`discard`/`discardAll`)의 5개 도메인 스위트로 분할되고 기존 단일 거대 파일은 제거됩니다.
-- [ ] 기존 40초대 베어 원격 통합 메가 테스트가 정상 원격 게시·이름 변경·동시 비충돌 동기화 시나리오와 비패스트포워드 거부·병합 충돌·원격 미설정/도달 불가 오류 격리 시나리오로 분리되어 단일 최장 케이스 병목이 완화됩니다.
-- [ ] 기존 17개 테스트가 검증하던 모든 Git 상태·경로 보안·심볼릭 링크·바이너리/대용량 Diff·충돌 상태(`U`)·휴지통 폴백 단언이 누락 없이 보존되며, 병렬 실행 시 간섭 없이 `npm run typecheck`, `npm test`, `npm run build`가 통과합니다.
+- [x] 호출마다 독립된 임시 디렉터리(`mkdtemp`), 작업 저장소·비저장소 폴더, 기본 브랜치(`main`) 및 기본 작성자(`user.name`, `user.email`)가 사전 설정된 격리 `.gitconfig`(`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL`), 서비스 인스턴스, 보조 Git 실행기, Windows 재시도 정리(`maxRetries`/`retryDelay`)를 제공하는 공용 Git 테스트 샌드박스 헬퍼가 구성됩니다.
+- [x] 기본 작성자 신원만으로 충분한 테스트에서 불필요한 `git config user.name` / `git config user.email` 서브프로세스 반복 호출이 제거됩니다(다중 작성자 구분이 필요한 케이스만 명시적 설정 유지).
+- [x] 기존 단일 Git 서비스 스위트가 (1) 초기화·상태·스테이징·브랜치 및 단위 헬퍼, (2) 베어 원격 `push`/`pull`/`sync`/`fetch`, (3) 커밋 로그·상세·오류 로깅, (4) 작업 트리 및 커밋 Diff, (5) 개별/전체 변경 사항 롤백(`discard`/`discardAll`)의 5개 도메인 스위트로 분할되고 기존 단일 거대 파일은 제거됩니다.
+- [x] 기존 40초대 베어 원격 통합 메가 테스트가 정상 원격 게시·이름 변경·동시 비충돌 동기화 시나리오와 비패스트포워드 거부·병합 충돌·원격 미설정/도달 불가 오류 격리 시나리오로 분리되어 단일 최장 케이스 병목이 완화됩니다.
+- [x] 기존 17개 테스트가 검증하던 모든 Git 상태·경로 보안·심볼릭 링크·바이너리/대용량 Diff·충돌 상태(`U`)·휴지통 폴백 단언이 누락 없이 보존되며, 병렬 실행 시 간섭 없이 `npm run typecheck`, `npm test`, `npm run build`가 통과합니다.
