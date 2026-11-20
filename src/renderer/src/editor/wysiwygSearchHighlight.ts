@@ -7,7 +7,20 @@ import {
   DEFAULT_SEARCH_MATCH_OPTIONS,
   type CompiledSearchMatcher
 } from '@shared/search'
+import type { DocumentJumpHighlightTarget } from '../hooks/useDocumentSearchJump'
 import { isMermaidLanguage } from './codeBlockHighlight'
+import {
+  alignRenderedBlocksToMarkdown,
+  analyzeMarkdownSearchJump,
+  collectRunContextualCandidates,
+  collectTopLevelMarkdownBlocks,
+  pickClosestLineBlock,
+  selectBestJumpCandidate,
+  type AlignedBlock,
+  type ContextualMatchCandidate,
+  type MarkdownTopBlockKind,
+  type NestedBlockHint
+} from './markdownSearchJump'
 import {
   areDocumentFindCriteriaEqual,
   areDocumentFindResultReportsEqual,
@@ -55,6 +68,22 @@ interface PmTextRunSegment extends TextRunSegment {
 const wysiwygSearchHighlightPluginKey = new PluginKey<WysiwygSearchPluginState>(
   'wysiwygSearchHighlight'
 )
+
+interface WysiwygJumpPluginState {
+  nonce: number
+  fallbackBlockPos: number | null
+  decorations: DecorationSet
+}
+
+const wysiwygSearchJumpPluginKey = new PluginKey<WysiwygJumpPluginState>('wysiwygSearchJump')
+
+function createEmptyJumpPluginState(): WysiwygJumpPluginState {
+  return {
+    nonce: 0,
+    fallbackBlockPos: null,
+    decorations: DecorationSet.empty
+  }
+}
 
 function createDefaultCriteria(): DocumentFindCriteria {
   return {
@@ -120,6 +149,63 @@ function isMermaidCodeBlockNode(node: ProseMirrorNode): boolean {
   )
 }
 
+function collectTextblockRuns(
+  textblock: ProseMirrorNode,
+  textblockPos: number,
+  onRun: (segments: PmTextRunSegment[]) => void
+): void {
+  const runSegments: PmTextRunSegment[] = []
+  let childPos = textblockPos + 1
+  let runLength = 0
+  for (let i = 0; i < textblock.childCount; i += 1) {
+    const child = textblock.child(i)
+    if (child.isText && child.text) {
+      runSegments.push({
+        text: child.text,
+        pmFrom: childPos,
+        startOffset: runLength,
+        endOffset: runLength + child.text.length
+      })
+      runLength += child.text.length
+    } else if (runSegments.length > 0) {
+      onRun(runSegments.splice(0, runSegments.length))
+      runLength = 0
+    } else {
+      runLength = 0
+    }
+    childPos += child.nodeSize
+  }
+  if (runSegments.length > 0) {
+    onRun(runSegments)
+  }
+}
+
+function walkSubtreeTextRuns(
+  root: ProseMirrorNode,
+  rootPos: number,
+  isDocRoot: boolean,
+  onRun: (segments: PmTextRunSegment[]) => void
+): void {
+  if (!isDocRoot && isMermaidCodeBlockNode(root)) {
+    return
+  }
+  if (!isDocRoot && root.isTextblock) {
+    collectTextblockRuns(root, rootPos, onRun)
+    return
+  }
+  const basePos = isDocRoot ? 0 : rootPos + 1
+  root.descendants((node, pos) => {
+    if (isMermaidCodeBlockNode(node)) {
+      return false
+    }
+    if (!node.isTextblock) {
+      return true
+    }
+    collectTextblockRuns(node, basePos + pos, onRun)
+    return false
+  })
+}
+
 function findProseMirrorMatches(
   doc: ProseMirrorNode,
   criteria: DocumentFindCriteria
@@ -133,40 +219,178 @@ function findProseMirrorMatches(
   }
 
   const matches: ProseMirrorSearchMatch[] = []
-  const runSegments: PmTextRunSegment[] = []
-
-  doc.descendants((node, pos) => {
-    if (isMermaidCodeBlockNode(node)) {
-      return false
-    }
-
-    if (!node.isTextblock) {
-      return true
-    }
-
-    let childPos = pos + 1
-    let runLength = 0
-    for (let i = 0; i < node.childCount; i += 1) {
-      const child = node.child(i)
-      if (child.isText && child.text) {
-        runSegments.push({
-          text: child.text,
-          pmFrom: childPos,
-          startOffset: runLength,
-          endOffset: runLength + child.text.length
-        })
-        runLength += child.text.length
-      } else {
-        flushTextRun(runSegments, compiled.matcher, matches)
-        runLength = 0
-      }
-      childPos += child.nodeSize
-    }
-    flushTextRun(runSegments, compiled.matcher, matches)
-    return false
+  walkSubtreeTextRuns(doc, 0, true, (segments) => {
+    flushTextRun(segments, compiled.matcher, matches)
   })
 
   return { matches, errorMessage: null }
+}
+
+interface TopLevelPmBlockSummary {
+  pos: number
+  node: ProseMirrorNode
+  kind: MarkdownTopBlockKind
+  plainText: string
+  isMermaid: boolean
+}
+
+function mapPmNodeToMarkdownKind(node: ProseMirrorNode): MarkdownTopBlockKind {
+  switch (node.type.name) {
+    case 'heading':
+      return 'heading'
+    case 'bulletList':
+    case 'orderedList':
+    case 'taskList':
+      return 'list'
+    case 'blockquote':
+      return 'blockquote'
+    case 'table':
+      return 'table'
+    case 'codeBlock':
+      return 'code'
+    case 'horizontalRule':
+      return 'thematicBreak'
+    default:
+      return 'paragraph'
+  }
+}
+
+function collectTopLevelPmBlocks(doc: ProseMirrorNode): TopLevelPmBlockSummary[] {
+  const blocks: TopLevelPmBlockSummary[] = []
+  doc.forEach((node, offset) => {
+    blocks.push({
+      pos: offset,
+      node,
+      kind: mapPmNodeToMarkdownKind(node),
+      plainText: node.textContent.replace(/\s+/g, ' ').trim(),
+      isMermaid: isMermaidCodeBlockNode(node)
+    })
+  })
+  return blocks
+}
+
+function resolveWysiwygFallbackPos(
+  candidateBlocks: readonly AlignedBlock<TopLevelPmBlockSummary>[],
+  nestedHint: NestedBlockHint | null
+): number {
+  const firstBlock = candidateBlocks[0]
+  if (nestedHint?.kind === 'list-item') {
+    let remaining = nestedHint.index
+    for (const block of candidateBlocks) {
+      if (block.kind !== 'list') {
+        continue
+      }
+      if (remaining >= 0 && remaining < block.node.childCount) {
+        let targetPos = block.pos
+        block.node.forEach((_child, relOffset, childIndex) => {
+          if (childIndex === remaining) {
+            targetPos = block.pos + 1 + relOffset
+          }
+        })
+        return targetPos
+      }
+      remaining -= block.node.childCount
+    }
+  } else if (
+    nestedHint?.kind === 'table-row' &&
+    firstBlock.kind === 'table' &&
+    nestedHint.index >= 0 &&
+    nestedHint.index < firstBlock.node.childCount
+  ) {
+    let targetPos = firstBlock.pos
+    firstBlock.node.forEach((_child, relOffset, childIndex) => {
+      if (childIndex === nestedHint.index) {
+        targetPos = firstBlock.pos + 1 + relOffset
+      }
+    })
+    return targetPos
+  }
+  return firstBlock.pos
+}
+
+function computeJumpPluginState(
+  doc: ProseMirrorNode,
+  rawContent: string,
+  jump: DocumentJumpHighlightTarget
+): WysiwygJumpPluginState {
+  const pmBlocks = collectTopLevelPmBlocks(doc)
+  if (pmBlocks.length === 0) {
+    return { nonce: jump.nonce, fallbackBlockPos: null, decorations: DecorationSet.empty }
+  }
+
+  const mdBlocks = collectTopLevelMarkdownBlocks(rawContent)
+  const alignedBlocks = alignRenderedBlocksToMarkdown(pmBlocks, mdBlocks)
+  const plan = analyzeMarkdownSearchJump(rawContent, jump)
+  const targetLine = plan.targetBlock?.startLine ?? plan.lineNumber
+  const targetBlock = pickClosestLineBlock(alignedBlocks, targetLine)
+  if (!targetBlock) {
+    return { nonce: jump.nonce, fallbackBlockPos: null, decorations: DecorationSet.empty }
+  }
+
+  const candidateBlocks = alignedBlocks.filter(
+    (block) => block.startLine === targetBlock.startLine && block.endLine === targetBlock.endLine
+  )
+  const fallbackBlockPos = resolveWysiwygFallbackPos(candidateBlocks, plan.nestedItemIndex)
+  const compiled = compileSearchMatcher(jump.query, jump.options)
+  if (!plan.renderedMatch || targetBlock.isMermaid || !compiled.ok) {
+    return {
+      nonce: jump.nonce,
+      fallbackBlockPos,
+      decorations: DecorationSet.empty
+    }
+  }
+
+  let exactCodeRange: ProseMirrorSearchMatch | null = null
+  const contextualCandidates: ContextualMatchCandidate<ProseMirrorSearchMatch>[] = []
+
+  for (const block of candidateBlocks) {
+    walkSubtreeTextRuns(block.node, block.pos, false, (segments) => {
+      const runText = segments.map((seg) => seg.text).join('')
+      if (!runText) {
+        return
+      }
+      if (
+        !exactCodeRange &&
+        block.kind === 'code' &&
+        plan.renderedMatch?.codeSpan &&
+        plan.renderedMatch.codeSpan.end <= runText.length &&
+        runText.slice(plan.renderedMatch.codeSpan.start, plan.renderedMatch.codeSpan.end) ===
+          plan.renderedMatch.matchedText
+      ) {
+        const from = resolveSegmentPmPosition(segments, plan.renderedMatch.codeSpan.start)
+        const to = Math.max(from, resolveSegmentPmPosition(segments, plan.renderedMatch.codeSpan.end))
+        exactCodeRange = { from, to }
+        return
+      }
+      contextualCandidates.push(
+        ...collectRunContextualCandidates(runText, compiled.matcher, (span) => {
+          const from = resolveSegmentPmPosition(segments, span.start)
+          const to = Math.max(from, resolveSegmentPmPosition(segments, span.end))
+          return { from, to }
+        })
+      )
+    })
+  }
+
+  const chosenRange = exactCodeRange ?? selectBestJumpCandidate(contextualCandidates, plan.renderedMatch)
+  if (!chosenRange || chosenRange.from >= chosenRange.to) {
+    return {
+      nonce: jump.nonce,
+      fallbackBlockPos,
+      decorations: DecorationSet.empty
+    }
+  }
+
+  return {
+    nonce: jump.nonce,
+    fallbackBlockPos,
+    decorations: DecorationSet.create(doc, [
+      Decoration.inline(chosenRange.from, chosenRange.to, {
+        class: 'pm-search-jump-highlight',
+        'data-search-jump': 'true'
+      })
+    ])
+  }
 }
 
 function buildWysiwygSearchDecorations(
@@ -265,6 +489,27 @@ export const WysiwygSearchHighlight = Extension.create({
             return wysiwygSearchHighlightPluginKey.getState(state)?.decorations ?? DecorationSet.empty
           }
         }
+      }),
+      new Plugin<WysiwygJumpPluginState>({
+        key: wysiwygSearchJumpPluginKey,
+        state: {
+          init: () => createEmptyJumpPluginState(),
+          apply: (tr, prev) => {
+            const meta = tr.getMeta(wysiwygSearchJumpPluginKey) as WysiwygJumpPluginState | undefined
+            if (meta) {
+              return meta
+            }
+            if (tr.docChanged && (prev.nonce !== 0 || prev.fallbackBlockPos !== null)) {
+              return createEmptyJumpPluginState()
+            }
+            return prev
+          }
+        },
+        props: {
+          decorations(state) {
+            return wysiwygSearchJumpPluginKey.getState(state)?.decorations ?? DecorationSet.empty
+          }
+        }
       })
     ]
   }
@@ -359,6 +604,69 @@ export function scrollWysiwygActiveMatch(
   }
   const match = state.matches[state.activeIndex]
   const domPos = editor.view.domAtPos(match.from)
+  const target = domPos.node instanceof Element ? domPos.node : domPos.node.parentElement
+  scrollMatchElementIntoView(target, scrollContainer)
+}
+
+/**
+ * Synchronizes temporary workspace search jump decorations for the WYSIWYG ProseMirror view.
+ */
+export function syncWysiwygSearchJump(
+  editor: Editor,
+  rawContent: string,
+  jump: DocumentJumpHighlightTarget | null
+): void {
+  if (editor.isDestroyed) {
+    return
+  }
+  const currentState = wysiwygSearchJumpPluginKey.getState(editor.state)
+  if (!jump) {
+    if (
+      currentState &&
+      (currentState.nonce !== 0 ||
+        currentState.fallbackBlockPos !== null ||
+        currentState.decorations !== DecorationSet.empty)
+    ) {
+      editor.view.dispatch(
+        editor.state.tr.setMeta(wysiwygSearchJumpPluginKey, createEmptyJumpPluginState())
+      )
+    }
+    return
+  }
+
+  if (currentState && currentState.nonce === jump.nonce) {
+    return
+  }
+
+  const nextState = computeJumpPluginState(editor.state.doc, rawContent, jump)
+  editor.view.dispatch(editor.state.tr.setMeta(wysiwygSearchJumpPluginKey, nextState))
+}
+
+/**
+ * Scrolls the WYSIWYG container to the active temporary jump highlight or its fallback block element.
+ */
+export function scrollWysiwygSearchJump(editor: Editor, scrollContainer: HTMLElement | null): void {
+  if (editor.isDestroyed) {
+    return
+  }
+  const highlightEl = editor.view.dom.querySelector('.pm-search-jump-highlight[data-search-jump="true"]')
+  if (highlightEl) {
+    scrollMatchElementIntoView(highlightEl, scrollContainer)
+    return
+  }
+
+  const state = wysiwygSearchJumpPluginKey.getState(editor.state)
+  if (!state || state.fallbackBlockPos === null) {
+    return
+  }
+
+  const blockDom = editor.view.nodeDOM(state.fallbackBlockPos)
+  if (blockDom instanceof Element) {
+    scrollMatchElementIntoView(blockDom, scrollContainer)
+    return
+  }
+  const safePos = Math.min(state.fallbackBlockPos + 1, editor.state.doc.content.size)
+  const domPos = editor.view.domAtPos(safePos)
   const target = domPos.node instanceof Element ? domPos.node : domPos.node.parentElement
   scrollMatchElementIntoView(target, scrollContainer)
 }

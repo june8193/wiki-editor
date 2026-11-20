@@ -3507,3 +3507,12 @@ body.is-resizing-git-sections * {
   background-color: var(--search-match-active-bg);
   outline: 1px solid var(--search-match-active-outline);
 }
+
+.cm-search-jump-highlight,
+.pm-search-jump-highlight,
+.preview-search-jump-highlight {
+  background-color: var(--search-match-active-bg);
+  color: inherit;
+  border-radius: 2px;
+  outline: 1px solid var(--search-match-active-outline);
+}

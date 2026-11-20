@@ -1031,3 +1031,466 @@ describe('In-Document Find Bar Pane State & Integration (<App />)', () => {
     selection.removeAllRanges()
   })
 })
+
+describe('Workspace Search Match Jump (<App />)', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.useRealTimers()
+  })
+
+  it('opens or activates the tab in active Pane without changing Raw/Split mode or opening Find Bar, jumps to exact column including long-line lineOffset, and clears jump highlight on edit/mode/tab switch', async () => {
+    const user = userEvent.setup()
+    const longPrefix = 'x'.repeat(160)
+    const targetLine = `${longPrefix} LongJumpTarget end`
+    const notesContent = `# Notes\n${targetLine}\nTrailing line`
+    const splitContent = `# Split Doc\nFirst line\nSplitTarget line`
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'notes.md': notesContent,
+            'split.md': splitContent,
+            'plain.txt': 'Plain file line'
+          }
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { container } = render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+    const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('split.md'))
+    await user.click(
+      within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+        name: 'Split'
+      })
+    )
+    await user.click(within(explorer).getByText('plain.txt'))
+
+    // Open Search View and search for LongJumpTarget
+    await user.click(
+      within(screen.getByRole('navigation', { name: '액티비티 바' })).getByRole('button', {
+        name: '검색'
+      })
+    )
+    const searchView = screen.getByRole('region', { name: '검색 뷰' })
+    const searchInput = within(searchView).getByRole('textbox', { name: '검색어 입력' })
+
+    await user.type(searchInput, 'LongJumpTarget')
+    fireEvent.keyDown(searchInput, { key: 'Enter' })
+
+    const notesLineBtn = await within(searchView).findByRole('button', { name: /LongJumpTarget/ })
+    await user.click(notesLineBtn)
+
+    // Opens notes.md in Raw mode without opening Find Bar, and moves selection to exact lineOffset + span
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'notes.md' })).toHaveAttribute('aria-selected', 'true')
+    })
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    expect(
+      within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+        name: 'Raw'
+      })
+    ).toHaveAttribute('aria-pressed', 'true')
+
+    const notesEditor = await screen.findByTestId('document-editor')
+    const expectedStart = notesContent.indexOf('LongJumpTarget')
+    const expectedEnd = expectedStart + 'LongJumpTarget'.length
+    await waitFor(() => {
+      expect(Number(notesEditor.getAttribute('data-selection-start'))).toBe(expectedStart)
+      expect(Number(notesEditor.getAttribute('data-selection-end'))).toBe(expectedEnd)
+    })
+    expect(container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(1)
+    expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe('LongJumpTarget')
+
+    // Switching to plain.txt tab and back to notes.md clears temporary jump highlight
+    await user.click(screen.getByRole('tab', { name: 'plain.txt' }))
+    await user.click(screen.getByRole('tab', { name: 'notes.md' }))
+    expect(container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+
+    // Search for SplitTarget in split.md (already open in Split mode behind plain.txt)
+    await user.clear(searchInput)
+    await user.type(searchInput, 'SplitTarget')
+    fireEvent.keyDown(searchInput, { key: 'Enter' })
+
+    const splitLineBtn = await within(searchView).findByRole('button', { name: /SplitTarget/ })
+    await user.click(splitLineBtn)
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'split.md' })).toHaveAttribute('aria-selected', 'true')
+    })
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    expect(
+      within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+        name: 'Split'
+      })
+    ).toHaveAttribute('aria-pressed', 'true')
+
+    const splitRawEditor = container.querySelector('.editor-split-region.is-raw [data-testid="document-editor"]') as HTMLElement
+    const splitExpectedStart = splitContent.indexOf('SplitTarget')
+    await waitFor(() => {
+      expect(Number(splitRawEditor.getAttribute('data-selection-start'))).toBe(splitExpectedStart)
+    })
+    expect(container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(1)
+    expect(
+      screen.getByTestId('split-markdown-preview').querySelectorAll('.preview-search-jump-highlight')
+    ).toHaveLength(1)
+
+    // Editing in Split Raw clears jump highlight on both Raw and Preview
+    setRawEditorText(splitRawEditor, `${splitContent}\nextra`)
+    expect(container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+    expect(
+      screen.getByTestId('split-markdown-preview').querySelectorAll('.preview-search-jump-highlight')
+    ).toHaveLength(0)
+  })
+
+  it('preserves Preview mode across Search View line match jump and safely falls back to block scroll for non-rendered markdown syntax', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewSpy = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy
+
+    try {
+      const previewContent = [
+        '# Preview Heading',
+        '',
+        'Check [Guide](https://example.com/hiddenUrlToken) for details.',
+        '',
+        'RenderedPreviewToken line'
+      ].join('\n')
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { autoSave: false, theme: 'light' },
+        {
+          selectedFolder: 'C:\\wiki\\docs',
+          workspaces: {
+            'C:\\wiki\\docs': {
+              'preview.md': previewContent,
+              'other.md': 'Other doc'
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('preview.md'))
+      await user.click(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: 'Preview'
+        })
+      )
+      expect(screen.getByLabelText('마크다운 미리보기')).toBeInTheDocument()
+
+      await user.click(within(explorer).getByText('other.md'))
+      await user.click(
+        within(screen.getByRole('navigation', { name: '액티비티 바' })).getByRole('button', {
+          name: '검색'
+        })
+      )
+
+      const searchView = screen.getByRole('region', { name: '검색 뷰' })
+      const searchInput = within(searchView).getByRole('textbox', { name: '검색어 입력' })
+
+      // 1. Rendered match in Preview mode
+      await user.type(searchInput, 'RenderedPreviewToken')
+      fireEvent.keyDown(searchInput, { key: 'Enter' })
+
+      scrollIntoViewSpy.mockClear()
+      const renderedBtn = await within(searchView).findByRole('button', {
+        name: /RenderedPreviewToken/
+      })
+      await user.click(renderedBtn)
+
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: 'preview.md' })).toHaveAttribute('aria-selected', 'true')
+      })
+      expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+      expect(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: 'Preview'
+        })
+      ).toHaveAttribute('aria-pressed', 'true')
+
+      const previewEl = screen.getByLabelText('마크다운 미리보기')
+      await waitFor(() => {
+        expect(previewEl.querySelectorAll('.preview-search-jump-highlight')).toHaveLength(1)
+      })
+      expect(previewEl.querySelector('.preview-search-jump-highlight')?.textContent).toBe(
+        'RenderedPreviewToken'
+      )
+      expect(scrollIntoViewSpy).toHaveBeenCalled()
+
+      // 2. Non-rendered link URL fallback in Preview mode
+      await user.clear(searchInput)
+      await user.type(searchInput, 'hiddenUrlToken')
+      fireEvent.keyDown(searchInput, { key: 'Enter' })
+
+      scrollIntoViewSpy.mockClear()
+      const urlBtn = await within(searchView).findByRole('button', { name: /hiddenUrlToken/ })
+      await user.click(urlBtn)
+
+      await waitFor(() => {
+        expect(scrollIntoViewSpy).toHaveBeenCalled()
+      })
+      expect(previewEl.querySelectorAll('.preview-search-jump-highlight')).toHaveLength(0)
+      expect(scrollIntoViewSpy.mock.instances[0]).toBe(
+        previewEl.querySelector('p[data-source-line="3"]')
+      )
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    }
+  })
+
+  it('preserves 위지윅 mode across Search View line match jump, highlights without dirtying buffer, falls back for non-rendered syntax, and clears on edit', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewSpy = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy
+
+    try {
+      const wysiwygContent = [
+        '# Wysiwyg Heading',
+        '',
+        'Check [Manual](https://example.com/wysiwygUrlSecret) now.',
+        '',
+        'WysiwygJumpTarget line'
+      ].join('\n')
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { autoSave: false, theme: 'light' },
+        {
+          selectedFolder: 'C:\\wiki\\docs',
+          workspaces: {
+            'C:\\wiki\\docs': {
+              'wysiwyg.md': wysiwygContent,
+              'other.md': 'Other doc'
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('wysiwyg.md'))
+      await user.click(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: '위지윅'
+        })
+      )
+      expect(screen.getByLabelText('위지윅 문서 에디터')).toBeInTheDocument()
+
+      await user.click(within(explorer).getByText('other.md'))
+      await user.click(
+        within(screen.getByRole('navigation', { name: '액티비티 바' })).getByRole('button', {
+          name: '검색'
+        })
+      )
+
+      const searchView = screen.getByRole('region', { name: '검색 뷰' })
+      const searchInput = within(searchView).getByRole('textbox', { name: '검색어 입력' })
+
+      // 1. Rendered match in 위지윅 mode
+      await user.type(searchInput, 'WysiwygJumpTarget')
+      fireEvent.keyDown(searchInput, { key: 'Enter' })
+
+      scrollIntoViewSpy.mockClear()
+      const renderedBtn = await within(searchView).findByRole('button', {
+        name: /WysiwygJumpTarget/
+      })
+      await user.click(renderedBtn)
+
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: 'wysiwyg.md' })).toHaveAttribute(
+          'aria-selected',
+          'true'
+        )
+      })
+      expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+      expect(
+        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
+          name: '위지윅'
+        })
+      ).toHaveAttribute('aria-pressed', 'true')
+
+      const wysiwygSurface = screen.getByLabelText('위지윅 문서 에디터')
+      await waitFor(() => {
+        expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(1)
+      })
+      expect(wysiwygSurface.querySelector('.pm-search-jump-highlight')?.textContent).toBe(
+        'WysiwygJumpTarget'
+      )
+      expect(screen.getByText('저장됨')).toBeInTheDocument()
+      expect(scrollIntoViewSpy).toHaveBeenCalled()
+
+      // 2. Non-rendered link URL fallback in 위지윅 mode
+      await user.clear(searchInput)
+      await user.type(searchInput, 'wysiwygUrlSecret')
+      fireEvent.keyDown(searchInput, { key: 'Enter' })
+
+      scrollIntoViewSpy.mockClear()
+      const urlBtn = await within(searchView).findByRole('button', { name: /wysiwygUrlSecret/ })
+      await user.click(urlBtn)
+
+      await waitFor(() => {
+        expect(scrollIntoViewSpy).toHaveBeenCalled()
+      })
+      expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+
+      // 3. Re-jump then edit inside 위지윅 clears jump highlight
+      await user.clear(searchInput)
+      await user.type(searchInput, 'WysiwygJumpTarget')
+      fireEvent.keyDown(searchInput, { key: 'Enter' })
+      await user.click(await within(searchView).findByRole('button', { name: /WysiwygJumpTarget/ }))
+      await waitFor(() => {
+        expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(1)
+      })
+
+      await user.click(wysiwygSurface)
+      await user.type(wysiwygSurface, ' edited')
+      await waitFor(() => {
+        expect(wysiwygSurface.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      })
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    }
+  })
+
+  it('discards stale jump requests and late tab opens across slow async opens, filename-only clicks, and workspace switches', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {
+        autoSave: false,
+        theme: 'light',
+        recentWorkspaces: ['C:\\wiki\\alpha', 'C:\\wiki\\beta']
+      },
+      {
+        selectedFolder: 'C:\\wiki\\alpha',
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'slow.md': '# Slow\nSlowJumpTarget unique line',
+            'fast.md': '# Fast\nFastJumpTarget line',
+            'nameMatch.md': 'Plain doc without jump targets'
+          },
+          'C:\\wiki\\beta': {
+            'beta.md': '# Beta\nBeta content'
+          }
+        }
+      }
+    )
+
+    const originalOpenWorkspaceFile = api.buffer.openWorkspaceFile.bind(api.buffer)
+    const deferredSlowOpens: Array<{ resolve: () => Promise<void> }> = []
+    api.buffer.openWorkspaceFile = (filePath, name) => {
+      if (filePath.toLowerCase().endsWith('slow.md')) {
+        return new Promise((resolve, reject) => {
+          deferredSlowOpens.push({
+            resolve: () => originalOpenWorkspaceFile(filePath, name).then(resolve, reject)
+          })
+        })
+      }
+      return originalOpenWorkspaceFile(filePath, name)
+    }
+    window.wikiApi = api
+
+    const { container } = render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await screen.findByLabelText('워크스페이스 탐색기')
+
+    // Open Search View
+    await user.click(
+      within(screen.getByRole('navigation', { name: '액티비티 바' })).getByRole('button', {
+        name: '검색'
+      })
+    )
+    const searchView = screen.getByRole('region', { name: '검색 뷰' })
+    const searchInput = within(searchView).getByRole('textbox', { name: '검색어 입력' })
+
+    // Race A: slow Result A superseded by fast Result B
+    await user.type(searchInput, 'JumpTarget')
+    fireEvent.keyDown(searchInput, { key: 'Enter' })
+
+    const slowBtn1 = await within(searchView).findByRole('button', { name: /SlowJumpTarget/ })
+    const fastBtn = await within(searchView).findByRole('button', { name: /FastJumpTarget/ })
+
+    await user.click(slowBtn1)
+    expect(deferredSlowOpens).toHaveLength(1)
+    await user.click(fastBtn)
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'fast.md' })).toHaveAttribute('aria-selected', 'true')
+    })
+    const fastEditor = await screen.findByTestId('document-editor')
+    const expectedFastStart = '# Fast\nFastJumpTarget line'.indexOf('JumpTarget')
+    expect(Number(fastEditor.getAttribute('data-selection-start'))).toBe(expectedFastStart)
+    expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe('JumpTarget')
+
+    await act(async () => {
+      await deferredSlowOpens[0].resolve()
+    })
+    expect(screen.queryByRole('tab', { name: 'slow.md' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'fast.md' })).toHaveAttribute('aria-selected', 'true')
+    expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe('JumpTarget')
+
+    // Race B: slow Result A superseded by filename-only click (nameMatch.md)
+    await user.click(slowBtn1)
+    expect(deferredSlowOpens).toHaveLength(2)
+
+    await user.clear(searchInput)
+    await user.type(searchInput, 'nameMatch')
+    fireEvent.keyDown(searchInput, { key: 'Enter' })
+    const nameMatchFileBtn = await within(searchView).findByRole('button', { name: /nameMatch\.md/ })
+    await user.click(nameMatchFileBtn)
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'nameMatch.md' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    })
+    expect(container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+
+    await act(async () => {
+      await deferredSlowOpens[1].resolve()
+    })
+    expect(screen.queryByRole('tab', { name: 'slow.md' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'nameMatch.md' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+
+    // Race C: slow Result A superseded by workspace switch (alpha -> beta)
+    await user.clear(searchInput)
+    await user.type(searchInput, 'SlowJumpTarget')
+    fireEvent.keyDown(searchInput, { key: 'Enter' })
+    const slowBtn3 = await within(searchView).findByRole('button', { name: /SlowJumpTarget/ })
+    await user.click(slowBtn3)
+    expect(deferredSlowOpens).toHaveLength(3)
+
+    await user.click(
+      within(screen.getByRole('navigation', { name: '액티비티 바' })).getByRole('button', {
+        name: '워크스페이스'
+      })
+    )
+    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
+    await user.click(within(workspaceView).getByText('beta'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('워크스페이스 탐색기')).toHaveTextContent('beta.md')
+    })
+
+    await act(async () => {
+      await deferredSlowOpens[2].resolve()
+    })
+    expect(screen.queryByRole('tab', { name: 'slow.md' })).not.toBeInTheDocument()
+    expect(container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+  })
+})

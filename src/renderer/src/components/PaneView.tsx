@@ -1,6 +1,7 @@
 import { CSSProperties, SyntheticEvent } from 'react'
 import type { ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
+import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
@@ -23,6 +24,7 @@ interface PaneViewProps {
   theme: ThemeMode
   autoSave: boolean
   scrollRequest?: OutlineScrollRequest | null
+  searchJumpRequest?: DocumentSearchJumpRequest | null
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   buffers: DocumentBufferSnapshot
@@ -41,6 +43,7 @@ export function PaneView({
   theme,
   autoSave,
   scrollRequest = null,
+  searchJumpRequest = null,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   buffers,
@@ -60,6 +63,13 @@ export function PaneView({
   const activeScrollRequest =
     activeTab && scrollRequest && scrollRequest.paneId === pane.id && scrollRequest.tabId === activeTab.id
       ? scrollRequest
+      : null
+  const activeSearchJumpRequest =
+    activeTab &&
+    searchJumpRequest &&
+    searchJumpRequest.paneId === pane.id &&
+    searchJumpRequest.tabId === activeTab.id
+      ? searchJumpRequest
       : null
   const canMoveToSplit = !(splitMode === 'single' && pane.tabs.length <= 1)
   const paneStyle: CSSProperties | undefined =
@@ -116,6 +126,7 @@ export function PaneView({
           theme={theme}
           autoSave={autoSave}
           scrollRequest={activeScrollRequest}
+          searchJumpRequest={activeSearchJumpRequest}
           isActive={isActivePane}
           isShortcutDisabled={isShortcutDisabled}
           workspaceMarkdownFiles={workspaceMarkdownFiles}

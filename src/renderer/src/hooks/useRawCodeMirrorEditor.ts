@@ -19,7 +19,10 @@ import type { WorkspaceEntry } from '@shared/workspace'
 import { formatRawMarkdownImages } from '../editor/imageIngestion'
 import {
   rawSearchHighlightField,
+  rawSearchJumpHighlightField,
   type RawFindHighlightRequest,
+  type RawJumpHighlightRequest,
+  syncRawJumpHighlight,
   syncRawSearchHighlights
 } from '../editor/rawSearchHighlight'
 import { RawTableAction, rawTableKeymap, runRawTableAction } from '../editor/rawTableCommands'
@@ -69,6 +72,7 @@ export interface UseRawCodeMirrorEditorOptions {
   enableImageInsertion?: boolean
   scrollRequest?: RawScrollRequest | null
   findHighlight?: RawFindHighlightRequest | null
+  jumpHighlight?: RawJumpHighlightRequest | null
   isActive?: boolean
   editorViewRef?: { current: EditorView | null }
   onChangeContent: (nextContent: string) => void
@@ -214,6 +218,7 @@ export function useRawCodeMirrorEditor({
   enableImageInsertion = language === 'markdown' && Boolean(documentPath),
   scrollRequest,
   findHighlight = null,
+  jumpHighlight = null,
   isActive = true,
   editorViewRef,
   onChangeContent,
@@ -226,6 +231,7 @@ export function useRawCodeMirrorEditor({
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const lastScrolledFindNonceRef = useRef(0)
+  const lastHandledJumpNonceRef = useRef(0)
   const outlineSpyRef = useRef<{
     attachScrollElement: (element: HTMLElement) => () => void
   }>({
@@ -367,6 +373,7 @@ export function useRawCodeMirrorEditor({
         EditorView.lineWrapping,
         syntaxHighlighting(markdownHighlightStyle),
         rawSearchHighlightField,
+        rawSearchJumpHighlightField,
         compartments.language.of(createLanguageExtension(initial.language)),
         compartments.theme.of(createEditorThemeExtension(initial.theme)),
         compartments.tableKeymap.of(initial.showTableToolbar ? rawTableKeymap : []),
@@ -639,6 +646,31 @@ export function useRawCodeMirrorEditor({
       }
     })
   }, [content, findHighlight])
+
+  useLayoutEffect(() => {
+    const view = viewRef.current
+    if (!view || jumpHighlight) return
+    syncRawJumpHighlight(view, null, {
+      externalAnnotation: externalSyncAnnotation.of(true)
+    })
+  }, [jumpHighlight])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || !jumpHighlight) return
+    if (jumpHighlight.nonce <= 0 || jumpHighlight.nonce === lastHandledJumpNonceRef.current) {
+      return
+    }
+    lastHandledJumpNonceRef.current = jumpHighlight.nonce
+    syncRawJumpHighlight(view, jumpHighlight, {
+      onScrolled: (nextScrollTop, didSetScrollTop) => {
+        if (didSetScrollTop) {
+          runtimeRef.current.onUpdateViewState({ scrollTop: nextScrollTop })
+        }
+        runtimeRef.current.onRawScroll?.()
+      }
+    })
+  }, [jumpHighlight])
 
   const outlineSpy = useEditorOutlineSpy({
     content,

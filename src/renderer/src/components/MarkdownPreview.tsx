@@ -7,6 +7,10 @@ import {
 } from '../editor/documentFind'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
 import {
+  findClosestPreviewBlockForLine,
+  type PreviewJumpHighlightQuery
+} from '../editor/previewSearchHighlight'
+import {
   type MermaidHeightChangeHandler,
   MermaidHeightSessionProvider
 } from '../editor/mermaidHeightSession'
@@ -32,6 +36,7 @@ interface MarkdownPreviewProps {
   onMermaidHeightChange?: MermaidHeightChangeHandler
   scrollRequest?: PreviewScrollRequest | null
   findHighlight?: DocumentFindHighlightQuery | null
+  jumpHighlight?: PreviewJumpHighlightQuery | null
   isActive?: boolean
   scrollContainerRef?: { current: HTMLDivElement | null }
   testId?: string
@@ -57,6 +62,7 @@ export function MarkdownPreview({
   onMermaidHeightChange,
   scrollRequest,
   findHighlight = null,
+  jumpHighlight = null,
   isActive = true,
   scrollContainerRef,
   testId = 'document-editor',
@@ -66,6 +72,7 @@ export function MarkdownPreview({
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const lastScrolledFindNonceRef = useRef(findHighlight?.scrollNonce ?? 0)
+  const lastHandledJumpNonceRef = useRef(0)
 
   const scrollToHeading = useCallback((slug?: string, index?: number): void => {
     const container = containerRef.current
@@ -111,6 +118,7 @@ export function MarkdownPreview({
         mermaidRenderer,
         documentTitle,
         findHighlight,
+        jumpHighlight,
         onAnchorNavigate: onLinkNavigate ? undefined : handleAnchorNavigate,
         onLinkNavigate
       }),
@@ -120,6 +128,7 @@ export function MarkdownPreview({
       documentTitle,
       findHighlight,
       handleAnchorNavigate,
+      jumpHighlight,
       mermaidRenderer,
       onLinkNavigate,
       theme
@@ -145,6 +154,33 @@ export function MarkdownPreview({
       }
     })
   }, [content, findHighlight])
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container || !jumpHighlight || jumpHighlight.suppressScroll) {
+      return
+    }
+    applyFindScrollNonce(lastHandledJumpNonceRef, jumpHighlight.nonce, {
+      skipScroll: false,
+      performScroll: () => {
+        const jumpEl = container.querySelector('[data-search-jump="true"]')
+        if (jumpEl) {
+          scrollMatchElementIntoView(jumpEl, container)
+          return true
+        }
+        const fallbackEl = findClosestPreviewBlockForLine(
+          container,
+          content,
+          jumpHighlight.lineNumber,
+          jumpHighlight
+        )
+        if (fallbackEl) {
+          scrollMatchElementIntoView(fallbackEl, container)
+        }
+        return true
+      }
+    })
+  }, [content, jumpHighlight])
 
   const setPreviewContainerRef = useCallback(
     (el: HTMLDivElement | null): void => {

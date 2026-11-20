@@ -22,6 +22,9 @@ export function useWorkspaceSearch({ workspaceRootPath }: UseWorkspaceSearchOpti
   const wikiApi = useWikiApi()
   const [query, setQuery] = useState('')
   const [options, setOptions] = useState<SearchMatchOptions>(DEFAULT_SEARCH_MATCH_OPTIONS)
+  const [resultOptions, setResultOptions] = useState<SearchMatchOptions>(
+    DEFAULT_SEARCH_MATCH_OPTIONS
+  )
   const [response, setResponse] = useState<WorkspaceSearchResponse | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isSearching, setIsSearching] = useState(false)
@@ -51,6 +54,7 @@ export function useWorkspaceSearch({ workspaceRootPath }: UseWorkspaceSearchOpti
 
   const applyClearedResults = useCallback((nextError: string | null = null): void => {
     setResponse(null)
+    setResultOptions(DEFAULT_SEARCH_MATCH_OPTIONS)
     setErrorMessage(nextError)
     setIsSearching(false)
     setCollapsedFileKeys(new Set())
@@ -123,6 +127,7 @@ export function useWorkspaceSearch({ workspaceRootPath }: UseWorkspaceSearchOpti
         }
         setIsSearching(false)
         setResponse(nextResponse)
+        setResultOptions(targetOptions)
         setErrorMessage(null)
         setCollapsedFileKeys(new Set())
       } catch (error: unknown) {
@@ -224,6 +229,7 @@ export function useWorkspaceSearch({ workspaceRootPath }: UseWorkspaceSearchOpti
   return {
     query,
     options,
+    resultOptions,
     response,
     errorMessage,
     isSearching,

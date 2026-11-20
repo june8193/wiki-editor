@@ -1,5 +1,5 @@
 import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
-import { compileSearchMatcher, type CompiledSearchMatcher } from '@shared/search'
+import { compileSearchMatcher, type CompiledSearchMatcher, type SearchMatchOptions } from '@shared/search'
 import type { CodeBlockHighlightSpan } from './codeBlockHighlight'
 import {
   areDocumentFindCriteriaEqual,
@@ -8,6 +8,15 @@ import {
   type DocumentFindHighlightQuery,
   type TextRunSegment
 } from './documentFind'
+import {
+  analyzeMarkdownSearchJump,
+  collectRunContextualCandidates,
+  type ContextualMatchCandidate,
+  type MarkdownJumpPlan,
+  type NestedBlockHint,
+  pickClosestLineBlock,
+  selectBestJumpCandidate
+} from './markdownSearchJump'
 
 export const PREVIEW_SEARCH_CHROME_SELECTOR =
   '.code-block-header, .mermaid-diagram-block, .markdown-preview-empty'
@@ -16,6 +25,17 @@ export interface PreviewSearchMatchSpan {
   start: number
   end: number
   matchIndex: number
+  isJump?: boolean
+}
+
+export interface PreviewJumpHighlightQuery {
+  query: string
+  options: SearchMatchOptions
+  lineNumber: number
+  columnStart: number
+  columnEnd: number
+  nonce: number
+  suppressScroll?: boolean
 }
 
 export interface PreviewSearchMatchResult {
@@ -162,25 +182,39 @@ function wrapSearchMark(
   text: string,
   matchIndex: number,
   activeMatchIndex: number,
+  isJump: boolean,
   key: string
 ): ReactNode {
   if (text.length === 0) {
+    const anchorClasses = [
+      ...(matchIndex >= 0 ? ['preview-search-match-anchor'] : []),
+      ...(isJump ? ['preview-search-jump-anchor'] : [])
+    ]
     return (
       <span
         key={key}
-        className="preview-search-match-anchor"
-        data-search-match-index={matchIndex}
+        className={anchorClasses.join(' ')}
+        {...(matchIndex >= 0 ? { 'data-search-match-index': matchIndex } : {})}
+        {...(isJump ? { 'data-search-jump': 'true' } : {})}
       />
     )
   }
-  const isActive = matchIndex === activeMatchIndex
+  const classes: string[] = []
+  if (matchIndex >= 0) {
+    classes.push('preview-search-match')
+    if (matchIndex === activeMatchIndex) {
+      classes.push('preview-search-match-active')
+    }
+  }
+  if (isJump) {
+    classes.push('preview-search-jump-highlight')
+  }
   return (
     <mark
       key={key}
-      className={
-        isActive ? 'preview-search-match preview-search-match-active' : 'preview-search-match'
-      }
-      data-search-match-index={matchIndex}
+      className={classes.join(' ')}
+      {...(matchIndex >= 0 ? { 'data-search-match-index': matchIndex } : {})}
+      {...(isJump ? { 'data-search-jump': 'true' } : {})}
     >
       {text}
     </mark>
@@ -201,7 +235,7 @@ function renderHighlightedSlice(
   }
 
   const boundarySet = new Set<number>([from, to])
-  const anchorMatchesByOffset = new Map<number, number[]>()
+  const anchorMatchesByOffset = new Map<number, Array<{ matchIndex: number; isJump: boolean }>>()
   const overlappingMatches: PreviewSearchMatchSpan[] = []
 
   for (const match of searchHighlights) {
@@ -209,11 +243,12 @@ function renderHighlightedSlice(
     const end = Math.max(start, Math.min(text.length, match.end))
     if (end <= start) {
       if (start >= from && (includeEndAnchors ? start <= to : start < to)) {
+        const entry = { matchIndex: match.matchIndex, isJump: Boolean(match.isJump) }
         const list = anchorMatchesByOffset.get(start)
         if (list) {
-          list.push(match.matchIndex)
+          list.push(entry)
         } else {
-          anchorMatchesByOffset.set(start, [match.matchIndex])
+          anchorMatchesByOffset.set(start, [entry])
         }
         boundarySet.add(start)
       }
@@ -225,7 +260,8 @@ function renderHighlightedSlice(
       overlappingMatches.push({
         start: clampedStart,
         end: clampedEnd,
-        matchIndex: match.matchIndex
+        matchIndex: match.matchIndex,
+        isJump: match.isJump
       })
       boundarySet.add(clampedStart)
       boundarySet.add(clampedEnd)
@@ -244,13 +280,15 @@ function renderHighlightedSlice(
     const anchors = anchorMatchesByOffset.get(pos)
     if (anchors) {
       anchorMatchesByOffset.delete(pos)
-      for (const matchIndex of anchors) {
+      for (let a = 0; a < anchors.length; a += 1) {
+        const anchor = anchors[a]
         pieces.push(
           wrapSearchMark(
             '',
-            matchIndex,
+            anchor.matchIndex,
             activeSearchMatchIndex,
-            `${keyPrefix}-a-${pos}-${matchIndex}`
+            anchor.isJump,
+            `${keyPrefix}-a-${pos}-${anchor.matchIndex}-${a}`
           )
         )
       }
@@ -260,10 +298,21 @@ function renderHighlightedSlice(
     if (nextPos <= pos) continue
 
     const slice = text.slice(pos, nextPos)
-    const activeMatch = overlappingMatches.find((m) => m.start <= pos && m.end >= nextPos)
+    const findMatch = overlappingMatches.find(
+      (m) => m.matchIndex >= 0 && m.start <= pos && m.end >= nextPos
+    )
+    const jumpMatch = overlappingMatches.find(
+      (m) => m.isJump && m.start <= pos && m.end >= nextPos
+    )
     pieces.push(
-      activeMatch
-        ? wrapSearchMark(slice, activeMatch.matchIndex, activeSearchMatchIndex, `${keyPrefix}-m-${i}`)
+      findMatch || jumpMatch
+        ? wrapSearchMark(
+            slice,
+            findMatch?.matchIndex ?? -1,
+            activeSearchMatchIndex,
+            Boolean(jumpMatch),
+            `${keyPrefix}-m-${i}`
+          )
         : slice
     )
   }
@@ -352,6 +401,8 @@ function walkPreviewTree<TResult>(
       isMermaid: boolean
     ) => TResult
     onBlockBoundary?: () => void
+    onElementEnter?: (element: ReactElement<{ children?: ReactNode }>) => void
+    onElementExit?: (element: ReactElement<{ children?: ReactNode }>) => void
     combineArray: (original: ReactNode[], mapped: TResult[]) => TResult
     combineElement: (element: ReactElement<{ children?: ReactNode }>, nextChild: TResult) => TResult
   }
@@ -380,24 +431,27 @@ function walkPreviewTree<TResult>(
       return visitor.identity(node)
     }
 
+    visitor.onElementEnter?.(node)
     const classification = resolvePreviewElementClassification(node, classify)
+    let result: TResult
     if (classification.kind === 'skip') {
       visitor.onBlockBoundary?.()
-      return visitor.identity(node)
-    }
-    if (classification.kind === 'fenced-code') {
+      result = visitor.identity(node)
+    } else if (classification.kind === 'fenced-code') {
       visitor.onBlockBoundary?.()
       const codeSlotId = classification.isMermaid ? -1 : nextCodeSlotId++
-      return visitor.onFencedCode(node, codeSlotId, classification.rawCode, classification.isMermaid)
-    }
-    if (classification.kind === 'block') {
+      result = visitor.onFencedCode(node, codeSlotId, classification.rawCode, classification.isMermaid)
+    } else if (classification.kind === 'block') {
       visitor.onBlockBoundary?.()
       const nextChild = visit(node.props.children, classification.isWhitespaceContainer)
       visitor.onBlockBoundary?.()
-      return visitor.combineElement(node, nextChild)
+      result = visitor.combineElement(node, nextChild)
+    } else {
+      const nextChild = visit(node.props.children, classification.isWhitespaceContainer)
+      result = visitor.combineElement(node, nextChild)
     }
-    const nextChild = visit(node.props.children, classification.isWhitespaceContainer)
-    return visitor.combineElement(node, nextChild)
+    visitor.onElementExit?.(node)
+    return result
   }
 
   return visit(root, true)
@@ -416,50 +470,65 @@ function appendPatch(
   }
 }
 
+function mapTextRunSpanToSlotPatches(
+  segments: readonly TextSlotSegment[],
+  span: { start: number; end: number },
+  matchIndex: number,
+  isJump: boolean,
+  textPatches: Map<number, PreviewSearchMatchSpan[]>
+): void {
+  if (span.end <= span.start) {
+    const targetSegment =
+      segments.find((seg) => span.start <= seg.endOffset) ?? segments[segments.length - 1]
+    const localPos = Math.max(
+      0,
+      Math.min(targetSegment.text.length, span.start - targetSegment.startOffset)
+    )
+    appendPatch(textPatches, targetSegment.slotId, {
+      start: localPos,
+      end: localPos,
+      matchIndex,
+      ...(isJump ? { isJump: true } : {})
+    })
+    return
+  }
+
+  for (const seg of segments) {
+    if (span.end <= seg.startOffset || span.start >= seg.endOffset) {
+      continue
+    }
+    const localStart = Math.max(0, span.start - seg.startOffset)
+    const localEnd = Math.min(seg.text.length, span.end - seg.startOffset)
+    if (localEnd > localStart) {
+      appendPatch(textPatches, seg.slotId, {
+        start: localStart,
+        end: localEnd,
+        matchIndex,
+        ...(isJump ? { isJump: true } : {})
+      })
+    }
+  }
+}
+
+function isWhitespaceOnlyTextRun(runSegments: readonly TextSlotSegment[]): boolean {
+  return (
+    runSegments.some((segment) => segment.text.includes('\n')) &&
+    runSegments.every((segment) => /^[\r\n\t ]+$/.test(segment.text))
+  )
+}
+
 function flushPreviewTextRun(
   runSegments: TextSlotSegment[],
   matcher: CompiledSearchMatcher,
   textPatches: Map<number, PreviewSearchMatchSpan[]>,
   nextMatchIndex: () => number
 ): void {
-  if (
-    runSegments.some((segment) => segment.text.includes('\n')) &&
-    runSegments.every((segment) => /^[\r\n\t ]+$/.test(segment.text))
-  ) {
+  if (isWhitespaceOnlyTextRun(runSegments)) {
     runSegments.length = 0
     return
   }
   consumeMatchedTextRun(runSegments, matcher, (span, segments) => {
-    const matchIndex = nextMatchIndex()
-    if (span.end <= span.start) {
-      const targetSegment =
-        segments.find((seg) => span.start <= seg.endOffset) ?? segments[segments.length - 1]
-      const localPos = Math.max(
-        0,
-        Math.min(targetSegment.text.length, span.start - targetSegment.startOffset)
-      )
-      appendPatch(textPatches, targetSegment.slotId, {
-        start: localPos,
-        end: localPos,
-        matchIndex
-      })
-      return
-    }
-
-    for (const seg of segments) {
-      if (span.end <= seg.startOffset || span.start >= seg.endOffset) {
-        continue
-      }
-      const localStart = Math.max(0, span.start - seg.startOffset)
-      const localEnd = Math.min(seg.text.length, span.end - seg.startOffset)
-      if (localEnd > localStart) {
-        appendPatch(textPatches, seg.slotId, {
-          start: localStart,
-          end: localEnd,
-          matchIndex
-        })
-      }
-    }
+    mapTextRunSpanToSlotPatches(segments, span, nextMatchIndex(), false, textPatches)
   })
 }
 
@@ -620,6 +689,224 @@ function applyPreviewSearchPlan(
   })
 }
 
+type PreviewJumpPatchRef =
+  | { kind: 'text'; segments: TextSlotSegment[]; span: { start: number; end: number } }
+  | { kind: 'code'; codeSlotId: number; span: { start: number; end: number } }
+
+function readElementSourceRange(
+  element: ReactElement<{ children?: ReactNode }>
+): { startLine: number; endLine: number } | null {
+  const props = element.props as Record<string, unknown>
+  const startRaw = props['data-source-line']
+  if (typeof startRaw !== 'string') return null
+  const startLine = Number(startRaw)
+  if (!Number.isFinite(startLine) || startLine < 1) return null
+  const endRaw = props['data-source-end-line']
+  const endLine = typeof endRaw === 'string' ? Number(endRaw) : startLine
+  return {
+    startLine,
+    endLine: Number.isFinite(endLine) && endLine >= startLine ? endLine : startLine
+  }
+}
+
+function buildPreviewJumpPatches(
+  target: PreviewSearchTarget,
+  markdown: string,
+  jumpHighlight: PreviewJumpHighlightQuery
+): {
+  textPatches: Map<number, PreviewSearchMatchSpan[]>
+  codePatches: Map<number, PreviewSearchMatchSpan[]>
+} {
+  const empty = {
+    textPatches: new Map<number, PreviewSearchMatchSpan[]>(),
+    codePatches: new Map<number, PreviewSearchMatchSpan[]>()
+  }
+  if (target.isBlankDocument || jumpHighlight.query.length === 0) {
+    return empty
+  }
+
+  const jumpPlan: MarkdownJumpPlan = analyzeMarkdownSearchJump(markdown, jumpHighlight)
+  if (!jumpPlan.renderedMatch) {
+    return empty
+  }
+  const compiled = compileSearchMatcher(jumpHighlight.query, jumpHighlight.options)
+  if (!compiled.ok) {
+    return empty
+  }
+
+  const blockEntries: Array<{ element: ReactElement; startLine: number; endLine: number }> = []
+  const collectTopBlocks = (node: ReactNode): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) collectTopBlocks(child)
+      return
+    }
+    if (!isValidElement<{ children?: ReactNode }>(node)) {
+      return
+    }
+    const range = readElementSourceRange(node)
+    if (range) {
+      blockEntries.push({ element: node, ...range })
+      return
+    }
+    if (node.type === Fragment) {
+      collectTopBlocks(node.props.children)
+    }
+  }
+  collectTopBlocks(target.baseTree)
+
+  const targetEntry = pickClosestLineBlock(blockEntries, jumpPlan.lineNumber)
+  if (!targetEntry) {
+    return empty
+  }
+
+  const candidates: ContextualMatchCandidate<PreviewJumpPatchRef>[] = []
+  let targetDepth = 0
+  const runSegments: TextSlotSegment[] = []
+  let runLength = 0
+
+  const flushRun = (): void => {
+    if (runSegments.length === 0) return
+    if (isWhitespaceOnlyTextRun(runSegments)) {
+      runSegments.length = 0
+      runLength = 0
+      return
+    }
+    const capturedSegments = [...runSegments]
+    const combined = capturedSegments.map((seg) => seg.text).join('')
+    candidates.push(
+      ...collectRunContextualCandidates(combined, compiled.matcher, (span) => ({
+        kind: 'text' as const,
+        segments: capturedSegments,
+        span
+      }))
+    )
+    runSegments.length = 0
+    runLength = 0
+  }
+
+  walkPreviewTree<void>(target.baseTree, target.classify, {
+    identity: () => undefined,
+    onElementEnter: (element) => {
+      if (targetDepth > 0 || element === targetEntry.element) {
+        targetDepth += 1
+      }
+    },
+    onElementExit: (element) => {
+      if (targetDepth > 0) {
+        if (targetDepth === 1 && element === targetEntry.element) {
+          flushRun()
+        }
+        targetDepth -= 1
+      }
+    },
+    onText: (text, slotId) => {
+      if (targetDepth === 0) return
+      runSegments.push({
+        slotId,
+        text,
+        startOffset: runLength,
+        endOffset: runLength + text.length
+      })
+      runLength += text.length
+    },
+    onFencedCode: (_element, codeSlotId, rawCode, isMermaid) => {
+      if (targetDepth === 0 || isMermaid || codeSlotId < 0) return
+      candidates.push(
+        ...collectRunContextualCandidates(rawCode, compiled.matcher, (span) => ({
+          kind: 'code' as const,
+          codeSlotId,
+          span
+        }))
+      )
+    },
+    onBlockBoundary: flushRun,
+    combineArray: () => undefined,
+    combineElement: () => undefined
+  })
+  flushRun()
+
+  const chosen = selectBestJumpCandidate(candidates, jumpPlan.renderedMatch)
+  if (!chosen) {
+    return empty
+  }
+
+  if (chosen.kind === 'code') {
+    empty.codePatches.set(chosen.codeSlotId, [
+      { start: chosen.span.start, end: chosen.span.end, matchIndex: -1, isJump: true }
+    ])
+  } else {
+    mapTextRunSpanToSlotPatches(chosen.segments, chosen.span, -1, true, empty.textPatches)
+  }
+  return empty
+}
+
+function mergePatchMaps(
+  base: Map<number, PreviewSearchMatchSpan[]>,
+  extra: Map<number, PreviewSearchMatchSpan[]>
+): Map<number, PreviewSearchMatchSpan[]> {
+  if (extra.size === 0) return base
+  if (base.size === 0) return extra
+  const merged = new Map<number, PreviewSearchMatchSpan[]>()
+  for (const [key, spans] of base.entries()) {
+    merged.set(key, [...spans])
+  }
+  for (const [key, spans] of extra.entries()) {
+    const existing = merged.get(key)
+    if (existing) {
+      existing.push(...spans)
+    } else {
+      merged.set(key, [...spans])
+    }
+  }
+  return merged
+}
+
+/**
+ * Resolves the closest rendered Preview DOM block (or nested list-item/table-row) for `lineNumber`.
+ */
+export function findClosestPreviewBlockForLine(
+  container: HTMLElement,
+  markdown: string,
+  lineNumber: number,
+  jumpHighlight?: PreviewJumpHighlightQuery | null
+): Element | null {
+  const candidates = Array.from(container.querySelectorAll<HTMLElement>('[data-source-line]')).filter(
+    (el) => {
+      const parentSource = el.parentElement?.closest('[data-source-line]')
+      return !(parentSource && container.contains(parentSource))
+    }
+  )
+
+  const blocks = candidates
+    .map((el) => {
+      const startLine = Number(el.getAttribute('data-source-line'))
+      if (!Number.isFinite(startLine) || startLine < 1) return null
+      const endLineRaw = Number(el.getAttribute('data-source-end-line') ?? startLine)
+      const endLine =
+        Number.isFinite(endLineRaw) && endLineRaw >= startLine ? endLineRaw : startLine
+      return { el, startLine, endLine }
+    })
+    .filter((entry): entry is { el: HTMLElement; startLine: number; endLine: number } => entry !== null)
+
+  const best = pickClosestLineBlock(blocks, lineNumber)
+  if (!best) {
+    return null
+  }
+
+  if (jumpHighlight && lineNumber >= best.startLine && lineNumber <= best.endLine) {
+    const hint: NestedBlockHint | null = analyzeMarkdownSearchJump(markdown, jumpHighlight).nestedItemIndex
+    if (hint?.kind === 'list-item') {
+      const listItem = best.el.querySelectorAll(':scope > li')[hint.index]
+      if (listItem) return listItem
+    } else if (hint?.kind === 'table-row') {
+      const tableRow = best.el.querySelectorAll('tr')[hint.index]
+      if (tableRow) return tableRow
+    }
+  }
+
+  return best.el
+}
+
 /**
  * Evaluates Preview search match counts and regex validation errors for a rendered tree,
  * validating regex syntax even when the document is blank or whitespace-only.
@@ -636,20 +923,45 @@ export function evaluatePreviewSearchMatches(
 }
 
 /**
- * Applies active/inactive `<mark>` search highlights across a rendered Preview React tree
- * while excluding Mermaid diagrams and code block UI chrome.
+ * Applies active/inactive `<mark>` search highlights and optional temporary jump highlights
+ * across a rendered Preview React tree while excluding Mermaid diagrams and code block UI chrome.
  */
 export function highlightPreviewTree(
   target: PreviewSearchTarget,
-  findHighlight: DocumentFindHighlightQuery | null | undefined
+  findHighlight: DocumentFindHighlightQuery | null | undefined,
+  jumpHighlight?: PreviewJumpHighlightQuery | null,
+  markdown = ''
 ): ReactNode {
-  if (
-    !findHighlight?.isActive ||
-    findHighlight.criteria.query.length === 0 ||
-    target.isBlankDocument
-  ) {
+  const hasActiveFind = Boolean(
+    findHighlight?.isActive && findHighlight.criteria.query.length > 0 && !target.isBlankDocument
+  )
+  const hasActiveJump = Boolean(
+    jumpHighlight && jumpHighlight.query.length > 0 && !target.isBlankDocument
+  )
+  if (!hasActiveFind && !hasActiveJump) {
     return target.baseTree
   }
-  const plan = buildPreviewSearchPlan(target, findHighlight.criteria)
-  return applyPreviewSearchPlan(target.baseTree, plan, findHighlight.activeIndex, target.classify)
+
+  const findPlan = hasActiveFind ? buildPreviewSearchPlan(target, findHighlight!.criteria) : EMPTY_SEARCH_PLAN
+  const jumpPatches = hasActiveJump
+    ? buildPreviewJumpPatches(target, markdown, jumpHighlight!)
+    : { textPatches: new Map<number, PreviewSearchMatchSpan[]>(), codePatches: new Map<number, PreviewSearchMatchSpan[]>() }
+
+  const mergedTextPatches = mergePatchMaps(findPlan.textPatches, jumpPatches.textPatches)
+  const mergedCodePatches = mergePatchMaps(findPlan.codePatches, jumpPatches.codePatches)
+  if (mergedTextPatches.size === 0 && mergedCodePatches.size === 0) {
+    return target.baseTree
+  }
+
+  return applyPreviewSearchPlan(
+    target.baseTree,
+    {
+      matchCount: mergedTextPatches.size + mergedCodePatches.size,
+      errorMessage: null,
+      textPatches: mergedTextPatches,
+      codePatches: mergedCodePatches
+    },
+    hasActiveFind ? findHighlight!.activeIndex : -1,
+    target.classify
+  )
 }

@@ -39,9 +39,12 @@ import {
   areWysiwygSearchSnapshotsEqual,
   getWysiwygSearchSnapshot,
   scrollWysiwygActiveMatch,
-  syncWysiwygSearchHighlights
+  scrollWysiwygSearchJump,
+  syncWysiwygSearchHighlights,
+  syncWysiwygSearchJump
 } from '../editor/wysiwygSearchHighlight'
 import { useDismissable } from '../hooks/useDismissable'
+import type { DocumentJumpHighlightTarget } from '../hooks/useDocumentSearchJump'
 import { useEditorImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
 import { useLinkMenu } from '../hooks/useLinkMenu'
@@ -70,6 +73,7 @@ interface WysiwygMarkdownEditorProps {
   enableImageInsertion?: boolean
   scrollRequest?: WysiwygScrollRequest | null
   findHighlight?: DocumentFindHighlightQuery | null
+  jumpHighlight?: DocumentJumpHighlightTarget | null
   editorRef?: { current: Editor | null }
   isActive?: boolean
   onChangeContent: (nextContent: string) => void
@@ -257,6 +261,7 @@ export function WysiwygMarkdownEditor({
   enableImageInsertion = Boolean(documentPath),
   scrollRequest,
   findHighlight = null,
+  jumpHighlight = null,
   editorRef: externalEditorRef,
   isActive = true,
   onChangeContent,
@@ -276,6 +281,7 @@ export function WysiwygMarkdownEditor({
   const onFindResultChangeRef = useRef(onFindResultChange)
   onFindResultChangeRef.current = onFindResultChange
   const lastScrolledFindNonceRef = useRef(findHighlight?.scrollNonce ?? 0)
+  const lastHandledJumpNonceRef = useRef(0)
   const lastReportedFindRef = useRef<DocumentFindResultReport | null>(null)
   const enableLinkAutocompleteRef = useRef(enableLinkAutocomplete)
   enableLinkAutocompleteRef.current = enableLinkAutocomplete
@@ -538,6 +544,22 @@ export function WysiwygMarkdownEditor({
       }
     })
   }, [editor, findHighlight, wysiwygSearchSnapshot])
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) {
+      return
+    }
+    if (!jumpHighlight) {
+      lastHandledJumpNonceRef.current = 0
+      syncWysiwygSearchJump(editor, content, null)
+      return
+    }
+    syncWysiwygSearchJump(editor, content, jumpHighlight)
+    if (lastHandledJumpNonceRef.current !== jumpHighlight.nonce) {
+      lastHandledJumpNonceRef.current = jumpHighlight.nonce
+      scrollWysiwygSearchJump(editor, scrollContainerRef.current)
+    }
+  }, [content, editor, jumpHighlight])
 
   const toolbarState = useEditorState({
     editor,

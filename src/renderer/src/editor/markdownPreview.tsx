@@ -34,6 +34,7 @@ import {
   evaluatePreviewSearchMatches,
   highlightPreviewTree,
   type PreviewElementClassification,
+  type PreviewJumpHighlightQuery,
   type PreviewPreSearchProps,
   type PreviewSearchMatchResult,
   type PreviewSearchMatchSpan,
@@ -46,6 +47,7 @@ export interface MarkdownPreviewRenderOptions {
   mermaidRenderer?: MermaidRenderer
   documentTitle?: string
   findHighlight?: DocumentFindHighlightQuery | null
+  jumpHighlight?: PreviewJumpHighlightQuery | null
   onAnchorNavigate?: (slug: string) => void
   onLinkNavigate?: (href: string) => void
 }
@@ -349,7 +351,13 @@ function PreviewPre(props: ComponentPropsWithoutRef<'pre'> & SourceLineDataProps
     )
   }
 
-  return <pre {...preProps} />
+    return (
+      <pre
+        data-source-line={sourceLine}
+        data-source-end-line={sourceEndLine}
+        {...preProps}
+      />
+    )
 }
 
 function PreviewTable(props: ComponentPropsWithoutRef<'table'> & SourceLineDataProps) {
@@ -483,7 +491,9 @@ export function renderMarkdownToReact(
 ): ReactNode {
   const contentTree = highlightPreviewTree(
     buildPreviewSearchTarget(markdown),
-    options.findHighlight
+    options.findHighlight,
+    options.jumpHighlight,
+    markdown
   )
 
   const contextValue: PreviewRenderContextValue = {

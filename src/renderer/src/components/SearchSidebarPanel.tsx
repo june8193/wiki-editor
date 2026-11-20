@@ -4,6 +4,7 @@ import type {
   SearchMatchOptions,
   TextMatchSpan,
   WorkspaceSearchFileResult,
+  WorkspaceSearchLineMatch,
   WorkspaceSearchResponse
 } from '@shared/search'
 import { getWorkspacePathKey } from '@shared/workspace'
@@ -40,6 +41,7 @@ export interface SearchSidebarPanelProps {
   onToggleOption: (optionKey: keyof SearchMatchOptions) => void
   onToggleFileCollapsed: (filePath: string) => void
   onOpenFile: (file: WorkspaceSearchFileResult) => void
+  onOpenLineMatch?: (file: WorkspaceSearchFileResult, line: WorkspaceSearchLineMatch) => void
 }
 
 /**
@@ -60,7 +62,8 @@ export function SearchSidebarPanel({
   onSubmitSearch,
   onToggleOption,
   onToggleFileCollapsed,
-  onOpenFile
+  onOpenFile,
+  onOpenLineMatch
 }: SearchSidebarPanelProps) {
   const inputRef = useSearchInputFocus(focusRequest)
 
@@ -195,7 +198,9 @@ export function SearchSidebarPanel({
                             <button
                               type="button"
                               className="search-line-btn"
-                              onClick={() => onOpenFile(file)}
+                              onClick={() =>
+                                onOpenLineMatch ? onOpenLineMatch(file, line) : onOpenFile(file)
+                              }
                             >
                               <span className="search-line-number">{line.lineNumber}</span>
                               <span className="search-line-text">

@@ -2,7 +2,7 @@ import type { EditorView } from '@codemirror/view'
 import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
-import type { RawFindHighlightRequest } from '../editor/rawSearchHighlight'
+import type { RawFindHighlightRequest, RawJumpHighlightRequest } from '../editor/rawSearchHighlight'
 import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
 import type { CursorPosition } from '../stores/PaneTabStore'
@@ -23,6 +23,7 @@ interface RawMarkdownEditorProps {
   enableImageInsertion?: boolean
   scrollRequest?: RawScrollRequest | null
   findHighlight?: RawFindHighlightRequest | null
+  jumpHighlight?: RawJumpHighlightRequest | null
   isActive?: boolean
   editorViewRef?: { current: EditorView | null }
   onChangeContent: (nextContent: string) => void
@@ -64,6 +65,7 @@ export function RawMarkdownEditor({
   enableImageInsertion = language === 'markdown' && Boolean(documentPath),
   scrollRequest,
   findHighlight,
+  jumpHighlight,
   isActive = true,
   editorViewRef,
   onChangeContent,
@@ -88,6 +90,7 @@ export function RawMarkdownEditor({
       enableImageInsertion,
       scrollRequest,
       findHighlight,
+      jumpHighlight,
       isActive,
       editorViewRef,
       onChangeContent,

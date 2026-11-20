@@ -8,6 +8,7 @@ import {
 } from 'react'
 import type { ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
+import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { ActiveTabDragSession } from '@shared/window'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
@@ -37,6 +38,7 @@ export interface PaneWorkspaceProps {
   theme: ThemeMode
   autoSave: boolean
   scrollRequest?: OutlineScrollRequest | null
+  searchJumpRequest?: DocumentSearchJumpRequest | null
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   dragState: TabDragUiState
@@ -65,6 +67,7 @@ export function PaneWorkspace({
   theme,
   autoSave,
   scrollRequest = null,
+  searchJumpRequest = null,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   dragState,
@@ -194,6 +197,7 @@ export function PaneWorkspace({
     theme,
     autoSave,
     scrollRequest,
+    searchJumpRequest,
     isShortcutDisabled,
     workspaceMarkdownFiles,
     buffers,

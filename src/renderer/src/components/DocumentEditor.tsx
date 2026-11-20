@@ -2,6 +2,8 @@ import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef } fro
 import { Search } from 'lucide-react'
 import type { Editor } from '@tiptap/core'
 import type { ThemeMode } from '@shared/config'
+import type { DocumentBuffer } from '@shared/documentBuffer'
+import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import {
   getRawEditorLanguage,
@@ -12,7 +14,6 @@ import {
 import { deriveDocumentTitle } from '../editor/mermaidExport'
 import { updateMermaidHeightMap } from '../editor/mermaidHeightSession'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import type { DocumentBuffer } from '@shared/documentBuffer'
 import type {
   DocumentOutlineSpyUpdate,
   HeadingScrollSpySample,
@@ -22,6 +23,7 @@ import {
   type DocumentEditorFindControl,
   useDocumentEditorFind
 } from '../hooks/useDocumentEditorFind'
+import { useDocumentSearchJump } from '../hooks/useDocumentSearchJump'
 import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
 import {
   DEFAULT_SPLIT_RATIO,
@@ -47,6 +49,7 @@ interface DocumentEditorProps {
   autoSave: boolean
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: OutlineScrollRequest | null
+  searchJumpRequest?: DocumentSearchJumpRequest | null
   isActive?: boolean
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
@@ -77,6 +80,7 @@ export function DocumentEditor({
   autoSave,
   mermaidRenderer,
   scrollRequest = null,
+  searchJumpRequest = null,
   isActive = true,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
@@ -138,6 +142,22 @@ export function DocumentEditor({
     findControl,
     domRefs: findDomRefs
   })
+
+  const docJump = useDocumentSearchJump({
+    tabId: tab.id,
+    documentKey: activeDoc.key,
+    effectiveMode,
+    isImage,
+    searchJumpRequest
+  })
+
+  const handleDocumentChangeContent = useCallback(
+    (nextContent: string): void => {
+      docJump.dismissJump()
+      onChangeContent(nextContent)
+    },
+    [docJump.dismissJump, onChangeContent]
+  )
 
   const handleSplitRatioChange = useCallback(
     (nextRatio: number): void => {
@@ -244,9 +264,10 @@ export function DocumentEditor({
             : null
         }
         findHighlight={docFind.rawFindHighlight}
+        jumpHighlight={docJump.rawJumpHighlight}
         isActive={isActive}
         editorViewRef={rawEditorViewRef}
-        onChangeContent={onChangeContent}
+        onChangeContent={handleDocumentChangeContent}
         onUpdateViewState={onUpdateViewState}
         onActiveHeadingChange={
           effectiveMode === 'split'
@@ -366,9 +387,10 @@ export function DocumentEditor({
                     : null
                 }
                 findHighlight={docFind.wysiwygFindHighlight}
+                jumpHighlight={docJump.wysiwygJumpHighlight}
                 editorRef={wysiwygEditorRef}
                 isActive={isActive}
-                onChangeContent={onChangeContent}
+                onChangeContent={handleDocumentChangeContent}
                 onScrollTopChange={handleScrollTopChange}
                 onLinkNavigate={onNavigateLink}
                 onActiveHeadingChange={modeHeadingChangeHandlers?.wysiwyg}
@@ -389,6 +411,7 @@ export function DocumentEditor({
                 onMermaidHeightChange={handleMermaidHeightChange}
                 scrollRequest={previewScrollRequest}
                 findHighlight={docFind.previewFindHighlight}
+                jumpHighlight={docJump.previewJumpHighlight}
                 isActive={isActive}
                 onScrollTopChange={handleScrollTopChange}
                 onLinkNavigate={onNavigateLink}
@@ -425,6 +448,7 @@ export function DocumentEditor({
                     onMermaidHeightChange={handleMermaidHeightChange}
                     scrollRequest={previewScrollRequest}
                     findHighlight={docFind.previewFindHighlight}
+                    jumpHighlight={docJump.previewJumpHighlight}
                     isActive={isActive}
                     onScrollTopChange={handleSplitPreviewScroll}
                     onLinkNavigate={onNavigateLink}

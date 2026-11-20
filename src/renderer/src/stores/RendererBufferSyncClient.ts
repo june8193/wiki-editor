@@ -35,6 +35,7 @@ import {
 export interface OpenedWorkspaceDocument {
   buffer: DocumentBuffer
   tab: DocumentTabItem
+  paneId: PaneId
 }
 
 export interface DirtyTabClosePrompt {
@@ -408,7 +409,8 @@ export class RendererBufferSyncClient {
   private async openRemoteBuffer(
     loadBuffer: () => Promise<DocumentBuffer>,
     targetPaneId: PaneId | undefined,
-    fallbackError: string
+    fallbackError: string,
+    isCancelled?: () => boolean
   ): Promise<OpenedWorkspaceDocument | null> {
     this.onError(null)
     const closedDuringOpen = new Set<string>()
@@ -417,6 +419,14 @@ export class RendererBufferSyncClient {
       const buf = await loadBuffer()
       if (!this.mounted) {
         this.releasePendingWindowTabs()
+        return null
+      }
+      if (isCancelled?.()) {
+        if (this.activeRemoteOpens.size === 1) {
+          void this.bufferApi
+            .syncWindowTabs(this.tabStore.getBufferKeys(), { releasePending: true })
+            .catch(() => undefined)
+        }
         return null
       }
       const targetKey = this.resolveLatestKey(buf.key)
@@ -430,10 +440,11 @@ export class RendererBufferSyncClient {
       this.remappedKeys.delete(targetKey)
       this.reconcileIncomingBuffer(buf)
       const tab = this.tabStore.openTab(targetKey, { paneId: targetPaneId })
+      const paneId = this.tabStore.getSnapshot().activePaneId
       this.syncCurrentLayoutTabs()
-      return { buffer: this.bufferStore.getBuffer(targetKey) ?? buf, tab }
+      return { buffer: this.bufferStore.getBuffer(targetKey) ?? buf, tab, paneId }
     } catch (error: unknown) {
-      if (this.mounted) {
+      if (this.mounted && !isCancelled?.()) {
         this.onError(toErrorMessage(error, fallbackError), error)
       }
       return null
@@ -445,7 +456,8 @@ export class RendererBufferSyncClient {
   openWorkspaceFile = async (
     target: WorkspaceEntry | string,
     targetPaneId?: PaneId,
-    explicitName?: string
+    explicitName?: string,
+    isCancelled?: () => boolean
   ): Promise<OpenedWorkspaceDocument | null> => {
     const filePath = typeof target === 'string' ? target : target.path
     const name =
@@ -454,14 +466,19 @@ export class RendererBufferSyncClient {
     this.remappedKeys.delete(key)
     const existing = this.bufferStore.getBuffer(key)
     if ((this.localTabCounts[key] ?? 0) > 0 && existing) {
+      if (isCancelled?.()) {
+        return null
+      }
       const tab = this.tabStore.openTab(key, { paneId: targetPaneId })
-      return { buffer: existing, tab }
+      const paneId = this.tabStore.getSnapshot().activePaneId
+      return { buffer: existing, tab, paneId }
     }
 
     return this.openRemoteBuffer(
       () => this.bufferApi.openWorkspaceFile(filePath, name),
       targetPaneId,
-      '파일을 열지 못했습니다.'
+      '파일을 열지 못했습니다.',
+      isCancelled
     )
   }
 

@@ -4469,6 +4469,173 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     expect(within(auxRendered.container).queryByLabelText('검색어 입력')).toBeNull()
   })
 
+  it('jumps to preserved Editor Mode and auxiliary unsaved edits inside Main Window while isolating Auxiliary Window and second Main Window', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewSpy = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy
+
+    try {
+      const harness = createMultiWindowWikiHarness(
+        {
+          autoSave: false,
+          theme: 'light',
+          recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+        },
+        {
+          workspaces: {
+            'C:\\wiki\\alpha': {
+              'alpha-doc.md': '# Alpha\nInitial alpha content',
+              'alpha-second.md': '# Second\nAlphaSecondToken body line',
+              'alpha-plain.md': '# Plain\nPlain text'
+            },
+            'C:\\wiki\\beta': {
+              'beta-doc.md': '# Beta\nSharedBeta content'
+            }
+          }
+        }
+      )
+      activeDisposers.push(() => harness.dispose())
+
+      const mainAlpha = harness.createWindow({ role: 'main' })
+      const renderedAlpha = render(<App wikiApi={mainAlpha.api} />)
+      activeDisposers.push(() => renderedAlpha.unmount())
+      const alphaExplorer = await within(renderedAlpha.container).findByLabelText(
+        '워크스페이스 탐색기'
+      )
+
+      // Open second main window on beta
+      await user.click(
+        within(
+          within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })
+        ).getByRole('button', { name: '워크스페이스' })
+      )
+      await user.click(
+        within(
+          within(renderedAlpha.container).getByRole('region', { name: '워크스페이스 뷰' })
+        ).getByRole('button', { name: 'beta 새 창에서 열기' })
+      )
+      await waitFor(() => {
+        expect(harness.getMainWindows()).toHaveLength(2)
+      })
+      const mainBeta = harness.getMainWindows()[1]
+      const renderedBeta = render(<App wikiApi={mainBeta.api} />)
+      activeDisposers.push(() => renderedBeta.unmount())
+      await within(renderedBeta.container).findByLabelText('워크스페이스 탐색기')
+
+      // Back to Explorer in mainAlpha: set alpha-second.md to Preview, switch to alpha-plain.md, and detach alpha-doc.md to Auxiliary Window
+      await user.click(
+        within(
+          within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })
+        ).getByRole('button', { name: '탐색기' })
+      )
+      const refreshedAlphaExplorer = await within(renderedAlpha.container).findByLabelText(
+        '워크스페이스 탐색기'
+      )
+      await user.click(await within(refreshedAlphaExplorer).findByText('alpha-second.md'))
+      const modeGroup = await within(renderedAlpha.container).findByRole('group', {
+        name: '에디터 모드 전환'
+      })
+      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      expect(within(renderedAlpha.container).getByLabelText('마크다운 미리보기')).toBeInTheDocument()
+
+      await user.click(within(refreshedAlphaExplorer).getByText('alpha-plain.md'))
+      await waitFor(() => {
+        expect(
+          within(renderedAlpha.container).getByRole('tab', { name: 'alpha-plain.md' })
+        ).toBeInTheDocument()
+      })
+      await user.click(within(refreshedAlphaExplorer).getByText('alpha-doc.md'))
+      await waitFor(() => {
+        expect(
+          within(renderedAlpha.container).getByRole('tab', { name: 'alpha-doc.md' })
+        ).toBeInTheDocument()
+      })
+      await detachTabViaContextMenu(user, renderedAlpha.container, /alpha-doc\.md/)
+      await waitFor(() => {
+        expect(harness.getAuxiliaryWindows(mainAlpha.windowId)).toHaveLength(1)
+      })
+      const auxWin = harness.getAuxiliaryWindows(mainAlpha.windowId)[0]
+      const auxRendered = render(<App wikiApi={auxWin.api} />)
+      activeDisposers.push(() => auxRendered.unmount())
+      const auxEditor = await within(auxRendered.container).findByTestId('document-editor')
+
+      // Unsaved edit inside Auxiliary Window
+      const updatedAuxText = '# Alpha\nLine two\nAuxUnsavedJumpToken line'
+      setRawEditorText(auxEditor, updatedAuxText)
+      await waitFor(() => {
+        expect(mainAlpha.hub.getSnapshot().buffers['c:/wiki/alpha/alpha-doc.md']?.content).toContain(
+          'AuxUnsavedJumpToken'
+        )
+      })
+
+      // Open Search View in mainAlpha
+      await user.click(
+        within(
+          within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })
+        ).getByRole('button', { name: '검색' })
+      )
+      const alphaSearchView = within(renderedAlpha.container).getByRole('region', {
+        name: '검색 뷰'
+      })
+      const alphaSearchInput = within(alphaSearchView).getByRole('textbox', { name: '검색어 입력' })
+
+      // 1. Jump to alpha-second.md -> preserves Preview mode, highlights without opening Find Bar
+      await user.type(alphaSearchInput, 'AlphaSecondToken')
+      fireEvent.keyDown(alphaSearchInput, { key: 'Enter' })
+      scrollIntoViewSpy.mockClear()
+      await user.click(
+        await within(alphaSearchView).findByRole('button', { name: /AlphaSecondToken/ })
+      )
+
+      await waitFor(() => {
+        expect(
+          within(renderedAlpha.container).getByRole('tab', { name: 'alpha-second.md' })
+        ).toHaveAttribute('aria-selected', 'true')
+      })
+      expect(within(renderedAlpha.container).queryByRole('region', { name: '문서 내 찾기 바' })).toBeNull()
+      expect(
+        within(
+          within(renderedAlpha.container).getByRole('group', { name: '에디터 모드 전환' })
+        ).getByRole('button', { name: 'Preview' })
+      ).toHaveAttribute('aria-pressed', 'true')
+      const previewEl = within(renderedAlpha.container).getByLabelText('마크다운 미리보기')
+      expect(previewEl.querySelectorAll('.preview-search-jump-highlight')).toHaveLength(1)
+      expect(previewEl.querySelector('.preview-search-jump-highlight')?.textContent).toBe(
+        'AlphaSecondToken'
+      )
+      expect(scrollIntoViewSpy).toHaveBeenCalled()
+      expect(auxRendered.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+      expect(renderedBeta.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+
+      // 2. Jump to unsaved edit from Auxiliary Window buffer -> opens alpha-doc.md in mainAlpha, jumps accurately without touching auxRendered or mainBeta
+      await user.clear(alphaSearchInput)
+      await user.type(alphaSearchInput, 'AuxUnsavedJumpToken')
+      fireEvent.keyDown(alphaSearchInput, { key: 'Enter' })
+      await user.click(
+        await within(alphaSearchView).findByRole('button', { name: /AuxUnsavedJumpToken/ })
+      )
+
+      await waitFor(() => {
+        expect(
+          within(renderedAlpha.container).getByRole('tab', { name: /alpha-doc\.md/ })
+        ).toHaveAttribute('aria-selected', 'true')
+      })
+      const mainAlphaEditor = await within(renderedAlpha.container).findByTestId('document-editor')
+      const expectedStart = updatedAuxText.indexOf('AuxUnsavedJumpToken')
+      await waitFor(() => {
+        expect(Number(mainAlphaEditor.getAttribute('data-selection-start'))).toBe(expectedStart)
+      })
+      expect(renderedAlpha.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(1)
+      expect(within(renderedAlpha.container).queryByRole('region', { name: '문서 내 찾기 바' })).toBeNull()
+      expect(auxRendered.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+      expect(within(auxRendered.container).queryByRole('region', { name: '문서 내 찾기 바' })).toBeNull()
+      expect(renderedBeta.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    }
+  })
+
   it('isolates workspace search across main windows, picks up auxiliary unsaved buffer edits, and preserves search state on focusIfOpen', async () => {
     const user = userEvent.setup()
     const harness = createMultiWindowWikiHarness(

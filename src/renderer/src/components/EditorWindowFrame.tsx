@@ -1,6 +1,7 @@
 import { type ReactNode, type Ref, useCallback, useMemo, useRef, useState } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
+import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { ConfirmDialogState } from '../hooks/useConfirmDialog'
 import { useDocumentOutline } from '../hooks/useDocumentOutline'
@@ -34,7 +35,7 @@ interface RightSidebarState {
 
 export type WindowFramePaneWorkspaceProps = Omit<
   PaneWorkspaceProps,
-  'scrollRequest' | 'onActiveHeadingChange' | 'getPaneFindControl'
+  'scrollRequest' | 'searchJumpRequest' | 'onActiveHeadingChange' | 'getPaneFindControl'
 >
 
 export function buildPaneWorkspaceProps(
@@ -68,6 +69,7 @@ export function buildPaneWorkspaceProps(
 export interface EditorWindowFrameProps {
   shellRef?: Ref<HTMLDivElement>
   paneWorkspaceProps: WindowFramePaneWorkspaceProps
+  searchJumpRequest?: DocumentSearchJumpRequest | null
   showHeadingNumbers: boolean
   onToggleHeadingNumbers: () => void
   workspaceRootPath?: string | null
@@ -90,6 +92,7 @@ export interface EditorWindowFrameProps {
 export function EditorWindowFrame({
   shellRef,
   paneWorkspaceProps,
+  searchJumpRequest = null,
   showHeadingNumbers,
   onToggleHeadingNumbers,
   workspaceRootPath = null,
@@ -183,6 +186,7 @@ export function EditorWindowFrame({
           <PaneWorkspace
             {...paneWorkspaceProps}
             scrollRequest={outline.scrollRequest}
+            searchJumpRequest={searchJumpRequest}
             getPaneFindControl={paneFind.getPaneFindControl}
             onActiveHeadingChange={outline.handleActiveHeadingChange}
             actions={paneActions}
