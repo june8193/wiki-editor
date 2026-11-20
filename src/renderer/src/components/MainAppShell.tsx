@@ -488,7 +488,6 @@ export function MainAppShell() {
     closeUnstagedDiffTabsForPaths,
     closeUnstagedDiffTabsExcept,
     closeAllUnstagedDiffTabs,
-    getOpenWorkspaceBufferPaths,
     prepareWorkspacePathsForDiscard,
     finishWorkspacePathsDiscard
   } = editor
@@ -578,27 +577,14 @@ export function MainAppShell() {
     [awaitGitConfirm, confirmAction]
   )
 
-  const resolveBufferMutationWorkspacePaths = useCallback(
-    (target: WorkspaceBufferMutationTarget): readonly string[] => {
-      if (target.kind === 'discard') {
-        return resolveTargetWorkspacePaths(target.paths)
-      }
-      if (target.kind === 'stash-create') {
-        return resolveTargetWorkspacePaths(target.targetRepoPaths)
-      }
-      return getOpenWorkspaceBufferPaths()
-    },
-    [getOpenWorkspaceBufferPaths, resolveTargetWorkspacePaths]
-  )
-
   const handleBeforeWorkspaceBufferMutation = useCallback(
     async (target: WorkspaceBufferMutationTarget): Promise<void> => {
-      const targetPaths = resolveBufferMutationWorkspacePaths(target)
+      const targetPaths = resolveTargetWorkspacePaths(target.paths)
       activeBufferMutationPathsRef.current = targetPaths
       if (targetPaths.length === 0) return
       await prepareWorkspacePathsForDiscard(targetPaths)
     },
-    [prepareWorkspacePathsForDiscard, resolveBufferMutationWorkspacePaths]
+    [prepareWorkspacePathsForDiscard, resolveTargetWorkspacePaths]
   )
 
   const handleAfterWorkspaceBufferMutation = useCallback(
@@ -608,23 +594,16 @@ export function MainAppShell() {
       nextStatus: GitStatus | null
     ): Promise<void> => {
       const targetPaths =
-        activeBufferMutationPathsRef.current ?? resolveBufferMutationWorkspacePaths(target)
+        activeBufferMutationPathsRef.current ?? resolveTargetWorkspacePaths(target.paths)
       activeBufferMutationPathsRef.current = null
       if (targetPaths.length > 0) {
-        await finishWorkspacePathsDiscard(
-          targetPaths,
-          target.kind === 'stash-restore' || succeeded
-        )
+        await finishWorkspacePathsDiscard(targetPaths, succeeded)
       }
-      if (!succeeded && target.kind !== 'stash-restore') {
-        return
-      }
-      if (target.kind === 'discard') {
-        if (target.scope === 'all') {
-          closeAllUnstagedDiffTabs()
-        } else {
-          closeUnstagedDiffTabsForPaths(target.paths)
-        }
+      if (!succeeded) return
+      if (target.kind === 'discard-all') {
+        closeAllUnstagedDiffTabs()
+      } else if (target.kind === 'discard-paths') {
+        closeUnstagedDiffTabsForPaths(target.paths)
       } else if (nextStatus) {
         closeUnstagedDiffTabsExcept(new Set(collectGitUnstagedPaths(nextStatus, true)))
       }
@@ -636,14 +615,20 @@ export function MainAppShell() {
       closeUnstagedDiffTabsForPaths,
       finishWorkspacePathsDiscard,
       refreshTree,
-      resolveBufferMutationWorkspacePaths
+      resolveTargetWorkspacePaths
     ]
   )
 
-  const handleGitWorkspaceMutated = useCallback(async (): Promise<readonly string[]> => {
-    await refreshTree()
-    return await reconcileBuffersRef.current()
-  }, [refreshTree])
+  const handleGitWorkspaceMutated = useCallback(
+    async (nextStatus?: GitStatus | null): Promise<readonly string[]> => {
+      if (nextStatus) {
+        closeUnstagedDiffTabsExcept(new Set(collectGitUnstagedPaths(nextStatus, true)))
+      }
+      await refreshTree()
+      return await reconcileBuffersRef.current()
+    },
+    [closeUnstagedDiffTabsExcept, refreshTree]
+  )
 
   const git = useGitController({
     workspaceRootPath: workspace?.rootPath ?? null,

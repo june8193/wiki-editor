@@ -1084,9 +1084,6 @@ export class RendererBufferSyncClient {
     return result.warnings
   }
 
-  getOpenWorkspaceBufferPaths = (): string[] =>
-    this.getScopeCandidates('workspace-all').map(({ buffer }) => buffer.path)
-
   prepareWorkspacePathsForDiscard = async (targetPaths: readonly string[]): Promise<void> => {
     if (targetPaths.length === 0) return
     await this.bufferApi.prepareDiscardPaths(targetPaths)

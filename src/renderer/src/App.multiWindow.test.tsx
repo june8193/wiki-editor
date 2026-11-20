@@ -5321,6 +5321,39 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     await mainWin.api.config.update({ autoSave: false })
     stashCreateDelayMs = 0
 
+    // 5c. Failed stashApply after '저장 없이 진행' must reconcile safely and preserve unsaved dirty edits across open tabs
+    await user.click(within(primaryPane).getByRole('tab', { name: /other\.md/ }))
+    setRawEditorText(
+      within(primaryPane).getByTestId('document-editor'),
+      '# Keep Dirty On Failed Apply'
+    )
+    stashApplySpy.mockRejectedValueOnce(
+      new Error('로컬 변경 사항을 먼저 커밋하거나 Stash로 임시 보관한 뒤 다시 시도하세요.')
+    )
+    const refreshedGitPanel = within(mainRendered.container).getByLabelText('Git 소스 제어')
+    const refreshedStashesSection = within(refreshedGitPanel).getByRole('region', {
+      name: 'Stashes'
+    })
+    await user.click(
+      within(refreshedStashesSection).getByRole('button', { name: 'stash@{0} Apply' })
+    )
+    const failedApplyPrompt = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(failedApplyPrompt).getByRole('button', { name: '저장 없이 진행' }))
+    await waitFor(() => {
+      expect(within(refreshedGitPanel).getByRole('alert')).toHaveTextContent(/Stash로 임시 보관/)
+    })
+    expect(getRawEditorText(within(primaryPane).getByTestId('document-editor'))).toBe(
+      '# Keep Dirty On Failed Apply'
+    )
+    fireEvent.keyDown(within(primaryPane).getByTestId('document-editor'), { key: 's', ctrlKey: true })
+    await waitFor(() => {
+      expect(
+        within(within(primaryPane).getByRole('tab', { name: /other\.md/ })).queryByTestId(
+          'tab-dirty-indicator'
+        )
+      ).toBeNull()
+    })
+
     // 6. Switching workspace resets Stashes section collapsed state back to default (aria-expanded="false")
     mainWin.api.workspace.selectFolder = async () => 'C:\\repo-other'
     await user.click(within(mainRendered.container).getByRole('button', { name: '워크스페이스' }))
