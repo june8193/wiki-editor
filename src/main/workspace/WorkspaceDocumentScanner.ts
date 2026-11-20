@@ -19,17 +19,19 @@ export interface WorkspaceDocumentScannerDependencies {
   concurrency?: number
 }
 
+export interface WorkspaceScanEntry {
+  entry: WorkspaceEntry
+  isFrontmatterEligible: boolean
+}
+
 export interface WorkspaceScanSession {
   readonly signal: AbortSignal
   isInvalidated: () => boolean
-  loadSchema: (strict: boolean) => Promise<WorkspaceFrontmatterSchema | null>
-  collectOpenTextBuffers: () => Promise<Map<string, string>>
-  listEligibleEntries: (onlyFrontmatterDocuments: boolean) => Promise<WorkspaceEntry[] | null>
-  readCandidateTextSafe: (
-    entry: WorkspaceEntry,
-    pathKey: string,
-    openTextBuffersByKey: ReadonlyMap<string, string>
-  ) => Promise<string | null>
+  loadSchema: (options?: { throwOnError?: boolean }) => Promise<WorkspaceFrontmatterSchema | null>
+  listEligibleEntries: (options?: {
+    onlyFrontmatterDocuments?: boolean
+  }) => Promise<WorkspaceScanEntry[] | null>
+  readCandidateTextSafe: (entry: WorkspaceEntry) => Promise<string | null>
   runWorkers: <TCandidate>(
     candidates: readonly TCandidate[],
     processCandidate: (candidate: TCandidate, index: number) => Promise<void>
@@ -101,15 +103,25 @@ export class WorkspaceDocumentScanner {
       controller.signal.aborted ||
       this.workspaceService.getWorkspaceRoot() !== capturedRoot
 
+    let openBuffersPromise: Promise<Map<string, string>> | null = null
+    const getOpenTextBuffersByKey = (): Promise<Map<string, string>> => {
+      openBuffersPromise ??= this.collectOpenTextBuffers()
+      return openBuffersPromise
+    }
+
     const session: WorkspaceScanSession = {
       signal: controller.signal,
       isInvalidated,
-      loadSchema: (strict) => this.loadSchema(strict),
-      collectOpenTextBuffers: () => this.collectOpenTextBuffers(),
-      listEligibleEntries: (onlyFrontmatterDocuments) =>
-        this.listEligibleEntries(onlyFrontmatterDocuments, controller.signal, isInvalidated),
-      readCandidateTextSafe: (entry, pathKey, openBuffers) =>
-        this.readCandidateTextSafe(entry, pathKey, openBuffers, controller.signal, isInvalidated),
+      loadSchema: (options) => this.loadSchema(options),
+      listEligibleEntries: (options) =>
+        this.listEligibleEntries(options, controller.signal, isInvalidated),
+      readCandidateTextSafe: (entry) =>
+        this.readCandidateTextSafe(
+          entry,
+          getOpenTextBuffersByKey,
+          controller.signal,
+          isInvalidated
+        ),
       runWorkers: (candidates, processCandidate) =>
         this.runWorkers(candidates, processCandidate, isInvalidated)
     }
@@ -123,7 +135,9 @@ export class WorkspaceDocumentScanner {
     }
   }
 
-  private async loadSchema(strict: boolean): Promise<WorkspaceFrontmatterSchema | null> {
+  private async loadSchema(
+    options: { throwOnError?: boolean } = {}
+  ): Promise<WorkspaceFrontmatterSchema | null> {
     if (!this.frontmatterSchemaService) {
       return null
     }
@@ -131,7 +145,7 @@ export class WorkspaceDocumentScanner {
       const loaded = await this.frontmatterSchemaService.getSchema()
       return loaded.schema
     } catch (error) {
-      if (strict) {
+      if (options.throwOnError) {
         throw error
       }
       return null
@@ -164,10 +178,11 @@ export class WorkspaceDocumentScanner {
   }
 
   private async listEligibleEntries(
-    onlyFrontmatterDocuments: boolean,
+    options: { onlyFrontmatterDocuments?: boolean } = {},
     signal: AbortSignal,
     isInvalidated: () => boolean
-  ): Promise<WorkspaceEntry[] | null> {
+  ): Promise<WorkspaceScanEntry[] | null> {
+    const onlyFrontmatterDocuments = options.onlyFrontmatterDocuments ?? false
     let entries: WorkspaceEntry[]
     try {
       entries = await this.workspaceService.listWorkspaceFiles({
@@ -185,19 +200,30 @@ export class WorkspaceDocumentScanner {
     if (isInvalidated()) {
       return null
     }
-    return onlyFrontmatterDocuments
-      ? entries.filter((entry) => !isExcludedFrontmatterRelativePath(entry.relativePath))
-      : entries
+
+    const scanEntries: WorkspaceScanEntry[] = []
+    for (const entry of entries) {
+      const isFrontmatterEligible =
+        !isExcludedFrontmatterRelativePath(entry.relativePath) &&
+        (onlyFrontmatterDocuments || isFrontmatterDocumentFileName(entry.name))
+      if (!onlyFrontmatterDocuments || isFrontmatterEligible) {
+        scanEntries.push({ entry, isFrontmatterEligible })
+      }
+    }
+    return scanEntries
   }
 
   private async readCandidateTextSafe(
     entry: WorkspaceEntry,
-    pathKey: string,
-    openTextBuffersByKey: ReadonlyMap<string, string>,
+    getOpenTextBuffersByKey: () => Promise<Map<string, string>>,
     signal: AbortSignal,
     isInvalidated: () => boolean
   ): Promise<string | null> {
-    const openContent = openTextBuffersByKey.get(pathKey)
+    const openTextBuffersByKey = await getOpenTextBuffersByKey()
+    if (isInvalidated()) {
+      return null
+    }
+    const openContent = openTextBuffersByKey.get(getWorkspacePathKey(entry.path))
     if (openContent !== undefined) {
       if (
         openContent.includes('\0') ||

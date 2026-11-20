@@ -80,9 +80,14 @@ export function isFrontmatterValueEmpty(value: FrontmatterFieldValue | undefined
   return true
 }
 
+function toFiniteNumberLiteral(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+}
+
 function toFiniteNumber(raw: unknown): number | null {
-  if (typeof raw === 'number') {
-    return Number.isFinite(raw) ? raw : null
+  const direct = toFiniteNumberLiteral(raw)
+  if (direct !== null) {
+    return direct
   }
   if (typeof raw === 'string') {
     if (raw.trim() === '') return null
@@ -92,15 +97,32 @@ function toFiniteNumber(raw: unknown): number | null {
   return null
 }
 
+function toNonBlankString(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.trim().length > 0 ? raw : null
+}
+
 function toValidIsoDate(raw: unknown): string | null {
   return typeof raw === 'string' && isValidIsoCalendarDate(raw) ? raw : null
 }
 
+function toStrictBoolean(raw: unknown): boolean | null {
+  return typeof raw === 'boolean' ? raw : null
+}
+
 function toBooleanValue(raw: unknown): boolean | null {
-  if (typeof raw === 'boolean') return raw
+  const direct = toStrictBoolean(raw)
+  if (direct !== null) return direct
   if (raw === 'true') return true
   if (raw === 'false') return false
   return null
+}
+
+function compareNumbers(a: number, b: number): number {
+  return a - b
+}
+
+function compareIsoDates(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 function normalizeTargetValues(values: readonly string[] | undefined): string[] {
@@ -182,10 +204,28 @@ function createDirectedComparator<T>(
   return direction === 'desc' ? (a, b) => -compareAsc(a, b) : compareAsc
 }
 
+function createOrderedRangeHandler<T>(options: {
+  normalizeDocumentValue: (raw: unknown) => T | null
+  parseConditionOperand: (raw: unknown) => T | null
+  compare: (a: T, b: T) => number
+}): FieldTypeHandler {
+  return defineFieldTypeHandler<T>({
+    evaluate: (rawValue, condition) =>
+      evaluateOrderedRangeOperator(
+        options.normalizeDocumentValue(rawValue),
+        condition,
+        options.parseConditionOperand,
+        options.compare
+      ),
+    normalizeSortable: options.normalizeDocumentValue,
+    createPairComparator: (_field, direction) => createDirectedComparator(direction, options.compare)
+  })
+}
+
 const FIELD_TYPE_HANDLERS: Readonly<Record<FrontmatterFieldType, FieldTypeHandler>> = {
   select: defineFieldTypeHandler<string>({
     evaluate: (rawValue, condition) => {
-      const actual = typeof rawValue === 'string' && rawValue.trim().length > 0 ? rawValue : null
+      const actual = toNonBlankString(rawValue)
       const targets = new Set(normalizeTargetValues(condition.values))
       if (condition.operator === 'in') {
         return actual !== null && targets.has(actual)
@@ -195,22 +235,22 @@ const FIELD_TYPE_HANDLERS: Readonly<Record<FrontmatterFieldType, FieldTypeHandle
       }
       return false
     },
-    normalizeSortable: (rawValue) =>
-      typeof rawValue === 'string' && rawValue.trim().length > 0 ? rawValue : null,
+    normalizeSortable: toNonBlankString,
     createPairComparator: (field, direction) => {
       const orderMap = new Map(
         (field.options ?? []).map((option, index) => [option.value, index] as const)
       )
-      return (a, b) => {
+      const compareWithinGroup = createDirectedComparator<string>(direction, (a, b) => {
         const idxA = orderMap.get(a)
-        const idxB = orderMap.get(b)
-        if (idxA !== undefined && idxB !== undefined) {
-          return direction === 'desc' ? idxB - idxA : idxA - idxB
+        return idxA !== undefined ? idxA - orderMap.get(b)! : compareLocaleStrings(a, b)
+      })
+      return (a, b) => {
+        const hasA = orderMap.has(a)
+        const hasB = orderMap.has(b)
+        if (hasA !== hasB) {
+          return hasA ? -1 : 1
         }
-        if (idxA !== undefined) return -1
-        if (idxB !== undefined) return 1
-        const cmp = compareLocaleStrings(a, b)
-        return direction === 'desc' ? -cmp : cmp
+        return compareWithinGroup(a, b)
       }
     }
   }),
@@ -255,43 +295,27 @@ const FIELD_TYPE_HANDLERS: Readonly<Record<FrontmatterFieldType, FieldTypeHandle
       }
       return false
     },
-    normalizeSortable: (rawValue) =>
-      typeof rawValue === 'string' && rawValue.trim().length > 0 ? rawValue : null,
+    normalizeSortable: toNonBlankString,
     createPairComparator: (_field, direction) =>
       createDirectedComparator(direction, compareLocaleStrings)
   }),
-  number: defineFieldTypeHandler<number>({
-    evaluate: (rawValue, condition) =>
-      evaluateOrderedRangeOperator(
-        typeof rawValue === 'number' && Number.isFinite(rawValue) ? rawValue : null,
-        condition,
-        toFiniteNumber,
-        (a, b) => a - b
-      ),
-    normalizeSortable: (rawValue) =>
-      typeof rawValue === 'number' && Number.isFinite(rawValue) ? rawValue : null,
-    createPairComparator: (_field, direction) =>
-      createDirectedComparator(direction, (a, b) => a - b)
+  number: createOrderedRangeHandler({
+    normalizeDocumentValue: toFiniteNumberLiteral,
+    parseConditionOperand: toFiniteNumber,
+    compare: compareNumbers
   }),
-  date: defineFieldTypeHandler<string>({
-    evaluate: (rawValue, condition) =>
-      evaluateOrderedRangeOperator(
-        toValidIsoDate(rawValue),
-        condition,
-        toValidIsoDate,
-        (a, b) => (a < b ? -1 : a > b ? 1 : 0)
-      ),
-    normalizeSortable: (rawValue) => toValidIsoDate(rawValue),
-    createPairComparator: (_field, direction) =>
-      createDirectedComparator(direction, (a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  date: createOrderedRangeHandler({
+    normalizeDocumentValue: toValidIsoDate,
+    parseConditionOperand: toValidIsoDate,
+    compare: compareIsoDates
   }),
   boolean: defineFieldTypeHandler<boolean>({
     evaluate: (rawValue, condition) => {
-      const actual = typeof rawValue === 'boolean' ? rawValue : null
+      const actual = toStrictBoolean(rawValue)
       const target = toBooleanValue(condition.value)
       return actual !== null && target !== null && actual === target
     },
-    normalizeSortable: (rawValue) => (typeof rawValue === 'boolean' ? rawValue : null),
+    normalizeSortable: toStrictBoolean,
     createPairComparator: (_field, direction) =>
       createDirectedComparator(direction, (a, b) => (a ? 1 : 0) - (b ? 1 : 0))
   })

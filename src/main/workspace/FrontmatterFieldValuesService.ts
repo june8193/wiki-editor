@@ -5,7 +5,6 @@ import {
   type WorkspaceFrontmatterFieldValuesResponse,
   type WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
-import { getWorkspacePathKey } from '@shared/workspace'
 import {
   WorkspaceDocumentScanner,
   type WorkspaceDocumentScannerDependencies
@@ -37,7 +36,7 @@ export class FrontmatterFieldValuesService {
     fieldKeys?: readonly string[]
   ): Promise<WorkspaceFrontmatterFieldValuesResponse> {
     return this.scanner.runSingleFlightScan({ valuesByField: {} }, async (session) => {
-      const schema = await session.loadSchema(true)
+      const schema = await session.loadSchema({ throwOnError: true })
       if (session.isInvalidated() || !schema) {
         return { valuesByField: {} }
       }
@@ -47,29 +46,16 @@ export class FrontmatterFieldValuesService {
         return { valuesByField: {} }
       }
 
-      const openTextBuffersByKey = await session.collectOpenTextBuffers()
-      if (session.isInvalidated()) {
+      const scanEntries = await session.listEligibleEntries({ onlyFrontmatterDocuments: true })
+      if (!scanEntries || session.isInvalidated()) {
         return { valuesByField: {} }
       }
 
-      const entries = await session.listEligibleEntries(true)
-      if (!entries || session.isInvalidated()) {
-        return { valuesByField: {} }
-      }
-
-      const candidates = entries.map((entry) => ({
-        entry,
-        pathKey: getWorkspacePathKey(entry.path)
-      }))
       const collector = createFrontmatterFieldValuesCollector(targetFields)
       const narrowSchema: WorkspaceFrontmatterSchema = { version: 1, fields: targetFields }
 
-      await session.runWorkers(candidates, async (candidate) => {
-        const text = await session.readCandidateTextSafe(
-          candidate.entry,
-          candidate.pathKey,
-          openTextBuffersByKey
-        )
+      await session.runWorkers(scanEntries, async (scanEntry) => {
+        const text = await session.readCandidateTextSafe(scanEntry.entry)
         if (text === null || session.isInvalidated()) {
           return
         }

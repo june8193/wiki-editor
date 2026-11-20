@@ -2,8 +2,6 @@ import {
   extractFrontmatterSummary,
   type FrontmatterFieldValue,
   type FrontmatterFilterCondition,
-  isExcludedFrontmatterRelativePath,
-  isFrontmatterDocumentFileName,
   matchesFrontmatterConditions,
   parseFrontmatterDocument,
   type WorkspaceFrontmatterSchema
@@ -26,7 +24,7 @@ import {
   type WorkspaceSearchResponse,
   type WorkspaceSearchSortPlan
 } from '@shared/search'
-import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
+import type { WorkspaceEntry } from '@shared/workspace'
 import {
   WorkspaceDocumentScanner,
   type WorkspaceDocumentScannerDependencies,
@@ -38,7 +36,6 @@ export type WorkspaceSearchServiceDependencies = WorkspaceDocumentScannerDepende
 interface SearchCandidate {
   entry: WorkspaceEntry
   relativePath: string
-  pathKey: string
   nameMatches: TextMatchSpan[]
   isFrontmatterEligible: boolean
 }
@@ -122,29 +119,21 @@ export class WorkspaceSearchService {
       }
 
       const needsSchema = hasConditions || sort?.by === 'frontmatter'
-      const schema = await session.loadSchema(needsSchema)
+      const schema = await session.loadSchema({ throwOnError: needsSchema })
       if (session.isInvalidated() || (hasConditions && !schema)) {
         return emptyWorkspaceSearchResponse(query)
       }
 
-      const openTextBuffersByKey = await session.collectOpenTextBuffers()
-      if (session.isInvalidated()) {
+      const scanEntries = await session.listEligibleEntries({ onlyFrontmatterDocuments: hasConditions })
+      if (!scanEntries || session.isInvalidated()) {
         return emptyWorkspaceSearchResponse(query)
       }
 
-      const entries = await session.listEligibleEntries(hasConditions)
-      if (!entries || session.isInvalidated()) {
-        return emptyWorkspaceSearchResponse(query)
-      }
-
-      const candidates: SearchCandidate[] = entries.map((entry) => ({
-        entry,
-        relativePath: entry.relativePath,
-        pathKey: getWorkspacePathKey(entry.path),
-        nameMatches: compiledMatcher ? compiledMatcher.findMatches(entry.relativePath) : [],
-        isFrontmatterEligible:
-          !isExcludedFrontmatterRelativePath(entry.relativePath) &&
-          isFrontmatterDocumentFileName(entry.name)
+      const candidates: SearchCandidate[] = scanEntries.map((scanEntry) => ({
+        entry: scanEntry.entry,
+        relativePath: scanEntry.entry.relativePath,
+        nameMatches: compiledMatcher ? compiledMatcher.findMatches(scanEntry.entry.relativePath) : [],
+        isFrontmatterEligible: scanEntry.isFrontmatterEligible
       }))
 
       const sortPlan = createWorkspaceSearchSortPlan(sort, schema)
@@ -157,7 +146,6 @@ export class WorkspaceSearchService {
         candidates,
         matcher: compiledMatcher,
         frontmatter: { schema, conditions, sortPlan },
-        openTextBuffersByKey,
         maxTotalMatches,
         maxMatchesPerFile,
         session
@@ -229,7 +217,6 @@ export class WorkspaceSearchService {
     candidates: readonly SearchCandidate[]
     matcher: CompiledSearchMatcher | null
     frontmatter: FrontmatterSearchPlan
-    openTextBuffersByKey: ReadonlyMap<string, string>
     maxTotalMatches: number
     maxMatchesPerFile: number
     session: WorkspaceScanSession
@@ -239,7 +226,6 @@ export class WorkspaceSearchService {
       candidates,
       matcher,
       frontmatter,
-      openTextBuffersByKey,
       maxTotalMatches,
       maxMatchesPerFile,
       session
@@ -286,11 +272,7 @@ export class WorkspaceSearchService {
         return
       }
 
-      const text = await session.readCandidateTextSafe(
-        candidate.entry,
-        candidate.pathKey,
-        openTextBuffersByKey
-      )
+      const text = await session.readCandidateTextSafe(candidate.entry)
       if (session.isInvalidated()) {
         return
       }
