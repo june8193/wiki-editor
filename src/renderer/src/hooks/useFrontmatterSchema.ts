@@ -86,28 +86,37 @@ export function useFrontmatterSchema({
     })
   }, [commitSchemaResult, frontmatterApi, isAuxiliary])
 
+  const isSessionRootActive = useCallback(
+    (capturedRoot: string | null): boolean =>
+      isMountedRef.current && (isAuxiliary || workspaceRootRef.current === capturedRoot),
+    [isAuxiliary]
+  )
+
+  const hasOpenSessionWorkspace = useCallback(
+    (capturedRoot: string | null): boolean => isAuxiliary || Boolean(capturedRoot),
+    [isAuxiliary]
+  )
+
   const createDefaultSchema = useCallback((): void => {
     if (!frontmatterApi) return
     const capturedRoot = workspaceRootRef.current
-    if (!isAuxiliary && !capturedRoot) return
+    if (!hasOpenSessionWorkspace(capturedRoot)) return
 
     onErrorRef.current(null)
     void frontmatterApi.createDefaultSchema().then(
       (created) => {
-        if (!isMountedRef.current) return
-        if (!isAuxiliary && workspaceRootRef.current !== capturedRoot) return
+        if (!isSessionRootActive(capturedRoot)) return
         commitSchemaResult(created)
       },
       (error: unknown) => {
-        if (!isMountedRef.current) return
-        if (!isAuxiliary && workspaceRootRef.current !== capturedRoot) return
+        if (!isSessionRootActive(capturedRoot)) return
         onErrorRef.current(
           toErrorMessage(error, '기본 프론트매터 스키마를 생성하지 못했습니다.'),
           error
         )
       }
     )
-  }, [commitSchemaResult, frontmatterApi, isAuxiliary])
+  }, [commitSchemaResult, frontmatterApi, hasOpenSessionWorkspace, isSessionRootActive])
 
   const saveSchema = useCallback(
     async (nextSchema: WorkspaceFrontmatterSchema): Promise<FrontmatterSchemaLoadResult> => {
@@ -115,22 +124,22 @@ export function useFrontmatterSchema({
         throw new Error('프론트매터 스키마 API를 사용할 수 없습니다.')
       }
       const capturedRoot = workspaceRootRef.current
-      if (!isAuxiliary && !capturedRoot) {
+      if (!hasOpenSessionWorkspace(capturedRoot)) {
         throw new Error('열린 워크스페이스가 없습니다.')
       }
       const saved = await frontmatterApi.saveSchema(nextSchema)
-      if (isMountedRef.current && (isAuxiliary || workspaceRootRef.current === capturedRoot)) {
+      if (isSessionRootActive(capturedRoot)) {
         commitSchemaResult(saved)
       }
       return saved
     },
-    [commitSchemaResult, frontmatterApi, isAuxiliary]
+    [commitSchemaResult, frontmatterApi, hasOpenSessionWorkspace, isSessionRootActive]
   )
 
   const ensureSchemaFilePath = useCallback(async (): Promise<string | null> => {
     if (!frontmatterApi) return null
     const capturedRoot = workspaceRootRef.current
-    if (!isAuxiliary && !capturedRoot) return null
+    if (!hasOpenSessionWorkspace(capturedRoot)) return null
 
     const current = schemaResultRef.current
     if (current?.exists && current.path) {
@@ -142,12 +151,11 @@ export function useFrontmatterSchema({
       const result = current?.exists
         ? await frontmatterApi.getSchema()
         : await frontmatterApi.createDefaultSchema()
-      if (!isMountedRef.current) return null
-      if (!isAuxiliary && workspaceRootRef.current !== capturedRoot) return null
+      if (!isSessionRootActive(capturedRoot)) return null
       commitSchemaResult(result)
       return result.exists && result.path ? result.path : null
     } catch (error: unknown) {
-      if (isMountedRef.current && (isAuxiliary || workspaceRootRef.current === capturedRoot)) {
+      if (isSessionRootActive(capturedRoot)) {
         onErrorRef.current(
           toErrorMessage(error, '프론트매터 스키마 파일을 준비하지 못했습니다.'),
           error
@@ -155,7 +163,7 @@ export function useFrontmatterSchema({
       }
       return null
     }
-  }, [commitSchemaResult, frontmatterApi, isAuxiliary])
+  }, [commitSchemaResult, frontmatterApi, hasOpenSessionWorkspace, isSessionRootActive])
 
   return {
     schemaResult,

@@ -16,6 +16,7 @@ export {
   isValidFrontmatterFieldKey,
   parseFrontmatterSchema,
   parseFrontmatterSchemaJson,
+  requiresFrontmatterFieldOptions,
   serializeFrontmatterSchema,
   type FrontmatterFieldDefinition,
   type FrontmatterFieldType,

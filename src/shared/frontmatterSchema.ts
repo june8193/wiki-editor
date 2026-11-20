@@ -157,6 +157,14 @@ export function isValidFrontmatterFieldKey(key: string): boolean {
   return !INVALID_FRONTMATTER_KEY_RE.test(key)
 }
 
+/** Returns true when a field type requires at least one predefined schema option. */
+export function requiresFrontmatterFieldOptions(
+  fieldType: FrontmatterFieldType,
+  allowCustom?: boolean
+): boolean {
+  return fieldType === 'select' || (fieldType === 'multi-select' && !allowCustom)
+}
+
 function validateOptionalBoolean(
   record: Record<string, unknown>,
   propName: string,
@@ -176,8 +184,7 @@ function validateSchemaOptions(
   fieldType: FrontmatterFieldType,
   allowCustom: boolean | undefined
 ): FrontmatterOptionSpec[] | undefined {
-  const requiresNonEmptyOptions =
-    fieldType === 'select' || (fieldType === 'multi-select' && !allowCustom)
+  const requiresNonEmptyOptions = requiresFrontmatterFieldOptions(fieldType, allowCustom)
 
   if (rawOptions === undefined) {
     if (requiresNonEmptyOptions) {

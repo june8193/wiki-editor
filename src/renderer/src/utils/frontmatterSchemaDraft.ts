@@ -4,6 +4,7 @@ import {
   type FrontmatterFieldType,
   isValidFrontmatterFieldKey,
   parseFrontmatterSchema,
+  requiresFrontmatterFieldOptions,
   type WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
 
@@ -194,9 +195,7 @@ export function validateAndBuildSchemaDraft(
     }
 
     if (isOptionBasedFieldType(field.type)) {
-      const requiresOptions =
-        field.type === 'select' || (field.type === 'multi-select' && !field.allowCustom)
-      if (requiresOptions && field.options.length === 0) {
+      if (requiresFrontmatterFieldOptions(field.type, field.allowCustom) && field.options.length === 0) {
         fieldError.optionsError = '최소 1개 이상의 옵션을 추가하세요.'
       }
 

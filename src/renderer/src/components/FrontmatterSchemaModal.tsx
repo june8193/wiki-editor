@@ -420,6 +420,13 @@ export function FrontmatterSchemaModal({
     setDraftFields(updater)
   }
 
+  const updateFieldById = (
+    fieldId: string,
+    updater: (prev: SchemaFieldDraft) => SchemaFieldDraft
+  ): void => {
+    mutateFields((prev) => prev.map((item) => (item.id === fieldId ? updater(item) : item)))
+  }
+
   const handleLoadDefaultTemplate = (): void => {
     mutateFields(() => createSchemaDraftFields(createDefaultFrontmatterSchema(), nextDraftId))
     setHasAttemptedSave(false)
@@ -529,11 +536,7 @@ export function FrontmatterSchemaModal({
                   totalCount={draftFields.length}
                   idPrefix={idPrefix}
                   errors={visibleErrorsByFieldId[field.id] ?? EMPTY_FIELD_ERRORS}
-                  onUpdate={(updater) =>
-                    mutateFields((prev) =>
-                      prev.map((item) => (item.id === field.id ? updater(item) : item))
-                    )
-                  }
+                  onUpdate={(updater) => updateFieldById(field.id, updater)}
                   onMove={(direction) =>
                     mutateFields((prev) => moveArrayItem(prev, index, direction))
                   }
@@ -541,16 +544,10 @@ export function FrontmatterSchemaModal({
                     mutateFields((prev) => prev.filter((item) => item.id !== field.id))
                   }
                   onAddOption={() =>
-                    mutateFields((prev) =>
-                      prev.map((item) =>
-                        item.id === field.id
-                          ? {
-                              ...item,
-                              options: [...item.options, createEmptySchemaOptionDraft(nextDraftId)]
-                            }
-                          : item
-                      )
-                    )
+                    updateFieldById(field.id, (prev) => ({
+                      ...prev,
+                      options: [...prev.options, createEmptySchemaOptionDraft(nextDraftId)]
+                    }))
                   }
                 />
               ))
