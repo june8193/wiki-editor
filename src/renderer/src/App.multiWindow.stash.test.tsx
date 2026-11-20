@@ -6,6 +6,7 @@ import { App } from './App'
 import {
   getRawEditorText,
   type InMemoryWindowHandle,
+  type MultiWindowWikiHarness,
   setRawEditorText
 } from './test/inMemoryWikiHarness'
 import {
@@ -18,6 +19,99 @@ vi.mock('mermaid', async () => (await import('./test/appTestHelpers')).createMer
 
 describe('Multi-window Git Stash integration (<App />)', () => {
   const { createHarness, trackDisposer } = registerMultiWindowLifecycle()
+
+  /**
+   * Opens shared buffers across Main + 2 Auxiliary windows, seeds non-target dirty edits,
+   * and opens Staged (`secondaryPane`) + Working Tree (`primaryPane`) Diff tabs for stash tests.
+   */
+  async function setupMultiWindowGitStashScenario(
+    user: ReturnType<typeof userEvent.setup>,
+    harness: MultiWindowWikiHarness,
+    mainWin: InMemoryWindowHandle
+  ) {
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    trackDisposer(() => mainRendered.unmount())
+
+    // Open notes.md -> detach to Aux1; open draft.md -> detach to Aux2; keep staged.md & other.md dirty in Main
+    await openFolderAndNoteInWindow(
+      user,
+      mainRendered.container,
+      mainWin.emitMenuCommand,
+      'notes.md'
+    )
+    await detachTabViaContextMenu(user, mainRendered.container, /notes\.md/)
+    const explorer = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('notes.md'))
+    await user.click(await within(explorer).findByText('draft.md'))
+    await detachTabViaContextMenu(user, mainRendered.container, /draft\.md/)
+    await user.click(await within(explorer).findByText('draft.md'))
+
+    for (const [fileName, dirtyText] of [
+      ['staged.md', '# Dirty Staged NonTarget'],
+      ['other.md', '# Dirty Other NonTarget']
+    ] as const) {
+      await user.click(await within(explorer).findByText(fileName))
+      await waitFor(() => {
+        expect(
+          within(mainRendered.container).getByRole('tab', { name: new RegExp(fileName) })
+        ).toHaveAttribute('aria-selected', 'true')
+      })
+      setRawEditorText(within(mainRendered.container).getByTestId('document-editor'), dirtyText)
+    }
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+    })
+    const [auxNotes, auxDraft] = harness.getAuxiliaryWindows()
+    const auxNotesRendered = render(<App wikiApi={auxNotes.api} />)
+    const auxDraftRendered = render(<App wikiApi={auxDraft.api} />)
+    trackDisposer(
+      () => auxNotesRendered.unmount(),
+      () => auxDraftRendered.unmount()
+    )
+
+    setRawEditorText(
+      await within(auxNotesRendered.container).findByTestId('document-editor'),
+      '# Aux Dirty Notes'
+    )
+    setRawEditorText(
+      await within(auxDraftRendered.container).findByTestId('document-editor'),
+      '# Aux Dirty Draft'
+    )
+
+    // Switch to Git View -> open staged Diff in secondary & unstaged notes Diff in primary
+    await user.click(within(mainRendered.container).getByRole('button', { name: 'Git' }))
+    const gitPanel = await within(mainRendered.container).findByLabelText('Git 소스 제어')
+    const stashesSection = within(gitPanel).getByRole('region', { name: 'Stashes' })
+    const stagedSection = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
+    const changesSection = within(gitPanel).getByRole('group', { name: 'Changes' })
+
+    await user.click(within(stagedSection).getByText('staged.md'))
+    const primaryPane = within(mainRendered.container).getByTestId('pane-primary')
+    await within(primaryPane).findByText('Staged')
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { selected: true }))
+    await user.click(
+      within(
+        await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })
+      ).getByRole('menuitem', { name: '분할 영역으로 이동' })
+    )
+    const secondaryPane = await within(mainRendered.container).findByTestId('pane-secondary')
+    fireEvent.mouseDown(primaryPane)
+    await user.click(within(changesSection).getByText('notes.md'))
+    await within(primaryPane).findByText('Working Tree')
+
+    return {
+      mainRendered,
+      auxDraft,
+      auxNotesRendered,
+      gitPanel,
+      stashesSection,
+      stagedSection,
+      changesSection,
+      primaryPane,
+      secondaryPane
+    }
+  }
 
   it('runs one-click Changes stash (keeping Staged Changes, auto-expanding Stashes, syncing Main/Aux buffers & tabs) and Apply/Pop restore (including conflict preservation and workspace-switch collapse reset)', async () => {
     const user = userEvent.setup()
@@ -176,81 +270,21 @@ describe('Multi-window Git Stash integration (<App />)', () => {
 
     const mainWin = harness.createWindow({ role: 'main' })
     mainWorkspaceApi = mainWin.api.workspace
-    const mainRendered = render(<App wikiApi={mainWin.api} />)
-    trackDisposer(() => mainRendered.unmount())
+    const {
+      mainRendered,
+      auxDraft,
+      auxNotesRendered,
+      gitPanel,
+      stashesSection,
+      changesSection,
+      primaryPane,
+      secondaryPane
+    } = await setupMultiWindowGitStashScenario(user, harness, mainWin)
 
-    // Open notes.md -> detach to Aux1; open draft.md -> detach to Aux2; keep staged.md & other.md dirty in Main
-    await openFolderAndNoteInWindow(
-      user,
-      mainRendered.container,
-      mainWin.emitMenuCommand,
-      'notes.md'
-    )
-    await detachTabViaContextMenu(user, mainRendered.container, /notes\.md/)
-    const explorer = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
-    await user.click(await within(explorer).findByText('notes.md'))
-    await user.click(await within(explorer).findByText('draft.md'))
-    await detachTabViaContextMenu(user, mainRendered.container, /draft\.md/)
-    await user.click(await within(explorer).findByText('draft.md'))
-
-    for (const [fileName, dirtyText] of [
-      ['staged.md', '# Dirty Staged NonTarget'],
-      ['other.md', '# Dirty Other NonTarget']
-    ] as const) {
-      await user.click(await within(explorer).findByText(fileName))
-      await waitFor(() => {
-        expect(
-          within(mainRendered.container).getByRole('tab', { name: new RegExp(fileName) })
-        ).toHaveAttribute('aria-selected', 'true')
-      })
-      setRawEditorText(within(mainRendered.container).getByTestId('document-editor'), dirtyText)
-    }
-
-    await waitFor(() => {
-      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
-    })
-    const [auxNotes, auxDraft] = harness.getAuxiliaryWindows()
-    const auxNotesRendered = render(<App wikiApi={auxNotes.api} />)
-    const auxDraftRendered = render(<App wikiApi={auxDraft.api} />)
-    trackDisposer(
-      () => auxNotesRendered.unmount(),
-      () => auxDraftRendered.unmount()
-    )
-
-    setRawEditorText(
-      await within(auxNotesRendered.container).findByTestId('document-editor'),
-      '# Aux Dirty Notes'
-    )
-    setRawEditorText(
-      await within(auxDraftRendered.container).findByTestId('document-editor'),
-      '# Aux Dirty Draft'
-    )
-
-    // Switch to Git View -> Stashes collapsed at 0, open staged Diff in secondary & unstaged notes Diff in primary
-    await user.click(within(mainRendered.container).getByRole('button', { name: 'Git' }))
-    const gitPanel = await within(mainRendered.container).findByLabelText('Git 소스 제어')
-    const stashesSection = within(gitPanel).getByRole('region', { name: 'Stashes' })
     expect(within(stashesSection).getByRole('button', { name: /^Stashes/i })).toHaveAttribute(
       'aria-expanded',
       'false'
     )
-
-    const stagedSection = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
-    const changesSection = within(gitPanel).getByRole('group', { name: 'Changes' })
-    await user.click(within(stagedSection).getByText('staged.md'))
-    const primaryPane = within(mainRendered.container).getByTestId('pane-primary')
-    await within(primaryPane).findByText('Staged')
-    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { selected: true }))
-    await user.click(
-      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
-        'menuitem',
-        { name: '분할 영역으로 이동' }
-      )
-    )
-    const secondaryPane = await within(mainRendered.container).findByTestId('pane-secondary')
-    fireEvent.mouseDown(primaryPane)
-    await user.click(within(changesSection).getByText('notes.md'))
-    await within(primaryPane).findByText('Working Tree')
 
     // 1. Click Changes만 Stash -> prompt shows ONLY target notes.md / draft.md (excludes staged.md & other.md)
     await user.click(within(changesSection).getByRole('button', { name: 'Changes만 Stash' }))
@@ -578,75 +612,20 @@ describe('Multi-window Git Stash integration (<App />)', () => {
 
     const mainWin = harness.createWindow({ role: 'main' })
     mainWorkspaceApi = mainWin.api.workspace
-    const mainRendered = render(<App wikiApi={mainWin.api} />)
-    trackDisposer(() => mainRendered.unmount())
-
-    // Open notes.md -> Aux1, draft.md -> Aux2; keep staged.md & other.md open & dirty in Main
-    await openFolderAndNoteInWindow(
-      user,
-      mainRendered.container,
-      mainWin.emitMenuCommand,
-      'notes.md'
-    )
-    await detachTabViaContextMenu(user, mainRendered.container, /notes\.md/)
-    const explorer = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
-    await user.click(await within(explorer).findByText('notes.md'))
-    await user.click(await within(explorer).findByText('draft.md'))
-    await detachTabViaContextMenu(user, mainRendered.container, /draft\.md/)
-    await user.click(await within(explorer).findByText('draft.md'))
-
-    for (const [fileName, dirtyText] of [
-      ['staged.md', '# Dirty Staged NonTarget'],
-      ['other.md', '# Dirty Other NonTarget']
-    ] as const) {
-      await user.click(await within(explorer).findByText(fileName))
-      await waitFor(() => {
-        expect(
-          within(mainRendered.container).getByRole('tab', { name: new RegExp(fileName) })
-        ).toHaveAttribute('aria-selected', 'true')
-      })
-      setRawEditorText(within(mainRendered.container).getByTestId('document-editor'), dirtyText)
-    }
-
-    await waitFor(() => {
-      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
-    })
-    const [auxNotes, auxDraft] = harness.getAuxiliaryWindows()
-    const auxNotesRendered = render(<App wikiApi={auxNotes.api} />)
-    const auxDraftRendered = render(<App wikiApi={auxDraft.api} />)
-    trackDisposer(() => auxNotesRendered.unmount(), () => auxDraftRendered.unmount())
-
-    setRawEditorText(
-      await within(auxNotesRendered.container).findByTestId('document-editor'),
-      '# Dirty Aux Notes'
-    )
-    setRawEditorText(
-      await within(auxDraftRendered.container).findByTestId('document-editor'),
-      '# Dirty Aux Draft'
-    )
-
-    // Open Git panel and open staged.md staged diff (Secondary) + notes.md unstaged diff (Primary)
-    await user.click(within(mainRendered.container).getByRole('button', { name: 'Git' }))
-    const gitPanel = await within(mainRendered.container).findByLabelText('Git 소스 제어')
-    const changesGroup = within(gitPanel).getByRole('group', { name: 'Changes' })
-    const stagedGroup = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
+    const {
+      mainRendered,
+      auxDraft,
+      auxNotesRendered,
+      gitPanel,
+      stashesSection,
+      stagedSection: stagedGroup,
+      changesSection: changesGroup,
+      primaryPane,
+      secondaryPane
+    } = await setupMultiWindowGitStashScenario(user, harness, mainWin)
 
     // Staged Changes rows must NOT have single-file Stash icon
     expect(within(stagedGroup).queryByRole('button', { name: 'wiki/staged.md Stash' })).toBeNull()
-
-    await user.click(within(stagedGroup).getByText('staged.md'))
-    const primaryPane = within(mainRendered.container).getByTestId('pane-primary')
-    await within(primaryPane).findByText('Staged')
-    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { selected: true }))
-    await user.click(
-      within(
-        await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })
-      ).getByRole('menuitem', { name: '분할 영역으로 이동' })
-    )
-    const secondaryPane = await within(mainRendered.container).findByTestId('pane-secondary')
-    fireEvent.mouseDown(primaryPane)
-    await user.click(within(changesGroup).getByText('notes.md'))
-    await within(primaryPane).findByText('Working Tree')
 
     // 1. Stash notes.md to verify target-only dirty buffer prompt and auto-closing notes.md unstaged diff
     await user.click(within(changesGroup).getByRole('button', { name: 'wiki/notes.md Stash' }))
@@ -667,7 +646,6 @@ describe('Multi-window Git Stash integration (<App />)', () => {
     expect(getRawEditorText(within(auxNotesRendered.container).getByTestId('document-editor'))).toBe(
       '# Head Notes'
     )
-    const stashesSection = within(gitPanel).getByRole('region', { name: 'Stashes' })
     expect(within(stashesSection).getByRole('button', { name: /^Stashes/i })).toHaveAttribute(
       'aria-expanded',
       'true'
