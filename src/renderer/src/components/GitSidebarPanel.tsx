@@ -30,7 +30,7 @@ import {
   type GitStatus
 } from '@shared/git'
 import { type DismissReason, useDismissable } from '../hooks/useDismissable'
-import type { GitStashDetailState } from '../hooks/useGitController'
+import type { GitStashDetailState } from '../hooks/useGitDetailSelection'
 import type { GitGraphState } from '../hooks/useGitGraphLog'
 import { toGitDiffRequest } from '../utils/gitFilePresentation'
 import type { GitChangesGroupKey, GitChangesViewState } from '../utils/gitChangesView'

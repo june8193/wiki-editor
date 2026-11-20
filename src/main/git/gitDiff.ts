@@ -314,18 +314,29 @@ async function readUntrackedFileDiff(
 
 async function readStashUntrackedFileDiff(
   repoRoot: string,
-  stashHash: string,
+  validatedStashHash: string,
   safePath: string,
   existsInWorkspace: boolean,
   execOptions: GitDiffExecOptions
 ): Promise<GitFileDiff> {
-  const validatedHash = assertValidStashHash(stashHash)
   const { buffer, truncated, hasNullByte } = await execGitStdoutCapped({
     cwd: repoRoot,
-    args: ['cat-file', '-p', `${validatedHash}^3:${safePath}`],
+    args: ['cat-file', '-p', `${validatedStashHash}^3:${safePath}`],
     execOptions
   })
   return buildUntrackedBlobDiffResult(safePath, buffer, truncated, hasNullByte, existsInWorkspace)
+}
+
+/**
+ * Validates commit/stash target identifiers on a GitDiffRequest before resolving repository paths.
+ */
+export function assertValidDiffTarget(request: GitDiffRequest): void {
+  if (request.kind === 'commit') {
+    assertValidCommitHash(request.commitHash)
+  } else if (request.kind === 'stash') {
+    assertValidStashRef(request.stashRef)
+    assertValidStashHash(request.stashHash)
+  }
 }
 
 export interface ComputeGitDiffOptions {
@@ -353,80 +364,77 @@ export async function computeGitDiff({
     safePath
   )
 
-  if (request.kind === 'unstaged' && request.status === '?') {
-    return readUntrackedFileDiff(repoRoot, safePath, existsOnDisk, existsInWorkspace)
-  }
-
-  if (request.kind === 'stash') {
-    assertValidStashRef(request.stashRef)
-    const validatedHash = assertValidStashHash(request.stashHash)
-    if (request.status === '?') {
-      return readStashUntrackedFileDiff(
-        repoRoot,
-        validatedHash,
-        safePath,
-        existsInWorkspace,
-        execOptions
-      )
-    }
-  }
-
   const pathArgs = safeOrigPath ? [safeOrigPath, safePath] : [safePath]
   let gitArgs: string[]
 
-  if (request.kind === 'staged') {
-    const baseTree = hasHeadCommit ? 'HEAD' : GIT_EMPTY_TREE_HASH
-    gitArgs = [
-      '-c',
-      'core.quotePath=false',
-      'diff',
-      '--cached',
-      '-M',
-      '--find-renames',
-      '--unified=3',
-      baseTree,
-      '--',
-      ...pathArgs
-    ]
-  } else if (request.kind === 'unstaged') {
-    gitArgs = [
-      '-c',
-      'core.quotePath=false',
-      'diff',
-      '--unified=3',
-      '--',
-      ...pathArgs
-    ]
-  } else if (request.kind === 'commit') {
-    const validatedHash = assertValidCommitHash(request.commitHash)
-    gitArgs = [
-      '-c',
-      'core.quotePath=false',
-      'show',
-      '--first-parent',
-      '-m',
-      '--root',
-      '-M',
-      '--format=',
-      '--unified=3',
-      `${validatedHash}^{commit}`,
-      '--',
-      ...pathArgs
-    ]
-  } else {
-    const validatedHash = assertValidStashHash(request.stashHash)
-    gitArgs = [
-      '-c',
-      'core.quotePath=false',
-      'diff',
-      '-M',
-      '--find-renames',
-      '--unified=3',
-      `${validatedHash}^1`,
-      validatedHash,
-      '--',
-      ...pathArgs
-    ]
+  switch (request.kind) {
+    case 'staged': {
+      const baseTree = hasHeadCommit ? 'HEAD' : GIT_EMPTY_TREE_HASH
+      gitArgs = [
+        '-c',
+        'core.quotePath=false',
+        'diff',
+        '--cached',
+        '-M',
+        '--find-renames',
+        '--unified=3',
+        baseTree,
+        '--',
+        ...pathArgs
+      ]
+      break
+    }
+    case 'unstaged': {
+      if (request.status === '?') {
+        return readUntrackedFileDiff(repoRoot, safePath, existsOnDisk, existsInWorkspace)
+      }
+      gitArgs = ['-c', 'core.quotePath=false', 'diff', '--unified=3', '--', ...pathArgs]
+      break
+    }
+    case 'commit': {
+      const validatedHash = assertValidCommitHash(request.commitHash)
+      gitArgs = [
+        '-c',
+        'core.quotePath=false',
+        'show',
+        '--first-parent',
+        '-m',
+        '--root',
+        '-M',
+        '--format=',
+        '--unified=3',
+        `${validatedHash}^{commit}`,
+        '--',
+        ...pathArgs
+      ]
+      break
+    }
+    case 'stash': {
+      assertValidStashRef(request.stashRef)
+      const validatedHash = assertValidStashHash(request.stashHash)
+      if (request.status === '?') {
+        return readStashUntrackedFileDiff(
+          repoRoot,
+          validatedHash,
+          safePath,
+          existsInWorkspace,
+          execOptions
+        )
+      }
+      gitArgs = [
+        '-c',
+        'core.quotePath=false',
+        'diff',
+        '-M',
+        '--find-renames',
+        '--unified=3',
+        `${validatedHash}^1`,
+        validatedHash,
+        '--',
+        ...pathArgs
+      ]
+      break
+    }
   }
 
   const { buffer, truncated, hasNullByte } = await execGitStdoutCapped({

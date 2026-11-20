@@ -10,7 +10,7 @@ import {
   type GitStatus
 } from '@shared/git'
 import { createInitialGitGraphState } from '../hooks/useGitGraphLog'
-import { createInitialGitStashDetailState } from '../hooks/useGitController'
+import { createInitialGitStashDetailState } from '../hooks/useGitDetailSelection'
 import themeCss from '../styles/theme.css?raw'
 import {
   createDefaultGitChangesViewState,

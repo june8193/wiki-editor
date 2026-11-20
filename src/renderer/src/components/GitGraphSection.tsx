@@ -381,17 +381,17 @@ function GitCommitDetailPanel({
 
   return (
     <div
-      className="git-commit-detail"
+      className="git-detail"
       role="region"
       aria-label={`${shortHash} 커밋 상세`}
       // Clear inherited commit-row tooltip while hovering inside the expanded detail box.
       title=""
     >
       {detailState.status === 'loading' && (
-        <p className="git-commit-detail-status">커밋 상세를 불러오는 중...</p>
+        <p className="git-detail-status">커밋 상세를 불러오는 중...</p>
       )}
       {detailState.status === 'error' && (
-        <p className="git-commit-detail-error" role="alert">
+        <p className="git-detail-error" role="alert">
           {detailState.errorMessage}
         </p>
       )}

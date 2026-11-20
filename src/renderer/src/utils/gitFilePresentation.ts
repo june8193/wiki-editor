@@ -163,35 +163,47 @@ export function canOpenGitChangedFile(
   return resolveRepoFileInWorkspace(repoRoot, workspaceRootPath, file.path) !== null
 }
 
+interface GitDiffPresentationDescriptor {
+  tabLabel: string
+  contextLabel: string
+  keyScope: string
+}
+
+function describeGitDiffRequest(request: GitDiffRequest): GitDiffPresentationDescriptor {
+  const baseName = getGitFileBaseName(request.path)
+  switch (request.kind) {
+    case 'staged':
+      return { tabLabel: baseName, contextLabel: 'Staged', keyScope: 'staged' }
+    case 'unstaged':
+      return { tabLabel: baseName, contextLabel: 'Working Tree', keyScope: 'unstaged' }
+    case 'commit':
+      return {
+        tabLabel: `${baseName} (${request.shortHash})`,
+        contextLabel: `Commit ${request.shortHash}`,
+        keyScope: `commit:${request.commitHash}`
+      }
+    case 'stash':
+      return {
+        tabLabel: `${baseName} (${request.stashRef})`,
+        contextLabel: request.stashRef,
+        keyScope: `stash:${request.stashHash}`
+      }
+  }
+}
+
 /**
  * Returns the short tab display label for a Diff tab, appending the abbreviated
  * commit hash or stash ref when inspecting a historical commit or stash file.
  */
 export function getGitDiffTabLabel(request: GitDiffRequest): string {
-  const baseName = getGitFileBaseName(request.path)
-  if (request.kind === 'commit') {
-    return `${baseName} (${request.shortHash})`
-  }
-  if (request.kind === 'stash') {
-    return `${baseName} (${request.stashRef})`
-  }
-  return baseName
+  return describeGitDiffRequest(request).tabLabel
 }
 
 /**
  * Maps a diff source request to its human-readable context badge label.
  */
 export function getGitDiffContextLabel(request: GitDiffRequest): string {
-  switch (request.kind) {
-    case 'staged':
-      return 'Staged'
-    case 'unstaged':
-      return 'Working Tree'
-    case 'commit':
-      return `Commit ${request.shortHash}`
-    case 'stash':
-      return request.stashRef
-  }
+  return describeGitDiffRequest(request).contextLabel
 }
 
 /**
@@ -199,13 +211,7 @@ export function getGitDiffContextLabel(request: GitDiffRequest): string {
  */
 export function formatGitDiffTabKey(request: GitDiffRequest): string {
   const renamePart = request.origPath ?? ''
-  if (request.kind === 'commit') {
-    return `diff:commit:${request.commitHash}:${request.status}:${renamePart}:${request.path}`
-  }
-  if (request.kind === 'stash') {
-    return `diff:stash:${request.stashHash}:${request.status}:${renamePart}:${request.path}`
-  }
-  return `diff:${request.kind}:${request.status}:${renamePart}:${request.path}`
+  return `diff:${describeGitDiffRequest(request).keyScope}:${request.status}:${renamePart}:${request.path}`
 }
 
 export type GitDiffTarget =

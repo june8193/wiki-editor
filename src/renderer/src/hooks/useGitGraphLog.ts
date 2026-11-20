@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_GIT_LOG_LIMIT,
   type GitCommitDetail,
@@ -7,14 +7,15 @@ import {
 } from '@shared/git'
 import { logRendererError } from '../logging/rendererLogger'
 import { toErrorMessage } from '@shared/errors'
+import {
+  createInitialGitDetailState,
+  type GitDetailState,
+  useGitDetailSelection
+} from './useGitDetailSelection'
 import { useWikiApi } from './useWikiApi'
 
 /** Discriminated union for the expanded commit detail panel in the Graph section. */
-export type GitCommitDetailState =
-  | { status: 'idle' }
-  | { status: 'loading'; selectedHash: string }
-  | { status: 'loaded'; selectedHash: string; detail: GitCommitDetail }
-  | { status: 'error'; selectedHash: string; errorMessage: string }
+export type GitCommitDetailState = GitDetailState<GitCommitDetail>
 
 /** Aggregated commit-graph UI state for the Graph accordion section. */
 export interface GitGraphState {
@@ -27,20 +28,28 @@ export interface GitGraphState {
   commitDetail: GitCommitDetailState
 }
 
+type GitGraphLogState = Omit<GitGraphState, 'commitDetail'>
+
 /** Creates empty inline commit-detail state. */
 export function createInitialGitCommitDetailState(): GitCommitDetailState {
-  return { status: 'idle' }
+  return createInitialGitDetailState()
 }
 
-/** Creates default commit-graph state starting in `'all'` scope. */
-export function createInitialGitGraphState(): GitGraphState {
+function createInitialGitGraphLogState(): GitGraphLogState {
   return {
     commits: [],
     hasMore: false,
     scope: 'all',
     isLoading: false,
     isLoadingMore: false,
-    errorMessage: null,
+    errorMessage: null
+  }
+}
+
+/** Creates default commit-graph state starting in `'all'` scope. */
+export function createInitialGitGraphState(): GitGraphState {
+  return {
+    ...createInitialGitGraphLogState(),
     commitDetail: createInitialGitCommitDetailState()
   }
 }
@@ -73,25 +82,47 @@ function appendUniqueCommits(
  */
 export function useGitGraphLog(options: UseGitGraphLogOptions) {
   const wikiApi = useWikiApi()
-  const [graphState, setGraphState] = useState<GitGraphState>(createInitialGitGraphState)
-  const graphStateRef = useRef<GitGraphState>(graphState)
+  const [graphLogState, setGraphLogState] = useState<GitGraphLogState>(createInitialGitGraphLogState)
+  const graphLogStateRef = useRef<GitGraphLogState>(graphLogState)
   const logRequestSeqRef = useRef(0)
-  const detailRequestSeqRef = useRef(0)
   const optionsRef = useRef(options)
   optionsRef.current = options
 
-  const updateGraphState = useCallback((updater: (prev: GitGraphState) => GitGraphState): void => {
-    const next = updater(graphStateRef.current)
-    graphStateRef.current = next
-    setGraphState(next)
-  }, [])
+  const updateGraphLogState = useCallback(
+    (updater: (prev: GitGraphLogState) => GitGraphLogState): void => {
+      const next = updater(graphLogStateRef.current)
+      graphLogStateRef.current = next
+      setGraphLogState(next)
+    },
+    []
+  )
+
+  const {
+    detailState: commitDetail,
+    toggleDetail: toggleCommitDetail,
+    clearDetail: clearCommitDetail,
+    pruneDetail: pruneCommitDetail
+  } = useGitDetailSelection<string, GitCommitDetail>({
+    isCurrentRequest: (rootPath, epoch) => optionsRef.current.isCurrentRequest(rootPath, epoch),
+    getWorkspaceRootPath: () => optionsRef.current.getWorkspaceRootPath(),
+    getWorkspaceEpoch: () => optionsRef.current.getWorkspaceEpoch(),
+    getSelectedHash: (commitHash) => commitHash,
+    fetchDetail: (rootPath, commitHash) => wikiApi.git.commitDetail(rootPath, commitHash),
+    fallbackErrorMessage: '커밋 상세 정보를 불러오지 못했습니다.',
+    logFailure: (rootPath, commitHash, errorMessage, error) => {
+      logRendererError('git', 'Git commit detail fetch failed', {
+        data: { workspaceRootPath: rootPath, commitHash, errorMessage },
+        error
+      })
+    }
+  })
 
   const isCurrentLogRequest = useCallback(
     (rootPath: string, epoch: number, logSeq: number, scope: GitLogScope): boolean => {
       return (
         optionsRef.current.isCurrentRequest(rootPath, epoch) &&
         logRequestSeqRef.current === logSeq &&
-        graphStateRef.current.scope === scope
+        graphLogStateRef.current.scope === scope
       )
     },
     []
@@ -100,18 +131,17 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
   const resetGraph = useCallback(
     (resetScope: boolean, nextScope?: GitLogScope): void => {
       logRequestSeqRef.current += 1
-      detailRequestSeqRef.current += 1
-      updateGraphState((prev) => ({
+      clearCommitDetail()
+      updateGraphLogState((prev) => ({
         commits: [],
         hasMore: false,
         scope: resetScope ? 'all' : (nextScope ?? prev.scope),
         isLoading: false,
         isLoadingMore: false,
-        errorMessage: null,
-        commitDetail: createInitialGitCommitDetailState()
+        errorMessage: null
       }))
     },
-    [updateGraphState]
+    [clearCommitDetail, updateGraphLogState]
   )
 
   const fetchCommitLog = useCallback(
@@ -126,9 +156,9 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
       }
 
       const logSeq = ++logRequestSeqRef.current
-      const skip = append ? graphStateRef.current.commits.length : 0
+      const skip = append ? graphLogStateRef.current.commits.length : 0
 
-      updateGraphState((prev) => ({
+      updateGraphLogState((prev) => ({
         ...prev,
         isLoading: append ? prev.isLoading : true,
         isLoadingMore: append,
@@ -145,33 +175,23 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
           return
         }
 
-        updateGraphState((prev) => {
-          const nextCommits = append
-            ? appendUniqueCommits(prev.commits, result.commits)
-            : result.commits
-          const currentDetail = prev.commitDetail
-          const shouldClearDetail =
-            !append &&
-            currentDetail.status !== 'idle' &&
-            !nextCommits.some((commit) => commit.hash === currentDetail.selectedHash)
-          if (shouldClearDetail) {
-            detailRequestSeqRef.current += 1
-          }
-          return {
-            ...prev,
-            commits: nextCommits,
-            hasMore: result.hasMore,
-            commitDetail: shouldClearDetail
-              ? createInitialGitCommitDetailState()
-              : currentDetail
-          }
-        })
+        const nextCommits = append
+          ? appendUniqueCommits(graphLogStateRef.current.commits, result.commits)
+          : result.commits
+        if (!append) {
+          pruneCommitDetail(new Set(nextCommits.map((commit) => commit.hash)))
+        }
+        updateGraphLogState((prev) => ({
+          ...prev,
+          commits: nextCommits,
+          hasMore: result.hasMore
+        }))
       } catch (error: unknown) {
         if (!isCurrentLogRequest(rootPath, epoch, logSeq, scope)) {
           return
         }
         const message = toErrorMessage(error, '커밋 히스토리를 불러오지 못했습니다.')
-        updateGraphState((prev) => ({
+        updateGraphLogState((prev) => ({
           ...prev,
           errorMessage: message
         }))
@@ -181,7 +201,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
         })
       } finally {
         if (optionsRef.current.isMounted() && logRequestSeqRef.current === logSeq) {
-          updateGraphState((prev) => ({
+          updateGraphLogState((prev) => ({
             ...prev,
             isLoading: append ? prev.isLoading : false,
             isLoadingMore: append ? false : prev.isLoadingMore
@@ -189,19 +209,19 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
         }
       }
     },
-    [isCurrentLogRequest, updateGraphState, wikiApi]
+    [isCurrentLogRequest, pruneCommitDetail, updateGraphLogState, wikiApi]
   )
 
   const refreshGraph = useCallback(
     async (rootPath: string, epoch: number): Promise<void> => {
-      await fetchCommitLog(rootPath, epoch, graphStateRef.current.scope, false)
+      await fetchCommitLog(rootPath, epoch, graphLogStateRef.current.scope, false)
     },
     [fetchCommitLog]
   )
 
   const changeLogScope = useCallback(
     async (nextScope: GitLogScope): Promise<void> => {
-      if (graphStateRef.current.scope === nextScope) {
+      if (graphLogStateRef.current.scope === nextScope) {
         return
       }
       resetGraph(false, nextScope)
@@ -217,7 +237,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
 
   const loadMoreCommits = useCallback(async (): Promise<void> => {
     const rootPath = optionsRef.current.getWorkspaceRootPath()
-    const current = graphStateRef.current
+    const current = graphLogStateRef.current
     if (!rootPath || current.isLoading || current.isLoadingMore || !current.hasMore) {
       return
     }
@@ -229,64 +249,12 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
     )
   }, [fetchCommitLog])
 
-  const toggleCommitDetail = useCallback(
-    async (commitHash: string): Promise<void> => {
-      const currentDetail = graphStateRef.current.commitDetail
-      if (currentDetail.status !== 'idle' && currentDetail.selectedHash === commitHash) {
-        detailRequestSeqRef.current += 1
-        updateGraphState((prev) => ({
-          ...prev,
-          commitDetail: createInitialGitCommitDetailState()
-        }))
-        return
-      }
-
-      const rootPath = optionsRef.current.getWorkspaceRootPath()
-      if (!rootPath) {
-        return
-      }
-      const epoch = optionsRef.current.getWorkspaceEpoch()
-      const detailSeq = ++detailRequestSeqRef.current
-      const isCurrentDetailRequest = (): boolean => {
-        const latestDetail = graphStateRef.current.commitDetail
-        return (
-          optionsRef.current.isCurrentRequest(rootPath, epoch) &&
-          detailRequestSeqRef.current === detailSeq &&
-          latestDetail.status !== 'idle' &&
-          latestDetail.selectedHash === commitHash
-        )
-      }
-
-      updateGraphState((prev) => ({
-        ...prev,
-        commitDetail: { status: 'loading', selectedHash: commitHash }
-      }))
-
-      try {
-        const detail = await wikiApi.git.commitDetail(rootPath, commitHash)
-        if (!isCurrentDetailRequest()) {
-          return
-        }
-        updateGraphState((prev) => ({
-          ...prev,
-          commitDetail: { status: 'loaded', selectedHash: commitHash, detail }
-        }))
-      } catch (error: unknown) {
-        if (!isCurrentDetailRequest()) {
-          return
-        }
-        const message = toErrorMessage(error, '커밋 상세 정보를 불러오지 못했습니다.')
-        updateGraphState((prev) => ({
-          ...prev,
-          commitDetail: { status: 'error', selectedHash: commitHash, errorMessage: message }
-        }))
-        logRendererError('git', 'Git commit detail fetch failed', {
-          data: { workspaceRootPath: rootPath, commitHash, errorMessage: message },
-          error
-        })
-      }
-    },
-    [updateGraphState, wikiApi]
+  const graphState = useMemo<GitGraphState>(
+    () => ({
+      ...graphLogState,
+      commitDetail
+    }),
+    [commitDetail, graphLogState]
   )
 
   return {

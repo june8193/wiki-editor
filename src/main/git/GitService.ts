@@ -38,11 +38,10 @@ import {
   parseCommitDetailOutput,
   parseGitNameStatusZ
 } from './gitCommitDetail'
-import { computeGitDiff } from './gitDiff'
+import { assertValidDiffTarget, computeGitDiff } from './gitDiff'
 import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
 import { parsePorcelainV2Z } from './gitPorcelain'
 import {
-  assertValidStashHash,
   assertValidStashRef,
   buildStashPushArgs,
   GIT_STASH_LIST_FORMAT,
@@ -576,12 +575,7 @@ export class GitService {
     }
 
     const repoRoot = await this.requireRepoRoot(workspacePath)
-    if (request.kind === 'commit') {
-      assertValidCommitHash(request.commitHash)
-    } else if (request.kind === 'stash') {
-      assertValidStashRef(request.stashRef)
-      assertValidStashHash(request.stashHash)
-    }
+    assertValidDiffTarget(request)
     const workspaceRealRoot = await realpath(resolve(workspacePath))
     const rawPaths = request.origPath ? [request.path, request.origPath] : [request.path]
     const [safePath, safeOrigPath] = await this.validateRepoRelativePaths(repoRoot, rawPaths)

@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { Plus } from 'lucide-react'
 import type { GitDiffRequest, GitStashEntry } from '@shared/git'
-import type { GitStashDetailState } from '../hooks/useGitController'
+import type { GitStashDetailState } from '../hooks/useGitDetailSelection'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { GitDetailFilesList } from './GitChangedFileRow'
 
@@ -72,17 +72,17 @@ function GitStashDetailPanel({
 
   return (
     <div
-      className="git-commit-detail git-stash-detail"
+      className="git-detail git-stash-detail"
       role="region"
       aria-label={`${entry.ref} Stash 상세`}
       // Clear inherited stash-row tooltip while hovering inside the expanded detail box.
       title=""
     >
       {detailState.status === 'loading' && (
-        <p className="git-commit-detail-status">Stash 상세를 불러오는 중...</p>
+        <p className="git-detail-status">Stash 상세를 불러오는 중...</p>
       )}
       {detailState.status === 'error' && (
-        <p className="git-commit-detail-error" role="alert">
+        <p className="git-detail-error" role="alert">
           {detailState.errorMessage}
         </p>
       )}

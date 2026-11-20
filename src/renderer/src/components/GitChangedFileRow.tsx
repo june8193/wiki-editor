@@ -197,13 +197,13 @@ export function GitDetailFilesList({
   onOpenFileDiff: (request: GitDiffRequest) => void
 }) {
   if (files.length === 0) {
-    return <p className="git-commit-detail-empty-files">변경된 파일이 없습니다.</p>
+    return <p className="git-detail-empty-files">변경된 파일이 없습니다.</p>
   }
 
   return (
-    <div className="git-commit-detail-files-section">
-      <div className="git-commit-detail-files-header">변경된 파일 ({files.length})</div>
-      <ul className="git-file-list git-commit-detail-files" aria-label="변경된 파일" role="list">
+    <div className="git-detail-files-section">
+      <div className="git-detail-files-header">변경된 파일 ({files.length})</div>
+      <ul className="git-file-list git-detail-files" aria-label="변경된 파일" role="list">
         {files.map((file) => (
           <GitChangedFileRow
             key={`${file.status}:${file.origPath ?? ''}:${file.path}`}

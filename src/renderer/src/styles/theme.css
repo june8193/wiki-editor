@@ -2998,10 +2998,6 @@ body.is-resizing-git-sections * {
   outline-offset: 1px;
 }
 
-.git-stash-detail {
-  margin: 2px 4px 4px 8px;
-}
-
 .git-stash-main {
   flex: 1 1 auto;
   min-width: 0;
@@ -3489,7 +3485,7 @@ body.is-resizing-git-sections * {
   cursor: default;
 }
 
-.git-commit-detail {
+.git-detail {
   margin: 2px 4px 6px 14px;
   padding: 8px 10px;
   border: 1px solid var(--border-color);
@@ -3502,19 +3498,23 @@ body.is-resizing-git-sections * {
   min-width: 0;
 }
 
-.git-commit-detail-status,
-.git-commit-detail-empty-files,
-.git-commit-detail-error {
+.git-stash-detail {
+  margin: 2px 4px 4px 8px;
+}
+
+.git-detail-status,
+.git-detail-empty-files,
+.git-detail-error {
   margin: 0;
   font-size: 11px;
 }
 
-.git-commit-detail-status,
-.git-commit-detail-empty-files {
+.git-detail-status,
+.git-detail-empty-files {
   color: var(--text-secondary);
 }
 
-.git-commit-detail-error {
+.git-detail-error {
   color: var(--danger-color);
 }
 
@@ -3579,20 +3579,20 @@ body.is-resizing-git-sections * {
   white-space: nowrap;
 }
 
-.git-commit-detail-files-section {
+.git-detail-files-section {
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
 }
 
-.git-commit-detail-files-header {
+.git-detail-files-header {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
 }
 
-.git-commit-detail-files {
+.git-detail-files {
   gap: 1px;
 }
 
