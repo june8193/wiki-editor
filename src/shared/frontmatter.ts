@@ -30,6 +30,7 @@ export {
 } from './frontmatterSchema'
 
 export {
+  buildSelectableFieldOptions,
   collectAllowCustomMultiSelectFields,
   createFrontmatterFieldComparator,
   createFrontmatterFieldValuesCollector,
@@ -47,6 +48,7 @@ export {
   type FrontmatterFilterOperator,
   type FrontmatterScalarValue,
   type FrontmatterValueComparator,
+  type SelectableFieldOption,
   type WorkspaceFrontmatterFieldValuesResponse
 } from './frontmatterFilter'
 

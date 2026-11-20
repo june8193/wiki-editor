@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import {
+  buildSelectableFieldOptions,
   FRONTMATTER_OPERATORS_BY_TYPE,
   type FrontmatterFieldDefinition,
   type FrontmatterFilterCondition,
@@ -8,7 +9,6 @@ import {
 } from '@shared/frontmatter'
 import {
   buildConditionFromDraft,
-  buildFilterSelectableOptions,
   cycleListboxIndex,
   type FilterPopoverDraft,
   getFrontmatterOperatorLabel
@@ -364,7 +364,7 @@ function FilterPopoverValueStep({
   const operator = draft.operator ?? operators[0]
 
   const allOptions = useMemo(
-    () => buildFilterSelectableOptions(field, fieldValuesByKey?.[field.key], draft.selectedValues),
+    () => buildSelectableFieldOptions(field, fieldValuesByKey?.[field.key], draft.selectedValues),
     [draft.selectedValues, field, fieldValuesByKey]
   )
 

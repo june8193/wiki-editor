@@ -491,3 +491,47 @@ export function createFrontmatterFieldValuesCollector(
     }
   }
 }
+
+export interface SelectableFieldOption {
+  value: string
+  color?: string
+}
+
+/**
+ * Combines schema options (preserving declaration order), live custom workspace values (for
+ * `allowCustom`), and any already-selected values into a deduplicated option list.
+ */
+export function buildSelectableFieldOptions(
+  field: FrontmatterFieldDefinition,
+  liveCustomValues?: readonly string[],
+  currentValues?: readonly string[]
+): SelectableFieldOption[] {
+  const result: SelectableFieldOption[] = []
+  const seen = new Set<string>()
+  const colorByValue = new Map<string, string | undefined>()
+
+  const pushUnique = (value: string): void => {
+    if (!value || seen.has(value)) return
+    seen.add(value)
+    const color = colorByValue.get(value)
+    result.push({ value, ...(color ? { color } : {}) })
+  }
+
+  for (const opt of field.options ?? []) {
+    if (!opt.value) continue
+    colorByValue.set(opt.value, opt.color)
+    pushUnique(opt.value)
+  }
+
+  if (field.type === 'multi-select' && field.allowCustom && liveCustomValues) {
+    for (const liveVal of liveCustomValues) {
+      pushUnique(liveVal)
+    }
+  }
+
+  for (const selectedVal of currentValues ?? []) {
+    pushUnique(selectedVal)
+  }
+
+  return result
+}

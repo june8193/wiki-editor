@@ -222,50 +222,6 @@ export function formatFilterChipLabel(
   }
 }
 
-export interface SelectableFilterOption {
-  value: string
-  color?: string
-}
-
-/**
- * Combines schema options (preserving declaration order), live custom workspace values (for
- * `allowCustom`), and any already-selected values into a deduplicated option list.
- */
-export function buildFilterSelectableOptions(
-  field: FrontmatterFieldDefinition,
-  liveCustomValues?: readonly string[],
-  currentValues?: readonly string[]
-): SelectableFilterOption[] {
-  const result: SelectableFilterOption[] = []
-  const seen = new Set<string>()
-  const colorByValue = new Map<string, string | undefined>()
-
-  const pushUnique = (value: string): void => {
-    if (!value || seen.has(value)) return
-    seen.add(value)
-    const color = colorByValue.get(value)
-    result.push({ value, ...(color ? { color } : {}) })
-  }
-
-  for (const opt of field.options ?? []) {
-    if (!opt.value) continue
-    colorByValue.set(opt.value, opt.color)
-    pushUnique(opt.value)
-  }
-
-  if (field.type === 'multi-select' && field.allowCustom && liveCustomValues) {
-    for (const liveVal of liveCustomValues) {
-      pushUnique(liveVal)
-    }
-  }
-
-  for (const selectedVal of currentValues ?? []) {
-    pushUnique(selectedVal)
-  }
-
-  return result
-}
-
 export type SummaryBadgeValue = string | number | boolean
 
 export interface DisplaySummaryBadge {
@@ -479,6 +435,19 @@ export function createFilterEditDraft(
     minValue: condition.min !== undefined ? String(condition.min) : '',
     maxValue: condition.max !== undefined ? String(condition.max) : ''
   }
+}
+
+/** Returns true when an active popover `draft` matches the schema `field` type and operator. */
+export function isFilterDraftCompatibleWithField(
+  draft: FilterPopoverDraft,
+  field: FrontmatterFieldDefinition | undefined
+): field is FrontmatterFieldDefinition {
+  if (!field) return false
+  if (draft.fieldType !== null && field.type !== draft.fieldType) return false
+  if (draft.operator !== null && !isFrontmatterOperatorForType(field.type, draft.operator)) {
+    return false
+  }
+  return true
 }
 
 /** Advances a cyclic listbox highlight index safely within `[0, totalCount - 1]`. */

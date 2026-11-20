@@ -288,6 +288,22 @@ export function useWorkspaceSearch({
     )
   }, [executeSearch])
 
+  const syncActiveSearch = useCallback((): void => {
+    if (
+      isComposingRef.current ||
+      !workspaceRootPathRef.current ||
+      (queryRef.current.length === 0 && conditionsRef.current.length === 0)
+    ) {
+      return
+    }
+    void executeSearch(
+      queryRef.current,
+      optionsRef.current,
+      conditionsRef.current,
+      sortRef.current
+    )
+  }, [executeSearch])
+
   const onToggleOption = useCallback(
     (optionKey: keyof SearchMatchOptions): void => {
       const nextOptions: SearchMatchOptions = {
@@ -296,20 +312,9 @@ export function useWorkspaceSearch({
       }
       optionsRef.current = nextOptions
       setOptions(nextOptions)
-      if (
-        !isComposingRef.current &&
-        workspaceRootPathRef.current &&
-        (queryRef.current.length > 0 || conditionsRef.current.length > 0)
-      ) {
-        void executeSearch(
-          queryRef.current,
-          nextOptions,
-          conditionsRef.current,
-          sortRef.current
-        )
-      }
+      syncActiveSearch()
     },
-    [executeSearch]
+    [syncActiveSearch]
   )
 
   const applyConditionsAndSearch = useCallback(
@@ -319,19 +324,14 @@ export function useWorkspaceSearch({
       if (isComposingRef.current || !workspaceRootPathRef.current) {
         return
       }
-      if (queryRef.current.length > 0 || nextConditions.length > 0) {
-        void executeSearch(
-          queryRef.current,
-          optionsRef.current,
-          nextConditions,
-          sortRef.current
-        )
-      } else {
-        clearDebounceTimer()
-        resetResults()
-      }
+      void executeSearch(
+        queryRef.current,
+        optionsRef.current,
+        nextConditions,
+        sortRef.current
+      )
     },
-    [clearDebounceTimer, executeSearch, resetResults]
+    [executeSearch]
   )
 
   const onAddCondition = useCallback(
@@ -380,20 +380,9 @@ export function useWorkspaceSearch({
     (nextSort: WorkspaceSearchSortSpec): void => {
       sortRef.current = nextSort
       setSort(nextSort)
-      if (
-        !isComposingRef.current &&
-        workspaceRootPathRef.current &&
-        (queryRef.current.length > 0 || conditionsRef.current.length > 0)
-      ) {
-        void executeSearch(
-          queryRef.current,
-          optionsRef.current,
-          conditionsRef.current,
-          nextSort
-        )
-      }
+      syncActiveSearch()
     },
-    [executeSearch]
+    [syncActiveSearch]
   )
 
   const onToggleFileCollapsed = useCallback((filePath: string): void => {

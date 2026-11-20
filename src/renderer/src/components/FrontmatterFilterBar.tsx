@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { X } from 'lucide-react'
-import {
-  isFrontmatterOperatorForType,
-  type FrontmatterFieldDefinition,
-  type FrontmatterFilterCondition,
-  type FrontmatterFilterOperator,
-  type FrontmatterSchemaLoadResult,
-  type WorkspaceFrontmatterSchema
+import type {
+  FrontmatterFieldDefinition,
+  FrontmatterFilterCondition,
+  FrontmatterFilterOperator,
+  FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
 import type { WorkspaceSearchSortSpec } from '@shared/search'
 import { type DismissReason, useDismissable } from '../hooks/useDismissable'
@@ -16,6 +15,7 @@ import {
   createInitialFilterAddDraft,
   type FilterPopoverDraft,
   formatFilterChipLabel,
+  isFilterDraftCompatibleWithField,
   parseSearchSortValue,
   serializeSearchSortSpec
 } from '../utils/frontmatterFilterBar'
@@ -114,17 +114,12 @@ export function FrontmatterFilterBar({
       dismissPopover(false)
       return
     }
-    if (popoverDraft.fieldKey) {
-      const targetField = fieldsByKey.get(popoverDraft.fieldKey)
-      if (
-        !targetField ||
-        (popoverDraft.fieldType !== null && targetField.type !== popoverDraft.fieldType) ||
-        (popoverDraft.operator !== null &&
-          !isFrontmatterOperatorForType(targetField.type, popoverDraft.operator))
-      ) {
-        dismissPopover(false)
-        return
-      }
+    if (
+      popoverDraft.fieldKey &&
+      !isFilterDraftCompatibleWithField(popoverDraft, fieldsByKey.get(popoverDraft.fieldKey))
+    ) {
+      dismissPopover(false)
+      return
     }
     if (
       popoverDraft.mode === 'edit' &&
@@ -152,17 +147,14 @@ export function FrontmatterFilterBar({
     return renderFilterNotice('정의된 스키마 필드가 없습니다.', '스키마 관리', onOpenSchemaModal)
   }
 
+  const candidateSelectedField =
+    popoverDraft?.fieldKey ? fieldsByKey.get(popoverDraft.fieldKey) : undefined
   const selectedField =
-    popoverDraft?.fieldKey ? fieldsByKey.get(popoverDraft.fieldKey) ?? null : null
-  const isDraftIncompatibleWithField =
-    popoverDraft !== null &&
-    selectedField !== null &&
-    ((popoverDraft.fieldType !== null && selectedField.type !== popoverDraft.fieldType) ||
-      (popoverDraft.operator !== null &&
-        !isFrontmatterOperatorForType(selectedField.type, popoverDraft.operator)))
+    popoverDraft && isFilterDraftCompatibleWithField(popoverDraft, candidateSelectedField)
+      ? candidateSelectedField
+      : null
   const showPopover =
-    popoverDraft !== null &&
-    (popoverDraft.step === 'field' || (selectedField !== null && !isDraftIncompatibleWithField))
+    popoverDraft !== null && (popoverDraft.step === 'field' || selectedField !== null)
 
   const openAddPopover = (triggerEl: HTMLButtonElement): void => {
     returnFocusElRef.current = triggerEl

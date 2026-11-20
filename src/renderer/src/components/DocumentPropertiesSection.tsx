@@ -2,6 +2,7 @@ import { memo, useId, useState, type KeyboardEvent } from 'react'
 import { ChevronDown, ChevronRight, Settings } from 'lucide-react'
 import {
   applyFrontmatterValues,
+  buildSelectableFieldOptions,
   isValidIsoCalendarDate,
   parseFrontmatterDocument,
   removeFrontmatterBlock,
@@ -14,7 +15,6 @@ import {
   type ParsedFrontmatterDocument
 } from '@shared/frontmatter'
 import type { SidebarDocumentContext } from '../editor/editorModes'
-import { buildFilterSelectableOptions } from '../utils/frontmatterFilterBar'
 import { SidebarAccordionSection } from './SidebarAccordionSection'
 
 export interface DocumentPropertiesSectionProps {
@@ -142,14 +142,14 @@ function MultiSelectPropertyInput({
   const selectedSet = new Set(selectedItems)
   const schemaOptionValues = new Set((field.options ?? []).map((opt) => opt.value))
 
-  const availableSuggestions = buildFilterSelectableOptions(field, suggestedValues)
-    .map((option) => option.value)
-    .filter((optionValue) => !selectedSet.has(optionValue))
+  const availableSuggestions = buildSelectableFieldOptions(field, suggestedValues).filter(
+    (option) => !selectedSet.has(option.value)
+  )
 
   const normalizedQuery = customDraft.trim().toLowerCase()
   const visibleSuggestions =
     field.allowCustom && normalizedQuery
-      ? availableSuggestions.filter((item) => item.toLowerCase().includes(normalizedQuery))
+      ? availableSuggestions.filter((option) => option.value.toLowerCase().includes(normalizedQuery))
       : availableSuggestions
 
   const addValue = (incoming: string): void => {
@@ -221,15 +221,15 @@ function MultiSelectPropertyInput({
 
       {visibleSuggestions.length > 0 && (
         <div className="properties-suggestion-list" aria-label={`${field.label} 제안`}>
-          {visibleSuggestions.map((optionValue) => (
+          {visibleSuggestions.map((option) => (
             <button
-              key={optionValue}
+              key={option.value}
               type="button"
               className="properties-suggestion-btn"
-              onClick={() => addValue(optionValue)}
+              onClick={() => addValue(option.value)}
             >
-              <OptionColorDot color={findOptionColor(field.options, optionValue)} />
-              <span>+ {optionValue}</span>
+              <OptionColorDot color={option.color} />
+              <span>+ {option.value}</span>
             </button>
           ))}
         </div>

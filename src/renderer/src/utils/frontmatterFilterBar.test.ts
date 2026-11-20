@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import type { WorkspaceFrontmatterSchema } from '@shared/frontmatter'
+import { buildSelectableFieldOptions, type WorkspaceFrontmatterSchema } from '@shared/frontmatter'
 import {
   buildConditionFromDraft,
-  buildFilterSelectableOptions,
   createFilterEditDraft,
   createFilterFieldDraft,
   cycleListboxIndex,
   DEFAULT_WORKSPACE_SEARCH_SORT,
   extractDisplaySummaryBadges,
   formatFilterChipLabel,
+  isFilterDraftCompatibleWithField,
   parseSearchSortValue,
   reconcileFilterConditions,
   reconcileSearchSortSpec,
@@ -146,7 +146,7 @@ describe('frontmatterFilterBar utils', () => {
     const strictField = SCHEMA.fields[2]
 
     expect(
-      buildFilterSelectableOptions(
+      buildSelectableFieldOptions(
         labelsField,
         ['alpha', 'backend', 'zebra'],
         ['selected-old']
@@ -159,7 +159,7 @@ describe('frontmatterFilterBar utils', () => {
     ])
 
     expect(
-      buildFilterSelectableOptions(strictField, ['should-ignore'])
+      buildSelectableFieldOptions(strictField, ['should-ignore'])
     ).toEqual([{ value: 'core' }])
   })
 
@@ -254,5 +254,14 @@ describe('frontmatterFilterBar utils', () => {
       minValue: '',
       maxValue: ''
     })
+    expect(isFilterDraftCompatibleWithField(nextFieldDraft, SCHEMA.fields[1])).toBe(true)
+    expect(
+      isFilterDraftCompatibleWithField(nextFieldDraft, {
+        key: 'labels',
+        label: '라벨',
+        type: 'text'
+      })
+    ).toBe(false)
+    expect(isFilterDraftCompatibleWithField(nextFieldDraft, undefined)).toBe(false)
   })
 })
