@@ -38,12 +38,12 @@ import {
   type GitChangesViewState
 } from '../utils/gitChangesView'
 import {
-  createDefaultGitPanelSplitState,
-  toggleGitChangesCollapsed,
-  toggleGitGraphCollapsed,
-  updateChangesHeightRatio,
-  type GitPanelSplitState
-} from '../utils/gitPanelSplit'
+  createTwoSectionSplitState,
+  toggleBottomSectionCollapsed,
+  toggleTopSectionCollapsed,
+  type TwoSectionSplitState,
+  updateTopSectionRatio
+} from '../utils/accordionSplit'
 import {
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
@@ -121,8 +121,8 @@ export function MainAppShell() {
     isCollapsed: false,
     width: LEFT_SIDEBAR_DEFAULT_WIDTH
   })
-  const [gitPanelSplit, setGitPanelSplit] = useState<GitPanelSplitState>(
-    createDefaultGitPanelSplitState
+  const [gitPanelSplit, setGitPanelSplit] = useState<TwoSectionSplitState>(() =>
+    createTwoSectionSplitState()
   )
   const [gitChangesView, setGitChangesView] = useState<GitChangesViewState>(
     createDefaultGitChangesViewState
@@ -245,15 +245,15 @@ export function MainAppShell() {
   }, [])
 
   const handleToggleGitChangesCollapsed = useCallback((): void => {
-    setGitPanelSplit(toggleGitChangesCollapsed)
+    setGitPanelSplit(toggleTopSectionCollapsed)
   }, [])
 
   const handleToggleGitGraphCollapsed = useCallback((): void => {
-    setGitPanelSplit(toggleGitGraphCollapsed)
+    setGitPanelSplit(toggleBottomSectionCollapsed)
   }, [])
 
   const handleResizeGitChangesRatio = useCallback((nextRatio: number): void => {
-    setGitPanelSplit((prev) => updateChangesHeightRatio(prev, nextRatio))
+    setGitPanelSplit((prev) => updateTopSectionRatio(prev, nextRatio))
   }, [])
 
   const handleToggleGitChangesViewMode = useCallback((): void => {

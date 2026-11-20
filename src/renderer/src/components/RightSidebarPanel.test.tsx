@@ -4,12 +4,15 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { createDefaultFrontmatterSchema } from '@shared/frontmatter'
 import {
-  createDefaultRightSidebarSplitState,
-  toggleRightSidebarOutlineCollapsed,
-  toggleRightSidebarPropertiesCollapsed,
-  updateRightSidebarOutlineRatio
-} from '../utils/rightSidebarSplit'
-import { RightSidebarPanel } from './RightSidebarPanel'
+  createTwoSectionSplitState,
+  toggleBottomSectionCollapsed,
+  toggleTopSectionCollapsed,
+  updateTopSectionRatio
+} from '../utils/accordionSplit'
+import {
+  RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO,
+  RightSidebarPanel
+} from './RightSidebarPanel'
 
 describe('RightSidebarPanel', () => {
   function renderStatefulPanel() {
@@ -18,14 +21,18 @@ describe('RightSidebarPanel', () => {
     const onChangeContent = vi.fn()
 
     function StatefulHarness() {
-      const [splitState, setSplitState] = useState(createDefaultRightSidebarSplitState)
+      const [splitState, setSplitState] = useState(() =>
+        createTwoSectionSplitState(RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)
+      )
       return (
         <RightSidebarPanel
           splitState={splitState}
-          onToggleOutlineCollapsed={() => setSplitState(toggleRightSidebarOutlineCollapsed)}
-          onTogglePropertiesCollapsed={() => setSplitState(toggleRightSidebarPropertiesCollapsed)}
+          onToggleOutlineCollapsed={() => setSplitState(toggleTopSectionCollapsed)}
+          onTogglePropertiesCollapsed={() => setSplitState(toggleBottomSectionCollapsed)}
           onResizeOutlineRatio={(nextRatio) =>
-            setSplitState((prev) => updateRightSidebarOutlineRatio(prev, nextRatio))
+            setSplitState((prev) =>
+              updateTopSectionRatio(prev, nextRatio, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)
+            )
           }
           document={{
             documentName: 'guide.md',

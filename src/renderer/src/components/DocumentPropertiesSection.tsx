@@ -13,7 +13,7 @@ import {
   type FrontmatterValidationIssue,
   type ParsedFrontmatterDocument
 } from '@shared/frontmatter'
-import type { SidebarDocumentContext } from '../hooks/useDocumentOutline'
+import type { SidebarDocumentContext } from '../editor/editorModes'
 import { SidebarAccordionSection } from './SidebarAccordionSection'
 
 export interface DocumentPropertiesSectionProps {

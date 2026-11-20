@@ -76,7 +76,6 @@ describe('SidebarAccordionSection & HorizontalSectionResizer', () => {
           <HorizontalSectionResizer
             ratio={ratio}
             fallbackRatio={0.35}
-            resetRatio={0.5}
             containerRef={containerRef}
             ariaLabel="우측 사이드바 섹션 높이 조절"
             bodyClassName="is-resizing-right-sections"

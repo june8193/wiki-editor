@@ -5,8 +5,18 @@ import {
   type MarkdownHeading,
   parseMarkdownHeadings
 } from '../editor/MarkdownTocEngine'
-import type { SidebarDocumentContext } from '../hooks/useDocumentOutline'
-import { SidebarAccordionSection } from './SidebarAccordionSection'
+import type { SidebarDocumentContext } from '../editor/editorModes'
+import {
+  type AccordionSectionClassNames,
+  SidebarAccordionSection
+} from './SidebarAccordionSection'
+
+const OUTLINE_ACCORDION_CLASS_NAMES: AccordionSectionClassNames = {
+  section: 'outline-sidebar',
+  header: 'outline-header',
+  toggle: 'outline-accordion-toggle',
+  body: 'outline-body'
+}
 
 export interface DocumentOutlinePanelProps {
   document: SidebarDocumentContext
@@ -162,10 +172,7 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
         headerActions={headerActions}
         isExpanded={isExpanded}
         flexRatio={flexRatio}
-        sectionClassName="outline-sidebar"
-        headerClassName="outline-header"
-        toggleClassName="outline-accordion-toggle"
-        bodyClassName="outline-body"
+        classNames={OUTLINE_ACCORDION_CLASS_NAMES}
         onToggle={onToggleExpanded}
       >
         {bodyContent}

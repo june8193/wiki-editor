@@ -9,6 +9,13 @@ export function getAccordionSectionFlexStyle(flexRatio: number | null): CSSPrope
   return flexRatio !== null ? { flex: `${flexRatio} 1 0%` } : undefined
 }
 
+export interface AccordionSectionClassNames {
+  section?: string
+  header?: string
+  toggle?: string
+  body?: string
+}
+
 export interface SidebarAccordionSectionProps {
   title: string
   ariaLabel?: string
@@ -16,12 +23,7 @@ export interface SidebarAccordionSectionProps {
   headerActions?: ReactNode
   isExpanded: boolean
   flexRatio: number | null
-  sectionClassName?: string
-  headerClassName?: string
-  toggleClassName?: string
-  chevronClassName?: string
-  titleClassName?: string
-  bodyClassName?: string
+  classNames?: AccordionSectionClassNames
   onToggle: () => void
   children: ReactNode
 }
@@ -37,45 +39,37 @@ export function SidebarAccordionSection({
   headerActions,
   isExpanded,
   flexRatio,
-  sectionClassName,
-  headerClassName,
-  toggleClassName,
-  chevronClassName,
-  titleClassName,
-  bodyClassName,
+  classNames,
   onToggle,
   children
 }: SidebarAccordionSectionProps) {
   return (
     <section
-      className={joinClassNames('accordion-section', sectionClassName, !isExpanded && 'is-collapsed')}
+      className={joinClassNames('accordion-section', classNames?.section, !isExpanded && 'is-collapsed')}
       aria-label={ariaLabel ?? title}
       style={getAccordionSectionFlexStyle(flexRatio)}
     >
-      <div className={joinClassNames('accordion-header', headerClassName)}>
+      <div className={joinClassNames('accordion-header', classNames?.header)}>
         <button
           type="button"
-          className={joinClassNames('accordion-toggle', toggleClassName)}
+          className={joinClassNames('accordion-toggle', classNames?.toggle)}
           aria-expanded={isExpanded}
           onClick={onToggle}
         >
-          <span
-            className={joinClassNames('accordion-chevron', chevronClassName)}
-            aria-hidden="true"
-          >
+          <span className="accordion-chevron" aria-hidden="true">
             {isExpanded ? (
               <ChevronDown size={13} strokeWidth={1.75} />
             ) : (
               <ChevronRight size={13} strokeWidth={1.75} />
             )}
           </span>
-          <span className={joinClassNames('accordion-title', titleClassName)}>{title}</span>
+          <span className="accordion-title">{title}</span>
           {badge}
         </button>
         {headerActions}
       </div>
       {isExpanded && (
-        <div className={joinClassNames('accordion-body', bodyClassName)}>{children}</div>
+        <div className={joinClassNames('accordion-body', classNames?.body)}>{children}</div>
       )}
     </section>
   )

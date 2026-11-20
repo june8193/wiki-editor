@@ -19,12 +19,12 @@ import {
   type GitChangesViewState
 } from '../utils/gitChangesView'
 import {
-  createDefaultGitPanelSplitState,
-  toggleGitChangesCollapsed,
-  toggleGitGraphCollapsed,
-  updateChangesHeightRatio,
-  type GitPanelSplitState
-} from '../utils/gitPanelSplit'
+  createTwoSectionSplitState,
+  toggleBottomSectionCollapsed,
+  toggleTopSectionCollapsed,
+  type TwoSectionSplitState,
+  updateTopSectionRatio
+} from '../utils/accordionSplit'
 import { GitSidebarPanel, type GitSidebarPanelProps } from './GitSidebarPanel'
 
 function buildGitStatus(overrides: Partial<GitStatus> = {}): GitStatus {
@@ -76,7 +76,7 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onChangeLogScope: vi.fn(),
     onLoadMoreCommits: vi.fn(),
     onToggleCommitDetail: vi.fn(),
-    splitState: createDefaultGitPanelSplitState(),
+    splitState: createTwoSectionSplitState(),
     changesViewState: createDefaultGitChangesViewState(),
     onOpenFileDiff: vi.fn(),
     onOpenWorkspaceFile: vi.fn(),
@@ -91,7 +91,7 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
 }
 
 function StatefulGitSidebarPanel(props: GitSidebarPanelProps) {
-  const [splitState, setSplitState] = useState<GitPanelSplitState>(() => props.splitState)
+  const [splitState, setSplitState] = useState<TwoSectionSplitState>(() => props.splitState)
   const [changesViewState, setChangesViewState] = useState<GitChangesViewState>(
     () => props.changesViewState
   )
@@ -105,10 +105,10 @@ function StatefulGitSidebarPanel(props: GitSidebarPanelProps) {
       {...props}
       splitState={splitState}
       changesViewState={changesViewState}
-      onToggleChangesCollapsed={() => setSplitState(toggleGitChangesCollapsed)}
-      onToggleGraphCollapsed={() => setSplitState(toggleGitGraphCollapsed)}
+      onToggleChangesCollapsed={() => setSplitState(toggleTopSectionCollapsed)}
+      onToggleGraphCollapsed={() => setSplitState(toggleBottomSectionCollapsed)}
       onResizeChangesRatio={(nextRatio) =>
-        setSplitState((prev) => updateChangesHeightRatio(prev, nextRatio))
+        setSplitState((prev) => updateTopSectionRatio(prev, nextRatio))
       }
       onToggleChangesViewMode={() => setChangesViewState(toggleGitChangesViewMode)}
       onToggleChangesGroupCollapsed={(group) =>

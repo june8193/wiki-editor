@@ -34,6 +34,13 @@ export type EditorModeDocumentRef = Pick<DocumentBuffer, 'kind' | 'name'> & {
   contentKind?: DocumentBuffer['contentKind']
 }
 
+export interface SidebarDocumentContext {
+  documentName: string | null
+  documentKey?: string | null
+  content: string
+  isMarkdownDocument: boolean
+}
+
 /**
  * Returns true when a buffer holds read-only binary image metadata rather than editable text.
  */

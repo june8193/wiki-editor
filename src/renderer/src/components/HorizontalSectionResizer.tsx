@@ -16,11 +16,9 @@ const MAX_PERCENT = toSectionHeightPercent(ACCORDION_MAX_TOP_RATIO)
 export interface HorizontalSectionResizerProps {
   ratio: number
   fallbackRatio?: number
-  resetRatio?: number
   containerRef: RefObject<HTMLDivElement | null>
   ariaLabel: string
   bodyClassName: string
-  className?: string
   onResizeRatio: (nextRatio: number) => void
 }
 
@@ -30,11 +28,9 @@ export interface HorizontalSectionResizerProps {
 export function HorizontalSectionResizer({
   ratio,
   fallbackRatio = ACCORDION_RESET_RATIO,
-  resetRatio = ACCORDION_RESET_RATIO,
   containerRef,
   ariaLabel,
   bodyClassName,
-  className = 'section-resizer',
   onResizeRatio
 }: HorizontalSectionResizerProps) {
   const { isDragging, handleDragStart } = usePointerDragSession({
@@ -60,7 +56,7 @@ export function HorizontalSectionResizer({
   }
 
   const handleDoubleClick = (): void => {
-    onResizeRatio(resetRatio)
+    onResizeRatio(ACCORDION_RESET_RATIO)
   }
 
   return (
@@ -72,7 +68,7 @@ export function HorizontalSectionResizer({
       aria-valuemin={MIN_PERCENT}
       aria-valuemax={MAX_PERCENT}
       aria-valuenow={toSectionHeightPercent(ratio, fallbackRatio)}
-      className={`${className}${isDragging ? ' is-dragging' : ''}`}
+      className={`section-resizer${isDragging ? ' is-dragging' : ''}`}
       onPointerDown={handleDragStart}
       onMouseDown={handleDragStart}
       onKeyDown={handleKeyDown}

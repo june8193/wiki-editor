@@ -10,14 +10,6 @@ import {
   type PaneLayoutState,
   type TabViewPatch
 } from '../stores/PaneTabStore'
-import { getGitFileBaseName } from '../utils/gitFilePresentation'
-
-export interface SidebarDocumentContext {
-  documentName: string | null
-  documentKey?: string | null
-  content: string
-  isMarkdownDocument: boolean
-}
 
 /**
  * Coordinates document outline scroll-spy tracking and heading click-to-scroll
@@ -85,22 +77,11 @@ export function useDocumentOutline(
     [actions, handlePaneChangeContent, handlePaneUpdateTabViewState]
   )
 
-  const documentContext: SidebarDocumentContext = {
-    documentName:
-      activeTab?.kind === 'diff'
-        ? getGitFileBaseName(activeTab.diff.request.path)
-        : (activeBuffer?.name ?? null),
-    documentKey: activeBuffer?.key ?? null,
-    content: activeBufferContent,
-    isMarkdownDocument: isActiveMarkdown
-  }
-
   return {
     scrollRequest: outlineScrollRequest,
     handleActiveHeadingChange: handleActiveHeadingReport,
     dispatchHeadingScroll,
     paneActions,
-    documentContext,
     activeHeadingIndex,
     selectHeading
   }

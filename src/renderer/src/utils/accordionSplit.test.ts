@@ -6,29 +6,30 @@ import {
   ACCORDION_RESET_RATIO,
   clampSectionHeightRatio,
   computeTwoSectionLayout,
+  createTwoSectionSplitState,
   stepSectionHeightRatio,
-  toSectionHeightPercent
+  toggleBottomSectionCollapsed,
+  toggleTopSectionCollapsed,
+  toSectionHeightPercent,
+  updateTopSectionRatio
 } from './accordionSplit'
-import {
-  createDefaultRightSidebarSplitState,
-  RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO,
-  toggleRightSidebarOutlineCollapsed,
-  toggleRightSidebarPropertiesCollapsed,
-  updateRightSidebarOutlineRatio
-} from './rightSidebarSplit'
 
-describe('accordionSplit & rightSidebarSplit', () => {
-  it('defines shared bounds and creates right sidebar default state with 35% outline / 65% properties', () => {
+describe('accordionSplit', () => {
+  it('defines shared bounds and creates split states for 0.5 default and 0.35 right-sidebar default', () => {
     expect(ACCORDION_MIN_TOP_RATIO).toBe(0.2)
     expect(ACCORDION_MAX_TOP_RATIO).toBe(0.8)
     expect(ACCORDION_RATIO_STEP).toBe(0.05)
     expect(ACCORDION_RESET_RATIO).toBe(0.5)
-    expect(RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO).toBe(0.35)
 
-    expect(createDefaultRightSidebarSplitState()).toEqual({
-      isOutlineCollapsed: false,
-      isPropertiesCollapsed: false,
-      outlineHeightRatio: 0.35
+    expect(createTwoSectionSplitState()).toEqual({
+      isTopCollapsed: false,
+      isBottomCollapsed: false,
+      topHeightRatio: 0.5
+    })
+    expect(createTwoSectionSplitState(0.35)).toEqual({
+      isTopCollapsed: false,
+      isBottomCollapsed: false,
+      topHeightRatio: 0.35
     })
   })
 
@@ -50,15 +51,8 @@ describe('accordionSplit & rightSidebarSplit', () => {
   })
 
   it('computes visibility, resizer presence, and flex distribution for all collapse combinations', () => {
-    const defaultState = createDefaultRightSidebarSplitState()
-    expect(
-      computeTwoSectionLayout(
-        defaultState.isOutlineCollapsed,
-        defaultState.isPropertiesCollapsed,
-        defaultState.outlineHeightRatio,
-        RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO
-      )
-    ).toEqual({
+    const defaultState = createTwoSectionSplitState(0.35)
+    expect(computeTwoSectionLayout(defaultState, 0.35)).toEqual({
       showTopBody: true,
       showBottomBody: true,
       showResizer: true,
@@ -66,8 +60,21 @@ describe('accordionSplit & rightSidebarSplit', () => {
       bottomFlexRatio: 0.65
     })
 
+    // Clamps out-of-range ratios when computing expanded layout
+    expect(
+      computeTwoSectionLayout({ isTopCollapsed: false, isBottomCollapsed: false, topHeightRatio: 0.95 })
+    ).toEqual({
+      showTopBody: true,
+      showBottomBody: true,
+      showResizer: true,
+      topFlexRatio: 0.8,
+      bottomFlexRatio: 0.2
+    })
+
     // Only top expanded -> resizer hidden, top takes 100% height
-    expect(computeTwoSectionLayout(false, true, 0.35, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)).toEqual({
+    expect(
+      computeTwoSectionLayout({ isTopCollapsed: false, isBottomCollapsed: true, topHeightRatio: 0.35 }, 0.35)
+    ).toEqual({
       showTopBody: true,
       showBottomBody: false,
       showResizer: false,
@@ -76,7 +83,9 @@ describe('accordionSplit & rightSidebarSplit', () => {
     })
 
     // Only bottom expanded -> resizer hidden, bottom takes 100% height
-    expect(computeTwoSectionLayout(true, false, 0.35, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)).toEqual({
+    expect(
+      computeTwoSectionLayout({ isTopCollapsed: true, isBottomCollapsed: false, topHeightRatio: 0.35 }, 0.35)
+    ).toEqual({
       showTopBody: false,
       showBottomBody: true,
       showResizer: false,
@@ -85,7 +94,9 @@ describe('accordionSplit & rightSidebarSplit', () => {
     })
 
     // Both collapsed -> resizer hidden, headers align at top
-    expect(computeTwoSectionLayout(true, true, 0.35, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)).toEqual({
+    expect(
+      computeTwoSectionLayout({ isTopCollapsed: true, isBottomCollapsed: true, topHeightRatio: 0.35 }, 0.35)
+    ).toEqual({
       showTopBody: false,
       showBottomBody: false,
       showResizer: false,
@@ -94,26 +105,28 @@ describe('accordionSplit & rightSidebarSplit', () => {
     })
   })
 
-  it('updates collapse flags and clamped outline ratios while preserving ratio across collapse/expand', () => {
-    const initial = createDefaultRightSidebarSplitState()
-    const resized = updateRightSidebarOutlineRatio(initial, 0.65)
-    expect(resized.outlineHeightRatio).toBe(0.65)
-    expect(updateRightSidebarOutlineRatio(resized, 0.65)).toBe(resized)
-    expect(updateRightSidebarOutlineRatio(resized, 0.99).outlineHeightRatio).toBe(0.8)
-    expect(updateRightSidebarOutlineRatio(resized, 0.05).outlineHeightRatio).toBe(0.2)
+  it('updates collapse flags and clamped ratios while preserving ratio across collapse/expand', () => {
+    const initial = createTwoSectionSplitState(0.35)
+    const resized = updateTopSectionRatio(initial, 0.65, 0.35)
+    expect(resized.topHeightRatio).toBe(0.65)
+    expect(updateTopSectionRatio(resized, 0.65, 0.35)).toBe(resized)
+    expect(updateTopSectionRatio(resized, 0.99, 0.35).topHeightRatio).toBe(0.8)
+    expect(updateTopSectionRatio(resized, 0.05, 0.35).topHeightRatio).toBe(0.2)
 
-    const collapsedOutline = toggleRightSidebarOutlineCollapsed(resized)
-    expect(collapsedOutline).toEqual({
-      isOutlineCollapsed: true,
-      isPropertiesCollapsed: false,
-      outlineHeightRatio: 0.65
+    const collapsedTop = toggleTopSectionCollapsed(resized)
+    expect(collapsedTop).toEqual({
+      isTopCollapsed: true,
+      isBottomCollapsed: false,
+      topHeightRatio: 0.65
     })
-    const collapsedBoth = toggleRightSidebarPropertiesCollapsed(collapsedOutline)
+    expect(toggleTopSectionCollapsed(collapsedTop)).toEqual(resized)
+
+    const collapsedBoth = toggleBottomSectionCollapsed(collapsedTop)
     expect(collapsedBoth).toEqual({
-      isOutlineCollapsed: true,
-      isPropertiesCollapsed: true,
-      outlineHeightRatio: 0.65
+      isTopCollapsed: true,
+      isBottomCollapsed: true,
+      topHeightRatio: 0.65
     })
-    expect(toggleRightSidebarOutlineCollapsed(collapsedBoth).outlineHeightRatio).toBe(0.65)
+    expect(toggleTopSectionCollapsed(collapsedBoth).topHeightRatio).toBe(0.65)
   })
 })

@@ -3,6 +3,7 @@ import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
+import { isMarkdownDocument, type SidebarDocumentContext } from '../editor/editorModes'
 import type { ConfirmDialogState } from '../hooks/useConfirmDialog'
 import { useDocumentOutline } from '../hooks/useDocumentOutline'
 import {
@@ -15,13 +16,15 @@ import {
   type UseMarkdownLinkNavigationOptions
 } from '../hooks/useMarkdownLinkNavigation'
 import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
+import { getPaneActiveTab } from '../stores/PaneTabStore'
 import {
-  createDefaultRightSidebarSplitState,
-  toggleRightSidebarOutlineCollapsed,
-  toggleRightSidebarPropertiesCollapsed,
-  updateRightSidebarOutlineRatio,
-  type RightSidebarSplitState
-} from '../utils/rightSidebarSplit'
+  createTwoSectionSplitState,
+  toggleBottomSectionCollapsed,
+  toggleTopSectionCollapsed,
+  type TwoSectionSplitState,
+  updateTopSectionRatio
+} from '../utils/accordionSplit'
+import { getGitFileBaseName } from '../utils/gitFilePresentation'
 import {
   clampSidebarWidth,
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
@@ -31,7 +34,10 @@ import { ConfirmDialog } from './ConfirmDialog'
 import type { GitDiffContentState } from './GitDiffViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneWorkspace, type PaneWorkspaceProps } from './PaneWorkspace'
-import { RightSidebarPanel } from './RightSidebarPanel'
+import {
+  RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO,
+  RightSidebarPanel
+} from './RightSidebarPanel'
 import { SidebarResizer } from './SidebarResizer'
 
 const DEFAULT_IMAGE_TRANSFER_CONTEXT: ImageTransferContextValue = {}
@@ -118,8 +124,8 @@ export function EditorWindowFrame({
     isCollapsed: initialRightSidebarCollapsed,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
   }))
-  const [rightSidebarSplit, setRightSidebarSplit] = useState<RightSidebarSplitState>(
-    createDefaultRightSidebarSplitState
+  const [rightSidebarSplit, setRightSidebarSplit] = useState<TwoSectionSplitState>(() =>
+    createTwoSectionSplitState(RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)
   )
   const localShellRef = useRef<HTMLDivElement | null>(null)
   const setMergedShellRef = useCallback(
@@ -150,15 +156,17 @@ export function EditorWindowFrame({
   }, [])
 
   const handleToggleOutlineCollapsed = useCallback((): void => {
-    setRightSidebarSplit(toggleRightSidebarOutlineCollapsed)
+    setRightSidebarSplit(toggleTopSectionCollapsed)
   }, [])
 
   const handleTogglePropertiesCollapsed = useCallback((): void => {
-    setRightSidebarSplit(toggleRightSidebarPropertiesCollapsed)
+    setRightSidebarSplit(toggleBottomSectionCollapsed)
   }, [])
 
   const handleResizeOutlineRatio = useCallback((nextRatio: number): void => {
-    setRightSidebarSplit((prev) => updateRightSidebarOutlineRatio(prev, nextRatio))
+    setRightSidebarSplit((prev) =>
+      updateTopSectionRatio(prev, nextRatio, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)
+    )
   }, [])
 
   const { schemaResult, isSchemaLoading, createDefaultSchema } = useFrontmatterSchema({
@@ -197,7 +205,20 @@ export function EditorWindowFrame({
     [handleNavigateMarkdownLink, outline.paneActions]
   )
 
-  const activeBufferKey = outline.documentContext.documentKey
+  const activePane = paneWorkspaceProps.layout.panes[paneWorkspaceProps.layout.activePaneId]
+  const activeTab = getPaneActiveTab(activePane)
+  const activeBuffer =
+    activeTab?.kind === 'document' ? paneWorkspaceProps.buffers[activeTab.bufferKey] : undefined
+  const activeBufferKey = activeBuffer?.key ?? null
+  const rightSidebarDocument: SidebarDocumentContext = {
+    documentName:
+      activeTab?.kind === 'diff'
+        ? getGitFileBaseName(activeTab.diff.request.path)
+        : (activeBuffer?.name ?? null),
+    documentKey: activeBufferKey,
+    content: activeBuffer?.content ?? '',
+    isMarkdownDocument: activeBuffer ? isMarkdownDocument(activeBuffer) : false
+  }
   const onOutlinePaneChangeContent = outline.paneActions.onChangeContent
 
   const handlePropertiesChangeContent = useCallback(
@@ -247,7 +268,7 @@ export function EditorWindowFrame({
               style={{ width: `${rightSidebar.width}px` }}
             >
               <RightSidebarPanel
-                document={outline.documentContext}
+                document={rightSidebarDocument}
                 splitState={rightSidebarSplit}
                 onToggleOutlineCollapsed={handleToggleOutlineCollapsed}
                 onTogglePropertiesCollapsed={handleTogglePropertiesCollapsed}

@@ -456,8 +456,7 @@ body,
 }
 
 .sidebar-resizer,
-.section-resizer,
-.git-section-resizer {
+.section-resizer {
   position: relative;
   flex-shrink: 0;
   z-index: 10;
@@ -496,16 +495,12 @@ body,
 .sidebar-resizer.is-dragging::after,
 .section-resizer:hover::after,
 .section-resizer:focus-visible::after,
-.section-resizer.is-dragging::after,
-.git-section-resizer:hover::after,
-.git-section-resizer:focus-visible::after,
-.git-section-resizer.is-dragging::after {
+.section-resizer.is-dragging::after {
   background-color: var(--accent-color);
 }
 
 .sidebar-resizer:focus-visible,
-.section-resizer:focus-visible,
-.git-section-resizer:focus-visible {
+.section-resizer:focus-visible {
   outline: none;
 }
 
@@ -2593,8 +2588,7 @@ body.is-resizing-mermaid * {
   overflow: hidden;
 }
 
-.accordion-section,
-.git-accordion-section {
+.accordion-section {
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2602,13 +2596,11 @@ body.is-resizing-mermaid * {
 }
 
 .accordion-section.is-collapsed,
-.outline-sidebar.is-collapsed,
-.git-accordion-section.is-collapsed {
+.outline-sidebar.is-collapsed {
   flex: 0 0 auto;
 }
 
-.accordion-header,
-.git-accordion-header {
+.accordion-header {
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -2629,8 +2621,7 @@ body.is-resizing-mermaid * {
   flex-shrink: 0;
 }
 
-.accordion-toggle,
-.git-accordion-toggle {
+.accordion-toggle {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -2651,13 +2642,11 @@ body.is-resizing-mermaid * {
   font-size: 12px;
 }
 
-.accordion-toggle:hover,
-.git-accordion-toggle:hover {
+.accordion-toggle:hover {
   background-color: var(--bg-elevated);
 }
 
-.accordion-chevron,
-.git-accordion-chevron {
+.accordion-chevron {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -2665,8 +2654,7 @@ body.is-resizing-mermaid * {
   color: var(--text-secondary);
 }
 
-.accordion-title,
-.git-accordion-title {
+.accordion-title {
   flex: 0 0 auto;
 }
 
@@ -2681,8 +2669,7 @@ body.is-resizing-mermaid * {
   background-color: var(--bg-elevated);
 }
 
-.accordion-body,
-.git-accordion-body {
+.accordion-body {
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
@@ -2698,15 +2685,13 @@ body.is-resizing-mermaid * {
   gap: 0;
 }
 
-.section-resizer,
-.git-section-resizer {
+.section-resizer {
   height: 5px;
   flex: 0 0 5px;
   cursor: row-resize;
 }
 
-.section-resizer::after,
-.git-section-resizer::after {
+.section-resizer::after {
   content: '';
   position: absolute;
   left: 0;
@@ -2720,10 +2705,7 @@ body.is-resizing-mermaid * {
 
 .section-resizer:hover::after,
 .section-resizer:focus-visible::after,
-.section-resizer.is-dragging::after,
-.git-section-resizer:hover::after,
-.git-section-resizer:focus-visible::after,
-.git-section-resizer.is-dragging::after {
+.section-resizer.is-dragging::after {
   height: 3px;
 }
 
