@@ -20,6 +20,7 @@ import {
   createDefaultFrontmatterSchema,
   FRONTMATTER_SCHEMA_DIR,
   FRONTMATTER_SCHEMA_RELATIVE_PATH,
+  type WorkspaceFrontmatterSchema,
   type FrontmatterSchemaLoadResult,
   parseFrontmatterSchema,
   parseFrontmatterSchemaJson,
@@ -532,6 +533,24 @@ export function createMultiWindowWikiHarness(
     }
     session.lastSchemaFingerprint = fingerprint
     notifySessionSchemaListeners(session, result)
+  }
+
+  const writeAndNotifySessionSchema = (
+    session: HarnessSession,
+    schema: WorkspaceFrontmatterSchema
+  ): FrontmatterSchemaLoadResult => {
+    if (!session.activeRoot) {
+      throw new Error('열린 워크스페이스가 없습니다.')
+    }
+    dirs.add(`${session.activeRoot}/${FRONTMATTER_SCHEMA_DIR}`)
+    files.set(
+      `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`,
+      serializeFrontmatterSchema(schema)
+    )
+    const { result, fingerprint } = readSessionSchema(session)
+    session.lastSchemaFingerprint = fingerprint
+    notifySessionSchemaListeners(session, result)
+    return cloneSchemaResult(result)
   }
 
   const defaultSession = createSession()
@@ -1349,13 +1368,7 @@ export function createMultiWindowWikiHarness(
             session.lastSchemaFingerprint = fingerprint
             return cloneSchemaResult(result)
           }
-          dirs.add(`${session.activeRoot}/${FRONTMATTER_SCHEMA_DIR}`)
-          const defaultSchema = createDefaultFrontmatterSchema()
-          files.set(schemaPath, serializeFrontmatterSchema(defaultSchema))
-          const { result, fingerprint } = readSessionSchema(session)
-          session.lastSchemaFingerprint = fingerprint
-          notifySessionSchemaListeners(session, result)
-          return cloneSchemaResult(result)
+          return writeAndNotifySessionSchema(session, createDefaultFrontmatterSchema())
         },
         async saveSchema(rawSchema) {
           if (!session.activeRoot) {
@@ -1365,13 +1378,7 @@ export function createMultiWindowWikiHarness(
           if (!validation.ok) {
             throw new Error(validation.error)
           }
-          dirs.add(`${session.activeRoot}/${FRONTMATTER_SCHEMA_DIR}`)
-          const schemaPath = `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`
-          files.set(schemaPath, serializeFrontmatterSchema(validation.schema))
-          const { result, fingerprint } = readSessionSchema(session)
-          session.lastSchemaFingerprint = fingerprint
-          notifySessionSchemaListeners(session, result)
-          return cloneSchemaResult(result)
+          return writeAndNotifySessionSchema(session, validation.schema)
         },
         onSchemaChanged(listener) {
           if (destroyed) {

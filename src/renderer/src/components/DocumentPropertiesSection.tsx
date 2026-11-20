@@ -1,4 +1,4 @@
-import { memo, useId, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useId, useState, type KeyboardEvent } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import {
   applyFrontmatterValues,
@@ -24,7 +24,6 @@ export interface DocumentPropertiesSectionProps {
   isSchemaLoading?: boolean
   isExpanded?: boolean
   flexRatio?: number | null
-  headerActions?: ReactNode
   onToggleExpanded: () => void
   onChangeContent: (nextContent: string) => void
   onCreateDefaultSchema: () => void
@@ -555,7 +554,6 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
   isSchemaLoading = false,
   isExpanded = true,
   flexRatio = null,
-  headerActions,
   onToggleExpanded,
   onChangeContent,
   onCreateDefaultSchema
@@ -649,13 +647,6 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
       title="문서 속성"
       ariaLabel="문서 속성"
       badge={headerBadges}
-      headerActions={
-        headerActions ? (
-          <div className="properties-header-actions" onClick={(e) => e.stopPropagation()}>
-            {headerActions}
-          </div>
-        ) : undefined
-      }
       isExpanded={isExpanded}
       flexRatio={flexRatio}
       sectionClassName="properties-section"

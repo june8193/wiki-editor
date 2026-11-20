@@ -4063,13 +4063,6 @@ body.is-resizing-right-sections * {
   border: 1px solid var(--diff-warn-border);
 }
 
-.properties-header-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
 .properties-empty-text {
   margin: 0;
   padding: 4px 2px;

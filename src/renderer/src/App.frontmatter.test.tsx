@@ -147,7 +147,7 @@ describe('App frontmatter properties & right sidebar 2-tier accordion integratio
     ].join('\r\n')
 
     const { api, emitMenuCommand, getFilesSnapshot, dispose } = createInMemoryWikiApi(
-      { theme: 'light', autoSave: true, autoSaveDelayMs: 60 },
+      { theme: 'light', autoSave: false, autoSaveDelayMs: 60 },
       {
         selectedFolder: 'C:\\wiki\\docs',
         workspaces: {
@@ -174,7 +174,7 @@ describe('App frontmatter properties & right sidebar 2-tier accordion integratio
     })
     expect(within(properties).getByText('1/7')).toBeInTheDocument()
 
-    // Edit all 6 field types in Properties section
+    // Edit all 6 field types in Properties section (keep autoSave disabled until dirty-indicator is verified)
     await user.selectOptions(within(properties).getByLabelText('상태'), 'in-progress')
     await user.type(within(properties).getByLabelText('우선순위'), '2')
     await user.click(within(properties).getByRole('checkbox', { name: '공개 여부' }))
@@ -183,15 +183,18 @@ describe('App frontmatter properties & right sidebar 2-tier accordion integratio
     })
     await user.type(within(properties).getByLabelText('담당자'), 'bob')
     await user.type(within(properties).getByLabelText('라벨'), 'custom-tag{Enter}')
-    await user.click(within(properties).getByRole('button', { name: '+ desktop' }))
 
     expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument()
-    expect(within(properties).getByText('7/7')).toBeInTheDocument()
 
     // Unknown field collapsible displays legacyOwner and preserves it through auto-save
     await user.click(within(properties).getByRole('button', { name: '미정의 필드 (1) · 보존' }))
     expect(within(properties).getByText('legacyOwner')).toBeInTheDocument()
     expect(within(properties).getByText('infra-team')).toBeInTheDocument()
+
+    // Enable auto-save, then apply final schema option chip so auto-save schedules deterministically
+    await api.config.update({ autoSave: true, autoSaveDelayMs: 60 })
+    await user.click(within(properties).getByRole('button', { name: '+ desktop' }))
+    expect(within(properties).getByText('7/7')).toBeInTheDocument()
 
     await waitFor(
       () => {

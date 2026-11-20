@@ -188,10 +188,8 @@ describe('DocumentPropertiesSection', () => {
     expect(screen.queryByRole('button', { name: '스키마 생성' })).not.toBeInTheDocument()
   })
 
-  it('adds and removes frontmatter blocks, displays n/m and ⚠ k badges, and blocks toggle propagation on header auxiliary buttons', async () => {
+  it('adds and removes frontmatter blocks and displays n/m and ⚠ k badges', async () => {
     const user = userEvent.setup()
-    const onToggleExpanded = vi.fn()
-    const onAuxClick = vi.fn()
 
     function StatefulHarness() {
       const [content, setContent] = useState('# Title\n\nBody text')
@@ -203,12 +201,7 @@ describe('DocumentPropertiesSection', () => {
           isMarkdownDocument
           schemaResult={makeSchemaResult(createDefaultFrontmatterSchema())}
           isExpanded
-          headerActions={
-            <button type="button" aria-label="스키마 설정" onClick={onAuxClick}>
-              ⚙
-            </button>
-          }
-          onToggleExpanded={onToggleExpanded}
+          onToggleExpanded={vi.fn()}
           onChangeContent={setContent}
           onCreateDefaultSchema={vi.fn()}
         />
@@ -219,11 +212,6 @@ describe('DocumentPropertiesSection', () => {
     const section = screen.getByRole('region', { name: '문서 속성' })
     expect(within(section).getByText('0/5')).toBeInTheDocument()
     expect(within(section).queryByLabelText(/유효성 경고/)).not.toBeInTheDocument()
-
-    // Clicking auxiliary header button does NOT toggle accordion
-    await user.click(within(section).getByRole('button', { name: '스키마 설정' }))
-    expect(onAuxClick).toHaveBeenCalledTimes(1)
-    expect(onToggleExpanded).not.toHaveBeenCalled()
 
     // Create frontmatter block via '+ 속성 추가'
     await user.click(within(section).getByRole('button', { name: '+ 속성 추가' }))

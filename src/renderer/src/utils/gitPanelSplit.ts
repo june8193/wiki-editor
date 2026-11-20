@@ -1,18 +1,10 @@
 import {
-  ACCORDION_MAX_TOP_RATIO,
-  ACCORDION_MIN_TOP_RATIO,
-  ACCORDION_RATIO_STEP,
   ACCORDION_RESET_RATIO,
   clampSectionHeightRatio,
-  computeTwoSectionLayout,
-  stepSectionHeightRatio,
-  toSectionHeightPercent
+  computeTwoSectionLayout
 } from './accordionSplit'
 
 export const GIT_PANEL_DEFAULT_CHANGES_RATIO = ACCORDION_RESET_RATIO
-export const GIT_PANEL_MIN_CHANGES_RATIO = ACCORDION_MIN_TOP_RATIO
-export const GIT_PANEL_MAX_CHANGES_RATIO = ACCORDION_MAX_TOP_RATIO
-export const GIT_PANEL_CHANGES_RATIO_STEP = ACCORDION_RATIO_STEP
 
 export interface GitPanelSplitState {
   isChangesCollapsed: boolean
@@ -40,13 +32,6 @@ export function createDefaultGitPanelSplitState(): GitPanelSplitState {
 }
 
 /**
- * Clamps the Changes section height ratio into [0.2, 0.8], falling back to 0.5 for non-finite inputs.
- */
-export function clampChangesHeightRatio(ratio: number): number {
-  return clampSectionHeightRatio(ratio, GIT_PANEL_DEFAULT_CHANGES_RATIO)
-}
-
-/**
  * Toggles the collapsed state of the Changes accordion section.
  */
 export function toggleGitChangesCollapsed(state: GitPanelSplitState): GitPanelSplitState {
@@ -67,22 +52,8 @@ export function updateChangesHeightRatio(
   state: GitPanelSplitState,
   nextRatio: number
 ): GitPanelSplitState {
-  const clamped = clampChangesHeightRatio(nextRatio)
+  const clamped = clampSectionHeightRatio(nextRatio, GIT_PANEL_DEFAULT_CHANGES_RATIO)
   return state.changesHeightRatio === clamped ? state : { ...state, changesHeightRatio: clamped }
-}
-
-/**
- * Applies a relative ratio delta and rounds away binary float drift before clamping into [0.2, 0.8].
- */
-export function stepChangesHeightRatio(ratio: number, delta: number): number {
-  return stepSectionHeightRatio(ratio, delta, GIT_PANEL_DEFAULT_CHANGES_RATIO)
-}
-
-/**
- * Converts a Changes section height ratio into a clamped integer percentage in [20, 80].
- */
-export function toChangesHeightPercent(ratio: number): number {
-  return toSectionHeightPercent(ratio, GIT_PANEL_DEFAULT_CHANGES_RATIO)
 }
 
 /**
