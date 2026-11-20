@@ -3,7 +3,7 @@ import { Plus } from 'lucide-react'
 import type { GitDiffRequest, GitStashEntry } from '@shared/git'
 import type { GitStashDetailState } from '../hooks/useGitDetailSelection'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
-import { GitDetailFilesList } from './GitChangedFileRow'
+import { GitDetailFilesList, GitDetailPanel } from './GitDetailPanel'
 
 export interface GitStashesHeaderActionsProps {
   hasChanges: boolean
@@ -57,44 +57,6 @@ export interface GitStashesSectionProps {
   onPopStash: (stashRef: string) => void
   onApplyStash: (stashRef: string) => void
   onDropStash: (stashRef: string) => void
-}
-
-function GitStashDetailPanel({
-  entry,
-  detailState,
-  onOpenFileDiff
-}: {
-  entry: GitStashEntry
-  detailState: GitStashDetailState
-  onOpenFileDiff: (request: GitDiffRequest) => void
-}) {
-  const loadedDetail = detailState.status === 'loaded' ? detailState.detail : null
-
-  return (
-    <div
-      className="git-detail git-stash-detail"
-      role="region"
-      aria-label={`${entry.ref} Stash 상세`}
-      // Clear inherited stash-row tooltip while hovering inside the expanded detail box.
-      title=""
-    >
-      {detailState.status === 'loading' && (
-        <p className="git-detail-status">Stash 상세를 불러오는 중...</p>
-      )}
-      {detailState.status === 'error' && (
-        <p className="git-detail-error" role="alert">
-          {detailState.errorMessage}
-        </p>
-      )}
-      {loadedDetail && (
-        <GitDetailFilesList
-          files={loadedDetail.files}
-          target={{ kind: 'stash', stashRef: entry.ref, stashHash: entry.hash }}
-          onOpenFileDiff={onOpenFileDiff}
-        />
-      )}
-    </div>
-  )
 }
 
 /**
@@ -182,10 +144,18 @@ export const GitStashesSection = memo(function GitStashesSection({
               </div>
             </div>
             {isExpanded && (
-              <GitStashDetailPanel
-                entry={entry}
+              <GitDetailPanel
+                className="git-detail git-stash-detail"
+                ariaLabel={`${entry.ref} Stash 상세`}
                 detailState={stashDetail}
-                onOpenFileDiff={onOpenFileDiff}
+                loadingText="Stash 상세를 불러오는 중..."
+                renderLoaded={(loadedDetail) => (
+                  <GitDetailFilesList
+                    files={loadedDetail.files}
+                    target={{ kind: 'stash', stashRef: entry.ref, stashHash: entry.hash }}
+                    onOpenFileDiff={onOpenFileDiff}
+                  />
+                )}
               />
             )}
           </li>

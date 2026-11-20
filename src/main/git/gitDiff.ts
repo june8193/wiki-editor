@@ -1,7 +1,13 @@
 import { spawn } from 'node:child_process'
 import { open, realpath, stat } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
-import { GIT_DIFF_MAX_BYTES, GIT_EMPTY_TREE_HASH, type GitDiffRequest, type GitFileDiff } from '@shared/git'
+import {
+  GIT_DIFF_MAX_BYTES,
+  GIT_EMPTY_TREE_HASH,
+  type GitChangedFile,
+  type GitDiffRequest,
+  type GitFileDiff
+} from '@shared/git'
 import { hasBlockedPathSegment, isMissingPathError, isPathInsideRoot } from '../fs/pathSecurity'
 import { IGNORED_ENTRY_NAMES } from '../workspace/WorkspaceFsService'
 import { assertValidCommitHash } from './gitCommitDetail'
@@ -327,22 +333,38 @@ async function readStashUntrackedFileDiff(
   return buildUntrackedBlobDiffResult(safePath, buffer, truncated, hasNullByte, existsInWorkspace)
 }
 
+export type ValidatedGitDiffTarget =
+  | { kind: 'staged' }
+  | { kind: 'unstaged'; isUntracked: boolean }
+  | { kind: 'commit'; commitHash: string }
+  | { kind: 'stash'; stashHash: string; isUntracked: boolean }
+
 /**
- * Validates commit/stash target identifiers on a GitDiffRequest before resolving repository paths.
+ * Validates target identifiers on a GitDiffRequest once before resolving repository paths.
  */
-export function assertValidDiffTarget(request: GitDiffRequest): void {
-  if (request.kind === 'commit') {
-    assertValidCommitHash(request.commitHash)
-  } else if (request.kind === 'stash') {
-    assertValidStashRef(request.stashRef)
-    assertValidStashHash(request.stashHash)
+export function validateGitDiffTarget(request: GitDiffRequest): ValidatedGitDiffTarget {
+  switch (request.kind) {
+    case 'staged':
+      return { kind: 'staged' }
+    case 'unstaged':
+      return { kind: 'unstaged', isUntracked: request.status === '?' }
+    case 'commit':
+      return { kind: 'commit', commitHash: assertValidCommitHash(request.commitHash) }
+    case 'stash':
+      assertValidStashRef(request.stashRef)
+      return {
+        kind: 'stash',
+        stashHash: assertValidStashHash(request.stashHash),
+        isUntracked: request.status === '?'
+      }
   }
 }
 
 export interface ComputeGitDiffOptions {
   repoRoot: string
   workspaceRealRoot: string
-  request: GitDiffRequest
+  target: ValidatedGitDiffTarget
+  status: GitChangedFile['status']
   safePath: string
   safeOrigPath?: string
   hasHeadCommit: boolean
@@ -352,7 +374,8 @@ export interface ComputeGitDiffOptions {
 export async function computeGitDiff({
   repoRoot,
   workspaceRealRoot,
-  request,
+  target,
+  status,
   safePath,
   safeOrigPath,
   hasHeadCommit,
@@ -367,7 +390,7 @@ export async function computeGitDiff({
   const pathArgs = safeOrigPath ? [safeOrigPath, safePath] : [safePath]
   let gitArgs: string[]
 
-  switch (request.kind) {
+  switch (target.kind) {
     case 'staged': {
       const baseTree = hasHeadCommit ? 'HEAD' : GIT_EMPTY_TREE_HASH
       gitArgs = [
@@ -385,14 +408,13 @@ export async function computeGitDiff({
       break
     }
     case 'unstaged': {
-      if (request.status === '?') {
+      if (target.isUntracked) {
         return readUntrackedFileDiff(repoRoot, safePath, existsOnDisk, existsInWorkspace)
       }
       gitArgs = ['-c', 'core.quotePath=false', 'diff', '--unified=3', '--', ...pathArgs]
       break
     }
     case 'commit': {
-      const validatedHash = assertValidCommitHash(request.commitHash)
       gitArgs = [
         '-c',
         'core.quotePath=false',
@@ -403,19 +425,17 @@ export async function computeGitDiff({
         '-M',
         '--format=',
         '--unified=3',
-        `${validatedHash}^{commit}`,
+        `${target.commitHash}^{commit}`,
         '--',
         ...pathArgs
       ]
       break
     }
     case 'stash': {
-      assertValidStashRef(request.stashRef)
-      const validatedHash = assertValidStashHash(request.stashHash)
-      if (request.status === '?') {
+      if (target.isUntracked) {
         return readStashUntrackedFileDiff(
           repoRoot,
-          validatedHash,
+          target.stashHash,
           safePath,
           existsInWorkspace,
           execOptions
@@ -428,8 +448,8 @@ export async function computeGitDiff({
         '-M',
         '--find-renames',
         '--unified=3',
-        `${validatedHash}^1`,
-        validatedHash,
+        `${target.stashHash}^1`,
+        target.stashHash,
         '--',
         ...pathArgs
       ]
@@ -449,7 +469,7 @@ export async function computeGitDiff({
     return {
       path: safePath,
       ...(safeOrigPath ? { origPath: safeOrigPath } : {}),
-      status: request.status,
+      status,
       isBinary: true,
       isTruncated: false,
       existsInWorkspace,
@@ -465,7 +485,7 @@ export async function computeGitDiff({
   return {
     path: safePath,
     ...(safeOrigPath ? { origPath: safeOrigPath } : {}),
-    status: request.status,
+    status,
     isBinary: false,
     isTruncated: truncated || utf8Truncated,
     existsInWorkspace,

@@ -6,7 +6,7 @@ import {
   type GitStashEntry,
   type GitStatus
 } from '@shared/git'
-import { assertValidGitHash } from './gitCommitDetail'
+import { assertValidGitHash } from './gitObjectParsing'
 
 const STASH_REF_PATTERN = /^stash@\{\d+\}$/
 const STASH_LIST_HEADER_TOKENS = ['%gd', '%H', '%gs', '%cI'] as const

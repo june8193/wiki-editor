@@ -20,7 +20,7 @@ import type {
 import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { normalizeGitGraphRefs, type GitGraphDisplayRef } from '../utils/gitGraphRefs'
-import { GitDetailFilesList } from './GitChangedFileRow'
+import { GitDetailFilesList, GitDetailPanel } from './GitDetailPanel'
 import {
   buildGitGraphConnectionPath,
   computeGitGraphLayout,
@@ -375,73 +375,62 @@ function GitCommitDetailPanel({
     }
   }
 
-  const loadedDetail = detailState.status === 'loaded' ? detailState.detail : null
-  const isCopied = loadedDetail !== null && copiedHash === loadedDetail.hash
-  const hasBody = loadedDetail !== null && loadedDetail.body.trim().length > 0
-
   return (
-    <div
-      className="git-detail"
-      role="region"
-      aria-label={`${shortHash} 커밋 상세`}
-      // Clear inherited commit-row tooltip while hovering inside the expanded detail box.
-      title=""
-    >
-      {detailState.status === 'loading' && (
-        <p className="git-detail-status">커밋 상세를 불러오는 중...</p>
-      )}
-      {detailState.status === 'error' && (
-        <p className="git-detail-error" role="alert">
-          {detailState.errorMessage}
-        </p>
-      )}
-      {loadedDetail && (
-        <>
-          <div className="git-commit-detail-top">
-            <code className="git-commit-detail-hash" title={loadedDetail.hash}>
-              {loadedDetail.shortHash}
-            </code>
-            <button
-              type="button"
-              className={`git-icon-btn git-commit-detail-copy-btn${isCopied ? ' is-copied' : ''}`}
-              aria-label="해시 복사"
-              title={isCopied ? '복사됨' : '전체 해시 복사'}
-              onClick={() => void handleCopyHash(loadedDetail.hash)}
-            >
-              {isCopied ? (
-                <>
-                  <Check size={12} strokeWidth={1.75} aria-hidden="true" />
-                  <span className="git-commit-detail-copy-status">복사됨</span>
-                </>
-              ) : (
-                <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
-              )}
-            </button>
-          </div>
-          <div className="git-commit-detail-subject">{loadedDetail.subject}</div>
-          {hasBody && <div className="git-commit-detail-body">{loadedDetail.body}</div>}
-          <div className="git-commit-detail-meta">
-            <span className="git-commit-detail-author">
-              {loadedDetail.authorEmail
-                ? `${loadedDetail.authorName} <${loadedDetail.authorEmail}>`
-                : loadedDetail.authorName}
-            </span>
-            <span className="git-commit-detail-date">
-              {formatGitTimestamp(loadedDetail.committedAt)}
-            </span>
-          </div>
-          <GitDetailFilesList
-            files={loadedDetail.files}
-            target={{
-              kind: 'commit',
-              commitHash: loadedDetail.hash,
-              shortHash: loadedDetail.shortHash
-            }}
-            onOpenFileDiff={onOpenFileDiff}
-          />
-        </>
-      )}
-    </div>
+    <GitDetailPanel
+      ariaLabel={`${shortHash} 커밋 상세`}
+      detailState={detailState}
+      loadingText="커밋 상세를 불러오는 중..."
+      renderLoaded={(loadedDetail) => {
+        const isCopied = copiedHash === loadedDetail.hash
+        const hasBody = loadedDetail.body.trim().length > 0
+        return (
+          <>
+            <div className="git-commit-detail-top">
+              <code className="git-commit-detail-hash" title={loadedDetail.hash}>
+                {loadedDetail.shortHash}
+              </code>
+              <button
+                type="button"
+                className={`git-icon-btn git-commit-detail-copy-btn${isCopied ? ' is-copied' : ''}`}
+                aria-label="해시 복사"
+                title={isCopied ? '복사됨' : '전체 해시 복사'}
+                onClick={() => void handleCopyHash(loadedDetail.hash)}
+              >
+                {isCopied ? (
+                  <>
+                    <Check size={12} strokeWidth={1.75} aria-hidden="true" />
+                    <span className="git-commit-detail-copy-status">복사됨</span>
+                  </>
+                ) : (
+                  <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
+                )}
+              </button>
+            </div>
+            <div className="git-commit-detail-subject">{loadedDetail.subject}</div>
+            {hasBody && <div className="git-commit-detail-body">{loadedDetail.body}</div>}
+            <div className="git-commit-detail-meta">
+              <span className="git-commit-detail-author">
+                {loadedDetail.authorEmail
+                  ? `${loadedDetail.authorName} <${loadedDetail.authorEmail}>`
+                  : loadedDetail.authorName}
+              </span>
+              <span className="git-commit-detail-date">
+                {formatGitTimestamp(loadedDetail.committedAt)}
+              </span>
+            </div>
+            <GitDetailFilesList
+              files={loadedDetail.files}
+              target={{
+                kind: 'commit',
+                commitHash: loadedDetail.hash,
+                shortHash: loadedDetail.shortHash
+              }}
+              onOpenFileDiff={onOpenFileDiff}
+            />
+          </>
+        )
+      }}
+    />
   )
 }
 

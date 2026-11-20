@@ -35,11 +35,11 @@ import {
 import {
   assertValidCommitHash,
   GIT_COMMIT_DETAIL_FORMAT,
-  parseCommitDetailOutput,
-  parseGitNameStatusZ
+  parseCommitDetailOutput
 } from './gitCommitDetail'
-import { assertValidDiffTarget, computeGitDiff } from './gitDiff'
+import { computeGitDiff, validateGitDiffTarget } from './gitDiff'
 import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
+import { parseGitNameStatusZ } from './gitObjectParsing'
 import { parsePorcelainV2Z } from './gitPorcelain'
 import {
   assertValidStashRef,
@@ -575,17 +575,18 @@ export class GitService {
     }
 
     const repoRoot = await this.requireRepoRoot(workspacePath)
-    assertValidDiffTarget(request)
+    const target = validateGitDiffTarget(request)
     const workspaceRealRoot = await realpath(resolve(workspacePath))
     const rawPaths = request.origPath ? [request.path, request.origPath] : [request.path]
     const [safePath, safeOrigPath] = await this.validateRepoRelativePaths(repoRoot, rawPaths)
 
     try {
-      const hasHeadCommit = request.kind === 'staged' ? await this.hasHeadCommit(repoRoot) : true
+      const hasHeadCommit = target.kind === 'staged' ? await this.hasHeadCommit(repoRoot) : true
       return await computeGitDiff({
         repoRoot,
         workspaceRealRoot,
-        request,
+        target,
+        status: request.status,
         safePath,
         safeOrigPath,
         hasHeadCommit,
