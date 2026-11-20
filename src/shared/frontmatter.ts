@@ -562,6 +562,59 @@ function serializeYamlPair(key: string, value: FrontmatterFieldValue): string {
   return serialized.endsWith('\n') ? serialized : `${serialized}\n`
 }
 
+function serializeYamlValueAfterColon(value: FrontmatterFieldValue): string {
+  const rendered = YAML.stringify({ _v: value }, { lineWidth: 0 })
+  const normalized = rendered.endsWith('\n') ? rendered : `${rendered}\n`
+  return normalized.slice(3)
+}
+
+interface CstTokenLike {
+  type?: string
+  source?: string
+}
+
+function findFirstLineCommentInTokens(tokens: readonly CstTokenLike[] | undefined): string {
+  if (!tokens) return ''
+  let precedingSpace = ''
+  for (const token of tokens) {
+    if (token.type === 'newline') break
+    if (token.type === 'space') {
+      precedingSpace = token.source ?? ''
+      continue
+    }
+    if (token.type === 'comment' && token.source) {
+      return `${precedingSpace || ' '}${token.source}`
+    }
+    precedingSpace = ''
+  }
+  return ''
+}
+
+function extractPairTrailingComment(
+  pair: Pair,
+  yamlLf: string,
+  valRange: [number, number, number] | undefined
+): string {
+  const pairToken = pair as { srcToken?: { sep?: CstTokenLike[] } }
+  const valToken = (pair.value as { srcToken?: { props?: CstTokenLike[] } } | null)?.srcToken
+  const headerComment =
+    findFirstLineCommentInTokens(pairToken.srcToken?.sep) ||
+    findFirstLineCommentInTokens(valToken?.props)
+  if (headerComment) {
+    return headerComment
+  }
+
+  if (valRange && valRange[1] > 0 && yamlLf[valRange[1] - 1] !== '\n') {
+    const valLineEnd = nextLineEnd(yamlLf, valRange[1])
+    const textEnd = valLineEnd > 0 && yamlLf[valLineEnd - 1] === '\n' ? valLineEnd - 1 : valLineEnd
+    const trailing = yamlLf.slice(valRange[1], textEnd)
+    if (trailing.trim().length > 0) {
+      return `${leadingSeparatorGap(trailing)}${trailing}`
+    }
+  }
+  return ''
+}
+
 function lastNewlineIndex(text: string, beforeOffset: number): number {
   const clamped = Math.max(0, Math.min(beforeOffset, text.length))
   return clamped === 0 ? -1 : text.lastIndexOf('\n', clamped - 1)
@@ -600,81 +653,36 @@ function buildPairUpdateEdit(
     return { start: lineStart, end: blockEnd, replacement: '' }
   }
 
-  const serializedPair = serializeYamlPair(key, nextVal)
-  const isSerializedSingleLine = !serializedPair.slice(0, -1).includes('\n')
   const colonIdx = yamlLf.indexOf(':', keyRange?.[1] ?? pairStart)
-  const hasSameLineValue = Boolean(
-    colonIdx !== -1 &&
-      colonIdx < firstLineEnd &&
-      valRange &&
-      valRange[0] >= colonIdx &&
-      valRange[1] <= firstLineEnd
-  )
-  const trailingOnLine =
-    valRange && hasSameLineValue ? yamlLf.slice(valRange[1], firstLineEnd - 1) : ''
+  if (colonIdx === -1 || colonIdx >= firstLineEnd) {
+    return { start: lineStart, end: blockEnd, replacement: serializeYamlPair(key, nextVal) }
+  }
 
-  if (isSerializedSingleLine && hasSameLineValue && valRange) {
-    const serializedVal = serializedPair.slice(serializedPair.indexOf(':') + 1, -1).trimStart()
-    if (trailingOnLine.trim().length > 0) {
-      return {
-        start: colonIdx + 1,
-        end: valRange[1],
-        replacement: ` ${serializedVal}${leadingSeparatorGap(trailingOnLine)}`
-      }
-    }
+  const preservedKeyAndColon = yamlLf.slice(lineStart, colonIdx + 1)
+  const valueAfterColon = serializeYamlValueAfterColon(nextVal)
+  const commentSuffix = extractPairTrailingComment(pair, yamlLf, valRange)
+  const firstValLf = valueAfterColon.slice(0, -1).indexOf('\n')
+
+  if (firstValLf === -1) {
     return {
-      start: colonIdx + 1,
-      end: firstLineEnd,
-      replacement: ` ${serializedVal}\n`
+      start: lineStart,
+      end: blockEnd,
+      replacement: `${preservedKeyAndColon}${valueAfterColon.slice(0, -1)}${commentSuffix}\n`
     }
   }
 
-  if (!isSerializedSingleLine && colonIdx !== -1 && colonIdx < firstLineEnd) {
-    const firstSerializedLf = serializedPair.indexOf('\n')
-    const serializedColonIdx = serializedPair.indexOf(':')
-    const serializedHeaderSuffix =
-      firstSerializedLf !== -1 && serializedColonIdx !== -1 && serializedColonIdx < firstSerializedLf
-        ? serializedPair.slice(serializedColonIdx + 1, firstSerializedLf).trim()
-        : ''
-    const canKeepHeaderSuffix =
-      serializedHeaderSuffix === '' ||
-      serializedHeaderSuffix.startsWith('|') ||
-      serializedHeaderSuffix.startsWith('>')
-    const serializedBlockBody =
-      firstSerializedLf === -1 ? serializedPair : serializedPair.slice(firstSerializedLf + 1)
-
-    if (canKeepHeaderSuffix) {
-      const blockHeaderSuffix = serializedHeaderSuffix ? ` ${serializedHeaderSuffix}` : ''
-
-      if (valRange && valRange[0] >= firstLineEnd) {
-        const existingHeaderComment = yamlLf.slice(colonIdx + 1, firstLineEnd - 1)
-        const preservedComment =
-          existingHeaderComment.trim().length > 0
-            ? `${leadingSeparatorGap(existingHeaderComment)}${existingHeaderComment}`
-            : ''
-        return {
-          start: lineStart,
-          end: blockEnd,
-          replacement: `${yamlLf.slice(lineStart, colonIdx + 1)}${blockHeaderSuffix}${preservedComment}\n${serializedBlockBody}`
-        }
-      }
-
-      if (hasSameLineValue && trailingOnLine.trim().length > 0) {
-        const preservedHeader = `${yamlLf.slice(lineStart, colonIdx + 1)}${blockHeaderSuffix}${leadingSeparatorGap(trailingOnLine)}${trailingOnLine}\n`
-        return {
-          start: lineStart,
-          end: blockEnd,
-          replacement: `${preservedHeader}${serializedBlockBody}`
-        }
-      }
+  const headerSuffix = valueAfterColon.slice(0, firstValLf)
+  const trimmedHeader = headerSuffix.trim()
+  if (trimmedHeader === '' || trimmedHeader.startsWith('|') || trimmedHeader.startsWith('>')) {
+    const blockBody = valueAfterColon.slice(firstValLf + 1)
+    return {
+      start: lineStart,
+      end: blockEnd,
+      replacement: `${preservedKeyAndColon}${headerSuffix}${commentSuffix}\n${blockBody}`
     }
   }
 
-  return {
-    start: lineStart,
-    end: blockEnd,
-    replacement: serializedPair
-  }
+  return { start: lineStart, end: blockEnd, replacement: serializeYamlPair(key, nextVal) }
 }
 
 function patchFlowRootDocument(
@@ -701,6 +709,28 @@ function sliceSeparatorAfterClosing(markdown: string, split: FrontmatterSplit): 
   return markdown.slice(contentStart + split.rawBlock.length, split.bodyStartOffset)
 }
 
+type MutableFrontmatterGuard =
+  | { ok: false; result: FrontmatterMutationResult }
+  | {
+      ok: true
+      state: Extract<InspectedFrontmatterDocument, { kind: 'no-frontmatter' | 'ready' }>
+    }
+
+function inspectFrontmatterForMutation(markdown: string): MutableFrontmatterGuard {
+  const state = inspectFrontmatter(markdown)
+  if (state.kind === 'unclosed' || state.kind === 'syntax-error') {
+    return {
+      ok: false,
+      result: {
+        applied: false,
+        content: markdown,
+        error: state.error
+      }
+    }
+  }
+  return { ok: true, state }
+}
+
 /**
  * Non-destructively updates, adds, or removes frontmatter fields while preserving
  * unedited fields, unknown keys, YAML comments, nested values, BOM, and line endings.
@@ -711,14 +741,11 @@ export function applyFrontmatterValues(
   patch: Record<string, FrontmatterFieldValue | null | undefined>,
   options: FrontmatterMutationOptions = {}
 ): FrontmatterMutationResult {
-  const state = inspectFrontmatter(markdown)
-  if (state.kind === 'unclosed' || state.kind === 'syntax-error') {
-    return {
-      applied: false,
-      content: markdown,
-      error: state.error
-    }
+  const guard = inspectFrontmatterForMutation(markdown)
+  if (!guard.ok) {
+    return guard.result
   }
+  const { state } = guard
 
   const patchEntries = Object.entries(patch)
   if (state.kind === 'no-frontmatter') {
@@ -803,41 +830,17 @@ export function applyFrontmatterValues(
  * Refuses to overwrite documents that contain YAML syntax errors.
  */
 export function removeFrontmatterBlock(markdown: string): FrontmatterMutationResult {
-  const state = inspectFrontmatter(markdown)
-  if (state.kind === 'unclosed' || state.kind === 'syntax-error') {
-    return {
-      applied: false,
-      content: markdown,
-      error: state.error
-    }
+  const guard = inspectFrontmatterForMutation(markdown)
+  if (!guard.ok) {
+    return guard.result
   }
-  if (state.kind === 'no-frontmatter') {
+  if (guard.state.kind === 'no-frontmatter') {
     return { applied: true, content: markdown }
   }
 
-  const prefix = getBomPrefix(state.split.hasBom)
+  const prefix = getBomPrefix(guard.state.split.hasBom)
   return {
     applied: true,
-    content: `${prefix}${state.split.body}`
+    content: `${prefix}${guard.state.split.body}`
   }
-}
-
-/**
- * Recombines the original document's frontmatter prefix (including BOM and line endings)
- * with an updated markdown body.
- */
-export function replaceFrontmatterBody(originalMarkdown: string, nextBody: string): string {
-  const split = splitFrontmatterRegion(originalMarkdown)
-  if (!split.hasFrontmatter) {
-    if (split.hasBom && !nextBody.startsWith('\uFEFF')) {
-      return `\uFEFF${nextBody}`
-    }
-    return nextBody
-  }
-
-  const separatorAfterClosing = sliceSeparatorAfterClosing(originalMarkdown, split)
-  const effectiveSeparator =
-    separatorAfterClosing || (nextBody.length > 0 ? split.lineEnding : '')
-  const prefix = getBomPrefix(split.hasBom)
-  return `${prefix}${split.rawBlock}${effectiveSeparator}${nextBody}`
 }

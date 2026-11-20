@@ -7,7 +7,6 @@ import {
   parseFrontmatterSchema,
   parseFrontmatterSchemaJson,
   removeFrontmatterBlock,
-  replaceFrontmatterBody,
   serializeFrontmatterSchema,
   type WorkspaceFrontmatterSchema
 } from './frontmatter'
@@ -443,6 +442,45 @@ describe('frontmatter non-destructive serialization and safety guards', () => {
     })
   })
 
+  it('preserves line-1 header comments on multiline values across updates and handles colons inside YAML keys', () => {
+    const doc = [
+      '---',
+      'notes: | # keep block comment',
+      '  line 1',
+      '  line 2',
+      'labels: # keep list comment',
+      '  - old',
+      '"my:key": old # keep colon key comment',
+      '---',
+      '# Body'
+    ].join('\n')
+
+    const toMultiline = applyFrontmatterValues(doc, {
+      notes: 'a\nb',
+      labels: [],
+      'my:key': 'new'
+    })
+    expect(toMultiline.applied).toBe(true)
+    expect(toMultiline.content).toBe(
+      [
+        '---',
+        'notes: |- # keep block comment',
+        '  a',
+        '  b',
+        'labels: [] # keep list comment',
+        '"my:key": new # keep colon key comment',
+        '---',
+        '# Body'
+      ].join('\n')
+    )
+
+    const blockToSingle = applyFrontmatterValues(doc, {
+      notes: 'single'
+    })
+    expect(blockToSingle.applied).toBe(true)
+    expect(blockToSingle.content).toContain('notes: single # keep block comment\n')
+  })
+
   it('preserves ... closing delimiter, flow root maps, and adds frontmatter to body-only documents', () => {
     const dotsDoc = '---\n# keep\nstatus: todo\n...\nBody'
     const updatedDots = applyFrontmatterValues(dotsDoc, { status: 'done' })
@@ -475,11 +513,8 @@ describe('frontmatter non-destructive serialization and safety guards', () => {
     expect(emptyCreate.content).toBe('---\n---\n# Only body')
   })
 
-  it('removes frontmatter cleanly while preserving BOM and body, and recombines rawBlock with edited body', () => {
+  it('removes frontmatter cleanly while preserving BOM and body', () => {
     const doc = '\uFEFF---\r\n# keep\r\nstatus: todo\r\n---\r\n# Heading\r\nText'
-    const recombined = replaceFrontmatterBody(doc, '# Heading\r\nEdited text')
-    expect(recombined).toBe('\uFEFF---\r\n# keep\r\nstatus: todo\r\n---\r\n# Heading\r\nEdited text')
-
     const removed = removeFrontmatterBlock(doc)
     expect(removed.applied).toBe(true)
     expect(removed.content).toBe('\uFEFF# Heading\r\nText')
