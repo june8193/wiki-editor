@@ -1,34 +1,40 @@
 import { type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import { usePointerDragSession } from '../hooks/usePointerDragSession'
 import {
-  clampChangesHeightRatio,
-  GIT_PANEL_CHANGES_RATIO_STEP,
-  GIT_PANEL_DEFAULT_CHANGES_RATIO,
-  GIT_PANEL_MAX_CHANGES_RATIO,
-  GIT_PANEL_MIN_CHANGES_RATIO,
-  stepChangesHeightRatio,
-  toChangesHeightPercent
-} from '../utils/gitPanelSplit'
+  ACCORDION_MAX_TOP_RATIO,
+  ACCORDION_MIN_TOP_RATIO,
+  ACCORDION_RATIO_STEP,
+  ACCORDION_RESET_RATIO,
+  clampSectionHeightRatio,
+  stepSectionHeightRatio,
+  toSectionHeightPercent
+} from '../utils/accordionSplit'
 
-const MIN_PERCENT = toChangesHeightPercent(GIT_PANEL_MIN_CHANGES_RATIO)
-const MAX_PERCENT = toChangesHeightPercent(GIT_PANEL_MAX_CHANGES_RATIO)
+const MIN_PERCENT = toSectionHeightPercent(ACCORDION_MIN_TOP_RATIO)
+const MAX_PERCENT = toSectionHeightPercent(ACCORDION_MAX_TOP_RATIO)
 
-export interface GitSectionResizerProps {
-  changesHeightRatio: number
+export interface HorizontalSectionResizerProps {
+  ratio: number
+  fallbackRatio?: number
   containerRef: RefObject<HTMLDivElement | null>
+  ariaLabel: string
+  bodyClassName: string
   onResizeRatio: (nextRatio: number) => void
 }
 
 /**
- * Accessible horizontal section resizer between the Git Changes and Graph accordion sections.
+ * Accessible horizontal section resizer between two vertically stacked accordion sections.
  */
-export function GitSectionResizer({
-  changesHeightRatio,
+export function HorizontalSectionResizer({
+  ratio,
+  fallbackRatio = ACCORDION_RESET_RATIO,
   containerRef,
+  ariaLabel,
+  bodyClassName,
   onResizeRatio
-}: GitSectionResizerProps) {
+}: HorizontalSectionResizerProps) {
   const { isDragging, handleDragStart } = usePointerDragSession({
-    bodyClassName: 'is-resizing-git-sections',
+    bodyClassName,
     cursor: 'row-resize',
     onDragMove: (event) => {
       if (typeof event.clientY !== 'number') return
@@ -36,7 +42,7 @@ export function GitSectionResizer({
       if (!container) return
       const rect = container.getBoundingClientRect()
       if (rect.height <= 0) return
-      onResizeRatio(clampChangesHeightRatio((event.clientY - rect.top) / rect.height))
+      onResizeRatio(clampSectionHeightRatio((event.clientY - rect.top) / rect.height, fallbackRatio))
     }
   })
 
@@ -45,24 +51,24 @@ export function GitSectionResizer({
     if (keySign === 0) return
     event.preventDefault()
     onResizeRatio(
-      stepChangesHeightRatio(changesHeightRatio, GIT_PANEL_CHANGES_RATIO_STEP * keySign)
+      stepSectionHeightRatio(ratio, ACCORDION_RATIO_STEP * keySign, fallbackRatio)
     )
   }
 
   const handleDoubleClick = (): void => {
-    onResizeRatio(GIT_PANEL_DEFAULT_CHANGES_RATIO)
+    onResizeRatio(ACCORDION_RESET_RATIO)
   }
 
   return (
     <div
       role="separator"
       tabIndex={0}
-      aria-label="Git 섹션 높이 조절"
+      aria-label={ariaLabel}
       aria-orientation="horizontal"
       aria-valuemin={MIN_PERCENT}
       aria-valuemax={MAX_PERCENT}
-      aria-valuenow={toChangesHeightPercent(changesHeightRatio)}
-      className={`git-section-resizer${isDragging ? ' is-dragging' : ''}`}
+      aria-valuenow={toSectionHeightPercent(ratio, fallbackRatio)}
+      className={`section-resizer${isDragging ? ' is-dragging' : ''}`}
       onPointerDown={handleDragStart}
       onMouseDown={handleDragStart}
       onKeyDown={handleKeyDown}

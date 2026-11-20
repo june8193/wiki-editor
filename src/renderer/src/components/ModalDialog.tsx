@@ -1,4 +1,5 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { type ReactNode, type RefObject, useEffect, useRef } from 'react'
+import { isEventOutsideShell } from '../utils/workspaceSearch'
 
 export interface ModalDialogProps {
   backdropClassName?: string
@@ -7,20 +8,22 @@ export interface ModalDialogProps {
   ariaLabelledBy?: string
   autoFocusDialog?: boolean
   isDismissDisabled?: boolean
+  shellRef?: RefObject<HTMLDivElement | null>
   onClose: () => void
   children: ReactNode
 }
 
 /**
- * Shared modal backdrop and accessible dialog frame handling backdrop clicks and Escape dismissal.
+ * Shared modal backdrop and accessible dialog container with Escape and backdrop dismissal.
  */
 export function ModalDialog({
   backdropClassName,
   dialogClassName,
   ariaLabel,
   ariaLabelledBy,
-  autoFocusDialog = false,
+  autoFocusDialog = true,
   isDismissDisabled = false,
+  shellRef,
   onClose,
   children
 }: ModalDialogProps) {
@@ -38,16 +41,20 @@ export function ModalDialog({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && !isDismissDisabledRef.current) {
-        event.preventDefault()
-        onCloseRef.current()
+      if (event.defaultPrevented || event.key !== 'Escape' || isDismissDisabledRef.current) {
+        return
       }
+      if (isEventOutsideShell(event.target, shellRef?.current ?? null)) {
+        return
+      }
+      event.preventDefault()
+      onCloseRef.current()
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [])
+  }, [shellRef])
 
   return (
     <div

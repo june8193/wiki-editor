@@ -25,6 +25,8 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
+import { useFrontmatterFieldValues } from '../hooks/useFrontmatterFieldValues'
+import { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
 import {
   useGitController,
   type WorkspaceBufferMutationTarget
@@ -75,6 +77,7 @@ import {
 import { ActivityBar, type LeftSidebarView } from './ActivityBar'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 import { type EntryPathCopyMode, FolderTreeSidebar } from './FolderTreeSidebar'
+import { FrontmatterFilterBar } from './FrontmatterFilterBar'
 import { GitSidebarPanel } from './GitSidebarPanel'
 import { GitStashDialog } from './GitStashDialog'
 import type { PaneInteractionActions } from './PaneTabBar'
@@ -135,6 +138,7 @@ export function MainAppShell() {
     confirmAction
   } = useConfirmDialog()
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
+  const [isSchemaModalOpen, setIsSchemaModalOpen] = useState<boolean>(false)
   const [stashDialogScope, setStashDialogScope] = useState<'unstaged' | 'all' | null>(null)
   const stashDialogScopeRef = useRef<'unstaged' | 'all' | null>(stashDialogScope)
   stashDialogScopeRef.current = stashDialogScope
@@ -197,7 +201,7 @@ export function MainAppShell() {
     onInitialConfigLoaded: (loadedConfig) => onInitialConfigLoadedRef.current(loadedConfig)
   })
 
-  const isEditorShortcutDisabled = hasActiveModalDialog || isSettingsOpen
+  const isEditorShortcutDisabled = hasActiveModalDialog || isSettingsOpen || isSchemaModalOpen
   const isEditorShortcutDisabledRef = useRef<boolean>(isEditorShortcutDisabled)
   isEditorShortcutDisabledRef.current = isEditorShortcutDisabled
   const editor = useEditorWorkspace({
@@ -372,10 +376,22 @@ export function MainAppShell() {
     setGitChangesView(resetGitChangesTreeCollapsedDirs)
     setGitPanelSplit(resetGitStashesCollapsed)
     setStashDialogScope(null)
+    setIsSchemaModalOpen(false)
   }, [activeWorkspaceRoot])
 
+  const frontmatterSchema = useFrontmatterSchema({
+    workspaceRootPath: activeWorkspaceRoot,
+    onError: reportErrorBanner
+  })
+  const frontmatterFieldValues = useFrontmatterFieldValues({
+    workspaceRootPath: activeWorkspaceRoot,
+    schema: frontmatterSchema.schemaResult?.schema ?? null,
+    activeDocumentKey: editor.activeBuffer?.key ?? null
+  })
+
   const workspaceSearch = useWorkspaceSearch({
-    workspaceRootPath: activeWorkspaceRoot
+    workspaceRootPath: activeWorkspaceRoot,
+    schema: frontmatterSchema.schemaResult?.schema ?? null
   })
 
   const workspaceStatePersistence = useWorkspaceStatePersistence({
@@ -980,7 +996,10 @@ export function MainAppShell() {
   menuHandlersRef.current = {
     'open-folder': handleSelectFolder,
     'toggle-theme': toggleTheme,
-    'toggle-settings': () => setIsSettingsOpen((open) => !open)
+    'toggle-settings': () => {
+      setIsSchemaModalOpen(false)
+      setIsSettingsOpen((open) => !open)
+    }
   }
 
   useEffect(() => {
@@ -1131,6 +1150,28 @@ export function MainAppShell() {
                 workspaceRootPath={workspace?.rootPath ?? null}
                 query={workspaceSearch.query}
                 options={workspaceSearch.options}
+                hasFilterConditions={workspaceSearch.conditions.length > 0}
+                schema={frontmatterSchema.schemaResult?.schema ?? null}
+                filterBarSlot={
+                  <FrontmatterFilterBar
+                    workspaceRootPath={workspace?.rootPath ?? null}
+                    schemaResult={frontmatterSchema.schemaResult}
+                    fieldValuesByKey={frontmatterFieldValues.valuesByField}
+                    conditions={workspaceSearch.conditions}
+                    sort={workspaceSearch.sort}
+                    onCreateDefaultSchema={frontmatterSchema.createDefaultSchema}
+                    onOpenSchemaModal={() => {
+                      setIsSettingsOpen(false)
+                      setIsSchemaModalOpen(true)
+                    }}
+                    onRequestFieldValues={frontmatterFieldValues.refreshFieldValues}
+                    onAddCondition={workspaceSearch.onAddCondition}
+                    onUpdateCondition={workspaceSearch.onUpdateCondition}
+                    onRemoveCondition={workspaceSearch.onRemoveCondition}
+                    onClearConditions={workspaceSearch.onClearConditions}
+                    onChangeSort={workspaceSearch.onChangeSort}
+                  />
+                }
                 response={workspaceSearch.response}
                 errorMessage={workspaceSearch.errorMessage}
                 isSearching={workspaceSearch.isSearching}
@@ -1144,6 +1185,7 @@ export function MainAppShell() {
                 onToggleFileCollapsed={workspaceSearch.onToggleFileCollapsed}
                 onOpenFile={handleOpenSearchResultFile}
                 onOpenLineMatch={openSearchLineMatch}
+                onClickSummaryBadge={workspaceSearch.onUpsertBadgeCondition}
               />
             )}
 
@@ -1242,6 +1284,8 @@ export function MainAppShell() {
       showHeadingNumbers={config.showHeadingNumbers}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
       workspaceRootPath={workspace?.rootPath ?? null}
+      frontmatterSchema={frontmatterSchema}
+      frontmatterFieldValues={frontmatterFieldValues}
       openWorkspaceFile={openWorkspaceFile}
       reportErrorBanner={reportErrorBanner}
       imageTransferContextValue={imageTransferContextValue}
@@ -1257,6 +1301,12 @@ export function MainAppShell() {
       leftSidebarSlot={leftSidebarSlot}
       settingsPanelSlot={settingsPanelSlot}
       stashDialogSlot={stashDialogSlot}
+      isSchemaModalOpen={isSchemaModalOpen}
+      onOpenSchemaModal={() => {
+        setIsSettingsOpen(false)
+        setIsSchemaModalOpen(true)
+      }}
+      onCloseSchemaModal={() => setIsSchemaModalOpen(false)}
       searchJumpRequest={searchJumpRequest}
     />
   )

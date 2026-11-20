@@ -1,29 +1,48 @@
 import { type ReactNode, type Ref, useCallback, useMemo, useRef, useState } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
+import { toErrorMessage } from '@shared/errors'
+import { FRONTMATTER_SCHEMA_FILE } from '@shared/frontmatter'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
+import { isMarkdownDocument, type SidebarDocumentContext } from '../editor/editorModes'
 import type { ConfirmDialogState } from '../hooks/useConfirmDialog'
 import { useDocumentOutline } from '../hooks/useDocumentOutline'
 import {
   ImageTransferContext,
   type ImageTransferContextValue
 } from '../hooks/useEditorImageTransfer'
+import type { useFrontmatterFieldValues } from '../hooks/useFrontmatterFieldValues'
+import type { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
+import type { OpenedWorkspaceDocument } from '../hooks/useEditorWorkspace'
 import {
   useMarkdownLinkNavigation,
   type UseMarkdownLinkNavigationOptions
 } from '../hooks/useMarkdownLinkNavigation'
 import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
+import { getPaneActiveTab, type PaneId } from '../stores/PaneTabStore'
+import {
+  createTwoSectionSplitState,
+  toggleBottomSectionCollapsed,
+  toggleTopSectionCollapsed,
+  type TwoSectionSplitState,
+  updateTopSectionRatio
+} from '../utils/accordionSplit'
+import { getGitFileBaseName } from '../utils/gitFilePresentation'
 import {
   clampSidebarWidth,
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
   RIGHT_SIDEBAR_WIDTH_BOUNDS
 } from '../utils/sidebarWidth'
 import { ConfirmDialog } from './ConfirmDialog'
-import { DocumentOutlinePanel } from './DocumentOutlinePanel'
+import { FrontmatterSchemaModal } from './FrontmatterSchemaModal'
 import type { GitDiffContentState } from './GitDiffViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneWorkspace, type PaneWorkspaceProps } from './PaneWorkspace'
+import {
+  RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO,
+  RightSidebarPanel
+} from './RightSidebarPanel'
 import { SidebarResizer } from './SidebarResizer'
 
 const DEFAULT_IMAGE_TRANSFER_CONTEXT: ImageTransferContextValue = {}
@@ -66,6 +85,9 @@ export function buildPaneWorkspaceProps(
   }
 }
 
+export type FrontmatterSchemaController = ReturnType<typeof useFrontmatterSchema>
+export type FrontmatterFieldValuesController = ReturnType<typeof useFrontmatterFieldValues>
+
 export interface EditorWindowFrameProps {
   shellRef?: Ref<HTMLDivElement>
   paneWorkspaceProps: WindowFramePaneWorkspaceProps
@@ -73,13 +95,23 @@ export interface EditorWindowFrameProps {
   showHeadingNumbers: boolean
   onToggleHeadingNumbers: () => void
   workspaceRootPath?: string | null
-  openWorkspaceFile: UseMarkdownLinkNavigationOptions['openWorkspaceFile']
+  frontmatterSchema: FrontmatterSchemaController
+  frontmatterFieldValues: FrontmatterFieldValuesController
+  openWorkspaceFile: (
+    filePath: string,
+    targetPaneId?: PaneId,
+    explicitName?: string,
+    isCancelled?: () => boolean
+  ) => Promise<OpenedWorkspaceDocument | null>
   reportErrorBanner: UseMarkdownLinkNavigationOptions['reportErrorBanner']
   imageTransferContextValue?: ImageTransferContextValue
   initialRightSidebarCollapsed?: boolean
   errorMessage: string | null
   pendingDialog: ConfirmDialogState | null
   onDismissDialog: () => void
+  isSchemaModalOpen: boolean
+  onOpenSchemaModal: () => void
+  onCloseSchemaModal: () => void
   leftSidebarSlot?: ReactNode
   settingsPanelSlot?: ReactNode
   stashDialogSlot?: ReactNode
@@ -88,7 +120,7 @@ export interface EditorWindowFrameProps {
 /**
  * Shared window frame rendering the error banner, optional activity bar and left sidebar slot,
  * pane workspace, collapsible right sidebar (document outline), optional settings panel slot,
- * and confirm dialog.
+ * schema management modal, and confirm dialog.
  */
 export function EditorWindowFrame({
   shellRef,
@@ -97,6 +129,8 @@ export function EditorWindowFrame({
   showHeadingNumbers,
   onToggleHeadingNumbers,
   workspaceRootPath = null,
+  frontmatterSchema,
+  frontmatterFieldValues,
   openWorkspaceFile,
   reportErrorBanner,
   imageTransferContextValue,
@@ -104,6 +138,9 @@ export function EditorWindowFrame({
   errorMessage,
   pendingDialog,
   onDismissDialog,
+  isSchemaModalOpen,
+  onOpenSchemaModal,
+  onCloseSchemaModal,
   leftSidebarSlot,
   settingsPanelSlot,
   stashDialogSlot
@@ -112,6 +149,9 @@ export function EditorWindowFrame({
     isCollapsed: initialRightSidebarCollapsed,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
   }))
+  const [rightSidebarSplit, setRightSidebarSplit] = useState<TwoSectionSplitState>(() =>
+    createTwoSectionSplitState(RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)
+  )
   const localShellRef = useRef<HTMLDivElement | null>(null)
   const setMergedShellRef = useCallback(
     (node: HTMLDivElement | null): void => {
@@ -139,6 +179,50 @@ export function EditorWindowFrame({
       prev.width === clampedWidth ? prev : { ...prev, width: clampedWidth }
     )
   }, [])
+
+  const handleToggleOutlineCollapsed = useCallback((): void => {
+    setRightSidebarSplit(toggleTopSectionCollapsed)
+  }, [])
+
+  const handleTogglePropertiesCollapsed = useCallback((): void => {
+    setRightSidebarSplit(toggleBottomSectionCollapsed)
+  }, [])
+
+  const handleResizeOutlineRatio = useCallback((nextRatio: number): void => {
+    setRightSidebarSplit((prev) =>
+      updateTopSectionRatio(prev, nextRatio, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)
+    )
+  }, [])
+
+  const {
+    schemaResult,
+    isSchemaLoading,
+    createDefaultSchema,
+    saveSchema,
+    ensureSchemaFilePath
+  } = frontmatterSchema
+  const { valuesByField, refreshFieldValues } = frontmatterFieldValues
+  const canManageSchema = Boolean(workspaceRootPath || schemaResult !== null)
+
+  const workspaceRootRef = useRef(workspaceRootPath)
+  workspaceRootRef.current = workspaceRootPath
+
+  const openSchemaRawJsonFile = useCallback(async (): Promise<boolean> => {
+    const startedRoot = workspaceRootRef.current
+    const targetPath = await ensureSchemaFilePath()
+    if (startedRoot !== workspaceRootRef.current) return false
+    if (!targetPath) {
+      throw new Error('프론트매터 스키마 파일을 준비하지 못했습니다.')
+    }
+    const opened = await openWorkspaceFile(
+      targetPath,
+      undefined,
+      FRONTMATTER_SCHEMA_FILE,
+      () => startedRoot !== workspaceRootRef.current
+    )
+    if (startedRoot !== workspaceRootRef.current) return false
+    return Boolean(opened)
+  }, [ensureSchemaFilePath, openWorkspaceFile])
 
   const paneFind = usePaneDocumentFind({
     layout: paneWorkspaceProps.layout,
@@ -169,6 +253,30 @@ export function EditorWindowFrame({
       onNavigateLink: handleNavigateMarkdownLink
     }),
     [handleNavigateMarkdownLink, outline.paneActions]
+  )
+
+  const activePane = paneWorkspaceProps.layout.panes[paneWorkspaceProps.layout.activePaneId]
+  const activeTab = getPaneActiveTab(activePane)
+  const activeBuffer =
+    activeTab?.kind === 'document' ? paneWorkspaceProps.buffers[activeTab.bufferKey] : undefined
+  const activeBufferKey = activeBuffer?.key ?? null
+  const rightSidebarDocument: SidebarDocumentContext = {
+    documentName:
+      activeTab?.kind === 'diff'
+        ? getGitFileBaseName(activeTab.diff.request.path)
+        : (activeBuffer?.name ?? null),
+    documentKey: activeBufferKey,
+    content: activeBuffer?.content ?? '',
+    isMarkdownDocument: activeBuffer ? isMarkdownDocument(activeBuffer) : false
+  }
+  const onOutlinePaneChangeContent = outline.paneActions.onChangeContent
+
+  const handlePropertiesChangeContent = useCallback(
+    (nextContent: string): void => {
+      if (!activeBufferKey) return
+      onOutlinePaneChangeContent(activeBufferKey, nextContent)
+    },
+    [activeBufferKey, onOutlinePaneChangeContent]
   )
 
   return (
@@ -209,11 +317,41 @@ export function EditorWindowFrame({
               aria-label="우측 사이드바"
               style={{ width: `${rightSidebar.width}px` }}
             >
-              <DocumentOutlinePanel
-                {...outline.documentOutlineProps}
-                showHeadingNumbers={showHeadingNumbers}
-                onToggleHeadingNumbers={onToggleHeadingNumbers}
-                onCollapse={handleCollapseRightSidebar}
+              <RightSidebarPanel
+                document={rightSidebarDocument}
+                splitState={rightSidebarSplit}
+                onToggleOutlineCollapsed={handleToggleOutlineCollapsed}
+                onTogglePropertiesCollapsed={handleTogglePropertiesCollapsed}
+                onResizeOutlineRatio={handleResizeOutlineRatio}
+                outlineProps={{
+                  activeHeadingIndex: outline.activeHeadingIndex,
+                  onSelectHeading: outline.selectHeading,
+                  showHeadingNumbers,
+                  onToggleHeadingNumbers,
+                  onCollapse: handleCollapseRightSidebar
+                }}
+                propertiesProps={{
+                  schemaResult,
+                  fieldValuesByKey: valuesByField,
+                  isSchemaLoading,
+                  canManageSchema,
+                  onChangeContent: handlePropertiesChangeContent,
+                  onCreateDefaultSchema: createDefaultSchema,
+                  onRequestFieldValues: refreshFieldValues,
+                  onOpenSchemaModal,
+                  onOpenSchemaRawJson: () => {
+                    const startedRoot = workspaceRootRef.current
+                    reportErrorBanner(null)
+                    void openSchemaRawJsonFile().catch((error: unknown) => {
+                      if (startedRoot === workspaceRootRef.current) {
+                        reportErrorBanner(
+                          toErrorMessage(error, '프론트매터 스키마 파일을 준비하지 못했습니다.'),
+                          error
+                        )
+                      }
+                    })
+                  }
+                }}
               />
             </aside>
           </>
@@ -229,6 +367,26 @@ export function EditorWindowFrame({
           </button>
         )}
       </main>
+
+      {isSchemaModalOpen && canManageSchema && (
+        <FrontmatterSchemaModal
+          schemaResult={schemaResult}
+          isDismissDisabled={pendingDialog !== null || Boolean(stashDialogSlot)}
+          shellRef={localShellRef}
+          onSaveSchema={saveSchema}
+          onOpenRawJson={async () => {
+            const startedRoot = workspaceRootRef.current
+            const opened = await openSchemaRawJsonFile()
+            if (startedRoot !== workspaceRootRef.current) return
+            if (!opened) {
+              reportErrorBanner(null)
+              throw new Error('스키마 JSON 파일을 열지 못했습니다.')
+            }
+            onCloseSchemaModal()
+          }}
+          onClose={onCloseSchemaModal}
+        />
+      )}
 
       {settingsPanelSlot}
 

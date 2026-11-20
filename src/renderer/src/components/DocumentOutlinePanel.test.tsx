@@ -23,9 +23,11 @@ describe('DocumentOutlinePanel', () => {
 
     const { rerender } = render(
       <DocumentOutlinePanel
-        documentName="note.md"
-        content={sampleMarkdown}
-        isMarkdownDocument
+        document={{
+          documentName: 'note.md',
+          content: sampleMarkdown,
+          isMarkdownDocument: true
+        }}
         showHeadingNumbers
         onToggleHeadingNumbers={onToggleHeadingNumbers}
         onSelectHeading={onSelectHeading}
@@ -74,9 +76,11 @@ describe('DocumentOutlinePanel', () => {
     // Turning showHeadingNumbers off hides dynamic numbers
     rerender(
       <DocumentOutlinePanel
-        documentName="note.md"
-        content={sampleMarkdown}
-        isMarkdownDocument
+        document={{
+          documentName: 'note.md',
+          content: sampleMarkdown,
+          isMarkdownDocument: true
+        }}
         showHeadingNumbers={false}
         onToggleHeadingNumbers={onToggleHeadingNumbers}
         onSelectHeading={onSelectHeading}
@@ -94,9 +98,11 @@ describe('DocumentOutlinePanel', () => {
   it('does not render removed TOC/heading-mutation buttons and shows non-markdown empty message cleanly', () => {
     const { rerender } = render(
       <DocumentOutlinePanel
-        documentName="note.md"
-        content={sampleMarkdown}
-        isMarkdownDocument
+        document={{
+          documentName: 'note.md',
+          content: sampleMarkdown,
+          isMarkdownDocument: true
+        }}
         showHeadingNumbers
         onToggleHeadingNumbers={vi.fn()}
         onSelectHeading={vi.fn()}
@@ -113,9 +119,11 @@ describe('DocumentOutlinePanel', () => {
     // Non-markdown document shows empty message while preserving header controls
     rerender(
       <DocumentOutlinePanel
-        documentName="config.json"
-        content='{"theme":"dark"}'
-        isMarkdownDocument={false}
+        document={{
+          documentName: 'config.json',
+          content: '{"theme":"dark"}',
+          isMarkdownDocument: false
+        }}
         showHeadingNumbers
         onToggleHeadingNumbers={vi.fn()}
         onSelectHeading={vi.fn()}
@@ -131,9 +139,11 @@ describe('DocumentOutlinePanel', () => {
     const onCollapse = vi.fn()
     render(
       <DocumentOutlinePanel
-        documentName="note.md"
-        content={'# First'}
-        isMarkdownDocument
+        document={{
+          documentName: 'note.md',
+          content: '# First',
+          isMarkdownDocument: true
+        }}
         showHeadingNumbers
         onToggleHeadingNumbers={vi.fn()}
         onSelectHeading={vi.fn()}
@@ -167,9 +177,11 @@ describe('DocumentOutlinePanel', () => {
 
     try {
       const baseProps = {
-        documentName: 'note.md',
-        content: sampleMarkdown,
-        isMarkdownDocument: true,
+        document: {
+          documentName: 'note.md',
+          content: sampleMarkdown,
+          isMarkdownDocument: true
+        },
         showHeadingNumbers: true,
         onToggleHeadingNumbers: vi.fn(),
         onSelectHeading: vi.fn(),
@@ -230,19 +242,40 @@ describe('DocumentOutlinePanel', () => {
       for (const btn of getButtons()) {
         expect(btn).not.toHaveAttribute('aria-current')
       }
-      rerender(<DocumentOutlinePanel {...baseProps} content="Plain paragraph only" activeHeadingIndex={0} />)
+      rerender(
+        <DocumentOutlinePanel
+          {...baseProps}
+          document={{ ...baseProps.document, content: 'Plain paragraph only' }}
+          activeHeadingIndex={0}
+        />
+      )
       expect(screen.queryByRole('list')).not.toBeInTheDocument()
-      rerender(<DocumentOutlinePanel {...baseProps} isMarkdownDocument={false} activeHeadingIndex={0} />)
+      rerender(
+        <DocumentOutlinePanel
+          {...baseProps}
+          document={{ ...baseProps.document, isMarkdownDocument: false }}
+          activeHeadingIndex={0}
+        />
+      )
       expect(screen.queryByRole('list')).not.toBeInTheDocument()
-      rerender(<DocumentOutlinePanel {...baseProps} documentName={null} activeHeadingIndex={0} />)
+      rerender(
+        <DocumentOutlinePanel
+          {...baseProps}
+          document={{ ...baseProps.document, documentName: null }}
+          activeHeadingIndex={0}
+        />
+      )
       expect(screen.queryByRole('list')).not.toBeInTheDocument()
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
 
       rerender(
         <DocumentOutlinePanel
           {...baseProps}
-          documentName="README.md"
-          documentKey="workspace:C:/wiki/a/README.md"
+          document={{
+            ...baseProps.document,
+            documentName: 'README.md',
+            documentKey: 'workspace:C:/wiki/a/README.md'
+          }}
           activeHeadingIndex={1}
         />
       )
@@ -250,8 +283,11 @@ describe('DocumentOutlinePanel', () => {
       rerender(
         <DocumentOutlinePanel
           {...baseProps}
-          documentName="README.md"
-          documentKey="workspace:C:/wiki/b/README.md"
+          document={{
+            ...baseProps.document,
+            documentName: 'README.md',
+            documentKey: 'workspace:C:/wiki/b/README.md'
+          }}
           activeHeadingIndex={1}
         />
       )

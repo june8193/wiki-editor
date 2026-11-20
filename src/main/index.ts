@@ -26,6 +26,7 @@ import { registerBufferIpc } from './ipc/registerBufferIpc'
 import { registerClipboardIpc } from './ipc/registerClipboardIpc'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerDiagramIpc } from './ipc/registerDiagramIpc'
+import { registerFrontmatterIpc } from './ipc/registerFrontmatterIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerLogIpc } from './ipc/registerLogIpc'
 import { registerWindowIpc } from './ipc/registerWindowIpc'
@@ -61,6 +62,7 @@ let disposeBufferIpc: (() => void) | undefined
 let disposeConfigIpc: (() => void) | undefined
 let disposeDiagramIpc: (() => void) | undefined
 let disposeWorkspaceIpc: (() => void) | undefined
+let disposeFrontmatterIpc: (() => void) | undefined
 let disposeWorkspaceStateIpc: (() => void) | undefined
 let disposeGitIpc: (() => void) | undefined
 let disposeWindowIpc: (() => void) | undefined
@@ -89,6 +91,8 @@ function disposeMainResources(): Promise<void> | undefined {
   disposeGitIpc = undefined
   disposeWorkspaceStateIpc?.()
   disposeWorkspaceStateIpc = undefined
+  disposeFrontmatterIpc?.()
+  disposeFrontmatterIpc = undefined
   disposeWorkspaceIpc?.()
   disposeWorkspaceIpc = undefined
   disposeConfigIpc?.()
@@ -218,6 +222,11 @@ void app.whenReady().then(async () => {
     ipcMain,
     workspaceStateService: activeWorkspaceStateService,
     isMainWindowSender: (sender) => windowManager?.isMainWebContents(sender) ?? false,
+    logService
+  })
+  disposeFrontmatterIpc = registerFrontmatterIpc({
+    ipcMain,
+    sessionSource: windowManager,
     logService
   })
 

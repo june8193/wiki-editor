@@ -2,6 +2,7 @@ import type { Code, Content, Definition, Html, List, ListItem, Parent, Root, Roo
 import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
+import { extractFrontmatterBody, isLineInFrontmatter } from '@shared/frontmatter'
 import {
   compileSearchMatcher,
   type CompiledSearchMatcher,
@@ -32,6 +33,7 @@ export interface NestedBlockHint {
 
 export interface MarkdownJumpPlan {
   lineNumber: number
+  isInFrontmatter: boolean
   targetBlock: MarkdownBlockRange | null
   nestedBlockHint: NestedBlockHint | null
   renderedMatch: MarkdownJumpCandidateMatch | null
@@ -185,8 +187,7 @@ function toTopBlockKind(node: RootContent): MarkdownTopBlockKind | null {
  * Parses top-level markdown blocks with 1-based line spans and normalized plain text
  * (omitting unrendered definitions and HTML-comment-only nodes).
  */
-export function collectTopLevelMarkdownBlocks(rawContent: string): TopLevelMarkdownBlock[] {
-  const content = normalizeLineEndingsToLf(rawContent)
+function collectBodyMarkdownBlocks(content: string, lineOffset: number): TopLevelMarkdownBlock[] {
   if (!content.trim()) {
     return []
   }
@@ -211,8 +212,8 @@ export function collectTopLevelMarkdownBlocks(rawContent: string): TopLevelMarkd
     const isIndentedCode = isCode && !isFencedCodeRaw(rawSlice)
     blocks.push({
       kind,
-      startLine: range.startLine,
-      endLine: range.endLine,
+      startLine: range.startLine + lineOffset,
+      endLine: range.endLine + lineOffset,
       plainText: extractPlainTextFromMdast(child).replace(/\s+/g, ' ').trim(),
       isMermaid,
       isIndentedCode,
@@ -221,6 +222,12 @@ export function collectTopLevelMarkdownBlocks(rawContent: string): TopLevelMarkd
   }
 
   return blocks
+}
+
+export function collectTopLevelMarkdownBlocks(rawContent: string): TopLevelMarkdownBlock[] {
+  const slice = extractFrontmatterBody(rawContent)
+  const content = normalizeLineEndingsToLf(slice.body)
+  return collectBodyMarkdownBlocks(content, slice.bodyStartLine - 1)
 }
 
 /**
@@ -656,17 +663,30 @@ export function analyzeMarkdownSearchJump(
   rawContent: string,
   jump: DocumentJumpLocation
 ): MarkdownJumpPlan {
-  const content = normalizeLineEndingsToLf(rawContent)
-  const lines = splitSearchLines(content)
-  const lineNumber = Math.max(1, Math.min(jump.lineNumber, lines.length))
-  const lineStartOffsets = computeLineStartOffsets(lines)
-  const rawLine = lines[lineNumber - 1] ?? ''
+  if (isLineInFrontmatter(rawContent, jump.lineNumber)) {
+    return {
+      lineNumber: Math.max(1, jump.lineNumber),
+      isInFrontmatter: true,
+      targetBlock: null,
+      nestedBlockHint: null,
+      renderedMatch: null
+    }
+  }
+
+  const slice = extractFrontmatterBody(rawContent)
+  const lineOffset = slice.bodyStartLine - 1
+  const bodyLf = normalizeLineEndingsToLf(slice.body)
+  const bodyLines = splitSearchLines(bodyLf)
+  const bodyLineNumber = Math.max(1, Math.min(jump.lineNumber - lineOffset, bodyLines.length))
+  const lineNumber = bodyLineNumber + lineOffset
+  const lineStartOffsets = computeLineStartOffsets(bodyLines)
+  const rawLine = bodyLines[bodyLineNumber - 1] ?? ''
   const colStart = Math.max(0, Math.min(jump.columnStart, rawLine.length))
   const colEnd = Math.max(colStart, Math.min(jump.columnEnd, rawLine.length))
-  const rawFrom = lineStartOffsets[lineNumber - 1] + colStart
-  const rawTo = lineStartOffsets[lineNumber - 1] + colEnd
+  const rawFrom = lineStartOffsets[bodyLineNumber - 1] + colStart
+  const rawTo = lineStartOffsets[bodyLineNumber - 1] + colEnd
 
-  const topBlocks = collectTopLevelMarkdownBlocks(content)
+  const topBlocks = collectBodyMarkdownBlocks(bodyLf, lineOffset)
   const closestBlock = pickClosestLineBlock(topBlocks, lineNumber)
   const containingBlock =
     closestBlock && lineNumber >= closestBlock.startLine && lineNumber <= closestBlock.endLine
@@ -677,29 +697,30 @@ export function analyzeMarkdownSearchJump(
     ? { startLine: closestBlock.startLine, endLine: closestBlock.endLine }
     : null
   const nestedBlockHint = containingBlock
-    ? resolveNestedBlockHint(containingBlock.node, lineNumber)
+    ? resolveNestedBlockHint(containingBlock.node, bodyLineNumber)
     : null
 
   if (!containingBlock || jump.query.length === 0) {
-    return { lineNumber, targetBlock, nestedBlockHint, renderedMatch: null }
+    return { lineNumber, isInFrontmatter: false, targetBlock, nestedBlockHint, renderedMatch: null }
   }
 
   const compiled = compileSearchMatcher(jump.query, jump.options)
   if (!compiled.ok) {
-    return { lineNumber, targetBlock, nestedBlockHint, renderedMatch: null }
+    return { lineNumber, isInFrontmatter: false, targetBlock, nestedBlockHint, renderedMatch: null }
   }
 
   if (containingBlock.node.type === 'code') {
     return {
       lineNumber,
+      isInFrontmatter: false,
       targetBlock,
       nestedBlockHint: null,
       renderedMatch: resolveCodeBlockJumpMatch(
-        content,
-        lines,
+        bodyLf,
+        bodyLines,
         containingBlock.node,
         compiled.matcher,
-        lineNumber,
+        bodyLineNumber,
         colStart,
         colEnd
       )
@@ -710,15 +731,16 @@ export function analyzeMarkdownSearchJump(
     containingBlock.node.type === 'thematicBreak' ||
     (containingBlock.node as RootContent | Definition).type === 'definition'
   ) {
-    return { lineNumber, targetBlock, nestedBlockHint: null, renderedMatch: null }
+    return { lineNumber, isInFrontmatter: false, targetBlock, nestedBlockHint: null, renderedMatch: null }
   }
 
   return {
     lineNumber,
+    isInFrontmatter: false,
     targetBlock,
     nestedBlockHint,
     renderedMatch: resolveInlineBlockMatch(
-      content,
+      bodyLf,
       containingBlock.node,
       compiled.matcher,
       rawFrom,

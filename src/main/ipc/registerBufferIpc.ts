@@ -9,8 +9,11 @@ import type { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import {
   broadcastIpcEvent,
   type IpcMainLike,
+  type IpcSessionSource,
   registerIpcHandlers,
+  resolveIpcSessionSource,
   resolveSenderWebContents,
+  subscribeIpcSessions,
   type WebContentsLike
 } from './ipcHelpers'
 
@@ -32,11 +35,7 @@ export interface BufferIpcSession {
   resolveWindowId?: (sender: BufferWebContentsLike | undefined) => number | undefined
 }
 
-export interface BufferIpcSessionSource {
-  resolveSession: (sender: BufferWebContentsLike | undefined) => BufferIpcSession | undefined
-  forEachSession: (visitor: (session: BufferIpcSession) => void) => void
-  onSessionCreated?: (listener: (session: BufferIpcSession) => (() => void) | void) => () => void
-}
+export type BufferIpcSessionSource = IpcSessionSource<BufferIpcSession, BufferWebContentsLike>
 
 export interface RegisterBufferIpcDependencies {
   ipcMain: IpcMainLike
@@ -132,19 +131,11 @@ export function registerBufferIpc({
   logService
 }: RegisterBufferIpcDependencies): () => void {
   const ownsSingleHub = !sessionSource
-  let source: BufferIpcSessionSource
-  if (sessionSource) {
-    source = sessionSource
-  } else {
-    if (!hub || !getTargets) {
-      throw new Error('registerBufferIpc requires either sessionSource or hub and getTargets')
-    }
-    const singleSession: BufferIpcSession = { hub, getTargets }
-    source = {
-      resolveSession: () => singleSession,
-      forEachSession: (visitor) => visitor(singleSession)
-    }
-  }
+  const source = resolveIpcSessionSource(
+    sessionSource,
+    hub && getTargets ? { hub, getTargets } : undefined,
+    'registerBufferIpc requires either sessionSource or hub and getTargets'
+  )
 
   const resolveContext = (
     event: unknown
@@ -170,25 +161,14 @@ export function registerBufferIpc({
     return ctx
   }
 
-  const hubUnsubscribers = new Map<SharedDocumentBufferHub, () => void>()
-  const attachSession = (session: BufferIpcSession): (() => void) | undefined => {
-    if (hubUnsubscribers.has(session.hub)) {
-      return undefined
-    }
-    const unsubscribeHub = session.hub.subscribe((hubEvent) => {
-      broadcastIpcEvent(session.getTargets, BUFFER_IPC_CHANNELS.event, hubEvent)
-    })
-    hubUnsubscribers.set(session.hub, unsubscribeHub)
-    return () => {
-      hubUnsubscribers.get(session.hub)?.()
-      hubUnsubscribers.delete(session.hub)
-    }
-  }
-
-  const unsubscribeSessionCreated = source.onSessionCreated?.((session) => attachSession(session))
-  source.forEachSession((session) => {
-    attachSession(session)
-  })
+  const unsubscribeSessions = subscribeIpcSessions(
+    source,
+    (session) => session.hub,
+    (session) =>
+      session.hub.subscribe((hubEvent) => {
+        broadcastIpcEvent(session.getTargets, BUFFER_IPC_CHANNELS.event, hubEvent)
+      })
+  )
 
   const unsubscribeConfig = configService.onChanged((config) => {
     source.forEachSession((session) => {
@@ -341,11 +321,7 @@ export function registerBufferIpc({
   )
 
   return () => {
-    unsubscribeSessionCreated?.()
-    for (const unsubscribeHub of hubUnsubscribers.values()) {
-      unsubscribeHub()
-    }
-    hubUnsubscribers.clear()
+    unsubscribeSessions()
     unsubscribeConfig()
     if (ownsSingleHub) {
       hub?.dispose()

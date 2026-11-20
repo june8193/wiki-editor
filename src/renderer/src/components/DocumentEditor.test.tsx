@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { EditorView } from '@codemirror/view'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -10,7 +11,14 @@ import themeCss from '../styles/theme.css?raw'
 import { installScrollContainerStub, mockElementBoundingRect } from '../test/domLayoutStub'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { DocumentEditor } from './DocumentEditor'
+import { DocumentPropertiesSection } from './DocumentPropertiesSection'
 import type { DocumentBuffer } from '@shared/documentBuffer'
+import {
+  applyFrontmatterValues,
+  createDefaultFrontmatterSchema,
+  parseFrontmatterDocument,
+  removeFrontmatterBlock
+} from '@shared/frontmatter'
 import type { DocumentTabItem, EditorMode, TabViewPatch } from '../stores/PaneTabStore'
 
 function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
@@ -1999,5 +2007,356 @@ describe('DocumentEditor Mermaid tab-session height persistence', () => {
     })
     expect(screen.getAllByTestId('mermaid-svg')[0].style.height).toBe('')
     expect(screen.getAllByTestId('mermaid-svg')[1].style.height).toBe('')
+  })
+})
+
+describe('DocumentEditor frontmatter integration (<DocumentEditor />)', () => {
+  it('hides YAML frontmatter in 위지윅 mode, recombines original frontmatter losslessly on body edits, preserves caret on external frontmatter-only updates, and guards syntax-error blocks', async () => {
+    const user = userEvent.setup()
+    const initialContent = [
+      '\uFEFF---',
+      '# Keep this YAML comment',
+      'status: todo',
+      'customBlock:',
+      '  owner: platform',
+      '  # nested comment',
+      '  items: [one, two]',
+      '---',
+      '',
+      '# Body Heading',
+      '',
+      'AlphaBeta'
+    ].join('\r\n')
+
+    let doc = createDoc({ content: initialContent, savedContent: initialContent })
+    let tab = createTab('wysiwyg')
+    const emittedUpdates: string[] = []
+    const onChangeContent = vi.fn((nextContent: string) => {
+      emittedUpdates.push(nextContent)
+      doc = { ...doc, content: nextContent, isDirty: true }
+      rerenderEditor()
+    })
+
+    const renderUi = () => (
+      <DocumentEditor
+        document={doc}
+        tab={tab}
+        theme="light"
+        autoSave={false}
+        onChangeContent={onChangeContent}
+        onSave={vi.fn()}
+        onUpdateViewState={(patch) => {
+          tab = { ...tab, ...patch }
+          rerenderEditor()
+        }}
+      />
+    )
+    const { rerender } = render(renderUi())
+    const rerenderEditor = () => rerender(renderUi())
+
+    const wysiwygSurface = screen.getByLabelText('위지윅 문서 에디터')
+    // Frontmatter must NOT leak into TipTap rich-text surface
+    expect(wysiwygSurface.textContent).not.toContain('status: todo')
+    expect(wysiwygSurface.textContent).not.toContain('customBlock')
+    expect(wysiwygSurface.textContent).not.toContain('Keep this YAML comment')
+    expect(wysiwygSurface.querySelector('hr')).toBeNull()
+    expect(within(wysiwygSurface).getByRole('heading', { level: 1, name: 'Body Heading' })).toBeInTheDocument()
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Mode roundtrips without body edits must not trigger onChangeContent
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+    expect(onChangeContent).not.toHaveBeenCalled()
+
+    // Place caret between 'Alpha' and 'Beta' inside TipTap paragraph
+    const activeSurface = screen.getByLabelText('위지윅 문서 에디터')
+    const paragraphTextNode = Array.from(activeSurface.querySelectorAll('p')).find(
+      (p) => p.textContent === 'AlphaBeta'
+    )?.firstChild
+    expect(paragraphTextNode).toBeTruthy()
+    const selection = window.getSelection()!
+    const range = document.createRange()
+    range.setStart(paragraphTextNode!, 5)
+    range.collapse(true)
+    activeSurface.focus()
+    selection.removeAllRanges()
+    selection.addRange(range)
+    document.dispatchEvent(new Event('selectionchange'))
+    expect(selection.anchorNode).toBe(paragraphTextNode)
+    expect(selection.anchorOffset).toBe(5)
+
+    // External update changing ONLY frontmatter must NOT emit onChangeContent or reset caret/selection
+    const updatedFrontmatter = applyFrontmatterValues(doc.content, { status: 'done' })
+    expect(updatedFrontmatter.applied).toBe(true)
+    doc = { ...doc, content: updatedFrontmatter.content, isDirty: true }
+    rerenderEditor()
+
+    expect(onChangeContent).not.toHaveBeenCalled()
+    expect(selection.rangeCount).toBe(1)
+    expect(selection.anchorNode).toBe(paragraphTextNode)
+    expect(selection.anchorOffset).toBe(5)
+
+    // Typing at preserved caret inserts at 'Alpha|Beta' and recombines with updated frontmatter + untouched unknown/comments/BOM/CRLF
+    await user.keyboard('Mid')
+    await waitFor(() => {
+      expect(emittedUpdates.length).toBeGreaterThanOrEqual(1)
+    })
+    const latestEmitted = emittedUpdates[emittedUpdates.length - 1]
+    expect(latestEmitted.startsWith('\uFEFF---\r\n# Keep this YAML comment\r\nstatus: done\r\n')).toBe(true)
+    expect(latestEmitted).toContain('customBlock:\r\n  owner: platform\r\n  # nested comment\r\n  items: [one, two]')
+    const reparsed = parseFrontmatterDocument(latestEmitted)
+    expect(reparsed.body).toContain('AlphaMidBeta')
+
+    // External frontmatter removal keeps body intact without losing edited text
+    const removed = removeFrontmatterBlock(doc.content)
+    expect(removed.applied).toBe(true)
+    doc = { ...doc, content: removed.content }
+    rerenderEditor()
+    expect(screen.getByLabelText('위지윅 문서 에디터').textContent).toContain('AlphaMidBeta')
+
+    // Closed YAML syntax error block stays hidden in 위지윅 and is preserved verbatim on edit
+    const brokenYamlDoc = '---\n# invalid yaml kept\nbroken: [unclosed\n---\n# Safe Body\n\nText'
+    doc = createDoc({ content: brokenYamlDoc, savedContent: brokenYamlDoc })
+    onChangeContent.mockClear()
+    emittedUpdates.length = 0
+    rerenderEditor()
+
+    const brokenSurface = screen.getByLabelText('위지윅 문서 에디터')
+    expect(brokenSurface.textContent).not.toContain('broken:')
+    expect(within(brokenSurface).getByRole('heading', { level: 1, name: 'Safe Body' })).toBeInTheDocument()
+    const brokenText = Array.from(brokenSurface.querySelectorAll('p')).find(
+      (p) => p.textContent === 'Text'
+    )!
+    const brokenRange = document.createRange()
+    brokenRange.selectNodeContents(brokenText)
+    brokenRange.collapse(false)
+    brokenSurface.focus()
+    selection.removeAllRanges()
+    selection.addRange(brokenRange)
+    document.dispatchEvent(new Event('selectionchange'))
+    await user.keyboard('!')
+    await waitFor(() => {
+      expect(emittedUpdates.length).toBeGreaterThanOrEqual(1)
+    })
+    expect(emittedUpdates[emittedUpdates.length - 1].startsWith('---\n# invalid yaml kept\nbroken: [unclosed\n---\n')).toBe(true)
+  })
+
+  it('hides YAML frontmatter in Split right preview, offsets data-source-line/end-line accurately, and syncs Raw <-> Preview scroll positions', async () => {
+    const frontmatterLines = [
+      '---',
+      'title: Split Sync Doc',
+      '# yaml comment',
+      'labels: [docs, wiki]',
+      '---'
+    ] // lines 1..5 -> bodyStartLine = 6 (offset = 5)
+    const trailingItems = Array.from({ length: 44 }, (_, i) => `- Item ${i + 1}`)
+    const docLines = [
+      ...frontmatterLines,
+      '# Top Heading', // line 6
+      '',
+      'Paragraph block', // line 8
+      '',
+      ...trailingItems // lines 10..53
+    ]
+    const fullContent = docLines.join('\n')
+    const doc = createDoc({ content: fullContent, savedContent: fullContent })
+    const tab = createTab('split', 0.5)
+
+    const { container } = render(
+      <DocumentEditor
+        document={doc}
+        tab={tab}
+        theme="light"
+        autoSave={false}
+        onChangeContent={vi.fn()}
+        onSave={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const rawScroller = container.querySelector('.cm-scroller') as HTMLElement
+    const previewRegion = screen.getByTestId('split-markdown-preview') as HTMLElement
+    const cmView = EditorView.findFromDOM(rawScroller)!
+
+    expect(previewRegion.textContent).not.toContain('Split Sync Doc')
+    expect(previewRegion.textContent).not.toContain('labels:')
+    expect(previewRegion.querySelector('hr')).toBeNull()
+
+    const h1 = previewRegion.querySelector('h1') as HTMLElement
+    const p = previewRegion.querySelector('p') as HTMLElement
+    const ul = previewRegion.querySelector('ul') as HTMLElement
+    expect(h1).toHaveAttribute('data-source-line', '6')
+    expect(h1).toHaveAttribute('data-source-end-line', '6')
+    expect(p).toHaveAttribute('data-source-line', '8')
+    expect(p).toHaveAttribute('data-source-end-line', '8')
+    expect(ul).toHaveAttribute('data-source-line', '10')
+    expect(ul).toHaveAttribute('data-source-end-line', '53')
+
+    Object.defineProperty(rawScroller, 'clientHeight', { configurable: true, value: 200 })
+    Object.defineProperty(rawScroller, 'scrollHeight', {
+      configurable: true,
+      get: () => cmView.contentHeight
+    })
+    Object.defineProperty(previewRegion, 'clientHeight', { configurable: true, value: 200 })
+    Object.defineProperty(previewRegion, 'scrollHeight', { configurable: true, value: 1200 })
+    previewRegion.getBoundingClientRect = () =>
+      ({ top: 0, left: 0, right: 500, bottom: 200, width: 500, height: 200, x: 0, y: 0, toJSON: () => ({}) })
+
+    mockScrollElementRect(previewRegion, h1, 16, 40)
+    mockScrollElementRect(previewRegion, p, 80, 40)
+    mockScrollElementRect(previewRegion, ul, 160, 1040)
+
+    // Scroll Raw to line 32 (50% through [10, 54) => 160 + 0.5 * 1040 = 680)
+    const line32Top = cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(32).from).top
+    rawScroller.scrollTop = line32Top
+    fireEvent.scroll(rawScroller)
+    expect(previewRegion.scrollTop).toBeCloseTo(680, 3)
+
+    // Scroll Preview back to p (line 8) -> Raw jumps accurately to line 8 (not line 3)
+    previewRegion.scrollTop = 80
+    fireEvent.scroll(previewRegion)
+    const expectedLine8Top =
+      cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(8).from).top
+    expect(rawScroller.scrollTop).toBeCloseTo(expectedLine8Top, 3)
+  })
+
+  it('syncs DocumentPropertiesSection and DocumentEditor bidirectionally across Raw (preserving Raw focus/cursor) and Split modes', async () => {
+    const user = userEvent.setup()
+    const initial = '---\nstatus: todo\n---\n# Heading\n\nBody text'
+    const schema = createDefaultFrontmatterSchema()
+
+    function Harness() {
+      const [doc, setDoc] = useState(() => createDoc({ content: initial, savedContent: initial }))
+      const [tab, setTab] = useState<DocumentTabItem>(() => createTab('raw'))
+
+      const handleChange = (nextContent: string): void => {
+        setDoc((prev) => ({
+          ...prev,
+          content: nextContent,
+          isDirty: nextContent !== prev.savedContent
+        }))
+      }
+
+      return (
+        <div>
+          <DocumentEditor
+            document={doc}
+            tab={tab}
+            theme="light"
+            autoSave={false}
+            onChangeContent={handleChange}
+            onSave={vi.fn()}
+            onUpdateViewState={(patch) => setTab((prev) => ({ ...prev, ...patch }))}
+          />
+          <DocumentPropertiesSection
+            document={{
+              documentName: doc.name,
+              documentKey: doc.key,
+              content: doc.content,
+              isMarkdownDocument: true
+            }}
+            schemaResult={{
+              exists: true,
+              path: 'C:/wiki/.wiki-editor/frontmatter.json',
+              schema
+            }}
+            isExpanded
+            onToggleExpanded={vi.fn()}
+            onChangeContent={handleChange}
+            onCreateDefaultSchema={vi.fn()}
+          />
+        </div>
+      )
+    }
+
+    render(<Harness />)
+
+    const rawEditorEl = screen.getByTestId('document-editor')
+    const cmView = EditorView.findFromDOM(rawEditorEl)!
+    const properties = screen.getByRole('region', { name: '문서 속성' })
+
+    // Typing inside Raw keeps focus & cursor while updating Properties immediately
+    act(() => {
+      cmView.focus()
+      cmView.dispatch({
+        changes: { from: 0, to: cmView.state.doc.length, insert: '---\nstatus: in-progress\n---\n# Heading\n\nBody text' },
+        selection: { anchor: 23, head: 23 }
+      })
+    })
+    expect(within(properties).getByLabelText('상태')).toHaveValue('in-progress')
+    expect(cmView.state.selection.main.head).toBe(23)
+
+    // Switch to Split and edit via Properties -> updates left Raw YAML without exposing YAML in right Preview
+    await user.click(within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', { name: 'Split' }))
+    await user.selectOptions(within(properties).getByLabelText('상태'), 'done')
+    await user.type(within(properties).getByLabelText('담당자'), '@bob')
+
+    const splitRaw = screen.getByTestId('document-editor')
+    const splitPreview = screen.getByTestId('split-markdown-preview')
+    expect(EditorView.findFromDOM(splitRaw)!.state.doc.toString()).toContain('status: done')
+    expect(EditorView.findFromDOM(splitRaw)!.state.doc.toString()).toContain('assignee: "@bob"')
+    expect(splitPreview.textContent).not.toContain('status:')
+    expect(within(splitPreview).getByRole('heading', { level: 1, name: 'Heading' })).toBeInTheDocument()
+  })
+
+  it('locks .wiki-editor/frontmatter.json to Raw JSON mode and suppresses editor shortcuts when modal disables shortcuts', () => {
+    const onSave = vi.fn()
+    const onUpdateViewState = vi.fn()
+    const schemaJson = JSON.stringify({ version: 1, fields: [{ key: 'status', label: '상태', type: 'text' }] }, null, 2)
+    const schemaDoc = createDoc({
+      key: 'c:/wiki/.wiki-editor/frontmatter.json',
+      kind: 'workspace',
+      path: 'C:/wiki/.wiki-editor/frontmatter.json',
+      name: 'frontmatter.json',
+      content: schemaJson,
+      savedContent: schemaJson,
+      isDirty: true
+    })
+
+    const { rerender } = render(
+      <DocumentEditor
+        document={schemaDoc}
+        tab={{ ...createTab('split'), bufferKey: schemaDoc.key }}
+        theme="light"
+        autoSave={false}
+        isShortcutDisabled={false}
+        onChangeContent={vi.fn()}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+    expect(within(modeGroup).getByRole('button', { name: 'Raw' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(modeGroup).getByRole('button', { name: '위지윅' })).toBeDisabled()
+    expect(within(modeGroup).getByRole('button', { name: 'Preview' })).toBeDisabled()
+    expect(within(modeGroup).getByRole('button', { name: 'Split' })).toBeDisabled()
+    expect(screen.queryByRole('toolbar', { name: 'Raw 표 편집 툴바' })).not.toBeInTheDocument()
+    expect(EditorView.findFromDOM(screen.getByTestId('document-editor'))!.state.doc.toString()).toBe(schemaJson)
+
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 's', ctrlKey: true })
+    expect(onSave).toHaveBeenCalledTimes(1)
+
+    // When modal disables shortcuts, Ctrl+S / Ctrl+F / Ctrl+1..4 are suppressed
+    rerender(
+      <DocumentEditor
+        document={schemaDoc}
+        tab={{ ...createTab('raw'), bufferKey: schemaDoc.key }}
+        theme="light"
+        autoSave={false}
+        isShortcutDisabled
+        onChangeContent={vi.fn()}
+        onSave={onSave}
+        onUpdateViewState={onUpdateViewState}
+      />
+    )
+
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 's', ctrlKey: true })
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: 'f', ctrlKey: true })
+    fireEvent.keyDown(screen.getByTestId('document-editor'), { key: '2', ctrlKey: true })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    expect(onUpdateViewState).not.toHaveBeenCalled()
   })
 })

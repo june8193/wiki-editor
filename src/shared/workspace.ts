@@ -41,6 +41,15 @@ export interface WorkspaceChangeEvent {
   relativePath: string | null
 }
 
+export const IGNORED_WORKSPACE_ENTRY_NAMES: ReadonlySet<string> = new Set([
+  '.git',
+  'node_modules',
+  '.hg',
+  '.svn',
+  '.DS_Store',
+  'Thumbs.db'
+])
+
 const DEFAULT_MAX_RECENT_WORKSPACES = 10
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:(?:[\\/]|$)/
 const WINDOWS_DRIVE_PREFIX_RE = /^[a-zA-Z]:/

@@ -45,11 +45,17 @@ import {
   type BufferWebContentsLike
 } from './ipc/registerBufferIpc'
 import type {
+  FrontmatterIpcSession,
+  FrontmatterIpcSessionSource
+} from './ipc/registerFrontmatterIpc'
+import type {
   WorkspaceIpcCoordinator,
   WorkspaceIpcSession
 } from './ipc/registerWorkspaceIpc'
 import type { LogService } from './logging/LogService'
 import { createAuxiliaryWindowOptions, createMainWindowOptions } from './window'
+import { FrontmatterFieldValuesService } from './workspace/FrontmatterFieldValuesService'
+import { FrontmatterSchemaService } from './workspace/FrontmatterSchemaService'
 import {
   resolveValidWorkspaceDirectory,
   tryResolveRealWorkspacePath,
@@ -100,6 +106,7 @@ export interface WindowManagerDependencies {
   configService?: ConfigService
   logService?: LogService
   trashItem?: (targetPath: string) => Promise<void>
+  watchDebounceMs?: number
   initialAutoSaveConfig?: AutoSaveConfig
   bufferHub?: SharedDocumentBufferHub
   createWindow: (options: BrowserWindowConstructorOptions) => BrowserWindowLike
@@ -112,9 +119,14 @@ export interface CreateMainWindowOptions {
   initialWorkspacePath?: string | null
 }
 
-export interface WorkspaceSessionHandle extends BufferIpcSession, WorkspaceIpcSession {
+export interface WorkspaceSessionHandle
+  extends BufferIpcSession,
+    WorkspaceIpcSession,
+    FrontmatterIpcSession {
   readonly workspaceService: WorkspaceFsService
   readonly searchService: WorkspaceSearchService
+  readonly frontmatterSchemaService: FrontmatterSchemaService
+  readonly frontmatterFieldValuesService: FrontmatterFieldValuesService
   getTargets: () => WindowWebContentsLike[]
 }
 
@@ -138,6 +150,8 @@ interface WorkspaceSession {
   mainWebContentsId: number
   workspaceService: WorkspaceFsService
   searchService: WorkspaceSearchService
+  frontmatterSchemaService: FrontmatterSchemaService
+  frontmatterFieldValuesService: FrontmatterFieldValuesService
   bufferHub: SharedDocumentBufferHub
   dragCoordinator: TabDragCoordinator
   ownsBufferHub: boolean
@@ -175,13 +189,16 @@ function matchesTargetWindow(record: WindowRecord, targetWindow: unknown): boole
  * Coordinates multiple main-window workspace sessions, their owned auxiliary editor windows,
  * window initialization contexts, session-scoped buffer/workspace/drag isolation, and menu routing.
  */
-export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordinator {
+export class WindowManager
+  implements BufferIpcSessionSource, WorkspaceIpcCoordinator, FrontmatterIpcSessionSource
+{
   private readonly preloadPath: string
   private readonly rendererUrl?: string
   private readonly rendererFilePath: string
   private readonly configService?: ConfigService
   private readonly logService?: LogService
   private readonly trashItem?: (targetPath: string) => Promise<void>
+  private readonly watchDebounceMs?: number
   private readonly injectedBufferHub?: SharedDocumentBufferHub
   private readonly createBrowserWindow: (options: BrowserWindowConstructorOptions) => BrowserWindowLike
   private readonly screen?: ScreenLike
@@ -213,6 +230,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     configService,
     logService,
     trashItem,
+    watchDebounceMs,
     initialAutoSaveConfig,
     bufferHub,
     createWindow,
@@ -225,6 +243,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     this.configService = configService
     this.logService = logService
     this.trashItem = trashItem
+    this.watchDebounceMs = watchDebounceMs
     this.latestAutoSaveConfig = initialAutoSaveConfig
     this.injectedBufferHub = bufferHub
     this.createBrowserWindow = createWindow
@@ -278,7 +297,10 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     if (this.injectedBufferHub && !this.usedInjectedHub) {
       this.usedInjectedHub = true
       return {
-        workspaceService: new WorkspaceFsService({ trashItem: this.trashItem }),
+        workspaceService: new WorkspaceFsService({
+          trashItem: this.trashItem,
+          watchDebounceMs: this.watchDebounceMs
+        }),
         bufferHub: this.injectedBufferHub,
         ownsBufferHub: false
       }
@@ -288,7 +310,10 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
       throw new Error('WindowManager requires configService to create main window sessions')
     }
 
-    const workspaceService = new WorkspaceFsService({ trashItem: this.trashItem })
+    const workspaceService = new WorkspaceFsService({
+      trashItem: this.trashItem,
+      watchDebounceMs: this.watchDebounceMs
+    })
     const bufferHub = createSharedDocumentBufferHub({
       workspaceService,
       configService: this.configService,
@@ -307,9 +332,22 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
   ): WorkspaceSession {
     const sessionId = this.nextSessionId++
     const { workspaceService, bufferHub, ownsBufferHub } = this.createSessionServices()
+    const frontmatterSchemaService = new FrontmatterSchemaService({
+      workspaceService,
+      watchDebounceMs: this.watchDebounceMs,
+      logService: this.logService
+    })
+    const getOpenBuffers = (): ReturnType<typeof Object.values<ReturnType<typeof bufferHub.getSnapshot>['buffers'][string]>> =>
+      Object.values(bufferHub.getSnapshot().buffers)
     const searchService = new WorkspaceSearchService({
       workspaceService,
-      getOpenBuffers: () => Object.values(bufferHub.getSnapshot().buffers)
+      frontmatterSchemaService,
+      getOpenBuffers
+    })
+    const frontmatterFieldValuesService = new FrontmatterFieldValuesService({
+      workspaceService,
+      frontmatterSchemaService,
+      getOpenBuffers
     })
     const dragCoordinator = new TabDragCoordinator({
       nextDragSessionId: () => `drag-${++this.dragSessionCounter}`
@@ -322,6 +360,8 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
       mainWebContentsId: 0,
       workspaceService,
       searchService,
+      frontmatterSchemaService,
+      frontmatterFieldValuesService,
       bufferHub,
       dragCoordinator,
       ownsBufferHub,
@@ -338,6 +378,8 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
         hub: bufferHub,
         workspaceService,
         searchService,
+        frontmatterSchemaService,
+        frontmatterFieldValuesService,
         getTargets,
         resolveWindowId: (sender) => {
           const live = this.resolveLiveWindowSession(sender)
@@ -357,6 +399,14 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     session.unsubscribeHub = bufferHub.subscribe((event) => {
       this.handleHubEvent(session, event)
     })
+    session.disposeCleanups.push(
+      frontmatterSchemaService.onSchemaChanged((result) => {
+        if (!result.exists || !result.path || !bufferHub.hasBuffer(result.path)) {
+          return
+        }
+        void bufferHub.refreshCleanWorkspaceFile(result.path).catch(() => undefined)
+      })
+    )
     session.unsubscribeDrag = dragCoordinator.onStateChanged((dragSession) => {
       if (this.disposed || session.disposed) return
       const targets = getTargets()
@@ -481,6 +531,8 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     if (session.ownsBufferHub) {
       session.bufferHub.dispose()
     }
+    session.frontmatterSchemaService.dispose()
+    session.frontmatterFieldValuesService.dispose()
     session.searchService.dispose()
     session.workspaceService.dispose()
 
@@ -738,6 +790,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
       }
       try {
         session.searchService.cancelActiveSearch()
+        session.frontmatterFieldValuesService.cancelActiveScan()
         const info = await session.workspaceService.openWorkspace(realRoot)
         session.pendingInitialWorkspacePath = null
         if (!this.getLiveMainRecord(session)) {
@@ -1156,6 +1209,14 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
 
     if (event.type === 'state-changed') {
       this.reconcileAuxiliaryAutoClose(session)
+      return
+    }
+
+    if (
+      event.type === 'workspace-saved' &&
+      session.frontmatterSchemaService.isSchemaFilePath(event.path)
+    ) {
+      void session.frontmatterSchemaService.reloadIfChanged()
     }
   }
 
@@ -1182,7 +1243,7 @@ export class WindowManager implements BufferIpcSessionSource, WorkspaceIpcCoordi
     return this.resolveLiveWindowSession(sender)?.session.handle
   }
 
-  forEachSession(visitor: (session: BufferIpcSession) => void): void {
+  forEachSession(visitor: (session: WorkspaceSessionHandle) => void): void {
     for (const session of this.sessions.values()) {
       if (!session.disposed) {
         visitor(session.handle)

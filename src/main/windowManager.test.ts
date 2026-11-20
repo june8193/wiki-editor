@@ -7,6 +7,7 @@ import type { DocumentBuffer, SharedBufferStateSnapshot } from '@shared/document
 import {
   BUFFER_IPC_CHANNELS,
   CONFIG_IPC_CHANNELS,
+  FRONTMATTER_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
   WINDOW_IPC_CHANNELS,
@@ -16,6 +17,11 @@ import {
   type FocusOpenWorkspaceResult,
   type OpenWorkspaceInNewWindowResult
 } from '@shared/ipc'
+import type {
+  FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterFieldValuesResponse,
+  WorkspaceFrontmatterSchema
+} from '@shared/frontmatter'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import {
   WINDOW_BASE_TITLE,
@@ -33,6 +39,7 @@ import { GitService } from './git/GitService'
 import { createFakeIpcMain, type FakeIpcMain } from './ipc/ipcTestHelpers'
 import { createSharedDocumentBufferHub, registerBufferIpc, type BufferWebContentsLike } from './ipc/registerBufferIpc'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
+import { registerFrontmatterIpc } from './ipc/registerFrontmatterIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerWindowIpc } from './ipc/registerWindowIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
@@ -1631,6 +1638,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       preloadPath: 'C:\\app\\out\\preload\\index.js',
       rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
       configService,
+      watchDebounceMs: 50,
       initialAutoSaveConfig: { autoSave: false, autoSaveDelayMs: 1000 },
       createWindow: factory.createWindow,
       screen: {
@@ -1645,6 +1653,10 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       registerBufferIpc({
         ipcMain: ipc,
         configService,
+        sessionSource: manager
+      }),
+      registerFrontmatterIpc({
+        ipcMain: ipc,
         sessionSource: manager
       }),
       registerWorkspaceIpc({
@@ -2678,5 +2690,330 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
         options: DEFAULT_SEARCH_MATCH_OPTIONS
       })
     ).rejects.toThrow(/워크스페이스/)
+  })
+
+  it('isolates frontmatter schema IPC, buffer saves, and external watch reloads per main-window session while broadcasting to owned auxiliary windows', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
+    const main2 = factory.createdWindows[1]
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+
+    // Detach a.md into aux1 under Session 1
+    const bufA = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, 'a.md'),
+      'a.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufA.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux1 = factory.createdWindows[2]
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key], {
+      releasePending: true
+    })
+
+    // Initialize starter schema in Session 1 only -> main1 and aux1 receive broadcast, main2 does NOT
+    const created1 = await ipc.invokeFrom<FrontmatterSchemaLoadResult>(
+      main1.webContents,
+      FRONTMATTER_IPC_CHANNELS.createDefaultSchema
+    )
+    expect(created1.exists).toBe(true)
+    expect(created1.path).toBe(join(wsAlpha, '.wiki-editor', 'frontmatter.json'))
+    expect(
+      main1.sentMessages.filter((m) => m.channel === FRONTMATTER_IPC_CHANNELS.schemaChanged)
+    ).toHaveLength(1)
+    expect(
+      aux1.sentMessages.filter((m) => m.channel === FRONTMATTER_IPC_CHANNELS.schemaChanged)
+    ).toHaveLength(1)
+    expect(
+      main2.sentMessages.filter((m) => m.channel === FRONTMATTER_IPC_CHANNELS.schemaChanged)
+    ).toHaveLength(0)
+
+    // Session 2 still sees no schema
+    const schema2Initial = await ipc.invokeFrom<FrontmatterSchemaLoadResult>(
+      main2.webContents,
+      FRONTMATTER_IPC_CHANNELS.getSchema
+    )
+    expect(schema2Initial).toEqual({
+      exists: false,
+      path: join(wsBeta, '.wiki-editor', 'frontmatter.json'),
+      schema: null
+    })
+
+    // Saving .wiki-editor/frontmatter.json via Raw JSON bufferHub reloads & broadcasts to Session 1 only
+    const schemaBuf = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, '.wiki-editor', 'frontmatter.json'),
+      'frontmatter.json'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key, schemaBuf.key])
+    const rawSavedSchema: WorkspaceFrontmatterSchema = {
+      version: 1,
+      fields: [{ key: 'epic', label: '에픽', type: 'text' }]
+    }
+    await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      schemaBuf.key,
+      JSON.stringify(rawSavedSchema, null, 2)
+    )
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.saveBuffer, schemaBuf.key)
+
+    await vi.waitFor(() => {
+      const main1Events = main1.sentMessages.filter(
+        (m) => m.channel === FRONTMATTER_IPC_CHANNELS.schemaChanged
+      )
+      expect(main1Events).toHaveLength(2)
+      expect((main1Events.at(-1)?.payload as FrontmatterSchemaLoadResult).schema).toEqual(
+        rawSavedSchema
+      )
+    })
+    expect(
+      aux1.sentMessages.filter((m) => m.channel === FRONTMATTER_IPC_CHANNELS.schemaChanged)
+    ).toHaveLength(2)
+    expect(
+      main2.sentMessages.filter((m) => m.channel === FRONTMATTER_IPC_CHANNELS.schemaChanged)
+    ).toHaveLength(0)
+
+    // External modification on Session 2 disk reloads ONLY for Session 2
+    await mkdir(join(wsBeta, '.wiki-editor'), { recursive: true })
+    await writeFile(
+      join(wsBeta, '.wiki-editor', 'frontmatter.json'),
+      JSON.stringify({
+        version: 1,
+        fields: [{ key: 'betaField', label: '베타', type: 'boolean' }]
+      }),
+      'utf8'
+    )
+    await vi.waitFor(() => {
+      const main2Events = main2.sentMessages.filter(
+        (m) => m.channel === FRONTMATTER_IPC_CHANNELS.schemaChanged
+      )
+      expect(main2Events).toHaveLength(1)
+      expect(
+        (main2Events[0].payload as FrontmatterSchemaLoadResult).schema?.fields[0]?.key
+      ).toBe('betaField')
+    })
+    expect(
+      main1.sentMessages.filter((m) => m.channel === FRONTMATTER_IPC_CHANNELS.schemaChanged)
+    ).toHaveLength(2)
+
+    // Unknown sender rejected
+    await expect(
+      ipc.invokeFrom(
+        { id: 99999, isDestroyed: () => false, send: () => undefined },
+        FRONTMATTER_IPC_CHANNELS.getSchema
+      )
+    ).rejects.toThrow(/워크스페이스/)
+  })
+
+  it('refreshes open clean frontmatter.json buffer on saveSchema and broadcasts error without corrupting markdown buffers on invalid Raw JSON save', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+
+    await ipc.invokeFrom<FrontmatterSchemaLoadResult>(
+      main1.webContents,
+      FRONTMATTER_IPC_CHANNELS.createDefaultSchema
+    )
+
+    const schemaPath = join(wsAlpha, '.wiki-editor', 'frontmatter.json')
+    const schemaBuf = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      schemaPath,
+      'frontmatter.json'
+    )) as DocumentBuffer
+    const mdBuf = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, 'a.md'),
+      'a.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [
+      schemaBuf.key,
+      mdBuf.key
+    ])
+
+    // Saving via GUI modal IPC (saveSchema) updates open clean frontmatter.json buffer
+    const nextSchema: WorkspaceFrontmatterSchema = {
+      version: 1,
+      fields: [{ key: 'reviewer', label: '리뷰어', type: 'text', required: true }]
+    }
+    await ipc.invokeFrom(main1.webContents, FRONTMATTER_IPC_CHANNELS.saveSchema, nextSchema)
+
+    await vi.waitFor(async () => {
+      const snapshot = (await ipc.invokeFrom(
+        main1.webContents,
+        BUFFER_IPC_CHANNELS.getSnapshot
+      )) as { buffers: Record<string, DocumentBuffer> }
+      expect(snapshot.buffers[schemaBuf.key]?.content).toContain('"reviewer"')
+      expect(snapshot.buffers[schemaBuf.key]?.isDirty).toBe(false)
+    })
+
+    // Saving invalid JSON via frontmatter.json buffer broadcasts schema error while preserving a.md buffer
+    await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      schemaBuf.key,
+      '{ broken json'
+    )
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.saveBuffer, schemaBuf.key)
+
+    await vi.waitFor(() => {
+      const schemaEvents = main1.sentMessages.filter(
+        (m) => m.channel === FRONTMATTER_IPC_CHANNELS.schemaChanged
+      )
+      const latest = schemaEvents.at(-1)?.payload as FrontmatterSchemaLoadResult | undefined
+      expect(latest?.exists).toBe(true)
+      expect(latest?.schema).toBeNull()
+      expect(latest?.error).toBeTruthy()
+    })
+
+    const finalSnapshot = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.getSnapshot
+    )) as { buffers: Record<string, DocumentBuffer> }
+    expect(finalSnapshot.buffers[mdBuf.key]?.content).toBe(mdBuf.content)
+  })
+
+  it('isolates frontmatter workspace:search and frontmatter:get-field-values per main-window session with aux dirty buffer priority and security exclusions', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
+    const main2 = factory.createdWindows[1]
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+
+    await ipc.invokeFrom(main1.webContents, FRONTMATTER_IPC_CHANNELS.createDefaultSchema)
+    await ipc.invokeFrom(main2.webContents, FRONTMATTER_IPC_CHANNELS.createDefaultSchema)
+
+    await writeFile(
+      join(wsAlpha, 'a.md'),
+      '---\nstatus: todo\npriority: low\nlabels: [backend]\n---\nAlpha body',
+      'utf8'
+    )
+    await writeFile(
+      join(wsAlpha, 'z.md'),
+      '---\nstatus: in-progress\npriority: high\nlabels: [security, alpha-disk-tag]\n---\nZeta body',
+      'utf8'
+    )
+    await writeFile(
+      join(wsBeta, 'b.md'),
+      '---\nstatus: in-progress\npriority: medium\nlabels: [beta-only-tag]\n---\nBeta body',
+      'utf8'
+    )
+    await writeFile(
+      join(wsAlpha, '.wiki-editor', 'leak.md'),
+      '---\nstatus: in-progress\nlabels: [internal-leak]\n---\nLeak',
+      'utf8'
+    )
+
+    // Detach a.md to aux1 under Session 1 and make unsaved edit changing status/priority/labels
+    const bufA = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      join(wsAlpha, 'a.md'),
+      'a.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufA.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux1 = factory.createdWindows[2]
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key], {
+      releasePending: true
+    })
+    await ipc.invokeFrom(
+      aux1.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      bufA.key,
+      '---\nstatus: in-progress\npriority: highest\nlabels: [security, aux1-custom-tag]\n---\nAlpha body'
+    )
+
+    // Dirty config.json in Session 1 must NOT leak into frontmatter search or getFieldValues
+    const configBuf1 = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openConfigDocument
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [configBuf1.key])
+    await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      configBuf1.key,
+      '---\nstatus: in-progress\nlabels: [config-leak-tag]\n---\n'
+    )
+
+    // Session 1 attribute-only search sorted by priority asc -> a.md (highest from aux1) before z.md (high)
+    const session1Search = await ipc.invokeFrom<WorkspaceSearchResponse>(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.search,
+      {
+        query: '',
+        options: DEFAULT_SEARCH_MATCH_OPTIONS,
+        frontmatter: {
+          conditions: [
+            { fieldKey: 'status', operator: 'in', values: ['in-progress'] },
+            { fieldKey: 'labels', operator: 'any-of', values: ['security'] }
+          ],
+          sort: { by: 'frontmatter', fieldKey: 'priority', direction: 'asc' }
+        }
+      }
+    )
+    expect(session1Search.files.map((f) => f.relativePath)).toEqual(['a.md', 'z.md'])
+    expect(session1Search.files[0].frontmatterSummary).toEqual({
+      status: 'in-progress',
+      priority: 'highest',
+      labels: ['security', 'aux1-custom-tag']
+    })
+
+    // Session 1 getFieldValues from aux1 sees aux1-custom-tag & alpha-disk-tag, NOT beta-only-tag/internal-leak/config-leak-tag
+    const session1Values = await ipc.invokeFrom<WorkspaceFrontmatterFieldValuesResponse>(
+      aux1.webContents,
+      FRONTMATTER_IPC_CHANNELS.getFieldValues,
+      ['labels']
+    )
+    expect(session1Values.valuesByField.labels).toEqual([
+      'alpha-disk-tag',
+      'aux1-custom-tag',
+      'backend',
+      'docs',
+      'frontend',
+      'security'
+    ])
+
+    // Session 2 is completely isolated from Session 1's aux1 edits and documents
+    const session2Values = await ipc.invokeFrom<WorkspaceFrontmatterFieldValuesResponse>(
+      main2.webContents,
+      FRONTMATTER_IPC_CHANNELS.getFieldValues
+    )
+    expect(session2Values.valuesByField.labels).toEqual([
+      'backend',
+      'beta-only-tag',
+      'docs',
+      'frontend',
+      'security'
+    ])
+
+    const session2Search = await ipc.invokeFrom<WorkspaceSearchResponse>(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.search,
+      {
+        query: '',
+        options: DEFAULT_SEARCH_MATCH_OPTIONS,
+        frontmatter: {
+          conditions: [{ fieldKey: 'labels', operator: 'any-of', values: ['aux1-custom-tag'] }]
+        }
+      }
+    )
+    expect(session2Search.files).toEqual([])
   })
 })

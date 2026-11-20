@@ -1524,4 +1524,124 @@ describe('Workspace Search Match Jump (<App />)', () => {
     expect(screen.queryByRole('tab', { name: 'slow.md' })).not.toBeInTheDocument()
     expect(container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
   })
+
+  it('jumps accurately from Search View to body and frontmatter matches across Raw, Split, Preview, and 위지윅 modes in <App />', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewMock = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+    try {
+      const fmNote = [
+        '---',
+        'yamlField: CrossModeSearchToken',
+        'status: draft',
+        '---',
+        'Preface text',
+        '## Heading With CrossModeSearchToken',
+        'Final body line with BodyOnlyJumpToken'
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { autoSave: false, theme: 'light' },
+        {
+          selectedFolder: 'C:\\wiki\\search-fm',
+          workspaces: {
+            'C:\\wiki\\search-fm': {
+              'fm-search.md': fmNote
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      const { container } = render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      const explorer = await screen.findByLabelText('워크스페이스 탐색기')
+      await user.click(await within(explorer).findByText('fm-search.md'))
+
+      // Run workspace search in Search View for CrossModeSearchToken (line 2 YAML + line 6 heading)
+      await user.click(
+        within(screen.getByRole('navigation', { name: '액티비티 바' })).getByRole('button', {
+          name: '검색'
+        })
+      )
+      const searchView = screen.getByRole('region', { name: '검색 뷰' })
+      const searchInput = within(searchView).getByRole('textbox', { name: '검색어 입력' })
+      await user.type(searchInput, 'CrossModeSearchToken')
+      fireEvent.keyDown(searchInput, { key: 'Enter' })
+
+      const matchButtons = await waitFor(() => {
+        const buttons = within(searchView).getAllByRole('button', { name: /CrossModeSearchToken/ })
+        expect(buttons).toHaveLength(2)
+        return buttons
+      })
+      const yamlMatchBtn = matchButtons[0]
+      const bodyMatchBtn = matchButtons[1]
+      const modeGroup = () => screen.getByRole('group', { name: '에디터 모드 전환' })
+
+      // 1. Raw mode: body jump highlights line 6; YAML jump highlights line 2
+      await user.click(bodyMatchBtn)
+      expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe(
+        'CrossModeSearchToken'
+      )
+      expect(Number(screen.getByTestId('document-editor').getAttribute('data-selection-start'))).toBe(
+        fmNote.lastIndexOf('CrossModeSearchToken')
+      )
+
+      await user.click(yamlMatchBtn)
+      expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe(
+        'CrossModeSearchToken'
+      )
+      expect(Number(screen.getByTestId('document-editor').getAttribute('data-selection-start'))).toBe(
+        fmNote.indexOf('CrossModeSearchToken')
+      )
+
+      // 2. 위지윅 mode: body jump highlights <h2>; YAML jump resets scrollTop = 0 with 0 highlights
+      await user.click(within(modeGroup()).getByRole('button', { name: '위지윅' }))
+      await user.click(bodyMatchBtn)
+      const wysiwygMarks = container.querySelectorAll('.pm-search-jump-highlight')
+      expect(wysiwygMarks).toHaveLength(1)
+      expect(wysiwygMarks[0].closest('h2')).not.toBeNull()
+
+      const wysiwygScroller = container.querySelector('.wysiwyg-scroll-container') as HTMLElement
+      wysiwygScroller.scrollTop = 140
+      await user.click(yamlMatchBtn)
+      expect(container.querySelectorAll('.pm-search-jump-highlight')).toHaveLength(0)
+      expect(wysiwygScroller.scrollTop).toBe(0)
+
+      // 3. Preview mode: body jump highlights <h2 data-source-line="6">; YAML jump resets scrollTop = 0 with 0 highlights
+      await user.click(within(modeGroup()).getByRole('button', { name: 'Preview' }))
+      await user.click(bodyMatchBtn)
+      const previewMarks = container.querySelectorAll('.preview-search-jump-highlight')
+      expect(previewMarks).toHaveLength(1)
+      expect(previewMarks[0].closest('h2[data-source-line="6"]')).not.toBeNull()
+
+      const previewEl = screen.getByLabelText('마크다운 미리보기')
+      previewEl.scrollTop = 140
+      await user.click(yamlMatchBtn)
+      expect(container.querySelectorAll('.preview-search-jump-highlight')).toHaveLength(0)
+      expect(previewEl.scrollTop).toBe(0)
+
+      // 4. Split mode: body jump highlights both sides; YAML jump highlights Raw ONLY (0 in right Preview)
+      await user.click(within(modeGroup()).getByRole('button', { name: 'Split' }))
+      await user.click(bodyMatchBtn)
+      expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe(
+        'CrossModeSearchToken'
+      )
+      expect(
+        screen.getByTestId('split-markdown-preview').querySelector('.preview-search-jump-highlight')
+          ?.textContent
+      ).toBe('CrossModeSearchToken')
+
+      const splitPreview = screen.getByTestId('split-markdown-preview')
+      await user.click(yamlMatchBtn)
+      expect(container.querySelector('.cm-search-jump-highlight')?.textContent).toBe(
+        'CrossModeSearchToken'
+      )
+      expect(splitPreview.querySelectorAll('.preview-search-jump-highlight')).toHaveLength(0)
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    }
+  })
 })

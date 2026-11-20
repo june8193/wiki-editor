@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  commitSearchCandidateSlot,
   compareWorkspaceSearchFileResults,
   compileSearchMatcher,
   DEFAULT_SEARCH_MATCH_OPTIONS,
   extractLineSnippet,
   type SearchMatchOptions,
   type TextMatchSpan,
+  type WorkspaceSearchAccumulator,
   type WorkspaceSearchFileResult
 } from './search'
 
@@ -284,5 +286,61 @@ describe('shared search matching engine', () => {
       'a-body-only.md',
       'b-body-only.md'
     ])
+  })
+
+  it('preserves optional frontmatterSummary on committed file results without adding undefined keys when absent', () => {
+    const accumulator: WorkspaceSearchAccumulator = {
+      files: [],
+      committedMatchCount: 0,
+      truncated: false,
+      stopBodyScanning: false,
+      maxTotalMatches: 10
+    }
+
+    commitSearchCandidateSlot(
+      accumulator,
+      {
+        path: '/wiki/a.md',
+        relativePath: 'a.md',
+        name: 'a.md',
+        nameMatches: [],
+        frontmatterSummary: { status: 'todo', labels: ['backend'] }
+      },
+      {
+        lineMatches: [
+          {
+            lineNumber: 3,
+            lineText: 'hit line',
+            lineOffset: 0,
+            matches: [{ start: 0, end: 3 }]
+          }
+        ],
+        totalMatchCount: 1,
+        keptMatchCount: 1,
+        truncatedInFile: false
+      }
+    )
+
+    commitSearchCandidateSlot(
+      accumulator,
+      {
+        path: '/wiki/b.md',
+        relativePath: 'b.md',
+        name: 'b.md',
+        nameMatches: [{ start: 0, end: 1 }]
+      },
+      {
+        lineMatches: [],
+        totalMatchCount: 0,
+        keptMatchCount: 0,
+        truncatedInFile: false
+      }
+    )
+
+    expect(accumulator.files[0].frontmatterSummary).toEqual({
+      status: 'todo',
+      labels: ['backend']
+    })
+    expect('frontmatterSummary' in accumulator.files[1]).toBe(false)
   })
 })

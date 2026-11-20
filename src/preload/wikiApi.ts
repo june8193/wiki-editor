@@ -12,6 +12,11 @@ import type {
   SharedBufferStateSnapshot
 } from '@shared/documentBuffer'
 import type {
+  FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterFieldValuesResponse,
+  WorkspaceFrontmatterSchema
+} from '@shared/frontmatter'
+import type {
   GitBranchList,
   GitCommitDetail,
   GitDiffRequest,
@@ -30,6 +35,7 @@ import {
   CONFIG_IPC_CHANNELS,
   DIAGRAM_IPC_CHANNELS,
   type DiagramSaveResult,
+  FRONTMATTER_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
@@ -215,6 +221,32 @@ export function createWikiApi(
           rootPath,
           update
         ) as Promise<PersistedWorkspaceState>
+    },
+    frontmatter: {
+      getSchema: () =>
+        ipcRenderer.invoke(
+          FRONTMATTER_IPC_CHANNELS.getSchema
+        ) as Promise<FrontmatterSchemaLoadResult>,
+      createDefaultSchema: () =>
+        ipcRenderer.invoke(
+          FRONTMATTER_IPC_CHANNELS.createDefaultSchema
+        ) as Promise<FrontmatterSchemaLoadResult>,
+      saveSchema: (schema: WorkspaceFrontmatterSchema) =>
+        ipcRenderer.invoke(
+          FRONTMATTER_IPC_CHANNELS.saveSchema,
+          schema
+        ) as Promise<FrontmatterSchemaLoadResult>,
+      getFieldValues: (fieldKeys?: string[]) =>
+        ipcRenderer.invoke(
+          FRONTMATTER_IPC_CHANNELS.getFieldValues,
+          ...(fieldKeys !== undefined ? [fieldKeys] : [])
+        ) as Promise<WorkspaceFrontmatterFieldValuesResponse>,
+      onSchemaChanged: (listener) =>
+        subscribeChannel<FrontmatterSchemaLoadResult>(
+          ipcRenderer,
+          FRONTMATTER_IPC_CHANNELS.schemaChanged,
+          listener
+        )
     },
     git: {
       status: (workspacePath) =>

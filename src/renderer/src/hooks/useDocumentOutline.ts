@@ -1,6 +1,5 @@
 import { useCallback, useMemo } from 'react'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
-import type { DocumentOutlinePanelProps } from '../components/DocumentOutlinePanel'
 import type { PaneInteractionActions } from '../components/PaneTabBar'
 import { isMarkdownDocument } from '../editor/editorModes'
 import type { OutlineContextTarget } from '../editor/outlineScrollSpy'
@@ -11,12 +10,6 @@ import {
   type PaneLayoutState,
   type TabViewPatch
 } from '../stores/PaneTabStore'
-import { getGitFileBaseName } from '../utils/gitFilePresentation'
-
-export type DocumentOutlineContentProps = Omit<
-  DocumentOutlinePanelProps,
-  'showHeadingNumbers' | 'onToggleHeadingNumbers' | 'onCollapse'
->
 
 /**
  * Coordinates document outline scroll-spy tracking and heading click-to-scroll
@@ -84,23 +77,12 @@ export function useDocumentOutline(
     [actions, handlePaneChangeContent, handlePaneUpdateTabViewState]
   )
 
-  const documentOutlineProps: DocumentOutlineContentProps = {
-    documentName:
-      activeTab?.kind === 'diff'
-        ? getGitFileBaseName(activeTab.diff.request.path)
-        : (activeBuffer?.name ?? null),
-    documentKey: activeBuffer?.key ?? null,
-    content: activeBufferContent,
-    isMarkdownDocument: isActiveMarkdown,
-    activeHeadingIndex,
-    onSelectHeading: selectHeading
-  }
-
   return {
     scrollRequest: outlineScrollRequest,
     handleActiveHeadingChange: handleActiveHeadingReport,
     dispatchHeadingScroll,
     paneActions,
-    documentOutlineProps
+    activeHeadingIndex,
+    selectHeading
   }
 }

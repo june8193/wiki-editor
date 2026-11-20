@@ -11,6 +11,7 @@ import type {
 } from '@shared/workspace'
 import { ConfigService } from '../config/ConfigService'
 import type { LogService } from '../logging/LogService'
+import { FrontmatterSchemaService } from '../workspace/FrontmatterSchemaService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import { WorkspaceSearchService } from '../workspace/WorkspaceSearchService'
 import {
@@ -78,6 +79,7 @@ export function registerWorkspaceIpc({
 }: RegisterWorkspaceIpcOptions): () => void {
   const watchersByService = new Map<WorkspaceFsService, () => void>()
   let ownedSearchService: WorkspaceSearchService | undefined
+  let ownedSchemaService: FrontmatterSchemaService | undefined
 
   let activeCoordinator: WorkspaceIpcCoordinator
   if (coordinator) {
@@ -88,8 +90,10 @@ export function registerWorkspaceIpc({
         'registerWorkspaceIpc requires either coordinator or workspaceService and getTargets'
       )
     }
+    ownedSchemaService = new FrontmatterSchemaService({ workspaceService, logService })
     ownedSearchService = new WorkspaceSearchService({
       workspaceService,
+      frontmatterSchemaService: ownedSchemaService,
       getOpenBuffers: bufferHub ? () => Object.values(bufferHub.getSnapshot().buffers) : () => []
     })
     const singleSession: WorkspaceIpcSession = {
@@ -305,6 +309,7 @@ export function registerWorkspaceIpc({
     unsubscribeSessionDisposed?.()
     clearAllWatchers()
     ownedSearchService?.dispose()
+    ownedSchemaService?.dispose()
     removeHandlers()
   }
 }

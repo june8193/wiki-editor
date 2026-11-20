@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createHeadingSlugTracker,
   formatOutlineHeadingTitle,
+  isOffsetInCodeFence,
   parseMarkdownHeadings,
   slugifyHeading
 } from './MarkdownTocEngine'
@@ -118,5 +119,49 @@ describe('MarkdownTocEngine inline image alt with parentheses', () => {
       'badge-gamma',
       'shield-delta'
     ])
+  })
+})
+
+describe('MarkdownTocEngine frontmatter handling', () => {
+  it('excludes YAML frontmatter comments and unclosed YAML fences while reporting 1-based Raw line numbers across BOM/CRLF/LF/...', () => {
+    const crlfFrontmatterDoc = [
+      '\uFEFF---',
+      '# YAML Comment Heading',
+      '## Secondary YAML Comment',
+      'snippet: |',
+      '  ```ts',
+      '  // unclosed backtick inside YAML must not poison body',
+      'title: Frontmatter Doc',
+      '...',
+      '',
+      '# Body One',
+      'Text',
+      '## Body Two'
+    ].join('\r\n')
+
+    const headings = parseMarkdownHeadings(crlfFrontmatterDoc)
+    expect(headings.map((h) => ({ line: h.line, title: h.title, slug: h.slug }))).toEqual([
+      { line: 10, title: 'Body One', slug: 'body-one' },
+      { line: 12, title: 'Body Two', slug: 'body-two' }
+    ])
+
+    // isOffsetInCodeFence ignores unclosed fences in YAML and detects real fences in body accurately
+    const bodyTextOffset = crlfFrontmatterDoc.indexOf('Text')
+    const yamlCommentOffset = crlfFrontmatterDoc.indexOf('# YAML Comment Heading')
+    expect(isOffsetInCodeFence(crlfFrontmatterDoc, yamlCommentOffset)).toBe(false)
+    expect(isOffsetInCodeFence(crlfFrontmatterDoc, bodyTextOffset)).toBe(false)
+
+    // Frontmatter-only document yields empty outline even with YAML # comments
+    expect(parseMarkdownHeadings('---\n# Only YAML comment\n---\n')).toEqual([])
+
+    // Closed YAML syntax error block still hides YAML comments and preserves body line numbers
+    const brokenYamlDoc = '---\n# Hidden comment\nbad: [unclosed\n---\n# Real Heading'
+    expect(parseMarkdownHeadings(brokenYamlDoc).map((h) => ({ line: h.line, title: h.title }))).toEqual([
+      { line: 5, title: 'Real Heading' }
+    ])
+
+    // Unclosed frontmatter falls back to normal markdown scanning
+    const unclosed = '---\ntitle: open\n# Fallback Heading\n'
+    expect(parseMarkdownHeadings(unclosed)).toHaveLength(1)
   })
 })

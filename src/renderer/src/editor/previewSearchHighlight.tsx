@@ -1,4 +1,5 @@
 import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { isLineInFrontmatter } from '@shared/frontmatter'
 import {
   compileSearchMatcher,
   type CompiledSearchMatcher,
@@ -731,7 +732,7 @@ function buildPreviewJumpPatches(
   }
 
   const jumpPlan: MarkdownJumpPlan = analyzeMarkdownSearchJump(markdown, jumpHighlight)
-  if (!jumpPlan.renderedMatch) {
+  if (jumpPlan.isInFrontmatter || !jumpPlan.renderedMatch) {
     return patches
   }
   const compiled = compileSearchMatcher(jumpHighlight.query, jumpHighlight.options)
@@ -876,6 +877,10 @@ export function findClosestPreviewBlockForLine(
   lineNumber: number,
   jumpHighlight?: PreviewJumpHighlightQuery | null
 ): Element | null {
+  if (isLineInFrontmatter(markdown, lineNumber)) {
+    return null
+  }
+
   const candidates = Array.from(container.querySelectorAll<HTMLElement>('[data-source-line]')).filter(
     (el) => {
       const parentSource = el.parentElement?.closest('[data-source-line]')

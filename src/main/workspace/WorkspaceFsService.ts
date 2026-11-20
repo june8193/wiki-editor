@@ -26,6 +26,7 @@ import {
   filterTopLevelWorkspaceItems,
   getWorkspaceDisplayName,
   getWorkspacePathKey,
+  IGNORED_WORKSPACE_ENTRY_NAMES,
   isMarkdownFileName,
   isNestedOrSameWorkspacePath,
   isSameWorkspacePath,
@@ -41,17 +42,12 @@ import {
   isErrnoCode,
   isMissingPathError,
   isPathInsideRoot,
-  resolveRealPathWithAncestor
+  resolveRealPathWithAncestor,
+  WORKSPACE_OUTSIDE_ERROR_MESSAGE,
+  WORKSPACE_SYMLINK_ERROR_MESSAGE
 } from '../fs/pathSecurity'
 
-export const IGNORED_ENTRY_NAMES: ReadonlySet<string> = new Set([
-  '.git',
-  'node_modules',
-  '.hg',
-  '.svn',
-  '.DS_Store',
-  'Thumbs.db'
-])
+export const IGNORED_ENTRY_NAMES = IGNORED_WORKSPACE_ENTRY_NAMES
 
 export interface WorkspaceFsServiceOptions {
   trashItem?: (targetPath: string) => Promise<void>
@@ -59,6 +55,7 @@ export interface WorkspaceFsServiceOptions {
 }
 
 export type WorkspaceWatchListener = (event: WorkspaceChangeEvent) => void
+export type WorkspaceRootChangedListener = (rootPath: string | null) => Promise<void> | void
 
 const INVALID_ENTRY_NAME_RE = /[<>:"/\\|?*\x00-\x1f]/
 const INVALID_IMAGE_STEM_CHARS_RE = new RegExp(`${INVALID_ENTRY_NAME_RE.source}+`, 'g')
@@ -197,10 +194,18 @@ export class WorkspaceFsService {
   private watcher: FSWatcher | null = null
   private watchTimer: ReturnType<typeof setTimeout> | null = null
   private watchListeners = new Set<WorkspaceWatchListener>()
+  private rootChangedListeners = new Set<WorkspaceRootChangedListener>()
 
   constructor(options: WorkspaceFsServiceOptions = {}) {
     this.trashItem = options.trashItem
     this.watchDebounceMs = options.watchDebounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS
+  }
+
+  onWorkspaceRootChanged(listener: WorkspaceRootChangedListener): () => void {
+    this.rootChangedListeners.add(listener)
+    return () => {
+      this.rootChangedListeners.delete(listener)
+    }
   }
 
   async openWorkspace(rootPath: string): Promise<WorkspaceInfo> {
@@ -208,6 +213,9 @@ export class WorkspaceFsService {
 
     this.unwatch()
     this.workspaceRoot = realRoot
+    for (const listener of [...this.rootChangedListeners]) {
+      await listener(realRoot)
+    }
     const entries = await this.readDir()
     return {
       rootPath: realRoot,
@@ -709,6 +717,10 @@ export class WorkspaceFsService {
   dispose(): void {
     this.unwatch()
     this.workspaceRoot = null
+    for (const listener of [...this.rootChangedListeners]) {
+      void listener(null)
+    }
+    this.rootChangedListeners.clear()
   }
 
   getWorkspaceRoot(): string | null {
@@ -889,7 +901,7 @@ export class WorkspaceFsService {
 
   private assertWithinWorkspaceAndAllowed(root: string, targetPath: string): void {
     if (!isPathInsideRoot(root, targetPath)) {
-      throw new Error('워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.')
+      throw new Error(WORKSPACE_OUTSIDE_ERROR_MESSAGE)
     }
     if (hasBlockedPathSegment(relative(root, targetPath), IGNORED_ENTRY_NAMES)) {
       throw new Error('시스템 폴더 경로에는 접근할 수 없습니다.')
@@ -916,9 +928,8 @@ export class WorkspaceFsService {
     candidate: string
   ): Promise<{ resolvedReal: string; exists: boolean }> {
     return resolveRealPathWithAncestor(candidate, {
-      outsideMessage: '워크스페이스 루트 밖의 경로에는 접근할 수 없습니다.',
-      danglingSymlinkMessage:
-        '유효하지 않거나 워크스페이스 루트 밖을 가리키는 심볼릭 링크에는 접근할 수 없습니다.',
+      outsideMessage: WORKSPACE_OUTSIDE_ERROR_MESSAGE,
+      danglingSymlinkMessage: WORKSPACE_SYMLINK_ERROR_MESSAGE,
       assertResolved: (resolvedReal) => this.assertWithinWorkspaceAndAllowed(root, resolvedReal)
     })
   }

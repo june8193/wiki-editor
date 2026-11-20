@@ -1,5 +1,6 @@
 import { type KeyboardEvent, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, FileText, RotateCw } from 'lucide-react'
+import type { FrontmatterFieldDefinition, WorkspaceFrontmatterSchema } from '@shared/frontmatter'
 import type {
   SearchMatchOptions,
   TextMatchSpan,
@@ -9,6 +10,10 @@ import type {
 } from '@shared/search'
 import { getWorkspacePathKey } from '@shared/workspace'
 import { useSearchInputFocus } from '../hooks/useSearchInputFocus'
+import {
+  extractDisplaySummaryBadges,
+  type SummaryBadgeValue
+} from '../utils/frontmatterFilterBar'
 import { type SearchFocusRequest, splitTextByMatchSpans } from '../utils/workspaceSearch'
 import { SearchOptionGroup } from './SearchOptionGroup'
 
@@ -29,6 +34,9 @@ export interface SearchSidebarPanelProps {
   workspaceRootPath: string | null
   query: string
   options: SearchMatchOptions
+  hasFilterConditions: boolean
+  schema: WorkspaceFrontmatterSchema | null
+  filterBarSlot?: ReactNode
   response: WorkspaceSearchResponse | null
   errorMessage: string | null
   isSearching: boolean
@@ -42,15 +50,20 @@ export interface SearchSidebarPanelProps {
   onToggleFileCollapsed: (filePath: string) => void
   onOpenFile: (file: WorkspaceSearchFileResult) => void
   onOpenLineMatch: (file: WorkspaceSearchFileResult, line: WorkspaceSearchLineMatch) => void
+  onClickSummaryBadge: (field: FrontmatterFieldDefinition, value: SummaryBadgeValue) => void
 }
 
 /**
- * Left sidebar Search View panel for workspace-wide filename, path, and text content search.
+ * Left sidebar Search View panel for workspace-wide filename, path, text content search,
+ * frontmatter filtering, summary badges, and sorting.
  */
 export function SearchSidebarPanel({
   workspaceRootPath,
   query,
   options,
+  hasFilterConditions,
+  schema,
+  filterBarSlot,
   response,
   errorMessage,
   isSearching,
@@ -63,9 +76,11 @@ export function SearchSidebarPanel({
   onToggleOption,
   onToggleFileCollapsed,
   onOpenFile,
-  onOpenLineMatch
+  onOpenLineMatch,
+  onClickSummaryBadge
 }: SearchSidebarPanelProps) {
   const inputRef = useSearchInputFocus(focusRequest)
+  const hasActiveCriteria = query.length > 0 || hasFilterConditions
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key !== 'Enter') return
@@ -96,7 +111,7 @@ export function SearchSidebarPanel({
       )
     }
 
-    if (query.length === 0) {
+    if (!hasActiveCriteria) {
       return (
         <div className="sidebar-empty">
           <p className="sidebar-empty-text">검색어를 입력하세요.</p>
@@ -122,7 +137,9 @@ export function SearchSidebarPanel({
     const summaryText =
       response.totalMatchCount > 0
         ? `${response.totalFileCount}개 파일 · ${response.totalMatchCount}건 일치`
-        : `${response.totalFileCount}개 파일 (파일명 일치)`
+        : response.query.length > 0
+          ? `${response.totalFileCount}개 파일 (파일명 일치)`
+          : `${response.totalFileCount}개 파일 (속성 일치)`
 
     return (
       <div className="search-results-body">
@@ -154,6 +171,7 @@ export function SearchSidebarPanel({
                 const hasLineMatches = file.lineMatches.length > 0
                 const hasNameMatches = file.nameMatches.length > 0
                 const isCollapsed = hasLineMatches && collapsedFileKeys.has(fileKey)
+                const summaryBadges = extractDisplaySummaryBadges(file.frontmatterSummary, schema)
                 return (
                   <li key={fileKey} className="search-file-group">
                     <button
@@ -186,10 +204,38 @@ export function SearchSidebarPanel({
                         >
                           {file.totalMatchCount}
                         </span>
-                      ) : (
+                      ) : hasNameMatches ? (
                         <span className="search-file-badge is-name-only">파일명</span>
-                      )}
+                      ) : null}
                     </button>
+
+                    {summaryBadges.length > 0 && (
+                      <div
+                        className="search-file-summary-row"
+                        role="group"
+                        aria-label={`${file.relativePath} 프론트매터 요약`}
+                      >
+                        {summaryBadges.map((badge) => (
+                          <button
+                            key={badge.id}
+                            type="button"
+                            className="search-fm-badge"
+                            aria-label={badge.ariaLabel}
+                            title={badge.title}
+                            onClick={() => onClickSummaryBadge(badge.field, badge.badgeValue)}
+                          >
+                            {badge.color && (
+                              <span
+                                className="properties-color-dot"
+                                style={{ backgroundColor: badge.color }}
+                                aria-hidden="true"
+                              />
+                            )}
+                            <span className="search-fm-badge-text">{badge.displayText}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
 
                     {hasLineMatches && !isCollapsed && (
                       <ul className="search-line-list" role="list">
@@ -234,7 +280,7 @@ export function SearchSidebarPanel({
             className="icon-btn search-refresh-btn"
             aria-label="검색 새로고침"
             title="새로고침"
-            disabled={!workspaceRootPath || query.length === 0}
+            disabled={!workspaceRootPath || !hasActiveCriteria}
             onClick={onSubmitSearch}
           >
             <RotateCw size={14} strokeWidth={1.75} aria-hidden="true" />
@@ -263,6 +309,8 @@ export function SearchSidebarPanel({
             onToggleOption={onToggleOption}
           />
         </div>
+
+        {filterBarSlot}
       </div>
 
       {renderBody()}

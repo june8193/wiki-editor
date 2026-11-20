@@ -318,4 +318,143 @@ describe('SharedDocumentBufferHub race guards', () => {
       hub.dispose()
     }
   })
+
+  it('refreshCleanWorkspaceFile refreshes only a clean target workspace file without reading unrelated text or reloading open image tabs', async () => {
+    const schemaPath = 'C:/wiki/.wiki-editor/frontmatter.json'
+    const notePath = 'C:/wiki/note.md'
+    const imagePath = 'C:/wiki/assets/diagram.png'
+    const files = new Map<string, string>([
+      [schemaPath, '{"version":1,"fields":[]}'],
+      [notePath, '# Unrelated Note']
+    ])
+    const readCalls: string[] = []
+    let readDirCalls = 0
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async (filePath) => {
+          readCalls.push(filePath)
+          const content = files.get(filePath)
+          if (content === undefined) throw new Error('ENOENT')
+          return content
+        },
+        writeWorkspaceFile: async () => undefined,
+        readWorkspaceDirectory: async () => {
+          readDirCalls += 1
+          return []
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+
+    try {
+      const schemaBuf = await hub.openWorkspaceFile(schemaPath, 'frontmatter.json', undefined, 1)
+      const noteBuf = await hub.openWorkspaceFile(notePath, 'note.md', undefined, 1)
+      const imageBuf = await hub.openWorkspaceFile(imagePath, 'diagram.png', undefined, 1)
+      hub.syncWindowTabs(1, [schemaBuf.key, noteBuf.key, imageBuf.key])
+      const initialImageVersion = hub.getBuffer(imageBuf.key)?.version
+      readCalls.length = 0
+
+      files.set(schemaPath, '{"version":1,"fields":[{"key":"status","label":"상태","type":"text"}]}')
+      files.set(notePath, '# Changed Externally But Unrelated')
+
+      const refreshed = await hub.refreshCleanWorkspaceFile(schemaPath)
+      expect(refreshed?.content).toContain('"status"')
+      expect(refreshed?.isDirty).toBe(false)
+      expect(readCalls).toEqual([schemaPath])
+      expect(readDirCalls).toBe(0)
+      expect(hub.getBuffer(noteBuf.key)?.content).toBe('# Unrelated Note')
+      expect(hub.getBuffer(imageBuf.key)?.version).toBe(initialImageVersion)
+
+      // Leaves dirty target buffer untouched without hitting disk
+      hub.updateContent(schemaBuf.key, '{"version":1,"fields":[{"key":"draft"}]}')
+      files.set(schemaPath, '{"version":1,"fields":[{"key":"disk"}]}')
+      readCalls.length = 0
+
+      const skippedDirty = await hub.refreshCleanWorkspaceFile(schemaPath)
+      expect(skippedDirty?.isDirty).toBe(true)
+      expect(skippedDirty?.content).toContain('"draft"')
+      expect(readCalls).toEqual([])
+    } finally {
+      hub.dispose()
+    }
+  })
+
+  it('ignores a slower refreshCleanWorkspaceFile read after a newer clean version has already settled', async () => {
+    const filePath = 'C:/wiki/.wiki-editor/frontmatter.json'
+    const firstRead = createDeferred<string>()
+    const secondRead = createDeferred<string>()
+    let readIndex = 0
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async () => {
+          readIndex += 1
+          return readIndex === 1 ? firstRead.promise : secondRead.promise
+        },
+        writeWorkspaceFile: async () => undefined,
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+
+    try {
+      const opened = await hub.openWorkspaceFile(filePath, 'frontmatter.json', 'initial', 1)
+      hub.syncWindowTabs(1, [opened.key])
+
+      const slowRefresh = hub.refreshCleanWorkspaceFile(filePath)
+      const fastRefresh = hub.refreshCleanWorkspaceFile(filePath)
+
+      secondRead.resolve('newer')
+      await fastRefresh
+      expect(hub.getBuffer(opened.key)?.content).toBe('newer')
+
+      firstRead.resolve('stale')
+      await slowRefresh
+      expect(hub.getBuffer(opened.key)?.content).toBe('newer')
+    } finally {
+      hub.dispose()
+    }
+  })
+
+  it('ignores a slower refreshCleanWorkspaceFile read even when a faster read matched the initial content without bumping version (ABA race)', async () => {
+    const filePath = 'C:/wiki/.wiki-editor/frontmatter.json'
+    const firstRead = createDeferred<string>()
+    const secondRead = createDeferred<string>()
+    let readIndex = 0
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async () => {
+          readIndex += 1
+          return readIndex === 1 ? firstRead.promise : secondRead.promise
+        },
+        writeWorkspaceFile: async () => undefined,
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+
+    try {
+      const opened = await hub.openWorkspaceFile(filePath, 'frontmatter.json', 'A', 1)
+      hub.syncWindowTabs(1, [opened.key])
+
+      const slowRefresh = hub.refreshCleanWorkspaceFile(filePath)
+      const fastRefresh = hub.refreshCleanWorkspaceFile(filePath)
+
+      secondRead.resolve('A')
+      await fastRefresh
+      expect(hub.getBuffer(opened.key)?.content).toBe('A')
+
+      firstRead.resolve('B')
+      await slowRefresh
+      expect(hub.getBuffer(opened.key)?.content).toBe('A')
+    } finally {
+      hub.dispose()
+    }
+  })
 })

@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import type { ThemeMode } from '@shared/config'
+import { extractFrontmatterBody } from '@shared/frontmatter'
 import type { Element as HastElement, Root as HastRoot, RootContent as HastRootContent } from 'hast'
 import rehypeRaw from 'rehype-raw'
 import rehypeReact from 'rehype-react'
@@ -27,7 +28,7 @@ import {
 } from './codeBlockHighlight'
 import type { DocumentFindCriteria, DocumentFindHighlightQuery } from './documentFind'
 import { MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
-import { createHeadingSlugTracker, decodeSlugSafely } from './MarkdownTocEngine'
+import { createHeadingSlugTracker, decodeSlugSafely, normalizeLineEndingsToLf } from './MarkdownTocEngine'
 import type { MermaidRenderer } from './mermaidRenderer'
 import { isLinkNavigationClick } from './editorModes'
 import {
@@ -83,7 +84,11 @@ function extractHastText(node: HastElement | HastRootContent): string {
 }
 
 function rehypeSourceLineAnnotation() {
-  return (tree: HastRoot): void => {
+  return (tree: HastRoot, file: { data?: Record<string, unknown> }): void => {
+    const rawOffset = file?.data?.sourceLineOffset
+    const lineOffset =
+      typeof rawOffset === 'number' && Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0
+
     for (const child of tree.children) {
       if (child.type !== 'element') continue
       const startLine = child.position?.start?.line
@@ -96,8 +101,8 @@ function rehypeSourceLineAnnotation() {
 
       child.properties = {
         ...child.properties,
-        'data-source-line': String(startLine),
-        'data-source-end-line': String(endLine)
+        'data-source-line': String(startLine + lineOffset),
+        'data-source-end-line': String(endLine + lineOffset)
       }
     }
   }
@@ -418,22 +423,26 @@ const previewProcessor = buildPreviewProcessor()
 const MAX_BASE_TREE_CACHE_ENTRIES = 8
 const previewBaseTreeCache = new Map<string, ReactNode>()
 
-function processPreviewBaseTree(markdown: string): ReactNode {
-  const cached = previewBaseTreeCache.get(markdown)
+function processPreviewBaseTree(body: string, lineOffset: number): ReactNode {
+  const cacheKey = `${lineOffset}\0${body}`
+  const cached = previewBaseTreeCache.get(cacheKey)
   if (cached !== undefined) {
     // Refresh insertion order for small LRU retention across dual-pane previews.
-    previewBaseTreeCache.delete(markdown)
-    previewBaseTreeCache.set(markdown, cached)
+    previewBaseTreeCache.delete(cacheKey)
+    previewBaseTreeCache.set(cacheKey, cached)
     return cached
   }
-  const tree = previewProcessor.processSync(markdown).result as ReactNode
+  const tree = previewProcessor.processSync({
+    value: body,
+    data: { sourceLineOffset: lineOffset }
+  }).result as ReactNode
   if (previewBaseTreeCache.size >= MAX_BASE_TREE_CACHE_ENTRIES) {
     const oldestKey = previewBaseTreeCache.keys().next().value
     if (oldestKey !== undefined) {
       previewBaseTreeCache.delete(oldestKey)
     }
   }
-  previewBaseTreeCache.set(markdown, tree)
+  previewBaseTreeCache.set(cacheKey, tree)
   return tree
 }
 
@@ -462,9 +471,12 @@ function classifyCustomPreviewElement(
 }
 
 function buildPreviewSearchTarget(markdown: string) {
-  const isBlankDocument = markdown.trim().length === 0
+  const slice = extractFrontmatterBody(markdown)
+  const body = normalizeLineEndingsToLf(slice.body)
+  const lineOffset = slice.bodyStartLine - 1
+  const isBlankDocument = body.trim().length === 0
   return {
-    baseTree: isBlankDocument ? null : processPreviewBaseTree(markdown),
+    baseTree: isBlankDocument ? null : processPreviewBaseTree(body, lineOffset),
     isBlankDocument,
     classify: classifyCustomPreviewElement
   }

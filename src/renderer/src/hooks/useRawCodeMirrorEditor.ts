@@ -15,6 +15,7 @@ import {
 } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
 import type { ThemeMode } from '@shared/config'
+import { isOffsetInFrontmatter } from '@shared/frontmatter'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { formatRawMarkdownImages } from '../editor/imageIngestion'
 import {
@@ -346,7 +347,11 @@ export function useRawCodeMirrorEditor({
       }
       const { from, to, empty } = view.state.selection.main
       const docText = view.state.doc.toString()
-      if (isOffsetInCodeFence(docText, from) || isOffsetInCodeFence(docText, to)) {
+      if (
+        isOffsetInFrontmatter(docText, from) ||
+        isOffsetInCodeFence(docText, from) ||
+        isOffsetInCodeFence(docText, to)
+      ) {
         return false
       }
       const selected = empty ? '' : docText.slice(from, to)

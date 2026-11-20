@@ -127,6 +127,33 @@ describe('detectLinkQuery', () => {
       rangeTo: 8
     })
   })
+
+  it('프론트매터 내부에서는 링크 쿼리를 감지하지 않고 YAML 내부 미닫힘 코드펜스에 영향받지 않는다', () => {
+    const md = [
+      '---',
+      'note: "[yaml](query"',
+      'snippet: |',
+      '  ```ts',
+      '---',
+      '본문 [링크](body'
+    ].join('\n')
+
+    const yamlCursor = md.indexOf('query"') + 'query'.length
+    expect(detectLinkQuery(md, yamlCursor)).toBeNull()
+
+    const bodyCursor = md.length
+    expect(detectLinkQuery(md, bodyCursor)).toEqual({
+      label: '링크',
+      query: 'body',
+      rangeFrom: md.indexOf('[링크]('),
+      rangeTo: bodyCursor
+    })
+
+    const withComments = '---\n# YAML Comment\n---\n# Real Target'
+    expect(buildHeadingLinkCandidates(withComments).map((c) => ({ title: c.title, line: c.heading.line }))).toEqual([
+      { title: 'Real Target', line: 4 }
+    ])
+  })
 })
 
 describe('buildHeadingLinkCandidates & filterAndRankLinkCandidates', () => {

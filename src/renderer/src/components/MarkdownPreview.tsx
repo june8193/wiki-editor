@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
+import { extractFrontmatterBody, isLineInFrontmatter } from '@shared/frontmatter'
 import {
   applyFindScrollNonce,
   type DocumentFindHighlightQuery,
@@ -71,6 +72,8 @@ export function MarkdownPreview({
   onLinkNavigate
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const onScrollTopChangeRef = useRef(onScrollTopChange)
+  onScrollTopChangeRef.current = onScrollTopChange
   const lastScrolledFindNonceRef = useRef(findHighlight?.scrollNonce ?? 0)
   const lastHandledJumpNonceRef = useRef(0)
 
@@ -163,6 +166,11 @@ export function MarkdownPreview({
     applyFindScrollNonce(lastHandledJumpNonceRef, jumpHighlight.nonce, {
       skipScroll: false,
       performScroll: () => {
+        if (isLineInFrontmatter(content, jumpHighlight.lineNumber)) {
+          container.scrollTop = 0
+          onScrollTopChangeRef.current?.(0)
+          return true
+        }
         const jumpEl = container.querySelector('[data-search-jump="true"]')
         if (jumpEl) {
           scrollMatchElementIntoView(jumpEl, container)
@@ -192,6 +200,11 @@ export function MarkdownPreview({
     [scrollContainerRef]
   )
 
+  const hasPreviewBody = useMemo(
+    () => extractFrontmatterBody(content).body.trim().length > 0,
+    [content]
+  )
+
   return (
     <MermaidHeightSessionProvider
       mermaidHeights={mermaidHeights}
@@ -204,7 +217,7 @@ export function MarkdownPreview({
         aria-label="마크다운 미리보기"
         tabIndex={0}
       >
-        {content.trim().length === 0 ? (
+        {!hasPreviewBody ? (
           <p className="markdown-preview-empty">미리 볼 내용이 없습니다.</p>
         ) : (
           rendered

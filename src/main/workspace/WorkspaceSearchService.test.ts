@@ -2,12 +2,47 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { type WorkspaceFrontmatterSchema } from '@shared/frontmatter'
 import { DEFAULT_SEARCH_MATCH_OPTIONS } from '@shared/search'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import { ConfigService } from '../config/ConfigService'
 import { createSharedDocumentBufferHub } from '../ipc/registerBufferIpc'
+import { FrontmatterSchemaService } from './FrontmatterSchemaService'
 import { WorkspaceFsService } from './WorkspaceFsService'
 import { WorkspaceSearchService } from './WorkspaceSearchService'
+
+const TEST_FM_SCHEMA: WorkspaceFrontmatterSchema = {
+  version: 1,
+  fields: [
+    {
+      key: 'status',
+      label: '상태',
+      type: 'select',
+      showInSearchBadge: true,
+      options: [{ value: 'todo' }, { value: 'in-progress' }, { value: 'done' }]
+    },
+    {
+      key: 'priority',
+      label: '우선순위',
+      type: 'select',
+      showInSearchBadge: true,
+      options: [{ value: 'high' }, { value: 'medium' }, { value: 'low' }]
+    },
+    {
+      key: 'labels',
+      label: '라벨',
+      type: 'multi-select',
+      allowCustom: true,
+      showInSearchBadge: true,
+      options: [{ value: 'backend' }, { value: 'security' }]
+    },
+    {
+      key: 'dueDate',
+      label: '마감일',
+      type: 'date'
+    }
+  ]
+}
 
 describe('WorkspaceSearchService', () => {
   let tempRoot: string
@@ -15,6 +50,7 @@ describe('WorkspaceSearchService', () => {
   let outsideDir: string
   let configPath: string
   let workspaceService: WorkspaceFsService
+  let schemaService: FrontmatterSchemaService
   let configService: ConfigService
   let bufferHub: SharedDocumentBufferHub
   let searchService: WorkspaceSearchService
@@ -28,17 +64,20 @@ describe('WorkspaceSearchService', () => {
     await mkdir(outsideDir, { recursive: true })
 
     workspaceService = new WorkspaceFsService()
+    schemaService = new FrontmatterSchemaService({ workspaceService, watchDebounceMs: 25 })
     configService = new ConfigService(configPath)
     await configService.get()
     bufferHub = createSharedDocumentBufferHub({ workspaceService, configService })
     searchService = new WorkspaceSearchService({
       workspaceService,
+      frontmatterSchemaService: schemaService,
       getOpenBuffers: () => Object.values(bufferHub.getSnapshot().buffers)
     })
   })
 
   afterEach(async () => {
     searchService.dispose()
+    schemaService.dispose()
     bufferHub.dispose()
     workspaceService.dispose()
     await rm(tempRoot, { recursive: true, force: true })
@@ -450,5 +489,176 @@ describe('WorkspaceSearchService', () => {
     } finally {
       sequentialSearch.dispose()
     }
+  })
+
+  it('supports attribute-only search, text+frontmatter intersection, unsaved aux buffer priority, and excludes .wiki-editor/non-markdown/binary/>2MB/config.json', async () => {
+    const info = await workspaceService.openWorkspace(workspaceDir)
+    await schemaService.saveSchema(TEST_FM_SCHEMA)
+
+    await writeFile(
+      join(info.rootPath, 'a-match.md'),
+      '---\nstatus: in-progress\npriority: high\nlabels: [security, backend]\ndueDate: 2026-11-22\n---\n# Auth\nAudit Auth token',
+      'utf8'
+    )
+    await writeFile(
+      join(info.rootPath, 'b-disk-stale.md'),
+      '---\nstatus: todo\npriority: low\n---\n# Draft\nOld body',
+      'utf8'
+    )
+    await writeFile(
+      join(info.rootPath, 'README'),
+      '---\nstatus: in-progress\npriority: medium\nlabels: [security]\ndueDate: 2026-11-21\n---\nAuth extensionless doc',
+      'utf8'
+    )
+    await writeFile(
+      join(info.rootPath, '.wiki-editor', 'internal.md'),
+      '---\nstatus: in-progress\nlabels: [security]\n---\nAuth internal',
+      'utf8'
+    )
+    await writeFile(
+      join(info.rootPath, 'ignored.txt'),
+      '---\nstatus: in-progress\nlabels: [security]\n---\nAuth txt',
+      'utf8'
+    )
+    await writeFile(
+      join(info.rootPath, 'null-doc.md'),
+      Buffer.from('---\nstatus: in-progress\nlabels: [security]\n---\nAuth\0binary')
+    )
+    await writeFile(
+      join(info.rootPath, 'huge-doc.md'),
+      Buffer.concat([
+        Buffer.from('---\nstatus: in-progress\nlabels: [security]\n---\nAuth '),
+        Buffer.alloc(2 * 1024 * 1024, 0x61)
+      ])
+    )
+
+    // Unsaved auxiliary window buffer updates b-disk-stale.md to match AND config.json must stay excluded
+    const stalePath = join(info.rootPath, 'b-disk-stale.md')
+    const bufB = await bufferHub.openWorkspaceFile(stalePath, 'b-disk-stale.md', undefined, 1)
+    bufferHub.syncWindowTabs(1, [bufB.key])
+    await bufferHub.openWorkspaceFile(stalePath, 'b-disk-stale.md', undefined, 2)
+    bufferHub.syncWindowTabs(2, [bufB.key])
+    bufferHub.updateContent(
+      bufB.key,
+      '---\nstatus: in-progress\npriority: high\nlabels: [security]\ndueDate: 2026-11-20\n---\n# Draft\nauth unsaved line'
+    )
+    const configBuf = await bufferHub.openConfigDocument(1)
+    bufferHub.syncWindowTabs(1, [bufB.key, configBuf.key])
+    bufferHub.updateContent(configBuf.key, '---\nstatus: in-progress\nlabels: [security]\n---\nAuth')
+
+    // 1. Attribute-only query (empty text query + AND conditions)
+    const attrOnly = await searchService.search({
+      query: '',
+      options: DEFAULT_SEARCH_MATCH_OPTIONS,
+      frontmatter: {
+        conditions: [
+          { fieldKey: 'status', operator: 'in', values: ['in-progress'] },
+          { fieldKey: 'labels', operator: 'any-of', values: ['security'] },
+          { fieldKey: 'dueDate', operator: 'lte', value: '2026-11-25' }
+        ]
+      }
+    })
+    expect(attrOnly.error).toBeUndefined()
+    expect(attrOnly.files.map((f) => f.relativePath)).toEqual([
+      'a-match.md',
+      'b-disk-stale.md',
+      'README'
+    ])
+    expect(attrOnly.totalFileCount).toBe(3)
+    expect(attrOnly.totalMatchCount).toBe(0)
+    expect(attrOnly.files[0].frontmatterSummary).toEqual({
+      status: 'in-progress',
+      priority: 'high',
+      labels: ['security', 'backend']
+    })
+
+    // 2. Intersection with case-sensitive + wholeWord text query ('Auth' matches a-match (2) & README (1), NOT lowercase 'auth' in b-disk-stale)
+    const combined = await searchService.search({
+      query: 'Auth',
+      options: { caseSensitive: true, wholeWord: true, useRegex: false },
+      frontmatter: {
+        conditions: [{ fieldKey: 'status', operator: 'in', values: ['in-progress'] }]
+      }
+    })
+    expect(combined.files.map((f) => f.relativePath)).toEqual(['a-match.md', 'README'])
+    expect(combined.totalMatchCount).toBe(3)
+
+    // Regex intersection (.*)
+    const regexCombined = await searchService.search({
+      query: 'Audit\\s+Auth',
+      options: { caseSensitive: false, wholeWord: false, useRegex: true },
+      frontmatter: {
+        conditions: [{ fieldKey: 'status', operator: 'in', values: ['in-progress'] }]
+      }
+    })
+    expect(regexCombined.files.map((f) => f.relativePath)).toEqual(['a-match.md'])
+    expect(regexCombined.totalMatchCount).toBe(1)
+
+    // 3. Plain text search without conditions still attaches frontmatterSummary when schema exists
+    const plainWithSummary = await searchService.search({
+      query: 'unsaved',
+      options: DEFAULT_SEARCH_MATCH_OPTIONS
+    })
+    expect(plainWithSummary.files.map((f) => f.relativePath)).toEqual(['b-disk-stale.md'])
+    expect(plainWithSummary.files[0].frontmatterSummary).toEqual({
+      status: 'in-progress',
+      priority: 'high',
+      labels: ['security']
+    })
+  })
+
+  it('sorts frontmatter search results by schema option order with empty last and applies maxTotalMatches after sorting', async () => {
+    const info = await workspaceService.openWorkspace(workspaceDir)
+    await schemaService.saveSchema(TEST_FM_SCHEMA)
+
+    await writeFile(
+      join(info.rootPath, 'a-low-first-by-path.md'),
+      '---\npriority: low\n---\ntoken\ntoken\ntoken',
+      'utf8'
+    )
+    await writeFile(join(info.rootPath, 'b-empty.md'), '# No priority\ntoken', 'utf8')
+    await writeFile(
+      join(info.rootPath, 'c-medium.md'),
+      '---\npriority: medium\n---\ntoken',
+      'utf8'
+    )
+    await writeFile(
+      join(info.rootPath, 'd-high-last-by-path.md'),
+      '---\npriority: high\n---\ntoken\ntoken',
+      'utf8'
+    )
+
+    // Attribute-only sort desc: low -> medium -> high -> empty
+    const attrDesc = await searchService.search({
+      query: '',
+      options: DEFAULT_SEARCH_MATCH_OPTIONS,
+      frontmatter: {
+        conditions: [{ fieldKey: 'priority', operator: 'not-in', values: ['none'] }],
+        sort: { by: 'frontmatter', fieldKey: 'priority', direction: 'desc' }
+      }
+    })
+    expect(attrDesc.files.map((f) => f.relativePath)).toEqual([
+      'a-low-first-by-path.md',
+      'c-medium.md',
+      'd-high-last-by-path.md',
+      'b-empty.md'
+    ])
+
+    // Text + frontmatter sort asc with maxTotalMatches=3 -> high (2) + medium (1) win before a-low-first-by-path!
+    const textSortedTruncated = await searchService.search({
+      query: 'token',
+      options: DEFAULT_SEARCH_MATCH_OPTIONS,
+      maxTotalMatches: 3,
+      frontmatter: {
+        conditions: [],
+        sort: { by: 'frontmatter', fieldKey: 'priority', direction: 'asc' }
+      }
+    })
+    expect(textSortedTruncated.files.map((f) => f.relativePath)).toEqual([
+      'd-high-last-by-path.md',
+      'c-medium.md'
+    ])
+    expect(textSortedTruncated.totalMatchCount).toBe(3)
+    expect(textSortedTruncated.truncated).toBe(true)
   })
 })

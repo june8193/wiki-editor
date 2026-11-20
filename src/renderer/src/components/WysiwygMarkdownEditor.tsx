@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
+import { extractFrontmatterBody, replaceFrontmatterBody } from '@shared/frontmatter'
 import type { DocumentJumpHighlightTarget } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
@@ -346,9 +347,12 @@ export function WysiwygMarkdownEditor({
   const shellRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const contextMenuRef = useRef<HTMLDivElement | null>(null)
+  const frontmatterBody = useMemo(() => extractFrontmatterBody(content).body, [content])
+  const latestContentRef = useRef(content)
+  latestContentRef.current = content
   const isProgrammaticSyncRef = useRef(false)
-  const lastEmittedMarkdownRef = useRef(content)
-  const lastSyncedContentPropRef = useRef(content)
+  const lastEmittedBodyRef = useRef(frontmatterBody)
+  const lastSyncedBodyPropRef = useRef(frontmatterBody)
   const onChangeContentRef = useRef(onChangeContent)
   onChangeContentRef.current = onChangeContent
   const onFindResultChangeRef = useRef(onFindResultChange)
@@ -357,6 +361,8 @@ export function WysiwygMarkdownEditor({
   const lastHandledJumpNonceRef = useRef(0)
   const jumpHighlightRef = useRef(jumpHighlight)
   jumpHighlightRef.current = jumpHighlight
+  const onScrollTopChangeRef = useRef(onScrollTopChange)
+  onScrollTopChangeRef.current = onScrollTopChange
   const lastReportedFindRef = useRef<DocumentFindResultReport | null>(null)
   const enableLinkAutocompleteRef = useRef(enableLinkAutocomplete)
   enableLinkAutocompleteRef.current = enableLinkAutocomplete
@@ -416,7 +422,7 @@ export function WysiwygMarkdownEditor({
       extensions: createWysiwygExtensions({
         getDocumentPath: () => documentPathRef.current
       }),
-      content: prepareMarkdownForTiptap(content),
+      content: prepareMarkdownForTiptap(frontmatterBody),
       contentType: 'markdown',
       editorProps: {
         attributes: {
@@ -481,9 +487,11 @@ export function WysiwygMarkdownEditor({
         if (isProgrammaticSyncRef.current || !transaction.docChanged) {
           return
         }
-        const serialized = instance.getMarkdown()
-        lastEmittedMarkdownRef.current = serialized
-        onChangeContentRef.current(serialized)
+        const serializedBody = instance.getMarkdown()
+        const recombined = replaceFrontmatterBody(latestContentRef.current, serializedBody)
+        latestContentRef.current = recombined
+        lastEmittedBodyRef.current = extractFrontmatterBody(recombined).body
+        onChangeContentRef.current(recombined)
         if (transaction.getMeta(linkInsertPluginKey)) {
           linkControlsRef.current.dismiss()
           return
@@ -492,7 +500,7 @@ export function WysiwygMarkdownEditor({
         const linkMatch = enableLinkAutocompleteRef.current
           ? detectProseMirrorLinkQuery(instance.state)
           : null
-        linkControlsRef.current.syncDocMatch(linkMatch, instance.view, shellRef.current, serialized)
+        linkControlsRef.current.syncDocMatch(linkMatch, instance.view, shellRef.current, recombined)
       },
       onSelectionUpdate: ({ editor: instance, transaction }) => {
         if (transaction.docChanged) {
@@ -502,11 +510,15 @@ export function WysiwygMarkdownEditor({
           const currentMatch = enableLinkAutocompleteRef.current
             ? detectProseMirrorLinkQuery(instance.state)
             : null
+          const recombined = replaceFrontmatterBody(
+            latestContentRef.current,
+            instance.getMarkdown()
+          )
           linkControlsRef.current.syncOpenSelection(
             currentMatch,
             instance.view,
             shellRef.current,
-            instance.getMarkdown()
+            recombined
           )
         }
       }
@@ -532,15 +544,15 @@ export function WysiwygMarkdownEditor({
   }, [documentPath, editor])
 
   const syncEditorContent = useCallback(
-    (markdown: string): void => {
+    (markdownBody: string): void => {
       if (!editor) return
       isProgrammaticSyncRef.current = true
       try {
-        editor.commands.setContent(prepareMarkdownForTiptap(markdown), {
+        editor.commands.setContent(prepareMarkdownForTiptap(markdownBody), {
           emitUpdate: false,
           contentType: 'markdown'
         })
-        lastEmittedMarkdownRef.current = markdown
+        lastEmittedBodyRef.current = markdownBody
         dismissLinkMenu()
       } finally {
         isProgrammaticSyncRef.current = false
@@ -567,7 +579,10 @@ export function WysiwygMarkdownEditor({
       syncWysiwygSearchJump(editor, content, targetJump)
       if (lastHandledJumpNonceRef.current !== targetJump.nonce) {
         lastHandledJumpNonceRef.current = targetJump.nonce
-        scrollWysiwygSearchJump(editor, scrollContainerRef.current)
+        const { scrolledToTop } = scrollWysiwygSearchJump(editor, scrollContainerRef.current)
+        if (scrolledToTop) {
+          onScrollTopChangeRef.current?.(0)
+        }
       }
     },
     [content, editor]
@@ -575,13 +590,13 @@ export function WysiwygMarkdownEditor({
 
   useEffect(() => {
     if (!editor) return
-    if (content === lastSyncedContentPropRef.current) return
-    lastSyncedContentPropRef.current = content
-    if (content !== lastEmittedMarkdownRef.current) {
-      syncEditorContent(content)
+    if (frontmatterBody === lastSyncedBodyPropRef.current) return
+    lastSyncedBodyPropRef.current = frontmatterBody
+    if (frontmatterBody !== lastEmittedBodyRef.current) {
+      syncEditorContent(frontmatterBody)
     }
     applyJumpHighlight(jumpHighlightRef.current)
-  }, [applyJumpHighlight, content, editor, syncEditorContent])
+  }, [applyJumpHighlight, editor, frontmatterBody, syncEditorContent])
 
   useContainerOutlineSpy({
     containerRef: scrollContainerRef,
@@ -644,11 +659,14 @@ export function WysiwygMarkdownEditor({
   }, [editor, findHighlight, wysiwygSearchSnapshot])
 
   useLayoutEffect(() => {
-    if (content !== lastSyncedContentPropRef.current && content !== lastEmittedMarkdownRef.current) {
+    if (
+      frontmatterBody !== lastSyncedBodyPropRef.current &&
+      frontmatterBody !== lastEmittedBodyRef.current
+    ) {
       return
     }
     applyJumpHighlight(jumpHighlight)
-  }, [applyJumpHighlight, content, jumpHighlight])
+  }, [applyJumpHighlight, frontmatterBody, jumpHighlight])
 
   const toolbarState = useEditorState({
     editor,

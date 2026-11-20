@@ -1,3 +1,5 @@
+import { extractFrontmatterBody } from '@shared/frontmatter'
+
 export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6
 
 export interface MarkdownHeading {
@@ -62,9 +64,14 @@ export function getLineNumberAtOffset(text: string, offset: number): number {
  * Returns true if the given character offset sits inside a fenced code block (``` or ~~~).
  */
 export function isOffsetInCodeFence(markdown: string, offset: number): boolean {
-  if (!markdown) return false
-  const lineNumber = getLineNumberAtOffset(markdown, offset)
-  const lines = scanMarkdownLines(markdown)
+  if (!markdown || offset < 0) return false
+  const slice = extractFrontmatterBody(markdown)
+  const bodyOffset = offset - slice.bodyStartOffset
+  if (bodyOffset < 0) {
+    return false
+  }
+  const lineNumber = getLineNumberAtOffset(slice.body, bodyOffset)
+  const lines = scanMarkdownLines(slice.body, 1)
   return lines[lineNumber - 1]?.inCodeFence ?? false
 }
 
@@ -104,11 +111,11 @@ function isClosingFence(line: string, active: ParsedFenceLine): boolean {
   return /^[ \t]*$/.test(trimmed.slice(count))
 }
 
-function scanMarkdownLines(markdown: string): ScannedLine[] {
+function scanMarkdownLines(markdown: string, initialLineNumber = 1): ScannedLine[] {
   const result: ScannedLine[] = []
   let activeFence: ParsedFenceLine | null = null
   let index = 0
-  let lineNumber = 1
+  let lineNumber = initialLineNumber
 
   while (index <= markdown.length) {
     const lfPos = markdown.indexOf('\n', index)
@@ -329,8 +336,10 @@ function matchAtxHeadingLine(lineText: string): MatchedAtxHeading | null {
  */
 export function parseMarkdownHeadings(markdown: string): MarkdownHeading[] {
   if (!markdown) return []
+  const slice = extractFrontmatterBody(markdown)
+  if (!slice.body) return []
 
-  const lines = scanMarkdownLines(markdown)
+  const lines = scanMarkdownLines(slice.body, slice.bodyStartLine)
   const numberTracker = createHeadingNumberTracker()
   const slugTracker = createHeadingSlugTracker()
   const headings: MarkdownHeading[] = []

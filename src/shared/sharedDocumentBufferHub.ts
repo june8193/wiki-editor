@@ -68,11 +68,13 @@ export class SharedDocumentBufferHub {
   private readonly inFlightOpens = new Map<string, InFlightOpenEntry>()
   private readonly inFlightSaves = new Map<string, InFlightSaveEntry>()
   private readonly discardingRefCounts = new Map<string, number>()
+  private readonly cleanRefreshTokens = new Map<string, number>()
   private readonly autoSaveScheduler: BufferAutoSaveScheduler
   private readonly storage: SharedDocumentBufferStorage
   private readonly logError?: (message: string, details?: Record<string, unknown>) => void
 
   private revision = 0
+  private nextCleanRefreshToken = 0
   private disposed = false
 
   constructor(options: SharedDocumentBufferHubOptions) {
@@ -193,6 +195,9 @@ export class SharedDocumentBufferHub {
     const keyList = [...keys]
     this.autoSaveScheduler.clearForKeys(keyList)
     this.tabTracker.clearPendingForKeys(keyList)
+    for (const key of keyList) {
+      this.cleanRefreshTokens.delete(key)
+    }
   }
 
   private removeOrphanedBuffers(
@@ -368,18 +373,32 @@ export class SharedDocumentBufferHub {
     )
   }
 
-  async refreshCleanConfig(): Promise<DocumentBuffer | null> {
-    const existing = this.store.getConfigBuffer()
-    if (!existing || existing.isDirty) {
+  private async refreshCleanBufferFromStorage(
+    getBuffer: () => DocumentBuffer | undefined,
+    readRaw: (buffer: DocumentBuffer) => Promise<string>
+  ): Promise<DocumentBuffer | null> {
+    const existing = getBuffer()
+    if (!existing || existing.isDirty || existing.isSaving || this.inFlightSaves.has(existing.key)) {
       return existing ? { ...existing } : null
     }
 
-    const freshRaw = await this.storage.readConfigRaw()
+    const refreshToken = ++this.nextCleanRefreshToken
+    this.cleanRefreshTokens.set(existing.key, refreshToken)
+
+    const freshRaw = await readRaw(existing)
     if (this.disposed) {
       return null
     }
-    const latest = this.store.getBuffer(existing.key)
-    if (!latest || latest.isDirty) {
+    const latest = getBuffer()
+    if (
+      this.cleanRefreshTokens.get(existing.key) !== refreshToken ||
+      !latest ||
+      latest.isDirty ||
+      latest.key !== existing.key ||
+      latest.version !== existing.version ||
+      latest.isSaving ||
+      this.inFlightSaves.has(latest.key)
+    ) {
       return latest ? { ...latest } : null
     }
 
@@ -388,6 +407,30 @@ export class SharedDocumentBufferHub {
     }
     const updated = this.store.getBuffer(latest.key)
     return updated ? { ...updated } : null
+  }
+
+  private getReconcilableWorkspaceTextBuffer(filePath: string): DocumentBuffer | undefined {
+    const key = getWorkspacePathKey(filePath)
+    if (!key) return undefined
+    const buffer = this.getReconcilableWorkspaceBuffer(key)
+    return buffer && buffer.contentKind !== 'image' ? buffer : undefined
+  }
+
+  async refreshCleanConfig(): Promise<DocumentBuffer | null> {
+    return this.refreshCleanBufferFromStorage(
+      () => this.store.getConfigBuffer(),
+      () => this.storage.readConfigRaw()
+    )
+  }
+
+  /**
+   * Re-reads a single open, clean workspace text buffer from disk without touching unrelated text or image tabs.
+   */
+  async refreshCleanWorkspaceFile(filePath: string): Promise<DocumentBuffer | null> {
+    return this.refreshCleanBufferFromStorage(
+      () => this.getReconcilableWorkspaceTextBuffer(filePath),
+      (buffer) => this.storage.readWorkspaceFile(buffer.path)
+    )
   }
 
   updateContent(pathOrKey: string, nextContent: string): DocumentBuffer | null {
@@ -977,5 +1020,6 @@ export class SharedDocumentBufferHub {
     this.inFlightOpens.clear()
     this.inFlightSaves.clear()
     this.discardingRefCounts.clear()
+    this.cleanRefreshTokens.clear()
   }
 }

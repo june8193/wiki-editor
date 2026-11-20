@@ -1,87 +1,100 @@
-import { realpath } from 'node:fs/promises'
-import type { DocumentBuffer } from '@shared/documentBuffer'
 import {
+  extractFrontmatterSummary,
+  type FrontmatterFieldValue,
+  type FrontmatterFilterCondition,
+  matchesFrontmatterConditions,
+  parseFrontmatterDocument,
+  type WorkspaceFrontmatterSchema
+} from '@shared/frontmatter'
+import {
+  buildWorkspaceSearchFileResult,
   commitSearchCandidateSlot,
-  compareWorkspaceSearchFileResults,
   compileSearchMatcher,
   type CompiledSearchMatcher,
+  createWorkspaceSearchSortPlan,
   DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE,
   DEFAULT_WORKSPACE_SEARCH_MAX_TOTAL_MATCHES,
   emptyWorkspaceSearchResponse,
-  isExcludedSearchFileName,
   normalizeWorkspaceSearchLimit,
   scanSearchTextContent,
   type SearchCandidateScanResult,
   type TextMatchSpan,
   type WorkspaceSearchAccumulator,
   type WorkspaceSearchRequest,
-  type WorkspaceSearchResponse
+  type WorkspaceSearchResponse,
+  type WorkspaceSearchSortPlan
 } from '@shared/search'
-import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
-import type { WorkspaceFsService } from './WorkspaceFsService'
+import type { WorkspaceEntry } from '@shared/workspace'
+import {
+  WorkspaceDocumentScanner,
+  type WorkspaceDocumentScannerDependencies,
+  type WorkspaceScanSession
+} from './WorkspaceDocumentScanner'
 
-const DEFAULT_SEARCH_CONCURRENCY = 8
-
-export interface WorkspaceSearchServiceDependencies {
-  workspaceService: WorkspaceFsService
-  getOpenBuffers?: () => readonly DocumentBuffer[]
-  concurrency?: number
-}
+export type WorkspaceSearchServiceDependencies = WorkspaceDocumentScannerDependencies
 
 interface SearchCandidate {
   entry: WorkspaceEntry
   relativePath: string
-  pathKey: string
   nameMatches: TextMatchSpan[]
+  isFrontmatterEligible: boolean
+}
+
+interface MatchedCandidateData {
+  scanResult: SearchCandidateScanResult
+  values?: Record<string, FrontmatterFieldValue>
+  frontmatterSummary?: Record<string, FrontmatterFieldValue>
 }
 
 type CandidateScanSlot =
   | { kind: 'skip' }
-  | ({ kind: 'scanned' } & SearchCandidateScanResult)
+  | ({ kind: 'matched' } & MatchedCandidateData)
+
+interface FrontmatterSearchPlan {
+  schema: WorkspaceFrontmatterSchema | null
+  conditions: readonly FrontmatterFilterCondition[]
+  sortPlan: WorkspaceSearchSortPlan
+}
+
+const EMPTY_SCAN_RESULT: SearchCandidateScanResult = {
+  lineMatches: [],
+  totalMatchCount: 0,
+  keptMatchCount: 0,
+  truncatedInFile: false
+}
 
 /**
  * Executes session-scoped workspace text search combining the workspace filesystem and live
- * shared document buffers, enforcing security filters, limits, snippet offsets, and scan cancellation.
+ * shared document buffers, enforcing security filters, frontmatter conditions/sorting, limits, and
+ * scan cancellation.
  */
 export class WorkspaceSearchService {
-  private readonly workspaceService: WorkspaceFsService
-  private readonly getOpenBuffers: () => readonly DocumentBuffer[]
-  private readonly concurrency: number
+  private readonly scanner: WorkspaceDocumentScanner
 
-  private activeSearchController: AbortController | null = null
-  private disposed = false
-
-  constructor({
-    workspaceService,
-    getOpenBuffers = () => [],
-    concurrency = DEFAULT_SEARCH_CONCURRENCY
-  }: WorkspaceSearchServiceDependencies) {
-    this.workspaceService = workspaceService
-    this.getOpenBuffers = getOpenBuffers
-    this.concurrency = Math.max(1, Math.floor(concurrency))
+  constructor(deps: WorkspaceSearchServiceDependencies) {
+    this.scanner = new WorkspaceDocumentScanner(deps)
   }
 
   /**
    * Aborts any currently running workspace search scan for this session.
    */
   cancelActiveSearch(): void {
-    if (this.activeSearchController) {
-      this.activeSearchController.abort()
-      this.activeSearchController = null
-    }
+    this.scanner.cancelActiveScan()
   }
 
   /**
-   * Searches workspace text filenames/paths and contents (preferring open workspace text buffers).
+   * Searches workspace text filenames/paths and contents (preferring open workspace text buffers),
+   * optionally filtering and sorting by workspace YAML frontmatter schema conditions.
    */
-  async search(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse> {
-    const capturedRoot = this.workspaceService.getWorkspaceRoot()
-    if (!capturedRoot) {
-      throw new Error('열린 워크스페이스가 없습니다.')
-    }
-
+  search(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse> {
     const query = typeof request?.query === 'string' ? request.query : ''
     const options = request?.options
+    const frontmatterQuery = request?.frontmatter
+    const conditions = Array.isArray(frontmatterQuery?.conditions)
+      ? frontmatterQuery.conditions
+      : []
+    const sort = frontmatterQuery?.sort
+    const hasConditions = conditions.length > 0
     const maxTotalMatches = normalizeWorkspaceSearchLimit(
       request?.maxTotalMatches,
       DEFAULT_WORKSPACE_SEARCH_MAX_TOTAL_MATCHES
@@ -91,133 +104,131 @@ export class WorkspaceSearchService {
       DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE
     )
 
-    this.cancelActiveSearch()
-
-    if (this.disposed) {
-      return emptyWorkspaceSearchResponse(query)
-    }
-
-    const controller = new AbortController()
-    this.activeSearchController = controller
-
-    const isInvalidated = (): boolean =>
-      this.disposed ||
-      controller.signal.aborted ||
-      this.workspaceService.getWorkspaceRoot() !== capturedRoot
-
-    try {
-      if (query.length === 0) {
+    return this.scanner.runSingleFlightScan(emptyWorkspaceSearchResponse(query), async (session) => {
+      if (query.length === 0 && !hasConditions) {
         return emptyWorkspaceSearchResponse(query)
       }
 
-      const compiled = compileSearchMatcher(query, options)
-      if (!compiled.ok) {
-        return emptyWorkspaceSearchResponse(query, compiled.error)
-      }
-
-      const openTextBuffersByKey = await this.collectOpenWorkspaceTextBuffers()
-      if (isInvalidated()) {
-        return emptyWorkspaceSearchResponse(query)
-      }
-
-      let entries: WorkspaceEntry[]
-      try {
-        entries = await this.workspaceService.listWorkspaceFiles({
-          filterFileName: (name) => !isExcludedSearchFileName(name),
-          signal: controller.signal
-        })
-      } catch (error) {
-        if (isInvalidated()) {
-          return emptyWorkspaceSearchResponse(query)
+      let compiledMatcher: CompiledSearchMatcher | null = null
+      if (query.length > 0) {
+        const compiled = compileSearchMatcher(query, options)
+        if (!compiled.ok) {
+          return emptyWorkspaceSearchResponse(query, compiled.error)
         }
-        throw error
+        compiledMatcher = compiled.matcher
       }
-      if (isInvalidated()) {
+
+      const needsSchema = hasConditions || sort?.by === 'frontmatter'
+      const schema = await session.loadSchema({ throwOnError: needsSchema })
+      if (session.isInvalidated() || (hasConditions && !schema)) {
         return emptyWorkspaceSearchResponse(query)
       }
 
-      const candidates: SearchCandidate[] = entries
-        .map((entry) => ({
-          entry,
-          relativePath: entry.relativePath,
-          pathKey: getWorkspacePathKey(entry.path),
-          nameMatches: compiled.matcher.findMatches(entry.relativePath)
-        }))
-        .sort(compareWorkspaceSearchFileResults)
+      const scanEntries = await session.listEligibleEntries({ onlyFrontmatterDocuments: hasConditions })
+      if (!scanEntries || session.isInvalidated()) {
+        return emptyWorkspaceSearchResponse(query)
+      }
 
-      return await this.scanCandidates({
+      const candidates: SearchCandidate[] = scanEntries.map((scanEntry) => ({
+        entry: scanEntry.entry,
+        relativePath: scanEntry.entry.relativePath,
+        nameMatches: compiledMatcher ? compiledMatcher.findMatches(scanEntry.entry.relativePath) : [],
+        isFrontmatterEligible: scanEntry.isFrontmatterEligible
+      }))
+
+      const sortPlan = createWorkspaceSearchSortPlan(sort, schema)
+      if (!sortPlan.requiresFrontmatterValues) {
+        candidates.sort(sortPlan.compare)
+      }
+
+      return this.scanCandidates({
         query,
         candidates,
-        matcher: compiled.matcher,
-        openTextBuffersByKey,
+        matcher: compiledMatcher,
+        frontmatter: { schema, conditions, sortPlan },
         maxTotalMatches,
         maxMatchesPerFile,
-        signal: controller.signal,
-        isInvalidated
+        session
       })
-    } finally {
-      if (this.activeSearchController === controller) {
-        this.activeSearchController = null
-      }
-    }
+    })
   }
 
-  private async collectOpenWorkspaceTextBuffers(): Promise<Map<string, string>> {
-    const bufferMap = new Map<string, string>()
-    for (const buffer of this.getOpenBuffers()) {
-      if (buffer.kind !== 'workspace' || buffer.contentKind !== 'text') {
-        continue
-      }
-      const key = getWorkspacePathKey(buffer.path)
-      if (key) {
-        bufferMap.set(key, buffer.content)
-      }
-      if (buffer.key && !bufferMap.has(buffer.key)) {
-        bufferMap.set(buffer.key, buffer.content)
-      }
-      try {
-        const realKey = getWorkspacePathKey(await realpath(buffer.path))
-        if (realKey && !bufferMap.has(realKey)) {
-          bufferMap.set(realKey, buffer.content)
-        }
-      } catch {
-        // Ignore unresolvable paths; disk enumeration decides which workspace files exist.
-      }
-    }
-    return bufferMap
-  }
-
-  private async readCandidateText(
+  private evaluateCandidateFrontmatter(
     candidate: SearchCandidate,
-    openTextBuffersByKey: ReadonlyMap<string, string>,
-    signal: AbortSignal
-  ): Promise<string | null> {
-    const openContent = openTextBuffersByKey.get(candidate.pathKey)
-    if (openContent !== undefined) {
-      return openContent
+    text: string,
+    plan: FrontmatterSearchPlan
+  ): {
+    matched: boolean
+    values?: Record<string, FrontmatterFieldValue>
+    frontmatterSummary?: Record<string, FrontmatterFieldValue>
+  } {
+    const hasConditions = plan.conditions.length > 0
+    if (!plan.schema || !candidate.isFrontmatterEligible) {
+      return { matched: !hasConditions }
     }
-    return this.workspaceService.readTextFileForSearch(candidate.entry.path, { signal })
+    const parsed = parseFrontmatterDocument(text, plan.schema)
+    if (hasConditions && !matchesFrontmatterConditions(parsed.values, plan.conditions, plan.schema)) {
+      return { matched: false }
+    }
+    return {
+      matched: true,
+      values: parsed.values,
+      frontmatterSummary: extractFrontmatterSummary(parsed.values, plan.schema)
+    }
+  }
+
+  private commitMatchedCandidate(
+    accumulator: WorkspaceSearchAccumulator,
+    candidate: SearchCandidate,
+    matched: MatchedCandidateData,
+    hasTextMatcher: boolean
+  ): void {
+    if (!hasTextMatcher) {
+      accumulator.files.push(
+        buildWorkspaceSearchFileResult({
+          path: candidate.entry.path,
+          relativePath: candidate.entry.relativePath,
+          name: candidate.entry.name,
+          nameMatches: [],
+          lineMatches: [],
+          totalMatchCount: 0,
+          truncatedInFile: false,
+          frontmatterSummary: matched.frontmatterSummary
+        })
+      )
+      return
+    }
+
+    commitSearchCandidateSlot(
+      accumulator,
+      {
+        path: candidate.entry.path,
+        relativePath: candidate.entry.relativePath,
+        name: candidate.entry.name,
+        nameMatches: candidate.nameMatches,
+        frontmatterSummary: matched.frontmatterSummary
+      },
+      matched.scanResult
+    )
   }
 
   private async scanCandidates(params: {
     query: string
     candidates: readonly SearchCandidate[]
-    matcher: CompiledSearchMatcher
-    openTextBuffersByKey: ReadonlyMap<string, string>
+    matcher: CompiledSearchMatcher | null
+    frontmatter: FrontmatterSearchPlan
     maxTotalMatches: number
     maxMatchesPerFile: number
-    signal: AbortSignal
-    isInvalidated: () => boolean
+    session: WorkspaceScanSession
   }): Promise<WorkspaceSearchResponse> {
     const {
       query,
       candidates,
       matcher,
-      openTextBuffersByKey,
+      frontmatter,
       maxTotalMatches,
       maxMatchesPerFile,
-      signal,
-      isInvalidated
+      session
     } = params
 
     if (candidates.length === 0) {
@@ -232,7 +243,8 @@ export class WorkspaceSearchService {
       stopBodyScanning: false,
       maxTotalMatches
     }
-    let nextDispatchIndex = 0
+    const needsPostScanSort = frontmatter.sortPlan.requiresFrontmatterValues
+    const shouldStreamCommit = !needsPostScanSort && matcher !== null
     let nextCommitIndex = 0
 
     const commitReadySlots = (): void => {
@@ -241,82 +253,114 @@ export class WorkspaceSearchService {
         const slot = slotResults[nextCommitIndex]!
         slotResults[nextCommitIndex] = undefined
         nextCommitIndex += 1
-
-        if (slot.kind === 'skip') {
-          continue
+        if (slot.kind === 'matched') {
+          this.commitMatchedCandidate(accumulator, candidate, slot, matcher !== null)
         }
-
-        commitSearchCandidateSlot(
-          accumulator,
-          {
-            path: candidate.entry.path,
-            relativePath: candidate.entry.relativePath,
-            name: candidate.entry.name,
-            nameMatches: candidate.nameMatches
-          },
-          slot
-        )
       }
     }
 
-    const runWorker = async (): Promise<void> => {
-      while (!isInvalidated()) {
-        const index = nextDispatchIndex
-        if (index >= candidates.length) {
-          return
-        }
-        nextDispatchIndex += 1
-
-        const candidate = candidates[index]
-        if (accumulator.stopBodyScanning && candidate.nameMatches.length === 0) {
-          slotResults[index] = { kind: 'skip' }
-          commitReadySlots()
-          return
-        }
-
-        let text: string | null
-        try {
-          text = await this.readCandidateText(candidate, openTextBuffersByKey, signal)
-        } catch (error) {
-          if (isInvalidated()) {
-            return
-          }
-          throw error
-        }
-
-        if (isInvalidated()) {
-          return
-        }
-
-        if (text === null) {
-          slotResults[index] = { kind: 'skip' }
-          commitReadySlots()
-          continue
-        }
-
-        const scanned = scanSearchTextContent(
-          text,
-          matcher,
-          accumulator.stopBodyScanning ? 0 : maxMatchesPerFile,
-          () => signal.aborted
-        )
-        if (!scanned || isInvalidated()) {
-          return
-        }
-
-        slotResults[index] = { kind: 'scanned', ...scanned }
+    const markSkipped = (index: number): void => {
+      slotResults[index] = { kind: 'skip' }
+      if (shouldStreamCommit) {
         commitReadySlots()
       }
     }
 
-    const workerCount = Math.min(this.concurrency, candidates.length)
-    await Promise.all(Array.from({ length: workerCount }, () => runWorker()))
+    await session.runWorkers(candidates, async (candidate, index) => {
+      if (shouldStreamCommit && accumulator.stopBodyScanning && candidate.nameMatches.length === 0) {
+        markSkipped(index)
+        return
+      }
 
-    if (isInvalidated()) {
+      const text = await session.readCandidateTextSafe(candidate.entry)
+      if (session.isInvalidated()) {
+        return
+      }
+      if (text === null) {
+        markSkipped(index)
+        return
+      }
+
+      const fmResult = this.evaluateCandidateFrontmatter(candidate, text, frontmatter)
+      if (!fmResult.matched) {
+        markSkipped(index)
+        return
+      }
+
+      if (!matcher) {
+        slotResults[index] = {
+          kind: 'matched',
+          scanResult: EMPTY_SCAN_RESULT,
+          values: fmResult.values,
+          frontmatterSummary: fmResult.frontmatterSummary
+        }
+        return
+      }
+
+      const scanned = scanSearchTextContent(
+        text,
+        matcher,
+        shouldStreamCommit && accumulator.stopBodyScanning ? 0 : maxMatchesPerFile,
+        () => session.signal.aborted
+      )
+      if (!scanned || session.isInvalidated()) {
+        return
+      }
+      if (candidate.nameMatches.length === 0 && scanned.lineMatches.length === 0) {
+        markSkipped(index)
+        return
+      }
+
+      slotResults[index] = {
+        kind: 'matched',
+        scanResult: scanned,
+        values: fmResult.values,
+        frontmatterSummary: fmResult.frontmatterSummary
+      }
+      if (shouldStreamCommit) {
+        commitReadySlots()
+      }
+    })
+
+    if (session.isInvalidated()) {
       return emptyWorkspaceSearchResponse(query)
     }
 
-    commitReadySlots()
+    if (shouldStreamCommit) {
+      commitReadySlots()
+    } else {
+      const matchedItems: Array<{
+        candidate: SearchCandidate
+        slot: Extract<CandidateScanSlot, { kind: 'matched' }>
+      }> = []
+      for (let i = 0; i < candidates.length; i += 1) {
+        const slot = slotResults[i]
+        if (slot && slot.kind === 'matched') {
+          matchedItems.push({ candidate: candidates[i], slot })
+        }
+      }
+
+      if (needsPostScanSort) {
+        matchedItems.sort((a, b) =>
+          frontmatter.sortPlan.compare(
+            {
+              relativePath: a.candidate.relativePath,
+              nameMatches: a.candidate.nameMatches,
+              values: a.slot.values
+            },
+            {
+              relativePath: b.candidate.relativePath,
+              nameMatches: b.candidate.nameMatches,
+              values: b.slot.values
+            }
+          )
+        )
+      }
+
+      for (const item of matchedItems) {
+        this.commitMatchedCandidate(accumulator, item.candidate, item.slot, matcher !== null)
+      }
+    }
 
     return {
       query,
@@ -328,7 +372,6 @@ export class WorkspaceSearchService {
   }
 
   dispose(): void {
-    this.disposed = true
-    this.cancelActiveSearch()
+    this.scanner.dispose()
   }
 }

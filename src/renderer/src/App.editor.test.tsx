@@ -2005,6 +2005,135 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
       restore()
     }
   })
+
+  it('excludes YAML frontmatter # comments from Document Outline and matches click-to-scroll and active-heading tracking across all 4 Editor Modes', async () => {
+    const user = userEvent.setup()
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
+
+    try {
+      const frontmatterDoc = [
+        '---',
+        '# YAML Heading Comment Should Be Ignored',
+        '## Another YAML Comment',
+        'status: in-progress',
+        '---',
+        'Body preface before headings',
+        '# First Body Heading', // line 7
+        'First section paragraph',
+        '## Second Body Heading', // line 9
+        'Second section paragraph'
+      ].join('\n')
+
+      const { api, emitMenuCommand } = createInMemoryWikiApi(
+        { theme: 'light', showHeadingNumbers: false },
+        {
+          selectedFolder: 'C:\\wiki\\outline-fm',
+          workspaces: {
+            'C:\\wiki\\outline-fm': {
+              'fm-outline.md': frontmatterDoc
+            }
+          }
+        }
+      )
+      window.wikiApi = api
+
+      render(<App />)
+      await triggerMenuCommand(emitMenuCommand, 'open-folder')
+      await user.click(
+        await within(await screen.findByLabelText('워크스페이스 탐색기')).findByText('fm-outline.md')
+      )
+
+      const primaryPane = screen.getByTestId('pane-primary')
+      const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
+      const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
+
+      // YAML # comments must not appear in Outline; raw line numbers reflect bodyStartLine = 6
+      expect(outline.textContent).not.toContain('YAML Heading Comment')
+      expect(outline.textContent).not.toContain('Another YAML Comment')
+      expect(outlineButtons()).toHaveLength(2)
+      expect(outlineButtons()[0]).toHaveAttribute('title', 'L7: First Body Heading')
+      expect(outlineButtons()[1]).toHaveAttribute('title', 'L9: Second Body Heading')
+
+      // 1. Raw mode: scroll inside frontmatter (line 2) -> no active heading; scroll to line 9 -> Second Body Heading active
+      const rawEditorEl = within(primaryPane).getByTestId('document-editor')
+      const rawView = getRawEditorView(rawEditorEl)
+      const rawScroller = primaryPane.querySelector('.cm-scroller') as HTMLElement
+      const rawPaddingTop =
+        rawView.documentPadding.top ||
+        Number.parseFloat(getComputedStyle(rawView.contentDOM).paddingTop || '0') ||
+        0
+      const rawLineHeight = rawView.defaultLineHeight > 0 ? rawView.defaultLineHeight : 14
+      const line9Top = Math.max(
+        rawView.lineBlockAt(rawView.state.doc.line(9).from).top,
+        8 * rawLineHeight
+      )
+      let scrollTopVal = rawPaddingTop + rawLineHeight // line 2 (inside frontmatter)
+      stubScrollLayout(rawScroller, () => ({
+        scrollTop: scrollTopVal,
+        scrollHeight: 500,
+        clientHeight: 200,
+        top: 100
+      }))
+      fireEvent.scroll(rawScroller)
+      expect(outlineButtons()[0]).not.toHaveAttribute('aria-current')
+      expect(outlineButtons()[1]).not.toHaveAttribute('aria-current')
+
+      scrollTopVal = rawPaddingTop + line9Top // line 9 (## Second Body Heading)
+      fireEvent.scroll(rawScroller)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // Click First Body Heading in Raw -> moves cursor to line 7 offset
+      await user.click(outlineButtons()[0])
+      expect(getRawEditorSelection(screen.getByTestId('document-editor')).start).toBe(
+        frontmatterDoc.indexOf('# First Body Heading')
+      )
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+
+      // 2. 위지윅 mode: click Second Body Heading scrolls to <h2> and tracks active heading
+      const modeGroup = within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })
+      await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+      scrollIntoViewMock.mockClear()
+      await user.click(outlineButtons()[1])
+      expect(scrollIntoViewMock).toHaveBeenCalled()
+      expect((scrollIntoViewMock.mock.instances[0] as HTMLElement).textContent).toBe(
+        'Second Body Heading'
+      )
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      // 3. Preview mode: scroll-spy and click scroll match body headings
+      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      const previewEl = within(primaryPane).getByLabelText('마크다운 미리보기')
+      scrollTopVal = 300
+      stubRenderedHeadingsScrollLayout(previewEl, [120, 310], () => scrollTopVal)
+      fireEvent.scroll(previewEl)
+      expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+
+      scrollIntoViewMock.mockClear()
+      await user.click(outlineButtons()[0])
+      expect(scrollIntoViewMock).toHaveBeenCalled()
+      expect((scrollIntoViewMock.mock.instances[0] as HTMLElement).textContent).toBe(
+        'First Body Heading'
+      )
+      expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
+
+      // 4. Split mode: click Second Body Heading moves Raw cursor to line 9 and scrolls right Preview <h2>
+      await user.click(within(modeGroup).getByRole('button', { name: 'Split' }))
+      scrollIntoViewMock.mockClear()
+      await user.click(outlineButtons()[1])
+      await waitFor(() => {
+        expect(getRawEditorSelection(screen.getByTestId('document-editor')).start).toBe(
+          frontmatterDoc.indexOf('## Second Body Heading')
+        )
+        expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
+      })
+      const splitPreview = screen.getByTestId('split-markdown-preview')
+      expect(scrollIntoViewMock.mock.instances).toContain(
+        within(splitPreview).getByRole('heading', { level: 2, name: 'Second Body Heading' })
+      )
+    } finally {
+      restore()
+    }
+  })
 })
 
 describe('Split editor mode and bidirectional scroll sync', () => {

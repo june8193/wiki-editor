@@ -6,6 +6,7 @@ import { App } from './App'
 import { getRawEditorText, setRawEditorText, triggerMenuCommand } from './test/inMemoryWikiHarness'
 import {
   deferBufferMethod,
+  detachTabViaContextMenu,
   openConfigFromSettings,
   openFolderAndNoteInWindow,
   registerMultiWindowLifecycle
@@ -14,7 +15,7 @@ import {
 vi.mock('mermaid', async () => (await import('./test/appTestHelpers')).createMermaidMockState().module)
 
 describe('Multi-window shared document buffer integration (<App />)', () => {
-  const { createHarness } = registerMultiWindowLifecycle()
+  const { createHarness, trackDisposer } = registerMultiWindowLifecycle()
 
   it('syncs workspace document edits, dirty badges, header save status, and saves in real time between two windows', async () => {
     const user = userEvent.setup()
@@ -807,5 +808,107 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
 
     await user.click(within(rendered1.container).getByRole('button', { name: 'shared.md 탭 닫기' }))
     expect(await within(rendered1.container).findByRole('alertdialog')).toBeInTheDocument()
+  })
+
+  it('preserves 위지윅 caret/selection on cross-window frontmatter-only Raw updates and losslessly recombines subsequent body edits', async () => {
+    const user = userEvent.setup()
+    const initialDoc = [
+      '---',
+      'title: Shared Frontmatter Doc',
+      '# kept yaml comment',
+      'status: draft',
+      '---',
+      '# Shared Title',
+      '',
+      'Editable body paragraph'
+    ].join('\n')
+
+    const harness = createHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'fm-shared.md': initialDoc,
+            'keep-aux-alive.md': '# Aux Keep'
+          }
+        }
+      }
+    )
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    trackDisposer(() => mainRendered.unmount())
+
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+    const mainExplorer = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(mainExplorer).findByText('fm-shared.md'))
+
+    // Detach fm-shared.md into aux window and also re-open fm-shared.md in main window
+    await detachTabViaContextMenu(user, mainRendered.container, /fm-shared\.md/)
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows(mainWin.windowId)).toHaveLength(1)
+    })
+    const auxWin = harness.getAuxiliaryWindows(mainWin.windowId)[0]
+    const auxRendered = render(<App wikiApi={auxWin.api} />)
+    trackDisposer(() => auxRendered.unmount())
+
+    await user.click(await within(mainExplorer).findByText('fm-shared.md'))
+
+    // Switch main window to 위지윅 and place caret inside body paragraph
+    await user.click(
+      within(within(mainRendered.container).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: '위지윅' }
+      )
+    )
+    const wysiwygSurface = within(mainRendered.container).getByLabelText('위지윅 문서 에디터')
+    const bodyParaText = wysiwygSurface.querySelector('p')!.firstChild!
+    wysiwygSurface.focus()
+    const selection = document.getSelection()!
+    const caretRange = document.createRange()
+    caretRange.setStart(bodyParaText, 'Editable'.length)
+    caretRange.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(caretRange)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    expect(selection.anchorNode).toBe(bodyParaText)
+    expect(selection.anchorOffset).toBe('Editable'.length)
+
+    // Aux window (Raw mode) updates ONLY YAML frontmatter (status + comment)
+    const auxRawEditor = await within(auxRendered.container).findByTestId('document-editor')
+    const auxFrontmatterUpdated = [
+      '---',
+      'title: Shared Frontmatter Doc',
+      '# kept yaml comment',
+      '# added yaml comment',
+      'status: published',
+      '---',
+      '# Shared Title',
+      '',
+      'Editable body paragraph'
+    ].join('\n')
+    setRawEditorText(auxRawEditor, auxFrontmatterUpdated)
+
+    // Main window 위지윅 must retain the exact DOM caret node & offset (NOT reset!)
+    await waitFor(() => {
+      expect(mainWin.hub.getSnapshot().buffers['c:/wiki/docs/fm-shared.md']?.content).toBe(
+        auxFrontmatterUpdated
+      )
+    })
+    expect(document.getSelection()?.anchorNode).toBe(bodyParaText)
+    expect(document.getSelection()?.anchorOffset).toBe('Editable'.length)
+
+    // Subsequent edit in main window 위지윅 recombines body edit with aux window's updated YAML frontmatter
+    await user.keyboard(' updated')
+    await waitFor(() => {
+      expect(getRawEditorText(auxRawEditor)).toContain('Editable updated body paragraph')
+    })
+    const recombined = getRawEditorText(auxRawEditor)
+    expect(recombined).toContain('# kept yaml comment')
+    expect(recombined).toContain('# added yaml comment')
+    expect(recombined).toContain('status: published')
+    expect(recombined).toContain('# Shared Title')
   })
 })

@@ -78,6 +78,7 @@ export function GitStashDialog({
     <ModalDialog
       dialogClassName="git-stash-dialog"
       ariaLabelledBy="git-stash-dialog-title"
+      autoFocusDialog={false}
       isDismissDisabled={isBusy}
       onClose={onClose}
     >

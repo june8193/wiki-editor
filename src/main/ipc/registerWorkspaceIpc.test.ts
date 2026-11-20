@@ -320,4 +320,72 @@ describe('registerWorkspaceIpc', () => {
     dispose()
     bufferHub.dispose()
   })
+
+  it('supports frontmatter filter, sort, and summary on workspace:search while redacting filter values from logs', async () => {
+    const logService = new LogService(join(tempDir, 'logs'))
+    const configService = new ConfigService(configPath)
+    await configService.get()
+    const bufferHub = createSharedDocumentBufferHub({ workspaceService, configService })
+    const ipcMain = createFakeIpcMain()
+
+    const dispose = registerWorkspaceIpc({
+      ipcMain,
+      workspaceService,
+      configService,
+      bufferHub,
+      selectDirectory: async () => workspaceDir,
+      getTargets: () => [],
+      logService
+    })
+
+    const opened = (await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.open, workspaceDir)) as {
+      rootPath: string
+    }
+    await mkdir(join(opened.rootPath, '.wiki-editor'), { recursive: true })
+    await writeFile(
+      join(opened.rootPath, '.wiki-editor', 'frontmatter.json'),
+      JSON.stringify({
+        version: 1,
+        fields: [
+          {
+            key: 'status',
+            label: '상태',
+            type: 'select',
+            showInSearchBadge: true,
+            options: [{ value: 'todo' }, { value: 'done' }]
+          },
+          { key: 'owner', label: '담당자', type: 'text' }
+        ]
+      }),
+      'utf8'
+    )
+    await writeFile(
+      join(opened.rootPath, 'b-todo.md'),
+      '---\nstatus: todo\nowner: SECRET_FILTER_OWNER\n---\nBody',
+      'utf8'
+    )
+    await writeFile(
+      join(opened.rootPath, 'a-done.md'),
+      '---\nstatus: done\nowner: SECRET_FILTER_OWNER\n---\nBody',
+      'utf8'
+    )
+
+    const result = await ipcMain.invoke<WorkspaceSearchResponse>(WORKSPACE_IPC_CHANNELS.search, {
+      query: '',
+      options: DEFAULT_SEARCH_MATCH_OPTIONS,
+      frontmatter: {
+        conditions: [{ fieldKey: 'owner', operator: 'contains', value: 'SECRET_FILTER_OWNER' }],
+        sort: { by: 'frontmatter', fieldKey: 'status', direction: 'asc' }
+      }
+    })
+
+    expect(result.files.map((f) => f.relativePath)).toEqual(['b-todo.md', 'a-done.md'])
+    expect(result.files[0].frontmatterSummary).toEqual({ status: 'todo' })
+
+    const serializedLogs = JSON.stringify(await logService.readEntries())
+    expect(serializedLogs).not.toContain('SECRET_FILTER_OWNER')
+
+    dispose()
+    bufferHub.dispose()
+  })
 })

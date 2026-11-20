@@ -1,4 +1,9 @@
 import { types } from 'node:util'
+import type {
+  FrontmatterSchemaLoadResult,
+  WorkspaceFrontmatterFieldValuesResponse,
+  WorkspaceFrontmatterSchema
+} from '@shared/frontmatter'
 import type { GitDiffRequest } from '@shared/git'
 import {
   BUFFER_IPC_CHANNELS,
@@ -7,6 +12,7 @@ import {
   DIAGRAM_IPC_CHANNELS,
   type DiagramSaveRequest,
   type DiagramSaveResult,
+  FRONTMATTER_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS,
@@ -43,11 +49,14 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
     const req =
       request && typeof request === 'object' ? (request as Partial<WorkspaceSearchRequest>) : {}
     const opts = req.options && typeof req.options === 'object' ? req.options : undefined
+    const fm = req.frontmatter && typeof req.frontmatter === 'object' ? req.frontmatter : undefined
     return {
       queryLength: typeof req.query === 'string' ? req.query.length : 0,
       caseSensitive: Boolean(opts?.caseSensitive),
       wholeWord: Boolean(opts?.wholeWord),
-      useRegex: Boolean(opts?.useRegex)
+      useRegex: Boolean(opts?.useRegex),
+      frontmatterConditionCount: Array.isArray(fm?.conditions) ? fm.conditions.length : 0,
+      sortBy: fm?.sort?.by === 'frontmatter' ? 'frontmatter' : 'path'
     }
   },
   [WORKSPACE_IPC_CHANNELS.createEntry]: ([parentDirPath, name, kind, initialContent]) => ({
@@ -138,6 +147,28 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
       hasLayout: layout !== null,
       ...(panes ? { tabCount: countPaneTabs(panes.primary) + countPaneTabs(panes.secondary) } : {})
     }
+  },
+  [FRONTMATTER_IPC_CHANNELS.saveSchema]: ([schema]) => {
+    const candidate =
+      schema && typeof schema === 'object'
+        ? (schema as Partial<WorkspaceFrontmatterSchema>)
+        : undefined
+    return {
+      fieldCount: Array.isArray(candidate?.fields) ? candidate.fields.length : 0
+    }
+  },
+  [FRONTMATTER_IPC_CHANNELS.getFieldValues]: ([fieldKeys]) => ({
+    fieldKeyCount: Array.isArray(fieldKeys) ? fieldKeys.length : 0
+  })
+}
+
+function extractFrontmatterResultMetadata(result: unknown): Record<string, unknown> {
+  const res =
+    result && typeof result === 'object' ? (result as Partial<FrontmatterSchemaLoadResult>) : {}
+  return {
+    exists: Boolean(res.exists),
+    hasSchema: Boolean(res.schema),
+    hasError: typeof res.error === 'string' && res.error.length > 0
   }
 }
 
@@ -145,6 +176,20 @@ const CHANNEL_RESULT_METADATA_EXTRACTORS: Record<
   string,
   (result: unknown) => Record<string, unknown>
 > = {
+  [FRONTMATTER_IPC_CHANNELS.getSchema]: extractFrontmatterResultMetadata,
+  [FRONTMATTER_IPC_CHANNELS.createDefaultSchema]: extractFrontmatterResultMetadata,
+  [FRONTMATTER_IPC_CHANNELS.saveSchema]: extractFrontmatterResultMetadata,
+  [FRONTMATTER_IPC_CHANNELS.getFieldValues]: (result) => {
+    const res =
+      result && typeof result === 'object'
+        ? (result as Partial<WorkspaceFrontmatterFieldValuesResponse>)
+        : {}
+    const valuesByField =
+      res.valuesByField && typeof res.valuesByField === 'object' ? res.valuesByField : {}
+    return {
+      fieldCount: Object.keys(valuesByField).length
+    }
+  },
   [DIAGRAM_IPC_CHANNELS.saveFile]: (result) => {
     const res = result as Partial<DiagramSaveResult> | undefined
     return typeof res?.canceled === 'boolean' ? { canceled: res.canceled } : {}
@@ -254,5 +299,77 @@ function extractGitDiffMetadata([workspacePath, request]: unknown[]): Record<str
     ...(req?.kind === 'commit' && req.commitHash ? { commitHash: req.commitHash } : {}),
     ...(req?.kind === 'stash' && req.stashRef ? { stashRef: req.stashRef } : {}),
     ...(req?.kind === 'stash' && req.stashHash ? { stashHash: req.stashHash } : {})
+  }
+}
+
+export interface IpcSessionSource<
+  TSession,
+  TWebContents extends WebContentsLike = WebContentsLike
+> {
+  resolveSession: (sender: TWebContents | undefined) => TSession | undefined
+  forEachSession: (visitor: (session: TSession) => void) => void
+  onSessionCreated?: (listener: (session: TSession) => (() => void) | void) => () => void
+}
+
+/**
+ * Uses sessionSource when provided, or wraps a single-session fallback adapter.
+ */
+export function resolveIpcSessionSource<
+  TSession,
+  TWebContents extends WebContentsLike = WebContentsLike
+>(
+  sessionSource: IpcSessionSource<TSession, TWebContents> | undefined,
+  fallbackSession: TSession | undefined,
+  missingError: string
+): IpcSessionSource<TSession, TWebContents> {
+  if (sessionSource) {
+    return sessionSource
+  }
+  if (!fallbackSession) {
+    throw new Error(missingError)
+  }
+  return {
+    resolveSession: () => fallbackSession,
+    forEachSession: (visitor) => visitor(fallbackSession)
+  }
+}
+
+/**
+ * Attaches an event subscription to all existing and future sessions without duplicate bindings.
+ */
+export function subscribeIpcSessions<
+  TSession,
+  TKey,
+  TWebContents extends WebContentsLike = WebContentsLike
+>(
+  source: IpcSessionSource<TSession, TWebContents>,
+  getKey: (session: TSession) => TKey,
+  subscribe: (session: TSession) => () => void
+): () => void {
+  const unsubscribers = new Map<TKey, () => void>()
+  const attachSession = (session: TSession): (() => void) | undefined => {
+    const key = getKey(session)
+    if (unsubscribers.has(key)) {
+      return undefined
+    }
+    const unsubscribe = subscribe(session)
+    unsubscribers.set(key, unsubscribe)
+    return () => {
+      unsubscribers.get(key)?.()
+      unsubscribers.delete(key)
+    }
+  }
+
+  const unsubscribeSessionCreated = source.onSessionCreated?.((session) => attachSession(session))
+  source.forEachSession((session) => {
+    attachSession(session)
+  })
+
+  return () => {
+    unsubscribeSessionCreated?.()
+    for (const unsubscribe of unsubscribers.values()) {
+      unsubscribe()
+    }
+    unsubscribers.clear()
   }
 }

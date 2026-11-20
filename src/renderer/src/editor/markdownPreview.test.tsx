@@ -706,4 +706,72 @@ describe('markdownPreview local image rendering', () => {
       Element.prototype.scrollIntoView = origScrollIntoView
     }
   })
+
+  it('hides YAML frontmatter, offsets data-source-line/end-line by bodyStartLine - 1, isolates cache across offsets, and shows empty state when body is empty', () => {
+    const bodyLines = [
+      '# Title',
+      '',
+      '---',
+      '',
+      '| ColA | ColB |',
+      '| --- | --- |',
+      '| A | B |',
+      '',
+      '```ts',
+      'const x = 1',
+      '```'
+    ]
+    const body = bodyLines.join('\n')
+    const frontmatterLines = ['---', '# comment', 'status: todo', 'priority: high', '---']
+    const withFrontmatter = [...frontmatterLines, ...bodyLines].join('\n')
+
+    const { container, rerender } = render(
+      <MarkdownPreview content={withFrontmatter} scrollTop={0} theme="light" />
+    )
+
+    // YAML lines are hidden (only the mid-body thematic break <hr> at line 8 renders)
+    expect(container.textContent).not.toContain('status: todo')
+    expect(container.textContent).not.toContain('priority: high')
+    const hrs = container.querySelectorAll('hr')
+    expect(hrs).toHaveLength(1)
+    expect(hrs[0]).toHaveAttribute('data-source-line', '8')
+    expect(hrs[0]).toHaveAttribute('data-source-end-line', '8')
+
+    // bodyStartLine = 6 -> offset = 5
+    const h1 = container.querySelector('h1')
+    expect(h1).toHaveAttribute('data-source-line', '6')
+    expect(h1).toHaveAttribute('data-source-end-line', '6')
+
+    const tableWrapper = container.querySelector('.md-table-wrapper')
+    expect(tableWrapper).toHaveAttribute('data-source-line', '10')
+    expect(tableWrapper).toHaveAttribute('data-source-end-line', '12')
+
+    const codeBlock = container.querySelector('[data-testid="preview-code-block"]')
+    expect(codeBlock).toHaveAttribute('data-source-line', '14')
+    expect(codeBlock).toHaveAttribute('data-source-end-line', '16')
+
+    // Identical body without frontmatter must NOT hit stale offset=5 cache
+    rerender(<MarkdownPreview content={body} scrollTop={0} theme="light" />)
+    expect(container.querySelector('h1')).toHaveAttribute('data-source-line', '1')
+    expect(container.querySelector('hr')).toHaveAttribute('data-source-line', '3')
+    expect(container.querySelector('.md-table-wrapper')).toHaveAttribute('data-source-line', '5')
+    expect(container.querySelector('[data-testid="preview-code-block"]')).toHaveAttribute(
+      'data-source-line',
+      '9'
+    )
+
+    // Frontmatter-only document shows empty preview placeholder
+    rerender(<MarkdownPreview content={'---\ntitle: Only\n---\n'} scrollTop={0} theme="light" />)
+    expect(screen.getByText('미리 볼 내용이 없습니다.')).toBeInTheDocument()
+
+    // Unclosed frontmatter & closed syntax-error frontmatter render safely without exceptions
+    rerender(
+      <MarkdownPreview content={'---\nbad: [unclosed\n---\n# Safe Heading'} scrollTop={0} theme="light" />
+    )
+    expect(container.textContent).not.toContain('bad:')
+    expect(container.querySelector('h1')).toHaveAttribute('data-source-line', '4')
+
+    rerender(<MarkdownPreview content={'---\ntitle: unclosed\n# Fallback'} scrollTop={0} theme="light" />)
+    expect(screen.getByRole('heading', { level: 1, name: 'Fallback' })).toBeInTheDocument()
+  })
 })
