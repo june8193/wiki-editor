@@ -654,34 +654,29 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
 
       // 4. Cross-mark matching ("Hello world" across **bold**) and ab (whole-word)
       await user.click(caseBtn)
-      await user.clear(findInput)
-      await user.type(findInput, 'Hello world')
+      fireEvent.change(findInput, { target: { value: 'Hello world' } })
       expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
 
-      await user.clear(findInput)
-      await user.type(findInput, 'world')
+      fireEvent.change(findInput, { target: { value: 'world' } })
       expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
       await user.click(wholeWordBtn)
       // '**world**wide' must NOT match whole-word 'world'; only 'Hello **world**' matches
       expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
 
-      await user.clear(findInput)
-      await user.type(findInput, '검색')
+      fireEvent.change(findInput, { target: { value: '검색' } })
       expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
       expect(container.querySelector('.pm-search-match')?.textContent).toBe('검색')
 
       // 5. .* (regex) + empty-match '^' + inline invalid regex error
       await user.click(wholeWordBtn)
       await user.click(regexBtn)
-      await user.clear(findInput)
-      await user.type(findInput, 'item-\\d+')
+      fireEvent.change(findInput, { target: { value: 'item-\\d+' } })
       expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
       expect(
         Array.from(container.querySelectorAll('.pm-search-match')).map((el) => el.textContent)
       ).toEqual(['item-42', 'item-99'])
 
-      await user.clear(findInput)
-      await user.type(findInput, '^')
+      fireEvent.change(findInput, { target: { value: '^' } })
       expect(within(findBar).getByText(/1 \/ \d+/)).toBeInTheDocument()
 
       fireEvent.change(findInput, { target: { value: '[unclosed' } })
@@ -693,8 +688,7 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
 
       // 7. Live document edit updates matches and decorations without jumping scroll
       await user.click(regexBtn)
-      await user.clear(findInput)
-      await user.type(findInput, 'alpha')
+      fireEvent.change(findInput, { target: { value: 'alpha' } })
       expect(within(findBar).getByText('1 / 8')).toBeInTheDocument()
 
       scrollIntoViewMock.mockClear()
@@ -801,8 +795,7 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
       expect(within(findBar).getByText('1 / 8')).toBeInTheDocument()
 
       // 3. Cross-token match inside syntax-highlighted code block ("const alphaCode") counts as 1 logical match
-      await user.clear(findInput)
-      await user.type(findInput, 'const alphaCode')
+      fireEvent.change(findInput, { target: { value: 'const alphaCode' } })
       expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
       expect(
         Array.from(container.querySelectorAll('.preview-search-match'))
@@ -811,39 +804,33 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
       ).toBe('const alphaCode')
 
       // 4. Cross-mark match ("Hello world") & ab whole-word boundary across inline marks & Korean text
-      await user.clear(findInput)
-      await user.type(findInput, 'Hello world')
+      fireEvent.change(findInput, { target: { value: 'Hello world' } })
       expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
 
-      await user.clear(findInput)
-      await user.type(findInput, 'world')
+      fireEvent.change(findInput, { target: { value: 'world' } })
       expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
       await user.click(wholeWordBtn)
       expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
 
-      await user.clear(findInput)
-      await user.type(findInput, '검색')
+      fireEvent.change(findInput, { target: { value: '검색' } })
       expect(within(findBar).getByText('1 / 1')).toBeInTheDocument()
 
       // 5. Aa (case-sensitive)
       await user.click(wholeWordBtn)
       await user.click(caseBtn)
-      await user.clear(findInput)
-      await user.type(findInput, 'Alpha')
+      fireEvent.change(findInput, { target: { value: 'Alpha' } })
       expect(within(findBar).getByText('1 / 4')).toBeInTheDocument()
 
       // 6. .* (regex) + empty match '^' + invalid regex alert
       await user.click(caseBtn)
       await user.click(regexBtn)
-      await user.clear(findInput)
-      await user.type(findInput, 'item-\\d+')
+      fireEvent.change(findInput, { target: { value: 'item-\\d+' } })
       expect(within(findBar).getByText('1 / 2')).toBeInTheDocument()
       expect(
         Array.from(container.querySelectorAll('.preview-search-match')).map((el) => el.textContent)
       ).toEqual(['item-42', 'item-99'])
 
-      await user.clear(findInput)
-      await user.type(findInput, '^')
+      fireEvent.change(findInput, { target: { value: '^' } })
       expect(within(findBar).getByText(/1 \/ \d+/)).toBeInTheDocument()
 
       fireEvent.change(findInput, { target: { value: '[bad' } })
@@ -853,8 +840,7 @@ describe('DocumentEditor In-Document Find Bar (<DocumentEditor />)', () => {
       // 7. Empty Preview placeholder text ("미리 볼 내용이 없습니다.") is NOT searched,
       // while invalid regex still surfaces inline alert consistently across modes
       await user.click(regexBtn)
-      await user.clear(findInput)
-      await user.type(findInput, '미리')
+      fireEvent.change(findInput, { target: { value: '미리' } })
       const emptyDoc = createDoc({ content: '   ', savedContent: '   ' })
       rerender(
         <DocumentEditor
