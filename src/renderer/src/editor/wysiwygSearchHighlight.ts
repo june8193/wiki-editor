@@ -551,6 +551,19 @@ export function areWysiwygSearchSnapshotsEqual(
   )
 }
 
+function dispatchSearchPluginMeta<T>(
+  editor: Editor,
+  pluginKey: PluginKey<T>,
+  meta: unknown
+): void {
+  editor.view.dispatch(
+    editor.state.tr
+      .setMeta(pluginKey, meta)
+      .setMeta('addToHistory', false)
+      .setMeta('skipTrailingNode', true)
+  )
+}
+
 /**
  * Synchronizes the WYSIWYG ProseMirror search plugin with the active Find Bar query/index
  * without mutating the document or appending undo history.
@@ -588,9 +601,7 @@ export function syncWysiwygSearchHighlights(
     criteria: nextCriteria,
     activeIndex: nextRawIndex
   }
-  editor.view.dispatch(
-    editor.state.tr.setMeta(wysiwygSearchHighlightPluginKey, meta).setMeta('addToHistory', false)
-  )
+  dispatchSearchPluginMeta(editor, wysiwygSearchHighlightPluginKey, meta)
   return getWysiwygSearchSnapshot(editor)
 }
 
@@ -635,9 +646,7 @@ export function syncWysiwygSearchJump(
         currentState.fallbackBlockPos !== null ||
         currentState.decorations !== DecorationSet.empty)
     ) {
-      editor.view.dispatch(
-        editor.state.tr.setMeta(wysiwygSearchJumpPluginKey, createEmptyJumpPluginState())
-      )
+      dispatchSearchPluginMeta(editor, wysiwygSearchJumpPluginKey, createEmptyJumpPluginState())
     }
     return
   }
@@ -647,7 +656,7 @@ export function syncWysiwygSearchJump(
   }
 
   const nextState = computeJumpPluginState(editor.state.doc, rawContent, jump)
-  editor.view.dispatch(editor.state.tr.setMeta(wysiwygSearchJumpPluginKey, nextState))
+  dispatchSearchPluginMeta(editor, wysiwygSearchJumpPluginKey, nextState)
 }
 
 /**

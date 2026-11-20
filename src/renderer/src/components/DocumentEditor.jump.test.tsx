@@ -4,6 +4,7 @@ import { EditorView } from '@codemirror/view'
 import { describe, expect, it, vi } from 'vitest'
 import type { DocumentBuffer } from '@shared/documentBuffer'
 import { DEFAULT_SEARCH_MATCH_OPTIONS, type DocumentSearchJumpRequest } from '@shared/search'
+import { createMermaidRenderer, type MermaidDriver } from '../editor/mermaidRenderer'
 import {
   collectPreviewSourceBlocks,
   computePreviewScrollTopFromRaw,
@@ -80,6 +81,16 @@ function createLineTokenJumpRequest(
     from = idx + token.length
   }
   throw new Error(`Missing ${token} occurrence ${occurrence} on line ${lineNumber}`)
+}
+
+function createStubMermaidRenderer() {
+  const driver: MermaidDriver = {
+    initialize: vi.fn(),
+    render: vi.fn(async () => ({
+      svg: '<svg data-testid="rendered-mermaid-svg"><text>MermaidDiagram</text></svg>'
+    }))
+  }
+  return createMermaidRenderer(driver)
 }
 
 describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
@@ -529,6 +540,7 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
       const content = mdLines.join('\n')
       const doc = createDoc({ content, savedContent: content })
       const tab = createTab('preview')
+      const mermaidRenderer = createStubMermaidRenderer()
       let currentJump: DocumentSearchJumpRequest | null = null
 
       const renderPreview = () => (
@@ -537,6 +549,7 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
           tab={tab}
           theme="light"
           autoSave={false}
+          mermaidRenderer={mermaidRenderer}
           searchJumpRequest={currentJump}
           onChangeContent={vi.fn()}
           onSave={vi.fn()}
@@ -817,6 +830,7 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
       const content = mdLines.join('\n')
       const doc = createDoc({ content, savedContent: content })
       const tab = createTab('wysiwyg')
+      const mermaidRenderer = createStubMermaidRenderer()
       let currentJump: DocumentSearchJumpRequest | null = null
 
       const renderWysiwyg = () => (
@@ -825,6 +839,7 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
           tab={tab}
           theme="light"
           autoSave={false}
+          mermaidRenderer={mermaidRenderer}
           searchJumpRequest={currentJump}
           onChangeContent={vi.fn()}
           onSave={vi.fn()}
