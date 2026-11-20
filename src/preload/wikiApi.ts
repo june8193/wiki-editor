@@ -58,6 +58,7 @@ import type {
   PersistedWorkspaceState,
   WorkspaceStateUpdate
 } from '@shared/workspaceState'
+import type { WorkspaceSearchRequest, WorkspaceSearchResponse } from '@shared/search'
 
 export interface IpcRendererLike {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>
@@ -147,6 +148,11 @@ export function createWikiApi(
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.readDir, dirPath) as Promise<WorkspaceEntry[]>,
       listMarkdownFiles: () =>
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.listMarkdownFiles) as Promise<WorkspaceEntry[]>,
+      search: (request: WorkspaceSearchRequest) =>
+        ipcRenderer.invoke(
+          WORKSPACE_IPC_CHANNELS.search,
+          request
+        ) as Promise<WorkspaceSearchResponse>,
       readFile: (filePath) =>
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.readFile, filePath) as Promise<string>,
       writeFile: (filePath, content) =>

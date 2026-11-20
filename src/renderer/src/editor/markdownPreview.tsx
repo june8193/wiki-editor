@@ -3,6 +3,7 @@ import {
   ComponentPropsWithoutRef,
   createContext,
   isValidElement,
+  ReactElement,
   ReactNode,
   useContext
 } from 'react'
@@ -24,16 +25,29 @@ import {
   getCodeBlockHighlightSpans,
   isMermaidLanguage
 } from './codeBlockHighlight'
+import type { DocumentFindCriteria, DocumentFindHighlightQuery } from './documentFind'
 import { MARKDOWN_SANITIZE_SCHEMA } from './markdownSecurity'
 import { createHeadingSlugTracker, decodeSlugSafely } from './MarkdownTocEngine'
 import type { MermaidRenderer } from './mermaidRenderer'
 import { isLinkNavigationClick } from './editorModes'
+import {
+  evaluatePreviewSearchMatches,
+  highlightPreviewTree,
+  type PreviewElementClassification,
+  type PreviewJumpHighlightQuery,
+  type PreviewPreSearchProps,
+  type PreviewSearchMatchResult,
+  type PreviewSearchMatchSpan,
+  renderCodeTokensWithSearch
+} from './previewSearchHighlight'
 
 export interface MarkdownPreviewRenderOptions {
   theme?: ThemeMode
   documentPath?: string
   mermaidRenderer?: MermaidRenderer
   documentTitle?: string
+  findHighlight?: DocumentFindHighlightQuery | null
+  jumpHighlight?: PreviewJumpHighlightQuery | null
   onAnchorNavigate?: (slug: string) => void
   onLinkNavigate?: (href: string) => void
 }
@@ -186,41 +200,21 @@ function normalizeCodeClassName(className: unknown): string | undefined {
 }
 
 /**
- * Renders highlighted React nodes for a code string while preserving exact source characters.
+ * Renders highlighted React nodes for a code string while preserving exact source characters
+ * and optionally layering in-document search `<mark>` spans across syntax token boundaries.
  */
 export function renderHighlightedCodeNodes(
   code: string,
-  language: string | null | undefined
+  language: string | null | undefined,
+  searchHighlights: readonly PreviewSearchMatchSpan[] = [],
+  activeSearchMatchIndex = -1
 ): ReactNode {
-  const spans = getCodeBlockHighlightSpans(code, language)
-  if (spans.length === 0) {
-    return code
-  }
-
-  const nodes: ReactNode[] = []
-  let cursor = 0
-
-  for (let i = 0; i < spans.length; i += 1) {
-    const span = spans[i]
-    if (span.from < cursor || span.to <= span.from || span.to > code.length) {
-      continue
-    }
-    if (span.from > cursor) {
-      nodes.push(code.slice(cursor, span.from))
-    }
-    nodes.push(
-      <span key={`tok-${i}`} className={span.className}>
-        {code.slice(span.from, span.to)}
-      </span>
-    )
-    cursor = span.to
-  }
-
-  if (cursor < code.length) {
-    nodes.push(code.slice(cursor))
-  }
-
-  return nodes
+  return renderCodeTokensWithSearch(
+    code,
+    getCodeBlockHighlightSpans(code, language),
+    searchHighlights,
+    activeSearchMatchIndex
+  )
 }
 
 function SafeLink(props: ComponentPropsWithoutRef<'a'>) {
@@ -269,71 +263,101 @@ function PreviewCheckbox(props: ComponentPropsWithoutRef<'input'>) {
   )
 }
 
-function PreviewPre(props: ComponentPropsWithoutRef<'pre'> & SourceLineDataProps) {
+interface FencedCodeBlockInfo {
+  rawLanguage: string
+  rawCode: string
+  codeClassName: string | undefined
+}
+
+function extractFencedCodeBlockInfo(children: ReactNode): FencedCodeBlockInfo | null {
+  const meaningfulChildren = Children.toArray(children).filter(
+    (child) => typeof child !== 'string' || child.trim().length > 0
+  )
+  if (meaningfulChildren.length !== 1) {
+    return null
+  }
+  const onlyChild = meaningfulChildren[0]
+  if (
+    !isValidElement<{ className?: unknown; children?: ReactNode }>(onlyChild) ||
+    onlyChild.type !== 'code'
+  ) {
+    return null
+  }
+  return {
+    rawLanguage: extractCodeLanguage(onlyChild.props.className),
+    rawCode: extractReactText(onlyChild.props.children).replace(/\n$/, ''),
+    codeClassName: normalizeCodeClassName(onlyChild.props.className)
+  }
+}
+
+function PreviewPre(props: ComponentPropsWithoutRef<'pre'> & SourceLineDataProps & PreviewPreSearchProps) {
   const { theme, mermaidRenderer, documentTitle } = useContext(PreviewRenderContext)
   const {
     'data-source-line': sourceLine,
     'data-source-end-line': sourceEndLine,
     'data-mermaid-index': rawMermaidIndex,
+    searchHighlightSpans,
+    activeSearchMatchIndex = -1,
     ...preProps
   } = props
-  const meaningfulChildren = Children.toArray(preProps.children).filter(
-    (child) => typeof child !== 'string' || child.trim().length > 0
-  )
+  const fencedInfo = extractFencedCodeBlockInfo(preProps.children)
 
-  if (meaningfulChildren.length === 1) {
-    const onlyChild = meaningfulChildren[0]
-    if (
-      isValidElement<{ className?: unknown; children?: ReactNode }>(onlyChild) &&
-      onlyChild.type === 'code'
-    ) {
-      const rawLanguage = extractCodeLanguage(onlyChild.props.className)
-      const rawCode = extractReactText(onlyChild.props.children).replace(/\n$/, '')
+  if (fencedInfo) {
+    const { rawLanguage, rawCode, codeClassName } = fencedInfo
 
-      if (isMermaidLanguage(rawLanguage)) {
-        const blockIndex =
-          rawMermaidIndex !== undefined && /^\d+$/.test(rawMermaidIndex)
-            ? Number(rawMermaidIndex)
-            : undefined
-        return (
-          <MermaidDiagram
-            code={rawCode}
-            theme={theme}
-            renderer={mermaidRenderer}
-            documentTitle={documentTitle}
-            blockIndex={blockIndex}
-            sourceLine={sourceLine}
-            sourceEndLine={sourceEndLine}
-          />
-        )
-      }
-
-      const codeClassName = normalizeCodeClassName(onlyChild.props.className)
+    if (isMermaidLanguage(rawLanguage)) {
+      const blockIndex =
+        rawMermaidIndex !== undefined && /^\d+$/.test(rawMermaidIndex)
+          ? Number(rawMermaidIndex)
+          : undefined
       return (
-        <div
-          className="md-code-block"
-          data-testid="preview-code-block"
-          data-language={rawLanguage || 'plaintext'}
-          data-source-line={sourceLine}
-          data-source-end-line={sourceEndLine}
-        >
-          <div className="code-block-header">
-            <span className="code-block-language-label" data-testid="code-block-language-label">
-              {formatCodeBlockLanguageLabel(rawLanguage)}
-            </span>
-            <CodeBlockCopyButton code={rawCode} />
-          </div>
-          <pre {...preProps}>
-            <code className={codeClassName}>
-              {renderHighlightedCodeNodes(rawCode, rawLanguage)}
-            </code>
-          </pre>
-        </div>
+        <MermaidDiagram
+          code={rawCode}
+          theme={theme}
+          renderer={mermaidRenderer}
+          documentTitle={documentTitle}
+          blockIndex={blockIndex}
+          sourceLine={sourceLine}
+          sourceEndLine={sourceEndLine}
+        />
       )
     }
+
+    return (
+      <div
+        className="md-code-block"
+        data-testid="preview-code-block"
+        data-language={rawLanguage || 'plaintext'}
+        data-source-line={sourceLine}
+        data-source-end-line={sourceEndLine}
+      >
+        <div className="code-block-header">
+          <span className="code-block-language-label" data-testid="code-block-language-label">
+            {formatCodeBlockLanguageLabel(rawLanguage)}
+          </span>
+          <CodeBlockCopyButton code={rawCode} />
+        </div>
+        <pre {...preProps}>
+          <code className={codeClassName}>
+            {renderHighlightedCodeNodes(
+              rawCode,
+              rawLanguage,
+              searchHighlightSpans,
+              activeSearchMatchIndex
+            )}
+          </code>
+        </pre>
+      </div>
+    )
   }
 
-  return <pre {...props} />
+    return (
+      <pre
+        data-source-line={sourceLine}
+        data-source-end-line={sourceEndLine}
+        {...preProps}
+      />
+    )
 }
 
 function PreviewTable(props: ComponentPropsWithoutRef<'table'> & SourceLineDataProps) {
@@ -391,15 +415,87 @@ function buildPreviewProcessor() {
 
 const previewProcessor = buildPreviewProcessor()
 
+const MAX_BASE_TREE_CACHE_ENTRIES = 8
+const previewBaseTreeCache = new Map<string, ReactNode>()
+
+function processPreviewBaseTree(markdown: string): ReactNode {
+  const cached = previewBaseTreeCache.get(markdown)
+  if (cached !== undefined) {
+    // Refresh insertion order for small LRU retention across dual-pane previews.
+    previewBaseTreeCache.delete(markdown)
+    previewBaseTreeCache.set(markdown, cached)
+    return cached
+  }
+  const tree = previewProcessor.processSync(markdown).result as ReactNode
+  if (previewBaseTreeCache.size >= MAX_BASE_TREE_CACHE_ENTRIES) {
+    const oldestKey = previewBaseTreeCache.keys().next().value
+    if (oldestKey !== undefined) {
+      previewBaseTreeCache.delete(oldestKey)
+    }
+  }
+  previewBaseTreeCache.set(markdown, tree)
+  return tree
+}
+
+function classifyCustomPreviewElement(
+  element: ReactElement<{ children?: ReactNode }>
+): PreviewElementClassification | null {
+  const { type } = element
+  if (type === PreviewPre) {
+    const fenced = extractFencedCodeBlockInfo(element.props.children)
+    if (fenced) {
+      return {
+        kind: 'fenced-code',
+        rawCode: fenced.rawCode,
+        isMermaid: isMermaidLanguage(fenced.rawLanguage)
+      }
+    }
+    return { kind: 'block', isWhitespaceContainer: false }
+  }
+  if (type === PreviewImage || type === PreviewCheckbox) {
+    return { kind: 'skip' }
+  }
+  if (type === PreviewTable) {
+    return { kind: 'block', isWhitespaceContainer: true }
+  }
+  return null
+}
+
+function buildPreviewSearchTarget(markdown: string) {
+  const isBlankDocument = markdown.trim().length === 0
+  return {
+    baseTree: isBlankDocument ? null : processPreviewBaseTree(markdown),
+    isBlankDocument,
+    classify: classifyCustomPreviewElement
+  }
+}
+
+/**
+ * Counts rendered Preview matches (excluding Mermaid diagrams and code block UI chrome)
+ * for `markdown` under the supplied search `criteria`.
+ */
+export function findPreviewSearchMatches(
+  markdown: string,
+  criteria: DocumentFindCriteria
+): PreviewSearchMatchResult {
+  return evaluatePreviewSearchMatches(buildPreviewSearchTarget(markdown), criteria)
+}
+
 /**
  * Parses GFM Markdown, sanitizes unsafe HTML/URIs, applies heading anchor slugs,
- * and renders Mermaid code blocks and safe React elements.
+ * and renders Mermaid code blocks, search highlights, and safe React elements.
  */
 export function renderMarkdownToReact(
   markdown: string,
   options: MarkdownPreviewRenderOptions = {}
 ): ReactNode {
-  const file = previewProcessor.processSync(markdown)
+  const contentTree = highlightPreviewTree(
+    buildPreviewSearchTarget(markdown),
+    options.findHighlight,
+    options.jumpHighlight,
+    markdown
+  )
+
   const contextValue: PreviewRenderContextValue = {
     theme: options.theme ?? 'light',
     documentPath: options.documentPath,
@@ -410,7 +506,7 @@ export function renderMarkdownToReact(
   }
   return (
     <PreviewRenderContext.Provider value={contextValue}>
-      {file.result as ReactNode}
+      {contentTree}
     </PreviewRenderContext.Provider>
   )
 }

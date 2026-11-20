@@ -473,4 +473,72 @@ describe('registerIpcHandlers logging wrapper', () => {
 
     dispose()
   })
+
+  it('logs workspace:search request and response metadata without leaking raw query or match snippets', async () => {
+    const ipcMain = createFakeIpcMain()
+    const secretQuery = 'TOP_SECRET_SEARCH_TOKEN'
+    const secretSnippet = 'CONFIDENTIAL_LINE_SNIPPET'
+    const dispose = registerIpcHandlers(
+      ipcMain,
+      [
+        [
+          WORKSPACE_IPC_CHANNELS.search,
+          async () => ({
+            query: secretQuery,
+            files: [
+              {
+                path: 'C:\\wiki\\secret.md',
+                relativePath: 'secret.md',
+                name: 'secret.md',
+                nameMatches: [],
+                lineMatches: [
+                  {
+                    lineNumber: 1,
+                    lineText: secretSnippet,
+                    lineOffset: 0,
+                    matches: [{ start: 0, end: 5 }]
+                  }
+                ],
+                totalMatchCount: 1,
+                truncatedInFile: false
+              }
+            ],
+            totalFileCount: 1,
+            totalMatchCount: 1,
+            truncated: false
+          })
+        ]
+      ],
+      { logService }
+    )
+
+    await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.search, {
+      query: secretQuery,
+      options: { caseSensitive: true, wholeWord: true, useRegex: false }
+    })
+
+    const entries = await logService.readEntries()
+    expect(entries).toHaveLength(1)
+    const serialized = JSON.stringify(entries)
+    expect(serialized).not.toContain(secretQuery)
+    expect(serialized).not.toContain(secretSnippet)
+    expect(entries[0]).toMatchObject({
+      level: 'info',
+      category: 'ipc',
+      data: {
+        channel: WORKSPACE_IPC_CHANNELS.search,
+        success: true,
+        queryLength: secretQuery.length,
+        caseSensitive: true,
+        wholeWord: true,
+        useRegex: false,
+        totalFileCount: 1,
+        totalMatchCount: 1,
+        truncated: false,
+        hasError: false
+      }
+    })
+
+    dispose()
+  })
 })

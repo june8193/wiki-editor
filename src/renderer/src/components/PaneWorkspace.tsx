@@ -8,6 +8,7 @@ import {
 } from 'react'
 import type { ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
+import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { ActiveTabDragSession } from '@shared/window'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
@@ -24,6 +25,7 @@ import {
   isExternalTabDragEvent,
   type TabDragUiState
 } from '../stores/tabDragDrop'
+import type { DocumentEditorFindControl } from './DocumentEditor'
 import type { GitDiffContentState } from './GitDiffViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
@@ -36,9 +38,11 @@ export interface PaneWorkspaceProps {
   theme: ThemeMode
   autoSave: boolean
   scrollRequest?: OutlineScrollRequest | null
+  searchJumpRequest?: DocumentSearchJumpRequest | null
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   dragState: TabDragUiState
+  getPaneFindControl?: (paneId: PaneId) => DocumentEditorFindControl
   onSetSplitRatio: (ratio: number) => void
   onSplitWithTab: (sourcePaneId: PaneId, tabId: string, splitDirection: SplitDirection) => void
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
@@ -63,9 +67,11 @@ export function PaneWorkspace({
   theme,
   autoSave,
   scrollRequest = null,
+  searchJumpRequest = null,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   dragState,
+  getPaneFindControl,
   onSetSplitRatio,
   onSplitWithTab,
   onActiveHeadingChange,
@@ -191,6 +197,7 @@ export function PaneWorkspace({
     theme,
     autoSave,
     scrollRequest,
+    searchJumpRequest,
     isShortcutDisabled,
     workspaceMarkdownFiles,
     buffers,
@@ -215,6 +222,7 @@ export function PaneWorkspace({
         pane={layout.panes.primary}
         isActivePane={layout.activePaneId === 'primary'}
         flexRatio={isSplit ? layout.splitRatio : undefined}
+        findControl={getPaneFindControl?.('primary')}
         {...sharedPaneProps}
       />
 
@@ -254,6 +262,7 @@ export function PaneWorkspace({
             pane={layout.panes.secondary}
             isActivePane={layout.activePaneId === 'secondary'}
             flexRatio={1 - layout.splitRatio}
+            findControl={getPaneFindControl?.('secondary')}
             {...sharedPaneProps}
           />
         </>

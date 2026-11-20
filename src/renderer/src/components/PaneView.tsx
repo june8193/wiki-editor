@@ -1,11 +1,12 @@
 import { CSSProperties, SyntheticEvent } from 'react'
 import type { ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
+import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
-import { DocumentEditor } from './DocumentEditor'
+import { DocumentEditor, type DocumentEditorFindControl } from './DocumentEditor'
 import { type GitDiffContentState, GitDiffViewer } from './GitDiffViewer'
 import {
   allowWikiTabDragOver,
@@ -23,11 +24,13 @@ interface PaneViewProps {
   theme: ThemeMode
   autoSave: boolean
   scrollRequest?: OutlineScrollRequest | null
+  searchJumpRequest?: DocumentSearchJumpRequest | null
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   buffers: DocumentBufferSnapshot
   diffsByKey: Record<string, GitDiffContentState>
   dragState: TabDragUiState
+  findControl?: DocumentEditorFindControl
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
   actions: PaneInteractionActions
 }
@@ -40,11 +43,13 @@ export function PaneView({
   theme,
   autoSave,
   scrollRequest = null,
+  searchJumpRequest = null,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   buffers,
   diffsByKey,
   dragState,
+  findControl,
   onActiveHeadingChange,
   actions
 }: PaneViewProps) {
@@ -58,6 +63,13 @@ export function PaneView({
   const activeScrollRequest =
     activeTab && scrollRequest && scrollRequest.paneId === pane.id && scrollRequest.tabId === activeTab.id
       ? scrollRequest
+      : null
+  const activeSearchJumpRequest =
+    activeTab &&
+    searchJumpRequest &&
+    searchJumpRequest.paneId === pane.id &&
+    searchJumpRequest.tabId === activeTab.id
+      ? searchJumpRequest
       : null
   const canMoveToSplit = !(splitMode === 'single' && pane.tabs.length <= 1)
   const paneStyle: CSSProperties | undefined =
@@ -114,9 +126,11 @@ export function PaneView({
           theme={theme}
           autoSave={autoSave}
           scrollRequest={activeScrollRequest}
+          searchJumpRequest={activeSearchJumpRequest}
           isActive={isActivePane}
           isShortcutDisabled={isShortcutDisabled}
           workspaceMarkdownFiles={workspaceMarkdownFiles}
+          findControl={findControl}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}

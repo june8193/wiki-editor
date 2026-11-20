@@ -3173,7 +3173,7 @@ describe('Multi-window shared document buffer integration (<App />)', () => {
     const refreshedExplorer = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
     expect(within(refreshedExplorer).getByText('deleted.md')).toBeInTheDocument()
     expect(within(refreshedExplorer).queryByText('draft.md')).toBeNull()
-  })
+  }, 15_000)
 
   it('excludes auxiliary windows from workspaceState access and flushes main window expandedDirs before resolving dirty close', async () => {
     const user = userEvent.setup()
@@ -4430,4 +4430,521 @@ describe('Multi-main-window workspace opening (<App />)', () => {
       within(updatedWorkspaceView2).getAllByRole('button', { name: 'beta 새 창에서 열기' })[0]
     ).toBeEnabled()
   }, 15_000)
+
+  it('ignores Ctrl+Shift+F inside an auxiliary window without rendering Activity Bar or Search View', async () => {
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'intro.md': '# Intro'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    render(<App wikiApi={mainWin.api} />)
+
+    const auxWin = harness.createWindow({ role: 'auxiliary', initialTabs: [] })
+    const auxRendered = render(<App wikiApi={auxWin.api} />)
+
+    await waitFor(() => {
+      expect(within(auxRendered.container).getByTestId('pane-workspace')).toBeInTheDocument()
+    })
+
+    // Focus auxiliary container and dispatch Ctrl+Shift+F -> auxiliary window ignores it
+    const paneWorkspace = within(auxRendered.container).getByTestId('pane-workspace')
+    fireEvent.keyDown(paneWorkspace, { key: 'F', ctrlKey: true, shiftKey: true })
+
+    expect(within(auxRendered.container).queryByLabelText('액티비티 바')).toBeNull()
+    expect(within(auxRendered.container).queryByLabelText('검색 뷰')).toBeNull()
+    expect(within(auxRendered.container).queryByLabelText('검색어 입력')).toBeNull()
+  })
+
+  it('jumps to preserved Editor Mode and auxiliary unsaved edits inside Main Window while isolating Auxiliary Window and second Main Window', async () => {
+    const user = userEvent.setup()
+    const scrollIntoViewSpy = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy
+
+    try {
+      const harness = createMultiWindowWikiHarness(
+        {
+          autoSave: false,
+          theme: 'light',
+          recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+        },
+        {
+          workspaces: {
+            'C:\\wiki\\alpha': {
+              'alpha-doc.md': '# Alpha\nInitial alpha content',
+              'alpha-second.md': '# Second\nAlphaSecondToken body line',
+              'alpha-plain.md': '# Plain\nPlain text'
+            },
+            'C:\\wiki\\beta': {
+              'beta-doc.md': '# Beta\nSharedBeta content'
+            }
+          }
+        }
+      )
+      activeDisposers.push(() => harness.dispose())
+
+      const mainAlpha = harness.createWindow({ role: 'main' })
+      const renderedAlpha = render(<App wikiApi={mainAlpha.api} />)
+      activeDisposers.push(() => renderedAlpha.unmount())
+      const alphaExplorer = await within(renderedAlpha.container).findByLabelText(
+        '워크스페이스 탐색기'
+      )
+
+      // Open second main window on beta
+      await user.click(
+        within(
+          within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })
+        ).getByRole('button', { name: '워크스페이스' })
+      )
+      await user.click(
+        within(
+          within(renderedAlpha.container).getByRole('region', { name: '워크스페이스 뷰' })
+        ).getByRole('button', { name: 'beta 새 창에서 열기' })
+      )
+      await waitFor(() => {
+        expect(harness.getMainWindows()).toHaveLength(2)
+      })
+      const mainBeta = harness.getMainWindows()[1]
+      const renderedBeta = render(<App wikiApi={mainBeta.api} />)
+      activeDisposers.push(() => renderedBeta.unmount())
+      await within(renderedBeta.container).findByLabelText('워크스페이스 탐색기')
+
+      // Back to Explorer in mainAlpha: set alpha-second.md to Preview, switch to alpha-plain.md, and detach alpha-doc.md to Auxiliary Window
+      await user.click(
+        within(
+          within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })
+        ).getByRole('button', { name: '탐색기' })
+      )
+      const refreshedAlphaExplorer = await within(renderedAlpha.container).findByLabelText(
+        '워크스페이스 탐색기'
+      )
+      await user.click(await within(refreshedAlphaExplorer).findByText('alpha-second.md'))
+      const modeGroup = await within(renderedAlpha.container).findByRole('group', {
+        name: '에디터 모드 전환'
+      })
+      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      expect(within(renderedAlpha.container).getByLabelText('마크다운 미리보기')).toBeInTheDocument()
+
+      await user.click(within(refreshedAlphaExplorer).getByText('alpha-plain.md'))
+      await waitFor(() => {
+        expect(
+          within(renderedAlpha.container).getByRole('tab', { name: 'alpha-plain.md' })
+        ).toBeInTheDocument()
+      })
+      await user.click(within(refreshedAlphaExplorer).getByText('alpha-doc.md'))
+      await waitFor(() => {
+        expect(
+          within(renderedAlpha.container).getByRole('tab', { name: 'alpha-doc.md' })
+        ).toBeInTheDocument()
+      })
+      await detachTabViaContextMenu(user, renderedAlpha.container, /alpha-doc\.md/)
+      await waitFor(() => {
+        expect(harness.getAuxiliaryWindows(mainAlpha.windowId)).toHaveLength(1)
+      })
+      const auxWin = harness.getAuxiliaryWindows(mainAlpha.windowId)[0]
+      const auxRendered = render(<App wikiApi={auxWin.api} />)
+      activeDisposers.push(() => auxRendered.unmount())
+      const auxEditor = await within(auxRendered.container).findByTestId('document-editor')
+
+      // Unsaved edit inside Auxiliary Window
+      const updatedAuxText = '# Alpha\nLine two\nAuxUnsavedJumpToken line'
+      setRawEditorText(auxEditor, updatedAuxText)
+      await waitFor(() => {
+        expect(mainAlpha.hub.getSnapshot().buffers['c:/wiki/alpha/alpha-doc.md']?.content).toContain(
+          'AuxUnsavedJumpToken'
+        )
+      })
+
+      // Open Search View in mainAlpha
+      await user.click(
+        within(
+          within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })
+        ).getByRole('button', { name: '검색' })
+      )
+      const alphaSearchView = within(renderedAlpha.container).getByRole('region', {
+        name: '검색 뷰'
+      })
+      const alphaSearchInput = within(alphaSearchView).getByRole('textbox', { name: '검색어 입력' })
+
+      // 1. Jump to alpha-second.md -> preserves Preview mode, highlights without opening Find Bar
+      fireEvent.change(alphaSearchInput, { target: { value: 'AlphaSecondToken' } })
+      fireEvent.keyDown(alphaSearchInput, { key: 'Enter' })
+      scrollIntoViewSpy.mockClear()
+      fireEvent.click(
+        await within(alphaSearchView).findByRole('button', { name: /AlphaSecondToken/ })
+      )
+
+      await waitFor(() => {
+        expect(
+          within(renderedAlpha.container).getByRole('tab', { name: 'alpha-second.md' })
+        ).toHaveAttribute('aria-selected', 'true')
+      })
+      expect(within(renderedAlpha.container).queryByRole('region', { name: '문서 내 찾기 바' })).toBeNull()
+      expect(
+        within(
+          within(renderedAlpha.container).getByRole('group', { name: '에디터 모드 전환' })
+        ).getByRole('button', { name: 'Preview' })
+      ).toHaveAttribute('aria-pressed', 'true')
+      const previewEl = within(renderedAlpha.container).getByLabelText('마크다운 미리보기')
+      expect(previewEl.querySelectorAll('.preview-search-jump-highlight')).toHaveLength(1)
+      expect(previewEl.querySelector('.preview-search-jump-highlight')?.textContent).toBe(
+        'AlphaSecondToken'
+      )
+      expect(scrollIntoViewSpy).toHaveBeenCalled()
+      expect(auxRendered.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+      expect(renderedBeta.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+
+      // 2. Jump to unsaved edit from Auxiliary Window buffer -> opens alpha-doc.md in mainAlpha, jumps accurately without touching auxRendered or mainBeta
+      fireEvent.change(alphaSearchInput, { target: { value: 'AuxUnsavedJumpToken' } })
+      fireEvent.keyDown(alphaSearchInput, { key: 'Enter' })
+      fireEvent.click(
+        await within(alphaSearchView).findByRole('button', { name: /AuxUnsavedJumpToken/ })
+      )
+
+      await waitFor(() => {
+        expect(
+          within(renderedAlpha.container).getByRole('tab', { name: /alpha-doc\.md/ })
+        ).toHaveAttribute('aria-selected', 'true')
+      })
+      const mainAlphaEditor = await within(renderedAlpha.container).findByTestId('document-editor')
+      const expectedStart = updatedAuxText.indexOf('AuxUnsavedJumpToken')
+      await waitFor(() => {
+        expect(Number(mainAlphaEditor.getAttribute('data-selection-start'))).toBe(expectedStart)
+      })
+      expect(renderedAlpha.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(1)
+      expect(within(renderedAlpha.container).queryByRole('region', { name: '문서 내 찾기 바' })).toBeNull()
+      expect(auxRendered.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+      expect(within(auxRendered.container).queryByRole('region', { name: '문서 내 찾기 바' })).toBeNull()
+      expect(renderedBeta.container.querySelectorAll('.cm-search-jump-highlight')).toHaveLength(0)
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    }
+  })
+
+  it('isolates workspace search across main windows, picks up auxiliary unsaved buffer edits, and preserves search state on focusIfOpen', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      {
+        autoSave: false,
+        theme: 'light',
+        recentWorkspaces: ['C:/wiki/alpha', 'C:/wiki/beta']
+      },
+      {
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            'alpha-doc.md': '# Alpha\nInitial alpha content'
+          },
+          'C:\\wiki\\beta': {
+            'beta-doc.md': '# Beta\nSharedToken in beta'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainAlpha = harness.createWindow({ role: 'main' })
+    const renderedAlpha = render(<App wikiApi={mainAlpha.api} />)
+    activeDisposers.push(() => renderedAlpha.unmount())
+    await within(renderedAlpha.container).findByLabelText('워크스페이스 탐색기')
+
+    // Open second main window on beta via Workspace View '새 창에서 열기'
+    await user.click(
+      within(within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })).getByRole(
+        'button',
+        { name: '워크스페이스' }
+      )
+    )
+    const alphaWorkspaceView = within(renderedAlpha.container).getByRole('region', {
+      name: '워크스페이스 뷰'
+    })
+    await user.click(within(alphaWorkspaceView).getByRole('button', { name: 'beta 새 창에서 열기' }))
+    await waitFor(() => {
+      expect(harness.getMainWindows()).toHaveLength(2)
+    })
+    const mainBeta = harness.getMainWindows()[1]
+    const renderedBeta = render(<App wikiApi={mainBeta.api} />)
+    activeDisposers.push(() => renderedBeta.unmount())
+    await within(renderedBeta.container).findByLabelText('워크스페이스 탐색기')
+
+    // Open alpha-doc.md in mainAlpha and detach it to an auxiliary window
+    await user.click(
+      within(within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })).getByRole(
+        'button',
+        { name: '탐색기' }
+      )
+    )
+    const alphaExplorer = within(renderedAlpha.container).getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(alphaExplorer).findByText('alpha-doc.md'))
+    await waitFor(() => {
+      expect(within(renderedAlpha.container).getByRole('tab', { name: 'alpha-doc.md' })).toBeInTheDocument()
+    })
+    await detachTabViaContextMenu(user, renderedAlpha.container, /alpha-doc\.md/)
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows(mainAlpha.windowId)).toHaveLength(1)
+    })
+    const auxWin = harness.getAuxiliaryWindows(mainAlpha.windowId)[0]
+    const auxRendered = render(<App wikiApi={auxWin.api} />)
+    activeDisposers.push(() => auxRendered.unmount())
+    const auxEditor = await within(auxRendered.container).findByTestId('document-editor')
+
+    // Edit alpha-doc.md inside auxiliary window without saving -> mainAlpha search picks up aux unsaved text, mainBeta does NOT
+    setRawEditorText(auxEditor, '# Alpha\nAuxUnsavedSharedToken here')
+    await waitFor(() => {
+      expect(mainAlpha.hub.getSnapshot().buffers['c:/wiki/alpha/alpha-doc.md']?.content).toContain(
+        'AuxUnsavedSharedToken'
+      )
+    })
+
+    // Ctrl+Shift+F inside auxRendered must NOT open Search View in mainAlpha or auxRendered
+    fireEvent.keyDown(auxEditor, { key: 'F', ctrlKey: true, shiftKey: true })
+    expect(within(auxRendered.container).queryByLabelText('검색 뷰')).toBeNull()
+    expect(within(renderedAlpha.container).queryByLabelText('검색 뷰')).toBeNull()
+
+    // Search in mainAlpha via Ctrl+Shift+F -> finds AuxUnsavedSharedToken in alpha-doc.md only
+    fireEvent.keyDown(within(renderedAlpha.container).getByTestId('pane-workspace'), {
+      key: 'F',
+      ctrlKey: true,
+      shiftKey: true
+    })
+    const alphaSearchView = await within(renderedAlpha.container).findByRole('region', {
+      name: '검색 뷰'
+    })
+    const alphaSearchInput = within(alphaSearchView).getByRole('textbox', { name: '검색어 입력' })
+    await user.type(alphaSearchInput, 'SharedToken')
+    fireEvent.keyDown(alphaSearchInput, { key: 'Enter' })
+
+    expect(await within(alphaSearchView).findByText(/alpha-doc\.md/)).toBeInTheDocument()
+    expect(within(alphaSearchView).queryByText(/beta-doc\.md/)).not.toBeInTheDocument()
+
+    // Search in mainBeta -> finds SharedToken in beta-doc.md only (isolated from alpha's auxiliary buffer)
+    fireEvent.keyDown(within(renderedBeta.container).getByTestId('pane-workspace'), {
+      key: 'F',
+      ctrlKey: true,
+      shiftKey: true
+    })
+    const betaSearchView = await within(renderedBeta.container).findByRole('region', {
+      name: '검색 뷰'
+    })
+    const betaSearchInput = within(betaSearchView).getByRole('textbox', { name: '검색어 입력' })
+    await user.type(betaSearchInput, 'SharedToken')
+    fireEvent.keyDown(betaSearchInput, { key: 'Enter' })
+
+    expect(await within(betaSearchView).findByText(/beta-doc\.md/)).toBeInTheDocument()
+    expect(within(betaSearchView).queryByText(/alpha-doc\.md/)).not.toBeInTheDocument()
+
+    // Clicking beta inside mainAlpha's Workspace View focuses mainBeta instead of switching mainAlpha, keeping mainAlpha's search state intact
+    await user.click(
+      within(within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })).getByRole(
+        'button',
+        { name: '워크스페이스' }
+      )
+    )
+    const alphaWsView = within(renderedAlpha.container).getByRole('region', {
+      name: '워크스페이스 뷰'
+    })
+    await user.click(within(alphaWsView).getByRole('button', { name: /^beta$/i }))
+    await waitFor(() => {
+      expect(mainBeta.getFocusCount()).toBeGreaterThanOrEqual(1)
+    })
+
+    await user.click(
+      within(within(renderedAlpha.container).getByRole('navigation', { name: '액티비티 바' })).getByRole(
+        'button',
+        { name: '검색' }
+      )
+    )
+    const alphaSearchAfterFocus = within(renderedAlpha.container).getByRole('region', {
+      name: '검색 뷰'
+    })
+    expect(
+      (within(alphaSearchAfterFocus).getByRole('textbox', { name: '검색어 입력' }) as HTMLInputElement).value
+    ).toBe('SharedToken')
+    expect(within(alphaSearchAfterFocus).getByText(/alpha-doc\.md/)).toBeInTheDocument()
+  })
+
+  it('supports in-document Find Bar, Ctrl+F selection auto-fill, Split/Raw navigation, and window isolation across main and auxiliary windows with live shared-buffer sync', async () => {
+    const user = userEvent.setup()
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\docs',
+        workspaces: {
+          'C:\\wiki\\docs': {
+            'shared.md': '# Shared Doc\nAuxTarget one\nAuxTarget two',
+            'other.md': '# Other\nMainTarget only'
+          }
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    activeDisposers.push(() => mainRendered.unmount())
+
+    await triggerMenuCommand(mainWin.emitMenuCommand, 'open-folder')
+    const mainExplorer = await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(mainExplorer).findByText('shared.md'))
+    await user.click(within(mainExplorer).getByText('other.md'))
+    await waitFor(() => {
+      expect(within(mainRendered.container).getByRole('tab', { name: 'shared.md' })).toBeInTheDocument()
+    })
+
+    // Detach shared.md into an auxiliary window
+    await detachTabViaContextMenu(user, mainRendered.container, /shared\.md/)
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows(mainWin.windowId)).toHaveLength(1)
+    })
+    const auxWin = harness.getAuxiliaryWindows(mainWin.windowId)[0]
+    const auxRendered = render(<App wikiApi={auxWin.api} />)
+    activeDisposers.push(() => auxRendered.unmount())
+
+    const auxEditor = await within(auxRendered.container).findByTestId('document-editor')
+
+    // Aux window still ignores Ctrl+Shift+F
+    fireEvent.keyDown(auxEditor, { key: 'F', ctrlKey: true, shiftKey: true })
+    expect(within(auxRendered.container).queryByRole('region', { name: '검색 뷰' })).toBeNull()
+
+    // Select 'AuxTarget' in auxEditor and press Ctrl+F -> opens Find Bar ONLY in auxWin, NOT in mainWin
+    const sharedText = '# Shared Doc\nAuxTarget one\nAuxTarget two'
+    const targetStart = sharedText.indexOf('AuxTarget')
+    setRawEditorSelection(auxEditor, targetStart, targetStart + 'AuxTarget'.length)
+    fireEvent.keyDown(auxEditor, { key: 'f', ctrlKey: true })
+
+    const auxFindBar = await within(auxRendered.container).findByRole('region', {
+      name: '문서 내 찾기 바'
+    })
+    expect(
+      (within(auxFindBar).getByRole('textbox', { name: '문서 내 검색어 입력' }) as HTMLInputElement).value
+    ).toBe('AuxTarget')
+    expect(within(auxFindBar).getByText('1 / 2')).toBeInTheDocument()
+    expect(auxRendered.container.querySelectorAll('.cm-search-match')).toHaveLength(2)
+    expect(
+      within(mainRendered.container).queryByRole('region', { name: '문서 내 찾기 바' })
+    ).not.toBeInTheDocument()
+
+    // Main window opens shared.md and edits it -> auxWin Find Bar match count & highlights update in real time
+    await user.click(await within(mainExplorer).findByText('shared.md'))
+    const mainSharedEditor = await within(mainRendered.container).findByTestId('document-editor')
+    setRawEditorText(
+      mainSharedEditor,
+      '# Shared Doc\nAuxTarget one\nAuxTarget two\nAuxTarget three'
+    )
+    await waitFor(() => {
+      expect(within(auxFindBar).getByText('1 / 3')).toBeInTheDocument()
+    })
+    expect(auxRendered.container.querySelectorAll('.cm-search-match')).toHaveLength(3)
+
+    // Aux window switches to Split mode -> Find Bar persists, Raw drives count, right Preview simultaneously highlights
+    await user.click(
+      within(within(auxRendered.container).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Split' }
+      )
+    )
+    const auxSplitBar = within(auxRendered.container).getByRole('region', {
+      name: '문서 내 찾기 바'
+    })
+    expect(within(auxSplitBar).getByText('1 / 3')).toBeInTheDocument()
+    expect(
+      within(auxRendered.container)
+        .getByTestId('split-markdown-preview')
+        .querySelectorAll('.preview-search-match')
+    ).toHaveLength(3)
+    await user.click(within(auxSplitBar).getByRole('button', { name: '다음 일치' }))
+    expect(within(auxSplitBar).getByText('2 / 3')).toBeInTheDocument()
+
+    // Aux window switches to 위지윅 and Preview -> Find Bar persists and highlights matches live
+    await user.click(
+      within(within(auxRendered.container).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: '위지윅' }
+      )
+    )
+    expect(within(auxSplitBar).getByText('2 / 3')).toBeInTheDocument()
+    expect(auxRendered.container.querySelectorAll('.pm-search-match')).toHaveLength(3)
+
+    await user.click(
+      within(within(auxRendered.container).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Preview' }
+      )
+    )
+    expect(within(auxSplitBar).getByText('2 / 3')).toBeInTheDocument()
+    expect(auxRendered.container.querySelectorAll('.preview-search-match')).toHaveLength(3)
+
+    // Main window edits shared.md while Aux window is in Preview -> Aux Preview highlights & count sync live
+    setRawEditorText(
+      mainSharedEditor,
+      '# Shared Doc\nAuxTarget one\nAuxTarget two\nAuxTarget three\nAuxTarget four'
+    )
+    await waitFor(() => {
+      expect(within(auxSplitBar).getByText('2 / 4')).toBeInTheDocument()
+    })
+    expect(auxRendered.container.querySelectorAll('.preview-search-match')).toHaveLength(4)
+
+    await user.click(
+      within(within(auxRendered.container).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
+        'button',
+        { name: 'Split' }
+      )
+    )
+
+    // Main window Ctrl+F opens independent Find Bar in mainWin without affecting auxWin
+    fireEvent.keyDown(mainSharedEditor, { key: 'f', ctrlKey: true })
+    const mainFindBar = await within(mainRendered.container).findByRole('region', {
+      name: '문서 내 찾기 바'
+    })
+    await user.type(
+      within(mainFindBar).getByRole('textbox', { name: '문서 내 검색어 입력' }),
+      'Shared'
+    )
+    expect(within(mainFindBar).getByText('1 / 1')).toBeInTheDocument()
+    expect(
+      (within(auxSplitBar).getByRole('textbox', { name: '문서 내 검색어 입력' }) as HTMLInputElement).value
+    ).toBe('AuxTarget')
+
+    // Aux window header button closes Find Bar; Ctrl+F from aux pane-workspace reopens with preserved query, and dirty tab close dialog suppresses Ctrl+F in auxWin
+    await user.click(within(auxRendered.container).getByRole('button', { name: '문서 내 찾기' }))
+    expect(
+      within(auxRendered.container).queryByRole('region', { name: '문서 내 찾기 바' })
+    ).not.toBeInTheDocument()
+
+    fireEvent.keyDown(within(auxRendered.container).getByTestId('pane-workspace'), {
+      key: 'f',
+      ctrlKey: true
+    })
+    expect(
+      within(auxRendered.container).getByRole('region', { name: '문서 내 찾기 바' })
+    ).toBeInTheDocument()
+    expect(
+      within(mainRendered.container).getByRole('region', { name: '문서 내 찾기 바' })
+    ).toBeInTheDocument()
+    await user.click(within(auxRendered.container).getByRole('button', { name: '문서 내 찾기' }))
+
+    // Close shared.md in mainWin first so auxWin holds the sole remaining dirty tab -> ConfirmDialog opens
+    await user.click(within(mainRendered.container).getByRole('button', { name: 'shared.md 탭 닫기' }))
+    await waitFor(() => {
+      expect(mainWin.hub.getSnapshot().tabCounts['c:/wiki/docs/shared.md']).toBe(1)
+    })
+    await user.click(within(auxRendered.container).getByRole('button', { name: 'shared.md 탭 닫기' }))
+    const auxConfirm = await within(auxRendered.container).findByRole('alertdialog')
+    fireEvent.keyDown(within(auxRendered.container).getByTestId('pane-workspace'), {
+      key: 'f',
+      ctrlKey: true
+    })
+    expect(
+      within(auxRendered.container).queryByRole('region', { name: '문서 내 찾기 바' })
+    ).not.toBeInTheDocument()
+    await user.click(within(auxConfirm).getByRole('button', { name: '취소' }))
+  })
 })

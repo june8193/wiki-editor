@@ -1,8 +1,15 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
+import type { DocumentJumpHighlightTarget } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { Editor } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
+import {
+  applyFindScrollNonce,
+  areDocumentFindResultReportsEqual,
+  type DocumentFindHighlightQuery,
+  type DocumentFindResultReport
+} from '../editor/documentFind'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
 import {
   type MermaidHeightChangeHandler,
@@ -29,6 +36,14 @@ import {
   sanitizeHtmlWithRehype,
   syncWysiwygImageDisplaySources
 } from '../editor/wysiwygMarkdown'
+import {
+  areWysiwygSearchSnapshotsEqual,
+  getWysiwygSearchSnapshot,
+  scrollWysiwygActiveMatch,
+  scrollWysiwygSearchJump,
+  syncWysiwygSearchHighlights,
+  syncWysiwygSearchJump
+} from '../editor/wysiwygSearchHighlight'
 import { useDismissable } from '../hooks/useDismissable'
 import { useEditorImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useContainerOutlineSpy } from '../hooks/useEditorOutlineSpy'
@@ -67,11 +82,15 @@ interface WysiwygMarkdownEditorProps {
   documentPath?: string
   enableImageInsertion?: boolean
   scrollRequest?: WysiwygScrollRequest | null
+  findHighlight?: DocumentFindHighlightQuery | null
+  jumpHighlight?: DocumentJumpHighlightTarget | null
+  editorRef?: { current: Editor | null }
   isActive?: boolean
   onChangeContent: (nextContent: string) => void
   onScrollTopChange?: (scrollTop: number) => void
   onLinkNavigate?: (href: string) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
+  onFindResultChange?: (report: DocumentFindResultReport) => void
 }
 
 interface ToolbarStateSnapshot {
@@ -314,11 +333,15 @@ export function WysiwygMarkdownEditor({
   documentPath,
   enableImageInsertion = Boolean(documentPath),
   scrollRequest,
+  findHighlight = null,
+  jumpHighlight = null,
+  editorRef: externalEditorRef,
   isActive = true,
   onChangeContent,
   onScrollTopChange,
   onLinkNavigate,
-  onActiveHeadingChange
+  onActiveHeadingChange,
+  onFindResultChange
 }: WysiwygMarkdownEditorProps) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
@@ -328,6 +351,13 @@ export function WysiwygMarkdownEditor({
   const lastSyncedContentPropRef = useRef(content)
   const onChangeContentRef = useRef(onChangeContent)
   onChangeContentRef.current = onChangeContent
+  const onFindResultChangeRef = useRef(onFindResultChange)
+  onFindResultChangeRef.current = onFindResultChange
+  const lastScrolledFindNonceRef = useRef(findHighlight?.scrollNonce ?? 0)
+  const lastHandledJumpNonceRef = useRef(0)
+  const jumpHighlightRef = useRef(jumpHighlight)
+  jumpHighlightRef.current = jumpHighlight
+  const lastReportedFindRef = useRef<DocumentFindResultReport | null>(null)
   const enableLinkAutocompleteRef = useRef(enableLinkAutocomplete)
   enableLinkAutocompleteRef.current = enableLinkAutocomplete
   const isShortcutDisabledRef = useRef(isShortcutDisabled)
@@ -484,6 +514,17 @@ export function WysiwygMarkdownEditor({
     []
   )
   editorRef.current = editor
+  if (externalEditorRef) {
+    externalEditorRef.current = editor
+  }
+
+  useEffect(() => {
+    return () => {
+      if (externalEditorRef) {
+        externalEditorRef.current = null
+      }
+    }
+  }, [externalEditorRef])
 
   useEffect(() => {
     documentPathRef.current = documentPath
@@ -513,13 +554,34 @@ export function WysiwygMarkdownEditor({
       dismissLinkMenu()
     }
   }, [dismissLinkMenu, enableLinkAutocomplete])
+  const applyJumpHighlight = useCallback(
+    (targetJump: DocumentJumpHighlightTarget | null): void => {
+      if (!editor || editor.isDestroyed) {
+        return
+      }
+      if (!targetJump) {
+        lastHandledJumpNonceRef.current = 0
+        syncWysiwygSearchJump(editor, content, null)
+        return
+      }
+      syncWysiwygSearchJump(editor, content, targetJump)
+      if (lastHandledJumpNonceRef.current !== targetJump.nonce) {
+        lastHandledJumpNonceRef.current = targetJump.nonce
+        scrollWysiwygSearchJump(editor, scrollContainerRef.current)
+      }
+    },
+    [content, editor]
+  )
+
   useEffect(() => {
     if (!editor) return
     if (content === lastSyncedContentPropRef.current) return
     lastSyncedContentPropRef.current = content
-    if (content === lastEmittedMarkdownRef.current) return
-    syncEditorContent(content)
-  }, [content, editor, syncEditorContent])
+    if (content !== lastEmittedMarkdownRef.current) {
+      syncEditorContent(content)
+    }
+    applyJumpHighlight(jumpHighlightRef.current)
+  }, [applyJumpHighlight, content, editor, syncEditorContent])
 
   useContainerOutlineSpy({
     containerRef: scrollContainerRef,
@@ -546,6 +608,47 @@ export function WysiwygMarkdownEditor({
     onScrollTopChange,
     onActiveHeadingChange
   })
+
+  const wysiwygSearchSnapshot = useEditorState({
+    editor,
+    selector: ({ editor: instance }) => getWysiwygSearchSnapshot(instance),
+    equalityFn: areWysiwygSearchSnapshotsEqual
+  })
+
+  useLayoutEffect(() => {
+    if (!editor || editor.isDestroyed) {
+      return
+    }
+
+    const nextSnapshot = syncWysiwygSearchHighlights(editor, findHighlight ?? null)
+    if (!findHighlight?.isActive || !nextSnapshot) {
+      lastReportedFindRef.current = null
+      return
+    }
+
+    if (!areDocumentFindResultReportsEqual(lastReportedFindRef.current, nextSnapshot.report)) {
+      lastReportedFindRef.current = nextSnapshot.report
+      onFindResultChangeRef.current?.(nextSnapshot.report)
+    }
+
+    applyFindScrollNonce(lastScrolledFindNonceRef, findHighlight.scrollNonce, {
+      skipScroll: nextSnapshot.report.matchCount === 0,
+      performScroll: () => {
+        if (nextSnapshot.activeIndex < 0) {
+          return false
+        }
+        scrollWysiwygActiveMatch(editor, scrollContainerRef.current)
+        return true
+      }
+    })
+  }, [editor, findHighlight, wysiwygSearchSnapshot])
+
+  useLayoutEffect(() => {
+    if (content !== lastSyncedContentPropRef.current && content !== lastEmittedMarkdownRef.current) {
+      return
+    }
+    applyJumpHighlight(jumpHighlight)
+  }, [applyJumpHighlight, content, jumpHighlight])
 
   const toolbarState = useEditorState({
     editor,

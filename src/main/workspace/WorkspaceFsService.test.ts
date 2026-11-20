@@ -611,4 +611,66 @@ describe('WorkspaceFsService', () => {
     await expect(service.moveEntries([outsideDir], folderB.path)).rejects.toThrow(/워크스페이스|경로/i)
     await expect(service.moveEntries([freshInA.path], outsideDir)).rejects.toThrow(/워크스페이스|경로/i)
   })
+
+  it('lists all safe workspace files and reads bounded UTF-8 text files while skipping null-byte binaries and >2MB files', async () => {
+    await mkdir(join(workspaceDir, '.git'), { recursive: true })
+    await mkdir(join(workspaceDir, 'node_modules'), { recursive: true })
+    await mkdir(join(workspaceDir, 'docs'), { recursive: true })
+    await writeFile(join(workspaceDir, '.git', 'HEAD'), 'ref: refs/heads/main', 'utf8')
+    await writeFile(join(workspaceDir, 'node_modules', 'pkg.json'), '{}', 'utf8')
+    await writeFile(join(workspaceDir, 'docs', 'guide.md'), '# Guide', 'utf8')
+    await writeFile(join(workspaceDir, 'docs', 'notes.txt'), 'plain notes', 'utf8')
+    await writeFile(join(workspaceDir, 'README'), 'no extension', 'utf8')
+    await writeFile(
+      join(workspaceDir, 'binary-in-probe.dat'),
+      Buffer.concat([Buffer.from('header'), Buffer.from([0]), Buffer.from('body')])
+    )
+    await writeFile(
+      join(workspaceDir, 'null-after-8kb.dat'),
+      Buffer.concat([Buffer.alloc(9000, 0x61), Buffer.from([0])])
+    )
+    const exact2Mb = Buffer.alloc(2 * 1024 * 1024, 0x62)
+    await writeFile(join(workspaceDir, 'exact-2mb.txt'), exact2Mb)
+    await writeFile(
+      join(workspaceDir, 'oversized.txt'),
+      Buffer.alloc(2 * 1024 * 1024 + 1, 0x63)
+    )
+
+    await service.openWorkspace(workspaceDir)
+
+    const allFiles = await service.listWorkspaceFiles()
+    expect(allFiles.map((item) => item.relativePath)).toEqual([
+      'binary-in-probe.dat',
+      'docs/guide.md',
+      'docs/notes.txt',
+      'exact-2mb.txt',
+      'null-after-8kb.dat',
+      'oversized.txt',
+      'README'
+    ])
+
+    expect(await service.readTextFileForSearch(join(workspaceDir, 'docs', 'notes.txt'))).toBe(
+      'plain notes'
+    )
+    expect(await service.readTextFileForSearch(join(workspaceDir, 'binary-in-probe.dat'))).toBeNull()
+    expect(
+      await service.readTextFileForSearch(join(workspaceDir, 'null-after-8kb.dat'))
+    ).not.toBeNull()
+    expect(await service.readTextFileForSearch(join(workspaceDir, 'exact-2mb.txt'))).toHaveLength(
+      2 * 1024 * 1024
+    )
+    expect(await service.readTextFileForSearch(join(workspaceDir, 'oversized.txt'))).toBeNull()
+    await expect(
+      service.readTextFileForSearch(join(outsideDir, 'secret.txt'))
+    ).rejects.toThrow(/워크스페이스|경로/i)
+
+    const controller = new AbortController()
+    controller.abort()
+    expect(await service.listWorkspaceFiles({ signal: controller.signal })).toEqual([])
+    expect(
+      await service.readTextFileForSearch(join(workspaceDir, 'docs', 'notes.txt'), {
+        signal: controller.signal
+      })
+    ).toBeNull()
+  })
 })

@@ -1,7 +1,9 @@
 import { Dirent, FSWatcher, watch as fsWatch } from 'node:fs'
 import {
+  type FileHandle,
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   realpath,
@@ -18,6 +20,7 @@ import {
   WorkspaceImageIngestInput,
   WorkspaceImageIngestResult
 } from '@shared/assets'
+import { WORKSPACE_SEARCH_MAX_FILE_BYTES } from '@shared/search'
 import {
   compareWorkspaceEntriesByRelativePath,
   filterTopLevelWorkspaceItems,
@@ -62,6 +65,16 @@ const INVALID_IMAGE_STEM_CHARS_RE = new RegExp(`${INVALID_ENTRY_NAME_RE.source}+
 const WINDOWS_RESERVED_IMAGE_STEM_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
 const DEFAULT_WATCH_DEBOUNCE_MS = 120
 const MAX_IMAGE_COLLISION_INDEX = 10000
+const DEFAULT_SEARCH_BINARY_PROBE_BYTES = 8 * 1024
+
+export interface ListWorkspaceFilesOptions {
+  filterFileName?: (fileName: string) => boolean
+  signal?: AbortSignal
+}
+
+export interface ReadTextFileForSearchOptions {
+  signal?: AbortSignal
+}
 
 function normalizeImageStem(rawStem: string): string {
   const cleaned = rawStem
@@ -230,17 +243,25 @@ export class WorkspaceFsService {
   }
 
   /**
-   * Recursively collects all workspace Markdown files (`.md` / `.markdown`), excluding ignored
-   * system directories, unsafe symlinks, and cyclic directory links.
+   * Recursively collects workspace files, excluding ignored system directories, unsafe symlinks,
+   * and cyclic directory links.
    */
-  async listMarkdownFiles(): Promise<WorkspaceEntry[]> {
+  async listWorkspaceFiles(options: ListWorkspaceFilesOptions = {}): Promise<WorkspaceEntry[]> {
     const root = this.requireWorkspaceRoot()
+    const { filterFileName, signal } = options
+    if (signal?.aborted) {
+      return []
+    }
+
     const visitedRealDirs = new Set<string>([getWorkspacePathKey(root)])
     const realDirQueue: string[] = [root]
     const symlinkDirQueue: string[] = []
     const entries: WorkspaceEntry[] = []
 
     const scanDir = async (dirPath: string): Promise<void> => {
+      if (signal?.aborted) {
+        return
+      }
       let dirents: Dirent[]
       try {
         dirents = await readdir(dirPath, { withFileTypes: true })
@@ -252,13 +273,16 @@ export class WorkspaceFsService {
       }
 
       for (const dirent of dirents) {
+        if (signal?.aborted) {
+          return
+        }
         if (IGNORED_ENTRY_NAMES.has(dirent.name)) {
           continue
         }
         const entryPath = join(dirPath, dirent.name)
         const kind = await this.resolveEntryKind(root, dirent, entryPath)
         if (kind === 'file') {
-          if (isMarkdownFileName(dirent.name)) {
+          if (!filterFileName || filterFileName(dirent.name)) {
             entries.push(buildEntry(root, entryPath, 'file'))
           }
           continue
@@ -275,6 +299,9 @@ export class WorkspaceFsService {
 
     const drainQueue = async (queue: string[]): Promise<void> => {
       while (queue.length > 0) {
+        if (signal?.aborted) {
+          return
+        }
         const nextDir = queue.shift()!
         if (nextDir !== root) {
           let realDirPath: string
@@ -296,7 +323,18 @@ export class WorkspaceFsService {
     await drainQueue(realDirQueue)
     await drainQueue(symlinkDirQueue)
 
+    if (signal?.aborted) {
+      return []
+    }
     return entries.sort(compareWorkspaceEntriesByRelativePath)
+  }
+
+  /**
+   * Recursively collects all workspace Markdown files (`.md` / `.markdown`), excluding ignored
+   * system directories, unsafe symlinks, and cyclic directory links.
+   */
+  listMarkdownFiles(): Promise<WorkspaceEntry[]> {
+    return this.listWorkspaceFiles({ filterFileName: isMarkdownFileName })
   }
 
   async readFile(filePath: string): Promise<string> {
@@ -306,6 +344,89 @@ export class WorkspaceFsService {
       throw new Error('파일이 아닙니다.')
     }
     return readFile(resolvedFile, 'utf8')
+  }
+
+  /**
+   * Safely reads a workspace UTF-8 text file for search, returning `null` if the file exceeds
+   * 2MB, contains a null byte in its leading 8KB window, is missing, or is aborted.
+   */
+  async readTextFileForSearch(
+    filePath: string,
+    options: ReadTextFileForSearchOptions = {}
+  ): Promise<string | null> {
+    const signal = options.signal
+
+    const { resolvedReal, exists } = await this.resolveRealWorkspaceTarget(filePath)
+    if (signal?.aborted || !exists) {
+      return null
+    }
+
+    let handle: FileHandle | undefined
+    try {
+      handle = await open(resolvedReal, 'r')
+      if (signal?.aborted) {
+        return null
+      }
+
+      const fileStats = await handle.stat()
+      if (!fileStats.isFile() || fileStats.size > WORKSPACE_SEARCH_MAX_FILE_BYTES) {
+        return null
+      }
+      if (fileStats.size === 0) {
+        return ''
+      }
+
+      const initialSize = Math.min(fileStats.size, DEFAULT_SEARCH_BINARY_PROBE_BYTES)
+      const probeBuffer = Buffer.allocUnsafe(initialSize)
+      let probeRead = 0
+      while (probeRead < initialSize) {
+        if (signal?.aborted) {
+          return null
+        }
+        const { bytesRead } = await handle.read(
+          probeBuffer,
+          probeRead,
+          initialSize - probeRead,
+          probeRead
+        )
+        if (bytesRead === 0) break
+        probeRead += bytesRead
+      }
+
+      const validProbe = probeBuffer.subarray(0, probeRead)
+      if (validProbe.includes(0)) {
+        return null
+      }
+      if (probeRead >= fileStats.size) {
+        return validProbe.toString('utf8')
+      }
+
+      const chunks: Buffer[] = [validProbe]
+      let totalRead = probeRead
+      while (totalRead <= WORKSPACE_SEARCH_MAX_FILE_BYTES) {
+        if (signal?.aborted) {
+          return null
+        }
+        const chunkSize = Math.min(64 * 1024, WORKSPACE_SEARCH_MAX_FILE_BYTES + 1 - totalRead)
+        const chunk = Buffer.allocUnsafe(chunkSize)
+        const { bytesRead } = await handle.read(chunk, 0, chunkSize, totalRead)
+        if (bytesRead === 0) break
+        totalRead += bytesRead
+        if (totalRead > WORKSPACE_SEARCH_MAX_FILE_BYTES) {
+          return null
+        }
+        chunks.push(chunk.subarray(0, bytesRead))
+      }
+
+      return Buffer.concat(chunks, totalRead).toString('utf8')
+    } catch (error) {
+      if (isMissingPathError(error) || isErrnoCode(error, 'EISDIR')) {
+        return null
+      }
+      throw error
+    } finally {
+      await handle?.close().catch(() => undefined)
+    }
   }
 
   async writeFile(filePath: string, content: string): Promise<void> {

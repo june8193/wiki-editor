@@ -16,6 +16,7 @@ import {
   WORKSPACE_STATE_IPC_CHANNELS
 } from '@shared/ipc'
 import type { RendererLogPayload } from '@shared/logging'
+import { DEFAULT_SEARCH_MATCH_OPTIONS } from '@shared/search'
 import type { ActiveTabDragSession } from '@shared/window'
 import { createWikiApi, IpcRendererLike } from './wikiApi'
 
@@ -123,6 +124,8 @@ describe('createWikiApi', () => {
     await api.workspace.focusIfOpen?.('C:\\wiki-other')
     await api.workspace.readDir('C:\\wiki\\docs')
     await api.workspace.listMarkdownFiles()
+    const searchRequest = { query: 'needle', options: DEFAULT_SEARCH_MATCH_OPTIONS }
+    await api.workspace.search?.(searchRequest)
     await api.workspace.readFile('C:\\wiki\\readme.md')
     await api.workspace.writeFile('C:\\wiki\\readme.md', '# Hi')
     await api.workspace.createEntry('C:\\wiki', 'note.md', 'file', '')
@@ -152,6 +155,7 @@ describe('createWikiApi', () => {
       WORKSPACE_IPC_CHANNELS.focusIfOpen,
       WORKSPACE_IPC_CHANNELS.readDir,
       WORKSPACE_IPC_CHANNELS.listMarkdownFiles,
+      WORKSPACE_IPC_CHANNELS.search,
       WORKSPACE_IPC_CHANNELS.readFile,
       WORKSPACE_IPC_CHANNELS.writeFile,
       WORKSPACE_IPC_CHANNELS.createEntry,

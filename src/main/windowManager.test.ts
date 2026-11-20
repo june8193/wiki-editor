@@ -42,6 +42,7 @@ import { WindowManager, type BrowserWindowLike } from './windowManager'
 import { WorkspaceFsService } from './workspace/WorkspaceFsService'
 import { WorkspaceStateService } from './workspace/WorkspaceStateService'
 import { TabDragCoordinator } from '@shared/tabDragSession'
+import { DEFAULT_SEARCH_MATCH_OPTIONS, type WorkspaceSearchResponse } from '@shared/search'
 
 interface FakeWindowInstance extends BrowserWindowLike {
   options: BrowserWindowConstructorOptions
@@ -2587,5 +2588,95 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       role: 'main',
       initialTabs: []
     })
+  })
+
+  it('isolates workspace:search IPC per main-window session, includes auxiliary dirty buffers, excludes config.json, and rejects unknown senders', async () => {
+    const main1 = manager.createMainWindow() as FakeWindowInstance
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
+    await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
+    const main2 = factory.createdWindows[1]
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+
+    const alphaDoc = join(wsAlpha, 'a.md')
+    const betaDoc = join(wsBeta, 'b.md')
+    await writeFile(alphaDoc, '# Alpha\nSHARED_DISK_TOKEN', 'utf8')
+    await writeFile(betaDoc, '# Beta\nBETA_ONLY_TOKEN', 'utf8')
+
+    // Open a.md in main1, detach to aux1, and make a dirty edit in aux1
+    const bufA = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      alphaDoc,
+      'a.md'
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key])
+    await ipc.invokeFrom(main1.webContents, WINDOW_IPC_CHANNELS.detachTabToNewWindow, {
+      bufferKey: bufA.key,
+      mode: 'raw',
+      cursor: { selectionStart: 0, selectionEnd: 0 },
+      scrollTop: 0
+    })
+    const aux1 = factory.createdWindows[2]
+    await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [bufA.key], {
+      releasePending: true
+    })
+    await ipc.invokeFrom(
+      aux1.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      bufA.key,
+      '# Alpha\nAUX1_UNSAVED_TOKEN'
+    )
+
+    // Open dirty config.json in Session 1 -> must NOT appear in Session 1 or Session 2 search
+    const configBuf1 = (await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.openConfigDocument
+    )) as DocumentBuffer
+    await ipc.invokeFrom(main1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [configBuf1.key])
+    await ipc.invokeFrom(
+      main1.webContents,
+      BUFFER_IPC_CHANNELS.updateContent,
+      configBuf1.key,
+      '{"secret":"AUX1_UNSAVED_TOKEN BETA_ONLY_TOKEN"}'
+    )
+
+    // Session 1 (main1 and aux1) sees aux1's unsaved buffer, NOT disk token or Session 2 files
+    const main1Search = await ipc.invokeFrom<WorkspaceSearchResponse>(
+      main1.webContents,
+      WORKSPACE_IPC_CHANNELS.search,
+      { query: 'AUX1_UNSAVED_TOKEN', options: DEFAULT_SEARCH_MATCH_OPTIONS }
+    )
+    expect(main1Search.files.map((f) => f.relativePath)).toEqual(['a.md'])
+    expect(main1Search.totalMatchCount).toBe(1)
+
+    const aux1Search = await ipc.invokeFrom<WorkspaceSearchResponse>(
+      aux1.webContents,
+      WORKSPACE_IPC_CHANNELS.search,
+      { query: 'SHARED_DISK_TOKEN', options: DEFAULT_SEARCH_MATCH_OPTIONS }
+    )
+    expect(aux1Search.files).toEqual([])
+
+    // Session 2 (main2) is isolated from Session 1 dirty buffers and sees only wsBeta
+    const main2CrossSearch = await ipc.invokeFrom<WorkspaceSearchResponse>(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.search,
+      { query: 'AUX1_UNSAVED_TOKEN', options: DEFAULT_SEARCH_MATCH_OPTIONS }
+    )
+    expect(main2CrossSearch.files).toEqual([])
+
+    const main2OwnSearch = await ipc.invokeFrom<WorkspaceSearchResponse>(
+      main2.webContents,
+      WORKSPACE_IPC_CHANNELS.search,
+      { query: 'BETA_ONLY_TOKEN', options: DEFAULT_SEARCH_MATCH_OPTIONS }
+    )
+    expect(main2OwnSearch.files.map((f) => f.relativePath)).toEqual(['b.md'])
+
+    // Unknown sender is rejected
+    await expect(
+      ipc.invokeFrom({ id: 99999, isDestroyed: () => false, send: () => undefined }, WORKSPACE_IPC_CHANNELS.search, {
+        query: 'BETA_ONLY_TOKEN',
+        options: DEFAULT_SEARCH_MATCH_OPTIONS
+      })
+    ).rejects.toThrow(/워크스페이스/)
   })
 })

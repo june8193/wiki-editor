@@ -1,5 +1,9 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef } from 'react'
+import { Search } from 'lucide-react'
+import type { Editor } from '@tiptap/core'
 import type { ThemeMode } from '@shared/config'
+import type { DocumentBuffer } from '@shared/documentBuffer'
+import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import {
   getRawEditorLanguage,
@@ -10,12 +14,16 @@ import {
 import { deriveDocumentTitle } from '../editor/mermaidExport'
 import { updateMermaidHeightMap } from '../editor/mermaidHeightSession'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
-import type { DocumentBuffer } from '@shared/documentBuffer'
 import type {
   DocumentOutlineSpyUpdate,
   HeadingScrollSpySample,
   OutlineScrollRequest
 } from '../editor/outlineScrollSpy'
+import {
+  type DocumentEditorFindControl,
+  useDocumentEditorFind
+} from '../hooks/useDocumentEditorFind'
+import { useDocumentSearchJump } from '../hooks/useDocumentSearchJump'
 import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
 import {
   DEFAULT_SPLIT_RATIO,
@@ -25,11 +33,14 @@ import {
   roundSplitRatio,
   TabViewPatch
 } from '../stores/PaneTabStore'
+import { DocumentFindBar } from './DocumentFindBar'
 import { ImagePreview } from './ImagePreview'
 import { MarkdownPreview } from './MarkdownPreview'
 import { RawMarkdownEditor } from './RawMarkdownEditor'
 import { SplitSplitter } from './SplitSplitter'
 import { WysiwygMarkdownEditor } from './WysiwygMarkdownEditor'
+
+export type { DocumentEditorFindControl }
 
 interface DocumentEditorProps {
   document: DocumentBuffer
@@ -38,9 +49,11 @@ interface DocumentEditorProps {
   autoSave: boolean
   mermaidRenderer?: MermaidRenderer
   scrollRequest?: OutlineScrollRequest | null
+  searchJumpRequest?: DocumentSearchJumpRequest | null
   isActive?: boolean
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
+  findControl?: DocumentEditorFindControl
   onChangeContent: (nextContent: string) => void
   onSave: () => void
   onUpdateViewState: (patch: TabViewPatch) => void
@@ -67,9 +80,11 @@ export function DocumentEditor({
   autoSave,
   mermaidRenderer,
   scrollRequest = null,
+  searchJumpRequest = null,
   isActive = true,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
+  findControl,
   onChangeContent,
   onSave,
   onUpdateViewState,
@@ -94,7 +109,10 @@ export function DocumentEditor({
         nonce: matchedScrollRequest.nonce
       }
     : null
+  const editorBodyRef = useRef<HTMLDivElement | null>(null)
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
+  const wysiwygEditorRef = useRef<Editor | null>(null)
+  const previewContainerRef = useRef<HTMLDivElement | null>(null)
   const {
     rawEditorViewRef,
     splitPreviewContainerRef,
@@ -105,6 +123,41 @@ export function DocumentEditor({
     matchedScrollRequest,
     onUpdateViewState
   })
+
+  const findDomRefs = useMemo(
+    () => ({
+      rawEditorViewRef,
+      wysiwygEditorRef,
+      previewContainerRef,
+      splitPreviewContainerRef,
+      editorBodyRef
+    }),
+    [editorBodyRef]
+  )
+
+  const docFind = useDocumentEditorFind({
+    content: activeDoc.content,
+    effectiveMode,
+    isImage,
+    findControl,
+    domRefs: findDomRefs
+  })
+
+  const docJump = useDocumentSearchJump({
+    tabId: tab.id,
+    documentKey: activeDoc.key,
+    effectiveMode,
+    isImage,
+    searchJumpRequest
+  })
+
+  const handleDocumentChangeContent = useCallback(
+    (nextContent: string): void => {
+      docJump.dismissJump()
+      onChangeContent(nextContent)
+    },
+    [docJump.dismissJump, onChangeContent]
+  )
 
   const handleSplitRatioChange = useCallback(
     (nextRatio: number): void => {
@@ -166,6 +219,7 @@ export function DocumentEditor({
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (isShortcutDisabled) return
+    if (docFind.handleEditorFindKeyDown(event)) return
 
     const shortcut = resolveEditorShortcut(event, effectiveMode, allowRichModes, isImage)
     if (!shortcut) return
@@ -209,9 +263,11 @@ export function DocumentEditor({
             ? { line: matchedScrollRequest.line, nonce: matchedScrollRequest.nonce }
             : null
         }
+        findHighlight={docFind.rawFindHighlight}
+        jumpHighlight={docJump.rawJumpHighlight}
         isActive={isActive}
         editorViewRef={rawEditorViewRef}
-        onChangeContent={onChangeContent}
+        onChangeContent={handleDocumentChangeContent}
         onUpdateViewState={onUpdateViewState}
         onActiveHeadingChange={
           effectiveMode === 'split'
@@ -273,6 +329,17 @@ export function DocumentEditor({
         </div>
 
         <div className="editor-header-actions">
+          <button
+            type="button"
+            className={`icon-btn editor-find-btn${docFind.isFindActive ? ' is-active' : ''}`}
+            aria-label="문서 내 찾기"
+            aria-pressed={docFind.isFindActive}
+            title="문서 내 찾기 (Ctrl+F)"
+            disabled={isImage}
+            onClick={docFind.handleHeaderToggle}
+          >
+            <Search size={14} strokeWidth={1.75} aria-hidden="true" />
+          </button>
           <span className="editor-save-status">{saveStatusText}</span>
           <button
             type="button"
@@ -286,100 +353,113 @@ export function DocumentEditor({
         </div>
       </div>
 
-      {isImage ? (
-        <ImagePreview
-          path={activeDoc.path}
-          name={activeDoc.name}
-          cacheKey={activeDoc.version > 1 ? activeDoc.version : undefined}
-        />
-      ) : (
-        <>
-          {effectiveMode === 'raw' && rawEditorElement}
+      <div ref={editorBodyRef} className="editor-body">
+        {docFind.findBarProps && <DocumentFindBar {...docFind.findBarProps} />}
 
-      {effectiveMode === 'wysiwyg' && (
-        <WysiwygMarkdownEditor
-          content={activeDoc.content}
-          scrollTop={tab.scrollTop}
-          theme={theme}
-          enableLinkAutocomplete={allowRichModes}
-          isShortcutDisabled={isShortcutDisabled}
-          workspaceMarkdownFiles={workspaceMarkdownFiles}
-          activeFilePath={activeFilePath}
-          documentTitle={documentTitle}
-          documentPath={documentPath}
-          enableImageInsertion={allowRichModes && Boolean(documentPath)}
-          mermaidRenderer={mermaidRenderer}
-          mermaidHeights={tab.mermaidHeights}
-          onMermaidHeightChange={handleMermaidHeightChange}
-          scrollRequest={
-            matchedScrollRequest
-              ? { index: matchedScrollRequest.index, nonce: matchedScrollRequest.nonce }
-              : null
-          }
-          isActive={isActive}
-          onChangeContent={onChangeContent}
-          onScrollTopChange={handleScrollTopChange}
-          onLinkNavigate={onNavigateLink}
-          onActiveHeadingChange={modeHeadingChangeHandlers?.wysiwyg}
-        />
-      )}
-
-      {effectiveMode === 'preview' && (
-        <MarkdownPreview
-          content={activeDoc.content}
-          scrollTop={tab.scrollTop}
-          theme={theme}
-          documentPath={documentPath}
-          mermaidRenderer={mermaidRenderer}
-          documentTitle={documentTitle}
-          mermaidHeights={tab.mermaidHeights}
-          onMermaidHeightChange={handleMermaidHeightChange}
-          scrollRequest={previewScrollRequest}
-          isActive={isActive}
-          onScrollTopChange={handleScrollTopChange}
-          onLinkNavigate={onNavigateLink}
-          onActiveHeadingChange={modeHeadingChangeHandlers?.preview}
-        />
-      )}
-      {effectiveMode === 'split' && (
-        <div
-          ref={splitContainerRef}
-          className="editor-split-container"
-          data-testid="editor-split-container"
-        >
-          <div className="editor-split-region is-raw" style={{ flex: `${rawRatio} 1 0%` }}>
-            {rawEditorElement}
-          </div>
-          <SplitSplitter
-            containerRef={splitContainerRef}
-            direction="horizontal"
-            ratio={rawRatio}
-            ariaLabel="에디터 분할 크기 조절"
-            onChangeRatio={handleSplitRatioChange}
-            allowReset
+        {isImage ? (
+          <ImagePreview
+            path={activeDoc.path}
+            name={activeDoc.name}
+            cacheKey={activeDoc.version > 1 ? activeDoc.version : undefined}
           />
-          <div className="editor-split-region is-preview" style={{ flex: `${previewRatio} 1 0%` }}>
-            <MarkdownPreview
-              scrollContainerRef={splitPreviewContainerRef}
-              content={activeDoc.content}
-              scrollTop={0}
-              theme={theme}
-              documentPath={documentPath}
-              mermaidRenderer={mermaidRenderer}
-              documentTitle={documentTitle}
-              mermaidHeights={tab.mermaidHeights}
-              onMermaidHeightChange={handleMermaidHeightChange}
-              scrollRequest={previewScrollRequest}
-              isActive={isActive}
-              onScrollTopChange={handleSplitPreviewScroll}
-              onLinkNavigate={onNavigateLink}
-              testId="split-markdown-preview"
-            />
-          </div>
-        </div>
-      )}
-        </>
-      )}
+        ) : (
+          <>
+            {effectiveMode === 'raw' && rawEditorElement}
+
+            {effectiveMode === 'wysiwyg' && (
+              <WysiwygMarkdownEditor
+                content={activeDoc.content}
+                scrollTop={tab.scrollTop}
+                theme={theme}
+                enableLinkAutocomplete={allowRichModes}
+                isShortcutDisabled={isShortcutDisabled}
+                workspaceMarkdownFiles={workspaceMarkdownFiles}
+                activeFilePath={activeFilePath}
+                documentTitle={documentTitle}
+                documentPath={documentPath}
+                enableImageInsertion={allowRichModes && Boolean(documentPath)}
+                mermaidRenderer={mermaidRenderer}
+                mermaidHeights={tab.mermaidHeights}
+                onMermaidHeightChange={handleMermaidHeightChange}
+                scrollRequest={
+                  matchedScrollRequest
+                    ? { index: matchedScrollRequest.index, nonce: matchedScrollRequest.nonce }
+                    : null
+                }
+                findHighlight={docFind.wysiwygFindHighlight}
+                jumpHighlight={docJump.wysiwygJumpHighlight}
+                editorRef={wysiwygEditorRef}
+                isActive={isActive}
+                onChangeContent={handleDocumentChangeContent}
+                onScrollTopChange={handleScrollTopChange}
+                onLinkNavigate={onNavigateLink}
+                onActiveHeadingChange={modeHeadingChangeHandlers?.wysiwyg}
+                onFindResultChange={docFind.handleWysiwygFindResultChange}
+              />
+            )}
+
+            {effectiveMode === 'preview' && (
+              <MarkdownPreview
+                scrollContainerRef={previewContainerRef}
+                content={activeDoc.content}
+                scrollTop={tab.scrollTop}
+                theme={theme}
+                documentPath={documentPath}
+                mermaidRenderer={mermaidRenderer}
+                documentTitle={documentTitle}
+                mermaidHeights={tab.mermaidHeights}
+                onMermaidHeightChange={handleMermaidHeightChange}
+                scrollRequest={previewScrollRequest}
+                findHighlight={docFind.previewFindHighlight}
+                jumpHighlight={docJump.previewJumpHighlight}
+                isActive={isActive}
+                onScrollTopChange={handleScrollTopChange}
+                onLinkNavigate={onNavigateLink}
+                onActiveHeadingChange={modeHeadingChangeHandlers?.preview}
+              />
+            )}
+            {effectiveMode === 'split' && (
+              <div
+                ref={splitContainerRef}
+                className="editor-split-container"
+                data-testid="editor-split-container"
+              >
+                <div className="editor-split-region is-raw" style={{ flex: `${rawRatio} 1 0%` }}>
+                  {rawEditorElement}
+                </div>
+                <SplitSplitter
+                  containerRef={splitContainerRef}
+                  direction="horizontal"
+                  ratio={rawRatio}
+                  ariaLabel="에디터 분할 크기 조절"
+                  onChangeRatio={handleSplitRatioChange}
+                  allowReset
+                />
+                <div className="editor-split-region is-preview" style={{ flex: `${previewRatio} 1 0%` }}>
+                  <MarkdownPreview
+                    scrollContainerRef={splitPreviewContainerRef}
+                    content={activeDoc.content}
+                    scrollTop={0}
+                    theme={theme}
+                    documentPath={documentPath}
+                    mermaidRenderer={mermaidRenderer}
+                    documentTitle={documentTitle}
+                    mermaidHeights={tab.mermaidHeights}
+                    onMermaidHeightChange={handleMermaidHeightChange}
+                    scrollRequest={previewScrollRequest}
+                    findHighlight={docFind.previewFindHighlight}
+                    jumpHighlight={docJump.previewJumpHighlight}
+                    isActive={isActive}
+                    onScrollTopChange={handleSplitPreviewScroll}
+                    onLinkNavigate={onNavigateLink}
+                    testId="split-markdown-preview"
+                  />
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </section>
   )
 }

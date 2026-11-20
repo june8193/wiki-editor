@@ -1,6 +1,15 @@
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
+import {
+  applyFindScrollNonce,
+  type DocumentFindHighlightQuery,
+  scrollMatchElementIntoView
+} from '../editor/documentFind'
 import { renderMarkdownToReact } from '../editor/markdownPreview'
+import {
+  findClosestPreviewBlockForLine,
+  type PreviewJumpHighlightQuery
+} from '../editor/previewSearchHighlight'
 import {
   type MermaidHeightChangeHandler,
   MermaidHeightSessionProvider
@@ -26,6 +35,8 @@ interface MarkdownPreviewProps {
   mermaidHeights?: MermaidDiagramHeightMap
   onMermaidHeightChange?: MermaidHeightChangeHandler
   scrollRequest?: PreviewScrollRequest | null
+  findHighlight?: DocumentFindHighlightQuery | null
+  jumpHighlight?: PreviewJumpHighlightQuery | null
   isActive?: boolean
   scrollContainerRef?: { current: HTMLDivElement | null }
   testId?: string
@@ -50,6 +61,8 @@ export function MarkdownPreview({
   mermaidHeights,
   onMermaidHeightChange,
   scrollRequest,
+  findHighlight = null,
+  jumpHighlight = null,
   isActive = true,
   scrollContainerRef,
   testId = 'document-editor',
@@ -58,6 +71,8 @@ export function MarkdownPreview({
   onLinkNavigate
 }: MarkdownPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const lastScrolledFindNonceRef = useRef(findHighlight?.scrollNonce ?? 0)
+  const lastHandledJumpNonceRef = useRef(0)
 
   const scrollToHeading = useCallback((slug?: string, index?: number): void => {
     const container = containerRef.current
@@ -102,10 +117,79 @@ export function MarkdownPreview({
         documentPath,
         mermaidRenderer,
         documentTitle,
+        findHighlight,
+        jumpHighlight,
         onAnchorNavigate: onLinkNavigate ? undefined : handleAnchorNavigate,
         onLinkNavigate
       }),
-    [content, documentPath, documentTitle, handleAnchorNavigate, mermaidRenderer, onLinkNavigate, theme]
+    [
+      content,
+      documentPath,
+      documentTitle,
+      findHighlight,
+      handleAnchorNavigate,
+      jumpHighlight,
+      mermaidRenderer,
+      onLinkNavigate,
+      theme
+    ]
+  )
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container || !findHighlight?.isActive) {
+      return
+    }
+    applyFindScrollNonce(lastScrolledFindNonceRef, findHighlight.scrollNonce, {
+      skipScroll: findHighlight.activeIndex < 0,
+      performScroll: () => {
+        const activeEl = container.querySelector(
+          `[data-search-match-index="${findHighlight.activeIndex}"]`
+        )
+        if (!activeEl) {
+          return false
+        }
+        scrollMatchElementIntoView(activeEl, container)
+        return true
+      }
+    })
+  }, [content, findHighlight])
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container || !jumpHighlight || jumpHighlight.suppressScroll) {
+      return
+    }
+    applyFindScrollNonce(lastHandledJumpNonceRef, jumpHighlight.nonce, {
+      skipScroll: false,
+      performScroll: () => {
+        const jumpEl = container.querySelector('[data-search-jump="true"]')
+        if (jumpEl) {
+          scrollMatchElementIntoView(jumpEl, container)
+          return true
+        }
+        const fallbackEl = findClosestPreviewBlockForLine(
+          container,
+          content,
+          jumpHighlight.lineNumber,
+          jumpHighlight
+        )
+        if (fallbackEl) {
+          scrollMatchElementIntoView(fallbackEl, container)
+        }
+        return true
+      }
+    })
+  }, [content, jumpHighlight])
+
+  const setPreviewContainerRef = useCallback(
+    (el: HTMLDivElement | null): void => {
+      containerRef.current = el
+      if (scrollContainerRef) {
+        scrollContainerRef.current = el
+      }
+    },
+    [scrollContainerRef]
   )
 
   return (
@@ -114,12 +198,7 @@ export function MarkdownPreview({
       onMermaidHeightChange={onMermaidHeightChange}
     >
       <div
-        ref={(el) => {
-          containerRef.current = el
-          if (scrollContainerRef) {
-            scrollContainerRef.current = el
-          }
-        }}
+        ref={setPreviewContainerRef}
         className="markdown-preview"
         data-testid={testId}
         aria-label="마크다운 미리보기"

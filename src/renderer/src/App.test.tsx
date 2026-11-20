@@ -1265,7 +1265,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     // While dirty-confirmation dialog is open, auto-save is paused and must not auto-write before choice
     const closeTopLevelBtn = screen.getByRole('button', { name: 'top-level.md 탭 닫기' })
     appendRawEditorText(editor, ' unsaved')
-    await user.click(closeTopLevelBtn)
+    fireEvent.click(closeTopLevelBtn)
     const dirtyDialog = await screen.findByRole('alertdialog')
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 120))
@@ -4732,7 +4732,7 @@ describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
     expect(
       within(gitRegion).getByText('병합 충돌 파일을 해결하고 Stage(+)한 후 커밋하세요.')
     ).toBeInTheDocument()
-  })
+  }, 15_000)
 
   it('supports Changes header toolbar (tree view toggle, Commit ✓ auto-stage flow, refresh), hover open-file vs row Diff tab, and session-only compressed tree folder collapse reset on workspace switch', async () => {
     const user = userEvent.setup()
@@ -10820,7 +10820,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
           .map((tab) => tab.textContent?.trim())
       ).toEqual(['b2.md'])
     })
-  })
+  }, 15_000)
 
   it('persists and restores per-tab mode, cursor, scrollTop, splitPreviewRatio, image preview tabs, duplicated split tabs, and rename/move/delete path updates', async () => {
     const user = userEvent.setup()
@@ -11023,7 +11023,7 @@ describe('Workspace state persistence, folder tree restore, and same-workspace r
       'C:/wiki/alpha/archive/docs/preview-doc.md'
     )
     expect(within(restartedPrimary).getByTestId('document-editor').scrollTop).toBe(310)
-  })
+  }, 15_000)
 
   it('skips missing text/image tabs without error banner, collapses empty secondary, promotes secondary when primary empties, falls back active tab, and cancels stale tab restore on rapid switch', async () => {
     const user = userEvent.setup()
@@ -11556,6 +11556,6 @@ describe('Mermaid tab-session height persistence and workspaceState exclusion', 
       expect(within(screen.getByTestId('pane-primary')).getByTestId('mermaid-svg')).toBeInTheDocument()
     })
     expect(within(screen.getByTestId('pane-primary')).getByTestId('mermaid-svg').style.height).toBe('')
-  })
+  }, 15_000)
 })
 

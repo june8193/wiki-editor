@@ -12,6 +12,7 @@ import {
   WORKSPACE_IPC_CHANNELS,
   WORKSPACE_STATE_IPC_CHANNELS
 } from '@shared/ipc'
+import type { WorkspaceSearchRequest, WorkspaceSearchResponse } from '@shared/search'
 import type { LogService } from '../logging/LogService'
 
 export interface IpcMainLike {
@@ -38,6 +39,17 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
     filePath,
     contentLength: typeof content === 'string' ? content.length : 0
   }),
+  [WORKSPACE_IPC_CHANNELS.search]: ([request]) => {
+    const req =
+      request && typeof request === 'object' ? (request as Partial<WorkspaceSearchRequest>) : {}
+    const opts = req.options && typeof req.options === 'object' ? req.options : undefined
+    return {
+      queryLength: typeof req.query === 'string' ? req.query.length : 0,
+      caseSensitive: Boolean(opts?.caseSensitive),
+      wholeWord: Boolean(opts?.wholeWord),
+      useRegex: Boolean(opts?.useRegex)
+    }
+  },
   [WORKSPACE_IPC_CHANNELS.createEntry]: ([parentDirPath, name, kind, initialContent]) => ({
     parentDirPath,
     name,
@@ -144,6 +156,16 @@ const CHANNEL_RESULT_METADATA_EXTRACTORS: Record<
   [DIAGRAM_IPC_CHANNELS.saveFile]: (result) => {
     const res = result as Partial<DiagramSaveResult> | undefined
     return typeof res?.canceled === 'boolean' ? { canceled: res.canceled } : {}
+  },
+  [WORKSPACE_IPC_CHANNELS.search]: (result) => {
+    const res =
+      result && typeof result === 'object' ? (result as Partial<WorkspaceSearchResponse>) : {}
+    return {
+      totalFileCount: typeof res.totalFileCount === 'number' ? res.totalFileCount : 0,
+      totalMatchCount: typeof res.totalMatchCount === 'number' ? res.totalMatchCount : 0,
+      truncated: Boolean(res.truncated),
+      hasError: typeof res.error === 'string' && res.error.length > 0
+    }
   }
 }
 

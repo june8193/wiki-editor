@@ -16,6 +16,21 @@ import {
 } from '@shared/config'
 import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import { createEmptyGitStatus } from '@shared/git'
+import {
+  commitSearchCandidateSlot,
+  compareWorkspaceSearchFileResults,
+  compileSearchMatcher,
+  DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE,
+  DEFAULT_WORKSPACE_SEARCH_MAX_TOTAL_MATCHES,
+  emptyWorkspaceSearchResponse,
+  isExcludedSearchFileName,
+  normalizeWorkspaceSearchLimit,
+  scanSearchTextContent,
+  WORKSPACE_SEARCH_MAX_FILE_BYTES,
+  type WorkspaceSearchAccumulator,
+  type WorkspaceSearchRequest,
+  type WorkspaceSearchResponse
+} from '@shared/search'
 import type {
   AppMenuCommand,
   WikiApi,
@@ -73,6 +88,15 @@ import {
   type WorkspaceEntryKind,
   type WorkspaceMovedEntry
 } from '@shared/workspace'
+
+const IGNORED_WORKSPACE_SEGMENTS = new Set([
+  '.git',
+  'node_modules',
+  '.hg',
+  '.svn',
+  '.DS_Store',
+  'Thumbs.db'
+])
 
 export interface VirtualFsOptions {
   workspaces?: Record<string, Record<string, string | null>>
@@ -295,6 +319,7 @@ interface HarnessSession {
   unsubscribeCoordinatorHub: () => void
   primaryApi: WikiApi | null
   activeRoot: string | null
+  searchSeq: number
   pendingInitialWorkspacePath: string | null
   workspaceListeners: Set<(event: WorkspaceChangeEvent) => void>
   dragListenersByWindow: Map<number, Set<(session: ActiveTabDragSession | null) => void>>
@@ -392,6 +417,7 @@ export function createMultiWindowWikiHarness(
       unsubscribeCoordinatorHub: () => undefined,
       primaryApi: null,
       activeRoot: null,
+      searchSeq: 0,
       pendingInitialWorkspacePath: null,
       workspaceListeners: new Set(),
       dragListenersByWindow,
@@ -850,19 +876,11 @@ export function createMultiWindowWikiHarness(
         async listMarkdownFiles() {
           if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
           const prefix = `${session.activeRoot}/`
-          const ignoredSegments = new Set([
-            '.git',
-            'node_modules',
-            '.hg',
-            '.svn',
-            '.DS_Store',
-            'Thumbs.db'
-          ])
           const markdownEntries: WorkspaceEntry[] = []
           for (const file of files.keys()) {
             if (!file.startsWith(prefix)) continue
             const relativePath = file.slice(prefix.length)
-            if (relativePath.split('/').some((seg) => ignoredSegments.has(seg))) continue
+            if (relativePath.split('/').some((seg) => IGNORED_WORKSPACE_SEGMENTS.has(seg))) continue
             const name = baseNameOf(file)
             if (!isMarkdownFileName(name)) continue
             markdownEntries.push({
@@ -873,6 +891,95 @@ export function createMultiWindowWikiHarness(
             })
           }
           return markdownEntries.sort(compareWorkspaceEntriesByRelativePath)
+        },
+        async search(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse> {
+          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+          const capturedRoot = session.activeRoot
+          const seq = ++session.searchSeq
+          const query = typeof request?.query === 'string' ? request.query : ''
+          if (query.length === 0) {
+            return emptyWorkspaceSearchResponse(query)
+          }
+
+          const compiled = compileSearchMatcher(query, request?.options)
+          if (!compiled.ok) {
+            return emptyWorkspaceSearchResponse(query, compiled.error)
+          }
+
+          const maxTotalMatches = normalizeWorkspaceSearchLimit(
+            request?.maxTotalMatches,
+            DEFAULT_WORKSPACE_SEARCH_MAX_TOTAL_MATCHES
+          )
+          const maxMatchesPerFile = normalizeWorkspaceSearchLimit(
+            request?.maxMatchesPerFile,
+            DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE
+          )
+
+          const openBuffersByKey = new Map<string, string>()
+          for (const buffer of Object.values(session.hub.getSnapshot().buffers)) {
+            if (buffer.kind !== 'workspace' || buffer.contentKind !== 'text') continue
+            const key = getWorkspacePathKey(buffer.path)
+            if (key) {
+              openBuffersByKey.set(key, buffer.content)
+            }
+          }
+
+          const prefix = `${capturedRoot}/`
+          const candidates = [...files.entries()]
+            .filter(([filePath]) => {
+              if (!filePath.startsWith(prefix)) return false
+              const rel = filePath.slice(prefix.length)
+              if (rel.split('/').some((seg) => IGNORED_WORKSPACE_SEGMENTS.has(seg))) return false
+              return !isExcludedSearchFileName(baseNameOf(filePath))
+            })
+            .map(([filePath, diskContent]) => {
+              const relativePath = filePath.slice(prefix.length)
+              return {
+                path: filePath,
+                relativePath,
+                name: baseNameOf(filePath),
+                pathKey: getWorkspacePathKey(filePath),
+                diskContent,
+                nameMatches: compiled.matcher.findMatches(relativePath)
+              }
+            })
+            .sort(compareWorkspaceSearchFileResults)
+
+          const accumulator: WorkspaceSearchAccumulator = {
+            files: [],
+            committedMatchCount: 0,
+            truncated: false,
+            stopBodyScanning: false,
+            maxTotalMatches
+          }
+
+          for (const candidate of candidates) {
+            if (seq !== session.searchSeq || session.activeRoot !== capturedRoot) {
+              return emptyWorkspaceSearchResponse(query)
+            }
+            if (accumulator.stopBodyScanning && candidate.nameMatches.length === 0) {
+              break
+            }
+            const text = openBuffersByKey.get(candidate.pathKey) ?? candidate.diskContent
+            if (text.includes('\0') || text.length > WORKSPACE_SEARCH_MAX_FILE_BYTES) {
+              continue
+            }
+            const scanned = scanSearchTextContent(
+              text,
+              compiled.matcher,
+              accumulator.stopBodyScanning ? 0 : maxMatchesPerFile
+            )
+            if (!scanned) continue
+            commitSearchCandidateSlot(accumulator, candidate, scanned)
+          }
+
+          return {
+            query,
+            files: accumulator.files,
+            totalFileCount: accumulator.files.length,
+            totalMatchCount: accumulator.committedMatchCount,
+            truncated: accumulator.truncated
+          }
         },
         async readFile(filePath) {
           const normalized = normalizePosix(filePath)

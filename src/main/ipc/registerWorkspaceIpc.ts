@@ -1,5 +1,7 @@
 import type { WorkspaceImageIngestInput } from '@shared/assets'
 import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
+import type { WorkspaceSearchRequest } from '@shared/search'
+import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import type {
   ActivateOrOpenWorkspaceResult,
   FocusOpenWorkspaceResult,
@@ -10,6 +12,7 @@ import type {
 import { ConfigService } from '../config/ConfigService'
 import type { LogService } from '../logging/LogService'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
+import { WorkspaceSearchService } from '../workspace/WorkspaceSearchService'
 import {
   broadcastIpcEvent,
   IpcHandlerTuple,
@@ -21,6 +24,7 @@ import {
 
 export interface WorkspaceIpcSession {
   workspaceService: WorkspaceFsService
+  searchService: WorkspaceSearchService
   getTargets: () => WebContentsLike[]
   isMainWindow: (sender: WebContentsLike | undefined) => boolean
 }
@@ -52,6 +56,7 @@ export interface RegisterWorkspaceIpcOptions {
   selectDirectory: (sender?: WebContentsLike) => Promise<string | null>
   coordinator?: WorkspaceIpcCoordinator
   workspaceService?: WorkspaceFsService
+  bufferHub?: SharedDocumentBufferHub
   getTargets?: () => WebContentsLike[]
   isMainWindowSender?: (sender: WebContentsLike | undefined) => boolean
   logService?: LogService
@@ -63,6 +68,7 @@ export interface RegisterWorkspaceIpcOptions {
 export function registerWorkspaceIpc({
   ipcMain,
   workspaceService,
+  bufferHub,
   configService,
   selectDirectory,
   coordinator,
@@ -70,6 +76,9 @@ export function registerWorkspaceIpc({
   isMainWindowSender = () => true,
   logService
 }: RegisterWorkspaceIpcOptions): () => void {
+  const watchersByService = new Map<WorkspaceFsService, () => void>()
+  let ownedSearchService: WorkspaceSearchService | undefined
+
   let activeCoordinator: WorkspaceIpcCoordinator
   if (coordinator) {
     activeCoordinator = coordinator
@@ -79,8 +88,13 @@ export function registerWorkspaceIpc({
         'registerWorkspaceIpc requires either coordinator or workspaceService and getTargets'
       )
     }
+    ownedSearchService = new WorkspaceSearchService({
+      workspaceService,
+      getOpenBuffers: bufferHub ? () => Object.values(bufferHub.getSnapshot().buffers) : () => []
+    })
     const singleSession: WorkspaceIpcSession = {
       workspaceService,
+      searchService: ownedSearchService,
       getTargets,
       isMainWindow: isMainWindowSender
     }
@@ -88,8 +102,6 @@ export function registerWorkspaceIpc({
       resolveSession: () => singleSession
     }
   }
-
-  const watchersByService = new Map<WorkspaceFsService, () => void>()
 
   const clearWatcher = (targetService: WorkspaceFsService): void => {
     watchersByService.get(targetService)?.()
@@ -145,6 +157,14 @@ export function registerWorkspaceIpc({
     await configService.recordRecentWorkspace(info.rootPath)
   }
 
+  const openWorkspaceInFallbackSession = async (
+    session: WorkspaceIpcSession,
+    rootPath: string
+  ): Promise<WorkspaceInfo> => {
+    session.searchService.cancelActiveSearch()
+    return session.workspaceService.openWorkspace(rootPath)
+  }
+
   const handlers: readonly IpcHandlerTuple[] = [
     [WORKSPACE_IPC_CHANNELS.selectFolder, (event) => selectDirectory(resolveSenderWebContents(event))],
     [
@@ -153,7 +173,7 @@ export function registerWorkspaceIpc({
         const { sender, session } = requireMainSession(event)
         const info = activeCoordinator.openWorkspaceInSession
           ? await activeCoordinator.openWorkspaceInSession(sender, rootPath as string)
-          : await session.workspaceService.openWorkspace(rootPath as string)
+          : await openWorkspaceInFallbackSession(session, rootPath as string)
         await finalizeOpenedWorkspace(session, info)
         return info
       }
@@ -166,7 +186,7 @@ export function registerWorkspaceIpc({
           ? await activeCoordinator.activateOrOpenWorkspace(sender, rootPath as string)
           : {
               status: 'opened',
-              info: await session.workspaceService.openWorkspace(rootPath as string)
+              info: await openWorkspaceInFallbackSession(session, rootPath as string)
             }
         if (result.status === 'opened') {
           await finalizeOpenedWorkspace(session, result.info)
@@ -200,6 +220,11 @@ export function registerWorkspaceIpc({
     [
       WORKSPACE_IPC_CHANNELS.listMarkdownFiles,
       (event) => requireSession(event).workspaceService.listMarkdownFiles()
+    ],
+    [
+      WORKSPACE_IPC_CHANNELS.search,
+      (event, request) =>
+        requireSession(event).searchService.search(request as WorkspaceSearchRequest)
     ],
     [
       WORKSPACE_IPC_CHANNELS.readFile,
@@ -279,6 +304,7 @@ export function registerWorkspaceIpc({
   return () => {
     unsubscribeSessionDisposed?.()
     clearAllWatchers()
+    ownedSearchService?.dispose()
     removeHandlers()
   }
 }
