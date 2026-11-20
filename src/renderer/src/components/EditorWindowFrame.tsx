@@ -3,27 +3,37 @@ import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
+import { isImageDocument, isMarkdownDocument } from '../editor/editorModes'
 import type { ConfirmDialogState } from '../hooks/useConfirmDialog'
 import { useDocumentOutline } from '../hooks/useDocumentOutline'
 import {
   ImageTransferContext,
   type ImageTransferContextValue
 } from '../hooks/useEditorImageTransfer'
+import { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
 import {
   useMarkdownLinkNavigation,
   type UseMarkdownLinkNavigationOptions
 } from '../hooks/useMarkdownLinkNavigation'
 import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
+import { getPaneActiveTab } from '../stores/PaneTabStore'
+import {
+  createDefaultRightSidebarSplitState,
+  toggleRightSidebarOutlineCollapsed,
+  toggleRightSidebarPropertiesCollapsed,
+  updateRightSidebarOutlineRatio,
+  type RightSidebarSplitState
+} from '../utils/rightSidebarSplit'
 import {
   clampSidebarWidth,
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
   RIGHT_SIDEBAR_WIDTH_BOUNDS
 } from '../utils/sidebarWidth'
 import { ConfirmDialog } from './ConfirmDialog'
-import { DocumentOutlinePanel } from './DocumentOutlinePanel'
 import type { GitDiffContentState } from './GitDiffViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneWorkspace, type PaneWorkspaceProps } from './PaneWorkspace'
+import { RightSidebarPanel } from './RightSidebarPanel'
 import { SidebarResizer } from './SidebarResizer'
 
 const DEFAULT_IMAGE_TRANSFER_CONTEXT: ImageTransferContextValue = {}
@@ -110,6 +120,9 @@ export function EditorWindowFrame({
     isCollapsed: initialRightSidebarCollapsed,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
   }))
+  const [rightSidebarSplit, setRightSidebarSplit] = useState<RightSidebarSplitState>(
+    createDefaultRightSidebarSplitState
+  )
   const localShellRef = useRef<HTMLDivElement | null>(null)
   const setMergedShellRef = useCallback(
     (node: HTMLDivElement | null): void => {
@@ -137,6 +150,23 @@ export function EditorWindowFrame({
       prev.width === clampedWidth ? prev : { ...prev, width: clampedWidth }
     )
   }, [])
+
+  const handleToggleOutlineCollapsed = useCallback((): void => {
+    setRightSidebarSplit(toggleRightSidebarOutlineCollapsed)
+  }, [])
+
+  const handleTogglePropertiesCollapsed = useCallback((): void => {
+    setRightSidebarSplit(toggleRightSidebarPropertiesCollapsed)
+  }, [])
+
+  const handleResizeOutlineRatio = useCallback((nextRatio: number): void => {
+    setRightSidebarSplit((prev) => updateRightSidebarOutlineRatio(prev, nextRatio))
+  }, [])
+
+  const { schemaResult, isSchemaLoading, createDefaultSchema } = useFrontmatterSchema({
+    workspaceRootPath,
+    onError: reportErrorBanner
+  })
 
   const paneFind = usePaneDocumentFind({
     layout: paneWorkspaceProps.layout,
@@ -167,6 +197,24 @@ export function EditorWindowFrame({
       onNavigateLink: handleNavigateMarkdownLink
     }),
     [handleNavigateMarkdownLink, outline.paneActions]
+  )
+
+  const activePane = paneWorkspaceProps.layout.panes[paneWorkspaceProps.layout.activePaneId]
+  const activeTab = getPaneActiveTab(activePane)
+  const activeBuffer =
+    activeTab?.kind === 'document' ? paneWorkspaceProps.buffers[activeTab.bufferKey] : undefined
+  const isDiffTab = activeTab?.kind === 'diff'
+  const isActiveImage = activeBuffer ? isImageDocument(activeBuffer) : false
+  const isActiveMarkdown = activeBuffer ? isMarkdownDocument(activeBuffer) : false
+  const activeBufferKey = activeBuffer?.key ?? null
+  const onOutlinePaneChangeContent = outline.paneActions.onChangeContent
+
+  const handlePropertiesChangeContent = useCallback(
+    (nextContent: string): void => {
+      if (!activeBufferKey) return
+      onOutlinePaneChangeContent(activeBufferKey, nextContent)
+    },
+    [activeBufferKey, onOutlinePaneChangeContent]
   )
 
   return (
@@ -207,11 +255,29 @@ export function EditorWindowFrame({
               aria-label="우측 사이드바"
               style={{ width: `${rightSidebar.width}px` }}
             >
-              <DocumentOutlinePanel
-                {...outline.documentOutlineProps}
-                showHeadingNumbers={showHeadingNumbers}
-                onToggleHeadingNumbers={onToggleHeadingNumbers}
-                onCollapse={handleCollapseRightSidebar}
+              <RightSidebarPanel
+                splitState={rightSidebarSplit}
+                onToggleOutlineCollapsed={handleToggleOutlineCollapsed}
+                onTogglePropertiesCollapsed={handleTogglePropertiesCollapsed}
+                onResizeOutlineRatio={handleResizeOutlineRatio}
+                outlineProps={{
+                  ...outline.documentOutlineProps,
+                  showHeadingNumbers,
+                  onToggleHeadingNumbers,
+                  onCollapse: handleCollapseRightSidebar
+                }}
+                propertiesProps={{
+                  documentName: outline.documentOutlineProps.documentName,
+                  documentKey: activeBufferKey,
+                  content: outline.documentOutlineProps.content,
+                  isMarkdownDocument: isActiveMarkdown,
+                  isDiffTab,
+                  isImageDocument: isActiveImage,
+                  schemaResult,
+                  isSchemaLoading,
+                  onChangeContent: handlePropertiesChangeContent,
+                  onCreateDefaultSchema: createDefaultSchema
+                }}
               />
             </aside>
           </>

@@ -5,15 +5,12 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type CSSProperties,
   type FormEvent,
-  type KeyboardEvent,
-  type ReactNode
+  type KeyboardEvent
 } from 'react'
 import {
   Check,
   ChevronDown,
-  ChevronRight,
   CloudUpload,
   GitBranch,
   MoreHorizontal,
@@ -42,6 +39,7 @@ import {
 import { GitChangesFileGroups, GitChangesHeaderActions } from './GitChangesSection'
 import { GitGraphHeaderActions, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
+import { SidebarAccordionSection } from './SidebarAccordionSection'
 
 const COMMIT_INPUT_MAX_HEIGHT_PX = 120
 
@@ -118,10 +116,6 @@ function useMenuPopover(isDisabled: boolean, resetKey: string | null) {
   return { isOpen, setIsOpen, close, containerRef, triggerRef }
 }
 
-function getSectionFlexStyle(flexRatio: number | null): CSSProperties | undefined {
-  return flexRatio !== null ? { flex: `${flexRatio} 1 0%` } : undefined
-}
-
 interface GitCommonBannersProps {
   pendingAction: string | null
   errorMessage: string | null
@@ -151,55 +145,6 @@ function GitCommonBanners({ pendingAction, errorMessage, onDismissError }: GitCo
         </div>
       )}
     </>
-  )
-}
-
-interface GitAccordionSectionProps {
-  title: string
-  badgeCount?: number
-  headerActions?: ReactNode
-  isExpanded: boolean
-  flexRatio: number | null
-  onToggle: () => void
-  children: ReactNode
-}
-
-function GitAccordionSection({
-  title,
-  badgeCount,
-  headerActions,
-  isExpanded,
-  flexRatio,
-  onToggle,
-  children
-}: GitAccordionSectionProps) {
-  return (
-    <section
-      className={`git-accordion-section${isExpanded ? '' : ' is-collapsed'}`}
-      aria-label={title}
-      style={getSectionFlexStyle(flexRatio)}
-    >
-      <div className="git-accordion-header">
-        <button
-          type="button"
-          className="git-accordion-toggle"
-          aria-expanded={isExpanded}
-          onClick={onToggle}
-        >
-          <span className="git-accordion-chevron" aria-hidden="true">
-            {isExpanded ? (
-              <ChevronDown size={13} strokeWidth={1.75} />
-            ) : (
-              <ChevronRight size={13} strokeWidth={1.75} />
-            )}
-          </span>
-          <span className="git-accordion-title">{title}</span>
-          {badgeCount !== undefined && <span className="git-accordion-badge">{badgeCount}</span>}
-        </button>
-        {headerActions}
-      </div>
-      {isExpanded && <div className="git-accordion-body">{children}</div>}
-    </section>
   )
 }
 
@@ -784,9 +729,9 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
           )}
 
           <div ref={splitContainerRef} className="git-split-container">
-            <GitAccordionSection
+            <SidebarAccordionSection
               title="Changes"
-              badgeCount={totalChangedCount}
+              badge={<span className="git-accordion-badge">{totalChangedCount}</span>}
               headerActions={
                 <GitChangesHeaderActions
                   viewMode={changesViewState.viewMode}
@@ -799,6 +744,12 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
               }
               isExpanded={layout.showChangesBody}
               flexRatio={layout.changesFlexRatio}
+              sectionClassName="git-accordion-section"
+              headerClassName="git-accordion-header"
+              toggleClassName="git-accordion-toggle"
+              chevronClassName="git-accordion-chevron"
+              titleClassName="git-accordion-title"
+              bodyClassName="git-accordion-body"
               onToggle={onToggleChangesCollapsed}
             >
               <GitCommitForm
@@ -829,7 +780,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 onUnstageFile={(file) => onUnstageFile(file.path, file.origPath)}
                 onDiscardFile={(file) => onDiscardFile(file.path)}
               />
-            </GitAccordionSection>
+            </SidebarAccordionSection>
 
             {layout.showResizer && (
               <GitSectionResizer
@@ -839,7 +790,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
               />
             )}
 
-            <GitAccordionSection
+            <SidebarAccordionSection
               title="Graph"
               headerActions={
                 <GitGraphHeaderActions
@@ -855,6 +806,12 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
               }
               isExpanded={layout.showGraphBody}
               flexRatio={layout.graphFlexRatio}
+              sectionClassName="git-accordion-section"
+              headerClassName="git-accordion-header"
+              toggleClassName="git-accordion-toggle"
+              chevronClassName="git-accordion-chevron"
+              titleClassName="git-accordion-title"
+              bodyClassName="git-accordion-body"
               onToggle={onToggleGraphCollapsed}
             >
               <GitGraphSection
@@ -864,7 +821,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 onToggleCommitDetail={onToggleCommitDetail}
                 onOpenFileDiff={onOpenFileDiff}
               />
-            </GitAccordionSection>
+            </SidebarAccordionSection>
           </div>
         </>
       )}

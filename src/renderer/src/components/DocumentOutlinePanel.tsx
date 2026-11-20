@@ -5,6 +5,7 @@ import {
   type MarkdownHeading,
   parseMarkdownHeadings
 } from '../editor/MarkdownTocEngine'
+import { SidebarAccordionSection } from './SidebarAccordionSection'
 
 export interface DocumentOutlinePanelProps {
   documentName: string | null
@@ -13,6 +14,9 @@ export interface DocumentOutlinePanelProps {
   isMarkdownDocument: boolean
   activeHeadingIndex?: number | null
   showHeadingNumbers: boolean
+  isExpanded?: boolean
+  flexRatio?: number | null
+  onToggleExpanded?: () => void
   onToggleHeadingNumbers: () => void
   onSelectHeading: (heading: MarkdownHeading, index: number) => void
   onCollapse: () => void
@@ -26,7 +30,7 @@ interface ActiveOutlineScrollTarget {
 /**
  * Right sidebar panel displaying the live document heading outline,
  * active heading indicator and auto-scroll, outline numbering toggle,
- * sidebar collapse trigger, and click-to-scroll triggers.
+ * sidebar collapse trigger, optional accordion toggle, and click-to-scroll triggers.
  */
 export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   documentName,
@@ -35,6 +39,9 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
   isMarkdownDocument,
   activeHeadingIndex = null,
   showHeadingNumbers,
+  isExpanded = true,
+  flexRatio = null,
+  onToggleExpanded,
   onToggleHeadingNumbers,
   onSelectHeading,
   onCollapse
@@ -124,6 +131,52 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
     )
   }
 
+  const headerActions = (
+    <div className="outline-header-actions">
+      <button
+        type="button"
+        className={`btn btn-sm outline-number-toggle${showHeadingNumbers ? ' is-active' : ''}`}
+        aria-pressed={showHeadingNumbers}
+        title="목차 헤딩 번호 표시 토글 (원본 파일 미변경)"
+        onClick={onToggleHeadingNumbers}
+      >
+        목차 번호 표시
+      </button>
+
+      <button
+        type="button"
+        className="icon-btn outline-collapse-btn"
+        aria-label="문서 목차 접기"
+        title="문서 목차 접기"
+        onClick={onCollapse}
+      >
+        <PanelRightClose size={16} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+    </div>
+  )
+
+  const bodyContent = <div className="outline-list-container">{renderBodyContent()}</div>
+
+  if (onToggleExpanded) {
+    return (
+      <SidebarAccordionSection
+        title="Outline"
+        ariaLabel="문서 목차 (Outline)"
+        badge={<span className="outline-count">{headings.length}</span>}
+        headerActions={headerActions}
+        isExpanded={isExpanded}
+        flexRatio={flexRatio}
+        sectionClassName="outline-sidebar"
+        headerClassName="outline-header"
+        toggleClassName="outline-accordion-toggle"
+        bodyClassName="outline-body"
+        onToggle={onToggleExpanded}
+      >
+        {bodyContent}
+      </SidebarAccordionSection>
+    )
+  }
+
   return (
     <section className="outline-sidebar" aria-label="문서 목차 (Outline)">
       <div className="outline-header">
@@ -131,33 +184,10 @@ export const DocumentOutlinePanel = memo(function DocumentOutlinePanel({
           <span>Outline</span>
           <span className="outline-count">{headings.length}</span>
         </div>
-
-        <div className="outline-header-actions">
-          <button
-            type="button"
-            className={`btn btn-sm outline-number-toggle${showHeadingNumbers ? ' is-active' : ''}`}
-            aria-pressed={showHeadingNumbers}
-            title="목차 헤딩 번호 표시 토글 (원본 파일 미변경)"
-            onClick={onToggleHeadingNumbers}
-          >
-            목차 번호 표시
-          </button>
-
-          <button
-            type="button"
-            className="icon-btn outline-collapse-btn"
-            aria-label="문서 목차 접기"
-            title="문서 목차 접기"
-            onClick={onCollapse}
-          >
-            <PanelRightClose size={16} strokeWidth={1.75} aria-hidden="true" />
-          </button>
-        </div>
+        {headerActions}
       </div>
 
-      <div className="outline-body">
-        <div className="outline-list-container">{renderBodyContent()}</div>
-      </div>
+      <div className="outline-body">{bodyContent}</div>
     </section>
   )
 })

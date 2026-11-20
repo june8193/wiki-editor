@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { EditorView } from '@codemirror/view'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -10,8 +11,14 @@ import themeCss from '../styles/theme.css?raw'
 import { installScrollContainerStub, mockElementBoundingRect } from '../test/domLayoutStub'
 import { installSvgCanvasStub } from '../test/svgCanvasStub'
 import { DocumentEditor } from './DocumentEditor'
+import { DocumentPropertiesSection } from './DocumentPropertiesSection'
 import type { DocumentBuffer } from '@shared/documentBuffer'
-import { applyFrontmatterValues, parseFrontmatterDocument, removeFrontmatterBlock } from '@shared/frontmatter'
+import {
+  applyFrontmatterValues,
+  createDefaultFrontmatterSchema,
+  parseFrontmatterDocument,
+  removeFrontmatterBlock
+} from '@shared/frontmatter'
 import type { DocumentTabItem, EditorMode, TabViewPatch } from '../stores/PaneTabStore'
 
 function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
@@ -2212,5 +2219,82 @@ describe('DocumentEditor frontmatter integration (<DocumentEditor />)', () => {
     const expectedLine8Top =
       cmView.documentPadding.top + cmView.lineBlockAt(cmView.state.doc.line(8).from).top
     expect(rawScroller.scrollTop).toBeCloseTo(expectedLine8Top, 3)
+  })
+
+  it('syncs DocumentPropertiesSection and DocumentEditor bidirectionally across Raw (preserving Raw focus/cursor) and Split modes', async () => {
+    const user = userEvent.setup()
+    const initial = '---\nstatus: todo\n---\n# Heading\n\nBody text'
+    const schema = createDefaultFrontmatterSchema()
+
+    function Harness() {
+      const [doc, setDoc] = useState(() => createDoc({ content: initial, savedContent: initial }))
+      const [tab, setTab] = useState<DocumentTabItem>(() => createTab('raw'))
+
+      const handleChange = (nextContent: string): void => {
+        setDoc((prev) => ({
+          ...prev,
+          content: nextContent,
+          isDirty: nextContent !== prev.savedContent
+        }))
+      }
+
+      return (
+        <div>
+          <DocumentEditor
+            document={doc}
+            tab={tab}
+            theme="light"
+            autoSave={false}
+            onChangeContent={handleChange}
+            onSave={vi.fn()}
+            onUpdateViewState={(patch) => setTab((prev) => ({ ...prev, ...patch }))}
+          />
+          <DocumentPropertiesSection
+            documentName={doc.name}
+            documentKey={doc.key}
+            content={doc.content}
+            isMarkdownDocument
+            schemaResult={{
+              exists: true,
+              path: 'C:/wiki/.wiki-editor/frontmatter.json',
+              schema
+            }}
+            isExpanded
+            onToggleExpanded={vi.fn()}
+            onChangeContent={handleChange}
+            onCreateDefaultSchema={vi.fn()}
+          />
+        </div>
+      )
+    }
+
+    render(<Harness />)
+
+    const rawEditorEl = screen.getByTestId('document-editor')
+    const cmView = EditorView.findFromDOM(rawEditorEl)!
+    const properties = screen.getByRole('region', { name: '문서 속성' })
+
+    // Typing inside Raw keeps focus & cursor while updating Properties immediately
+    act(() => {
+      cmView.focus()
+      cmView.dispatch({
+        changes: { from: 0, to: cmView.state.doc.length, insert: '---\nstatus: in-progress\n---\n# Heading\n\nBody text' },
+        selection: { anchor: 23, head: 23 }
+      })
+    })
+    expect(within(properties).getByLabelText('상태')).toHaveValue('in-progress')
+    expect(cmView.state.selection.main.head).toBe(23)
+
+    // Switch to Split and edit via Properties -> updates left Raw YAML without exposing YAML in right Preview
+    await user.click(within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', { name: 'Split' }))
+    await user.selectOptions(within(properties).getByLabelText('상태'), 'done')
+    await user.type(within(properties).getByLabelText('담당자'), '@bob')
+
+    const splitRaw = screen.getByTestId('document-editor')
+    const splitPreview = screen.getByTestId('split-markdown-preview')
+    expect(EditorView.findFromDOM(splitRaw)!.state.doc.toString()).toContain('status: done')
+    expect(EditorView.findFromDOM(splitRaw)!.state.doc.toString()).toContain('assignee: "@bob"')
+    expect(splitPreview.textContent).not.toContain('status:')
+    expect(within(splitPreview).getByRole('heading', { level: 1, name: 'Heading' })).toBeInTheDocument()
   })
 })

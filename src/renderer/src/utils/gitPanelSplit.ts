@@ -1,7 +1,18 @@
-export const GIT_PANEL_DEFAULT_CHANGES_RATIO = 0.5
-export const GIT_PANEL_MIN_CHANGES_RATIO = 0.2
-export const GIT_PANEL_MAX_CHANGES_RATIO = 0.8
-export const GIT_PANEL_CHANGES_RATIO_STEP = 0.05
+import {
+  ACCORDION_MAX_TOP_RATIO,
+  ACCORDION_MIN_TOP_RATIO,
+  ACCORDION_RATIO_STEP,
+  ACCORDION_RESET_RATIO,
+  clampSectionHeightRatio,
+  computeTwoSectionLayout,
+  stepSectionHeightRatio,
+  toSectionHeightPercent
+} from './accordionSplit'
+
+export const GIT_PANEL_DEFAULT_CHANGES_RATIO = ACCORDION_RESET_RATIO
+export const GIT_PANEL_MIN_CHANGES_RATIO = ACCORDION_MIN_TOP_RATIO
+export const GIT_PANEL_MAX_CHANGES_RATIO = ACCORDION_MAX_TOP_RATIO
+export const GIT_PANEL_CHANGES_RATIO_STEP = ACCORDION_RATIO_STEP
 
 export interface GitPanelSplitState {
   isChangesCollapsed: boolean
@@ -32,10 +43,7 @@ export function createDefaultGitPanelSplitState(): GitPanelSplitState {
  * Clamps the Changes section height ratio into [0.2, 0.8], falling back to 0.5 for non-finite inputs.
  */
 export function clampChangesHeightRatio(ratio: number): number {
-  if (!Number.isFinite(ratio)) {
-    return GIT_PANEL_DEFAULT_CHANGES_RATIO
-  }
-  return Math.min(GIT_PANEL_MAX_CHANGES_RATIO, Math.max(GIT_PANEL_MIN_CHANGES_RATIO, ratio))
+  return clampSectionHeightRatio(ratio, GIT_PANEL_DEFAULT_CHANGES_RATIO)
 }
 
 /**
@@ -67,42 +75,31 @@ export function updateChangesHeightRatio(
  * Applies a relative ratio delta and rounds away binary float drift before clamping into [0.2, 0.8].
  */
 export function stepChangesHeightRatio(ratio: number, delta: number): number {
-  const base = clampChangesHeightRatio(ratio)
-  const stepped = Math.round((base + delta) * 1000) / 1000
-  return clampChangesHeightRatio(stepped)
+  return stepSectionHeightRatio(ratio, delta, GIT_PANEL_DEFAULT_CHANGES_RATIO)
 }
 
 /**
  * Converts a Changes section height ratio into a clamped integer percentage in [20, 80].
  */
 export function toChangesHeightPercent(ratio: number): number {
-  return Math.round(clampChangesHeightRatio(ratio) * 100)
+  return toSectionHeightPercent(ratio, GIT_PANEL_DEFAULT_CHANGES_RATIO)
 }
 
 /**
  * Computes accordion body visibility, resizer visibility, and flex growth ratios for Changes and Graph.
  */
 export function computeGitSectionLayout(state: GitPanelSplitState): GitSectionLayout {
-  const showChangesBody = !state.isChangesCollapsed
-  const showGraphBody = !state.isGraphCollapsed
-
-  if (showChangesBody && showGraphBody) {
-    const changesFlexRatio = clampChangesHeightRatio(state.changesHeightRatio)
-    const graphFlexRatio = Math.round((1 - changesFlexRatio) * 1000) / 1000
-    return {
-      showChangesBody: true,
-      showGraphBody: true,
-      showResizer: true,
-      changesFlexRatio,
-      graphFlexRatio
-    }
-  }
-
+  const layout = computeTwoSectionLayout(
+    state.isChangesCollapsed,
+    state.isGraphCollapsed,
+    state.changesHeightRatio,
+    GIT_PANEL_DEFAULT_CHANGES_RATIO
+  )
   return {
-    showChangesBody,
-    showGraphBody,
-    showResizer: false,
-    changesFlexRatio: showChangesBody ? 1 : null,
-    graphFlexRatio: showGraphBody ? 1 : null
+    showChangesBody: layout.showTopBody,
+    showGraphBody: layout.showBottomBody,
+    showResizer: layout.showResizer,
+    changesFlexRatio: layout.topFlexRatio,
+    graphFlexRatio: layout.bottomFlexRatio
   }
 }
