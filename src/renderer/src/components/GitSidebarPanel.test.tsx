@@ -2307,8 +2307,8 @@ describe('GitSidebarPanel', () => {
       // Clicking single-file Stash calls onStashFile without opening Diff tab
       await user.click(modifiedStashBtn)
       await user.click(untrackedStashBtn)
-      expect(onStashFile).toHaveBeenNthCalledWith(1, 'docs/modified.md', undefined)
-      expect(onStashFile).toHaveBeenNthCalledWith(2, 'notes/new.md', undefined)
+      expect(onStashFile).toHaveBeenNthCalledWith(1, 'docs/modified.md')
+      expect(onStashFile).toHaveBeenNthCalledWith(2, 'notes/new.md')
       expect(onOpenFileDiff).not.toHaveBeenCalled()
 
       // 2. Stashes header '+' and 'Clear All' work without toggling section expansion, and row 'Drop' calls onDropStash

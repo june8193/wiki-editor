@@ -1169,7 +1169,7 @@ export function MainAppShell() {
                 onDiscardFile={(path) => void git.discardFile(path)}
                 onDiscardAll={handleRequestDiscardAll}
                 onStashChanges={() => void git.stashChanges()}
-                onStashFile={(path, origPath) => void git.stashFile(path, origPath)}
+                onStashFile={(path) => void git.stashFile(path)}
                 onOpenStashDialog={handleOpenStashDialog}
                 onPopStash={(stashRef) => void git.stashPop(stashRef)}
                 onApplyStash={(stashRef) => void git.stashApply(stashRef)}

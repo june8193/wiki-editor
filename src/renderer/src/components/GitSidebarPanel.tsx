@@ -76,7 +76,7 @@ export interface GitSidebarPanelProps {
   onDiscardFile: (path: string) => void
   onDiscardAll: () => void
   onStashChanges: () => void
-  onStashFile: (path: string, origPath?: string) => void
+  onStashFile: (path: string) => void
   onOpenStashDialog: (initialScope?: 'unstaged' | 'all') => void
   onPopStash: (stashRef: string) => void
   onApplyStash: (stashRef: string) => void
@@ -879,7 +879,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 onStageFile={(file) => onStageFile(file.path)}
                 onUnstageFile={(file) => onUnstageFile(file.path, file.origPath)}
                 onDiscardFile={(file) => onDiscardFile(file.path)}
-                onStashFile={(file) => onStashFile(file.path, file.origPath)}
+                onStashFile={(file) => onStashFile(file.path)}
               />
             </GitAccordionSection>
 

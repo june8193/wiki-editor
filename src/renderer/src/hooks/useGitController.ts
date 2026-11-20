@@ -714,10 +714,8 @@ export function useGitController({
   )
 
   const stashFile = useCallback(
-    (filePath: string, origPath?: string): Promise<boolean> => {
-      const paths = origPath ? [filePath, origPath] : [filePath]
-      return stashWithOptions({ scope: 'paths', includeUntracked: true, paths })
-    },
+    (filePath: string): Promise<boolean> =>
+      stashWithOptions({ scope: 'paths', includeUntracked: true, paths: [filePath] }),
     [stashWithOptions]
   )
 
