@@ -6,9 +6,9 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 렌더러 하위의 순수 유틸리티 및 순수 상태 스토어 단위 테스트(`.test.ts`) 중 `DOMPurify`, `CodeMirror`, `TipTap`, React 렌더링, 브라우저 전역(`window`/`document`)에 직간접 의존이 없는 스위트들이 `node` 프로젝트에 포함되어 `jsdom` 부팅 없이 실행됩니다.
-- [ ] DOM 살균기(`DOMPurify`), 코드 편집기 뷰(`CodeMirror` / `ProseMirror`), 브라우저 레이아웃·캔버스·이벤트 객체에 의존하는 렌더러 `.test.ts` 및 모든 `.test.tsx` 스위트는 누락이나 중복 수집 없이 `renderer` 프로젝트(`jsdom`)에서 실행됩니다.
-- [ ] `renderer` 프로젝트에 `vmThreads` 풀이 적용되어 워커 스레드당 `jsdom` 환경 생성 횟수가 줄어들고, Vitest 실행 결과에서 과도한 `jsdom` 반복 생성 경고가 해소됩니다.
-- [ ] 프로덕션 코드를 변경하지 않으며, 기존 전체 테스트 케이스(`741`개)가 단 한 건의 누락이나 이중 수집 없이 모두 통과하고 `npm run typecheck`, `npm test`, `npm run build`가 정상 성공합니다.
+- [x] 렌더러 하위의 순수 유틸리티 및 순수 상태 스토어 단위 테스트(`.test.ts`) 중 `DOMPurify`, `CodeMirror`, `TipTap`, React 렌더링, 브라우저 전역(`window`/`document`)에 직간접 의존이 없는 스위트들이 `node` 프로젝트에 포함되어 `jsdom` 부팅 없이 실행됩니다.
+- [x] DOM 살균기(`DOMPurify`), 코드 편집기 뷰(`CodeMirror` / `ProseMirror`), 브라우저 레이아웃·캔버스·이벤트 객체에 의존하는 렌더러 `.test.ts` 및 모든 `.test.tsx` 스위트는 누락이나 중복 수집 없이 `renderer` 프로젝트(`jsdom`)에서 실행됩니다.
+- [x] `renderer` 프로젝트에 `vmThreads` 풀이 적용되어 워커 스레드당 `jsdom` 환경 생성 횟수가 줄어들고, Vitest 실행 결과에서 과도한 `jsdom` 반복 생성 경고가 해소됩니다.
+- [x] 프로덕션 코드를 변경하지 않으며, 기존 전체 테스트 케이스(`741`개)가 단 한 건의 누락이나 이중 수집 없이 모두 통과하고 `npm run typecheck`, `npm test`, `npm run build`가 정상 성공합니다.
