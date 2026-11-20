@@ -187,8 +187,8 @@ function wrapSearchMark(
   )
 }
 
-function renderCodeSlice(
-  code: string,
+function renderHighlightedSlice(
+  text: string,
   from: number,
   to: number,
   includeEndAnchors: boolean,
@@ -197,7 +197,7 @@ function renderCodeSlice(
   keyPrefix: string
 ): ReactNode {
   if (searchHighlights.length === 0) {
-    return to > from ? code.slice(from, to) : null
+    return to > from ? text.slice(from, to) : null
   }
 
   const boundarySet = new Set<number>([from, to])
@@ -205,8 +205,8 @@ function renderCodeSlice(
   const overlappingMatches: PreviewSearchMatchSpan[] = []
 
   for (const match of searchHighlights) {
-    const start = Math.max(0, Math.min(code.length, match.start))
-    const end = Math.max(start, Math.min(code.length, match.end))
+    const start = Math.max(0, Math.min(text.length, match.start))
+    const end = Math.max(start, Math.min(text.length, match.end))
     if (end <= start) {
       if (start >= from && (includeEndAnchors ? start <= to : start < to)) {
         const list = anchorMatchesByOffset.get(start)
@@ -233,7 +233,7 @@ function renderCodeSlice(
   }
 
   if (overlappingMatches.length === 0 && anchorMatchesByOffset.size === 0) {
-    return to > from ? code.slice(from, to) : null
+    return to > from ? text.slice(from, to) : null
   }
 
   const boundaries = Array.from(boundarySet).sort((a, b) => a - b)
@@ -259,7 +259,7 @@ function renderCodeSlice(
     const nextPos = boundaries[i + 1]
     if (nextPos <= pos) continue
 
-    const slice = code.slice(pos, nextPos)
+    const slice = text.slice(pos, nextPos)
     const activeMatch = overlappingMatches.find((m) => m.start <= pos && m.end >= nextPos)
     pieces.push(
       activeMatch
@@ -294,7 +294,7 @@ export function renderCodeTokensWithSearch(
       continue
     }
     if (span.from > cursor) {
-      const gapNode = renderCodeSlice(
+      const gapNode = renderHighlightedSlice(
         code,
         cursor,
         span.from,
@@ -309,7 +309,7 @@ export function renderCodeTokensWithSearch(
     }
     nodes.push(
       <span key={`tok-${i}`} className={span.className}>
-        {renderCodeSlice(
+        {renderHighlightedSlice(
           code,
           span.from,
           span.to,
@@ -323,7 +323,7 @@ export function renderCodeTokensWithSearch(
     cursor = span.to
   }
 
-  const trailingNode = renderCodeSlice(
+  const trailingNode = renderHighlightedSlice(
     code,
     cursor,
     code.length,
@@ -557,51 +557,6 @@ function buildPreviewSearchPlan(
   return plan
 }
 
-function renderPatchedText(
-  text: string,
-  patches: readonly PreviewSearchMatchSpan[],
-  activeMatchIndex: number,
-  slotId: number
-): ReactNode {
-  const ordered = [...patches].sort(
-    (a, b) => a.start - b.start || a.end - b.end || a.matchIndex - b.matchIndex
-  )
-  const parts: ReactNode[] = []
-  let cursor = 0
-
-  for (let i = 0; i < ordered.length; i += 1) {
-    const patch = ordered[i]
-    if (patch.start > cursor) {
-      parts.push(text.slice(cursor, patch.start))
-    }
-    if (patch.end <= patch.start) {
-      parts.push(
-        wrapSearchMark('', patch.matchIndex, activeMatchIndex, `sma-${slotId}-${i}-${patch.matchIndex}`)
-      )
-      cursor = Math.max(cursor, patch.start)
-      continue
-    }
-    const start = Math.max(cursor, patch.start)
-    if (patch.end > start) {
-      parts.push(
-        wrapSearchMark(
-          text.slice(start, patch.end),
-          patch.matchIndex,
-          activeMatchIndex,
-          `sm-${slotId}-${i}-${patch.matchIndex}`
-        )
-      )
-      cursor = patch.end
-    }
-  }
-
-  if (cursor < text.length) {
-    parts.push(text.slice(cursor))
-  }
-
-  return <Fragment key={`smf-${slotId}`}>{parts}</Fragment>
-}
-
 function applyPreviewSearchPlan(
   baseTree: ReactNode,
   plan: PreviewSearchPlan,
@@ -616,7 +571,21 @@ function applyPreviewSearchPlan(
     identity: (node) => node,
     onText: (text, slotId) => {
       const patches = plan.textPatches.get(slotId)
-      return patches ? renderPatchedText(text, patches, activeMatchIndex, slotId) : text
+      return patches ? (
+        <Fragment key={`smf-${slotId}`}>
+          {renderHighlightedSlice(
+            text,
+            0,
+            text.length,
+            true,
+            patches,
+            activeMatchIndex,
+            `sm-${slotId}`
+          )}
+        </Fragment>
+      ) : (
+        text
+      )
     },
     onFencedCode: (element, codeSlotId, _rawCode, isMermaid) => {
       if (isMermaid || codeSlotId < 0) {

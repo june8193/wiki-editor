@@ -113,6 +113,13 @@ function flushTextRun(
   })
 }
 
+function isMermaidCodeBlockNode(node: ProseMirrorNode): boolean {
+  return (
+    node.type.name === 'codeBlock' &&
+    isMermaidLanguage(typeof node.attrs.language === 'string' ? node.attrs.language : '')
+  )
+}
+
 function findProseMirrorMatches(
   doc: ProseMirrorNode,
   criteria: DocumentFindCriteria
@@ -129,11 +136,8 @@ function findProseMirrorMatches(
   const runSegments: PmTextRunSegment[] = []
 
   doc.descendants((node, pos) => {
-    if (node.type.name === 'codeBlock') {
-      const language = typeof node.attrs.language === 'string' ? node.attrs.language : ''
-      if (isMermaidLanguage(language)) {
-        return false
-      }
+    if (isMermaidCodeBlockNode(node)) {
+      return false
     }
 
     if (!node.isTextblock) {
@@ -386,12 +390,7 @@ export function readWysiwygSingleLineSelection(editor: Editor | null): string | 
     if (!$from.sameParent($to)) {
       return null
     }
-    if (
-      $from.parent.type.name === 'codeBlock' &&
-      isMermaidLanguage(
-        typeof $from.parent.attrs.language === 'string' ? $from.parent.attrs.language : ''
-      )
-    ) {
+    if (isMermaidCodeBlockNode($from.parent)) {
       return null
     }
     return extractSingleLineFindQuery(editor.state.doc.textBetween(from, to, '\n'))

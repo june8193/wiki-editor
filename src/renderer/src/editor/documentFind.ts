@@ -416,16 +416,6 @@ export function inspectDomSingleLineSelection(
 }
 
 /**
- * Reads a single-line DOM selection contained within `container`, excluding UI chrome and cross-block ranges.
- */
-export function readDomSingleLineSelection(
-  container: HTMLElement | null,
-  excludedSelector: string
-): string | null {
-  return inspectDomSingleLineSelection(container, excludedSelector).value
-}
-
-/**
  * Resolves Find Bar navigation/close shortcuts (`Enter`, `Shift+Enter`, `F3`, `Shift+F3`, `Escape`).
  */
 export function resolveFindBarKeyAction(

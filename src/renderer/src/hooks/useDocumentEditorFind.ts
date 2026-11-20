@@ -25,7 +25,6 @@ import {
   type DocumentFindState,
   findTextMatchesInDocument,
   inspectDomSingleLineSelection,
-  readDomSingleLineSelection,
   readRawEditorSingleLineSelection,
   stepActiveMatchIndex
 } from '../editor/documentFind'
@@ -57,9 +56,9 @@ interface MatchCursorState {
 
 export interface DocumentFindDomRefs {
   rawEditorViewRef: RefObject<EditorView | null>
-  wysiwygEditorRef?: RefObject<Editor | null>
-  previewContainerRef?: RefObject<HTMLDivElement | null>
-  splitPreviewContainerRef?: RefObject<HTMLDivElement | null>
+  wysiwygEditorRef: RefObject<Editor | null>
+  previewContainerRef: RefObject<HTMLDivElement | null>
+  splitPreviewContainerRef: RefObject<HTMLDivElement | null>
   editorBodyRef: RefObject<HTMLDivElement | null>
 }
 
@@ -144,7 +143,7 @@ const MODE_FIND_STRATEGIES: Record<EditorMode, ModeFindStrategy> = {
     focus: ({ rawEditorViewRef }) => rawEditorViewRef.current?.focus(),
     readSelection: ({ rawEditorViewRef, splitPreviewContainerRef }) => {
       const previewSelection = inspectDomSingleLineSelection(
-        splitPreviewContainerRef?.current ?? null,
+        splitPreviewContainerRef.current,
         PREVIEW_SEARCH_CHROME_SELECTOR
       )
       if (previewSelection.inBoundary) {
@@ -161,7 +160,7 @@ const MODE_FIND_STRATEGIES: Record<EditorMode, ModeFindStrategy> = {
   wysiwyg: {
     source: 'wysiwyg',
     focus: ({ wysiwygEditorRef, editorBodyRef }) => {
-      const editor = wysiwygEditorRef?.current
+      const editor = wysiwygEditorRef.current
       if (editor && !editor.isDestroyed) {
         editor.view.focus()
         return
@@ -169,7 +168,7 @@ const MODE_FIND_STRATEGIES: Record<EditorMode, ModeFindStrategy> = {
       editorBodyRef.current?.querySelector<HTMLElement>('[data-testid="document-editor"]')?.focus()
     },
     readSelection: ({ wysiwygEditorRef }) =>
-      readWysiwygSingleLineSelection(wysiwygEditorRef?.current ?? null),
+      readWysiwygSingleLineSelection(wysiwygEditorRef.current),
     buildHighlights: (ctx) => ({
       raw: null,
       wysiwyg: buildRichHighlightQuery(ctx.criteria, ctx.activeIndex, ctx.scrollNonce),
@@ -178,12 +177,10 @@ const MODE_FIND_STRATEGIES: Record<EditorMode, ModeFindStrategy> = {
   },
   preview: {
     source: 'preview',
-    focus: ({ previewContainerRef }) => previewContainerRef?.current?.focus(),
+    focus: ({ previewContainerRef }) => previewContainerRef.current?.focus(),
     readSelection: ({ previewContainerRef }) =>
-      readDomSingleLineSelection(
-        previewContainerRef?.current ?? null,
-        PREVIEW_SEARCH_CHROME_SELECTOR
-      ),
+      inspectDomSingleLineSelection(previewContainerRef.current, PREVIEW_SEARCH_CHROME_SELECTOR)
+        .value,
     buildHighlights: (ctx) => ({
       raw: null,
       wysiwyg: null,
