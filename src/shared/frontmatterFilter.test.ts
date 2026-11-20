@@ -12,8 +12,9 @@ import {
   type WorkspaceFrontmatterSchema
 } from './frontmatter'
 import {
-  compareWorkspaceSearchEntriesBySort,
-  type FrontmatterSortableSearchEntry
+  createWorkspaceSearchSortPlan,
+  type FrontmatterSortableSearchEntry,
+  type WorkspaceSearchSortSpec
 } from './search'
 
 const TEST_SCHEMA: WorkspaceFrontmatterSchema = {
@@ -251,6 +252,14 @@ describe('frontmatter filter engine', () => {
   })
 })
 
+function sortEntries(
+  items: readonly FrontmatterSortableSearchEntry[],
+  sort: WorkspaceSearchSortSpec | undefined,
+  schema: WorkspaceFrontmatterSchema | null | undefined = TEST_SCHEMA
+): string[] {
+  return [...items].sort(createWorkspaceSearchSortPlan(sort, schema).compare).map((i) => i.relativePath)
+}
+
 describe('frontmatter sort engine, summary extraction, and custom value collection', () => {
   it('sorts by path asc/desc and by select option declaration order with out-of-schema after options and empty always last', () => {
     const items: FrontmatterSortableSearchEntry[] = [
@@ -263,15 +272,7 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
       { relativePath: 'a-empty.md', nameMatches: [], values: { status: '' } }
     ]
 
-    const ascStatus = [...items].sort((a, b) =>
-      compareWorkspaceSearchEntriesBySort(
-        a,
-        b,
-        { by: 'frontmatter', fieldKey: 'status', direction: 'asc' },
-        TEST_SCHEMA
-      )
-    )
-    expect(ascStatus.map((item) => item.relativePath)).toEqual([
+    expect(sortEntries(items, { by: 'frontmatter', fieldKey: 'status', direction: 'asc' })).toEqual([
       'a-todo.md',
       'b-progress-1.md',
       'e-progress-2.md',
@@ -281,15 +282,7 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
       'd-empty.md'
     ])
 
-    const descStatus = [...items].sort((a, b) =>
-      compareWorkspaceSearchEntriesBySort(
-        a,
-        b,
-        { by: 'frontmatter', fieldKey: 'status', direction: 'desc' },
-        TEST_SCHEMA
-      )
-    )
-    expect(descStatus.map((item) => item.relativePath)).toEqual([
+    expect(sortEntries(items, { by: 'frontmatter', fieldKey: 'status', direction: 'desc' })).toEqual([
       'b-done.md',
       'b-progress-1.md',
       'e-progress-2.md',
@@ -299,10 +292,7 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
       'd-empty.md'
     ])
 
-    const pathDesc = [...items].sort((a, b) =>
-      compareWorkspaceSearchEntriesBySort(a, b, { by: 'path', direction: 'desc' }, TEST_SCHEMA)
-    )
-    expect(pathDesc.map((item) => item.relativePath)).toEqual([
+    expect(sortEntries(items, { by: 'path', direction: 'desc' })).toEqual([
       'e-progress-2.md',
       'd-empty.md',
       'c-custom.md',
@@ -321,30 +311,20 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
       { relativePath: 'two.md', nameMatches: [], values: { points: 2 } },
       { relativePath: 'invalid.md', nameMatches: [], values: { points: '5' } }
     ]
-    expect(
-      [...numItems]
-        .sort((a, b) =>
-          compareWorkspaceSearchEntriesBySort(
-            a,
-            b,
-            { by: 'frontmatter', fieldKey: 'points', direction: 'asc' },
-            TEST_SCHEMA
-          )
-        )
-        .map((i) => i.relativePath)
-    ).toEqual(['zero.md', 'two.md', 'ten.md', 'empty.md', 'invalid.md'])
-    expect(
-      [...numItems]
-        .sort((a, b) =>
-          compareWorkspaceSearchEntriesBySort(
-            a,
-            b,
-            { by: 'frontmatter', fieldKey: 'points', direction: 'desc' },
-            TEST_SCHEMA
-          )
-        )
-        .map((i) => i.relativePath)
-    ).toEqual(['ten.md', 'two.md', 'zero.md', 'empty.md', 'invalid.md'])
+    expect(sortEntries(numItems, { by: 'frontmatter', fieldKey: 'points', direction: 'asc' })).toEqual([
+      'zero.md',
+      'two.md',
+      'ten.md',
+      'empty.md',
+      'invalid.md'
+    ])
+    expect(sortEntries(numItems, { by: 'frontmatter', fieldKey: 'points', direction: 'desc' })).toEqual([
+      'ten.md',
+      'two.md',
+      'zero.md',
+      'empty.md',
+      'invalid.md'
+    ])
 
     const dateItems: FrontmatterSortableSearchEntry[] = [
       { relativePath: 'none.md', nameMatches: [], values: {} },
@@ -352,48 +332,28 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
       { relativePath: 'early.md', nameMatches: [], values: { dueDate: '2026-01-15' } },
       { relativePath: 'bad.md', nameMatches: [], values: { dueDate: '2026-02-29' } }
     ]
-    expect(
-      [...dateItems]
-        .sort((a, b) =>
-          compareWorkspaceSearchEntriesBySort(
-            a,
-            b,
-            { by: 'frontmatter', fieldKey: 'dueDate', direction: 'asc' },
-            TEST_SCHEMA
-          )
-        )
-        .map((i) => i.relativePath)
-    ).toEqual(['early.md', 'late.md', 'bad.md', 'none.md'])
+    expect(sortEntries(dateItems, { by: 'frontmatter', fieldKey: 'dueDate', direction: 'asc' })).toEqual([
+      'early.md',
+      'late.md',
+      'bad.md',
+      'none.md'
+    ])
 
     const boolItems: FrontmatterSortableSearchEntry[] = [
       { relativePath: 'unset.md', nameMatches: [], values: {} },
       { relativePath: 'true.md', nameMatches: [], values: { archived: true } },
       { relativePath: 'false.md', nameMatches: [], values: { archived: false } }
     ]
-    expect(
-      [...boolItems]
-        .sort((a, b) =>
-          compareWorkspaceSearchEntriesBySort(
-            a,
-            b,
-            { by: 'frontmatter', fieldKey: 'archived', direction: 'asc' },
-            TEST_SCHEMA
-          )
-        )
-        .map((i) => i.relativePath)
-    ).toEqual(['false.md', 'true.md', 'unset.md'])
-    expect(
-      [...boolItems]
-        .sort((a, b) =>
-          compareWorkspaceSearchEntriesBySort(
-            a,
-            b,
-            { by: 'frontmatter', fieldKey: 'archived', direction: 'desc' },
-            TEST_SCHEMA
-          )
-        )
-        .map((i) => i.relativePath)
-    ).toEqual(['true.md', 'false.md', 'unset.md'])
+    expect(sortEntries(boolItems, { by: 'frontmatter', fieldKey: 'archived', direction: 'asc' })).toEqual([
+      'false.md',
+      'true.md',
+      'unset.md'
+    ])
+    expect(sortEntries(boolItems, { by: 'frontmatter', fieldKey: 'archived', direction: 'desc' })).toEqual([
+      'true.md',
+      'false.md',
+      'unset.md'
+    ])
 
     const textAndTags: FrontmatterSortableSearchEntry[] = [
       { relativePath: 'c.md', nameMatches: [], values: { assignee: 'Charlie', labels: ['zeta'] } },
@@ -401,30 +361,18 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
       { relativePath: 'b.md', nameMatches: [], values: { assignee: 'Bob', labels: ['alpha'] } },
       { relativePath: 'd.md', nameMatches: [], values: { assignee: '', labels: [] } }
     ]
-    expect(
-      [...textAndTags]
-        .sort((a, b) =>
-          compareWorkspaceSearchEntriesBySort(
-            a,
-            b,
-            { by: 'frontmatter', fieldKey: 'assignee', direction: 'asc' },
-            TEST_SCHEMA
-          )
-        )
-        .map((i) => i.relativePath)
-    ).toEqual(['a.md', 'b.md', 'c.md', 'd.md'])
-    expect(
-      [...textAndTags]
-        .sort((a, b) =>
-          compareWorkspaceSearchEntriesBySort(
-            a,
-            b,
-            { by: 'frontmatter', fieldKey: 'labels', direction: 'asc' },
-            TEST_SCHEMA
-          )
-        )
-        .map((i) => i.relativePath)
-    ).toEqual(['b.md', 'a.md', 'c.md', 'd.md'])
+    expect(sortEntries(textAndTags, { by: 'frontmatter', fieldKey: 'assignee', direction: 'asc' })).toEqual([
+      'a.md',
+      'b.md',
+      'c.md',
+      'd.md'
+    ])
+    expect(sortEntries(textAndTags, { by: 'frontmatter', fieldKey: 'labels', direction: 'asc' })).toEqual([
+      'b.md',
+      'a.md',
+      'c.md',
+      'd.md'
+    ])
   })
 
   it('extracts frontmatterSummary prioritizing showInSearchBadge fields and falling back when none are marked', () => {

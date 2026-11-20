@@ -422,18 +422,6 @@ export function createWorkspaceSearchSortPlan(
   }
 }
 
-/**
- * Compares search result entries by `WorkspaceSearchSortSpec`, falling back to `relativePath` asc on ties.
- */
-export function compareWorkspaceSearchEntriesBySort(
-  a: FrontmatterSortableSearchEntry,
-  b: FrontmatterSortableSearchEntry,
-  sort: WorkspaceSearchSortSpec | undefined,
-  schema: WorkspaceFrontmatterSchema | null | undefined
-): number {
-  return createWorkspaceSearchSortPlan(sort, schema).compare(a, b)
-}
-
 /** Builds a `WorkspaceSearchFileResult`, omitting `frontmatterSummary` when undefined. */
 export function buildWorkspaceSearchFileResult(fields: {
   path: string

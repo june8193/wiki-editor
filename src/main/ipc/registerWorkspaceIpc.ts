@@ -57,7 +57,6 @@ export interface RegisterWorkspaceIpcOptions {
   selectDirectory: (sender?: WebContentsLike) => Promise<string | null>
   coordinator?: WorkspaceIpcCoordinator
   workspaceService?: WorkspaceFsService
-  frontmatterSchemaService?: FrontmatterSchemaService
   bufferHub?: SharedDocumentBufferHub
   getTargets?: () => WebContentsLike[]
   isMainWindowSender?: (sender: WebContentsLike | undefined) => boolean
@@ -70,7 +69,6 @@ export interface RegisterWorkspaceIpcOptions {
 export function registerWorkspaceIpc({
   ipcMain,
   workspaceService,
-  frontmatterSchemaService,
   bufferHub,
   configService,
   selectDirectory,
@@ -92,12 +90,10 @@ export function registerWorkspaceIpc({
         'registerWorkspaceIpc requires either coordinator or workspaceService and getTargets'
       )
     }
-    const effectiveSchemaService =
-      frontmatterSchemaService ??
-      (ownedSchemaService = new FrontmatterSchemaService({ workspaceService, logService }))
+    ownedSchemaService = new FrontmatterSchemaService({ workspaceService, logService })
     ownedSearchService = new WorkspaceSearchService({
       workspaceService,
-      frontmatterSchemaService: effectiveSchemaService,
+      frontmatterSchemaService: ownedSchemaService,
       getOpenBuffers: bufferHub ? () => Object.values(bufferHub.getSnapshot().buffers) : () => []
     })
     const singleSession: WorkspaceIpcSession = {
