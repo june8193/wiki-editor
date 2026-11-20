@@ -541,25 +541,17 @@ describe('Multi-window Git Stash integration (<App />)', () => {
             ...gitState,
             untracked: gitState.untracked.filter((item) => item.path !== 'wiki/draft.md')
           }
-        } else if (options.scope === 'all') {
-          await mainWorkspaceApi?.writeFile(`${workspaceRoot}/staged.md`, '# Head Staged')
-          await mainWorkspaceApi?.writeFile(`${workspaceRoot}/other.md`, '# Head Other')
-          if (options.includeUntracked !== false) {
-            await removeOrIgnoreMissing(`${workspaceRoot}/draft.md`)
-          }
-          gitState = {
-            ...gitState,
-            staged: [],
-            unstaged: [],
-            untracked: options.includeUntracked === false ? gitState.untracked : []
-          }
         } else {
+          if (options.scope === 'all') {
+            await mainWorkspaceApi?.writeFile(`${workspaceRoot}/staged.md`, '# Head Staged')
+          }
           await mainWorkspaceApi?.writeFile(`${workspaceRoot}/other.md`, '# Head Other')
           if (options.includeUntracked !== false) {
             await removeOrIgnoreMissing(`${workspaceRoot}/draft.md`)
           }
           gitState = {
             ...gitState,
+            ...(options.scope === 'all' ? { staged: [] } : {}),
             unstaged: [],
             untracked: options.includeUntracked === false ? gitState.untracked : []
           }

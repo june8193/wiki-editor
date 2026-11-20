@@ -11,8 +11,6 @@ describe('GitService integration (stash)', () => {
       await expect(service.stashList(nonGitDir)).rejects.toThrow(/Git 저장소가 아닙니다/)
 
       await service.init(repoDir)
-      await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
-      await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
 
       // Unborn repo returns []
       expect(await service.stashList(repoDir)).toEqual([])
@@ -64,8 +62,6 @@ describe('GitService integration (stash)', () => {
   it('stashes only Changes (unstaged M/D and optional untracked ?) while preserving isolated Staged Changes and falling back to --keep-index on MM overlap', () =>
     withGitTestSandbox(async ({ service, repoDir, runGit }) => {
       await service.init(repoDir)
-      await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
-      await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
 
       await mkdir(join(repoDir, 'subws'), { recursive: true })
       await writeFile(join(repoDir, 'staged-doc.md'), '# Staged v1\n', 'utf8')
@@ -147,10 +143,8 @@ describe('GitService integration (stash)', () => {
     }), 60_000)
 
   it('supports scope=all and scope=paths stash creation, blocks unborn/empty targets, and enforces path security', () =>
-    withGitTestSandbox(async ({ service, tempRoot, repoDir, runGit }) => {
+    withGitTestSandbox(async ({ service, tempRoot, repoDir }) => {
       await service.init(repoDir)
-      await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
-      await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
 
       // 1. Unborn repo error
       await writeFile(join(repoDir, 'seed.md'), '# Seed\n', 'utf8')
@@ -253,10 +247,8 @@ describe('GitService integration (stash)', () => {
     }), 60_000)
 
   it('restores Changes via stashApply (keeps entry) and stashPop (removes entry on success, preserves entry on conflict) and suggests Stash on local overwrite errors', () =>
-    withGitTestSandbox(async ({ service, repoDir, runGit }) => {
+    withGitTestSandbox(async ({ service, repoDir }) => {
       await service.init(repoDir)
-      await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
-      await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
 
       await writeFile(join(repoDir, 'doc.md'), '# Base\n', 'utf8')
       await service.stageAll(repoDir)
@@ -305,13 +297,11 @@ describe('GitService integration (stash)', () => {
     }), 60_000)
 
   it('drops individual stashes with ref renumbering, clears all stashes idempotently, and blocks non-repo/invalid/missing stashRefs', () =>
-    withGitTestSandbox(async ({ service, repoDir, nonGitDir, runGit }) => {
+    withGitTestSandbox(async ({ service, repoDir, nonGitDir }) => {
       await expect(service.stashDrop(nonGitDir, 'stash@{0}')).rejects.toThrow(/Git 저장소가 아닙니다/)
       await expect(service.stashClear(nonGitDir)).rejects.toThrow(/Git 저장소가 아닙니다/)
 
       await service.init(repoDir)
-      await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
-      await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
 
       // Unborn repo: stashClear returns [] cleanly, malformed stashRefs are rejected
       expect(await service.stashClear(repoDir)).toEqual([])
