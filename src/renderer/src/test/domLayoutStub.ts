@@ -1,5 +1,6 @@
 import { act } from '@testing-library/react'
 import { vi } from 'vitest'
+import themeCss from '../styles/theme.css?raw'
 
 export interface ResizeObserverStub {
   trigger: () => void
@@ -36,13 +37,20 @@ export function installResizeObserverStub(): ResizeObserverStub {
 }
 
 /**
- * Stubs `getBoundingClientRect()` on a JSDOM element with deterministic layout dimensions.
+ * Constructs a `DOMRect` object with deterministic bounds for JSDOM layout stubs.
  */
-export function mockElementBoundingRect(
-  element: HTMLElement,
-  { left = 0, top = 0, width, height }: { left?: number; top?: number; width: number; height: number }
-): void {
-  vi.spyOn(element, 'getBoundingClientRect').mockReturnValue({
+export function createDomRect({
+  left = 0,
+  top = 0,
+  width,
+  height
+}: {
+  left?: number
+  top?: number
+  width: number
+  height: number
+}): DOMRect {
+  return {
     left,
     top,
     right: left + width,
@@ -52,7 +60,17 @@ export function mockElementBoundingRect(
     x: left,
     y: top,
     toJSON: () => ({})
-  })
+  } as DOMRect
+}
+
+/**
+ * Stubs `getBoundingClientRect()` on a JSDOM element with deterministic layout dimensions.
+ */
+export function mockElementBoundingRect(
+  element: HTMLElement,
+  bounds: { left?: number; top?: number; width: number; height: number }
+): void {
+  vi.spyOn(element, 'getBoundingClientRect').mockReturnValue(createDomRect(bounds))
 }
 
 /**
@@ -100,6 +118,29 @@ export function installScrollContainerStub(
     getScrollWrites: () => scrollWrites,
     clearScrollWrites: () => {
       scrollWrites.length = 0
+    }
+  }
+}
+
+/**
+ * Injects `theme.css` into `document.head` and mounts a `#root` element in `document.body`
+ * for layout and computed-style assertions, returning a cleanup callback.
+ */
+export function mountThemeStylesAndRoot(): { rootEl: HTMLDivElement; cleanup: () => void } {
+  const styleEl = document.createElement('style')
+  styleEl.setAttribute('data-test-theme', 'true')
+  styleEl.textContent = themeCss
+  document.head.appendChild(styleEl)
+
+  const rootEl = document.createElement('div')
+  rootEl.id = 'root'
+  document.body.appendChild(rootEl)
+
+  return {
+    rootEl,
+    cleanup: () => {
+      rootEl.remove()
+      styleEl.remove()
     }
   }
 }
