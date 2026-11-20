@@ -1288,6 +1288,10 @@ export function createMultiWindowWikiHarness(
           existsInWorkspace: true,
           rawPatch: ''
         }),
+        stashList: async () => [],
+        stashCreate: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+        stashApply: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+        stashPop: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
         ...fsOptions.git
       },
       menu: {

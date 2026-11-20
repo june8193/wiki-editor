@@ -99,6 +99,23 @@ export type GitDiffRequest =
       shortHash: string
     } & GitChangedFile)
 
+export type GitStashScope = 'unstaged' | 'all' | 'paths'
+
+export interface GitStashEntry {
+  ref: string
+  hash: string
+  branch: string | null
+  message: string
+  createdAt: string
+}
+
+export interface GitStashCreateOptions {
+  scope: GitStashScope
+  message?: string
+  includeUntracked?: boolean
+  paths?: string[]
+}
+
 export interface GitFileDiff extends GitChangedFile {
   isBinary: boolean
   isTruncated: boolean

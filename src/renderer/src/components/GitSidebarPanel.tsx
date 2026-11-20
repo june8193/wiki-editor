@@ -26,6 +26,7 @@ import {
   type GitChangedFile,
   type GitDiffRequest,
   type GitLogScope,
+  type GitStashEntry,
   type GitStatus
 } from '@shared/git'
 import { type DismissReason, useDismissable } from '../hooks/useDismissable'
@@ -42,6 +43,7 @@ import {
 import { GitChangesFileGroups, GitChangesHeaderActions } from './GitChangesSection'
 import { GitGraphHeaderActions, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
+import { GitStashesSection } from './GitStashesSection'
 
 const COMMIT_INPUT_MAX_HEIGHT_PX = 120
 
@@ -55,6 +57,7 @@ export interface GitSidebarPanelProps {
   workspaceRootPath: string | null
   status: GitStatus | null
   branchList: GitBranchList | null
+  stashes: readonly GitStashEntry[]
   graphState: GitGraphState
   pendingAction: string | null
   errorMessage: string | null
@@ -72,6 +75,9 @@ export interface GitSidebarPanelProps {
   onUnstageAll: () => void
   onDiscardFile: (path: string) => void
   onDiscardAll: () => void
+  onStashChanges: () => void
+  onPopStash: (stashRef: string) => void
+  onApplyStash: (stashRef: string) => void
   onCommit: (message: string, mode?: GitCommitActionMode) => Promise<boolean> | boolean
   onCheckoutBranch: (branchName: string) => void
   onPull: () => void
@@ -81,6 +87,7 @@ export interface GitSidebarPanelProps {
   onOpenFileDiff: (request: GitDiffRequest) => void
   onOpenWorkspaceFile: (repoRelativePath: string) => void
   onToggleChangesCollapsed: () => void
+  onToggleStashesCollapsed: () => void
   onToggleGraphCollapsed: () => void
   onResizeChangesRatio: (nextRatio: number) => void
   onToggleChangesViewMode: () => void
@@ -158,6 +165,7 @@ interface GitAccordionSectionProps {
   title: string
   badgeCount?: number
   headerActions?: ReactNode
+  className?: string
   isExpanded: boolean
   flexRatio: number | null
   onToggle: () => void
@@ -168,14 +176,23 @@ function GitAccordionSection({
   title,
   badgeCount,
   headerActions,
+  className,
   isExpanded,
   flexRatio,
   onToggle,
   children
 }: GitAccordionSectionProps) {
+  const sectionClassName = [
+    'git-accordion-section',
+    isExpanded ? '' : 'is-collapsed',
+    className ?? ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
     <section
-      className={`git-accordion-section${isExpanded ? '' : ' is-collapsed'}`}
+      className={sectionClassName}
       aria-label={title}
       style={getSectionFlexStyle(flexRatio)}
     >
@@ -639,6 +656,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   workspaceRootPath,
   status,
   branchList,
+  stashes,
   graphState,
   pendingAction,
   errorMessage,
@@ -656,6 +674,9 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onUnstageAll,
   onDiscardFile,
   onDiscardAll,
+  onStashChanges,
+  onPopStash,
+  onApplyStash,
   onCommit,
   onCheckoutBranch,
   onPull,
@@ -665,6 +686,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onOpenFileDiff,
   onOpenWorkspaceFile,
   onToggleChangesCollapsed,
+  onToggleStashesCollapsed,
   onToggleGraphCollapsed,
   onResizeChangesRatio,
   onToggleChangesViewMode,
@@ -821,6 +843,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 onToggleTreeDir={onToggleChangesTreeDirCollapsed}
                 onStageAll={onStageAll}
                 onUnstageAll={onUnstageAll}
+                onStashChanges={onStashChanges}
                 onDiscardAll={onDiscardAll}
                 onSelectStagedFile={(file) => onOpenFileDiff(toGitDiffRequest('staged', file))}
                 onSelectWorkingFile={(file) => onOpenFileDiff(toGitDiffRequest('unstaged', file))}
@@ -838,6 +861,22 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 onResizeRatio={onResizeChangesRatio}
               />
             )}
+
+            <GitAccordionSection
+              title="Stashes"
+              badgeCount={stashes.length}
+              className={layout.stashesBodyMode === 'compact' ? 'is-compact' : undefined}
+              isExpanded={layout.showStashesBody}
+              flexRatio={layout.stashesFlexRatio}
+              onToggle={onToggleStashesCollapsed}
+            >
+              <GitStashesSection
+                stashes={stashes}
+                isBusy={isBusy}
+                onPopStash={onPopStash}
+                onApplyStash={onApplyStash}
+              />
+            </GitAccordionSection>
 
             <GitAccordionSection
               title="Graph"

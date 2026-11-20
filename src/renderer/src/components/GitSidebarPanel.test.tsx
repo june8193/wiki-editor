@@ -6,6 +6,7 @@ import {
   createEmptyGitStatus,
   type GitBranchList,
   type GitGraphCommit,
+  type GitStashEntry,
   type GitStatus
 } from '@shared/git'
 import { createInitialGitGraphState } from '../hooks/useGitGraphLog'
@@ -22,6 +23,7 @@ import {
   createDefaultGitPanelSplitState,
   toggleGitChangesCollapsed,
   toggleGitGraphCollapsed,
+  toggleGitStashesCollapsed,
   updateChangesHeightRatio,
   type GitPanelSplitState
 } from '../utils/gitPanelSplit'
@@ -66,12 +68,16 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onUnstageAll: vi.fn(),
     onDiscardFile: vi.fn(),
     onDiscardAll: vi.fn(),
+    onStashChanges: vi.fn(),
+    onPopStash: vi.fn(),
+    onApplyStash: vi.fn(),
     onCommit: vi.fn(),
     onCheckoutBranch: vi.fn(),
     onPull: vi.fn(),
     onPush: vi.fn(),
     onFetch: vi.fn(),
     onSync: vi.fn(),
+    stashes: [],
     graphState: createInitialGitGraphState(),
     onChangeLogScope: vi.fn(),
     onLoadMoreCommits: vi.fn(),
@@ -81,6 +87,7 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onOpenFileDiff: vi.fn(),
     onOpenWorkspaceFile: vi.fn(),
     onToggleChangesCollapsed: vi.fn(),
+    onToggleStashesCollapsed: vi.fn(),
     onToggleGraphCollapsed: vi.fn(),
     onResizeChangesRatio: vi.fn(),
     onToggleChangesViewMode: vi.fn(),
@@ -106,6 +113,7 @@ function StatefulGitSidebarPanel(props: GitSidebarPanelProps) {
       splitState={splitState}
       changesViewState={changesViewState}
       onToggleChangesCollapsed={() => setSplitState(toggleGitChangesCollapsed)}
+      onToggleStashesCollapsed={() => setSplitState(toggleGitStashesCollapsed)}
       onToggleGraphCollapsed={() => setSplitState(toggleGitGraphCollapsed)}
       onResizeChangesRatio={(nextRatio) =>
         setSplitState((prev) => updateChangesHeightRatio(prev, nextRatio))
@@ -2047,6 +2055,152 @@ describe('GitSidebarPanel', () => {
       expect(getComputedStyle(masterBadge.querySelector('.git-ref-label')!).textOverflow).toBe(
         'ellipsis'
       )
+    } finally {
+      styleEl.remove()
+    }
+  })
+
+  it('renders 3-tier Changes -> Stashes -> Graph accordions, quick Changes stash icon left of Discard All, Stashes compact/fill layout, and Pop/Apply row actions', async () => {
+    const user = userEvent.setup()
+    const onStashChanges = vi.fn()
+    const onPopStash = vi.fn()
+    const onApplyStash = vi.fn()
+
+    const stashes: GitStashEntry[] = [
+      {
+        ref: 'stash@{0}',
+        hash: '1111111111111111111111111111111111111111',
+        branch: 'main',
+        message: 'draft notes backup',
+        createdAt: '2026-11-20T09:15:00+09:00'
+      },
+      {
+        ref: 'stash@{1}',
+        hash: '2222222222222222222222222222222222222222',
+        branch: null,
+        message: 'WIP on main: seed',
+        createdAt: '2026-11-19T18:05:00+09:00'
+      }
+    ]
+
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    try {
+      const { rerender } = render(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            stashes: [],
+            onStashChanges,
+            onPopStash,
+            onApplyStash
+          })}
+        />
+      )
+
+      const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+      const changesSection = within(region).getByRole('region', { name: 'Changes' })
+      const stashesSection = within(region).getByRole('region', { name: 'Stashes' })
+      const graphSection = within(region).getByRole('region', { name: 'Graph' })
+
+      // 1. 3-tier order: Changes -> Stashes -> Graph; Stashes defaults collapsed with badge 0
+      expect(
+        changesSection.compareDocumentPosition(stashesSection) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      expect(
+        stashesSection.compareDocumentPosition(graphSection) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+
+      const stashesToggle = within(stashesSection).getByRole('button', { name: /^Stashes/i })
+      expect(stashesToggle).toHaveAttribute('aria-expanded', 'false')
+      expect(stashesToggle).toHaveTextContent('0')
+
+      // 2. Changes subgroup quick stash button sits left of 전체 변경 사항 롤백 and is absent from Staged Changes
+      const stagedGroup = within(changesSection).getByRole('group', { name: 'Staged Changes' })
+      expect(within(stagedGroup).queryByRole('button', { name: 'Changes만 Stash' })).toBeNull()
+
+      const changesGroup = within(changesSection).getByRole('group', { name: 'Changes' })
+      const quickStashBtn = within(changesGroup).getByRole('button', { name: 'Changes만 Stash' })
+      const discardAllBtn = within(changesGroup).getByRole('button', {
+        name: '전체 변경 사항 롤백'
+      })
+      expect(
+        quickStashBtn.compareDocumentPosition(discardAllBtn) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      expect(quickStashBtn).toBeEnabled()
+      await user.click(quickStashBtn)
+      expect(onStashChanges).toHaveBeenCalledTimes(1)
+
+      // 3. Expand empty Stashes -> shows empty text and compact style while Changes/Graph expanded
+      await user.click(stashesToggle)
+      expect(stashesToggle).toHaveAttribute('aria-expanded', 'true')
+      expect(within(stashesSection).getByText('보관된 Stash가 없습니다.')).toBeInTheDocument()
+      expect(stashesSection).toHaveClass('is-compact')
+      expect(stashesSection.style.flex).toBe('')
+
+      // 4. Render stashes -> displays badge 2, message, stash@{n}, formatted timestamp, and Pop/Apply actions
+      rerender(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            stashes,
+            splitState: {
+              ...createDefaultGitPanelSplitState(),
+              isStashesCollapsed: false
+            },
+            onStashChanges,
+            onPopStash,
+            onApplyStash
+          })}
+        />
+      )
+
+      expect(within(stashesSection).getByRole('button', { name: /^Stashes/i })).toHaveTextContent(
+        '2'
+      )
+      const stashList = within(stashesSection).getByRole('list', { name: 'Stash 목록' })
+      const stashItems = within(stashList).getAllByRole('listitem')
+      expect(stashItems).toHaveLength(2)
+
+      expect(stashItems[0]).toHaveTextContent('draft notes backup')
+      expect(stashItems[0]).toHaveTextContent('stash@{0}')
+      expect(stashItems[0].textContent).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/)
+
+      const popBtn0 = within(stashItems[0]).getByRole('button', { name: /Pop/ })
+      const applyBtn0 = within(stashItems[0]).getByRole('button', { name: /Apply/ })
+      const actionsContainer = popBtn0.parentElement as HTMLElement
+      expect(getComputedStyle(actionsContainer).opacity).toBe('0')
+      popBtn0.focus()
+      expect(getComputedStyle(actionsContainer).opacity).toBe('1')
+
+      await user.click(popBtn0)
+      expect(onPopStash).toHaveBeenCalledWith('stash@{0}')
+      await user.click(applyBtn0)
+      expect(onApplyStash).toHaveBeenCalledWith('stash@{0}')
+
+      // 5. Collapsing both Changes and Graph switches Stashes from compact to fill (flex: 1 1 0%)
+      await user.click(getChangesAccordionToggle(region))
+      await user.click(within(region).getByRole('button', { name: /^Graph/i }))
+      expect(stashesSection).not.toHaveClass('is-compact')
+      expect(stashesSection).toHaveStyle({ flex: '1 1 0%' })
+
+      // Re-expand Changes so subgroup header is rendered, then verify disabled states on empty Changes & busy
+      await user.click(getChangesAccordionToggle(region))
+      rerender(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            status: buildGitStatus({ unstaged: [], untracked: [] }),
+            stashes,
+            pendingAction: 'Stash Pop',
+            onStashChanges,
+            onPopStash,
+            onApplyStash
+          })}
+        />
+      )
+      expect(within(region).getByRole('button', { name: 'Changes만 Stash' })).toBeDisabled()
+      expect(within(region).getByRole('button', { name: 'stash@{0} Pop' })).toBeDisabled()
+      expect(within(region).getByRole('button', { name: 'stash@{0} Apply' })).toBeDisabled()
     } finally {
       styleEl.remove()
     }

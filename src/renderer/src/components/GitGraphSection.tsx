@@ -19,7 +19,7 @@ import type {
   GitLogScope
 } from '@shared/git'
 import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
-import { toGitDiffRequest } from '../utils/gitFilePresentation'
+import { formatGitTimestamp, toGitDiffRequest } from '../utils/gitFilePresentation'
 import { normalizeGitGraphRefs, type GitGraphDisplayRef } from '../utils/gitGraphRefs'
 import { GitChangedFileRow } from './GitChangedFileRow'
 import {
@@ -71,26 +71,9 @@ function getLaneColor(colorIndex: number): string {
   return `var(--git-graph-lane-${normalized}, ${LANE_FALLBACK_COLORS[normalized]})`
 }
 
-function padTwo(value: number): string {
-  return String(value).padStart(2, '0')
-}
-
-function formatGitCommitTimestamp(isoTimestamp: string): string {
-  const parsed = new Date(isoTimestamp)
-  if (Number.isNaN(parsed.getTime())) {
-    return isoTimestamp
-  }
-  const year = parsed.getFullYear()
-  const month = padTwo(parsed.getMonth() + 1)
-  const day = padTwo(parsed.getDate())
-  const hours = padTwo(parsed.getHours())
-  const minutes = padTwo(parsed.getMinutes())
-  return `${year}-${month}-${day} ${hours}:${minutes}`
-}
-
 /** Formats hover tooltip text (`shortHash · authorName · 날짜·시간 · subject`) for a commit row. */
 export function formatGitCommitTooltip(commit: GitGraphCommit): string {
-  return `${commit.shortHash} · ${commit.authorName} · ${formatGitCommitTimestamp(commit.committedAt)} · ${commit.subject}`
+  return `${commit.shortHash} · ${commit.authorName} · ${formatGitTimestamp(commit.committedAt)} · ${commit.subject}`
 }
 
 function getDisplayRefKey(displayRef: GitGraphDisplayRef): string {
@@ -484,7 +467,7 @@ function GitCommitDetailPanel({
                 : loadedDetail.authorName}
             </span>
             <span className="git-commit-detail-date">
-              {formatGitCommitTimestamp(loadedDetail.committedAt)}
+              {formatGitTimestamp(loadedDetail.committedAt)}
             </span>
           </div>
           <GitCommitDetailFiles detail={loadedDetail} onOpenFileDiff={onOpenFileDiff} />

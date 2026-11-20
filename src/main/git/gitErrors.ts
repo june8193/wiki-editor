@@ -43,7 +43,12 @@ const ERROR_PATTERNS: ReadonlyArray<{
   {
     patterns: ['would be overwritten by', 'please commit your changes or stash them'],
     buildMessage: (detail) =>
-      `커밋되지 않은 로컬 변경 사항이 있어 작업을 완료할 수 없습니다. 변경 사항을 커밋하거나 정리한 뒤 다시 시도하세요.\n${detail}`
+      `커밋되지 않은 로컬 변경 사항이 있어 작업을 완료할 수 없습니다. 변경 사항을 커밋하거나 Stash로 임시 보관한 뒤 다시 시도하세요.\n${detail}`
+  },
+  {
+    patterns: ['could not restore untracked files from stash', 'already exists, no checkout'],
+    buildMessage: (detail) =>
+      `워킹 트리에 이미 동일한 이름의 파일이 있어 Stash의 미추적 파일을 복원하지 못했습니다. 해당 Stash는 보존되었습니다.\n${detail}`
   },
   {
     patterns: ['non-fast-forward', 'fetch first', 'failed to push some refs'],
@@ -61,6 +66,10 @@ const ERROR_PATTERNS: ReadonlyArray<{
   {
     patterns: ['invalid reference:'],
     buildMessage: (detail) => `브랜치를 찾을 수 없습니다.\n${detail}`
+  },
+  {
+    patterns: ['is not a valid reference', 'no stash entries found'],
+    buildMessage: (detail) => `지정한 Stash 항목을 찾을 수 없습니다.\n${detail}`
   },
   {
     patterns: ['no configured push destination', 'does not appear to be a git repository'],

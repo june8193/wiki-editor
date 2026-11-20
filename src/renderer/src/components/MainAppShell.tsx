@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand, WikiApi } from '@shared/ipc'
-import { getGitChangedCount, type GitDiffRequest } from '@shared/git'
+import { getGitChangedCount, type GitDiffRequest, type GitStatus } from '@shared/git'
 import type { WorkspaceSearchFileResult } from '@shared/search'
 import {
   filterTopLevelWorkspaceEntries,
@@ -18,7 +18,11 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
-import { useGitController, type WorkspaceDiscardTarget } from '../hooks/useGitController'
+import {
+  useGitController,
+  type WorkspaceDiscardTarget,
+  type WorkspaceStashMutationTarget
+} from '../hooks/useGitController'
 import { useGitDiffTabs } from '../hooks/useGitDiffTabs'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
@@ -39,8 +43,11 @@ import {
 } from '../utils/gitChangesView'
 import {
   createDefaultGitPanelSplitState,
+  resetGitStashesCollapsed,
+  setGitStashesCollapsed,
   toggleGitChangesCollapsed,
   toggleGitGraphCollapsed,
+  toggleGitStashesCollapsed,
   updateChangesHeightRatio,
   type GitPanelSplitState
 } from '../utils/gitPanelSplit'
@@ -139,6 +146,7 @@ export function MainAppShell() {
   const activeWorkspaceRootRef = useRef<string | null>(null)
   const activeGitRepoRootRef = useRef<string | null>(null)
   const activeDiscardTargetPathsRef = useRef<readonly string[] | null>(null)
+  const activeStashTargetPathsRef = useRef<readonly string[] | null>(null)
   const onInitialConfigLoadedRef = useRef<(loadedConfig: AppConfig) => void>(() => undefined)
   const tryStartupWorkspaceOpenRef = useRef<() => void>(() => undefined)
   const startupInitRef = useRef<{
@@ -248,6 +256,14 @@ export function MainAppShell() {
     setGitPanelSplit(toggleGitChangesCollapsed)
   }, [])
 
+  const handleToggleGitStashesCollapsed = useCallback((): void => {
+    setGitPanelSplit(toggleGitStashesCollapsed)
+  }, [])
+
+  const handleStashCreated = useCallback((): void => {
+    setGitPanelSplit((prev) => setGitStashesCollapsed(prev, false))
+  }, [])
+
   const handleToggleGitGraphCollapsed = useCallback((): void => {
     setGitPanelSplit(toggleGitGraphCollapsed)
   }, [])
@@ -335,6 +351,7 @@ export function MainAppShell() {
   const activeWorkspaceRoot = workspace?.rootPath ?? null
   useEffect(() => {
     setGitChangesView(resetGitChangesTreeCollapsedDirs)
+    setGitPanelSplit(resetGitStashesCollapsed)
   }, [activeWorkspaceRoot])
 
   const workspaceSearch = useWorkspaceSearch({
@@ -465,8 +482,11 @@ export function MainAppShell() {
   const {
     ensureAllWorkspaceBuffersSaved,
     getDirtyWorkspaceSummary,
+    closeDiffTabsForPaths,
     closeUnstagedDiffTabsForPaths,
+    closeUnstagedDiffTabsExcept,
     closeAllUnstagedDiffTabs,
+    getOpenWorkspaceBufferPaths,
     prepareWorkspacePathsForDiscard,
     finishWorkspacePathsDiscard
   } = editor
@@ -556,6 +576,15 @@ export function MainAppShell() {
     [awaitGitConfirm, confirmAction]
   )
 
+  const finishPreparedWorkspacePaths = useCallback(
+    async (targetPaths: readonly string[], forceSync: boolean): Promise<void> => {
+      if (targetPaths.length > 0) {
+        await finishWorkspacePathsDiscard(targetPaths, forceSync)
+      }
+    },
+    [finishWorkspacePathsDiscard]
+  )
+
   const handleBeforeWorkspaceDiscard = useCallback(
     async (target: WorkspaceDiscardTarget): Promise<void> => {
       const targetPaths = resolveTargetWorkspacePaths(target.paths)
@@ -571,9 +600,7 @@ export function MainAppShell() {
       const targetPaths =
         activeDiscardTargetPathsRef.current ?? resolveTargetWorkspacePaths(target.paths)
       activeDiscardTargetPathsRef.current = null
-      if (targetPaths.length > 0) {
-        await finishWorkspacePathsDiscard(targetPaths, succeeded)
-      }
+      await finishPreparedWorkspacePaths(targetPaths, succeeded)
       if (succeeded) {
         if (target.scope === 'all') {
           closeAllUnstagedDiffTabs()
@@ -586,7 +613,68 @@ export function MainAppShell() {
     [
       closeAllUnstagedDiffTabs,
       closeUnstagedDiffTabsForPaths,
-      finishWorkspacePathsDiscard,
+      finishPreparedWorkspacePaths,
+      refreshTree,
+      resolveTargetWorkspacePaths
+    ]
+  )
+
+  const handleBeforeWorkspaceStash = useCallback(
+    async (target: WorkspaceStashMutationTarget): Promise<void> => {
+      const targetPaths =
+        target.kind === 'create'
+          ? resolveTargetWorkspacePaths(target.targetRepoPaths)
+          : getOpenWorkspaceBufferPaths()
+      activeStashTargetPathsRef.current = targetPaths
+      if (targetPaths.length === 0) return
+      await prepareWorkspacePathsForDiscard(targetPaths)
+    },
+    [getOpenWorkspaceBufferPaths, prepareWorkspacePathsForDiscard, resolveTargetWorkspacePaths]
+  )
+
+  const handleAfterWorkspaceStash = useCallback(
+    async (
+      target: WorkspaceStashMutationTarget,
+      succeeded: boolean,
+      nextStatus: GitStatus | null
+    ): Promise<void> => {
+      const fallbackPaths =
+        target.kind === 'create'
+          ? resolveTargetWorkspacePaths(target.targetRepoPaths)
+          : getOpenWorkspaceBufferPaths()
+      const targetPaths = activeStashTargetPathsRef.current ?? fallbackPaths
+      activeStashTargetPathsRef.current = null
+      await finishPreparedWorkspacePaths(targetPaths, target.kind === 'restore' || succeeded)
+
+      if (target.kind === 'create') {
+        if (!succeeded) return
+        if (target.scope === 'unstaged') {
+          closeAllUnstagedDiffTabs()
+        } else if (target.scope === 'all') {
+          closeAllUnstagedDiffTabs()
+          closeDiffTabsForPaths(target.targetRepoPaths, ['staged'])
+        } else {
+          closeDiffTabsForPaths(target.targetRepoPaths, ['staged', 'unstaged'])
+        }
+        await refreshTree()
+        return
+      }
+
+      if (nextStatus) {
+        const activeWorkingPaths = new Set([
+          ...nextStatus.unstaged.map((item) => item.path),
+          ...nextStatus.untracked.map((item) => item.path)
+        ])
+        closeUnstagedDiffTabsExcept(activeWorkingPaths)
+      }
+      await refreshTree()
+    },
+    [
+      closeAllUnstagedDiffTabs,
+      closeDiffTabsForPaths,
+      closeUnstagedDiffTabsExcept,
+      finishPreparedWorkspacePaths,
+      getOpenWorkspaceBufferPaths,
       refreshTree,
       resolveTargetWorkspacePaths
     ]
@@ -603,6 +691,9 @@ export function MainAppShell() {
     confirmBeforeWorkspaceMutation: confirmDirtyBuffersBeforeGitMutation,
     onBeforeWorkspaceDiscard: handleBeforeWorkspaceDiscard,
     onAfterWorkspaceDiscard: handleAfterWorkspaceDiscard,
+    onBeforeWorkspaceStash: handleBeforeWorkspaceStash,
+    onAfterWorkspaceStash: handleAfterWorkspaceStash,
+    onStashCreated: handleStashCreated,
     onWorkspaceMutated: handleGitWorkspaceMutated,
     onWorkspaceMutationActiveChange: setIsGitWorkspaceMutating
   })
@@ -1010,6 +1101,7 @@ export function MainAppShell() {
                 workspaceRootPath={workspace?.rootPath ?? null}
                 status={git.status}
                 branchList={git.branchList}
+                stashes={git.stashes}
                 graphState={git.graphState}
                 pendingAction={git.pendingAction}
                 errorMessage={git.errorMessage}
@@ -1027,6 +1119,9 @@ export function MainAppShell() {
                 onUnstageAll={() => void git.unstageAll()}
                 onDiscardFile={(path) => void git.discardFile(path)}
                 onDiscardAll={handleRequestDiscardAll}
+                onStashChanges={() => void git.stashChanges()}
+                onPopStash={(stashRef) => void git.stashPop(stashRef)}
+                onApplyStash={(stashRef) => void git.stashApply(stashRef)}
                 onCommit={git.commit}
                 onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
                 onPull={() => void git.pull()}
@@ -1036,6 +1131,7 @@ export function MainAppShell() {
                 onOpenFileDiff={handleOpenFileDiff}
                 onOpenWorkspaceFile={handleOpenRepoWorkspaceFile}
                 onToggleChangesCollapsed={handleToggleGitChangesCollapsed}
+                onToggleStashesCollapsed={handleToggleGitStashesCollapsed}
                 onToggleGraphCollapsed={handleToggleGitGraphCollapsed}
                 onResizeChangesRatio={handleResizeGitChangesRatio}
                 onToggleChangesViewMode={handleToggleGitChangesViewMode}

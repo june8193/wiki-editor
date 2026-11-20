@@ -19,6 +19,8 @@ import type {
   GitFileDiff,
   GitLogOptions,
   GitLogResult,
+  GitStashCreateOptions,
+  GitStashEntry,
   GitStatus,
   GitSyncResult
 } from './git'
@@ -112,7 +114,11 @@ export const GIT_IPC_CHANNELS = {
   sync: 'git:sync',
   log: 'git:log',
   commitDetail: 'git:commit-detail',
-  diff: 'git:diff'
+  diff: 'git:diff',
+  stashList: 'git:stash-list',
+  stashCreate: 'git:stash-create',
+  stashApply: 'git:stash-apply',
+  stashPop: 'git:stash-pop'
 } as const
 
 export type AppMenuCommand = 'open-folder' | 'toggle-theme' | 'toggle-settings'
@@ -236,6 +242,10 @@ export interface WikiGitApi {
   log(workspacePath: string, options?: GitLogOptions): Promise<GitLogResult>
   commitDetail(workspacePath: string, commitHash: string): Promise<GitCommitDetail>
   diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff>
+  stashList(workspacePath: string): Promise<GitStashEntry[]>
+  stashCreate(workspacePath: string, options: GitStashCreateOptions): Promise<GitStatus>
+  stashApply(workspacePath: string, stashRef: string): Promise<GitStatus>
+  stashPop(workspacePath: string, stashRef: string): Promise<GitStatus>
 }
 
 export interface WikiMenuApi {

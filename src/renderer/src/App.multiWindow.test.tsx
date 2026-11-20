@@ -1,7 +1,7 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { GitDiffRequest, GitStatus } from '@shared/git'
+import type { GitDiffRequest, GitStashCreateOptions, GitStashEntry, GitStatus } from '@shared/git'
 import type { ActiveTabDragSession } from '@shared/window'
 import { addFavoriteWorkspace, type WorkspaceChangeEvent } from '@shared/workspace'
 import { App } from './App'
@@ -4947,4 +4947,395 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     ).not.toBeInTheDocument()
     await user.click(within(auxConfirm).getByRole('button', { name: '취소' }))
   })
+
+  it('runs one-click Changes stash (keeping Staged Changes, auto-expanding Stashes, syncing Main/Aux buffers & tabs) and Apply/Pop restore (including conflict preservation and workspace-switch collapse reset)', async () => {
+    const user = userEvent.setup()
+    const repoRoot = 'C:/repo'
+    const workspaceRoot = 'C:/repo/wiki'
+    const otherWorkspaceRoot = 'C:/repo-other'
+    let mainWorkspaceApi: InMemoryWindowHandle['api']['workspace'] | null = null
+
+    let gitState: GitStatus = {
+      isRepo: true,
+      repoRoot,
+      branch: 'main',
+      isDetached: false,
+      isUnborn: false,
+      ahead: 0,
+      behind: 0,
+      hasUpstream: true,
+      hasConflicts: false,
+      staged: [{ path: 'wiki/staged.md', status: 'A' }],
+      unstaged: [{ path: 'wiki/notes.md', status: 'M' }],
+      untracked: [{ path: 'wiki/draft.md', status: '?' }]
+    }
+
+    let stashes: GitStashEntry[] = []
+    let popCalls = 0
+    let stashCreateDelayMs = 0
+    let stashApplyDiffText = 'diff --git a/wiki/notes.md b/wiki/notes.md\n@@ -1 +1 @@\n-# Head Notes\n+# Stashed Notes'
+    const stashEntry0: GitStashEntry = {
+      ref: 'stash@{0}',
+      hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      branch: 'main',
+      message: 'WIP on main: seed',
+      createdAt: '2026-11-20T10:15:00+09:00'
+    }
+
+    const stashCreateSpy = vi.fn(async (_wsPath: string, options: GitStashCreateOptions) => {
+      expect(options).toEqual({ scope: 'unstaged', includeUntracked: true })
+      if (stashCreateDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, stashCreateDelayMs))
+      }
+      await mainWorkspaceApi?.writeFile(`${workspaceRoot}/notes.md`, '# Head Notes')
+      await mainWorkspaceApi?.deleteEntry(`${workspaceRoot}/draft.md`).catch(() => undefined)
+      stashes = [stashEntry0]
+      gitState = {
+        ...gitState,
+        unstaged: [],
+        untracked: []
+      }
+      return gitState
+    })
+
+    const writeOrCreateDraft = async (content: string): Promise<void> => {
+      if (!mainWorkspaceApi) return
+      try {
+        await mainWorkspaceApi.writeFile(`${workspaceRoot}/draft.md`, content)
+      } catch {
+        await mainWorkspaceApi.createEntry(workspaceRoot, 'draft.md', 'file', content)
+      }
+    }
+
+    const stashApplySpy = vi.fn(async () => {
+      await mainWorkspaceApi?.writeFile(`${workspaceRoot}/notes.md`, '# Stashed Notes')
+      await writeOrCreateDraft('# Stashed Draft')
+      gitState = {
+        ...gitState,
+        unstaged: [{ path: 'wiki/notes.md', status: 'M' }],
+        untracked: [{ path: 'wiki/draft.md', status: '?' }]
+      }
+      return gitState
+    })
+
+    const stashPopSpy = vi.fn(async () => {
+      popCalls += 1
+      if (popCalls === 1) {
+        await mainWorkspaceApi?.writeFile(
+          `${workspaceRoot}/notes.md`,
+          '<<<<<<< HEAD\n# Head Notes\n=======\n# Stashed Notes\n>>>>>>> Stashed changes'
+        )
+        stashApplyDiffText =
+          'diff --git a/wiki/notes.md b/wiki/notes.md\n@@ -1 +1,5 @@\n+<<<<<<< HEAD\n+# Head Notes'
+        gitState = {
+          ...gitState,
+          hasConflicts: true,
+          unstaged: [{ path: 'wiki/notes.md', status: 'U' }]
+        }
+        throw new Error('병합 충돌(Conflict)이 발생했습니다. 충돌 파일을 해결한 뒤 다시 시도하세요.')
+      }
+      await mainWorkspaceApi?.writeFile(`${workspaceRoot}/notes.md`, '# Popped Notes')
+      await writeOrCreateDraft('# Popped Draft')
+      stashApplyDiffText = 'diff --git a/wiki/notes.md b/wiki/notes.md\n@@ -1 +1 @@\n-# Head Notes\n+# Popped Notes'
+      stashes = []
+      gitState = {
+        ...gitState,
+        hasConflicts: false,
+        unstaged: [{ path: 'wiki/notes.md', status: 'M' }],
+        untracked: [{ path: 'wiki/draft.md', status: '?' }]
+      }
+      return gitState
+    })
+
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\repo\\wiki',
+        workspaces: {
+          'C:\\repo\\wiki': {
+            'staged.md': '# Staged Content',
+            'notes.md': '# Worktree Notes',
+            'draft.md': '# Untracked Draft',
+            'other.md': '# Other Content'
+          },
+          'C:\\repo-other': {
+            'alpha.md': '# Alpha'
+          }
+        },
+        git: {
+          status: async (wsPath) =>
+            wsPath.includes('repo-other')
+              ? {
+                  isRepo: true,
+                  repoRoot: otherWorkspaceRoot,
+                  branch: 'main',
+                  isDetached: false,
+                  isUnborn: false,
+                  ahead: 0,
+                  behind: 0,
+                  hasUpstream: false,
+                  hasConflicts: false,
+                  staged: [],
+                  unstaged: [],
+                  untracked: []
+                }
+              : gitState,
+          stashList: async (wsPath) => (wsPath.includes('repo-other') ? [] : stashes),
+          stashCreate: stashCreateSpy,
+          stashApply: stashApplySpy,
+          stashPop: stashPopSpy,
+          commit: async () => {
+            gitState = { ...gitState, staged: [] }
+            return gitState
+          },
+          diff: async (_wsPath, request: GitDiffRequest) => ({
+            path: request.path,
+            status: request.status,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch:
+              request.kind === 'unstaged' && request.path === 'wiki/notes.md'
+                ? stashApplyDiffText
+                : `diff --git a/${request.path} b/${request.path}\n@@ -1 +1 @@\n-old\n+new`
+          })
+        }
+      }
+    )
+    activeDisposers.push(() => harness.dispose())
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    mainWorkspaceApi = mainWin.api.workspace
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    activeDisposers.push(() => mainRendered.unmount())
+
+    // Open notes.md -> detach to Aux1; open draft.md -> detach to Aux2; keep staged.md & other.md dirty in Main
+    await openFolderAndNoteInWindow(
+      user,
+      mainRendered.container,
+      mainWin.emitMenuCommand,
+      'notes.md'
+    )
+    await detachTabViaContextMenu(user, mainRendered.container, /notes\.md/)
+    const explorer = within(mainRendered.container).getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('notes.md'))
+    await user.click(await within(explorer).findByText('draft.md'))
+    await detachTabViaContextMenu(user, mainRendered.container, /draft\.md/)
+    await user.click(await within(explorer).findByText('draft.md'))
+
+    for (const [fileName, dirtyText] of [
+      ['staged.md', '# Dirty Staged NonTarget'],
+      ['other.md', '# Dirty Other NonTarget']
+    ] as const) {
+      await user.click(await within(explorer).findByText(fileName))
+      await waitFor(() => {
+        expect(
+          within(mainRendered.container).getByRole('tab', { name: new RegExp(fileName) })
+        ).toHaveAttribute('aria-selected', 'true')
+      })
+      setRawEditorText(within(mainRendered.container).getByTestId('document-editor'), dirtyText)
+    }
+
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(2)
+    })
+    const [auxNotes, auxDraft] = harness.getAuxiliaryWindows()
+    const auxNotesRendered = render(<App wikiApi={auxNotes.api} />)
+    const auxDraftRendered = render(<App wikiApi={auxDraft.api} />)
+    activeDisposers.push(
+      () => auxNotesRendered.unmount(),
+      () => auxDraftRendered.unmount()
+    )
+
+    setRawEditorText(
+      await within(auxNotesRendered.container).findByTestId('document-editor'),
+      '# Aux Dirty Notes'
+    )
+    setRawEditorText(
+      await within(auxDraftRendered.container).findByTestId('document-editor'),
+      '# Aux Dirty Draft'
+    )
+
+    // Switch to Git View -> Stashes collapsed at 0, open staged Diff in secondary & unstaged notes Diff in primary
+    await user.click(within(mainRendered.container).getByRole('button', { name: 'Git' }))
+    const gitPanel = await within(mainRendered.container).findByLabelText('Git 소스 제어')
+    const stashesSection = within(gitPanel).getByRole('region', { name: 'Stashes' })
+    expect(within(stashesSection).getByRole('button', { name: /^Stashes/i })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+
+    const stagedSection = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
+    const changesSection = within(gitPanel).getByRole('group', { name: 'Changes' })
+    await user.click(within(stagedSection).getByText('staged.md'))
+    const primaryPane = within(mainRendered.container).getByTestId('pane-primary')
+    await within(primaryPane).findByText('Staged')
+    fireEvent.contextMenu(within(primaryPane).getByRole('tab', { selected: true }))
+    await user.click(
+      within(await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })).getByRole(
+        'menuitem',
+        { name: '분할 영역으로 이동' }
+      )
+    )
+    const secondaryPane = await within(mainRendered.container).findByTestId('pane-secondary')
+    fireEvent.mouseDown(primaryPane)
+    await user.click(within(changesSection).getByText('notes.md'))
+    await within(primaryPane).findByText('Working Tree')
+
+    // 1. Click Changes만 Stash -> prompt shows ONLY target notes.md / draft.md (excludes staged.md & other.md)
+    await user.click(within(changesSection).getByRole('button', { name: 'Changes만 Stash' }))
+    const cancelPrompt = await within(mainRendered.container).findByRole('alertdialog')
+    expect(cancelPrompt).toHaveTextContent(/notes\.md/)
+    expect(cancelPrompt).not.toHaveTextContent(/staged\.md/)
+    expect(cancelPrompt).not.toHaveTextContent(/other\.md/)
+    await user.click(within(cancelPrompt).getByRole('button', { name: '취소' }))
+    expect(stashCreateSpy).not.toHaveBeenCalled()
+
+    // 2. Confirm 저장 없이 진행 -> keeps staged.md, syncs Aux1/Main notes.md, closes Aux2 draft.md, closes unstaged diff, keeps staged diff, preserves non-target dirty buffers, auto-expands Stashes
+    await user.click(within(changesSection).getByRole('button', { name: 'Changes만 Stash' }))
+    const proceedPrompt = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(proceedPrompt).getByRole('button', { name: '저장 없이 진행' }))
+
+    await waitFor(() => {
+      expect(stashCreateSpy).toHaveBeenCalledTimes(1)
+      expect(auxDraft.isClosed()).toBe(true)
+      expect(within(mainRendered.container).queryByRole('tab', { name: /draft\.md/ })).toBeNull()
+      expect(within(auxNotesRendered.container).queryByTestId('tab-dirty-indicator')).toBeNull()
+    })
+    expect(harness.getFilesSnapshot().get('C:/repo/wiki/notes.md')).toBe('# Head Notes')
+    expect(harness.getFilesSnapshot().get('C:/repo/wiki/other.md')).toBe('# Other Content')
+    expect(getRawEditorText(within(auxNotesRendered.container).getByTestId('document-editor'))).toBe(
+      '# Head Notes'
+    )
+    expect(within(auxNotesRendered.container).queryByText(/외부에서 변경/)).not.toBeInTheDocument()
+
+    // Primary unstaged diff for notes.md closed; Secondary staged diff for staged.md preserved
+    expect(within(primaryPane).queryByText('Working Tree')).toBeNull()
+    expect(within(secondaryPane).getByText('Staged')).toBeInTheDocument()
+    expect(within(stashesSection).getByRole('button', { name: /^Stashes/i })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(within(stashesSection).getByText('WIP on main: seed')).toBeInTheDocument()
+    expect(within(mainRendered.container).getByRole('button', { name: 'Git' })).toHaveTextContent(
+      '1'
+    )
+
+    // 3. Commit staged.md cleanly, then Apply stash@{0} (checks full workspace because other.md & staged.md are dirty)
+    await user.type(within(gitPanel).getByLabelText('커밋 메시지'), 'commit staged')
+    await user.click(within(gitPanel).getByRole('button', { name: 'Commit' }))
+    await waitFor(() => {
+      expect(within(mainRendered.container).getByRole('button', { name: 'Git' })).toHaveTextContent(
+        ''
+      )
+    })
+
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Apply' }))
+    const applyConfirm = await within(mainRendered.container).findByRole('alertdialog')
+    expect(applyConfirm).toHaveTextContent(/staged\.md 외 1개/)
+    await user.click(within(applyConfirm).getByRole('button', { name: '저장 후 진행' }))
+
+    await waitFor(() => {
+      expect(stashApplySpy).toHaveBeenCalledWith(workspaceRoot, 'stash@{0}')
+      expect(within(mainRendered.container).getByRole('button', { name: 'Git' })).toHaveTextContent(
+        '2'
+      )
+    })
+    expect(harness.getFilesSnapshot().get('C:/repo/wiki/staged.md')).toBe(
+      '# Dirty Staged NonTarget'
+    )
+    expect(harness.getFilesSnapshot().get('C:/repo/wiki/other.md')).toBe('# Dirty Other NonTarget')
+    expect(within(stashesSection).getByText('WIP on main: seed')).toBeInTheDocument()
+    expect(getRawEditorText(within(auxNotesRendered.container).getByTestId('document-editor'))).toBe(
+      '# Stashed Notes'
+    )
+
+    // Open unstaged diff tab for notes.md before Pop conflict check
+    fireEvent.mouseDown(primaryPane)
+    await user.click(within(changesSection).getByText('notes.md'))
+    await waitFor(() => {
+      expect(primaryPane).toHaveTextContent('# Stashed Notes')
+    })
+
+    // 4. First Pop hits conflict -> preserves stash@{0}, shows error alert, syncs Aux1 buffer & open unstaged diff tab
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Pop' }))
+    await waitFor(() => {
+      expect(stashPopSpy).toHaveBeenCalledTimes(1)
+      expect(within(gitPanel).getByRole('alert')).toHaveTextContent(/충돌/)
+    })
+    expect(within(stashesSection).getByText('WIP on main: seed')).toBeInTheDocument()
+    expect(getRawEditorText(within(auxNotesRendered.container).getByTestId('document-editor'))).toContain(
+      '<<<<<<< HEAD'
+    )
+    await waitFor(() => {
+      expect(primaryPane).toHaveTextContent('<<<<<<< HEAD')
+    })
+
+    // 5. Second Pop succeeds -> removes stash@{0}, updates Aux1/Main/Diff/Tree
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Pop' }))
+    await waitFor(() => {
+      expect(stashPopSpy).toHaveBeenCalledTimes(2)
+      expect(within(stashesSection).getByRole('button', { name: /^Stashes/i })).toHaveTextContent(
+        '0'
+      )
+    })
+    expect(getRawEditorText(within(auxNotesRendered.container).getByTestId('document-editor'))).toBe(
+      '# Popped Notes'
+    )
+    await waitFor(() => {
+      expect(primaryPane).toHaveTextContent('# Popped Notes')
+    })
+    await user.click(within(mainRendered.container).getByRole('button', { name: '탐색기' }))
+    expect(
+      await within(within(mainRendered.container).getByLabelText('워크스페이스 탐색기')).findByText(
+        'draft.md'
+      )
+    ).toBeInTheDocument()
+    await user.click(within(mainRendered.container).getByRole('button', { name: 'Git' }))
+
+    // 5b. Slow stashCreate (650ms > 500ms autoSave) with 저장 없이 진행 must suppress late auto-save overwrite across Aux1
+    await mainWin.api.config.update({ autoSave: true, autoSaveDelayMs: 500 })
+    stashCreateDelayMs = 650
+    setRawEditorText(
+      within(auxNotesRendered.container).getByTestId('document-editor'),
+      '# Aux Dirty Before AutoSave Suppression'
+    )
+    const refreshedChangesSection = within(
+      await within(mainRendered.container).findByLabelText('Git 소스 제어')
+    ).getByRole('group', { name: 'Changes' })
+    await user.click(
+      within(refreshedChangesSection).getByRole('button', { name: 'Changes만 Stash' })
+    )
+    const autoSavePrompt = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(autoSavePrompt).getByRole('button', { name: '저장 없이 진행' }))
+    await waitFor(() => {
+      expect(stashCreateSpy).toHaveBeenCalledTimes(2)
+      expect(within(auxNotesRendered.container).queryByTestId('tab-dirty-indicator')).toBeNull()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 550))
+    expect(harness.getFilesSnapshot().get('C:/repo/wiki/notes.md')).toBe('# Head Notes')
+    expect(getRawEditorText(within(auxNotesRendered.container).getByTestId('document-editor'))).toBe(
+      '# Head Notes'
+    )
+    expect(within(auxNotesRendered.container).queryByText(/외부에서 변경/)).not.toBeInTheDocument()
+    await mainWin.api.config.update({ autoSave: false })
+    stashCreateDelayMs = 0
+
+    // 6. Switching workspace resets Stashes section collapsed state back to default (aria-expanded="false")
+    mainWin.api.workspace.selectFolder = async () => 'C:\\repo-other'
+    await user.click(within(mainRendered.container).getByRole('button', { name: '워크스페이스' }))
+    const wsView = await within(mainRendered.container).findByRole('region', {
+      name: '워크스페이스 뷰'
+    })
+    await user.click(within(wsView).getByRole('button', { name: '폴더 열기...' }))
+    await within(mainRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(within(mainRendered.container).getByRole('button', { name: 'Git' }))
+    const switchedGitPanel = await within(mainRendered.container).findByLabelText('Git 소스 제어')
+    expect(
+      within(within(switchedGitPanel).getByRole('region', { name: 'Stashes' })).getByRole(
+        'button',
+        { name: /^Stashes/i }
+      )
+    ).toHaveAttribute('aria-expanded', 'false')
+  }, 30_000)
 })

@@ -220,6 +220,26 @@ export function toGitDiffRequest(
   }
 }
 
+function padTwo(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+/**
+ * Formats an ISO-8601 Git timestamp into local `YYYY-MM-DD HH:mm`, returning the raw input if unparseable.
+ */
+export function formatGitTimestamp(isoTimestamp: string): string {
+  const parsed = new Date(isoTimestamp)
+  if (Number.isNaN(parsed.getTime())) {
+    return isoTimestamp
+  }
+  const year = parsed.getFullYear()
+  const month = padTwo(parsed.getMonth() + 1)
+  const day = padTwo(parsed.getDate())
+  const hours = padTwo(parsed.getHours())
+  const minutes = padTwo(parsed.getMinutes())
+  return `${year}-${month}-${day} ${hours}:${minutes}`
+}
+
 /**
  * Formats the discard-all confirmation message distinguishing irreversible tracked restores
  * and OS trash moves for untracked files.

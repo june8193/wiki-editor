@@ -7,15 +7,18 @@ import {
   GIT_PANEL_DEFAULT_CHANGES_RATIO,
   GIT_PANEL_MAX_CHANGES_RATIO,
   GIT_PANEL_MIN_CHANGES_RATIO,
+  resetGitStashesCollapsed,
+  setGitStashesCollapsed,
   stepChangesHeightRatio,
   toChangesHeightPercent,
   toggleGitChangesCollapsed,
   toggleGitGraphCollapsed,
+  toggleGitStashesCollapsed,
   updateChangesHeightRatio
 } from './gitPanelSplit'
 
 describe('gitPanelSplit', () => {
-  it('creates default split state with both sections expanded at 50% ratio', () => {
+  it('creates default split state with Changes/Graph expanded at 50% ratio and Stashes collapsed', () => {
     expect(GIT_PANEL_DEFAULT_CHANGES_RATIO).toBe(0.5)
     expect(GIT_PANEL_MIN_CHANGES_RATIO).toBe(0.2)
     expect(GIT_PANEL_MAX_CHANGES_RATIO).toBe(0.8)
@@ -23,6 +26,7 @@ describe('gitPanelSplit', () => {
 
     expect(createDefaultGitPanelSplitState()).toEqual({
       isChangesCollapsed: false,
+      isStashesCollapsed: true,
       isGraphCollapsed: false,
       changesHeightRatio: 0.5
     })
@@ -59,95 +63,148 @@ describe('gitPanelSplit', () => {
     expect(toChangesHeightPercent(Number.NaN)).toBe(50)
   })
 
-  it('computes section visibility, resizer presence, and flex distribution for all collapse combinations', () => {
+  it('computes section visibility, resizer presence, Stashes compact/fill mode, and flex distribution for all collapse combinations', () => {
     expect(
       computeGitSectionLayout({
         isChangesCollapsed: false,
+        isStashesCollapsed: true,
         isGraphCollapsed: false,
         changesHeightRatio: 0.65
       })
     ).toEqual({
       showChangesBody: true,
+      showStashesBody: false,
       showGraphBody: true,
       showResizer: true,
       changesFlexRatio: 0.65,
+      stashesFlexRatio: null,
+      stashesBodyMode: 'hidden',
       graphFlexRatio: 0.35
     })
 
-    // Clamps out-of-range ratios when computing expanded layout
+    // Clamps out-of-range ratios when computing expanded layout, Stashes uses compact mode when both neighbors expanded
     expect(
       computeGitSectionLayout({
         isChangesCollapsed: false,
+        isStashesCollapsed: false,
         isGraphCollapsed: false,
         changesHeightRatio: 0.95
       })
     ).toEqual({
       showChangesBody: true,
+      showStashesBody: true,
       showGraphBody: true,
       showResizer: true,
       changesFlexRatio: 0.8,
+      stashesFlexRatio: null,
+      stashesBodyMode: 'compact',
       graphFlexRatio: 0.2
     })
 
-    // Only Changes expanded -> resizer hidden, Changes takes 100% remaining height
+    // Only Changes expanded + Stashes expanded -> resizer hidden, Changes takes 100% remaining, Stashes compact
     expect(
       computeGitSectionLayout({
         isChangesCollapsed: false,
+        isStashesCollapsed: false,
         isGraphCollapsed: true,
         changesHeightRatio: 0.35
       })
     ).toEqual({
       showChangesBody: true,
+      showStashesBody: true,
       showGraphBody: false,
       showResizer: false,
       changesFlexRatio: 1,
+      stashesFlexRatio: null,
+      stashesBodyMode: 'compact',
       graphFlexRatio: null
     })
 
-    // Only Graph expanded -> resizer hidden, Graph takes 100% remaining height
+    // Only Graph expanded + Stashes expanded -> resizer hidden, Graph takes 100% remaining, Stashes compact
     expect(
       computeGitSectionLayout({
         isChangesCollapsed: true,
+        isStashesCollapsed: false,
         isGraphCollapsed: false,
         changesHeightRatio: 0.35
       })
     ).toEqual({
       showChangesBody: false,
+      showStashesBody: true,
       showGraphBody: true,
       showResizer: false,
       changesFlexRatio: null,
+      stashesFlexRatio: null,
+      stashesBodyMode: 'compact',
       graphFlexRatio: 1
     })
 
-    // Both collapsed -> resizer hidden, both sections collapse to header only
+    // Both Changes and Graph collapsed + Stashes expanded -> Stashes fills remaining space (flex: 1)
     expect(
       computeGitSectionLayout({
         isChangesCollapsed: true,
+        isStashesCollapsed: false,
         isGraphCollapsed: true,
         changesHeightRatio: 0.35
       })
     ).toEqual({
       showChangesBody: false,
+      showStashesBody: true,
       showGraphBody: false,
       showResizer: false,
       changesFlexRatio: null,
+      stashesFlexRatio: 1,
+      stashesBodyMode: 'fill',
+      graphFlexRatio: null
+    })
+
+    // All three collapsed -> resizer hidden, all sections collapse to header only
+    expect(
+      computeGitSectionLayout({
+        isChangesCollapsed: true,
+        isStashesCollapsed: true,
+        isGraphCollapsed: true,
+        changesHeightRatio: 0.35
+      })
+    ).toEqual({
+      showChangesBody: false,
+      showStashesBody: false,
+      showGraphBody: false,
+      showResizer: false,
+      changesFlexRatio: null,
+      stashesFlexRatio: null,
+      stashesBodyMode: 'hidden',
       graphFlexRatio: null
     })
   })
 
-  it('provides pure state updaters for accordion toggles and clamped height ratio updates', () => {
+  it('provides pure state updaters for accordion toggles, stash expand/reset, and clamped height ratio updates', () => {
     const initial = createDefaultGitPanelSplitState()
     const changesCollapsed = toggleGitChangesCollapsed(initial)
     expect(changesCollapsed).toEqual({
       isChangesCollapsed: true,
+      isStashesCollapsed: true,
       isGraphCollapsed: false,
       changesHeightRatio: 0.5
     })
     expect(toggleGitChangesCollapsed(changesCollapsed)).toEqual(initial)
 
+    const stashesExpanded = toggleGitStashesCollapsed(changesCollapsed)
+    expect(stashesExpanded).toEqual({
+      isChangesCollapsed: true,
+      isStashesCollapsed: false,
+      isGraphCollapsed: false,
+      changesHeightRatio: 0.5
+    })
+    expect(setGitStashesCollapsed(stashesExpanded, false)).toBe(stashesExpanded)
+    expect(setGitStashesCollapsed(initial, false).isStashesCollapsed).toBe(false)
+    expect(resetGitStashesCollapsed(initial)).toBe(initial)
+    expect(resetGitStashesCollapsed(stashesExpanded).isStashesCollapsed).toBe(true)
+
     const graphCollapsed = toggleGitGraphCollapsed(changesCollapsed)
     expect(graphCollapsed).toEqual({
       isChangesCollapsed: true,
+      isStashesCollapsed: true,
       isGraphCollapsed: true,
       changesHeightRatio: 0.5
     })
