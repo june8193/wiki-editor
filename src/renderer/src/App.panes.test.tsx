@@ -5,7 +5,7 @@ import { buildWikiAssetUrl } from '@shared/assets'
 import { createEmptyGitStatus } from '@shared/git'
 import { addFavoriteWorkspace } from '@shared/workspace'
 import { App } from './App'
-import { clickActivityBarButton } from './test/appTestHelpers'
+import { clickActivityBarButton, switchWorkspaceFromView } from './test/appTestHelpers'
 import { mockElementBoundingRect, mountThemeStylesAndRoot } from './test/domLayoutStub'
 import {
   appendRawEditorText,
@@ -477,9 +477,7 @@ describe('Multi-tab and 2-pane Split View layout', () => {
     })
 
     // Switching workspace closes workspace tabs (keep.md) while preserving config.json tab
-    await clickActivityBarButton(user, '워크스페이스')
-    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
-    await user.click(within(workspaceView).getByRole('button', { name: /★\s*ws2/i }))
+    await switchWorkspaceFromView(user, /★\s*ws2/i)
 
     const updatedSidebar = await screen.findByLabelText('워크스페이스 탐색기')
     expect(await within(updatedSidebar).findByText('ws2.md')).toBeInTheDocument()

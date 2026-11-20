@@ -182,9 +182,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     expect(await within(explorerAfterOpen).findByText('alpha.md')).toBeInTheDocument()
 
     // Return to Workspace View and click recent workspace directly -> opens gamma and transitions to Explorer
-    await clickActivityBarButton(user, '워크스페이스')
-    const reopenedWorkspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
-    await user.click(within(reopenedWorkspaceView).getByRole('button', { name: /^gamma$/i }))
+    await switchWorkspaceFromView(user, /^gamma$/i)
 
     const sidebar = await screen.findByLabelText('워크스페이스 탐색기')
     expect(await within(sidebar).findByText('gamma.md')).toBeInTheDocument()
@@ -715,9 +713,7 @@ describe('Workspace folder tree, favorites, editing, and saving', () => {
     await waitFor(() => expect(callNum).toBe(1))
     // Type more while first save is still in flight, then switch workspace via Workspace View and choose 저장 후 이동
     appendRawEditorText(editor, ' v2')
-    await clickActivityBarButton(user, '워크스페이스')
-    const workspaceView = screen.getByRole('region', { name: '워크스페이스 뷰' })
-    await user.click(within(workspaceView).getByRole('button', { name: /★\s*inflight-next/i }))
+    await switchWorkspaceFromView(user, /★\s*inflight-next/i)
     const dirtyDialog = await screen.findByRole('alertdialog')
     await user.click(within(dirtyDialog).getByRole('button', { name: /저장 후 이동/i }))
 
