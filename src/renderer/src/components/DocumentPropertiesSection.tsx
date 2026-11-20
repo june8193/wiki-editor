@@ -19,6 +19,7 @@ import { SidebarAccordionSection } from './SidebarAccordionSection'
 export interface DocumentPropertiesSectionProps {
   document: SidebarDocumentContext
   schemaResult: FrontmatterSchemaLoadResult | null
+  fieldValuesByKey?: Readonly<Record<string, readonly string[]>>
   isSchemaLoading?: boolean
   canManageSchema?: boolean
   isExpanded?: boolean
@@ -26,6 +27,7 @@ export interface DocumentPropertiesSectionProps {
   onToggleExpanded: () => void
   onChangeContent: (nextContent: string) => void
   onCreateDefaultSchema: () => void
+  onRequestFieldValues?: () => void
   onOpenSchemaModal?: () => void
   onOpenSchemaRawJson?: () => void
 }
@@ -81,6 +83,8 @@ interface FieldInputProps {
   field: FrontmatterFieldDefinition
   inputId: string
   value: FrontmatterFieldValue | undefined
+  suggestedValues?: readonly string[]
+  onRequestFieldValues?: () => void
   onUpdateField: (key: string, nextValue: FrontmatterFieldValue | null) => void
 }
 
@@ -128,6 +132,8 @@ function MultiSelectPropertyInput({
   field,
   inputId,
   value,
+  suggestedValues,
+  onRequestFieldValues,
   onUpdateField
 }: FieldInputProps) {
   const [customDraft, setCustomDraft] = useState('')
@@ -135,9 +141,22 @@ function MultiSelectPropertyInput({
   const selectedSet = new Set(selectedItems)
   const schemaOptionValues = new Set((field.options ?? []).map((opt) => opt.value))
 
-  const availableSuggestions = (field.options ?? [])
-    .map((opt) => opt.value)
-    .filter((optionValue) => Boolean(optionValue) && !selectedSet.has(optionValue))
+  const seenSuggestions = new Set<string>()
+  const availableSuggestions: string[] = []
+  for (const option of field.options ?? []) {
+    if (option.value && !selectedSet.has(option.value) && !seenSuggestions.has(option.value)) {
+      seenSuggestions.add(option.value)
+      availableSuggestions.push(option.value)
+    }
+  }
+  if (field.allowCustom && suggestedValues) {
+    for (const item of suggestedValues) {
+      if (item && !selectedSet.has(item) && !seenSuggestions.has(item)) {
+        seenSuggestions.add(item)
+        availableSuggestions.push(item)
+      }
+    }
+  }
 
   const normalizedQuery = customDraft.trim().toLowerCase()
   const visibleSuggestions =
@@ -206,6 +225,7 @@ function MultiSelectPropertyInput({
           placeholder={field.placeholder ?? '값 입력 후 Enter'}
           aria-required={field.required || undefined}
           value={customDraft}
+          onFocus={() => onRequestFieldValues?.()}
           onChange={(event) => setCustomDraft(event.target.value)}
           onKeyDown={handleKeyDown}
         />
@@ -230,7 +250,14 @@ function MultiSelectPropertyInput({
   )
 }
 
-function PropertyFieldWidget({ field, inputId, value, onUpdateField }: FieldInputProps) {
+function PropertyFieldWidget({
+  field,
+  inputId,
+  value,
+  suggestedValues,
+  onRequestFieldValues,
+  onUpdateField
+}: FieldInputProps) {
   switch (field.type) {
     case 'text':
       return (
@@ -344,6 +371,8 @@ function PropertyFieldWidget({ field, inputId, value, onUpdateField }: FieldInpu
           field={field}
           inputId={inputId}
           value={value}
+          suggestedValues={suggestedValues}
+          onRequestFieldValues={onRequestFieldValues}
           onUpdateField={onUpdateField}
         />
       )
@@ -392,10 +421,12 @@ interface DocumentPropertiesFormProps {
   idPrefix: string
   parsed: ParsedFrontmatterDocument
   schemaResult: FrontmatterSchemaLoadResult | null
+  fieldValuesByKey?: Readonly<Record<string, readonly string[]>>
   isSchemaLoading: boolean
   canManageSchema: boolean
   hasYamlSyntaxError: boolean
   onCreateDefaultSchema: () => void
+  onRequestFieldValues?: () => void
   onOpenSchemaModal?: () => void
   onOpenSchemaRawJson?: () => void
   onAddFrontmatter: () => void
@@ -407,10 +438,12 @@ function DocumentPropertiesForm({
   idPrefix,
   parsed,
   schemaResult,
+  fieldValuesByKey,
   isSchemaLoading,
   canManageSchema,
   hasYamlSyntaxError,
   onCreateDefaultSchema,
+  onRequestFieldValues,
   onOpenSchemaModal,
   onOpenSchemaRawJson,
   onAddFrontmatter,
@@ -542,6 +575,8 @@ function DocumentPropertiesForm({
                   field={field}
                   inputId={inputId}
                   value={parsed.values[field.key]}
+                  suggestedValues={fieldValuesByKey?.[field.key]}
+                  onRequestFieldValues={onRequestFieldValues}
                   onUpdateField={onUpdateField}
                 />
 
@@ -585,6 +620,7 @@ function DocumentPropertiesForm({
 export const DocumentPropertiesSection = memo(function DocumentPropertiesSection({
   document,
   schemaResult,
+  fieldValuesByKey,
   isSchemaLoading = false,
   canManageSchema = true,
   isExpanded = true,
@@ -592,6 +628,7 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
   onToggleExpanded,
   onChangeContent,
   onCreateDefaultSchema,
+  onRequestFieldValues,
   onOpenSchemaModal,
   onOpenSchemaRawJson
 }: DocumentPropertiesSectionProps) {
@@ -688,10 +725,12 @@ export const DocumentPropertiesSection = memo(function DocumentPropertiesSection
         idPrefix={idPrefix}
         parsed={parsed}
         schemaResult={schemaResult}
+        fieldValuesByKey={fieldValuesByKey}
         isSchemaLoading={isSchemaLoading}
         canManageSchema={canManageSchema}
         hasYamlSyntaxError={hasYamlSyntaxError}
         onCreateDefaultSchema={onCreateDefaultSchema}
+        onRequestFieldValues={onRequestFieldValues}
         onOpenSchemaModal={onOpenSchemaModal}
         onOpenSchemaRawJson={onOpenSchemaRawJson}
         onAddFrontmatter={handleAddFrontmatter}

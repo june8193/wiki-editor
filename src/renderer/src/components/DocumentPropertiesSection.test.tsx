@@ -464,4 +464,60 @@ describe('DocumentPropertiesSection', () => {
     await user.click(within(section).getByRole('button', { name: 'JSON 파일로 열기' }))
     expect(onOpenSchemaRawJson).toHaveBeenCalledTimes(1)
   })
+
+  it('merges workspace custom values with schema options for allowCustom multi-select suggestions and requests fresh values on focus', async () => {
+    const user = userEvent.setup()
+    const onRequestFieldValues = vi.fn()
+    let latestContent = '---\nlabels:\n  - docs\n---\n# Guide'
+
+    function StatefulHarness() {
+      const [content, setContent] = useState(latestContent)
+      latestContent = content
+      return (
+        <DocumentPropertiesSection
+          document={{
+            documentName: 'guide.md',
+            documentKey: 'c:/wiki/guide.md',
+            content,
+            isMarkdownDocument: true
+          }}
+          schemaResult={makeSchemaResult(FULL_SCHEMA)}
+          fieldValuesByKey={{
+            labels: ['backend', 'docs', 'security-audit', 'urgent-fix'],
+            platforms: ['web', 'desktop', 'should-not-appear']
+          }}
+          onRequestFieldValues={onRequestFieldValues}
+          isExpanded
+          onToggleExpanded={vi.fn()}
+          onChangeContent={setContent}
+          onCreateDefaultSchema={vi.fn()}
+        />
+      )
+    }
+
+    render(<StatefulHarness />)
+    const section = screen.getByRole('region', { name: '문서 속성' })
+    const labelSuggestions = within(section).getByLabelText('라벨 제안')
+    expect(
+      within(labelSuggestions)
+        .getAllByRole('button')
+        .map((btn) => btn.textContent)
+    ).toEqual(['+ backend', '+ security-audit', '+ urgent-fix'])
+
+    // allowCustom: false field ignores extra suggested values
+    const platformSuggestions = within(section).getByLabelText('플랫폼 제안')
+    expect(within(platformSuggestions).queryByRole('button', { name: '+ should-not-appear' })).not.toBeInTheDocument()
+
+    // Focusing input requests live refresh and typing filters both schema and custom values
+    const labelInput = within(section).getByLabelText('라벨')
+    await user.click(labelInput)
+    expect(onRequestFieldValues).toHaveBeenCalled()
+
+    await user.type(labelInput, 'audit')
+    expect(within(labelSuggestions).getByRole('button', { name: '+ security-audit' })).toBeInTheDocument()
+    expect(within(labelSuggestions).queryByRole('button', { name: '+ backend' })).not.toBeInTheDocument()
+
+    await user.click(within(labelSuggestions).getByRole('button', { name: '+ security-audit' }))
+    expect(latestContent).toContain('- security-audit')
+  })
 })

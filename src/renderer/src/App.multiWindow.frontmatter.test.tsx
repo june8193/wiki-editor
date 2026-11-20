@@ -296,4 +296,114 @@ describe('Multi-window frontmatter right sidebar & shared buffer synchronization
       expect(within(auxProps).getByLabelText('상태')).toHaveValue('todo')
     })
   })
+
+  it('suggests disk and unsaved auxiliary buffer custom values in allowCustom multi-select DocumentPropertiesSection while isolating other sessions', async () => {
+    const user = userEvent.setup()
+    const customSchema: WorkspaceFrontmatterSchema = {
+      version: 1,
+      fields: [
+        {
+          key: 'labels',
+          label: '라벨',
+          type: 'multi-select',
+          allowCustom: true,
+          options: [{ value: 'docs' }, { value: 'backend' }]
+        }
+      ]
+    }
+    const harness = createHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\wiki\\alpha',
+        workspaces: {
+          'C:\\wiki\\alpha': {
+            [FRONTMATTER_SCHEMA_RELATIVE_PATH]: serializeFrontmatterSchema(customSchema),
+            'disk-only.md': '---\nlabels: [disk-tag]\n---\n# Disk',
+            'aux-doc.md': '---\nlabels: [docs]\n---\n# Aux',
+            'main-doc.md': '---\nlabels: [docs]\n---\n# Main'
+          },
+          'C:\\wiki\\beta': {
+            [FRONTMATTER_SCHEMA_RELATIVE_PATH]: serializeFrontmatterSchema(customSchema),
+            'beta.md': '---\nlabels: [beta-secret-tag]\n---\n# Beta'
+          }
+        }
+      }
+    )
+
+    const alphaMain = harness.createWindow({ role: 'main' })
+    const alphaRendered = render(<App wikiApi={alphaMain.api} />)
+    await openFolderAndNoteInWindow(user, alphaRendered.container, alphaMain.emitMenuCommand, 'aux-doc.md')
+
+    await detachTabViaContextMenu(user, alphaRendered.container, /aux-doc\.md/)
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows(alphaMain.windowId)).toHaveLength(1)
+    })
+    const alphaAux = harness.getAuxiliaryWindows(alphaMain.windowId)[0]
+    const auxRendered = render(<App wikiApi={alphaAux.api} />)
+    await user.click(within(auxRendered.container).getByRole('button', { name: '문서 목차 펼치기' }))
+    const auxProps = within(auxRendered.container).getByRole('region', { name: '문서 속성' })
+    await waitFor(() => {
+      expect(within(auxProps).getByLabelText('라벨')).toBeInTheDocument()
+    })
+
+    // Open isolated Beta main window
+    const openedBeta = await alphaMain.api.workspace.openInNewWindow!('C:\\wiki\\beta')
+    const betaMain = harness.getMainWindows().find((w) => w.windowId === openedBeta.windowId)!
+    const betaRendered = render(<App wikiApi={betaMain.api} />)
+    const betaExplorer = await within(betaRendered.container).findByLabelText('워크스페이스 탐색기')
+    await user.click(await within(betaExplorer).findByText('beta.md'))
+
+    // Unsaved custom tag typed in auxiliary window's aux-doc.md
+    await user.type(within(auxProps).getByLabelText('라벨'), 'aux-unsaved-tag{Enter}')
+
+    // Open main-doc.md in alphaMain -> Properties suggests schema option 'backend', disk 'disk-tag', AND unsaved 'aux-unsaved-tag' (never beta's tag)
+    const alphaExplorer = within(alphaRendered.container).getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(alphaExplorer).findByText('main-doc.md'))
+    const mainProps = within(alphaRendered.container).getByRole('region', { name: '문서 속성' })
+
+    await waitFor(() => {
+      const suggestions = within(mainProps).getByLabelText('라벨 제안')
+      expect(within(suggestions).getByRole('button', { name: '+ backend' })).toBeInTheDocument()
+      expect(within(suggestions).getByRole('button', { name: '+ disk-tag' })).toBeInTheDocument()
+      expect(within(suggestions).getByRole('button', { name: '+ aux-unsaved-tag' })).toBeInTheDocument()
+      expect(within(suggestions).queryByRole('button', { name: '+ beta-secret-tag' })).not.toBeInTheDocument()
+    })
+
+    // Clicking '+ aux-unsaved-tag' adds it to main-doc.md
+    await user.click(within(mainProps).getByRole('button', { name: '+ aux-unsaved-tag' }))
+    expect(getRawEditorText(within(alphaRendered.container).getByTestId('document-editor'))).toContain(
+      'aux-unsaved-tag'
+    )
+
+    // Alpha Main Search View filter picker also proposes 'aux-unsaved-tag' (not beta-secret-tag) and filters aux-doc.md via unsaved buffer
+    await user.click(
+      within(within(alphaRendered.container).getByRole('navigation', { name: '액티비티 바' })).getByRole(
+        'button',
+        { name: '검색' }
+      )
+    )
+    const alphaSearchView = within(alphaRendered.container).getByRole('region', { name: '검색 뷰' })
+    const alphaFilterBar = within(alphaSearchView).getByRole('region', {
+      name: '프론트매터 필터 바'
+    })
+    await user.click(within(alphaFilterBar).getByRole('button', { name: '+ 필터 추가' }))
+    const searchPopover = within(alphaFilterBar).getByRole('dialog', {
+      name: '프론트매터 필터 설정'
+    })
+    await user.click(within(searchPopover).getByRole('option', { name: /라벨/ }))
+    await user.click(within(searchPopover).getByRole('option', { name: '모두 포함' }))
+    await waitFor(() => {
+      expect(within(searchPopover).getByLabelText('aux-unsaved-tag')).toBeInTheDocument()
+      expect(within(searchPopover).queryByLabelText('beta-secret-tag')).not.toBeInTheDocument()
+    })
+    await user.click(within(searchPopover).getByLabelText('aux-unsaved-tag'))
+    await user.click(within(searchPopover).getByRole('button', { name: '적용' }))
+
+    await waitFor(() => {
+      const list = within(alphaSearchView).getByRole('list', { name: '검색 결과 목록' })
+      expect(within(list).getByText('aux-doc.md')).toBeInTheDocument()
+      expect(within(list).getByText('main-doc.md')).toBeInTheDocument()
+      expect(within(list).queryByText('disk-only.md')).not.toBeInTheDocument()
+    })
+  })
 })

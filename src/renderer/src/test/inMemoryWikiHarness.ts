@@ -17,26 +17,39 @@ import {
 import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import {
   cloneFrontmatterSchema,
+  collectAllowCustomMultiSelectFields,
   createDefaultFrontmatterSchema,
+  createFrontmatterFieldValuesCollector,
+  extractFrontmatterSummary,
   FRONTMATTER_SCHEMA_DIR,
   FRONTMATTER_SCHEMA_RELATIVE_PATH,
-  type WorkspaceFrontmatterSchema,
+  type FrontmatterFieldValue,
   type FrontmatterSchemaLoadResult,
+  isExcludedFrontmatterRelativePath,
+  isFrontmatterDocumentFileName,
+  matchesFrontmatterConditions,
+  parseFrontmatterDocument,
   parseFrontmatterSchema,
   parseFrontmatterSchemaJson,
-  serializeFrontmatterSchema
+  serializeFrontmatterSchema,
+  type WorkspaceFrontmatterFieldValuesResponse,
+  type WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
 import { createEmptyGitStatus } from '@shared/git'
 import {
+  buildWorkspaceSearchFileResult,
   commitSearchCandidateSlot,
-  compareWorkspaceSearchFileResults,
+  type CompiledSearchMatcher,
   compileSearchMatcher,
+  createWorkspaceSearchSortPlan,
   DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE,
   DEFAULT_WORKSPACE_SEARCH_MAX_TOTAL_MATCHES,
   emptyWorkspaceSearchResponse,
   isExcludedSearchFileName,
   normalizeWorkspaceSearchLimit,
   scanSearchTextContent,
+  type SearchCandidateScanResult,
+  type TextMatchSpan,
   WORKSPACE_SEARCH_MAX_FILE_BYTES,
   type WorkspaceSearchAccumulator,
   type WorkspaceSearchRequest,
@@ -559,6 +572,65 @@ export function createMultiWindowWikiHarness(
     return commitAndBroadcastSessionSchema(session, readSessionSchema(session))
   }
 
+  const collectSessionOpenTextBuffers = (session: HarnessSession): Map<string, string> => {
+    const openBuffersByKey = new Map<string, string>()
+    for (const buffer of Object.values(session.hub.getSnapshot().buffers)) {
+      if (buffer.kind !== 'workspace' || buffer.contentKind !== 'text') continue
+      const key = getWorkspacePathKey(buffer.path)
+      if (key) {
+        openBuffersByKey.set(key, buffer.content)
+      }
+    }
+    return openBuffersByKey
+  }
+
+  const isReadableSearchText = (text: string): boolean =>
+    !text.includes('\0') &&
+    new TextEncoder().encode(text).byteLength <= WORKSPACE_SEARCH_MAX_FILE_BYTES
+
+  const listSessionEligibleFiles = (
+    rootPath: string,
+    onlyFrontmatterDocuments: boolean
+  ): Array<{
+    path: string
+    relativePath: string
+    name: string
+    pathKey: string
+    diskContent: string
+    isFrontmatterEligible: boolean
+  }> => {
+    const prefix = `${rootPath}/`
+    const result: Array<{
+      path: string
+      relativePath: string
+      name: string
+      pathKey: string
+      diskContent: string
+      isFrontmatterEligible: boolean
+    }> = []
+
+    for (const [filePath, diskContent] of files.entries()) {
+      if (!filePath.startsWith(prefix)) continue
+      const relativePath = filePath.slice(prefix.length)
+      if (relativePath.split('/').some((seg) => IGNORED_WORKSPACE_SEGMENTS.has(seg))) continue
+      const name = baseNameOf(filePath)
+      if (isExcludedSearchFileName(name)) continue
+      const isFrontmatterEligible =
+        !isExcludedFrontmatterRelativePath(relativePath) && isFrontmatterDocumentFileName(name)
+      if (onlyFrontmatterDocuments && !isFrontmatterEligible) continue
+      result.push({
+        path: filePath,
+        relativePath,
+        name,
+        pathKey: getWorkspacePathKey(filePath),
+        diskContent,
+        isFrontmatterEligible
+      })
+    }
+
+    return result
+  }
+
   const defaultSession = createSession()
 
   const listDir = (session: HarnessSession, dirPath: string): WorkspaceEntry[] => {
@@ -1005,13 +1077,28 @@ export function createMultiWindowWikiHarness(
           const capturedRoot = session.activeRoot
           const seq = ++session.searchSeq
           const query = typeof request?.query === 'string' ? request.query : ''
-          if (query.length === 0) {
+          const frontmatterQuery = request?.frontmatter
+          const conditions = Array.isArray(frontmatterQuery?.conditions)
+            ? frontmatterQuery.conditions
+            : []
+          const sort = frontmatterQuery?.sort
+          const hasConditions = conditions.length > 0
+          if (query.length === 0 && !hasConditions) {
             return emptyWorkspaceSearchResponse(query)
           }
 
-          const compiled = compileSearchMatcher(query, request?.options)
-          if (!compiled.ok) {
-            return emptyWorkspaceSearchResponse(query, compiled.error)
+          let compiledMatcher: CompiledSearchMatcher | null = null
+          if (query.length > 0) {
+            const compiled = compileSearchMatcher(query, request?.options)
+            if (!compiled.ok) {
+              return emptyWorkspaceSearchResponse(query, compiled.error)
+            }
+            compiledMatcher = compiled.matcher
+          }
+
+          const schema = readSessionSchema(session).result.schema
+          if (hasConditions && !schema) {
+            return emptyWorkspaceSearchResponse(query)
           }
 
           const maxTotalMatches = normalizeWorkspaceSearchLimit(
@@ -1023,35 +1110,17 @@ export function createMultiWindowWikiHarness(
             DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE
           )
 
-          const openBuffersByKey = new Map<string, string>()
-          for (const buffer of Object.values(session.hub.getSnapshot().buffers)) {
-            if (buffer.kind !== 'workspace' || buffer.contentKind !== 'text') continue
-            const key = getWorkspacePathKey(buffer.path)
-            if (key) {
-              openBuffersByKey.set(key, buffer.content)
-            }
-          }
+          const openBuffersByKey = collectSessionOpenTextBuffers(session)
+          const eligibleFiles = listSessionEligibleFiles(capturedRoot, hasConditions)
+          const candidates = eligibleFiles.map((entry) => ({
+            ...entry,
+            nameMatches: compiledMatcher ? compiledMatcher.findMatches(entry.relativePath) : ([] as TextMatchSpan[])
+          }))
 
-          const prefix = `${capturedRoot}/`
-          const candidates = [...files.entries()]
-            .filter(([filePath]) => {
-              if (!filePath.startsWith(prefix)) return false
-              const rel = filePath.slice(prefix.length)
-              if (rel.split('/').some((seg) => IGNORED_WORKSPACE_SEGMENTS.has(seg))) return false
-              return !isExcludedSearchFileName(baseNameOf(filePath))
-            })
-            .map(([filePath, diskContent]) => {
-              const relativePath = filePath.slice(prefix.length)
-              return {
-                path: filePath,
-                relativePath,
-                name: baseNameOf(filePath),
-                pathKey: getWorkspacePathKey(filePath),
-                diskContent,
-                nameMatches: compiled.matcher.findMatches(relativePath)
-              }
-            })
-            .sort(compareWorkspaceSearchFileResults)
+          const sortPlan = createWorkspaceSearchSortPlan(sort, schema)
+          if (!sortPlan.requiresFrontmatterValues) {
+            candidates.sort(sortPlan.compare)
+          }
 
           const accumulator: WorkspaceSearchAccumulator = {
             files: [],
@@ -1061,24 +1130,126 @@ export function createMultiWindowWikiHarness(
             maxTotalMatches
           }
 
+          const matchedForPostSort: Array<{
+            candidate: (typeof candidates)[number]
+            scanResult: SearchCandidateScanResult
+            values?: Record<string, FrontmatterFieldValue>
+            frontmatterSummary?: Record<string, FrontmatterFieldValue>
+          }> = []
+
           for (const candidate of candidates) {
             if (seq !== session.searchSeq || session.activeRoot !== capturedRoot) {
               return emptyWorkspaceSearchResponse(query)
             }
-            if (accumulator.stopBodyScanning && candidate.nameMatches.length === 0) {
+            if (
+              !sortPlan.requiresFrontmatterValues &&
+              compiledMatcher &&
+              accumulator.stopBodyScanning &&
+              candidate.nameMatches.length === 0
+            ) {
               break
             }
             const text = openBuffersByKey.get(candidate.pathKey) ?? candidate.diskContent
-            if (text.includes('\0') || text.length > WORKSPACE_SEARCH_MAX_FILE_BYTES) {
+            if (!isReadableSearchText(text)) {
               continue
             }
-            const scanned = scanSearchTextContent(
-              text,
-              compiled.matcher,
-              accumulator.stopBodyScanning ? 0 : maxMatchesPerFile
+
+            let values: Record<string, FrontmatterFieldValue> | undefined
+            let frontmatterSummary: Record<string, FrontmatterFieldValue> | undefined
+            if (schema && candidate.isFrontmatterEligible) {
+              const parsed = parseFrontmatterDocument(text, schema)
+              if (hasConditions && !matchesFrontmatterConditions(parsed.values, conditions, schema)) {
+                continue
+              }
+              values = parsed.values
+              frontmatterSummary = extractFrontmatterSummary(parsed.values, schema)
+            } else if (hasConditions) {
+              continue
+            }
+
+            let scanned: SearchCandidateScanResult = {
+              lineMatches: [],
+              totalMatchCount: 0,
+              keptMatchCount: 0,
+              truncatedInFile: false
+            }
+            if (compiledMatcher) {
+              const bodyLimit =
+                !sortPlan.requiresFrontmatterValues && accumulator.stopBodyScanning
+                  ? 0
+                  : maxMatchesPerFile
+              const result = scanSearchTextContent(text, compiledMatcher, bodyLimit)
+              if (!result) continue
+              if (candidate.nameMatches.length === 0 && result.lineMatches.length === 0) {
+                continue
+              }
+              scanned = result
+            }
+
+            if (sortPlan.requiresFrontmatterValues || !compiledMatcher) {
+              matchedForPostSort.push({ candidate, scanResult: scanned, values, frontmatterSummary })
+              continue
+            }
+
+            commitSearchCandidateSlot(
+              accumulator,
+              {
+                path: candidate.path,
+                relativePath: candidate.relativePath,
+                name: candidate.name,
+                nameMatches: candidate.nameMatches,
+                frontmatterSummary
+              },
+              scanned
             )
-            if (!scanned) continue
-            commitSearchCandidateSlot(accumulator, candidate, scanned)
+          }
+
+          if (sortPlan.requiresFrontmatterValues || !compiledMatcher) {
+            if (sortPlan.requiresFrontmatterValues) {
+              matchedForPostSort.sort((a, b) =>
+                sortPlan.compare(
+                  {
+                    relativePath: a.candidate.relativePath,
+                    nameMatches: a.candidate.nameMatches,
+                    values: a.values
+                  },
+                  {
+                    relativePath: b.candidate.relativePath,
+                    nameMatches: b.candidate.nameMatches,
+                    values: b.values
+                  }
+                )
+              )
+            }
+
+            for (const item of matchedForPostSort) {
+              if (!compiledMatcher) {
+                accumulator.files.push(
+                  buildWorkspaceSearchFileResult({
+                    path: item.candidate.path,
+                    relativePath: item.candidate.relativePath,
+                    name: item.candidate.name,
+                    nameMatches: [],
+                    lineMatches: [],
+                    totalMatchCount: 0,
+                    truncatedInFile: false,
+                    frontmatterSummary: item.frontmatterSummary
+                  })
+                )
+                continue
+              }
+              commitSearchCandidateSlot(
+                accumulator,
+                {
+                  path: item.candidate.path,
+                  relativePath: item.candidate.relativePath,
+                  name: item.candidate.name,
+                  nameMatches: item.candidate.nameMatches,
+                  frontmatterSummary: item.frontmatterSummary
+                },
+                item.scanResult
+              )
+            }
           }
 
           return {
@@ -1385,6 +1556,33 @@ export function createMultiWindowWikiHarness(
             throw new Error(validation.error)
           }
           return writeAndNotifySessionSchema(session, validation.schema)
+        },
+        async getFieldValues(fieldKeys?: string[]): Promise<WorkspaceFrontmatterFieldValuesResponse> {
+          if (!session.activeRoot) {
+            throw new Error('열린 워크스페이스가 없습니다.')
+          }
+          const schema = readSessionSchema(session).result.schema
+          if (!schema) {
+            return { valuesByField: {} }
+          }
+          const targetFields = collectAllowCustomMultiSelectFields(schema, fieldKeys)
+          if (targetFields.length === 0) {
+            return { valuesByField: {} }
+          }
+
+          const openBuffersByKey = collectSessionOpenTextBuffers(session)
+          const collector = createFrontmatterFieldValuesCollector(targetFields)
+          const narrowSchema: WorkspaceFrontmatterSchema = { version: 1, fields: targetFields }
+
+          for (const candidate of listSessionEligibleFiles(session.activeRoot, true)) {
+            const text = openBuffersByKey.get(candidate.pathKey) ?? candidate.diskContent
+            if (!isReadableSearchText(text)) {
+              continue
+            }
+            const parsed = parseFrontmatterDocument(text, narrowSchema)
+            collector.addDocumentValues(parsed.values)
+          }
+          return collector.finalize()
         },
         onSchemaChanged(listener) {
           if (destroyed) {

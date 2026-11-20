@@ -4,6 +4,8 @@ import { useConfigController } from '../hooks/useConfigController'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
+import { useFrontmatterFieldValues } from '../hooks/useFrontmatterFieldValues'
+import { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
@@ -29,6 +31,15 @@ export function AuxiliaryAppShell() {
     isShortcutDisabled,
     onError: reportErrorBanner,
     onConfirmCloseDirtyTab: confirmCloseDirtyTab
+  })
+  const frontmatterSchema = useFrontmatterSchema({
+    workspaceRootPath: null,
+    onError: reportErrorBanner
+  })
+  const frontmatterFieldValues = useFrontmatterFieldValues({
+    workspaceRootPath: null,
+    schema: frontmatterSchema.schemaResult?.schema ?? null,
+    activeDocumentKey: editor.activeBuffer?.key ?? null
   })
 
   useWindowCloseGuard({
@@ -64,6 +75,8 @@ export function AuxiliaryAppShell() {
       onCloseSchemaModal={() => setIsSchemaModalOpen(false)}
       showHeadingNumbers={config.showHeadingNumbers}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
+      frontmatterSchema={frontmatterSchema}
+      frontmatterFieldValues={frontmatterFieldValues}
       openWorkspaceFile={editor.openWorkspaceFile}
       reportErrorBanner={reportErrorBanner}
       paneWorkspaceProps={buildPaneWorkspaceProps(config, editor, isShortcutDisabled)}

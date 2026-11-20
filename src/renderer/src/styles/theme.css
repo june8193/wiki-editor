@@ -3916,6 +3916,322 @@ body.is-resizing-right-sections * {
   padding: 0 1px;
 }
 
+/* Frontmatter Filter Bar & Summary Badges in Search Panel */
+.search-filter-bar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.search-filter-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-app);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.search-filter-notice.is-error {
+  border-color: var(--diff-warn-border);
+  background-color: var(--diff-warn-bg);
+  color: var(--text-primary);
+}
+
+.search-filter-notice-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-filter-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.search-filter-add-btn,
+.search-filter-clear-btn {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  padding: 3px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.search-filter-add-btn:hover,
+.search-filter-clear-btn:hover {
+  border-color: var(--accent-color);
+}
+
+.search-filter-clear-btn {
+  color: var(--text-secondary);
+}
+
+.search-sort-select {
+  flex: 1 1 90px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.search-sort-select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.search-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.search-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.search-filter-chip-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 2px 4px 2px 8px;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-filter-chip-btn:hover {
+  color: var(--accent-color);
+}
+
+.search-filter-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 2px 6px 2px 2px;
+  cursor: pointer;
+}
+
+.search-filter-chip-remove:hover {
+  color: var(--danger-color);
+}
+
+.search-filter-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-surface);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
+}
+
+.search-filter-popover-step {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.search-filter-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.search-filter-back-btn {
+  flex-shrink: 0;
+}
+
+.search-filter-popover-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-filter-op-select {
+  margin-left: auto;
+  min-width: 0;
+  padding: 2px 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.search-filter-popover-input {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.search-filter-popover-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.search-filter-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+  outline: none;
+}
+
+.search-filter-popover-item,
+.search-filter-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-filter-option-row {
+  justify-content: flex-start;
+}
+
+.search-filter-popover-item:hover,
+.search-filter-popover-item.is-highlighted,
+.search-filter-option-row:hover,
+.search-filter-option-row.is-highlighted {
+  background-color: var(--bg-elevated);
+}
+
+.search-filter-popover-item-key {
+  font-size: 10.5px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--text-secondary);
+}
+
+.search-filter-option-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-filter-range-inputs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.search-filter-range-sep {
+  color: var(--text-secondary);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.search-filter-popover-empty {
+  margin: 0;
+  padding: 6px 4px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.search-filter-popover-error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--danger-color);
+}
+
+.search-filter-popover-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.search-file-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 10px 4px 26px;
+  min-width: 0;
+}
+
+.search-fm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.search-fm-badge:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
+.search-fm-badge-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .editor-body {
   position: relative;
   flex: 1;

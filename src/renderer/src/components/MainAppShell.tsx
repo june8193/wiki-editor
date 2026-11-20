@@ -18,6 +18,8 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
+import { useFrontmatterFieldValues } from '../hooks/useFrontmatterFieldValues'
+import { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
 import { useGitController, type WorkspaceDiscardTarget } from '../hooks/useGitController'
 import { useGitDiffTabs } from '../hooks/useGitDiffTabs'
 import { useWikiApi } from '../hooks/useWikiApi'
@@ -339,8 +341,19 @@ export function MainAppShell() {
     setIsSchemaModalOpen(false)
   }, [activeWorkspaceRoot])
 
+  const frontmatterSchema = useFrontmatterSchema({
+    workspaceRootPath: activeWorkspaceRoot,
+    onError: reportErrorBanner
+  })
+  const frontmatterFieldValues = useFrontmatterFieldValues({
+    workspaceRootPath: activeWorkspaceRoot,
+    schema: frontmatterSchema.schemaResult?.schema ?? null,
+    activeDocumentKey: editor.activeBuffer?.key ?? null
+  })
+
   const workspaceSearch = useWorkspaceSearch({
-    workspaceRootPath: activeWorkspaceRoot
+    workspaceRootPath: activeWorkspaceRoot,
+    schema: frontmatterSchema.schemaResult?.schema ?? null
   })
 
   const workspaceStatePersistence = useWorkspaceStatePersistence({
@@ -994,6 +1007,10 @@ export function MainAppShell() {
                 workspaceRootPath={workspace?.rootPath ?? null}
                 query={workspaceSearch.query}
                 options={workspaceSearch.options}
+                conditions={workspaceSearch.conditions}
+                sort={workspaceSearch.sort}
+                schemaResult={frontmatterSchema.schemaResult}
+                fieldValuesByKey={frontmatterFieldValues.valuesByField}
                 response={workspaceSearch.response}
                 errorMessage={workspaceSearch.errorMessage}
                 isSearching={workspaceSearch.isSearching}
@@ -1007,6 +1024,18 @@ export function MainAppShell() {
                 onToggleFileCollapsed={workspaceSearch.onToggleFileCollapsed}
                 onOpenFile={handleOpenSearchResultFile}
                 onOpenLineMatch={openSearchLineMatch}
+                onCreateDefaultSchema={frontmatterSchema.createDefaultSchema}
+                onOpenSchemaModal={() => {
+                  setIsSettingsOpen(false)
+                  setIsSchemaModalOpen(true)
+                }}
+                onRequestFieldValues={frontmatterFieldValues.refreshFieldValues}
+                onAddCondition={workspaceSearch.onAddCondition}
+                onUpdateCondition={workspaceSearch.onUpdateCondition}
+                onRemoveCondition={workspaceSearch.onRemoveCondition}
+                onClearConditions={workspaceSearch.onClearConditions}
+                onClickSummaryBadge={workspaceSearch.onUpsertBadgeCondition}
+                onChangeSort={workspaceSearch.onChangeSort}
               />
             )}
 
@@ -1083,6 +1112,8 @@ export function MainAppShell() {
       showHeadingNumbers={config.showHeadingNumbers}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
       workspaceRootPath={workspace?.rootPath ?? null}
+      frontmatterSchema={frontmatterSchema}
+      frontmatterFieldValues={frontmatterFieldValues}
       openWorkspaceFile={openWorkspaceFile}
       reportErrorBanner={reportErrorBanner}
       imageTransferContextValue={imageTransferContextValue}

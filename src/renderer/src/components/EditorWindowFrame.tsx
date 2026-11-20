@@ -12,7 +12,8 @@ import {
   ImageTransferContext,
   type ImageTransferContextValue
 } from '../hooks/useEditorImageTransfer'
-import { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
+import type { useFrontmatterFieldValues } from '../hooks/useFrontmatterFieldValues'
+import type { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
 import type { OpenedWorkspaceDocument } from '../hooks/useEditorWorkspace'
 import {
   useMarkdownLinkNavigation,
@@ -84,6 +85,9 @@ export function buildPaneWorkspaceProps(
   }
 }
 
+export type FrontmatterSchemaController = ReturnType<typeof useFrontmatterSchema>
+export type FrontmatterFieldValuesController = ReturnType<typeof useFrontmatterFieldValues>
+
 export interface EditorWindowFrameProps {
   shellRef?: Ref<HTMLDivElement>
   paneWorkspaceProps: WindowFramePaneWorkspaceProps
@@ -91,6 +95,8 @@ export interface EditorWindowFrameProps {
   showHeadingNumbers: boolean
   onToggleHeadingNumbers: () => void
   workspaceRootPath?: string | null
+  frontmatterSchema: FrontmatterSchemaController
+  frontmatterFieldValues: FrontmatterFieldValuesController
   openWorkspaceFile: (
     filePath: string,
     targetPaneId?: PaneId,
@@ -122,6 +128,8 @@ export function EditorWindowFrame({
   showHeadingNumbers,
   onToggleHeadingNumbers,
   workspaceRootPath = null,
+  frontmatterSchema,
+  frontmatterFieldValues,
   openWorkspaceFile,
   reportErrorBanner,
   imageTransferContextValue,
@@ -190,10 +198,8 @@ export function EditorWindowFrame({
     createDefaultSchema,
     saveSchema,
     ensureSchemaFilePath
-  } = useFrontmatterSchema({
-    workspaceRootPath,
-    onError: reportErrorBanner
-  })
+  } = frontmatterSchema
+  const { valuesByField, refreshFieldValues } = frontmatterFieldValues
   const canManageSchema = Boolean(workspaceRootPath || schemaResult !== null)
 
   const workspaceRootRef = useRef(workspaceRootPath)
@@ -324,10 +330,12 @@ export function EditorWindowFrame({
                 }}
                 propertiesProps={{
                   schemaResult,
+                  fieldValuesByKey: valuesByField,
                   isSchemaLoading,
                   canManageSchema,
                   onChangeContent: handlePropertiesChangeContent,
                   onCreateDefaultSchema: createDefaultSchema,
+                  onRequestFieldValues: refreshFieldValues,
                   onOpenSchemaModal,
                   onOpenSchemaRawJson: () => {
                     const startedRoot = workspaceRootRef.current
