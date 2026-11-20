@@ -120,16 +120,23 @@ export function DocumentEditor({
     onUpdateViewState
   })
 
+  const findDomRefs = useMemo(
+    () => ({
+      rawEditorViewRef,
+      wysiwygEditorRef,
+      previewContainerRef,
+      splitPreviewContainerRef,
+      editorBodyRef
+    }),
+    [editorBodyRef]
+  )
+
   const docFind = useDocumentEditorFind({
     content: activeDoc.content,
     effectiveMode,
     isImage,
     findControl,
-    rawEditorViewRef,
-    wysiwygEditorRef,
-    previewContainerRef,
-    splitPreviewContainerRef,
-    editorBodyRef
+    domRefs: findDomRefs
   })
 
   const handleSplitRatioChange = useCallback(

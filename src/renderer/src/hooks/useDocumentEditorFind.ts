@@ -24,12 +24,13 @@ import {
   type DocumentFindResultReport,
   type DocumentFindState,
   findTextMatchesInDocument,
-  PREVIEW_SEARCH_CHROME_SELECTOR,
+  inspectDomSingleLineSelection,
   readDomSingleLineSelection,
   readRawEditorSingleLineSelection,
   stepActiveMatchIndex
 } from '../editor/documentFind'
 import { findPreviewSearchMatches } from '../editor/markdownPreview'
+import { PREVIEW_SEARCH_CHROME_SELECTOR } from '../editor/previewSearchHighlight'
 import type { RawFindHighlightRequest } from '../editor/rawSearchHighlight'
 import { readWysiwygSingleLineSelection } from '../editor/wysiwygSearchHighlight'
 import type { EditorMode } from '../stores/PaneTabStore'
@@ -54,7 +55,7 @@ interface MatchCursorState {
   snapshot: FindSnapshot
 }
 
-interface ModeDomContext {
+export interface DocumentFindDomRefs {
   rawEditorViewRef: RefObject<EditorView | null>
   wysiwygEditorRef?: RefObject<Editor | null>
   previewContainerRef?: RefObject<HTMLDivElement | null>
@@ -77,8 +78,8 @@ interface ModeHighlightContext {
 
 interface ModeFindStrategy {
   source: FindSearchSource
-  focus: (dom: ModeDomContext) => void
-  readSelection: (dom: ModeDomContext) => string | null
+  focus: (dom: DocumentFindDomRefs) => void
+  readSelection: (dom: DocumentFindDomRefs) => string | null
   buildHighlights: (ctx: ModeHighlightContext) => ModeHighlightOutputs
 }
 
@@ -141,12 +142,16 @@ const MODE_FIND_STRATEGIES: Record<EditorMode, ModeFindStrategy> = {
   split: {
     source: 'raw',
     focus: ({ rawEditorViewRef }) => rawEditorViewRef.current?.focus(),
-    readSelection: ({ rawEditorViewRef, splitPreviewContainerRef }) =>
-      readRawEditorSingleLineSelection(rawEditorViewRef.current) ??
-      readDomSingleLineSelection(
+    readSelection: ({ rawEditorViewRef, splitPreviewContainerRef }) => {
+      const previewSelection = inspectDomSingleLineSelection(
         splitPreviewContainerRef?.current ?? null,
         PREVIEW_SEARCH_CHROME_SELECTOR
-      ),
+      )
+      if (previewSelection.inBoundary) {
+        return previewSelection.value
+      }
+      return readRawEditorSingleLineSelection(rawEditorViewRef.current)
+    },
     buildHighlights: (ctx) => ({
       raw: buildRawHighlightRequest(ctx),
       wysiwyg: null,
@@ -227,11 +232,7 @@ export interface UseDocumentEditorFindOptions {
   effectiveMode: EditorMode
   isImage: boolean
   findControl?: DocumentEditorFindControl
-  rawEditorViewRef: RefObject<EditorView | null>
-  wysiwygEditorRef?: RefObject<Editor | null>
-  previewContainerRef?: RefObject<HTMLDivElement | null>
-  splitPreviewContainerRef?: RefObject<HTMLDivElement | null>
-  editorBodyRef: RefObject<HTMLDivElement | null>
+  domRefs: DocumentFindDomRefs
 }
 
 /**
@@ -243,11 +244,7 @@ export function useDocumentEditorFind({
   effectiveMode,
   isImage,
   findControl,
-  rawEditorViewRef,
-  wysiwygEditorRef,
-  previewContainerRef,
-  splitPreviewContainerRef,
-  editorBodyRef
+  domRefs
 }: UseDocumentEditorFindOptions) {
   const localFocusNonceRef = useRef(0)
   const [localFindState, setLocalFindState] = useState<DocumentFindState>(
@@ -268,26 +265,10 @@ export function useDocumentEditorFind({
   const activeControl = findControl ?? fallbackControl
   const effectiveFindState = activeControl.state
   const modeStrategy = MODE_FIND_STRATEGIES[effectiveMode]
-  const domContext = useMemo<ModeDomContext>(
-    () => ({
-      rawEditorViewRef,
-      wysiwygEditorRef,
-      previewContainerRef,
-      splitPreviewContainerRef,
-      editorBodyRef
-    }),
-    [
-      editorBodyRef,
-      previewContainerRef,
-      rawEditorViewRef,
-      splitPreviewContainerRef,
-      wysiwygEditorRef
-    ]
-  )
 
   const focusActiveEditorBody = useCallback((): void => {
-    modeStrategy.focus(domContext)
-  }, [domContext, modeStrategy])
+    modeStrategy.focus(domRefs)
+  }, [domRefs, modeStrategy])
 
   const closeFind = useCallback((): void => {
     activeControl.onClose()
@@ -296,8 +277,8 @@ export function useDocumentEditorFind({
 
   const readSingleLineSelection = useCallback((): string | null => {
     if (isImage) return null
-    return modeStrategy.readSelection(domContext)
-  }, [domContext, isImage, modeStrategy])
+    return modeStrategy.readSelection(domRefs)
+  }, [domRefs, isImage, modeStrategy])
 
   const registerSelectionReader = findControl?.onRegisterSelectionReader
   useEffect(() => {

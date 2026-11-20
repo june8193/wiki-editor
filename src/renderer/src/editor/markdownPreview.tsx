@@ -204,42 +204,15 @@ function normalizeCodeClassName(className: unknown): string | undefined {
 export function renderHighlightedCodeNodes(
   code: string,
   language: string | null | undefined,
-  searchHighlights?: readonly PreviewSearchMatchSpan[],
+  searchHighlights: readonly PreviewSearchMatchSpan[] = [],
   activeSearchMatchIndex = -1
 ): ReactNode {
-  const spans = getCodeBlockHighlightSpans(code, language)
-  const activeSearchSpans = searchHighlights ?? []
-  if (spans.length === 0 && activeSearchSpans.length === 0) {
-    return code
-  }
-  if (activeSearchSpans.length > 0) {
-    return renderCodeTokensWithSearch(code, spans, activeSearchSpans, activeSearchMatchIndex)
-  }
-
-  const nodes: ReactNode[] = []
-  let cursor = 0
-
-  for (let i = 0; i < spans.length; i += 1) {
-    const span = spans[i]
-    if (span.from < cursor || span.to <= span.from || span.to > code.length) {
-      continue
-    }
-    if (span.from > cursor) {
-      nodes.push(code.slice(cursor, span.from))
-    }
-    nodes.push(
-      <span key={`tok-${i}`} className={span.className}>
-        {code.slice(span.from, span.to)}
-      </span>
-    )
-    cursor = span.to
-  }
-
-  if (cursor < code.length) {
-    nodes.push(code.slice(cursor))
-  }
-
-  return nodes
+  return renderCodeTokensWithSearch(
+    code,
+    getCodeBlockHighlightSpans(code, language),
+    searchHighlights,
+    activeSearchMatchIndex
+  )
 }
 
 function SafeLink(props: ComponentPropsWithoutRef<'a'>) {

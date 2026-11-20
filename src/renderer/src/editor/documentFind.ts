@@ -2,6 +2,7 @@ import type { EditorView } from '@codemirror/view'
 import {
   compileSearchMatcher,
   DEFAULT_SEARCH_MATCH_OPTIONS,
+  type CompiledSearchMatcher,
   type SearchMatchOptions,
   type TextMatchSpan
 } from '@shared/search'
@@ -330,8 +331,30 @@ export function readRawEditorSingleLineSelection(view: EditorView | null): strin
 const SINGLE_LINE_BLOCK_SELECTOR =
   'p, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, pre, dt, dd, summary'
 
-export const PREVIEW_SEARCH_CHROME_SELECTOR =
-  '.code-block-header, .mermaid-diagram-block, .markdown-preview-empty'
+export interface TextRunSegment {
+  text: string
+  startOffset: number
+  endOffset: number
+}
+
+/**
+ * Matches `matcher` across concatenated inline `segments` text, invokes `onMatch`
+ * for each match span, and clears `segments` afterward.
+ */
+export function consumeMatchedTextRun<TSegment extends TextRunSegment>(
+  segments: TSegment[],
+  matcher: CompiledSearchMatcher,
+  onMatch: (span: TextMatchSpan, runSegments: readonly TSegment[]) => void
+): void {
+  if (segments.length === 0) {
+    return
+  }
+  const combined = segments.map((segment) => segment.text).join('')
+  for (const span of matcher.findMatches(combined)) {
+    onMatch(span, segments)
+  }
+  segments.length = 0
+}
 
 export interface DomSingleLineSelectionInspection {
   inBoundary: boolean
@@ -344,7 +367,7 @@ export interface DomSingleLineSelectionInspection {
  */
 export function inspectDomSingleLineSelection(
   container: Element | null,
-  excludedSelector: string = PREVIEW_SEARCH_CHROME_SELECTOR,
+  excludedSelector: string,
   guardBoundary: Element | null = container
 ): DomSingleLineSelectionInspection {
   if (!container || typeof window === 'undefined') {
@@ -397,7 +420,7 @@ export function inspectDomSingleLineSelection(
  */
 export function readDomSingleLineSelection(
   container: HTMLElement | null,
-  excludedSelector: string = PREVIEW_SEARCH_CHROME_SELECTOR
+  excludedSelector: string
 ): string | null {
   return inspectDomSingleLineSelection(container, excludedSelector).value
 }

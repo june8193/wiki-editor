@@ -12,12 +12,14 @@ import {
   areDocumentFindCriteriaEqual,
   areDocumentFindResultReportsEqual,
   clampActiveMatchIndex,
+  consumeMatchedTextRun,
   type DocumentFindCriteria,
   type DocumentFindHighlightQuery,
   type DocumentFindResultReport,
   extractSingleLineFindQuery,
   inspectDomSingleLineSelection,
-  scrollMatchElementIntoView
+  scrollMatchElementIntoView,
+  type TextRunSegment
 } from './documentFind'
 
 interface ProseMirrorSearchMatch {
@@ -46,11 +48,8 @@ interface WysiwygSearchMeta {
   activeIndex: number
 }
 
-interface TextRunSegment {
-  text: string
+interface PmTextRunSegment extends TextRunSegment {
   pmFrom: number
-  startOffset: number
-  endOffset: number
 }
 
 const wysiwygSearchHighlightPluginKey = new PluginKey<WysiwygSearchPluginState>(
@@ -89,7 +88,10 @@ function toWysiwygSearchSnapshot(state: WysiwygSearchPluginState): WysiwygSearch
   }
 }
 
-function resolveSegmentPmPosition(segments: readonly TextRunSegment[], offset: number): number {
+function resolveSegmentPmPosition(
+  segments: readonly PmTextRunSegment[],
+  offset: number
+): number {
   for (const segment of segments) {
     if (offset <= segment.endOffset) {
       return segment.pmFrom + (offset - segment.startOffset)
@@ -100,20 +102,15 @@ function resolveSegmentPmPosition(segments: readonly TextRunSegment[], offset: n
 }
 
 function flushTextRun(
-  segments: TextRunSegment[],
+  segments: PmTextRunSegment[],
   matcher: CompiledSearchMatcher,
   matches: ProseMirrorSearchMatch[]
 ): void {
-  if (segments.length === 0) {
-    return
-  }
-  const combinedText = segments.map((segment) => segment.text).join('')
-  for (const span of matcher.findMatches(combinedText)) {
-    const from = resolveSegmentPmPosition(segments, span.start)
-    const to = resolveSegmentPmPosition(segments, span.end)
+  consumeMatchedTextRun(segments, matcher, (span, runSegments) => {
+    const from = resolveSegmentPmPosition(runSegments, span.start)
+    const to = resolveSegmentPmPosition(runSegments, span.end)
     matches.push({ from, to: Math.max(from, to) })
-  }
-  segments.length = 0
+  })
 }
 
 function findProseMirrorMatches(
@@ -129,7 +126,7 @@ function findProseMirrorMatches(
   }
 
   const matches: ProseMirrorSearchMatch[] = []
-  const runSegments: TextRunSegment[] = []
+  const runSegments: PmTextRunSegment[] = []
 
   doc.descendants((node, pos) => {
     if (node.type.name === 'codeBlock') {

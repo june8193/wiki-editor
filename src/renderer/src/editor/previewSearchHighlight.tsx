@@ -3,9 +3,14 @@ import { compileSearchMatcher, type CompiledSearchMatcher } from '@shared/search
 import type { CodeBlockHighlightSpan } from './codeBlockHighlight'
 import {
   areDocumentFindCriteriaEqual,
+  consumeMatchedTextRun,
   type DocumentFindCriteria,
-  type DocumentFindHighlightQuery
+  type DocumentFindHighlightQuery,
+  type TextRunSegment
 } from './documentFind'
+
+export const PREVIEW_SEARCH_CHROME_SELECTOR =
+  '.code-block-header, .mermaid-diagram-block, .markdown-preview-empty'
 
 export interface PreviewSearchMatchSpan {
   start: number
@@ -129,11 +134,8 @@ function resolvePreviewElementClassification(
   return { kind: 'inline', isWhitespaceContainer: type === Fragment }
 }
 
-interface TextSlotSegment {
+interface TextSlotSegment extends TextRunSegment {
   slotId: number
-  text: string
-  startOffset: number
-  endOffset: number
 }
 
 interface PreviewSearchPlan {
@@ -185,86 +187,153 @@ function wrapSearchMark(
   )
 }
 
-/**
- * Renders syntax-highlighted code tokens layered with in-document search `<mark>` spans,
- * cleanly splitting across token boundaries while preserving exact source characters.
- */
-export function renderCodeTokensWithSearch(
+function renderCodeSlice(
   code: string,
-  syntaxSpans: readonly CodeBlockHighlightSpan[],
+  from: number,
+  to: number,
+  includeEndAnchors: boolean,
   searchHighlights: readonly PreviewSearchMatchSpan[],
-  activeSearchMatchIndex: number
+  activeSearchMatchIndex: number,
+  keyPrefix: string
 ): ReactNode {
-  const boundarySet = new Set<number>([0, code.length])
-  const validSyntaxSpans: CodeBlockHighlightSpan[] = []
-  for (const span of syntaxSpans) {
-    if (span.from >= 0 && span.to > span.from && span.to <= code.length) {
-      validSyntaxSpans.push(span)
-      boundarySet.add(span.from)
-      boundarySet.add(span.to)
-    }
+  if (searchHighlights.length === 0) {
+    return to > from ? code.slice(from, to) : null
   }
 
+  const boundarySet = new Set<number>([from, to])
   const anchorMatchesByOffset = new Map<number, number[]>()
-  const rangeSearchSpans: PreviewSearchMatchSpan[] = []
+  const overlappingMatches: PreviewSearchMatchSpan[] = []
+
   for (const match of searchHighlights) {
     const start = Math.max(0, Math.min(code.length, match.start))
     const end = Math.max(start, Math.min(code.length, match.end))
     if (end <= start) {
-      const existing = anchorMatchesByOffset.get(start)
-      if (existing) {
-        existing.push(match.matchIndex)
-      } else {
-        anchorMatchesByOffset.set(start, [match.matchIndex])
+      if (start >= from && (includeEndAnchors ? start <= to : start < to)) {
+        const list = anchorMatchesByOffset.get(start)
+        if (list) {
+          list.push(match.matchIndex)
+        } else {
+          anchorMatchesByOffset.set(start, [match.matchIndex])
+        }
+        boundarySet.add(start)
       }
-      boundarySet.add(start)
-    } else {
-      rangeSearchSpans.push({ start, end, matchIndex: match.matchIndex })
-      boundarySet.add(start)
-      boundarySet.add(end)
+      continue
     }
+    const clampedStart = Math.max(from, start)
+    const clampedEnd = Math.min(to, end)
+    if (clampedEnd > clampedStart) {
+      overlappingMatches.push({
+        start: clampedStart,
+        end: clampedEnd,
+        matchIndex: match.matchIndex
+      })
+      boundarySet.add(clampedStart)
+      boundarySet.add(clampedEnd)
+    }
+  }
+
+  if (overlappingMatches.length === 0 && anchorMatchesByOffset.size === 0) {
+    return to > from ? code.slice(from, to) : null
   }
 
   const boundaries = Array.from(boundarySet).sort((a, b) => a - b)
-  const nodes: ReactNode[] = []
-
-  const emitAnchorsAt = (offset: number): void => {
-    const anchors = anchorMatchesByOffset.get(offset)
-    if (!anchors) return
-    anchorMatchesByOffset.delete(offset)
-    for (const matchIndex of anchors) {
-      nodes.push(wrapSearchMark('', matchIndex, activeSearchMatchIndex, `ca-${offset}-${matchIndex}`))
-    }
-  }
+  const pieces: ReactNode[] = []
 
   for (let i = 0; i < boundaries.length; i += 1) {
-    const start = boundaries[i]
-    emitAnchorsAt(start)
+    const pos = boundaries[i]
+    const anchors = anchorMatchesByOffset.get(pos)
+    if (anchors) {
+      anchorMatchesByOffset.delete(pos)
+      for (const matchIndex of anchors) {
+        pieces.push(
+          wrapSearchMark(
+            '',
+            matchIndex,
+            activeSearchMatchIndex,
+            `${keyPrefix}-a-${pos}-${matchIndex}`
+          )
+        )
+      }
+    }
     if (i + 1 >= boundaries.length) break
-    const end = boundaries[i + 1]
-    if (end <= start) continue
+    const nextPos = boundaries[i + 1]
+    if (nextPos <= pos) continue
 
-    const slice = code.slice(start, end)
-    const syntaxSpan = validSyntaxSpans.find((span) => span.from <= start && span.to >= end)
-    const searchMatch = rangeSearchSpans.find((span) => span.start <= start && span.end >= end)
+    const slice = code.slice(pos, nextPos)
+    const activeMatch = overlappingMatches.find((m) => m.start <= pos && m.end >= nextPos)
+    pieces.push(
+      activeMatch
+        ? wrapSearchMark(slice, activeMatch.matchIndex, activeSearchMatchIndex, `${keyPrefix}-m-${i}`)
+        : slice
+    )
+  }
 
-    let piece: ReactNode = slice
-    if (searchMatch) {
-      piece = wrapSearchMark(
-        slice,
-        searchMatch.matchIndex,
+  return pieces.length === 1 ? pieces[0] : pieces
+}
+
+/**
+ * Renders syntax-highlighted code tokens and optional search `<mark>` spans in one pass,
+ * avoiding allocation and sorting overhead when no search highlights are active.
+ */
+export function renderCodeTokensWithSearch(
+  code: string,
+  syntaxSpans: readonly CodeBlockHighlightSpan[],
+  searchHighlights: readonly PreviewSearchMatchSpan[] = [],
+  activeSearchMatchIndex = -1
+): ReactNode {
+  if (syntaxSpans.length === 0 && searchHighlights.length === 0) {
+    return code
+  }
+
+  const nodes: ReactNode[] = []
+  let cursor = 0
+
+  for (let i = 0; i < syntaxSpans.length; i += 1) {
+    const span = syntaxSpans[i]
+    if (span.from < cursor || span.to <= span.from || span.to > code.length) {
+      continue
+    }
+    if (span.from > cursor) {
+      const gapNode = renderCodeSlice(
+        code,
+        cursor,
+        span.from,
+        false,
+        searchHighlights,
         activeSearchMatchIndex,
-        `cm-${i}-${searchMatch.matchIndex}`
+        `g-${i}`
       )
+      if (gapNode !== null) {
+        nodes.push(gapNode)
+      }
     }
-    if (syntaxSpan) {
-      piece = (
-        <span key={`tok-${i}`} className={syntaxSpan.className}>
-          {piece}
-        </span>
-      )
-    }
-    nodes.push(piece)
+    nodes.push(
+      <span key={`tok-${i}`} className={span.className}>
+        {renderCodeSlice(
+          code,
+          span.from,
+          span.to,
+          false,
+          searchHighlights,
+          activeSearchMatchIndex,
+          `t-${i}`
+        )}
+      </span>
+    )
+    cursor = span.to
+  }
+
+  const trailingNode = renderCodeSlice(
+    code,
+    cursor,
+    code.length,
+    true,
+    searchHighlights,
+    activeSearchMatchIndex,
+    'end'
+  )
+  if (trailingNode !== null) {
+    nodes.push(trailingNode)
   }
 
   return nodes
@@ -353,20 +422,18 @@ function flushPreviewTextRun(
   textPatches: Map<number, PreviewSearchMatchSpan[]>,
   nextMatchIndex: () => number
 ): void {
-  if (runSegments.length === 0) {
-    return
-  }
-  const combined = runSegments.map((segment) => segment.text).join('')
-  if (combined.includes('\n') && /^[\r\n\t ]+$/.test(combined)) {
+  if (
+    runSegments.some((segment) => segment.text.includes('\n')) &&
+    runSegments.every((segment) => /^[\r\n\t ]+$/.test(segment.text))
+  ) {
     runSegments.length = 0
     return
   }
-  for (const span of matcher.findMatches(combined)) {
+  consumeMatchedTextRun(runSegments, matcher, (span, segments) => {
     const matchIndex = nextMatchIndex()
     if (span.end <= span.start) {
       const targetSegment =
-        runSegments.find((seg) => span.start <= seg.endOffset) ??
-        runSegments[runSegments.length - 1]
+        segments.find((seg) => span.start <= seg.endOffset) ?? segments[segments.length - 1]
       const localPos = Math.max(
         0,
         Math.min(targetSegment.text.length, span.start - targetSegment.startOffset)
@@ -376,10 +443,10 @@ function flushPreviewTextRun(
         end: localPos,
         matchIndex
       })
-      continue
+      return
     }
 
-    for (const seg of runSegments) {
+    for (const seg of segments) {
       if (span.end <= seg.startOffset || span.start >= seg.endOffset) {
         continue
       }
@@ -393,8 +460,7 @@ function flushPreviewTextRun(
         })
       }
     }
-  }
-  runSegments.length = 0
+  })
 }
 
 function buildPreviewSearchPlan(
