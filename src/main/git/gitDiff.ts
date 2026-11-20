@@ -10,8 +10,8 @@ import {
 } from '@shared/git'
 import { hasBlockedPathSegment, isMissingPathError, isPathInsideRoot } from '../fs/pathSecurity'
 import { IGNORED_ENTRY_NAMES } from '../workspace/WorkspaceFsService'
-import { assertValidCommitHash } from './gitCommitDetail'
-import { assertValidStashHash, assertValidStashRef } from './gitStash'
+import { assertValidGitHash } from './gitObjectParsing'
+import { assertValidStashRef } from './gitStash'
 
 export interface GitBufferResult {
   buffer: Buffer
@@ -242,12 +242,10 @@ function buildUntrackedUnifiedPatch(safePath: string, text: string): string {
 
 function buildUntrackedBlobDiffResult(
   safePath: string,
-  chunk: Buffer,
-  chunkTruncated: boolean,
-  hasNullByte: boolean,
+  result: GitBufferResult,
   existsInWorkspace: boolean
 ): GitFileDiff {
-  if (hasNullByte || chunk.includes(0)) {
+  if (result.hasNullByte || result.buffer.includes(0)) {
     return {
       path: safePath,
       status: '?',
@@ -259,7 +257,7 @@ function buildUntrackedBlobDiffResult(
   }
 
   const { text, isTruncated: textTruncated } = truncateUtf8BufferToMaxBytes(
-    chunk,
+    result.buffer,
     GIT_DIFF_MAX_BYTES
   )
   const fullPatch = buildUntrackedUnifiedPatch(safePath, text)
@@ -273,7 +271,7 @@ function buildUntrackedBlobDiffResult(
     path: safePath,
     status: '?',
     isBinary: false,
-    isTruncated: chunkTruncated || textTruncated || patchExceeded,
+    isTruncated: result.truncated || textTruncated || patchExceeded,
     existsInWorkspace,
     rawPatch: boundedPatch
   }
@@ -311,9 +309,11 @@ async function readUntrackedFileDiff(
 
   return buildUntrackedBlobDiffResult(
     safePath,
-    buffer.subarray(0, totalRead),
-    totalRead > GIT_DIFF_MAX_BYTES,
-    false,
+    {
+      buffer: buffer.subarray(0, totalRead),
+      truncated: totalRead > GIT_DIFF_MAX_BYTES,
+      hasNullByte: false
+    },
     existsInWorkspace
   )
 }
@@ -325,12 +325,12 @@ async function readStashUntrackedFileDiff(
   existsInWorkspace: boolean,
   execOptions: GitDiffExecOptions
 ): Promise<GitFileDiff> {
-  const { buffer, truncated, hasNullByte } = await execGitStdoutCapped({
+  const result = await execGitStdoutCapped({
     cwd: repoRoot,
     args: ['cat-file', '-p', `${validatedStashHash}^3:${safePath}`],
     execOptions
   })
-  return buildUntrackedBlobDiffResult(safePath, buffer, truncated, hasNullByte, existsInWorkspace)
+  return buildUntrackedBlobDiffResult(safePath, result, existsInWorkspace)
 }
 
 export type ValidatedGitDiffTarget =
@@ -352,12 +352,12 @@ export function validateGitDiffTarget(request: GitDiffRequest): ValidatedGitDiff
     case 'unstaged':
       return { kind: 'unstaged', isUntracked: request.status === '?' }
     case 'commit':
-      return { kind: 'commit', commitHash: assertValidCommitHash(request.commitHash) }
+      return { kind: 'commit', commitHash: assertValidGitHash(request.commitHash, '커밋') }
     case 'stash':
       assertValidStashRef(request.stashRef)
       return {
         kind: 'stash',
-        stashHash: assertValidStashHash(request.stashHash),
+        stashHash: assertValidGitHash(request.stashHash, 'Stash'),
         isUntracked: request.status === '?'
       }
     default:

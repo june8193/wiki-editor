@@ -1,6 +1,6 @@
 import type { GitCommitDetail } from '@shared/git'
 import { parseCommitIdentityFields } from './gitLog'
-import { assertValidGitHash, parseGitNameStatusZ } from './gitObjectParsing'
+import { parseGitNameStatusZ } from './gitObjectParsing'
 
 const COMMIT_DETAIL_HEADER_TOKENS = ['%H', '%h', '%P', '%s', '%an', '%ae', '%cI'] as const
 
@@ -9,14 +9,6 @@ const COMMIT_DETAIL_HEADER_TOKENS = ['%H', '%h', '%P', '%s', '%an', '%ae', '%cI'
  * so field order and delimiters stay coupled in one place.
  */
 export const GIT_COMMIT_DETAIL_FORMAT = `--format=${COMMIT_DETAIL_HEADER_TOKENS.join('%x1f')}%x1f%b%x1e`
-
-/**
- * Validates that a commit reference is strictly a 7–64 character hexadecimal hash,
- * preventing Git CLI option injection and symbolic ref ambiguity.
- */
-export function assertValidCommitHash(commitHash: unknown): string {
-  return assertValidGitHash(commitHash, '커밋')
-}
 
 /**
  * Parses NUL-delimited `git show --name-status -z` output with `\x1f`/`\x1e` header delimiters

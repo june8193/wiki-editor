@@ -33,13 +33,12 @@ import {
   GitFormattedError
 } from './gitErrors'
 import {
-  assertValidCommitHash,
   GIT_COMMIT_DETAIL_FORMAT,
   parseCommitDetailOutput
 } from './gitCommitDetail'
 import { computeGitDiff, validateGitDiffTarget } from './gitDiff'
 import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
-import { parseGitNameStatusZ } from './gitObjectParsing'
+import { assertValidGitHash, parseGitNameStatusZ } from './gitObjectParsing'
 import { parsePorcelainV2Z } from './gitPorcelain'
 import {
   assertValidStashRef,
@@ -541,7 +540,7 @@ export class GitService {
   }
 
   async commitDetail(workspacePath: string, commitHash: string): Promise<GitCommitDetail> {
-    const validatedHash = assertValidCommitHash(commitHash)
+    const validatedHash = assertValidGitHash(commitHash, '커밋')
     const repoRoot = await this.requireRepoRoot(workspacePath)
     try {
       const raw = await this.execGit(repoRoot, [
