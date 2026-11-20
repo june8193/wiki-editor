@@ -26,6 +26,7 @@ import {
   filterTopLevelWorkspaceItems,
   getWorkspaceDisplayName,
   getWorkspacePathKey,
+  IGNORED_WORKSPACE_ENTRY_NAMES,
   isMarkdownFileName,
   isNestedOrSameWorkspacePath,
   isSameWorkspacePath,
@@ -46,14 +47,7 @@ import {
   WORKSPACE_SYMLINK_ERROR_MESSAGE
 } from '../fs/pathSecurity'
 
-export const IGNORED_ENTRY_NAMES: ReadonlySet<string> = new Set([
-  '.git',
-  'node_modules',
-  '.hg',
-  '.svn',
-  '.DS_Store',
-  'Thumbs.db'
-])
+export const IGNORED_ENTRY_NAMES = IGNORED_WORKSPACE_ENTRY_NAMES
 
 export interface WorkspaceFsServiceOptions {
   trashItem?: (targetPath: string) => Promise<void>

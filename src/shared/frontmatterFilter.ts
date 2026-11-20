@@ -4,7 +4,7 @@ import {
   isValidIsoCalendarDate,
   type WorkspaceFrontmatterSchema
 } from './frontmatterSchema'
-import { compareWorkspaceEntriesByRelativePath, isMarkdownFileName } from './workspace'
+import { IGNORED_WORKSPACE_ENTRY_NAMES, isMarkdownFileName } from './workspace'
 
 export type FrontmatterScalarValue = string | number | boolean
 export type FrontmatterFieldValue = FrontmatterScalarValue | string[]
@@ -35,28 +35,15 @@ export interface WorkspaceFrontmatterFieldValuesResponse {
   valuesByField: Record<string, string[]>
 }
 
-export interface WorkspaceSearchSortSpec {
-  by: 'path' | 'frontmatter'
-  fieldKey?: string
-  direction: 'asc' | 'desc'
-}
+export type FrontmatterValueComparator = (
+  a: FrontmatterFieldValue | undefined,
+  b: FrontmatterFieldValue | undefined
+) => number
 
-export interface FrontmatterSortableEntry {
-  relativePath: string
-  hasNameMatch?: boolean
-  values?: Readonly<Record<string, FrontmatterFieldValue | undefined>>
+export interface FrontmatterFieldValuesCollector {
+  addDocumentValues(docValues: Readonly<Record<string, FrontmatterFieldValue | undefined>>): void
+  finalize(): WorkspaceFrontmatterFieldValuesResponse
 }
-
-const DEFAULT_FALLBACK_SUMMARY_MAX_FIELDS = 3
-const FRONTMATTER_EXCLUDED_SEGMENTS: ReadonlySet<string> = new Set([
-  '.wiki-editor',
-  '.git',
-  'node_modules',
-  '.hg',
-  '.svn',
-  '.DS_Store',
-  'Thumbs.db'
-])
 
 export const FRONTMATTER_OPERATORS_BY_TYPE: Readonly<
   Record<FrontmatterFieldType, readonly FrontmatterFilterOperator[]>
@@ -68,6 +55,12 @@ export const FRONTMATTER_OPERATORS_BY_TYPE: Readonly<
   date: ['equals', 'gte', 'lte', 'between', 'is-empty'],
   boolean: ['equals', 'is-empty']
 }
+
+const DEFAULT_FALLBACK_SUMMARY_MAX_FIELDS = 3
+const FRONTMATTER_EXCLUDED_SEGMENTS: ReadonlySet<string> = new Set([
+  ...IGNORED_WORKSPACE_ENTRY_NAMES,
+  '.wiki-editor'
+])
 
 /** Returns true when `operator` is supported for `fieldType`. */
 export function isFrontmatterOperatorForType(
@@ -115,6 +108,20 @@ function normalizeTargetValues(values: readonly string[] | undefined): string[] 
   return values.filter((item): item is string => typeof item === 'string')
 }
 
+function compareLocaleStrings(a: string, b: string): number {
+  const baseOrder = a.localeCompare(b, undefined, { sensitivity: 'base' })
+  return baseOrder !== 0 ? baseOrder : a.localeCompare(b)
+}
+
+function compareLocaleStringArrays(a: readonly string[], b: readonly string[]): number {
+  const limit = Math.min(a.length, b.length)
+  for (let i = 0; i < limit; i += 1) {
+    const cmp = compareLocaleStrings(a[i], b[i])
+    if (cmp !== 0) return cmp
+  }
+  return a.length - b.length
+}
+
 function evaluateOrderedRangeOperator<T>(
   actual: T | null,
   condition: FrontmatterFilterCondition,
@@ -152,59 +159,142 @@ function evaluateOrderedRangeOperator<T>(
   }
 }
 
-function evaluateSelectCondition(
-  rawValue: FrontmatterFieldValue | undefined,
-  condition: FrontmatterFilterCondition
-): boolean {
-  const actual = typeof rawValue === 'string' && rawValue.trim().length > 0 ? rawValue : null
-  const targets = new Set(normalizeTargetValues(condition.values))
-
-  if (condition.operator === 'in') {
-    return actual !== null && targets.has(actual)
-  }
-  if (condition.operator === 'not-in') {
-    return actual === null || !targets.has(actual)
-  }
-  return false
+interface FieldTypeHandler<TNorm = unknown> {
+  evaluate: (
+    rawValue: FrontmatterFieldValue | undefined,
+    condition: FrontmatterFilterCondition
+  ) => boolean
+  normalizeSortable: (rawValue: FrontmatterFieldValue | undefined) => TNorm | null
+  createPairComparator: (
+    field: FrontmatterFieldDefinition,
+    direction: 'asc' | 'desc'
+  ) => (a: TNorm, b: TNorm) => number
 }
 
-function evaluateMultiSelectCondition(
-  rawValue: FrontmatterFieldValue | undefined,
-  condition: FrontmatterFilterCondition
-): boolean {
-  const actualSet = new Set(
-    Array.isArray(rawValue)
-      ? rawValue.filter((item): item is string => typeof item === 'string')
-      : []
-  )
-  const targets = normalizeTargetValues(condition.values)
+function defineFieldTypeHandler<TNorm>(handler: FieldTypeHandler<TNorm>): FieldTypeHandler {
+  return handler as FieldTypeHandler
+}
 
-  switch (condition.operator) {
-    case 'all-of':
-      return targets.every((target) => actualSet.has(target))
-    case 'any-of':
-      return targets.some((target) => actualSet.has(target))
-    case 'none-of':
-      return !targets.some((target) => actualSet.has(target))
-    default:
+function createDirectedComparator<T>(
+  direction: 'asc' | 'desc',
+  compareAsc: (a: T, b: T) => number
+): (a: T, b: T) => number {
+  return direction === 'desc' ? (a, b) => -compareAsc(a, b) : compareAsc
+}
+
+const FIELD_TYPE_HANDLERS: Readonly<Record<FrontmatterFieldType, FieldTypeHandler>> = {
+  select: defineFieldTypeHandler<string>({
+    evaluate: (rawValue, condition) => {
+      const actual = typeof rawValue === 'string' && rawValue.trim().length > 0 ? rawValue : null
+      const targets = new Set(normalizeTargetValues(condition.values))
+      if (condition.operator === 'in') {
+        return actual !== null && targets.has(actual)
+      }
+      if (condition.operator === 'not-in') {
+        return actual === null || !targets.has(actual)
+      }
       return false
-  }
-}
-
-function evaluateTextCondition(
-  rawValue: FrontmatterFieldValue | undefined,
-  condition: FrontmatterFilterCondition
-): boolean {
-  if (typeof rawValue !== 'string' || typeof condition.value !== 'string') {
-    return false
-  }
-  if (condition.operator === 'contains') {
-    return rawValue.toLowerCase().includes(condition.value.toLowerCase())
-  }
-  if (condition.operator === 'equals') {
-    return rawValue === condition.value
-  }
-  return false
+    },
+    normalizeSortable: (rawValue) =>
+      typeof rawValue === 'string' && rawValue.trim().length > 0 ? rawValue : null,
+    createPairComparator: (field, direction) => {
+      const orderMap = new Map(
+        (field.options ?? []).map((option, index) => [option.value, index] as const)
+      )
+      return (a, b) => {
+        const idxA = orderMap.get(a)
+        const idxB = orderMap.get(b)
+        if (idxA !== undefined && idxB !== undefined) {
+          return direction === 'desc' ? idxB - idxA : idxA - idxB
+        }
+        if (idxA !== undefined) return -1
+        if (idxB !== undefined) return 1
+        const cmp = compareLocaleStrings(a, b)
+        return direction === 'desc' ? -cmp : cmp
+      }
+    }
+  }),
+  'multi-select': defineFieldTypeHandler<string[]>({
+    evaluate: (rawValue, condition) => {
+      const actualSet = new Set(
+        Array.isArray(rawValue)
+          ? rawValue.filter((item): item is string => typeof item === 'string')
+          : []
+      )
+      const targets = normalizeTargetValues(condition.values)
+      switch (condition.operator) {
+        case 'all-of':
+          return targets.length > 0 && targets.every((target) => actualSet.has(target))
+        case 'any-of':
+          return targets.some((target) => actualSet.has(target))
+        case 'none-of':
+          return !targets.some((target) => actualSet.has(target))
+        default:
+          return false
+      }
+    },
+    normalizeSortable: (rawValue) =>
+      Array.isArray(rawValue) &&
+      rawValue.length > 0 &&
+      rawValue.every((item) => typeof item === 'string')
+        ? rawValue
+        : null,
+    createPairComparator: (_field, direction) =>
+      createDirectedComparator(direction, compareLocaleStringArrays)
+  }),
+  text: defineFieldTypeHandler<string>({
+    evaluate: (rawValue, condition) => {
+      if (typeof rawValue !== 'string' || typeof condition.value !== 'string') {
+        return false
+      }
+      if (condition.operator === 'contains') {
+        return rawValue.toLowerCase().includes(condition.value.toLowerCase())
+      }
+      if (condition.operator === 'equals') {
+        return rawValue === condition.value
+      }
+      return false
+    },
+    normalizeSortable: (rawValue) =>
+      typeof rawValue === 'string' && rawValue.trim().length > 0 ? rawValue : null,
+    createPairComparator: (_field, direction) =>
+      createDirectedComparator(direction, compareLocaleStrings)
+  }),
+  number: defineFieldTypeHandler<number>({
+    evaluate: (rawValue, condition) =>
+      evaluateOrderedRangeOperator(
+        typeof rawValue === 'number' && Number.isFinite(rawValue) ? rawValue : null,
+        condition,
+        toFiniteNumber,
+        (a, b) => a - b
+      ),
+    normalizeSortable: (rawValue) =>
+      typeof rawValue === 'number' && Number.isFinite(rawValue) ? rawValue : null,
+    createPairComparator: (_field, direction) =>
+      createDirectedComparator(direction, (a, b) => a - b)
+  }),
+  date: defineFieldTypeHandler<string>({
+    evaluate: (rawValue, condition) =>
+      evaluateOrderedRangeOperator(
+        toValidIsoDate(rawValue),
+        condition,
+        toValidIsoDate,
+        (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+      ),
+    normalizeSortable: (rawValue) => toValidIsoDate(rawValue),
+    createPairComparator: (_field, direction) =>
+      createDirectedComparator(direction, (a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  }),
+  boolean: defineFieldTypeHandler<boolean>({
+    evaluate: (rawValue, condition) => {
+      const actual = typeof rawValue === 'boolean' ? rawValue : null
+      const target = toBooleanValue(condition.value)
+      return actual !== null && target !== null && actual === target
+    },
+    normalizeSortable: (rawValue) => (typeof rawValue === 'boolean' ? rawValue : null),
+    createPairComparator: (_field, direction) =>
+      createDirectedComparator(direction, (a, b) => (a ? 1 : 0) - (b ? 1 : 0))
+  })
 }
 
 /**
@@ -224,33 +314,7 @@ export function evaluateFrontmatterCondition(
     return isFrontmatterValueEmpty(rawValue)
   }
 
-  switch (field.type) {
-    case 'select':
-      return evaluateSelectCondition(rawValue, condition)
-    case 'multi-select':
-      return evaluateMultiSelectCondition(rawValue, condition)
-    case 'text':
-      return evaluateTextCondition(rawValue, condition)
-    case 'number':
-      return evaluateOrderedRangeOperator(
-        typeof rawValue === 'number' && Number.isFinite(rawValue) ? rawValue : null,
-        condition,
-        toFiniteNumber,
-        (a, b) => a - b
-      )
-    case 'date':
-      return evaluateOrderedRangeOperator(
-        toValidIsoDate(rawValue),
-        condition,
-        toValidIsoDate,
-        (a, b) => (a < b ? -1 : a > b ? 1 : 0)
-      )
-    case 'boolean': {
-      const actual = typeof rawValue === 'boolean' ? rawValue : null
-      const target = toBooleanValue(condition.value)
-      return actual !== null && target !== null && actual === target
-    }
-  }
+  return FIELD_TYPE_HANDLERS[field.type].evaluate(rawValue, condition)
 }
 
 /**
@@ -278,136 +342,37 @@ export function matchesFrontmatterConditions(
   return true
 }
 
-function compareLocaleStrings(a: string, b: string): number {
-  const baseOrder = a.localeCompare(b, undefined, { sensitivity: 'base' })
-  return baseOrder !== 0 ? baseOrder : a.localeCompare(b)
-}
+/**
+ * Builds a reusable comparator for sorting values of `field`, caching schema option lookup order
+ * and placing empty/invalid values last in both ascending and descending directions.
+ */
+export function createFrontmatterFieldComparator(
+  field: FrontmatterFieldDefinition,
+  direction: 'asc' | 'desc'
+): FrontmatterValueComparator {
+  const handler = FIELD_TYPE_HANDLERS[field.type]
+  const comparePair = handler.createPairComparator(field, direction)
 
-function compareLocaleStringArrays(a: readonly string[], b: readonly string[]): number {
-  const limit = Math.min(a.length, b.length)
-  for (let i = 0; i < limit; i += 1) {
-    const cmp = compareLocaleStrings(a[i], b[i])
-    if (cmp !== 0) return cmp
-  }
-  return a.length - b.length
-}
-
-function normalizeSortableFieldValue(
-  value: FrontmatterFieldValue | undefined,
-  fieldType: FrontmatterFieldType
-): string | number | boolean | string[] | null {
-  if (value === undefined || value === null) return null
-
-  switch (fieldType) {
-    case 'select':
-    case 'text':
-      return typeof value === 'string' && value.trim().length > 0 ? value : null
-    case 'number':
-      return typeof value === 'number' && Number.isFinite(value) ? value : null
-    case 'date':
-      return toValidIsoDate(value)
-    case 'boolean':
-      return typeof value === 'boolean' ? value : null
-    case 'multi-select':
-      return Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === 'string')
-        ? value
-        : null
+  return (rawA, rawB) => {
+    const normA = handler.normalizeSortable(rawA)
+    const normB = handler.normalizeSortable(rawB)
+    if (normA === null && normB === null) return 0
+    if (normA === null) return 1
+    if (normB === null) return -1
+    return comparePair(normA, normB)
   }
 }
 
 /**
- * Compares two values for a frontmatter field, placing empty/invalid values last in both directions
- * and sorting `select` values by declared schema option order before out-of-schema values.
+ * Compares two values for a frontmatter field, placing empty/invalid values last in both directions.
  */
 export function compareFrontmatterFieldValues(
   rawA: FrontmatterFieldValue | undefined,
   rawB: FrontmatterFieldValue | undefined,
   field: FrontmatterFieldDefinition,
-  direction: 'asc' | 'desc',
-  optionOrderMap?: ReadonlyMap<string, number>
+  direction: 'asc' | 'desc'
 ): number {
-  const normA = normalizeSortableFieldValue(rawA, field.type)
-  const normB = normalizeSortableFieldValue(rawB, field.type)
-  if (normA === null && normB === null) return 0
-  if (normA === null) return 1
-  if (normB === null) return -1
-
-  let cmp = 0
-  switch (field.type) {
-    case 'select': {
-      const orderMap =
-        optionOrderMap ??
-        new Map((field.options ?? []).map((option, index) => [option.value, index] as const))
-      const idxA = orderMap.get(normA as string)
-      const idxB = orderMap.get(normB as string)
-      if (idxA !== undefined && idxB !== undefined) {
-        cmp = idxA - idxB
-        break
-      }
-      if (idxA !== undefined) return -1
-      if (idxB !== undefined) return 1
-      cmp = compareLocaleStrings(normA as string, normB as string)
-      break
-    }
-    case 'number':
-      cmp = (normA as number) - (normB as number)
-      break
-    case 'date':
-      cmp = (normA as string) < (normB as string) ? -1 : (normA as string) > (normB as string) ? 1 : 0
-      break
-    case 'text':
-      cmp = compareLocaleStrings(normA as string, normB as string)
-      break
-    case 'multi-select':
-      cmp = compareLocaleStringArrays(normA as string[], normB as string[])
-      break
-    case 'boolean':
-      cmp = (normA ? 1 : 0) - (normB ? 1 : 0)
-      break
-  }
-
-  return direction === 'desc' ? -cmp : cmp
-}
-
-function compareDefaultSearchOrder(a: FrontmatterSortableEntry, b: FrontmatterSortableEntry): number {
-  const aHasName = Boolean(a.hasNameMatch)
-  const bHasName = Boolean(b.hasNameMatch)
-  if (aHasName !== bHasName) {
-    return aHasName ? -1 : 1
-  }
-  return compareWorkspaceEntriesByRelativePath(a, b)
-}
-
-/**
- * Compares search result entries by `WorkspaceSearchSortSpec`, falling back to `relativePath` asc on ties.
- */
-export function compareWorkspaceSearchEntriesBySort(
-  a: FrontmatterSortableEntry,
-  b: FrontmatterSortableEntry,
-  sort: WorkspaceSearchSortSpec | undefined,
-  schema: WorkspaceFrontmatterSchema | null | undefined,
-  optionOrderMap?: ReadonlyMap<string, number>
-): number {
-  if (!sort || (sort.by === 'path' && sort.direction === 'asc')) {
-    return compareDefaultSearchOrder(a, b)
-  }
-  if (sort.by === 'path') {
-    return compareWorkspaceEntriesByRelativePath(b, a)
-  }
-
-  const field = sort.fieldKey ? schema?.fields.find((item) => item.key === sort.fieldKey) : undefined
-  if (!field) {
-    return compareDefaultSearchOrder(a, b)
-  }
-
-  const cmp = compareFrontmatterFieldValues(
-    a.values?.[field.key],
-    b.values?.[field.key],
-    field,
-    sort.direction,
-    optionOrderMap
-  )
-  return cmp !== 0 ? cmp : compareWorkspaceEntriesByRelativePath(a, b)
+  return createFrontmatterFieldComparator(field, direction)(rawA, rawB)
 }
 
 /**
@@ -427,7 +392,8 @@ export function extractFrontmatterSummary(
     explicitBadgeFields.length > 0
       ? explicitBadgeFields
       : schema.fields.filter((field) => field.showInSearchBadge !== false)
-  const limit = explicitBadgeFields.length > 0 ? candidates.length : DEFAULT_FALLBACK_SUMMARY_MAX_FIELDS
+  const limit =
+    explicitBadgeFields.length > 0 ? candidates.length : DEFAULT_FALLBACK_SUMMARY_MAX_FIELDS
 
   const summary: Record<string, FrontmatterFieldValue> = {}
   let count = 0
@@ -477,10 +443,10 @@ export function collectAllowCustomMultiSelectFields(
   )
 }
 
-/** Creates an incremental value-collection seed map pre-populated with schema options. */
+/** Creates a stateful collector for deduplicating and sorting `allowCustom` `multi-select` field values. */
 export function createFrontmatterFieldValuesCollector(
   targetFields: readonly FrontmatterFieldDefinition[]
-): Map<string, Set<string>> {
+): FrontmatterFieldValuesCollector {
   const byField = new Map<string, Set<string>>()
   for (const field of targetFields) {
     const set = new Set<string>()
@@ -491,44 +457,25 @@ export function createFrontmatterFieldValuesCollector(
     }
     byField.set(field.key, set)
   }
-  return byField
-}
 
-/** Adds extracted document frontmatter values for `targetFields` into the collector map. */
-export function appendDocumentValuesToFieldCollector(
-  collector: ReadonlyMap<string, Set<string>>,
-  docValues: Readonly<Record<string, FrontmatterFieldValue>>
-): void {
-  for (const [fieldKey, valueSet] of collector.entries()) {
-    const raw = docValues[fieldKey]
-    if (!Array.isArray(raw)) continue
-    for (const item of raw) {
-      if (typeof item === 'string' && item.trim().length > 0) {
-        valueSet.add(item)
+  return {
+    addDocumentValues(docValues) {
+      for (const [fieldKey, valueSet] of byField.entries()) {
+        const raw = docValues[fieldKey]
+        if (!Array.isArray(raw)) continue
+        for (const item of raw) {
+          if (typeof item === 'string' && item.trim().length > 0) {
+            valueSet.add(item)
+          }
+        }
       }
+    },
+    finalize() {
+      const valuesByField: Record<string, string[]> = {}
+      for (const [fieldKey, valueSet] of byField.entries()) {
+        valuesByField[fieldKey] = [...valueSet].sort(compareLocaleStrings)
+      }
+      return { valuesByField }
     }
   }
-}
-
-/** Converts a field-values collector map into sorted deduplicated arrays per field. */
-export function finalizeCollectedFrontmatterFieldValues(
-  collector: ReadonlyMap<string, Set<string>>
-): WorkspaceFrontmatterFieldValuesResponse {
-  const valuesByField: Record<string, string[]> = {}
-  for (const [fieldKey, valueSet] of collector.entries()) {
-    valuesByField[fieldKey] = [...valueSet].sort(compareLocaleStrings)
-  }
-  return { valuesByField }
-}
-
-/** Collects deduplicated, sorted schema options and document values for `targetFields`. */
-export function mergeCollectedFrontmatterFieldValues(
-  targetFields: readonly FrontmatterFieldDefinition[],
-  documentValuesList: ReadonlyArray<Readonly<Record<string, FrontmatterFieldValue>>>
-): WorkspaceFrontmatterFieldValuesResponse {
-  const collector = createFrontmatterFieldValuesCollector(targetFields)
-  for (const docValues of documentValuesList) {
-    appendDocumentValuesToFieldCollector(collector, docValues)
-  }
-  return finalizeCollectedFrontmatterFieldValues(collector)
 }

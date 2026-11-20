@@ -1,13 +1,25 @@
 import { isSupportedImageFile } from './assets'
-import type {
-  FrontmatterFieldValue,
-  FrontmatterFilterCondition,
-  WorkspaceSearchSortSpec
+import {
+  createFrontmatterFieldComparator,
+  type FrontmatterFieldValue,
+  type FrontmatterFilterCondition,
+  type FrontmatterValueComparator
 } from './frontmatterFilter'
+import type { WorkspaceFrontmatterSchema } from './frontmatterSchema'
 import type { PaneId } from './window'
 import { compareWorkspaceEntriesByRelativePath } from './workspace'
 
-export type { WorkspaceSearchSortSpec } from './frontmatterFilter'
+export interface WorkspaceSearchSortSpec {
+  by: 'path' | 'frontmatter'
+  fieldKey?: string
+  direction: 'asc' | 'desc'
+}
+
+export interface FrontmatterSortableSearchEntry {
+  relativePath: string
+  nameMatches: TextMatchSpan[]
+  values?: Readonly<Record<string, FrontmatterFieldValue | undefined>>
+}
 
 export interface SearchMatchOptions {
   caseSensitive: boolean
@@ -367,6 +379,51 @@ export function compareWorkspaceSearchFileResults(
   return compareWorkspaceEntriesByRelativePath(a, b)
 }
 
+/**
+ * Compares search result entries by `WorkspaceSearchSortSpec`, falling back to `relativePath` asc on ties.
+ */
+export function compareWorkspaceSearchEntriesBySort(
+  a: FrontmatterSortableSearchEntry,
+  b: FrontmatterSortableSearchEntry,
+  sort: WorkspaceSearchSortSpec | undefined,
+  schema: WorkspaceFrontmatterSchema | null | undefined,
+  fieldComparator?: FrontmatterValueComparator
+): number {
+  if (!sort || (sort.by === 'path' && sort.direction === 'asc')) {
+    return compareWorkspaceSearchFileResults(a, b)
+  }
+  if (sort.by === 'path') {
+    return compareWorkspaceEntriesByRelativePath(b, a)
+  }
+
+  const field = sort.fieldKey ? schema?.fields.find((item) => item.key === sort.fieldKey) : undefined
+  if (!field) {
+    return compareWorkspaceSearchFileResults(a, b)
+  }
+
+  const comparator = fieldComparator ?? createFrontmatterFieldComparator(field, sort.direction)
+  const cmp = comparator(a.values?.[field.key], b.values?.[field.key])
+  return cmp !== 0 ? cmp : compareWorkspaceEntriesByRelativePath(a, b)
+}
+
+/** Builds a `WorkspaceSearchFileResult`, omitting `frontmatterSummary` when undefined. */
+export function buildWorkspaceSearchFileResult(fields: {
+  path: string
+  relativePath: string
+  name: string
+  nameMatches: TextMatchSpan[]
+  lineMatches: WorkspaceSearchLineMatch[]
+  totalMatchCount: number
+  truncatedInFile: boolean
+  frontmatterSummary?: Record<string, FrontmatterFieldValue>
+}): WorkspaceSearchFileResult {
+  const { frontmatterSummary, ...rest } = fields
+  return {
+    ...rest,
+    ...(frontmatterSummary !== undefined ? { frontmatterSummary } : {})
+  }
+}
+
 export interface SearchCandidateScanResult {
   lineMatches: WorkspaceSearchLineMatch[]
   totalMatchCount: number
@@ -533,10 +590,6 @@ export function commitSearchCandidateSlot(
   },
   slot: SearchCandidateScanResult
 ): void {
-  const summaryField =
-    candidate.frontmatterSummary !== undefined
-      ? { frontmatterSummary: candidate.frontmatterSummary }
-      : {}
   const remainingBudget = accumulator.maxTotalMatches - accumulator.committedMatchCount
   if (remainingBudget <= 0) {
     if (slot.totalMatchCount > 0) {
@@ -544,16 +597,18 @@ export function commitSearchCandidateSlot(
       accumulator.stopBodyScanning = true
     }
     if (candidate.nameMatches.length > 0) {
-      accumulator.files.push({
-        path: candidate.path,
-        relativePath: candidate.relativePath,
-        name: candidate.name,
-        nameMatches: candidate.nameMatches,
-        lineMatches: [],
-        totalMatchCount: slot.totalMatchCount,
-        truncatedInFile: slot.totalMatchCount > 0,
-        ...summaryField
-      })
+      accumulator.files.push(
+        buildWorkspaceSearchFileResult({
+          path: candidate.path,
+          relativePath: candidate.relativePath,
+          name: candidate.name,
+          nameMatches: candidate.nameMatches,
+          lineMatches: [],
+          totalMatchCount: slot.totalMatchCount,
+          truncatedInFile: slot.totalMatchCount > 0,
+          frontmatterSummary: candidate.frontmatterSummary
+        })
+      )
     }
     return
   }
@@ -563,30 +618,34 @@ export function commitSearchCandidateSlot(
     accumulator.committedMatchCount += trimmed.keptCount
     accumulator.truncated = true
     accumulator.stopBodyScanning = true
-    accumulator.files.push({
-      path: candidate.path,
-      relativePath: candidate.relativePath,
-      name: candidate.name,
-      nameMatches: candidate.nameMatches,
-      lineMatches: trimmed.lineMatches,
-      totalMatchCount: slot.totalMatchCount,
-      truncatedInFile: true,
-      ...summaryField
-    })
+    accumulator.files.push(
+      buildWorkspaceSearchFileResult({
+        path: candidate.path,
+        relativePath: candidate.relativePath,
+        name: candidate.name,
+        nameMatches: candidate.nameMatches,
+        lineMatches: trimmed.lineMatches,
+        totalMatchCount: slot.totalMatchCount,
+        truncatedInFile: true,
+        frontmatterSummary: candidate.frontmatterSummary
+      })
+    )
     return
   }
 
   accumulator.committedMatchCount += slot.keptMatchCount
   if (candidate.nameMatches.length > 0 || slot.lineMatches.length > 0) {
-    accumulator.files.push({
-      path: candidate.path,
-      relativePath: candidate.relativePath,
-      name: candidate.name,
-      nameMatches: candidate.nameMatches,
-      lineMatches: slot.lineMatches,
-      totalMatchCount: slot.totalMatchCount,
-      truncatedInFile: slot.truncatedInFile,
-      ...summaryField
-    })
+    accumulator.files.push(
+      buildWorkspaceSearchFileResult({
+        path: candidate.path,
+        relativePath: candidate.relativePath,
+        name: candidate.name,
+        nameMatches: candidate.nameMatches,
+        lineMatches: slot.lineMatches,
+        totalMatchCount: slot.totalMatchCount,
+        truncatedInFile: slot.truncatedInFile,
+        frontmatterSummary: candidate.frontmatterSummary
+      })
+    )
   }
 }

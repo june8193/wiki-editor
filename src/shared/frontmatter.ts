@@ -30,28 +30,25 @@ export {
 } from './frontmatterSchema'
 
 export {
-  appendDocumentValuesToFieldCollector,
   collectAllowCustomMultiSelectFields,
   compareFrontmatterFieldValues,
-  compareWorkspaceSearchEntriesBySort,
+  createFrontmatterFieldComparator,
   createFrontmatterFieldValuesCollector,
   evaluateFrontmatterCondition,
   extractFrontmatterSummary,
-  finalizeCollectedFrontmatterFieldValues,
   FRONTMATTER_OPERATORS_BY_TYPE,
   isExcludedFrontmatterRelativePath,
   isFrontmatterDocumentFileName,
   isFrontmatterOperatorForType,
   isFrontmatterValueEmpty,
   matchesFrontmatterConditions,
-  mergeCollectedFrontmatterFieldValues,
   type FrontmatterFieldValue,
+  type FrontmatterFieldValuesCollector,
   type FrontmatterFilterCondition,
   type FrontmatterFilterOperator,
   type FrontmatterScalarValue,
-  type FrontmatterSortableEntry,
-  type WorkspaceFrontmatterFieldValuesResponse,
-  type WorkspaceSearchSortSpec
+  type FrontmatterValueComparator,
+  type WorkspaceFrontmatterFieldValuesResponse
 } from './frontmatterFilter'
 
 export type FrontmatterValidationCode =

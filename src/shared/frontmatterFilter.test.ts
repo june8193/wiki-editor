@@ -1,17 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import {
   collectAllowCustomMultiSelectFields,
-  compareWorkspaceSearchEntriesBySort,
+  createFrontmatterFieldValuesCollector,
   extractFrontmatterSummary,
   type FrontmatterFieldDefinition,
   type FrontmatterFilterCondition,
   isExcludedFrontmatterRelativePath,
   isFrontmatterDocumentFileName,
   matchesFrontmatterConditions,
-  mergeCollectedFrontmatterFieldValues,
   parseFrontmatterDocument,
   type WorkspaceFrontmatterSchema
 } from './frontmatter'
+import {
+  compareWorkspaceSearchEntriesBySort,
+  type FrontmatterSortableSearchEntry
+} from './search'
 
 const TEST_SCHEMA: WorkspaceFrontmatterSchema = {
   version: 1,
@@ -113,6 +116,12 @@ describe('frontmatter filter engine', () => {
     ).toBe(false)
     expect(
       evalDoc(malformedDoc, [{ fieldKey: 'labels', operator: 'all-of', values: ['not-an-array'] }])
+    ).toBe(false)
+    expect(
+      evalDoc(bothDoc, [{ fieldKey: 'labels', operator: 'all-of', values: [] }])
+    ).toBe(false)
+    expect(
+      evalDoc(plainDoc, [{ fieldKey: 'labels', operator: 'all-of' }])
     ).toBe(false)
 
     expect(
@@ -244,14 +253,14 @@ describe('frontmatter filter engine', () => {
 
 describe('frontmatter sort engine, summary extraction, and custom value collection', () => {
   it('sorts by path asc/desc and by select option declaration order with out-of-schema after options and empty always last', () => {
-    const items = [
-      { relativePath: 'd-empty.md', values: {} },
-      { relativePath: 'b-done.md', values: { status: 'done' } },
-      { relativePath: 'c-custom.md', values: { status: 'legacy' } },
-      { relativePath: 'a-todo.md', values: { status: 'todo' } },
-      { relativePath: 'e-progress-2.md', values: { status: 'in-progress' } },
-      { relativePath: 'b-progress-1.md', values: { status: 'in-progress' } },
-      { relativePath: 'a-empty.md', values: { status: '' } }
+    const items: FrontmatterSortableSearchEntry[] = [
+      { relativePath: 'd-empty.md', nameMatches: [], values: {} },
+      { relativePath: 'b-done.md', nameMatches: [], values: { status: 'done' } },
+      { relativePath: 'c-custom.md', nameMatches: [], values: { status: 'legacy' } },
+      { relativePath: 'a-todo.md', nameMatches: [], values: { status: 'todo' } },
+      { relativePath: 'e-progress-2.md', nameMatches: [], values: { status: 'in-progress' } },
+      { relativePath: 'b-progress-1.md', nameMatches: [], values: { status: 'in-progress' } },
+      { relativePath: 'a-empty.md', nameMatches: [], values: { status: '' } }
     ]
 
     const ascStatus = [...items].sort((a, b) =>
@@ -305,12 +314,12 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
   })
 
   it('sorts number, date, text, multi-select, and boolean fields with empty values always last in both asc and desc', () => {
-    const numItems = [
-      { relativePath: 'empty.md', values: {} },
-      { relativePath: 'ten.md', values: { points: 10 } },
-      { relativePath: 'zero.md', values: { points: 0 } },
-      { relativePath: 'two.md', values: { points: 2 } },
-      { relativePath: 'invalid.md', values: { points: '5' } }
+    const numItems: FrontmatterSortableSearchEntry[] = [
+      { relativePath: 'empty.md', nameMatches: [], values: {} },
+      { relativePath: 'ten.md', nameMatches: [], values: { points: 10 } },
+      { relativePath: 'zero.md', nameMatches: [], values: { points: 0 } },
+      { relativePath: 'two.md', nameMatches: [], values: { points: 2 } },
+      { relativePath: 'invalid.md', nameMatches: [], values: { points: '5' } }
     ]
     expect(
       [...numItems]
@@ -337,11 +346,11 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
         .map((i) => i.relativePath)
     ).toEqual(['ten.md', 'two.md', 'zero.md', 'empty.md', 'invalid.md'])
 
-    const dateItems = [
-      { relativePath: 'none.md', values: {} },
-      { relativePath: 'late.md', values: { dueDate: '2026-12-01' } },
-      { relativePath: 'early.md', values: { dueDate: '2026-01-15' } },
-      { relativePath: 'bad.md', values: { dueDate: '2026-02-29' } }
+    const dateItems: FrontmatterSortableSearchEntry[] = [
+      { relativePath: 'none.md', nameMatches: [], values: {} },
+      { relativePath: 'late.md', nameMatches: [], values: { dueDate: '2026-12-01' } },
+      { relativePath: 'early.md', nameMatches: [], values: { dueDate: '2026-01-15' } },
+      { relativePath: 'bad.md', nameMatches: [], values: { dueDate: '2026-02-29' } }
     ]
     expect(
       [...dateItems]
@@ -356,10 +365,10 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
         .map((i) => i.relativePath)
     ).toEqual(['early.md', 'late.md', 'bad.md', 'none.md'])
 
-    const boolItems = [
-      { relativePath: 'unset.md', values: {} },
-      { relativePath: 'true.md', values: { archived: true } },
-      { relativePath: 'false.md', values: { archived: false } }
+    const boolItems: FrontmatterSortableSearchEntry[] = [
+      { relativePath: 'unset.md', nameMatches: [], values: {} },
+      { relativePath: 'true.md', nameMatches: [], values: { archived: true } },
+      { relativePath: 'false.md', nameMatches: [], values: { archived: false } }
     ]
     expect(
       [...boolItems]
@@ -386,11 +395,11 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
         .map((i) => i.relativePath)
     ).toEqual(['true.md', 'false.md', 'unset.md'])
 
-    const textAndTags = [
-      { relativePath: 'c.md', values: { assignee: 'Charlie', labels: ['zeta'] } },
-      { relativePath: 'a.md', values: { assignee: 'alice', labels: ['alpha', 'beta'] } },
-      { relativePath: 'b.md', values: { assignee: 'Bob', labels: ['alpha'] } },
-      { relativePath: 'd.md', values: { assignee: '', labels: [] } }
+    const textAndTags: FrontmatterSortableSearchEntry[] = [
+      { relativePath: 'c.md', nameMatches: [], values: { assignee: 'Charlie', labels: ['zeta'] } },
+      { relativePath: 'a.md', nameMatches: [], values: { assignee: 'alice', labels: ['alpha', 'beta'] } },
+      { relativePath: 'b.md', nameMatches: [], values: { assignee: 'Bob', labels: ['alpha'] } },
+      { relativePath: 'd.md', nameMatches: [], values: { assignee: '', labels: [] } }
     ]
     expect(
       [...textAndTags]
@@ -501,11 +510,10 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
     ])
     expect(filteredTargets.map((f) => f.key)).toEqual(['labels'])
 
-    const merged = mergeCollectedFrontmatterFieldValues(targets, [
-      { labels: ['zebra', 'backend', 'alpha', '  '], areas: ['docs', 'api'] },
-      { labels: ['alpha', 'api'], areas: ['docs'] }
-    ])
-    expect(merged).toEqual({
+    const collector = createFrontmatterFieldValuesCollector(targets)
+    collector.addDocumentValues({ labels: ['zebra', 'backend', 'alpha', '  '], areas: ['docs', 'api'] })
+    collector.addDocumentValues({ labels: ['alpha', 'api'], areas: ['docs'] })
+    expect(collector.finalize()).toEqual({
       valuesByField: {
         labels: ['alpha', 'api', 'backend', 'security', 'zebra'],
         areas: ['api', 'docs']
