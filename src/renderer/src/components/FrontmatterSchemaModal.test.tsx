@@ -293,4 +293,83 @@ describe('FrontmatterSchemaModal', () => {
     expect(screen.getByRole('group', { name: '필드 담당자' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: '필드 마감일' })).toBeInTheDocument()
   })
+
+  it('locks form inputs and dismissal while async save or raw JSON transition is pending and ignores post-unmount resolution', async () => {
+    const user = userEvent.setup()
+    let resolveSave!: (value: FrontmatterSchemaLoadResult) => void
+    const onSaveSchema = vi.fn(
+      () =>
+        new Promise<FrontmatterSchemaLoadResult>((resolve) => {
+          resolveSave = resolve
+        })
+    )
+    let resolveRawJson!: () => void
+    const onOpenRawJson = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRawJson = resolve
+        })
+    )
+    const onClose = vi.fn()
+
+    const validSchema: WorkspaceFrontmatterSchema = {
+      version: 1,
+      fields: [{ key: 'status', label: '상태', type: 'text' }]
+    }
+
+    const { rerender, unmount } = render(
+      <FrontmatterSchemaModal
+        schemaResult={makeSchemaResult(validSchema)}
+        onSaveSchema={onSaveSchema}
+        onOpenRawJson={onOpenRawJson}
+        onClose={onClose}
+      />
+    )
+
+    // Pending raw JSON transition disables inputs, buttons, Esc, and backdrop dismissal
+    const openJsonBtn = screen.getByRole('button', { name: 'JSON 파일로 열기' })
+    await user.click(openJsonBtn)
+    await user.click(openJsonBtn)
+    expect(onOpenRawJson).toHaveBeenCalledTimes(1)
+
+    const statusCard = screen.getByRole('group', { name: '필드 상태' })
+    expect(within(statusCard).getByLabelText('키')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '취소' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '닫기' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '+ 필드 추가' })).toBeDisabled()
+
+    await user.keyboard('{Escape}')
+    fireEvent.click(screen.getByRole('presentation'))
+    expect(onClose).not.toHaveBeenCalled()
+
+    resolveRawJson()
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button', { name: '저장' })).toBeEnabled()
+    })
+
+    // Pending save locks field edits and ignores onClose if unmounted mid-save
+    await user.click(screen.getByRole('button', { name: '저장' }))
+    expect(onSaveSchema).toHaveBeenCalledTimes(1)
+    expect(within(statusCard).getByLabelText('키')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'JSON 파일로 열기' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '닫기' })).toBeDisabled()
+    await user.keyboard('{Escape}')
+    expect(onClose).not.toHaveBeenCalled()
+
+    // Unmount (e.g. workspace switch) mid-save must not invoke onClose when promise resolves
+    rerender(
+      <FrontmatterSchemaModal
+        schemaResult={makeSchemaResult(validSchema)}
+        onSaveSchema={onSaveSchema}
+        onOpenRawJson={onOpenRawJson}
+        onClose={onClose}
+      />
+    )
+    unmount()
+    resolveSave(makeSchemaResult(validSchema))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(onClose).not.toHaveBeenCalled()
+  })
 })

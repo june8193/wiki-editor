@@ -21,7 +21,7 @@ import {
   type SchemaOptionDraft,
   validateAndBuildSchemaDraft
 } from '../utils/frontmatterSchemaDraft'
-import { isEventOutsideShell } from '../utils/workspaceSearch'
+import { ModalDialog } from './ModalDialog'
 
 export interface FrontmatterSchemaModalProps {
   schemaResult: FrontmatterSchemaLoadResult | null
@@ -372,16 +372,18 @@ export function FrontmatterSchemaModal({
   const isDraftDirtyRef = useRef(false)
   const [hasAttemptedSave, setHasAttemptedSave] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [isOpeningRawJson, setIsOpeningRawJson] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
-  const dialogRef = useRef<HTMLDivElement | null>(null)
-  const onCloseRef = useRef(onClose)
-  const isDismissBlockedRef = useRef(isDismissDisabled || isSaving)
-  onCloseRef.current = onClose
-  isDismissBlockedRef.current = isDismissDisabled || isSaving
+  const isMountedRef = useRef(true)
+  const inFlightActionRef = useRef(false)
+  const isBusy = isSaving || isOpeningRawJson
 
   useEffect(() => {
-    dialogRef.current?.focus()
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
   }, [])
 
   const prevSchemaResultRef = useRef(schemaResult)
@@ -393,23 +395,6 @@ export function FrontmatterSchemaModal({
     setHasAttemptedSave(false)
     setSaveError(null)
   }, [schemaResult])
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || event.key !== 'Escape' || isDismissBlockedRef.current) {
-        return
-      }
-      if (isEventOutsideShell(event.target, shellRef?.current ?? null)) {
-        return
-      }
-      event.preventDefault()
-      onCloseRef.current()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [shellRef])
 
   const validation = useMemo(() => validateAndBuildSchemaDraft(draftFields), [draftFields])
   const visibleErrorsByFieldId = hasAttemptedSave ? validation.errorsByFieldId : {}
@@ -433,21 +418,45 @@ export function FrontmatterSchemaModal({
   }
 
   const handleSave = async (): Promise<void> => {
+    if (inFlightActionRef.current) return
     setHasAttemptedSave(true)
     setSaveError(null)
     if (!validation.ok) {
       return
     }
 
+    inFlightActionRef.current = true
     setIsSaving(true)
     try {
       await onSaveSchema(validation.schema)
+      if (!isMountedRef.current) return
       isDraftDirtyRef.current = false
       setIsSaving(false)
       onClose()
     } catch (error: unknown) {
+      if (!isMountedRef.current) return
       setIsSaving(false)
       setSaveError(toErrorMessage(error, '프론트매터 스키마를 저장하지 못했습니다.'))
+    } finally {
+      inFlightActionRef.current = false
+    }
+  }
+
+  const handleOpenRawJson = async (): Promise<void> => {
+    if (inFlightActionRef.current) return
+    inFlightActionRef.current = true
+    setIsOpeningRawJson(true)
+    setSaveError(null)
+    try {
+      await onOpenRawJson()
+    } catch (error: unknown) {
+      if (!isMountedRef.current) return
+      setSaveError(toErrorMessage(error, '스키마 JSON 파일을 열지 못했습니다.'))
+    } finally {
+      inFlightActionRef.current = false
+      if (isMountedRef.current) {
+        setIsOpeningRawJson(false)
+      }
     }
   }
 
@@ -462,63 +471,49 @@ export function FrontmatterSchemaModal({
       : null
 
   return (
-    <div
-      className="modal-backdrop schema-modal-backdrop"
-      role="presentation"
-      onClick={(event) => {
-        if (!isDismissDisabled && !isSaving && event.target === event.currentTarget) {
-          onClose()
-        }
-      }}
+    <ModalDialog
+      ariaLabel="프론트매터 스키마 관리"
+      backdropClassName="schema-modal-backdrop"
+      dialogClassName="schema-modal"
+      isDismissDisabled={isDismissDisabled || isBusy}
+      shellRef={shellRef}
+      onClose={onClose}
     >
-      <div
-        ref={dialogRef}
-        className="modal-dialog schema-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="프론트매터 스키마 관리"
-        tabIndex={-1}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="schema-modal-header">
-          <div className="schema-modal-title-group">
-            <h2>프론트매터 스키마 관리</h2>
-            <code className="schema-modal-path">
-              {schemaResult?.path || FRONTMATTER_SCHEMA_RELATIVE_PATH}
-            </code>
-          </div>
-          <button type="button" className="btn" disabled={isSaving} onClick={onClose}>
-            닫기
-          </button>
+      <div className="schema-modal-header">
+        <div className="schema-modal-title-group">
+          <h2>프론트매터 스키마 관리</h2>
+          <code className="schema-modal-path">
+            {schemaResult?.path || FRONTMATTER_SCHEMA_RELATIVE_PATH}
+          </code>
         </div>
+        <button type="button" className="btn" disabled={isBusy} onClick={onClose}>
+          닫기
+        </button>
+      </div>
 
-        <div className="schema-modal-body">
+      <div className="schema-modal-body">
+        {saveError && (
+          <div className="schema-modal-banner is-error" role="alert">
+            {saveError}
+          </div>
+        )}
+
+        {hasAttemptedSave && !validation.ok && (
+          <div className="schema-modal-banner is-error" role="alert">
+            {validation.summaryErrors.join(' ')}
+          </div>
+        )}
+
+        <fieldset className="schema-modal-fieldset" disabled={isBusy}>
           {templateBanner && (
             <div
               className={`schema-modal-banner${templateBanner.isError ? ' is-error' : ''}`}
               role={templateBanner.isError ? 'alert' : undefined}
             >
               <span>{templateBanner.message}</span>
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={isSaving}
-                onClick={handleLoadDefaultTemplate}
-              >
+              <button type="button" className="btn btn-sm" onClick={handleLoadDefaultTemplate}>
                 기본 템플릿 불러오기
               </button>
-            </div>
-          )}
-
-          {saveError && (
-            <div className="schema-modal-banner is-error" role="alert">
-              {saveError}
-            </div>
-          )}
-
-          {hasAttemptedSave && !validation.ok && (
-            <div className="schema-modal-banner is-error" role="alert">
-              {validation.summaryErrors.join(' ')}
             </div>
           )}
 
@@ -558,7 +553,6 @@ export function FrontmatterSchemaModal({
             <button
               type="button"
               className="btn btn-sm"
-              disabled={isSaving}
               onClick={() =>
                 mutateFields((prev) => [...prev, createEmptySchemaFieldDraft(nextDraftId)])
               }
@@ -567,32 +561,32 @@ export function FrontmatterSchemaModal({
               <span>+ 필드 추가</span>
             </button>
           </div>
-        </div>
+        </fieldset>
+      </div>
 
-        <div className="schema-modal-footer">
+      <div className="schema-modal-footer">
+        <button
+          type="button"
+          className="btn"
+          disabled={isBusy}
+          onClick={() => void handleOpenRawJson()}
+        >
+          JSON 파일로 열기
+        </button>
+        <div className="schema-modal-footer-right">
+          <button type="button" className="btn" disabled={isBusy} onClick={onClose}>
+            취소
+          </button>
           <button
             type="button"
-            className="btn"
-            disabled={isSaving}
-            onClick={() => void onOpenRawJson()}
+            className="btn btn-primary"
+            disabled={isBusy}
+            onClick={() => void handleSave()}
           >
-            JSON 파일로 열기
+            저장
           </button>
-          <div className="schema-modal-footer-right">
-            <button type="button" className="btn" disabled={isSaving} onClick={onClose}>
-              취소
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={isSaving}
-              onClick={() => void handleSave()}
-            >
-              저장
-            </button>
-          </div>
         </div>
       </div>
-    </div>
+    </ModalDialog>
   )
 }

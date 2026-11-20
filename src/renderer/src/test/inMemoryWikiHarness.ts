@@ -531,8 +531,8 @@ export function createMultiWindowWikiHarness(
   ): FrontmatterSchemaLoadResult => {
     session.lastSchemaFingerprint = readResult.fingerprint
     notifySessionSchemaListeners(session, readResult.result)
-    if (session.hub.hasBuffer(readResult.result.path)) {
-      void session.hub.reconcileWorkspaceBuffersWithDisk().catch(() => undefined)
+    if (readResult.result.exists && session.hub.hasBuffer(readResult.result.path)) {
+      void session.hub.refreshCleanWorkspaceFile(readResult.result.path).catch(() => undefined)
     }
     return cloneSchemaResult(readResult.result)
   }

@@ -387,12 +387,11 @@ export class WindowManager
       this.handleHubEvent(session, event)
     })
     session.disposeCleanups.push(
-      frontmatterSchemaService.onSchemaChanged(() => {
-        const schemaPath = frontmatterSchemaService.getSchemaPath()
-        if (!schemaPath || !bufferHub.hasBuffer(schemaPath)) {
+      frontmatterSchemaService.onSchemaChanged((result) => {
+        if (!result.exists || !result.path || !bufferHub.hasBuffer(result.path)) {
           return
         }
-        void bufferHub.reconcileWorkspaceBuffersWithDisk().catch(() => undefined)
+        void bufferHub.refreshCleanWorkspaceFile(result.path).catch(() => undefined)
       })
     )
     session.unsubscribeDrag = dragCoordinator.onStateChanged((dragSession) => {

@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
 import { ThemeMode } from '@shared/config'
+import { ModalDialog } from './ModalDialog'
 
 interface SettingsPanelProps {
   theme: ThemeMode
@@ -23,49 +23,16 @@ export function SettingsPanel({
   onClose
 }: SettingsPanelProps) {
   const nextThemeLabel = theme === 'light' ? '다크 모드로 전환' : '라이트 모드로 전환'
-  const dialogRef = useRef<HTMLDivElement | null>(null)
-  const onCloseRef = useRef(onClose)
-  const isDismissDisabledRef = useRef(isDismissDisabled)
-  onCloseRef.current = onClose
-  isDismissDisabledRef.current = isDismissDisabled
-
-  useEffect(() => {
-    dialogRef.current?.focus()
-  }, [])
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && !isDismissDisabledRef.current) {
-        event.preventDefault()
-        onCloseRef.current()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [])
 
   return (
-    <div
-      className="modal-backdrop settings-modal-backdrop"
-      role="presentation"
-      onClick={(event) => {
-        if (!isDismissDisabled && event.target === event.currentTarget) {
-          onClose()
-        }
-      }}
+    <ModalDialog
+      ariaLabel="전역 설정 패널"
+      backdropClassName="settings-modal-backdrop"
+      dialogClassName="settings-modal"
+      isDismissDisabled={isDismissDisabled}
+      onClose={onClose}
     >
-      <div
-        ref={dialogRef}
-        className="modal-dialog settings-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="전역 설정 패널"
-        tabIndex={-1}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="settings-panel-header">
+      <div className="settings-panel-header">
           <h2>전역 설정</h2>
           <button type="button" className="btn" onClick={onClose}>
             닫기
@@ -99,7 +66,6 @@ export function SettingsPanel({
             </button>
           </section>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   )
 }

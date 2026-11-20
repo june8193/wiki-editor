@@ -189,10 +189,15 @@ export function EditorWindowFrame({
   })
   const canManageSchema = Boolean(workspaceRootPath || schemaResult !== null)
 
+  const workspaceRootRef = useRef(workspaceRootPath)
+  workspaceRootRef.current = workspaceRootPath
+
   const handleOpenSchemaRawJson = useCallback(async (): Promise<void> => {
+    const startedRoot = workspaceRootRef.current
     const targetPath = await ensureSchemaFilePath()
-    if (!targetPath) return
+    if (!targetPath || startedRoot !== workspaceRootRef.current) return
     await openWorkspaceFile(targetPath, undefined, FRONTMATTER_SCHEMA_FILE)
+    if (startedRoot !== workspaceRootRef.current) return
     onCloseSchemaModal()
   }, [ensureSchemaFilePath, onCloseSchemaModal, openWorkspaceFile])
 

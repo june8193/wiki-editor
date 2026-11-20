@@ -4428,6 +4428,16 @@ body.is-resizing-right-sections * {
   padding-right: 2px;
 }
 
+.schema-modal-fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .schema-modal-banner {
   display: flex;
   align-items: center;
