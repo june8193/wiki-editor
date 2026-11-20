@@ -1,4 +1,3 @@
-import { EditorView } from '@codemirror/view'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -68,8 +67,7 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
     )
 
     const secondaryPane = screen.getByTestId('pane-secondary')
-    const secondaryModeGroup = within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })
-    await user.click(within(secondaryModeGroup).getByRole('button', { name: 'Preview' }))
+    await switchPaneEditorMode(user, secondaryPane, 'Preview')
 
     expect(within(secondaryPane).getByLabelText('마크다운 미리보기')).toBeInTheDocument()
     expect(
@@ -169,8 +167,8 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
 
     // 2) WYSIWYG mode table insertion + row/column add/delete
     await user.click(within(sidebar).getByText('wysiwyg-table.md'))
-    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
-    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+    const primaryPane = screen.getByTestId('pane-primary')
+    await switchPaneEditorMode(user, primaryPane, '위지윅')
 
     const formatToolbar = screen.getByRole('toolbar', { name: '위지윅 서식 툴바' })
     await user.click(within(formatToolbar).getByRole('button', { name: '표 삽입' }))
@@ -197,7 +195,7 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
     })
     expect(getFilesSnapshot().get('C:/wiki/tables/wysiwyg-table.md')).toContain('|')
 
-    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+    await switchPaneEditorMode(user, primaryPane, 'Preview')
     const previewTable = screen.getByTestId('document-editor').querySelector('table')
     expect(previewTable?.querySelectorAll('tr')).toHaveLength(3)
   })
@@ -231,11 +229,7 @@ describe('Three-mode markdown editor, split mode sync, and table editing', () =>
     })
 
     // Switch to Preview and verify XSS sanitization
-    await user.click(
-      within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
-        name: 'Preview'
-      })
-    )
+    await switchPaneEditorMode(user, screen.getByTestId('pane-primary'), 'Preview')
     const previewEl = screen.getByTestId('document-editor')
     expect(previewEl.querySelector('script')).toBeNull()
     const imgEl = previewEl.querySelector('img')
@@ -294,8 +288,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     await user.click(await screen.findByText('diagram.md'))
 
     // Preview mode renders valid Mermaid SVG and isolates broken block without crashing
-    const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
-    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+    const primaryPane = screen.getByTestId('pane-primary')
+    await switchPaneEditorMode(user, primaryPane, 'Preview')
 
     await waitFor(() => {
       const svgs = screen.getByTestId('document-editor').querySelectorAll('svg[data-mermaid-theme]')
@@ -331,7 +325,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     ).toHaveLength(0)
 
     // Switch to WYSIWYG: Mermaid NodeView renders both SVG and error isolation
-    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+    await switchPaneEditorMode(user, primaryPane, '위지윅')
     await waitFor(() => {
       const blocks = within(screen.getByTestId('document-editor')).getAllByTestId('wysiwyg-mermaid-block')
       expect(blocks).toHaveLength(2)
@@ -342,7 +336,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     })
 
     // Return to Raw: lossless roundtrip preserves original markdown without dirty flag
-    await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+    await switchPaneEditorMode(user, primaryPane, 'Raw')
     expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(diagramDoc)
     expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
   })
@@ -400,10 +394,10 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       await triggerMenuCommand(emitMenuCommand, 'open-folder')
       await user.click(await screen.findByText('actions.md'))
 
-      const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+      const primaryPane = screen.getByTestId('pane-primary')
 
       // 1. Preview mode: floating bar hover/focus reveal, blank disabled, broken syntax copy allowed, multi-block isolation
-      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      await switchPaneEditorMode(user, primaryPane, 'Preview')
       await waitFor(() => {
         expect(screen.getAllByTestId('mermaid-diagram')).toHaveLength(3)
         expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
@@ -443,7 +437,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(copyText).toHaveBeenLastCalledWith(brokenSource)
 
       // 2. Split mode: right preview pane renders floating action bar and copies source
-      await user.click(within(modeGroup).getByRole('button', { name: 'Split' }))
+      await switchPaneEditorMode(user, primaryPane, 'Split')
       const splitPreview = await screen.findByTestId('split-markdown-preview')
       const splitBlocks = within(splitPreview).getAllByTestId('mermaid-diagram')
       expect(splitBlocks).toHaveLength(3)
@@ -456,7 +450,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(copyText).toHaveBeenLastCalledWith(validSource)
 
       // 3. WYSIWYG mode: single integrated header toolbar beside 코드 편집 (zero floating preview toolbar)
-      await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+      await switchPaneEditorMode(user, primaryPane, '위지윅')
       await waitFor(() => {
         expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
       })
@@ -505,7 +499,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       vi.useRealTimers()
 
       // Return to Raw: lossless roundtrip and clean buffer without dirty flag
-      await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+      await switchPaneEditorMode(user, primaryPane, 'Raw')
       expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(docContent)
       expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
     } finally {
@@ -570,10 +564,10 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       await triggerMenuCommand(emitMenuCommand, 'open-folder')
       await user.click(await screen.findByText('diagram-export.md'))
 
-      const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+      const primaryPane = screen.getByTestId('pane-primary')
 
       // 1. Preview mode: 이미지 복사 first in toolbar, light #ffffff 2x copy, broken/blank disabled
-      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      await switchPaneEditorMode(user, primaryPane, 'Preview')
       await waitFor(() => {
         expect(screen.getAllByTestId('mermaid-diagram')).toHaveLength(3)
         expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
@@ -650,7 +644,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       })
 
       // 2. Split mode: image copy works, live edit to SYNTAX_ERROR disables 이미지 복사 while keeping 코드 복사 enabled, and recovery re-enables
-      await user.click(within(modeGroup).getByRole('button', { name: 'Split' }))
+      await switchPaneEditorMode(user, primaryPane, 'Split')
       const splitPreview = await screen.findByTestId('split-markdown-preview')
       await waitFor(() => {
         expect(within(splitPreview).getAllByTestId('mermaid-diagram')).toHaveLength(3)
@@ -691,7 +685,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       })
 
       // 3. WYSIWYG mode: inline 이미지 복사 before 코드 복사, scoped failure alert, sanitized log, and 1500ms feedback timer
-      await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+      await switchPaneEditorMode(user, primaryPane, '위지윅')
       await waitFor(() => {
         expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
         expect(
@@ -766,7 +760,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       vi.useRealTimers()
 
       // Return to Raw: lossless roundtrip and clean buffer without dirty flag
-      await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+      await switchPaneEditorMode(user, primaryPane, 'Raw')
       expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(docContent)
       expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
     } finally {
@@ -839,10 +833,10 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       await triggerMenuCommand(emitMenuCommand, 'open-folder')
       await user.click(await screen.findByText('아키텍처<설계>-v1.md'))
 
-      const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
+      const primaryPane = screen.getByTestId('pane-primary')
 
       // 1. Preview mode: 4 buttons in order, PNG light export, dark SVG export, dialog cancel, disabled states
-      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      await switchPaneEditorMode(user, primaryPane, 'Preview')
       await waitFor(() => {
         expect(screen.getAllByTestId('mermaid-diagram')).toHaveLength(3)
         expect(screen.getByTestId('mermaid-svg')).toBeInTheDocument()
@@ -926,7 +920,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       nextSaveOutcome = 'confirm'
 
       // 2. Split mode: PNG/SVG export uses document title, syntax error disables both while keeping 코드 복사 active
-      await user.click(within(modeGroup).getByRole('button', { name: 'Split' }))
+      await switchPaneEditorMode(user, primaryPane, 'Split')
       const splitPreview = await screen.findByTestId('split-markdown-preview')
       await waitFor(() => {
         expect(within(splitPreview).getAllByTestId('mermaid-diagram')).toHaveLength(3)
@@ -972,7 +966,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       })
 
       // 3. WYSIWYG mode: 4 buttons, doc title propagation, failure alert + sanitized logs, and 1500ms timer revert
-      await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+      await switchPaneEditorMode(user, primaryPane, '위지윅')
       await waitFor(() => {
         expect(screen.getAllByTestId('wysiwyg-mermaid-block')).toHaveLength(3)
         expect(
@@ -1071,7 +1065,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       vi.useRealTimers()
 
       // Return to Raw: lossless roundtrip and clean buffer without dirty flag
-      await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+      await switchPaneEditorMode(user, primaryPane, 'Raw')
       expect(getRawEditorText(screen.getByTestId('document-editor'))).toBe(docContent)
       expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument()
     } finally {
@@ -1132,8 +1126,8 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       })
 
       // Preview renders source headings without dynamic numbering even when showHeadingNumbers is true
-      const modeGroup = screen.getByRole('group', { name: '에디터 모드 전환' })
-      await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+      const primaryPane = screen.getByTestId('pane-primary')
+      await switchPaneEditorMode(user, primaryPane, 'Preview')
       const setupHeading = screen.getByRole('heading', { level: 2, name: 'Setup' })
       expect(setupHeading.textContent).toBe('Setup')
 
@@ -1155,7 +1149,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       expect(getFilesSnapshot().get('C:/wiki/outline/guide.md')).toBe(guideDoc)
 
       // Verify WYSIWYG mode renders without dynamic numbers and performs one-shot click-to-scroll
-      await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+      await switchPaneEditorMode(user, primaryPane, '위지윅')
       expect(screen.getByTestId('document-editor').querySelector('.heading-number')).toBeNull()
       scrollIntoViewMock.mockClear()
       const currentItems = within(within(outline).getByRole('list')).getAllByRole('listitem')
@@ -1225,11 +1219,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
     const rawToolbar = screen.getByRole('toolbar', { name: 'Raw 표 편집 툴바' })
     expect(within(rawToolbar).queryByRole('button', { name: '목차 삽입' })).not.toBeInTheDocument()
 
-    await user.click(
-      within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
-        name: '위지윅'
-      })
-    )
+    await switchPaneEditorMode(user, screen.getByTestId('pane-primary'), '위지윅')
     const wysiwygToolbar = screen.getByRole('toolbar', { name: '위지윅 서식 툴바' })
     expect(
       within(wysiwygToolbar).queryByRole('button', { name: '목차 삽입' })
@@ -1262,11 +1252,7 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
       await user.click(within(sidebar).getByText('beta.md'))
       await user.click(screen.getByRole('tab', { name: 'alpha.md' }))
 
-      await user.click(
-        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
-          name: 'Preview'
-        })
-      )
+      await switchPaneEditorMode(user, screen.getByTestId('pane-primary'), 'Preview')
 
       const rightSidebar = screen.getByRole('complementary', { name: '우측 사이드바' })
       const outline = within(rightSidebar).getByRole('region', { name: '문서 목차 (Outline)' })
@@ -1385,6 +1371,20 @@ describe('Mermaid rendering, Outline TOC, and hybrid heading auto-numbering', ()
   })
 })
 
+function createDomRect(top: number, height: number, width = 500): DOMRect {
+  return {
+    top,
+    bottom: top + height,
+    left: 0,
+    right: width,
+    width,
+    height,
+    x: 0,
+    y: top,
+    toJSON: () => ({})
+  } as DOMRect
+}
+
 function stubScrollLayout(
   el: HTMLElement,
   getGeometry: () => { scrollTop: number; scrollHeight: number; clientHeight: number; top: number }
@@ -1402,32 +1402,11 @@ function stubScrollLayout(
     configurable: true,
     get: () => getGeometry().clientHeight
   })
-  el.getBoundingClientRect = () =>
-    ({
-      top: getGeometry().top,
-      bottom: getGeometry().top + getGeometry().clientHeight,
-      left: 0,
-      right: 600,
-      width: 600,
-      height: getGeometry().clientHeight,
-      x: 0,
-      y: getGeometry().top,
-      toJSON: () => ({})
-    }) as DOMRect
+  el.getBoundingClientRect = () => createDomRect(getGeometry().top, getGeometry().clientHeight, 600)
 }
 
 function createHeadingRect(top: number): DOMRect {
-  return {
-    top,
-    bottom: top + 28,
-    left: 0,
-    right: 500,
-    width: 500,
-    height: 28,
-    x: 0,
-    y: top,
-    toJSON: () => ({})
-  } as DOMRect
+  return createDomRect(top, 28, 500)
 }
 
 function stubHeadingTop(el: HTMLElement, getTop: () => number): void {
@@ -1500,11 +1479,7 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
       const explorer = await screen.findByLabelText('워크스페이스 탐색기')
       await user.click(await within(explorer).findByText('guide.md'))
 
-      await user.click(
-        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
-          name: 'Preview'
-        })
-      )
+      await switchPaneEditorMode(user, screen.getByTestId('pane-primary'), 'Preview')
 
       const preview = screen.getByLabelText('마크다운 미리보기')
       const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
@@ -1604,13 +1579,9 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
       await user.click(await within(explorer).findByText('side.md'))
       await user.click(await within(explorer).findByText('guide.md'))
 
-      await user.click(
-        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
-          name: 'Preview'
-        })
-      )
-
       const primaryPane = screen.getByTestId('pane-primary')
+      await switchPaneEditorMode(user, primaryPane, 'Preview')
+
       let primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
       const outline = screen.getByRole('region', { name: '문서 목차 (Outline)' })
       const outlineButtons = () => within(within(outline).getByRole('list')).getAllByRole('button')
@@ -1686,12 +1657,7 @@ describe('Document Outline active heading scroll spy in Preview mode', () => {
       await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역으로 이동' }))
 
       const secondaryPane = screen.getByTestId('pane-secondary')
-      await user.click(
-        within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
-          'button',
-          { name: 'Preview' }
-        )
-      )
+      await switchPaneEditorMode(user, secondaryPane, 'Preview')
 
       // Keep primaryPane focused on guide.md at Overview (index 0)
       await user.click(within(primaryPane).getByRole('tab', { name: /guide\.md/i }))
@@ -1756,13 +1722,9 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
       const explorer = await screen.findByLabelText('워크스페이스 탐색기')
       await user.click(await within(explorer).findByText('guide.md'))
 
-      await user.click(
-        within(screen.getByRole('group', { name: '에디터 모드 전환' })).getByRole('button', {
-          name: '위지윅'
-        })
-      )
-
       const primaryPane = screen.getByTestId('pane-primary')
+      await switchPaneEditorMode(user, primaryPane, '위지윅')
+
       const scrollContainer = primaryPane.querySelector('.wysiwyg-scroll-container') as HTMLElement
       expect(scrollContainer).toBeTruthy()
 
@@ -2029,12 +1991,7 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
       await user.click(outlineButtons()[2])
       expect(outlineButtons()[2]).toHaveAttribute('aria-current', 'location')
 
-      await user.click(
-        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
-          'button',
-          { name: '위지윅' }
-        )
-      )
+      await switchPaneEditorMode(user, primaryPane, '위지윅')
       const wysiwygContainer = primaryPane.querySelector('.wysiwyg-scroll-container') as HTMLElement
       alphaScrollTop = 0
       stubPreviewSpyLayout(wysiwygContainer, [120, 320, 520], () => alphaScrollTop)
@@ -2045,12 +2002,7 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
       }
 
       // Switch to Preview mode and scroll to Alpha Two (index 1)
-      await user.click(
-        within(within(primaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
-          'button',
-          { name: 'Preview' }
-        )
-      )
+      await switchPaneEditorMode(user, primaryPane, 'Preview')
       const primaryPreview = within(primaryPane).getByLabelText('마크다운 미리보기')
       alphaScrollTop = 310
       stubPreviewSpyLayout(primaryPreview, [120, 320, 520], () => alphaScrollTop)
@@ -2211,17 +2163,7 @@ describe('Split editor mode and bidirectional scroll sync', () => {
     // Adjust internal split splitter via drag + double-click + ArrowRight, and persist per tab across tab & mode switches
     const alphaSplitter = within(primaryPane).getByRole('separator', { name: '에디터 분할 크기 조절' })
     const alphaContainer = within(primaryPane).getByTestId('editor-split-container')
-    vi.spyOn(alphaContainer, 'getBoundingClientRect').mockReturnValue({
-      x: 0,
-      y: 0,
-      left: 0,
-      top: 0,
-      right: 1000,
-      bottom: 600,
-      width: 1000,
-      height: 600,
-      toJSON: () => ({})
-    })
+    mockElementBoundingRect(alphaContainer, { width: 1000, height: 600 })
     fireEvent.mouseDown(alphaSplitter)
     fireEvent.mouseMove(window, { clientX: 600 })
     fireEvent.mouseUp(window)
@@ -2257,12 +2199,7 @@ describe('Split editor mode and bidirectional scroll sync', () => {
       })
     )
     const secondaryPane = screen.getByTestId('pane-secondary')
-    await user.click(
-      within(within(secondaryPane).getByRole('group', { name: '에디터 모드 전환' })).getByRole(
-        'button',
-        { name: 'Split' }
-      )
-    )
+    await switchPaneEditorMode(user, secondaryPane, 'Split')
     const secondarySplitter = within(secondaryPane).getByRole('separator', {
       name: '에디터 분할 크기 조절'
     })
@@ -2297,12 +2234,7 @@ describe('Split editor mode and bidirectional scroll sync', () => {
 
   it('synchronizes Split mode scroll bidirectionally with PaneTabStore persistence and jumps both Raw and Preview on Outline click', async () => {
     const user = userEvent.setup()
-    const scrollIntoViewMock = vi.fn()
-    const origScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
-      HTMLElement.prototype,
-      'scrollIntoView'
-    )
-    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
 
     try {
       const mermaidBlock = [
@@ -2370,14 +2302,11 @@ describe('Split editor mode and bidirectional scroll sync', () => {
       })
       Object.defineProperty(previewRegion, 'clientHeight', { configurable: true, value: 200 })
       Object.defineProperty(previewRegion, 'scrollHeight', { configurable: true, value: 1480 })
-      previewRegion.getBoundingClientRect = () =>
-        ({ top: 0, left: 0, right: 500, bottom: 200, width: 500, height: 200, x: 0, y: 0, toJSON: () => ({}) })
+      mockElementBoundingRect(previewRegion, { width: 500, height: 200 })
 
       const mockRect = (el: HTMLElement, docTop: number, height: number) => {
-        el.getBoundingClientRect = () => {
-          const y = docTop - previewRegion.scrollTop
-          return { top: y, left: 0, right: 500, bottom: y + height, width: 500, height, x: 0, y, toJSON: () => ({}) }
-        }
+        el.getBoundingClientRect = () =>
+          createDomRect(docTop - previewRegion.scrollTop, height, 500)
       }
       mockRect(h1El, 0, 40)
       mockRect(mermaidEl, 60, 560)
@@ -2425,11 +2354,7 @@ describe('Split editor mode and bidirectional scroll sync', () => {
       const jumpedArchHeading = within(jumpedPreview).getByRole('heading', { level: 2, name: 'Architecture' })
       expect(scrollIntoViewMock.mock.instances).toContain(jumpedArchHeading)
     } finally {
-      if (origScrollIntoViewDescriptor) {
-        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', origScrollIntoViewDescriptor)
-      } else {
-        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
-      }
+      restore()
     }
   })
 
@@ -2803,7 +2728,8 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
     expect(getRawEditorText(rawEl)).toContain('본문 [`buildTree`](#buildtree)')
 
     // 4) 위지윅 모드로 전환하여 본문/테이블 []( 자동 채움 및 후속 입력 링크 마크 이탈 확인
-    await user.click(screen.getByRole('button', { name: '위지윅' }))
+    const primaryPane = screen.getByTestId('pane-primary')
+    await switchPaneEditorMode(user, primaryPane, '위지윅')
     const wysiwygEl = await screen.findByTestId('document-editor')
     const tableCellP = wysiwygEl.querySelectorAll('td p')[1]
     wysiwygEl.focus()
@@ -2824,7 +2750,7 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
     expect(wysiwygEl.querySelector('td a[href="#11-개요"]')).toHaveTextContent('개요')
 
     // 5) Preview 헤딩 id / 문서 목차와 동일한 슬러그 일치 검증
-    await user.click(screen.getByRole('button', { name: 'Preview' }))
+    await switchPaneEditorMode(user, primaryPane, 'Preview')
     await waitFor(() => {
       expect(document.getElementById('11-개요')).not.toBeNull()
       expect(document.getElementById('buildtree')).not.toBeNull()
@@ -2866,7 +2792,7 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
     fireEvent.keyDown(rawEl, { key: 'Escape' })
 
     // 위지윅에서 기존 링크 내부 커서 Ctrl+K -> 언랩 및 메뉴 오픈
-    await user.click(screen.getByRole('button', { name: '위지윅' }))
+    await switchPaneEditorMode(user, screen.getByTestId('pane-primary'), '위지윅')
     const wysiwygEl = await screen.findByTestId('document-editor')
     const existingAnchor = wysiwygEl.querySelector('a[href="#개요"]')!
     wysiwygEl.focus()
@@ -2969,7 +2895,8 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
     expect(getRawEditorText(rawEl)).toContain('[api (1)](./sub/api%20%281%29.md)')
 
     // Switch to 위지윅 and insert a parent-relative ../ link
-    await user.click(screen.getByRole('button', { name: '위지윅' }))
+    const primaryPane = screen.getByTestId('pane-primary')
+    await switchPaneEditorMode(user, primaryPane, '위지윅')
     const wysiwygEl = await screen.findByTestId('document-editor')
     expect(wysiwygEl.querySelector('a[href="./sub/api%20%281%29.md"]')).not.toBeNull()
 
@@ -2989,7 +2916,7 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
     expect(within(wListbox).queryByText('docs/sub/api (1).md')).not.toBeInTheDocument()
     await user.click(within(wListbox).getByRole('option', { name: /setup\.markdown/ }))
 
-    await user.click(screen.getByRole('button', { name: 'Raw' }))
+    await switchPaneEditorMode(user, primaryPane, 'Raw')
     expect(getRawEditorText(await screen.findByTestId('document-editor'))).toContain(
       '[셋업](../guides/setup.markdown)'
     )
@@ -3210,19 +3137,13 @@ describe('Markdown link navigation and missing target banner', () => {
       }
     )
     const readFileSpy = vi.spyOn(api.workspace, 'readFile')
-    const scrollIntoViewMock = vi.fn()
+    const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
     const getHeadingScrollTargets = (): HTMLElement[] =>
       scrollIntoViewMock.mock.calls.flatMap((args, idx) =>
         (args[0] as ScrollIntoViewOptions | undefined)?.block === 'start'
           ? [scrollIntoViewMock.mock.instances[idx] as HTMLElement]
           : []
       )
-    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-      configurable: true,
-      writable: true,
-      value: scrollIntoViewMock
-    })
 
     try {
       window.wikiApi = api
@@ -3237,7 +3158,7 @@ describe('Markdown link navigation and missing target banner', () => {
       expect(within(primaryPane).getByRole('tab', { name: /current\.md/i })).toBeInTheDocument()
 
       // 1) Preview normal click: same-doc percent-encoded Korean #slug + external links no-op
-      await user.click(within(primaryPane).getByRole('button', { name: 'Preview' }))
+      await switchPaneEditorMode(user, primaryPane, 'Preview')
       scrollIntoViewMock.mockClear()
       fireEvent.click(within(primaryPane).getByRole('link', { name: '세부 이동' }))
       expect(getHeadingScrollTargets()).toHaveLength(1)
@@ -3251,9 +3172,9 @@ describe('Markdown link navigation and missing target banner', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
       // 2) Raw mode: normal click does not jump, Ctrl+click jumps cursor to heading line
-      await user.click(within(primaryPane).getByRole('button', { name: 'Raw' }))
+      await switchPaneEditorMode(user, primaryPane, 'Raw')
       const rawCmContent = within(primaryPane).getByTestId('document-editor') as HTMLElement
-      const rawView = EditorView.findFromDOM(rawCmContent)!
+      const rawView = getRawEditorView(rawCmContent)
       const headingOffset = rawView.state.doc.toString().indexOf('## 세부 항목')
       const sectionSpan = Array.from(rawCmContent.querySelectorAll('span')).find((el) =>
         el.textContent?.includes('#%EC%84%B8%EB%B6%80-%ED%95%AD%EB%AA%A9')
@@ -3281,7 +3202,7 @@ describe('Markdown link navigation and missing target banner', () => {
       await user.click(within(primaryPane).getByRole('tab', { name: /current\.md/i }))
 
       // 3) WYSIWYG mode: Alt+click does not jump, plain click and Meta+click scroll heading, plain click opens relative file
-      await user.click(within(primaryPane).getByRole('button', { name: '위지윅' }))
+      await switchPaneEditorMode(user, primaryPane, '위지윅')
       scrollIntoViewMock.mockClear()
       const wysiwygEl = within(primaryPane).getByTestId('document-editor')
       const wysiwygSectionLink = Array.from(wysiwygEl.querySelectorAll('a')).find(
@@ -3314,13 +3235,13 @@ describe('Markdown link navigation and missing target banner', () => {
       await user.click(within(primaryPane).getByRole('tab', { name: /current\.md/i }))
 
       // 4) Preview relative file link with percent encoding + #slug opens tab and jumps to target heading
-      await user.click(within(primaryPane).getByRole('button', { name: 'Preview' }))
+      await switchPaneEditorMode(user, primaryPane, 'Preview')
       await user.click(within(primaryPane).getByRole('link', { name: '가이드' }))
       const guideTab = await within(primaryPane).findByRole('tab', { name: /guide \(1\)\.md/i })
       expect(guideTab).toHaveAttribute('aria-selected', 'true')
       await waitFor(() => {
         const targetCm = within(primaryPane).getByTestId('document-editor') as HTMLElement
-        const targetView = EditorView.findFromDOM(targetCm)!
+        const targetView = getRawEditorView(targetCm)
         expect(targetView.state.selection.main.head).toBe(
           targetView.state.doc.toString().indexOf('## 설정')
         )
@@ -3332,7 +3253,7 @@ describe('Markdown link navigation and missing target banner', () => {
       await user.click(within(tabMenu).getByRole('menuitem', { name: '분할 영역에 복제 열기' }))
 
       const secondaryPane = screen.getByTestId('pane-secondary')
-      await user.click(within(secondaryPane).getByRole('button', { name: 'Preview' }))
+      await switchPaneEditorMode(user, secondaryPane, 'Preview')
       await user.click(within(secondaryPane).getByRole('link', { name: '형제' }))
 
       const siblingTab = await within(secondaryPane).findByRole('tab', { name: /sibling\.md/i })
@@ -3341,7 +3262,7 @@ describe('Markdown link navigation and missing target banner', () => {
       expect(within(secondaryPane).getAllByRole('tab')).toHaveLength(2)
 
       // Activating already-open current.md tab in secondary pane via ./current.md#개요 keeps tab count at 2 and scrolls
-      await user.click(within(secondaryPane).getByRole('button', { name: 'Preview' }))
+      await switchPaneEditorMode(user, secondaryPane, 'Preview')
       scrollIntoViewMock.mockClear()
       await user.click(within(secondaryPane).getByRole('link', { name: '현재 복귀' }))
       await waitFor(() => {
@@ -3362,7 +3283,7 @@ describe('Markdown link navigation and missing target banner', () => {
       expect(screen.getByTestId('pane-workspace')).toHaveAttribute('data-split-mode', 'vertical')
 
       await user.click(within(secondaryPane).getByRole('tab', { name: /current\.md/i }))
-      await user.click(within(secondaryPane).getByRole('button', { name: 'Preview' }))
+      await switchPaneEditorMode(user, secondaryPane, 'Preview')
       await user.click(within(secondaryPane).getByRole('link', { name: '상하 이동' }))
 
       const verticalTargetTab = await within(secondaryPane).findByRole('tab', {
@@ -3373,11 +3294,7 @@ describe('Markdown link navigation and missing target banner', () => {
         within(primaryPane).queryByRole('tab', { name: /vertical-target\.md/i })
       ).not.toBeInTheDocument()
     } finally {
-      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-        configurable: true,
-        writable: true,
-        value: originalScrollIntoView
-      })
+      restore()
     }
   })
 
@@ -3416,7 +3333,7 @@ describe('Markdown link navigation and missing target banner', () => {
 
     const initialSnapshot = getFilesSnapshot()
     const primaryPane = screen.getByTestId('pane-primary')
-    await user.click(within(primaryPane).getByRole('button', { name: 'Preview' }))
+    await switchPaneEditorMode(user, primaryPane, 'Preview')
 
     // 1) Missing #slug in current document
     await user.click(within(primaryPane).getByRole('link', { name: '없는 섹션' }))
