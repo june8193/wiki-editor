@@ -1,7 +1,10 @@
+/**
+ * Shared `<App />` test helpers: Mermaid module mock state, `scrollIntoView` prototype stub,
+ * and Activity Bar / Workspace / Pane Editor Mode UI drivers.
+ */
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { type Mock, vi } from 'vitest'
-import themeCss from '../styles/theme.css?raw'
 
 export type ActivityBarButtonLabel = '탐색기' | '검색' | 'Git' | '워크스페이스'
 export type PaneEditorModeLabel = 'Raw' | 'Split' | 'Preview' | '위지윅'
@@ -10,6 +13,12 @@ export interface MermaidMockState {
   initialize: Mock<(cfg?: { theme?: string }) => void>
   render: Mock<(id: string, text: string) => Promise<{ svg: string }>>
   reset: () => void
+  module: {
+    default: {
+      initialize: Mock<(cfg?: { theme?: string }) => void>
+      render: Mock<(id: string, text: string) => Promise<{ svg: string }>>
+    }
+  }
 }
 
 /**
@@ -36,6 +45,12 @@ export function createMermaidMockState(): MermaidMockState {
       activeTheme = 'default'
       initialize.mockClear()
       render.mockClear()
+    },
+    module: {
+      default: {
+        initialize,
+        render
+      }
     }
   }
 }
@@ -106,27 +121,4 @@ export async function switchPaneEditorMode(
       name: modeLabel
     })
   )
-}
-
-/**
- * Injects `theme.css` into `document.head` and mounts a `#root` element in `document.body`
- * for layout and computed-style assertions, returning a cleanup callback.
- */
-export function mountThemeStylesAndRoot(): { rootEl: HTMLDivElement; cleanup: () => void } {
-  const styleEl = document.createElement('style')
-  styleEl.setAttribute('data-test-theme', 'true')
-  styleEl.textContent = themeCss
-  document.head.appendChild(styleEl)
-
-  const rootEl = document.createElement('div')
-  rootEl.id = 'root'
-  document.body.appendChild(rootEl)
-
-  return {
-    rootEl,
-    cleanup: () => {
-      rootEl.remove()
-      styleEl.remove()
-    }
-  }
 }

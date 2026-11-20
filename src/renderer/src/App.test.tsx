@@ -10,11 +10,10 @@ import { App } from './App'
 import { defaultMermaidRenderer } from './editor/mermaidRenderer'
 import {
   mockPrototypeScrollIntoView,
-  mountThemeStylesAndRoot,
   switchPaneEditorMode,
   switchWorkspaceFromView
 } from './test/appTestHelpers'
-import { mockElementBoundingRect } from './test/domLayoutStub'
+import { mockElementBoundingRect, mountThemeStylesAndRoot } from './test/domLayoutStub'
 import {
   appendRawEditorText,
   createInMemoryWikiApi,
@@ -28,17 +27,11 @@ import {
 } from './test/inMemoryWikiHarness'
 import { installSvgCanvasStub } from './test/svgCanvasStub'
 
-const mermaidMockState = await vi.hoisted(async () => {
-  const { createMermaidMockState } = await import('./test/appTestHelpers')
-  return createMermaidMockState()
-})
+const mermaidMockState = await vi.hoisted(async () =>
+  (await import('./test/appTestHelpers')).createMermaidMockState()
+)
 
-vi.mock('mermaid', () => ({
-  default: {
-    initialize: mermaidMockState.initialize,
-    render: mermaidMockState.render
-  }
-}))
+vi.mock('mermaid', () => mermaidMockState.module)
 
 describe('Three-mode markdown editor, split mode sync, and table editing', () => {
   beforeEach(() => {

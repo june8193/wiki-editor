@@ -1,5 +1,6 @@
 import { act } from '@testing-library/react'
 import { vi } from 'vitest'
+import themeCss from '../styles/theme.css?raw'
 
 export interface ResizeObserverStub {
   trigger: () => void
@@ -100,6 +101,29 @@ export function installScrollContainerStub(
     getScrollWrites: () => scrollWrites,
     clearScrollWrites: () => {
       scrollWrites.length = 0
+    }
+  }
+}
+
+/**
+ * Injects `theme.css` into `document.head` and mounts a `#root` element in `document.body`
+ * for layout and computed-style assertions, returning a cleanup callback.
+ */
+export function mountThemeStylesAndRoot(): { rootEl: HTMLDivElement; cleanup: () => void } {
+  const styleEl = document.createElement('style')
+  styleEl.setAttribute('data-test-theme', 'true')
+  styleEl.textContent = themeCss
+  document.head.appendChild(styleEl)
+
+  const rootEl = document.createElement('div')
+  rootEl.id = 'root'
+  document.body.appendChild(rootEl)
+
+  return {
+    rootEl,
+    cleanup: () => {
+      rootEl.remove()
+      styleEl.remove()
     }
   }
 }

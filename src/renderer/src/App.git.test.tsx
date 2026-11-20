@@ -18,16 +18,7 @@ import {
   triggerMenuCommand
 } from './test/inMemoryWikiHarness'
 
-vi.mock('mermaid', async () => {
-  const { createMermaidMockState } = await import('./test/appTestHelpers')
-  const { initialize, render } = createMermaidMockState()
-  return {
-    default: {
-      initialize,
-      render
-    }
-  }
-})
+vi.mock('mermaid', async () => (await import('./test/appTestHelpers')).createMermaidMockState().module)
 
 describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
   beforeEach(() => {

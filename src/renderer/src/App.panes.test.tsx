@@ -5,7 +5,8 @@ import { buildWikiAssetUrl } from '@shared/assets'
 import { createEmptyGitStatus } from '@shared/git'
 import { addFavoriteWorkspace } from '@shared/workspace'
 import { App } from './App'
-import { clickActivityBarButton, mountThemeStylesAndRoot } from './test/appTestHelpers'
+import { clickActivityBarButton } from './test/appTestHelpers'
+import { mountThemeStylesAndRoot } from './test/domLayoutStub'
 import {
   appendRawEditorText,
   createInMemoryWikiApi,
@@ -17,16 +18,7 @@ import {
   triggerMenuCommand
 } from './test/inMemoryWikiHarness'
 
-vi.mock('mermaid', async () => {
-  const { createMermaidMockState } = await import('./test/appTestHelpers')
-  const { initialize, render } = createMermaidMockState()
-  return {
-    default: {
-      initialize,
-      render
-    }
-  }
-})
+vi.mock('mermaid', async () => (await import('./test/appTestHelpers')).createMermaidMockState().module)
 
 describe('Multi-tab and 2-pane Split View layout', () => {
   beforeEach(() => {

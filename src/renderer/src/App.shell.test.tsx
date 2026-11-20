@@ -5,7 +5,8 @@ import { type AppConfig, cloneAppConfig, DEFAULT_APP_CONFIG } from '@shared/conf
 import { createEmptyGitStatus, type GitFileStatusCode } from '@shared/git'
 import type { RendererLogPayload } from '@shared/logging'
 import { App } from './App'
-import { clickActivityBarButton, mountThemeStylesAndRoot } from './test/appTestHelpers'
+import { clickActivityBarButton } from './test/appTestHelpers'
+import { mountThemeStylesAndRoot } from './test/domLayoutStub'
 import {
   appendRawEditorText,
   createInMemoryWikiApi,
@@ -15,16 +16,7 @@ import {
   triggerMenuCommand
 } from './test/inMemoryWikiHarness'
 
-vi.mock('mermaid', async () => {
-  const { createMermaidMockState } = await import('./test/appTestHelpers')
-  const { initialize, render } = createMermaidMockState()
-  return {
-    default: {
-      initialize,
-      render
-    }
-  }
-})
+vi.mock('mermaid', async () => (await import('./test/appTestHelpers')).createMermaidMockState().module)
 
 describe('App shell, theme persistence, and settings panel', () => {
   beforeEach(() => {
