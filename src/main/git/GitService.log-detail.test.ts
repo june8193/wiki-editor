@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process'
 import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -112,7 +111,7 @@ describe('GitService integration (log, commitDetail, error logging)', () => {
 
   it('filters log by scope (all vs current+upstream), resolves branches/remotes/annotated tags, excludes refs/stash and */HEAD, and defaults pagination to 100 commits', () =>
     withGitTestSandbox(async (sandbox) => {
-      const { service, repoDir, env, runGit } = sandbox
+      const { service, repoDir, runGit } = sandbox
     const { cloneA, cloneB } = await setupBareRemoteClones(sandbox, {
       prefix: 'graph',
       files: { 'base.md': '# Base\n' },
@@ -221,21 +220,8 @@ describe('GitService integration (log, commitDetail, error logging)', () => {
         ...(i > 1 ? [`from :${i - 1}`] : [])
       )
     }
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('git', ['fast-import', '--quiet'], {
-        cwd: repoDir,
-        windowsHide: true,
-        env: {
-          ...process.env,
-          ...env
-        }
-      })
-      child.on('error', reject)
-      child.on('close', (code) => {
-        if (code === 0) resolve()
-        else reject(new Error(`git fast-import exited with code ${code}`))
-      })
-      child.stdin.end(fastImportLines.join('\n') + '\n')
+    await runGit(repoDir, ['fast-import', '--quiet'], {
+      input: fastImportLines.join('\n') + '\n'
     })
 
     const defaultPage1 = await service.log(repoDir)

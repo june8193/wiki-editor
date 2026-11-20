@@ -2,26 +2,21 @@ import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { GitService, type GitServiceOptions } from './GitService'
-
-const execFileAsync = promisify(execFile)
 
 const DEFAULT_GIT_CONFIG =
   '[init]\n\tdefaultBranch = main\n[user]\n\tname = Wiki Tester\n\temail = tester@example.com\n'
 
 /**
- * Isolated temporary directories, git configuration, service factory, and cleanup handle for Git integration tests.
+ * Isolated temporary directories, service factory, Git CLI runner, and cleanup handle for Git integration tests.
  */
 export interface GitTestSandbox {
   tempRoot: string
   repoDir: string
   nonGitDir: string
-  gitConfigFile: string
-  env: NodeJS.ProcessEnv
   service: GitService
   createService: (overrides?: GitServiceOptions) => GitService
-  runGit: (cwd: string, args: readonly string[]) => Promise<string>
+  runGit: (cwd: string, args: readonly string[], options?: { input?: string }) => Promise<string>
   cleanup: () => Promise<void>
 }
 
@@ -32,7 +27,6 @@ export interface BareRemoteClonesOptions {
 }
 
 export interface BareRemoteClones {
-  bareRemote: string
   cloneA: string
   cloneB: string
 }
@@ -40,9 +34,7 @@ export interface BareRemoteClones {
 /**
  * Creates a fresh isolated Git test sandbox with a pre-populated .gitconfig and Windows-safe cleanup.
  */
-export async function createGitTestSandbox(
-  options: GitServiceOptions = {}
-): Promise<GitTestSandbox> {
+export async function createGitTestSandbox(): Promise<GitTestSandbox> {
   const tempRoot = await mkdtemp(join(tmpdir(), 'wiki-editor-git-'))
   const repoDir = join(tempRoot, 'repo')
   const nonGitDir = join(tempRoot, 'plain-folder')
@@ -57,7 +49,7 @@ export async function createGitTestSandbox(
     GIT_CONFIG_GLOBAL: gitConfigFile
   }
 
-  const env: NodeJS.ProcessEnv = {
+  const execEnv: NodeJS.ProcessEnv = {
     GIT_TERMINAL_PROMPT: '0',
     GCM_INTERACTIVE: 'never',
     ...configEnv
@@ -72,19 +64,37 @@ export async function createGitTestSandbox(
       }
     })
 
-  const service = createService(options)
+  const service = createService()
 
-  const runGit = async (cwd: string, args: readonly string[]): Promise<string> => {
-    const { stdout } = await execFileAsync('git', [...args], {
-      cwd,
-      windowsHide: true,
-      env: {
-        ...process.env,
-        ...env
+  const runGit = (
+    cwd: string,
+    args: readonly string[],
+    options?: { input?: string }
+  ): Promise<string> =>
+    new Promise<string>((resolve, reject) => {
+      const child = execFile(
+        'git',
+        [...args],
+        {
+          cwd,
+          windowsHide: true,
+          env: {
+            ...process.env,
+            ...execEnv
+          }
+        },
+        (error, stdout) => {
+          if (error) {
+            reject(error)
+            return
+          }
+          resolve(stdout)
+        }
+      )
+      if (options?.input !== undefined) {
+        child.stdin?.end(options.input)
       }
     })
-    return stdout
-  }
 
   const cleanup = async (): Promise<void> => {
     await rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
@@ -94,8 +104,6 @@ export async function createGitTestSandbox(
     tempRoot,
     repoDir,
     nonGitDir,
-    gitConfigFile,
-    env,
     service,
     createService,
     runGit,
@@ -107,10 +115,9 @@ export async function createGitTestSandbox(
  * Runs a test callback with an automatically cleaned-up isolated Git test sandbox.
  */
 export async function withGitTestSandbox<T>(
-  run: (sandbox: GitTestSandbox) => Promise<T>,
-  options: GitServiceOptions = {}
+  run: (sandbox: GitTestSandbox) => Promise<T>
 ): Promise<T> {
-  const sandbox = await createGitTestSandbox(options)
+  const sandbox = await createGitTestSandbox()
   try {
     return await run(sandbox)
   } finally {
@@ -152,5 +159,5 @@ export async function setupBareRemoteClones(
   await sandbox.runGit(cloneB, ['config', 'user.name', 'Bob'])
   await sandbox.runGit(cloneB, ['config', 'user.email', 'bob@example.com'])
 
-  return { bareRemote, cloneA, cloneB }
+  return { cloneA, cloneB }
 }
