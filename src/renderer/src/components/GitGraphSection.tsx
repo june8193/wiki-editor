@@ -13,11 +13,13 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import type {
+  GitCommitDetail,
   GitDiffRequest,
   GitGraphCommit,
   GitLogScope
 } from '@shared/git'
-import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
+import type { GitDetailState } from '../hooks/useGitDetailSelection'
+import type { GitGraphState } from '../hooks/useGitGraphLog'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { normalizeGitGraphRefs, type GitGraphDisplayRef } from '../utils/gitGraphRefs'
 import { GitDetailFilesList, GitDetailPanel } from './GitDetailPanel'
@@ -333,7 +335,7 @@ const GitGraphLaneSvg = memo(function GitGraphLaneSvg({
 
 interface GitCommitDetailPanelProps {
   shortHash: string
-  detailState: GitCommitDetailState
+  detailState: GitDetailState<GitCommitDetail>
   onOpenFileDiff: (request: GitDiffRequest) => void
 }
 

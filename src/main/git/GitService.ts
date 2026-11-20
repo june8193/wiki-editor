@@ -564,18 +564,8 @@ export class GitService {
   }
 
   async diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff> {
-    if (
-      !request ||
-      (request.kind !== 'staged' &&
-        request.kind !== 'unstaged' &&
-        request.kind !== 'commit' &&
-        request.kind !== 'stash')
-    ) {
-      throw new Error('유효하지 않은 Diff 요청 형식입니다.')
-    }
-
-    const repoRoot = await this.requireRepoRoot(workspacePath)
     const target = validateGitDiffTarget(request)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
     const workspaceRealRoot = await realpath(resolve(workspacePath))
     const rawPaths = request.origPath ? [request.path, request.origPath] : [request.path]
     const [safePath, safeOrigPath] = await this.validateRepoRelativePaths(repoRoot, rawPaths)

@@ -1,6 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
 import { toErrorMessage } from '@shared/errors'
-import type { GitStashDetail } from '@shared/git'
 
 /** Discriminated union for inline expandable detail panels (Commit or Stash). */
 export type GitDetailState<TDetail> =
@@ -9,23 +8,20 @@ export type GitDetailState<TDetail> =
   | { status: 'loaded'; selectedHash: string; detail: TDetail }
   | { status: 'error'; selectedHash: string; errorMessage: string }
 
-/** State alias for expanded inline Stash detail inside the Stashes accordion section. */
-export type GitStashDetailState = GitDetailState<GitStashDetail>
-
 /** Creates an empty collapsed inline detail state. */
 export function createInitialGitDetailState<TDetail>(): GitDetailState<TDetail> {
   return { status: 'idle' }
 }
 
-/** Creates an empty collapsed inline Stash detail state. */
-export function createInitialGitStashDetailState(): GitStashDetailState {
-  return createInitialGitDetailState()
-}
-
-export interface UseGitDetailSelectionOptions<TTarget, TDetail> {
+/** Shared workspace-epoch guard for ignoring stale async Git responses across switches. */
+export interface GitWorkspaceRequestGuard {
   isCurrentRequest: (rootPath: string, epoch: number) => boolean
   getWorkspaceRootPath: () => string | null
   getWorkspaceEpoch: () => number
+}
+
+export interface UseGitDetailSelectionOptions<TTarget, TDetail> {
+  requestGuard: GitWorkspaceRequestGuard
   getSelectedHash: (target: TTarget) => string
   fetchDetail: (rootPath: string, target: TTarget) => Promise<TDetail>
   fallbackErrorMessage: string
@@ -72,23 +68,25 @@ export function useGitDetailSelection<TTarget, TDetail>(
 
   const toggleDetail = useCallback(
     async (target: TTarget): Promise<void> => {
-      const selectedHash = optionsRef.current.getSelectedHash(target)
+      const { requestGuard, getSelectedHash, fetchDetail, fallbackErrorMessage, logFailure } =
+        optionsRef.current
+      const selectedHash = getSelectedHash(target)
       const currentDetail = detailStateRef.current
       if (currentDetail.status !== 'idle' && currentDetail.selectedHash === selectedHash) {
         clearDetail()
         return
       }
 
-      const rootPath = optionsRef.current.getWorkspaceRootPath()
+      const rootPath = requestGuard.getWorkspaceRootPath()
       if (!rootPath) {
         return
       }
-      const epoch = optionsRef.current.getWorkspaceEpoch()
+      const epoch = requestGuard.getWorkspaceEpoch()
       const detailSeq = ++detailSeqRef.current
       const isCurrentDetailRequest = (): boolean => {
         const latestDetail = detailStateRef.current
         return (
-          optionsRef.current.isCurrentRequest(rootPath, epoch) &&
+          optionsRef.current.requestGuard.isCurrentRequest(rootPath, epoch) &&
           detailSeqRef.current === detailSeq &&
           latestDetail.status !== 'idle' &&
           latestDetail.selectedHash === selectedHash
@@ -98,7 +96,7 @@ export function useGitDetailSelection<TTarget, TDetail>(
       updateDetailState({ status: 'loading', selectedHash })
 
       try {
-        const detail = await optionsRef.current.fetchDetail(rootPath, target)
+        const detail = await fetchDetail(rootPath, target)
         if (!isCurrentDetailRequest()) {
           return
         }
@@ -107,9 +105,9 @@ export function useGitDetailSelection<TTarget, TDetail>(
         if (!isCurrentDetailRequest()) {
           return
         }
-        const message = toErrorMessage(error, optionsRef.current.fallbackErrorMessage)
+        const message = toErrorMessage(error, fallbackErrorMessage)
         updateDetailState({ status: 'error', selectedHash, errorMessage: message })
-        optionsRef.current.logFailure(rootPath, target, message, error)
+        logFailure(rootPath, target, message, error)
       }
     },
     [clearDetail, updateDetailState]

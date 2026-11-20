@@ -343,6 +343,9 @@ export type ValidatedGitDiffTarget =
  * Validates target identifiers on a GitDiffRequest once before resolving repository paths.
  */
 export function validateGitDiffTarget(request: GitDiffRequest): ValidatedGitDiffTarget {
+  if (!request || typeof request !== 'object') {
+    throw new Error('유효하지 않은 Diff 요청 형식입니다.')
+  }
   switch (request.kind) {
     case 'staged':
       return { kind: 'staged' }
@@ -357,6 +360,8 @@ export function validateGitDiffTarget(request: GitDiffRequest): ValidatedGitDiff
         stashHash: assertValidStashHash(request.stashHash),
         isUntracked: request.status === '?'
       }
+    default:
+      throw new Error('유효하지 않은 Diff 요청 형식입니다.')
   }
 }
 

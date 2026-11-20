@@ -24,9 +24,11 @@ describe('useGitDetailSelection', () => {
 
     const { result } = renderHook(() =>
       useGitDetailSelection<{ id: string }, { summary: string }>({
-        isCurrentRequest: () => true,
-        getWorkspaceRootPath: () => 'C:/wiki',
-        getWorkspaceEpoch: () => 1,
+        requestGuard: {
+          isCurrentRequest: () => true,
+          getWorkspaceRootPath: () => 'C:/wiki',
+          getWorkspaceEpoch: () => 1
+        },
         getSelectedHash: (item) => item.id,
         fetchDetail,
         fallbackErrorMessage: '상세 조회 실패',
@@ -67,10 +69,12 @@ describe('useGitDetailSelection', () => {
 
     const { result } = renderHook(() =>
       useGitDetailSelection<{ id: string }, { summary: string }>({
-        isCurrentRequest: (rootPath, epoch) =>
-          activeRoot === rootPath && activeEpoch === epoch,
-        getWorkspaceRootPath: () => activeRoot,
-        getWorkspaceEpoch: () => activeEpoch,
+        requestGuard: {
+          isCurrentRequest: (rootPath, epoch) =>
+            activeRoot === rootPath && activeEpoch === epoch,
+          getWorkspaceRootPath: () => activeRoot,
+          getWorkspaceEpoch: () => activeEpoch
+        },
         getSelectedHash: (item) => item.id,
         fetchDetail,
         fallbackErrorMessage: '상세 조회 실패',
@@ -136,9 +140,11 @@ describe('useGitDetailSelection', () => {
 
     const { result } = renderHook(() =>
       useGitDetailSelection<{ id: string }, { summary: string }>({
-        isCurrentRequest: () => true,
-        getWorkspaceRootPath: () => 'C:/wiki',
-        getWorkspaceEpoch: () => 1,
+        requestGuard: {
+          isCurrentRequest: () => true,
+          getWorkspaceRootPath: () => 'C:/wiki',
+          getWorkspaceEpoch: () => 1
+        },
         getSelectedHash: (item) => item.id,
         fetchDetail,
         fallbackErrorMessage: '기본 실패 메시지',

@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { Plus } from 'lucide-react'
-import type { GitDiffRequest, GitStashEntry } from '@shared/git'
-import type { GitStashDetailState } from '../hooks/useGitDetailSelection'
+import type { GitDiffRequest, GitStashDetail, GitStashEntry } from '@shared/git'
+import type { GitDetailState } from '../hooks/useGitDetailSelection'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { GitDetailFilesList, GitDetailPanel } from './GitDetailPanel'
 
@@ -50,7 +50,7 @@ export const GitStashesHeaderActions = memo(function GitStashesHeaderActions({
 
 export interface GitStashesSectionProps {
   stashes: readonly GitStashEntry[]
-  stashDetail: GitStashDetailState
+  stashDetail: GitDetailState<GitStashDetail>
   isBusy: boolean
   onToggleStashDetail: (entry: GitStashEntry) => void
   onOpenFileDiff: (request: GitDiffRequest) => void

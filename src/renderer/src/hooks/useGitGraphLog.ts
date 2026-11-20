@@ -10,12 +10,10 @@ import { toErrorMessage } from '@shared/errors'
 import {
   createInitialGitDetailState,
   type GitDetailState,
+  type GitWorkspaceRequestGuard,
   useGitDetailSelection
 } from './useGitDetailSelection'
 import { useWikiApi } from './useWikiApi'
-
-/** Discriminated union for the expanded commit detail panel in the Graph section. */
-export type GitCommitDetailState = GitDetailState<GitCommitDetail>
 
 /** Aggregated commit-graph UI state for the Graph accordion section. */
 export interface GitGraphState {
@@ -25,15 +23,10 @@ export interface GitGraphState {
   isLoading: boolean
   isLoadingMore: boolean
   errorMessage: string | null
-  commitDetail: GitCommitDetailState
+  commitDetail: GitDetailState<GitCommitDetail>
 }
 
 type GitGraphLogState = Omit<GitGraphState, 'commitDetail'>
-
-/** Creates empty inline commit-detail state. */
-export function createInitialGitCommitDetailState(): GitCommitDetailState {
-  return createInitialGitDetailState()
-}
 
 function createInitialGitGraphLogState(): GitGraphLogState {
   return {
@@ -50,14 +43,12 @@ function createInitialGitGraphLogState(): GitGraphLogState {
 export function createInitialGitGraphState(): GitGraphState {
   return {
     ...createInitialGitGraphLogState(),
-    commitDetail: createInitialGitCommitDetailState()
+    commitDetail: createInitialGitDetailState()
   }
 }
 
 interface UseGitGraphLogOptions {
-  isCurrentRequest: (rootPath: string, epoch: number) => boolean
-  getWorkspaceRootPath: () => string | null
-  getWorkspaceEpoch: () => number
+  requestGuard: GitWorkspaceRequestGuard
   isMounted: () => boolean
 }
 
@@ -103,9 +94,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
     clearDetail: clearCommitDetail,
     pruneDetail: pruneCommitDetail
   } = useGitDetailSelection<string, GitCommitDetail>({
-    isCurrentRequest: (rootPath, epoch) => optionsRef.current.isCurrentRequest(rootPath, epoch),
-    getWorkspaceRootPath: () => optionsRef.current.getWorkspaceRootPath(),
-    getWorkspaceEpoch: () => optionsRef.current.getWorkspaceEpoch(),
+    requestGuard: options.requestGuard,
     getSelectedHash: (commitHash) => commitHash,
     fetchDetail: (rootPath, commitHash) => wikiApi.git.commitDetail(rootPath, commitHash),
     fallbackErrorMessage: '커밋 상세 정보를 불러오지 못했습니다.',
@@ -120,7 +109,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
   const isCurrentLogRequest = useCallback(
     (rootPath: string, epoch: number, logSeq: number, scope: GitLogScope): boolean => {
       return (
-        optionsRef.current.isCurrentRequest(rootPath, epoch) &&
+        optionsRef.current.requestGuard.isCurrentRequest(rootPath, epoch) &&
         logRequestSeqRef.current === logSeq &&
         graphLogStateRef.current.scope === scope
       )
@@ -151,7 +140,7 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
       scope: GitLogScope,
       append: boolean
     ): Promise<void> => {
-      if (!optionsRef.current.isCurrentRequest(rootPath, epoch)) {
+      if (!optionsRef.current.requestGuard.isCurrentRequest(rootPath, epoch)) {
         return
       }
 
@@ -226,24 +215,29 @@ export function useGitGraphLog(options: UseGitGraphLogOptions) {
       }
       resetGraph(false, nextScope)
 
-      const rootPath = optionsRef.current.getWorkspaceRootPath()
+      const rootPath = optionsRef.current.requestGuard.getWorkspaceRootPath()
       if (!rootPath) {
         return
       }
-      await fetchCommitLog(rootPath, optionsRef.current.getWorkspaceEpoch(), nextScope, false)
+      await fetchCommitLog(
+        rootPath,
+        optionsRef.current.requestGuard.getWorkspaceEpoch(),
+        nextScope,
+        false
+      )
     },
     [fetchCommitLog, resetGraph]
   )
 
   const loadMoreCommits = useCallback(async (): Promise<void> => {
-    const rootPath = optionsRef.current.getWorkspaceRootPath()
+    const rootPath = optionsRef.current.requestGuard.getWorkspaceRootPath()
     const current = graphLogStateRef.current
     if (!rootPath || current.isLoading || current.isLoadingMore || !current.hasMore) {
       return
     }
     await fetchCommitLog(
       rootPath,
-      optionsRef.current.getWorkspaceEpoch(),
+      optionsRef.current.requestGuard.getWorkspaceEpoch(),
       current.scope,
       true
     )

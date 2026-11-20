@@ -10,7 +10,7 @@ import {
   type GitStatus
 } from '@shared/git'
 import { createInitialGitGraphState } from '../hooks/useGitGraphLog'
-import { createInitialGitStashDetailState } from '../hooks/useGitDetailSelection'
+import { createInitialGitDetailState } from '../hooks/useGitDetailSelection'
 import themeCss from '../styles/theme.css?raw'
 import {
   createDefaultGitChangesViewState,
@@ -83,7 +83,7 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onFetch: vi.fn(),
     onSync: vi.fn(),
     stashes: [],
-    stashDetail: createInitialGitStashDetailState(),
+    stashDetail: createInitialGitDetailState(),
     graphState: createInitialGitGraphState(),
     onChangeLogScope: vi.fn(),
     onLoadMoreCommits: vi.fn(),
@@ -2417,7 +2417,7 @@ describe('GitSidebarPanel', () => {
       <GitSidebarPanel
         {...buildProps({
           stashes: [stash0, stash1],
-          stashDetail: createInitialGitStashDetailState(),
+          stashDetail: createInitialGitDetailState(),
           splitState: baseSplit,
           onToggleStashDetail,
           onPopStash,
