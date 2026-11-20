@@ -1,6 +1,7 @@
 import { type ReactNode, type Ref, useCallback, useMemo, useRef, useState } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
+import { toErrorMessage } from '@shared/errors'
 import { FRONTMATTER_SCHEMA_FILE } from '@shared/frontmatter'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
@@ -192,31 +193,17 @@ export function EditorWindowFrame({
   const workspaceRootRef = useRef(workspaceRootPath)
   workspaceRootRef.current = workspaceRootPath
 
-  const openSchemaRawJsonFile = useCallback(
-    async (fromModal: boolean): Promise<void> => {
-      const startedRoot = workspaceRootRef.current
-      const targetPath = await ensureSchemaFilePath({ throwOnError: fromModal })
-      if (startedRoot !== workspaceRootRef.current) return
-      if (!targetPath) {
-        if (fromModal) {
-          throw new Error('프론트매터 스키마 파일을 준비하지 못했습니다.')
-        }
-        return
-      }
-      const opened = await openWorkspaceFile(targetPath, undefined, FRONTMATTER_SCHEMA_FILE)
-      if (startedRoot !== workspaceRootRef.current) return
-      if (!opened) {
-        if (fromModal) {
-          throw new Error('스키마 JSON 파일을 열지 못했습니다.')
-        }
-        return
-      }
-      if (fromModal) {
-        onCloseSchemaModal()
-      }
-    },
-    [ensureSchemaFilePath, onCloseSchemaModal, openWorkspaceFile]
-  )
+  const openSchemaRawJsonFile = useCallback(async (): Promise<boolean> => {
+    const startedRoot = workspaceRootRef.current
+    const targetPath = await ensureSchemaFilePath()
+    if (startedRoot !== workspaceRootRef.current) return false
+    if (!targetPath) {
+      throw new Error('프론트매터 스키마 파일을 준비하지 못했습니다.')
+    }
+    const opened = await openWorkspaceFile(targetPath, undefined, FRONTMATTER_SCHEMA_FILE)
+    if (startedRoot !== workspaceRootRef.current) return false
+    return Boolean(opened)
+  }, [ensureSchemaFilePath, openWorkspaceFile])
 
   const paneFind = usePaneDocumentFind({
     layout: paneWorkspaceProps.layout,
@@ -331,7 +318,18 @@ export function EditorWindowFrame({
                   onChangeContent: handlePropertiesChangeContent,
                   onCreateDefaultSchema: createDefaultSchema,
                   onOpenSchemaModal,
-                  onOpenSchemaRawJson: () => void openSchemaRawJsonFile(false)
+                  onOpenSchemaRawJson: () => {
+                    const startedRoot = workspaceRootRef.current
+                    reportErrorBanner(null)
+                    void openSchemaRawJsonFile().catch((error: unknown) => {
+                      if (startedRoot === workspaceRootRef.current) {
+                        reportErrorBanner(
+                          toErrorMessage(error, '프론트매터 스키마 파일을 준비하지 못했습니다.'),
+                          error
+                        )
+                      }
+                    })
+                  }
                 }}
               />
             </aside>
@@ -355,7 +353,15 @@ export function EditorWindowFrame({
           isDismissDisabled={pendingDialog !== null}
           shellRef={localShellRef}
           onSaveSchema={saveSchema}
-          onOpenRawJson={() => openSchemaRawJsonFile(true)}
+          onOpenRawJson={async () => {
+            const startedRoot = workspaceRootRef.current
+            const opened = await openSchemaRawJsonFile()
+            if (startedRoot !== workspaceRootRef.current) return
+            if (!opened) {
+              throw new Error('스키마 JSON 파일을 열지 못했습니다.')
+            }
+            onCloseSchemaModal()
+          }}
           onClose={onCloseSchemaModal}
         />
       )}

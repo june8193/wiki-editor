@@ -393,7 +393,6 @@ export function FrontmatterSchemaModal({
     if (isDraftDirtyRef.current) return
     setDraftFields(createSchemaDraftFields(schemaResult?.schema ?? null, nextDraftId))
     setHasAttemptedSave(false)
-    setSaveError(null)
   }, [schemaResult])
 
   const validation = useMemo(() => validateAndBuildSchemaDraft(draftFields), [draftFields])

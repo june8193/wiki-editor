@@ -1,9 +1,11 @@
+import { useState } from 'react'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import type {
-  FrontmatterSchemaLoadResult,
-  WorkspaceFrontmatterSchema
+import {
+  createDefaultFrontmatterSchema,
+  type FrontmatterSchemaLoadResult,
+  type WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
 import { FrontmatterSchemaModal } from './FrontmatterSchemaModal'
 
@@ -371,5 +373,35 @@ describe('FrontmatterSchemaModal', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('retains inline saveError when opening raw JSON initializes schemaResult on a clean modal and then fails', async () => {
+    const user = userEvent.setup()
+
+    function Wrapper(): React.JSX.Element {
+      const [schemaResult, setSchemaResult] = useState<FrontmatterSchemaLoadResult>(
+        makeSchemaResult(null)
+      )
+
+      return (
+        <FrontmatterSchemaModal
+          schemaResult={schemaResult}
+          onSaveSchema={async (next) => makeSchemaResult(next)}
+          onOpenRawJson={async () => {
+            await Promise.resolve()
+            setSchemaResult(makeSchemaResult(createDefaultFrontmatterSchema()))
+            throw new Error('열기 실패')
+          }}
+          onClose={vi.fn()}
+        />
+      )
+    }
+
+    render(<Wrapper />)
+
+    await user.click(screen.getByRole('button', { name: 'JSON 파일로 열기' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('열기 실패')
   })
 })
