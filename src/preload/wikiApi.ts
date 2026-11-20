@@ -275,7 +275,15 @@ export function createWikiApi(
           stashRef
         ) as Promise<GitStatus>,
       stashPop: (workspacePath, stashRef) =>
-        ipcRenderer.invoke(GIT_IPC_CHANNELS.stashPop, workspacePath, stashRef) as Promise<GitStatus>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.stashPop, workspacePath, stashRef) as Promise<GitStatus>,
+      stashDrop: (workspacePath, stashRef) =>
+        ipcRenderer.invoke(
+          GIT_IPC_CHANNELS.stashDrop,
+          workspacePath,
+          stashRef
+        ) as Promise<GitStashEntry[]>,
+      stashClear: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.stashClear, workspacePath) as Promise<GitStashEntry[]>
     },
     menu: {
       onCommand: (listener) =>

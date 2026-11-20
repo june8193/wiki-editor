@@ -79,6 +79,8 @@ function installMockGitWikiApi(overrides: Partial<WikiApi['git']> = {}): void {
       stashCreate: vi.fn(),
       stashApply: vi.fn(),
       stashPop: vi.fn(),
+      stashDrop: vi.fn(async () => []),
+      stashClear: vi.fn(async () => []),
       ...overrides
     }
   } as unknown as WikiApi
@@ -1445,5 +1447,160 @@ describe('useGitController', () => {
     expect(result.current.stashes).toEqual([stash0])
     rerender({ ws: null })
     expect(result.current.stashes).toEqual([])
+  })
+
+  it('supports single-file stash, options-based stashCreate, stashDrop, and stashClear', async () => {
+    const baseStatus = makeStatus('main')
+    const initialStatus: GitStatus = {
+      ...baseStatus,
+      staged: [{ path: 'staged.md', status: 'M' }],
+      unstaged: [{ path: 'target.md', status: 'M' }],
+      untracked: [{ path: 'draft.md', status: '?' }]
+    }
+    const stash0: GitStashEntry = {
+      ref: 'stash@{0}',
+      hash: '1111111111111111111111111111111111111111',
+      branch: 'main',
+      message: 'target only',
+      createdAt: '2026-11-20T12:00:00Z'
+    }
+    const stash1: GitStashEntry = {
+      ref: 'stash@{1}',
+      hash: '2222222222222222222222222222222222222222',
+      branch: 'main',
+      message: 'WIP release',
+      createdAt: '2026-11-20T12:05:00Z'
+    }
+
+    let currentStatus = initialStatus
+    let currentStashes: GitStashEntry[] = []
+    const stashCreateMock = vi.fn(async () => {
+      currentStashes = [...currentStashes, stash0]
+      return currentStatus
+    })
+    const stashDropMock = vi.fn(async (_ws: string, stashRef: string) => {
+      if (stashRef === 'stash@{99}') {
+        throw new Error('지정한 Stash 항목을 찾을 수 없습니다.')
+      }
+      currentStashes = [
+        {
+          ...stash1,
+          ref: 'stash@{0}'
+        }
+      ]
+      return currentStashes
+    })
+    const stashClearMock = vi.fn(async () => {
+      currentStashes = []
+      return currentStashes
+    })
+    const statusMock = vi.fn(async () => currentStatus)
+
+    installMockGitWikiApi({
+      status: statusMock,
+      stashList: vi.fn(async () => currentStashes),
+      stashCreate: stashCreateMock,
+      stashDrop: stashDropMock,
+      stashClear: stashClearMock
+    })
+
+    const confirmBeforeWorkspaceMutation = vi.fn(async () => true)
+    const onBeforeWorkspaceBufferMutation = vi.fn(async () => {})
+    const onAfterWorkspaceBufferMutation = vi.fn(async () => {})
+    const onStashCreated = vi.fn()
+
+    const { result } = renderHook(() =>
+      useGitController({
+        workspaceRootPath: 'C:/wiki',
+        confirmBeforeWorkspaceMutation,
+        onBeforeWorkspaceBufferMutation,
+        onAfterWorkspaceBufferMutation,
+        onStashCreated
+      })
+    )
+
+    await waitFor(() => {
+      expect(result.current.status?.branch).toBe('main')
+    })
+
+    // 1. stashFile scopes dirty buffer check & stashCreate to the single target path
+    currentStatus = {
+      ...baseStatus,
+      staged: initialStatus.staged,
+      unstaged: [],
+      untracked: initialStatus.untracked
+    }
+    await act(async () => {
+      await expect(result.current.stashFile('target.md')).resolves.toBe(true)
+    })
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenLastCalledWith('파일 Stash', ['target.md'])
+    expect(onBeforeWorkspaceBufferMutation).toHaveBeenLastCalledWith({
+      kind: 'stash-create',
+      paths: ['target.md']
+    })
+    expect(stashCreateMock).toHaveBeenLastCalledWith('C:/wiki', {
+      scope: 'paths',
+      includeUntracked: true,
+      paths: ['target.md']
+    })
+    expect(onStashCreated).toHaveBeenCalledTimes(1)
+    expect(result.current.stashes).toEqual([stash0])
+
+    // 2. stashWithOptions with scope: 'all' and includeUntracked: false excludes untracked paths from buffer target
+    currentStatus = initialStatus
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    currentStatus = {
+      ...baseStatus,
+      staged: [],
+      unstaged: [],
+      untracked: initialStatus.untracked
+    }
+    await act(async () => {
+      await expect(
+        result.current.stashWithOptions({
+          scope: 'all',
+          message: 'WIP release',
+          includeUntracked: false
+        })
+      ).resolves.toBe(true)
+    })
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenLastCalledWith('전체 변경 사항 Stash', [
+      'staged.md',
+      'target.md'
+    ])
+    expect(stashCreateMock).toHaveBeenLastCalledWith('C:/wiki', {
+      scope: 'all',
+      message: 'WIP release',
+      includeUntracked: false
+    })
+    expect(onStashCreated).toHaveBeenCalledTimes(2)
+
+    // 3. stashDrop skips buffer confirm/mutation hooks and updates stashes directly from return value
+    const confirmCountBeforeDrop = confirmBeforeWorkspaceMutation.mock.calls.length
+    const bufferBeforeCountBeforeDrop = onBeforeWorkspaceBufferMutation.mock.calls.length
+    await act(async () => {
+      await expect(result.current.stashDrop('stash@{0}')).resolves.toBe(true)
+    })
+    expect(stashDropMock).toHaveBeenCalledWith('C:/wiki', 'stash@{0}')
+    expect(result.current.stashes).toEqual([{ ...stash1, ref: 'stash@{0}' }])
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledTimes(confirmCountBeforeDrop)
+    expect(onBeforeWorkspaceBufferMutation).toHaveBeenCalledTimes(bufferBeforeCountBeforeDrop)
+
+    // 4. stashDrop surfaces errors without triggering workspace buffer prompts
+    await act(async () => {
+      await expect(result.current.stashDrop('stash@{99}')).resolves.toBe(false)
+    })
+    expect(result.current.errorMessage).toBe('지정한 Stash 항목을 찾을 수 없습니다.')
+
+    // 5. stashClear empties stashes and skips buffer confirm/mutation hooks
+    await act(async () => {
+      await expect(result.current.stashClear()).resolves.toBe(true)
+    })
+    expect(stashClearMock).toHaveBeenCalledWith('C:/wiki')
+    expect(result.current.stashes).toEqual([])
+    expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledTimes(confirmCountBeforeDrop)
+    expect(onBeforeWorkspaceBufferMutation).toHaveBeenCalledTimes(bufferBeforeCountBeforeDrop)
   })
 })

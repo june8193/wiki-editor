@@ -82,6 +82,7 @@ export interface EditorWindowFrameProps {
   onDismissDialog: () => void
   leftSidebarSlot?: ReactNode
   settingsPanelSlot?: ReactNode
+  stashDialogSlot?: ReactNode
 }
 
 /**
@@ -104,7 +105,8 @@ export function EditorWindowFrame({
   pendingDialog,
   onDismissDialog,
   leftSidebarSlot,
-  settingsPanelSlot
+  settingsPanelSlot,
+  stashDialogSlot
 }: EditorWindowFrameProps) {
   const [rightSidebar, setRightSidebar] = useState<RightSidebarState>(() => ({
     isCollapsed: initialRightSidebarCollapsed,
@@ -229,6 +231,8 @@ export function EditorWindowFrame({
       </main>
 
       {settingsPanelSlot}
+
+      {stashDialogSlot}
 
       {pendingDialog && (
         <ConfirmDialog

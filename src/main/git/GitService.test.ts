@@ -1874,6 +1874,50 @@ describe('GitService integration (isolated temp repos)', () => {
     const conflictStatus = await service.status(repoDir)
     expect(conflictStatus.hasConflicts).toBe(true)
   }, 60_000)
+
+  it('drops individual stashes with ref renumbering, clears all stashes idempotently, and blocks non-repo/invalid/missing stashRefs', async () => {
+    await expect(service.stashDrop(nonGitDir, 'stash@{0}')).rejects.toThrow(/Git 저장소가 아닙니다/)
+    await expect(service.stashClear(nonGitDir)).rejects.toThrow(/Git 저장소가 아닙니다/)
+
+    await service.init(repoDir)
+    await runGit(repoDir, ['config', 'user.name', 'Wiki Tester'])
+    await runGit(repoDir, ['config', 'user.email', 'tester@example.com'])
+
+    // Unborn repo: stashClear returns [] cleanly, malformed stashRefs are rejected
+    expect(await service.stashClear(repoDir)).toEqual([])
+    for (const badRef of ['', 'HEAD', 'stash@{0}^', 'stash@{-1}', '--all', 'stash@{0} ', 'main']) {
+      await expect(service.stashDrop(repoDir, badRef)).rejects.toThrow(/Stash 참조/)
+    }
+
+    await mkdir(join(repoDir, 'subws'), { recursive: true })
+    await writeFile(join(repoDir, 'subws', 'note.md'), '# Base\n', 'utf8')
+    await service.stageAll(repoDir)
+    await service.commit(repoDir, 'seed')
+
+    // Missing stash ref fails cleanly
+    await expect(service.stashDrop(repoDir, 'stash@{0}')).rejects.toThrow(/Stash 항목/)
+
+    // Create 3 stashes (oldest=first, middle=second, newest=third)
+    for (const label of ['first stash', 'second stash', 'third stash']) {
+      await writeFile(join(repoDir, 'subws', 'note.md'), `# ${label}\n`, 'utf8')
+      await service.stashCreate(repoDir, { scope: 'unstaged', message: label })
+    }
+
+    await expect(service.stashDrop(repoDir, 'stash@{99}')).rejects.toThrow(/Stash 항목/)
+
+    // Drop middle entry stash@{1} from subdirectory workspace -> remaining stashes renumber to stash@{0} and stash@{1}
+    const afterDrop = await service.stashDrop(join(repoDir, 'subws'), 'stash@{1}')
+    expect(afterDrop.map((entry) => `${entry.ref}:${entry.message}`)).toEqual([
+      'stash@{0}:third stash',
+      'stash@{1}:first stash'
+    ])
+    expect(await service.stashList(repoDir)).toEqual(afterDrop)
+
+    // Clear all remaining stashes -> returns [] and subsequent clear is idempotent
+    expect(await service.stashClear(join(repoDir, 'subws'))).toEqual([])
+    expect(await service.stashList(repoDir)).toEqual([])
+    expect(await service.stashClear(repoDir)).toEqual([])
+  }, 60_000)
 })
 
 describe('GitService helpers (unit)', () => {

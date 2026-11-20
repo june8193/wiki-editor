@@ -109,6 +109,7 @@ interface GitChangesSubgroupProps {
   onOpenWorkspaceFile: (repoRelativePath: string) => void
   onItemAction: (file: GitChangedFile) => void
   onDiscardFile?: (file: GitChangedFile) => void
+  onStashFile?: (file: GitChangedFile) => void
 }
 
 function GitChangesSubgroup({
@@ -132,7 +133,8 @@ function GitChangesSubgroup({
   onSelectFile,
   onOpenWorkspaceFile,
   onItemAction,
-  onDiscardFile
+  onDiscardFile,
+  onStashFile
 }: GitChangesSubgroupProps) {
   const treeNodes = useMemo(
     () => (viewMode === 'tree' ? buildCompressedGitFileTree(files) : []),
@@ -155,6 +157,7 @@ function GitChangesSubgroup({
       onSelectFile={onSelectFile}
       onOpenWorkspaceFile={onOpenWorkspaceFile}
       onDiscardFile={onDiscardFile}
+      onStashFile={onStashFile}
       onItemAction={onItemAction}
     />
   )
@@ -294,6 +297,7 @@ export interface GitChangesFileGroupsProps {
   onStageFile: (file: GitChangedFile) => void
   onUnstageFile: (file: GitChangedFile) => void
   onDiscardFile: (file: GitChangedFile) => void
+  onStashFile: (file: GitChangedFile) => void
 }
 
 /**
@@ -318,7 +322,8 @@ export const GitChangesFileGroups = memo(function GitChangesFileGroups({
   onOpenWorkspaceFile,
   onStageFile,
   onUnstageFile,
-  onDiscardFile
+  onDiscardFile,
+  onStashFile
 }: GitChangesFileGroupsProps) {
   return (
     <>
@@ -366,6 +371,7 @@ export const GitChangesFileGroups = memo(function GitChangesFileGroups({
         onOpenWorkspaceFile={onOpenWorkspaceFile}
         onItemAction={onStageFile}
         onDiscardFile={onDiscardFile}
+        onStashFile={onStashFile}
       />
     </>
   )

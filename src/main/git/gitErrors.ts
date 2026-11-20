@@ -68,7 +68,12 @@ const ERROR_PATTERNS: ReadonlyArray<{
     buildMessage: (detail) => `브랜치를 찾을 수 없습니다.\n${detail}`
   },
   {
-    patterns: ['is not a valid reference', 'no stash entries found'],
+    patterns: [
+      'is not a valid reference',
+      'no stash entries found',
+      "log for 'stash' only has",
+      "log for 'refs/stash' only has"
+    ],
     buildMessage: (detail) => `지정한 Stash 항목을 찾을 수 없습니다.\n${detail}`
   },
   {

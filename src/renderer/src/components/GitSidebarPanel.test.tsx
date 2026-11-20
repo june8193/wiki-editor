@@ -69,8 +69,12 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onDiscardFile: vi.fn(),
     onDiscardAll: vi.fn(),
     onStashChanges: vi.fn(),
+    onStashFile: vi.fn(),
+    onOpenStashDialog: vi.fn(),
     onPopStash: vi.fn(),
     onApplyStash: vi.fn(),
+    onDropStash: vi.fn(),
+    onClearStashes: vi.fn(),
     onCommit: vi.fn(),
     onCheckoutBranch: vi.fn(),
     onPull: vi.fn(),
@@ -1043,6 +1047,8 @@ describe('GitSidebarPanel', () => {
     const onStageAll = vi.fn()
     const onUnstageAll = vi.fn()
     const onDiscardAll = vi.fn()
+    const onOpenStashDialog = vi.fn()
+    const onClearStashes = vi.fn()
     const onCheckoutBranch = vi.fn()
 
     const { rerender } = render(
@@ -1056,6 +1062,15 @@ describe('GitSidebarPanel', () => {
             unstaged: [{ path: 'README.md', status: 'M' }],
             untracked: []
           }),
+          stashes: [
+            {
+              ref: 'stash@{0}',
+              hash: '1111111111111111111111111111111111111111',
+              branch: 'main',
+              message: 'saved wip',
+              createdAt: '2026-11-20T12:00:00Z'
+            }
+          ],
           onPull,
           onPush,
           onFetch,
@@ -1063,6 +1078,8 @@ describe('GitSidebarPanel', () => {
           onStageAll,
           onUnstageAll,
           onDiscardAll,
+          onOpenStashDialog,
+          onClearStashes,
           onCheckoutBranch
         })}
       />
@@ -1076,11 +1093,11 @@ describe('GitSidebarPanel', () => {
     await user.click(publishBtn)
     expect(onPush).toHaveBeenCalledTimes(1)
 
-    // 2. ... menu lists all 7 items with separator, disables Unstage All Changes when staged=0, and dismisses on Escape / outside click
+    // 2. ... menu lists remote, bulk changes, and stash items with separators, and dismisses on Escape / outside click
     const moreBtn = within(region).getByRole('button', { name: '더 보기' })
     await user.click(moreBtn)
     const moreMenu = within(region).getByRole('menu', { name: 'Git 패널 추가 작업' })
-    expect(within(moreMenu).getByRole('separator')).toBeInTheDocument()
+    expect(within(moreMenu).getAllByRole('separator')).toHaveLength(2)
     expect(within(moreMenu).getByRole('menuitem', { name: 'Pull' })).toBeEnabled()
     expect(within(moreMenu).getByRole('menuitem', { name: 'Push' })).toBeEnabled()
     expect(within(moreMenu).getByRole('menuitem', { name: 'Fetch' })).toBeEnabled()
@@ -1088,6 +1105,11 @@ describe('GitSidebarPanel', () => {
     expect(within(moreMenu).getByRole('menuitem', { name: 'Stage All Changes' })).toBeEnabled()
     expect(within(moreMenu).getByRole('menuitem', { name: 'Unstage All Changes' })).toBeDisabled()
     expect(within(moreMenu).getByRole('menuitem', { name: 'Discard All Changes' })).toBeEnabled()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Stash Changes...' })).toBeEnabled()
+    expect(within(moreMenu).getByRole('menuitem', { name: 'Stash All Changes...' })).toBeEnabled()
+    const clearAllMenuItem = within(moreMenu).getByRole('menuitem', { name: 'Clear All Stashes' })
+    expect(clearAllMenuItem).toBeEnabled()
+    expect(clearAllMenuItem).toHaveClass('is-danger')
 
     await user.keyboard('{Escape}')
     expect(within(region).queryByRole('menu', { name: 'Git 패널 추가 작업' })).not.toBeInTheDocument()
@@ -1105,7 +1127,19 @@ describe('GitSidebarPanel', () => {
     await user.click(within(region).getByRole('menuitem', { name: 'Discard All Changes' }))
     expect(onDiscardAll).toHaveBeenCalledTimes(1)
 
-    // 3. Staged-only repo enables Unstage All Changes and disables Stage/Discard All Changes
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Stash Changes...' }))
+    expect(onOpenStashDialog).toHaveBeenCalledWith('unstaged')
+
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Stash All Changes...' }))
+    expect(onOpenStashDialog).toHaveBeenCalledWith('all')
+
+    await user.click(moreBtn)
+    await user.click(within(region).getByRole('menuitem', { name: 'Clear All Stashes' }))
+    expect(onClearStashes).toHaveBeenCalledTimes(1)
+
+    // 3. Staged-only repo with 0 stashes enables Unstage/Stash All Changes and disables Stage/Discard/Stash Changes.../Clear All Stashes
     rerender(
       <GitSidebarPanel
         {...buildProps({
@@ -1114,9 +1148,12 @@ describe('GitSidebarPanel', () => {
             unstaged: [],
             untracked: []
           }),
+          stashes: [],
           onStageAll,
           onUnstageAll,
           onDiscardAll,
+          onOpenStashDialog,
+          onClearStashes,
           onCheckoutBranch
         })}
       />
@@ -1124,6 +1161,9 @@ describe('GitSidebarPanel', () => {
     await user.click(moreBtn)
     expect(within(region).getByRole('menuitem', { name: 'Stage All Changes' })).toBeDisabled()
     expect(within(region).getByRole('menuitem', { name: 'Discard All Changes' })).toBeDisabled()
+    expect(within(region).getByRole('menuitem', { name: 'Stash Changes...' })).toBeDisabled()
+    expect(within(region).getByRole('menuitem', { name: 'Stash All Changes...' })).toBeEnabled()
+    expect(within(region).getByRole('menuitem', { name: 'Clear All Stashes' })).toBeDisabled()
     await user.click(within(region).getByRole('menuitem', { name: 'Unstage All Changes' }))
     expect(onUnstageAll).toHaveBeenCalledTimes(1)
 
@@ -2201,6 +2241,143 @@ describe('GitSidebarPanel', () => {
       expect(within(region).getByRole('button', { name: 'Changes만 Stash' })).toBeDisabled()
       expect(within(region).getByRole('button', { name: 'stash@{0} Pop' })).toBeDisabled()
       expect(within(region).getByRole('button', { name: 'stash@{0} Apply' })).toBeDisabled()
+    } finally {
+      styleEl.remove()
+    }
+  })
+
+  it('renders single-file Stash only on Changes rows without clipping and wires Stashes +, Clear All, and Drop actions', async () => {
+    const user = userEvent.setup()
+    const styleEl = document.createElement('style')
+    styleEl.textContent = themeCss
+    document.head.appendChild(styleEl)
+
+    try {
+      const onStashFile = vi.fn()
+      const onOpenFileDiff = vi.fn()
+      const onOpenStashDialog = vi.fn()
+      const onDropStash = vi.fn()
+      const onClearStashes = vi.fn()
+
+      const stashes: GitStashEntry[] = [
+        {
+          ref: 'stash@{0}',
+          hash: '1111111111111111111111111111111111111111',
+          branch: 'main',
+          message: 'single file wip',
+          createdAt: '2026-11-20T12:00:00Z'
+        }
+      ]
+
+      const { rerender } = render(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            status: buildGitStatus({
+              staged: [{ path: 'staged.md', status: 'M' }],
+              unstaged: [{ path: 'docs/modified.md', status: 'M' }],
+              untracked: [{ path: 'notes/new.md', status: '?' }]
+            }),
+            stashes,
+            splitState: {
+              ...createDefaultGitPanelSplitState(),
+              isStashesCollapsed: false
+            },
+            onStashFile,
+            onOpenFileDiff,
+            onOpenStashDialog,
+            onDropStash,
+            onClearStashes
+          })}
+        />
+      )
+
+      const region = screen.getByRole('region', { name: 'Git 소스 제어' })
+
+      // 1. Single-file Stash appears on Changes rows only (not on Staged Changes)
+      const modifiedStashBtn = within(region).getByRole('button', { name: 'docs/modified.md Stash' })
+      const untrackedStashBtn = within(region).getByRole('button', { name: 'notes/new.md Stash' })
+      expect(within(region).queryByRole('button', { name: 'staged.md Stash' })).not.toBeInTheDocument()
+
+      // Action strip stays hidden at idle (max-width: 0) and expands enough for 4 icons on focus-within
+      const fileActions = modifiedStashBtn.parentElement as HTMLElement
+      expect(getComputedStyle(fileActions).maxWidth).toBe('0px')
+      modifiedStashBtn.focus()
+      expect(getComputedStyle(fileActions).maxWidth).toBe('100px')
+
+      // Clicking single-file Stash calls onStashFile without opening Diff tab
+      await user.click(modifiedStashBtn)
+      await user.click(untrackedStashBtn)
+      expect(onStashFile).toHaveBeenNthCalledWith(1, 'docs/modified.md', undefined)
+      expect(onStashFile).toHaveBeenNthCalledWith(2, 'notes/new.md', undefined)
+      expect(onOpenFileDiff).not.toHaveBeenCalled()
+
+      // 2. Stashes header '+' and 'Clear All' work without toggling section expansion, and row 'Drop' calls onDropStash
+      const stashesSection = within(region).getByRole('region', { name: 'Stashes' })
+      const stashesToggle = within(stashesSection).getByRole('button', { name: /^Stashes/i })
+      const createStashBtn = within(stashesSection).getByRole('button', { name: '새 Stash 만들기' })
+      const clearAllBtn = within(stashesSection).getByRole('button', { name: 'Clear All' })
+      const dropBtn = within(stashesSection).getByRole('button', { name: 'stash@{0} Drop' })
+
+      expect(createStashBtn).toBeEnabled()
+      expect(clearAllBtn).toBeEnabled()
+      expect(dropBtn).toBeEnabled()
+
+      await user.click(createStashBtn)
+      expect(onOpenStashDialog).toHaveBeenCalledTimes(1)
+      expect(stashesToggle).toHaveAttribute('aria-expanded', 'true')
+
+      await user.click(clearAllBtn)
+      expect(onClearStashes).toHaveBeenCalledTimes(1)
+      expect(stashesToggle).toHaveAttribute('aria-expanded', 'true')
+
+      await user.click(dropBtn)
+      expect(onDropStash).toHaveBeenCalledWith('stash@{0}')
+
+      // 3. Staged-only repo still enables Stashes '+' while empty Changes/empty Stashes disables Clear All
+      rerender(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            status: buildGitStatus({
+              staged: [{ path: 'staged.md', status: 'M' }],
+              unstaged: [],
+              untracked: []
+            }),
+            stashes: [],
+            splitState: {
+              ...createDefaultGitPanelSplitState(),
+              isStashesCollapsed: false
+            },
+            onStashFile,
+            onOpenStashDialog,
+            onDropStash,
+            onClearStashes
+          })}
+        />
+      )
+      expect(within(stashesSection).getByRole('button', { name: '새 Stash 만들기' })).toBeEnabled()
+      expect(within(stashesSection).getByRole('button', { name: 'Clear All' })).toBeDisabled()
+
+      // 4. Clean working tree (0 changes) and busy state disable header + file actions
+      rerender(
+        <StatefulGitSidebarPanel
+          {...buildProps({
+            status: buildGitStatus({ staged: [], unstaged: [], untracked: [] }),
+            stashes,
+            pendingAction: 'Stash Drop',
+            splitState: {
+              ...createDefaultGitPanelSplitState(),
+              isStashesCollapsed: false
+            },
+            onStashFile,
+            onOpenStashDialog,
+            onDropStash,
+            onClearStashes
+          })}
+        />
+      )
+      expect(within(stashesSection).getByRole('button', { name: '새 Stash 만들기' })).toBeDisabled()
+      expect(within(stashesSection).getByRole('button', { name: 'Clear All' })).toBeDisabled()
+      expect(within(stashesSection).getByRole('button', { name: 'stash@{0} Drop' })).toBeDisabled()
     } finally {
       styleEl.remove()
     }

@@ -118,7 +118,9 @@ export const GIT_IPC_CHANNELS = {
   stashList: 'git:stash-list',
   stashCreate: 'git:stash-create',
   stashApply: 'git:stash-apply',
-  stashPop: 'git:stash-pop'
+  stashPop: 'git:stash-pop',
+  stashDrop: 'git:stash-drop',
+  stashClear: 'git:stash-clear'
 } as const
 
 export type AppMenuCommand = 'open-folder' | 'toggle-theme' | 'toggle-settings'
@@ -246,6 +248,8 @@ export interface WikiGitApi {
   stashCreate(workspacePath: string, options: GitStashCreateOptions): Promise<GitStatus>
   stashApply(workspacePath: string, stashRef: string): Promise<GitStatus>
   stashPop(workspacePath: string, stashRef: string): Promise<GitStatus>
+  stashDrop(workspacePath: string, stashRef: string): Promise<GitStashEntry[]>
+  stashClear(workspacePath: string): Promise<GitStashEntry[]>
 }
 
 export interface WikiMenuApi {

@@ -1,4 +1,5 @@
 import {
+  Archive,
   File,
   FileCode,
   FileInput,
@@ -44,6 +45,7 @@ export interface GitChangedFileRowProps {
   onSelectFile: (file: GitChangedFile) => void
   onOpenWorkspaceFile?: (repoRelativePath: string) => void
   onDiscardFile?: (file: GitChangedFile) => void
+  onStashFile?: (file: GitChangedFile) => void
   onItemAction?: (file: GitChangedFile) => void
 }
 
@@ -85,6 +87,7 @@ export function GitChangedFileRow({
   onSelectFile,
   onOpenWorkspaceFile,
   onDiscardFile,
+  onStashFile,
   onItemAction
 }: GitChangedFileRowProps) {
   const statusDisplay = getGitFileStatusDisplay(file.status)
@@ -97,6 +100,7 @@ export function GitChangedFileRow({
   const showActions =
     (canOpenFile && onOpenWorkspaceFile !== undefined) ||
     onDiscardFile !== undefined ||
+    onStashFile !== undefined ||
     (itemAction !== undefined && onItemAction !== undefined)
 
   return (
@@ -138,6 +142,18 @@ export function GitChangedFileRow({
               onClick={() => onDiscardFile(file)}
             >
               <Undo2 size={13} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+          )}
+          {onStashFile && (
+            <button
+              type="button"
+              className="git-hover-icon-btn"
+              aria-label={`${file.path} Stash`}
+              title="Stash"
+              disabled={isBusy}
+              onClick={() => onStashFile(file)}
+            >
+              <Archive size={13} strokeWidth={1.75} aria-hidden="true" />
             </button>
           )}
           {itemAction && itemActionLabel && onItemAction && (

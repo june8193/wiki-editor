@@ -298,6 +298,7 @@ export function useEditorWorkspace({
     updateDiffTabViewMode: tabStore.updateDiffTabViewMode,
     closeUnstagedDiffTabsForPaths: tabStore.closeUnstagedDiffTabsForPaths,
     closeUnstagedDiffTabsExcept: tabStore.closeUnstagedDiffTabsExcept,
+    closeStagedDiffTabsExcept: tabStore.closeStagedDiffTabsExcept,
     closeAllUnstagedDiffTabs: tabStore.closeAllUnstagedDiffTabs,
     prepareWorkspacePathsForDiscard: syncClient.prepareWorkspacePathsForDiscard,
     finishWorkspacePathsDiscard: syncClient.finishWorkspacePathsDiscard,

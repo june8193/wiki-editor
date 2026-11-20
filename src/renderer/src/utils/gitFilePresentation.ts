@@ -1,4 +1,9 @@
-import type { GitChangedFile, GitDiffRequest, GitFileStatusCode } from '@shared/git'
+import type {
+  GitChangedFile,
+  GitDiffRequest,
+  GitFileStatusCode,
+  GitStashEntry
+} from '@shared/git'
 import { isAbsoluteOrDrivePrefix, resolveRepoFileInWorkspace } from '@shared/workspace'
 
 export type GitFileStatusTone = 'amber' | 'green' | 'red' | 'accent'
@@ -256,4 +261,20 @@ export function buildDiscardAllConfirmMessage(
     return `추적된 변경 파일 ${trackedCount}개를 이전 상태로 되돌립니다. 되돌린 변경 사항은 복구할 수 없습니다. 계속할까요?`
   }
   return `추적되지 않은 새 파일 ${untrackedCount}개를 OS 휴지통으로 이동합니다. 계속할까요?`
+}
+
+/**
+ * Formats the danger confirmation message for permanently dropping a single stash entry.
+ */
+export function buildStashDropConfirmMessage(
+  entry: Pick<GitStashEntry, 'ref' | 'message'>
+): string {
+  return `${entry.ref} ("${entry.message}") 항목을 영구적으로 삭제합니다. 삭제한 Stash는 복구할 수 없습니다. 계속할까요?`
+}
+
+/**
+ * Formats the danger confirmation message for permanently clearing all saved stash entries.
+ */
+export function buildStashClearConfirmMessage(count: number): string {
+  return `보관된 Stash ${count}개를 모두 영구적으로 삭제합니다. 삭제한 Stash는 복구할 수 없습니다. 계속할까요?`
 }

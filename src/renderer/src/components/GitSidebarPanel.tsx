@@ -43,7 +43,7 @@ import {
 import { GitChangesFileGroups, GitChangesHeaderActions } from './GitChangesSection'
 import { GitGraphHeaderActions, GitGraphSection } from './GitGraphSection'
 import { GitSectionResizer } from './GitSectionResizer'
-import { GitStashesSection } from './GitStashesSection'
+import { GitStashesHeaderActions, GitStashesSection } from './GitStashesSection'
 
 const COMMIT_INPUT_MAX_HEIGHT_PX = 120
 
@@ -76,8 +76,12 @@ export interface GitSidebarPanelProps {
   onDiscardFile: (path: string) => void
   onDiscardAll: () => void
   onStashChanges: () => void
+  onStashFile: (path: string, origPath?: string) => void
+  onOpenStashDialog: (initialScope?: 'unstaged' | 'all') => void
   onPopStash: (stashRef: string) => void
   onApplyStash: (stashRef: string) => void
+  onDropStash: (stashRef: string) => void
+  onClearStashes: () => void
   onCommit: (message: string, mode?: GitCommitActionMode) => Promise<boolean> | boolean
   onCheckoutBranch: (branchName: string) => void
   onPull: () => void
@@ -675,8 +679,12 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onDiscardFile,
   onDiscardAll,
   onStashChanges,
+  onStashFile,
+  onOpenStashDialog,
   onPopStash,
   onApplyStash,
+  onDropStash,
+  onClearStashes,
   onCommit,
   onCheckoutBranch,
   onPull,
@@ -761,6 +769,26 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
       disabled: isBusy || !hasUnstagedOrUntracked,
       danger: true,
       onSelect: onDiscardAll
+    },
+    { kind: 'separator', key: 'changes-stash-divider' },
+    {
+      kind: 'item',
+      label: 'Stash Changes...',
+      disabled: isBusy || !hasUnstagedOrUntracked,
+      onSelect: () => onOpenStashDialog('unstaged')
+    },
+    {
+      kind: 'item',
+      label: 'Stash All Changes...',
+      disabled: isBusy || totalChangedCount === 0,
+      onSelect: () => onOpenStashDialog('all')
+    },
+    {
+      kind: 'item',
+      label: 'Clear All Stashes',
+      disabled: isBusy || stashes.length === 0,
+      danger: true,
+      onSelect: onClearStashes
     }
   ]
 
@@ -851,6 +879,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 onStageFile={(file) => onStageFile(file.path)}
                 onUnstageFile={(file) => onUnstageFile(file.path, file.origPath)}
                 onDiscardFile={(file) => onDiscardFile(file.path)}
+                onStashFile={(file) => onStashFile(file.path, file.origPath)}
               />
             </GitAccordionSection>
 
@@ -865,6 +894,15 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
             <GitAccordionSection
               title="Stashes"
               badgeCount={stashes.length}
+              headerActions={
+                <GitStashesHeaderActions
+                  hasChanges={totalChangedCount > 0}
+                  stashCount={stashes.length}
+                  isBusy={isBusy}
+                  onOpenStashDialog={() => onOpenStashDialog()}
+                  onClearStashes={onClearStashes}
+                />
+              }
               className={layout.stashesBodyMode === 'compact' ? 'is-compact' : undefined}
               isExpanded={layout.showStashesBody}
               flexRatio={layout.stashesFlexRatio}
@@ -875,6 +913,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 isBusy={isBusy}
                 onPopStash={onPopStash}
                 onApplyStash={onApplyStash}
+                onDropStash={onDropStash}
               />
             </GitAccordionSection>
 

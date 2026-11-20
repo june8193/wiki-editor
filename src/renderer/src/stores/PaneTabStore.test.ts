@@ -751,4 +751,31 @@ describe('PaneTabStore', () => {
     expect(getDocTab('primary', docTabA.id).mermaidHeights).toBeUndefined()
     expect(getDocTab('primary', docTabB.id).mermaidHeights).toEqual({ '0': 190 })
   })
+
+  it('closeStagedDiffTabsExcept closes only staged diff tabs outside the active set across both panes', () => {
+    const store = new PaneTabStore()
+    const docTab = store.openTab('c:/wiki/docs/keep.md')
+    const keepStagedTab = store.openDiffTab({ kind: 'staged', path: 'docs/keep.md', status: 'M' })
+    store.openDiffTab({ kind: 'staged', path: 'docs/stashed.md', status: 'A' }, { paneId: 'secondary' })
+    expect(store.getSnapshot().splitMode).toBe('horizontal')
+
+    store.closeStagedDiffTabsExcept(new Set(['docs/keep.md']))
+
+    const afterFirst = store.getSnapshot()
+    expect(afterFirst.splitMode).toBe('single')
+    expect(afterFirst.panes.secondary.tabs).toHaveLength(0)
+    expect(afterFirst.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id, keepStagedTab.id])
+
+    // Primary stale staged diff tab is closed while secondary unstaged diff tab is preserved
+    store.openDiffTab({ kind: 'staged', path: 'docs/stashed.md', status: 'A' }, { paneId: 'primary' })
+    const secondaryUnstaged = store.openDiffTab(
+      { kind: 'unstaged', path: 'docs/stashed.md', status: 'M' },
+      { paneId: 'secondary' }
+    )
+    store.closeStagedDiffTabsExcept(new Set(['docs/keep.md']))
+
+    const afterSecond = store.getSnapshot()
+    expect(afterSecond.panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id])
+    expect(afterSecond.panes.secondary.tabs.map((t) => t.id)).toEqual([secondaryUnstaged.id])
+  })
 })

@@ -137,7 +137,14 @@ export function registerGitIpc({
       withWorkspace<[string], Awaited<ReturnType<GitService['stashPop']>>>((rootPath, stashRef) =>
         gitService.stashPop(rootPath, stashRef)
       )
-    ]
+    ],
+    [
+      GIT_IPC_CHANNELS.stashDrop,
+      withWorkspace<[string], Awaited<ReturnType<GitService['stashDrop']>>>((rootPath, stashRef) =>
+        gitService.stashDrop(rootPath, stashRef)
+      )
+    ],
+    [GIT_IPC_CHANNELS.stashClear, withWorkspace((rootPath) => gitService.stashClear(rootPath))]
   ]
 
   return registerIpcHandlers(ipcMain, handlers, { logService })

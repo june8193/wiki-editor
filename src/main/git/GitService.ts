@@ -595,6 +595,10 @@ export class GitService {
 
   async stashList(workspacePath: string): Promise<GitStashEntry[]> {
     const repoRoot = await this.requireRepoRoot(workspacePath)
+    return this.listStashesForRepo(repoRoot)
+  }
+
+  private async listStashesForRepo(repoRoot: string): Promise<GitStashEntry[]> {
     if (!(await this.hasHeadCommit(repoRoot))) {
       return []
     }
@@ -680,6 +684,27 @@ export class GitService {
 
   async stashPop(workspacePath: string, stashRef: string): Promise<GitStatus> {
     return this.execStashRestore(workspacePath, stashRef, 'pop')
+  }
+
+  async stashDrop(workspacePath: string, stashRef: string): Promise<GitStashEntry[]> {
+    const validatedRef = assertValidStashRef(stashRef)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    try {
+      await this.execGit(repoRoot, ['stash', 'drop', validatedRef])
+    } catch (error) {
+      throw await this.formatAndLogGitError('stashDrop', error)
+    }
+    return this.listStashesForRepo(repoRoot)
+  }
+
+  async stashClear(workspacePath: string): Promise<GitStashEntry[]> {
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    try {
+      await this.execGit(repoRoot, ['stash', 'clear'])
+    } catch (error) {
+      throw await this.formatAndLogGitError('stashClear', error)
+    }
+    return this.listStashesForRepo(repoRoot)
   }
 
   private async execStashRestore(
