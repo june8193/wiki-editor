@@ -5,7 +5,6 @@ export interface ModalDialogProps {
   dialogClassName?: string
   ariaLabel?: string
   ariaLabelledBy?: string
-  ariaDescribedBy?: string
   autoFocusDialog?: boolean
   isDismissDisabled?: boolean
   onClose: () => void
@@ -20,7 +19,6 @@ export function ModalDialog({
   dialogClassName,
   ariaLabel,
   ariaLabelledBy,
-  ariaDescribedBy,
   autoFocusDialog = false,
   isDismissDisabled = false,
   onClose,
@@ -68,7 +66,6 @@ export function ModalDialog({
         aria-modal="true"
         aria-label={ariaLabel}
         aria-labelledby={ariaLabelledBy}
-        aria-describedby={ariaDescribedBy}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >

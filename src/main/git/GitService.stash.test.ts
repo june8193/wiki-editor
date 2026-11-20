@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { withGitTestSandbox } from './gitTestSandbox'
 
+const INVALID_STASH_REFS = ['', 'HEAD', 'stash@{0}^', 'stash@{-1}', '--all', 'stash@{0} ', 'main'] as const
+
 describe('GitService integration (stash)', () => {
   it('lists stash entries (empty on unborn, parses branch/custom messages/ISO timestamps) and validates stashRef format', () =>
     withGitTestSandbox(async ({ service, repoDir, nonGitDir, runGit }) => {
@@ -53,7 +55,7 @@ describe('GitService integration (stash)', () => {
       expect(entries[2].message).toContain('initial commit')
 
       // Reject malformed stashRef values in stashApply / stashPop
-      for (const badRef of ['', 'HEAD', 'stash@{0}^', 'stash@{-1}', '--all', 'stash@{0} ', 'main']) {
+      for (const badRef of INVALID_STASH_REFS) {
         await expect(service.stashApply(repoDir, badRef)).rejects.toThrow(/Stash 참조/)
         await expect(service.stashPop(repoDir, badRef)).rejects.toThrow(/Stash 참조/)
       }
@@ -313,7 +315,7 @@ describe('GitService integration (stash)', () => {
 
       // Unborn repo: stashClear returns [] cleanly, malformed stashRefs are rejected
       expect(await service.stashClear(repoDir)).toEqual([])
-      for (const badRef of ['', 'HEAD', 'stash@{0}^', 'stash@{-1}', '--all', 'stash@{0} ', 'main']) {
+      for (const badRef of INVALID_STASH_REFS) {
         await expect(service.stashDrop(repoDir, badRef)).rejects.toThrow(/Stash 참조/)
       }
 
