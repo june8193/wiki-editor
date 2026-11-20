@@ -496,7 +496,8 @@ function resolveInlineBlockMatch(
   // Fallback for line-anchored regex matches (e.g. ^foo / bar$) inside multi-line wrapped blocks:
   // rendered DOM runs concatenate lines, so line-based regex anchors may not match runText directly.
   if (rawTo > rawFrom) {
-    for (const runSegments of runs) {
+    for (let runIdx = 0; runIdx < runs.length; runIdx += 1) {
+      const runSegments = runs[runIdx]
       if (!isRawSpanEndpointsInSegments(runSegments, rawFrom, rawTo)) {
         continue
       }
@@ -504,9 +505,26 @@ function resolveInlineBlockMatch(
       const runStart = Math.max(0, Math.min(runText.length, mapRawOffsetToRun(runSegments, rawFrom)))
       const runEnd = Math.max(runStart, Math.min(runText.length, mapRawOffsetToRun(runSegments, rawTo)))
       if (runEnd > runStart) {
+        const slice = buildContextualSlice(runText, runStart, runEnd)
+        let fallbackOccurrence = 0
+        const literal = compileSearchMatcher(slice.matchedText, {
+          caseSensitive: true,
+          wholeWord: false,
+          useRegex: false
+        })
+        if (literal.ok) {
+          for (let priorIdx = 0; priorIdx <= runIdx; priorIdx += 1) {
+            const priorText = runs[priorIdx].map((seg) => seg.text).join('')
+            for (const span of literal.matcher.findMatches(priorText)) {
+              if (priorIdx < runIdx || span.start < runStart) {
+                fallbackOccurrence += 1
+              }
+            }
+          }
+        }
         return {
-          occurrenceInBlock: 0,
-          ...buildContextualSlice(runText, runStart, runEnd)
+          occurrenceInBlock: fallbackOccurrence,
+          ...slice
         }
       }
     }

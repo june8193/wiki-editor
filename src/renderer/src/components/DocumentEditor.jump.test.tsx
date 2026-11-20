@@ -928,7 +928,7 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
     HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy
 
     try {
-      const content = 'LineOneParagraph text\nLineTwoAnchorToken repeated and LineTwoAnchorToken end'
+      const content = 'LineTwoAnchorToken\nLineTwoAnchorToken'
       const doc = createDoc({ content, savedContent: content })
       let currentJump = createJumpRequest({
         query: '^LineTwoAnchorToken',
@@ -956,6 +956,7 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
         .querySelectorAll('.preview-search-jump-highlight')
       expect(previewMarks).toHaveLength(1)
       expect(previewMarks[0].textContent).toBe('LineTwoAnchorToken')
+      expect(previewMarks[0].previousSibling?.textContent).toBe('LineTwoAnchorToken\n')
       unmount()
 
       currentJump = { ...currentJump, nonce: 2 }
@@ -976,6 +977,9 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
         .querySelectorAll('.pm-search-jump-highlight')
       expect(wysiwygMarks).toHaveLength(1)
       expect(wysiwygMarks[0].textContent).toBe('LineTwoAnchorToken')
+      expect(wysiwygMarks[0].previousSibling?.textContent?.startsWith('LineTwoAnchorToken')).toBe(
+        true
+      )
     } finally {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView
     }
