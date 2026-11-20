@@ -5,6 +5,7 @@ import { GIT_DIFF_MAX_BYTES, GIT_EMPTY_TREE_HASH, type GitDiffRequest, type GitF
 import { hasBlockedPathSegment, isMissingPathError, isPathInsideRoot } from '../fs/pathSecurity'
 import { IGNORED_ENTRY_NAMES } from '../workspace/WorkspaceFsService'
 import { assertValidCommitHash } from './gitCommitDetail'
+import { assertValidStashHash, assertValidStashRef } from './gitStash'
 
 export interface GitBufferResult {
   buffer: Buffer
@@ -233,6 +234,45 @@ function buildUntrackedUnifiedPatch(safePath: string, text: string): string {
   return `${patchLines.join('\n')}\n`
 }
 
+function buildUntrackedBlobDiffResult(
+  safePath: string,
+  chunk: Buffer,
+  chunkTruncated: boolean,
+  hasNullByte: boolean,
+  existsInWorkspace: boolean
+): GitFileDiff {
+  if (hasNullByte || chunk.includes(0)) {
+    return {
+      path: safePath,
+      status: '?',
+      isBinary: true,
+      isTruncated: false,
+      existsInWorkspace,
+      rawPatch: ''
+    }
+  }
+
+  const { text, isTruncated: textTruncated } = truncateUtf8BufferToMaxBytes(
+    chunk,
+    GIT_DIFF_MAX_BYTES
+  )
+  const fullPatch = buildUntrackedUnifiedPatch(safePath, text)
+  const patchBuffer = Buffer.from(fullPatch, 'utf8')
+  const { text: boundedPatch, isTruncated: patchExceeded } = truncateUtf8BufferToMaxBytes(
+    patchBuffer,
+    GIT_DIFF_MAX_BYTES
+  )
+
+  return {
+    path: safePath,
+    status: '?',
+    isBinary: false,
+    isTruncated: chunkTruncated || textTruncated || patchExceeded,
+    existsInWorkspace,
+    rawPatch: boundedPatch
+  }
+}
+
 async function readUntrackedFileDiff(
   repoRoot: string,
   safePath: string,
@@ -263,37 +303,29 @@ async function readUntrackedFileDiff(
     await handle.close()
   }
 
-  const chunk = buffer.subarray(0, totalRead)
-  if (chunk.includes(0)) {
-    return {
-      path: safePath,
-      status: '?',
-      isBinary: true,
-      isTruncated: false,
-      existsInWorkspace,
-      rawPatch: ''
-    }
-  }
-
-  const { text, isTruncated: textTruncated } = truncateUtf8BufferToMaxBytes(
-    chunk,
-    GIT_DIFF_MAX_BYTES
+  return buildUntrackedBlobDiffResult(
+    safePath,
+    buffer.subarray(0, totalRead),
+    totalRead > GIT_DIFF_MAX_BYTES,
+    false,
+    existsInWorkspace
   )
-  const fullPatch = buildUntrackedUnifiedPatch(safePath, text)
-  const patchBuffer = Buffer.from(fullPatch, 'utf8')
-  const { text: boundedPatch, isTruncated: patchExceeded } = truncateUtf8BufferToMaxBytes(
-    patchBuffer,
-    GIT_DIFF_MAX_BYTES
-  )
+}
 
-  return {
-    path: safePath,
-    status: '?',
-    isBinary: false,
-    isTruncated: textTruncated || patchExceeded,
-    existsInWorkspace,
-    rawPatch: boundedPatch
-  }
+async function readStashUntrackedFileDiff(
+  repoRoot: string,
+  stashHash: string,
+  safePath: string,
+  existsInWorkspace: boolean,
+  execOptions: GitDiffExecOptions
+): Promise<GitFileDiff> {
+  const validatedHash = assertValidStashHash(stashHash)
+  const { buffer, truncated, hasNullByte } = await execGitStdoutCapped({
+    cwd: repoRoot,
+    args: ['cat-file', '-p', `${validatedHash}^3:${safePath}`],
+    execOptions
+  })
+  return buildUntrackedBlobDiffResult(safePath, buffer, truncated, hasNullByte, existsInWorkspace)
 }
 
 export interface ComputeGitDiffOptions {
@@ -325,6 +357,20 @@ export async function computeGitDiff({
     return readUntrackedFileDiff(repoRoot, safePath, existsOnDisk, existsInWorkspace)
   }
 
+  if (request.kind === 'stash') {
+    assertValidStashRef(request.stashRef)
+    const validatedHash = assertValidStashHash(request.stashHash)
+    if (request.status === '?') {
+      return readStashUntrackedFileDiff(
+        repoRoot,
+        validatedHash,
+        safePath,
+        existsInWorkspace,
+        execOptions
+      )
+    }
+  }
+
   const pathArgs = safeOrigPath ? [safeOrigPath, safePath] : [safePath]
   let gitArgs: string[]
 
@@ -351,7 +397,7 @@ export async function computeGitDiff({
       '--',
       ...pathArgs
     ]
-  } else {
+  } else if (request.kind === 'commit') {
     const validatedHash = assertValidCommitHash(request.commitHash)
     gitArgs = [
       '-c',
@@ -364,6 +410,20 @@ export async function computeGitDiff({
       '--format=',
       '--unified=3',
       `${validatedHash}^{commit}`,
+      '--',
+      ...pathArgs
+    ]
+  } else {
+    const validatedHash = assertValidStashHash(request.stashHash)
+    gitArgs = [
+      '-c',
+      'core.quotePath=false',
+      'diff',
+      '-M',
+      '--find-renames',
+      '--unified=3',
+      `${validatedHash}^1`,
+      validatedHash,
       '--',
       ...pathArgs
     ]

@@ -98,6 +98,11 @@ export type GitDiffRequest =
       commitHash: string
       shortHash: string
     } & GitChangedFile)
+  | ({
+      kind: 'stash'
+      stashRef: string
+      stashHash: string
+    } & GitChangedFile)
 
 export type GitStashScope = 'unstaged' | 'all' | 'paths'
 
@@ -107,6 +112,10 @@ export interface GitStashEntry {
   branch: string | null
   message: string
   createdAt: string
+}
+
+export interface GitStashDetail extends GitStashEntry {
+  files: GitChangedFile[]
 }
 
 export interface GitStashCreateOptions {

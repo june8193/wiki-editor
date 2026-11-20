@@ -9,12 +9,14 @@ import {
   Plus,
   Undo2
 } from 'lucide-react'
-import type { GitChangedFile } from '@shared/git'
+import type { GitChangedFile, GitDiffRequest } from '@shared/git'
 import {
   formatGitChangedFileDisplay,
   formatGitFileLabel,
   getGitFileBaseName,
-  getGitFileStatusDisplay
+  getGitFileStatusDisplay,
+  toGitDiffRequest,
+  type GitDiffTarget
 } from '../utils/gitFilePresentation'
 
 export type GitFileRowActionKind = 'stage' | 'unstage'
@@ -179,5 +181,38 @@ export function GitChangedFileRow({
         {statusDisplay.displayCode}
       </span>
     </li>
+  )
+}
+
+/**
+ * Renders the shared inline changed-files list inside expanded Commit and Stash detail panels.
+ */
+export function GitDetailFilesList({
+  files,
+  target,
+  onOpenFileDiff
+}: {
+  files: readonly GitChangedFile[]
+  target: GitDiffTarget
+  onOpenFileDiff: (request: GitDiffRequest) => void
+}) {
+  if (files.length === 0) {
+    return <p className="git-commit-detail-empty-files">변경된 파일이 없습니다.</p>
+  }
+
+  return (
+    <div className="git-commit-detail-files-section">
+      <div className="git-commit-detail-files-header">변경된 파일 ({files.length})</div>
+      <ul className="git-file-list git-commit-detail-files" aria-label="변경된 파일" role="list">
+        {files.map((file) => (
+          <GitChangedFileRow
+            key={`${file.status}:${file.origPath ?? ''}:${file.path}`}
+            file={file}
+            displayMode="list"
+            onSelectFile={(selectedFile) => onOpenFileDiff(toGitDiffRequest(target, selectedFile))}
+          />
+        ))}
+      </ul>
+    </div>
   )
 }

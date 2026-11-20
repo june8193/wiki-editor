@@ -13,6 +13,7 @@ import {
   type GitLogOptions,
   type GitLogResult,
   type GitStashCreateOptions,
+  type GitStashDetail,
   type GitStashEntry,
   type GitStatus,
   type GitSyncResult
@@ -34,18 +35,21 @@ import {
 import {
   assertValidCommitHash,
   GIT_COMMIT_DETAIL_FORMAT,
-  parseCommitDetailOutput
+  parseCommitDetailOutput,
+  parseGitNameStatusZ
 } from './gitCommitDetail'
 import { computeGitDiff } from './gitDiff'
 import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
 import { parsePorcelainV2Z } from './gitPorcelain'
 import {
+  assertValidStashHash,
   assertValidStashRef,
   buildStashPushArgs,
   GIT_STASH_LIST_FORMAT,
   hasAllScopeStashTargets,
   hasMatchingPathStashTargets,
   parseStashListOutput,
+  parseStashUntrackedTreeOutput,
   resolveUnstagedStashTargets
 } from './gitStash'
 
@@ -563,12 +567,21 @@ export class GitService {
   async diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff> {
     if (
       !request ||
-      (request.kind !== 'staged' && request.kind !== 'unstaged' && request.kind !== 'commit')
+      (request.kind !== 'staged' &&
+        request.kind !== 'unstaged' &&
+        request.kind !== 'commit' &&
+        request.kind !== 'stash')
     ) {
       throw new Error('유효하지 않은 Diff 요청 형식입니다.')
     }
 
     const repoRoot = await this.requireRepoRoot(workspacePath)
+    if (request.kind === 'commit') {
+      assertValidCommitHash(request.commitHash)
+    } else if (request.kind === 'stash') {
+      assertValidStashRef(request.stashRef)
+      assertValidStashHash(request.stashHash)
+    }
     const workspaceRealRoot = await realpath(resolve(workspacePath))
     const rawPaths = request.origPath ? [request.path, request.origPath] : [request.path]
     const [safePath, safeOrigPath] = await this.validateRepoRelativePaths(repoRoot, rawPaths)
@@ -596,6 +609,50 @@ export class GitService {
   async stashList(workspacePath: string): Promise<GitStashEntry[]> {
     const repoRoot = await this.requireRepoRoot(workspacePath)
     return this.listStashesForRepo(repoRoot)
+  }
+
+  async stashDetail(workspacePath: string, stashRef: string): Promise<GitStashDetail> {
+    const validatedRef = assertValidStashRef(stashRef)
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const entries = await this.listStashesForRepo(repoRoot)
+    const entry = entries.find((item) => item.ref === validatedRef)
+    if (!entry) {
+      throw new GitFormattedError('지정한 Stash 항목을 찾을 수 없습니다.')
+    }
+
+    try {
+      const [trackedRaw, untrackedParentHash] = await Promise.all([
+        this.execGit(repoRoot, [
+          '-c',
+          'core.quotePath=false',
+          'diff',
+          '--name-status',
+          '-z',
+          '-M',
+          `${entry.hash}^1`,
+          entry.hash
+        ]),
+        this.resolveRevisionHash(repoRoot, `${entry.hash}^3`)
+      ])
+      const trackedFiles = parseGitNameStatusZ(trackedRaw)
+      const untrackedRaw = untrackedParentHash
+        ? await this.execGit(repoRoot, [
+            '-c',
+            'core.quotePath=false',
+            'ls-tree',
+            '-r',
+            '-z',
+            '--name-only',
+            `${entry.hash}^3`
+          ])
+        : ''
+      return {
+        ...entry,
+        files: [...trackedFiles, ...parseStashUntrackedTreeOutput(untrackedRaw)]
+      }
+    } catch (error) {
+      throw await this.formatAndLogGitError('stashDetail', error)
+    }
   }
 
   private async listStashesForRepo(repoRoot: string): Promise<GitStashEntry[]> {

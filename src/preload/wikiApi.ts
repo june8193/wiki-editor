@@ -18,6 +18,7 @@ import type {
   GitFileDiff,
   GitLogResult,
   GitStashCreateOptions,
+  GitStashDetail,
   GitStashEntry,
   GitStatus,
   GitSyncResult
@@ -262,6 +263,12 @@ export function createWikiApi(
         ipcRenderer.invoke(GIT_IPC_CHANNELS.diff, workspacePath, request) as Promise<GitFileDiff>,
       stashList: (workspacePath) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.stashList, workspacePath) as Promise<GitStashEntry[]>,
+      stashDetail: (workspacePath, stashRef) =>
+        ipcRenderer.invoke(
+          GIT_IPC_CHANNELS.stashDetail,
+          workspacePath,
+          stashRef
+        ) as Promise<GitStashDetail>,
       stashCreate: (workspacePath, options: GitStashCreateOptions) =>
         ipcRenderer.invoke(
           GIT_IPC_CHANNELS.stashCreate,

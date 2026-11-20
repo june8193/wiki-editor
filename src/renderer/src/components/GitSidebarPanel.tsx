@@ -30,6 +30,7 @@ import {
   type GitStatus
 } from '@shared/git'
 import { type DismissReason, useDismissable } from '../hooks/useDismissable'
+import type { GitStashDetailState } from '../hooks/useGitController'
 import type { GitGraphState } from '../hooks/useGitGraphLog'
 import { toGitDiffRequest } from '../utils/gitFilePresentation'
 import type { GitChangesGroupKey, GitChangesViewState } from '../utils/gitChangesView'
@@ -58,6 +59,7 @@ export interface GitSidebarPanelProps {
   status: GitStatus | null
   branchList: GitBranchList | null
   stashes: readonly GitStashEntry[]
+  stashDetail: GitStashDetailState
   graphState: GitGraphState
   pendingAction: string | null
   errorMessage: string | null
@@ -68,6 +70,7 @@ export interface GitSidebarPanelProps {
   onChangeLogScope: (nextScope: GitLogScope) => void
   onLoadMoreCommits: () => void
   onToggleCommitDetail: (commitHash: string) => void
+  onToggleStashDetail: (entry: GitStashEntry) => void
   onInitRepo: () => void
   onStageFile: (path: string) => void
   onStageAll: () => void
@@ -661,6 +664,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   status,
   branchList,
   stashes,
+  stashDetail,
   graphState,
   pendingAction,
   errorMessage,
@@ -671,6 +675,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   onChangeLogScope,
   onLoadMoreCommits,
   onToggleCommitDetail,
+  onToggleStashDetail,
   onInitRepo,
   onStageFile,
   onStageAll,
@@ -910,7 +915,10 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
             >
               <GitStashesSection
                 stashes={stashes}
+                stashDetail={stashDetail}
                 isBusy={isBusy}
+                onToggleStashDetail={onToggleStashDetail}
+                onOpenFileDiff={onOpenFileDiff}
                 onPopStash={onPopStash}
                 onApplyStash={onApplyStash}
                 onDropStash={onDropStash}

@@ -20,6 +20,7 @@ import type {
   GitLogOptions,
   GitLogResult,
   GitStashCreateOptions,
+  GitStashDetail,
   GitStashEntry,
   GitStatus,
   GitSyncResult
@@ -116,6 +117,7 @@ export const GIT_IPC_CHANNELS = {
   commitDetail: 'git:commit-detail',
   diff: 'git:diff',
   stashList: 'git:stash-list',
+  stashDetail: 'git:stash-detail',
   stashCreate: 'git:stash-create',
   stashApply: 'git:stash-apply',
   stashPop: 'git:stash-pop',
@@ -245,6 +247,7 @@ export interface WikiGitApi {
   commitDetail(workspacePath: string, commitHash: string): Promise<GitCommitDetail>
   diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff>
   stashList(workspacePath: string): Promise<GitStashEntry[]>
+  stashDetail(workspacePath: string, stashRef: string): Promise<GitStashDetail>
   stashCreate(workspacePath: string, options: GitStashCreateOptions): Promise<GitStatus>
   stashApply(workspacePath: string, stashRef: string): Promise<GitStatus>
   stashPop(workspacePath: string, stashRef: string): Promise<GitStatus>

@@ -10,6 +10,7 @@ import {
   type GitStatus
 } from '@shared/git'
 import { createInitialGitGraphState } from '../hooks/useGitGraphLog'
+import { createInitialGitStashDetailState } from '../hooks/useGitController'
 import themeCss from '../styles/theme.css?raw'
 import {
   createDefaultGitChangesViewState,
@@ -82,10 +83,12 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     onFetch: vi.fn(),
     onSync: vi.fn(),
     stashes: [],
+    stashDetail: createInitialGitStashDetailState(),
     graphState: createInitialGitGraphState(),
     onChangeLogScope: vi.fn(),
     onLoadMoreCommits: vi.fn(),
     onToggleCommitDetail: vi.fn(),
+    onToggleStashDetail: vi.fn(),
     splitState: createDefaultGitPanelSplitState(),
     changesViewState: createDefaultGitChangesViewState(),
     onOpenFileDiff: vi.fn(),
@@ -2381,5 +2384,169 @@ describe('GitSidebarPanel', () => {
     } finally {
       styleEl.remove()
     }
+  })
+
+  it('toggles inline stash detail (loading/error/empty/loaded files including untracked ?), separates row click from Pop/Apply/Drop, and triggers kind=stash diff on file click', async () => {
+    const user = userEvent.setup()
+    const onToggleStashDetail = vi.fn()
+    const onPopStash = vi.fn()
+    const onApplyStash = vi.fn()
+    const onDropStash = vi.fn()
+    const onOpenFileDiff = vi.fn()
+
+    const stash0: GitStashEntry = {
+      ref: 'stash@{0}',
+      hash: '1111111111111111111111111111111111111111',
+      branch: 'main',
+      message: 'first stash summary',
+      createdAt: '2026-11-20T12:00:00Z'
+    }
+    const stash1: GitStashEntry = {
+      ref: 'stash@{1}',
+      hash: '2222222222222222222222222222222222222222',
+      branch: 'main',
+      message: 'second stash summary',
+      createdAt: '2026-11-20T11:00:00Z'
+    }
+    const baseSplit = {
+      ...createDefaultGitPanelSplitState(),
+      isStashesCollapsed: false
+    }
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        {...buildProps({
+          stashes: [stash0, stash1],
+          stashDetail: createInitialGitStashDetailState(),
+          splitState: baseSplit,
+          onToggleStashDetail,
+          onPopStash,
+          onApplyStash,
+          onDropStash,
+          onOpenFileDiff
+        })}
+      />
+    )
+
+    const stashesSection = screen.getByRole('region', { name: 'Stashes' })
+    const rowTrigger0 = within(stashesSection).getByRole('button', { name: /first stash summary/ })
+    const rowTrigger1 = within(stashesSection).getByRole('button', { name: /second stash summary/ })
+    expect(rowTrigger0).toHaveAttribute('aria-expanded', 'false')
+    expect(rowTrigger1).toHaveAttribute('aria-expanded', 'false')
+
+    // Pop / Apply / Drop must NOT trigger onToggleStashDetail
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Pop' }))
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Apply' }))
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Drop' }))
+    expect(onPopStash).toHaveBeenCalledWith('stash@{0}')
+    expect(onApplyStash).toHaveBeenCalledWith('stash@{0}')
+    expect(onDropStash).toHaveBeenCalledWith('stash@{0}')
+    expect(onToggleStashDetail).not.toHaveBeenCalled()
+
+    // Clicking stash row itself triggers onToggleStashDetail(stash0)
+    await user.click(rowTrigger0)
+    expect(onToggleStashDetail).toHaveBeenCalledWith(stash0)
+
+    // Loading state
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          stashes: [stash0, stash1],
+          stashDetail: { status: 'loading', selectedHash: stash0.hash },
+          splitState: baseSplit,
+          onToggleStashDetail,
+          onOpenFileDiff
+        })}
+      />
+    )
+    expect(rowTrigger0).toHaveAttribute('aria-expanded', 'true')
+    expect(rowTrigger1).toHaveAttribute('aria-expanded', 'false')
+    const loadingRegion = within(stashesSection).getByRole('region', { name: 'stash@{0} Stash 상세' })
+    expect(loadingRegion).toHaveTextContent('Stash 상세를 불러오는 중...')
+
+    // Error state
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          stashes: [stash0, stash1],
+          stashDetail: {
+            status: 'error',
+            selectedHash: stash0.hash,
+            errorMessage: 'Stash 상세 조회 실패'
+          },
+          splitState: baseSplit,
+          onToggleStashDetail,
+          onOpenFileDiff
+        })}
+      />
+    )
+    expect(within(stashesSection).getByRole('alert')).toHaveTextContent('Stash 상세 조회 실패')
+
+    // Empty files state
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          stashes: [stash0, stash1],
+          stashDetail: {
+            status: 'loaded',
+            selectedHash: stash0.hash,
+            detail: { ...stash0, files: [] }
+          },
+          splitState: baseSplit,
+          onToggleStashDetail,
+          onOpenFileDiff
+        })}
+      />
+    )
+    expect(
+      within(within(stashesSection).getByRole('region', { name: 'stash@{0} Stash 상세' })).getByText(
+        '변경된 파일이 없습니다.'
+      )
+    ).toBeInTheDocument()
+
+    // Loaded state with M, D, R, ? (switches to stash1 only -> single expansion)
+    rerender(
+      <GitSidebarPanel
+        {...buildProps({
+          stashes: [stash0, stash1],
+          stashDetail: {
+            status: 'loaded',
+            selectedHash: stash1.hash,
+            detail: {
+              ...stash1,
+              files: [
+                { path: 'docs/edited.md', status: 'M' },
+                { path: 'docs/removed.md', status: 'D' },
+                { path: 'docs/new.md', origPath: 'docs/old.md', status: 'R' },
+                { path: 'notes/untracked.md', status: '?' }
+              ]
+            }
+          },
+          splitState: baseSplit,
+          onToggleStashDetail,
+          onOpenFileDiff
+        })}
+      />
+    )
+    expect(rowTrigger0).toHaveAttribute('aria-expanded', 'false')
+    expect(rowTrigger1).toHaveAttribute('aria-expanded', 'true')
+    expect(within(stashesSection).queryByRole('region', { name: 'stash@{0} Stash 상세' })).toBeNull()
+
+    const detailRegion1 = within(stashesSection).getByRole('region', {
+      name: 'stash@{1} Stash 상세'
+    })
+    expect(detailRegion1).toHaveTextContent('변경된 파일 (4)')
+    expect(within(detailRegion1).getByText('removed.md')).toHaveClass('is-deleted')
+    expect(within(detailRegion1).getByText('old.md → new.md')).toBeInTheDocument()
+    expect(within(detailRegion1).getByText('U')).toHaveClass('git-status-letter', 'is-green')
+
+    await user.click(within(detailRegion1).getByTitle('notes/untracked.md'))
+    expect(onOpenFileDiff).toHaveBeenCalledWith({
+      kind: 'stash',
+      stashRef: stash1.ref,
+      stashHash: stash1.hash,
+      path: 'notes/untracked.md',
+      status: '?'
+    })
   })
 })

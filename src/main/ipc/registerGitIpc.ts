@@ -121,6 +121,12 @@ export function registerGitIpc({
     ],
     [GIT_IPC_CHANNELS.stashList, withWorkspace((rootPath) => gitService.stashList(rootPath))],
     [
+      GIT_IPC_CHANNELS.stashDetail,
+      withWorkspace<[string], Awaited<ReturnType<GitService['stashDetail']>>>(
+        (rootPath, stashRef) => gitService.stashDetail(rootPath, stashRef)
+      )
+    ],
+    [
       GIT_IPC_CHANNELS.stashCreate,
       withWorkspace<[GitStashCreateOptions], Awaited<ReturnType<GitService['stashCreate']>>>(
         (rootPath, options) => gitService.stashCreate(rootPath, options)

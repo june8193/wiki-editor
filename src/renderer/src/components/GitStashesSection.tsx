@@ -1,7 +1,9 @@
 import { memo } from 'react'
 import { Plus } from 'lucide-react'
-import type { GitStashEntry } from '@shared/git'
+import type { GitDiffRequest, GitStashEntry } from '@shared/git'
+import type { GitStashDetailState } from '../hooks/useGitController'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
+import { GitDetailFilesList } from './GitChangedFileRow'
 
 export interface GitStashesHeaderActionsProps {
   hasChanges: boolean
@@ -48,19 +50,63 @@ export const GitStashesHeaderActions = memo(function GitStashesHeaderActions({
 
 export interface GitStashesSectionProps {
   stashes: readonly GitStashEntry[]
+  stashDetail: GitStashDetailState
   isBusy: boolean
+  onToggleStashDetail: (entry: GitStashEntry) => void
+  onOpenFileDiff: (request: GitDiffRequest) => void
   onPopStash: (stashRef: string) => void
   onApplyStash: (stashRef: string) => void
   onDropStash: (stashRef: string) => void
 }
 
+function GitStashDetailPanel({
+  entry,
+  detailState,
+  onOpenFileDiff
+}: {
+  entry: GitStashEntry
+  detailState: GitStashDetailState
+  onOpenFileDiff: (request: GitDiffRequest) => void
+}) {
+  const loadedDetail = detailState.status === 'loaded' ? detailState.detail : null
+
+  return (
+    <div
+      className="git-commit-detail git-stash-detail"
+      role="region"
+      aria-label={`${entry.ref} Stash 상세`}
+      // Clear inherited stash-row tooltip while hovering inside the expanded detail box.
+      title=""
+    >
+      {detailState.status === 'loading' && (
+        <p className="git-commit-detail-status">Stash 상세를 불러오는 중...</p>
+      )}
+      {detailState.status === 'error' && (
+        <p className="git-commit-detail-error" role="alert">
+          {detailState.errorMessage}
+        </p>
+      )}
+      {loadedDetail && (
+        <GitDetailFilesList
+          files={loadedDetail.files}
+          target={{ kind: 'stash', stashRef: entry.ref, stashHash: entry.hash }}
+          onOpenFileDiff={onOpenFileDiff}
+        />
+      )}
+    </div>
+  )
+}
+
 /**
  * Renders the Stashes accordion body listing saved stashes with message, ref, formatted timestamp,
- * and hover/focus-revealed `Pop` / `Apply` / `Drop` actions.
+ * inline expandable changed-file list, and hover/focus-revealed `Pop` / `Apply` / `Drop` actions.
  */
 export const GitStashesSection = memo(function GitStashesSection({
   stashes,
+  stashDetail,
   isBusy,
+  onToggleStashDetail,
+  onOpenFileDiff,
   onPopStash,
   onApplyStash,
   onDropStash
@@ -72,22 +118,35 @@ export const GitStashesSection = memo(function GitStashesSection({
   return (
     <ul className="git-stash-list" role="list" aria-label="Stash 목록">
       {stashes.map((entry) => {
+        const isExpanded =
+          stashDetail.status !== 'idle' && stashDetail.selectedHash === entry.hash
         const formattedTime = formatGitTimestamp(entry.createdAt)
         const tooltip = entry.branch
           ? `${entry.ref} (${entry.branch}) · ${formattedTime} · ${entry.message}`
           : `${entry.ref} · ${formattedTime} · ${entry.message}`
 
         return (
-          <li key={`${entry.ref}:${entry.hash}`} className="git-stash-item" title={tooltip}>
+          <li
+            key={`${entry.ref}:${entry.hash}`}
+            className={`git-stash-item${isExpanded ? ' is-expanded' : ''}`}
+            title={tooltip}
+          >
             <div className="git-stash-row">
-              <div className="git-stash-main">
-                <span className="git-stash-message">{entry.message}</span>
-                <span className="git-stash-meta">
-                  <span className="git-stash-ref">{entry.ref}</span>
-                  <span aria-hidden="true">·</span>
-                  <span className="git-stash-time">{formattedTime}</span>
+              <button
+                type="button"
+                className="git-stash-trigger"
+                aria-expanded={isExpanded}
+                onClick={() => onToggleStashDetail(entry)}
+              >
+                <span className="git-stash-main">
+                  <span className="git-stash-message">{entry.message}</span>
+                  <span className="git-stash-meta">
+                    <span className="git-stash-ref">{entry.ref}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="git-stash-time">{formattedTime}</span>
+                  </span>
                 </span>
-              </div>
+              </button>
 
               <div className="git-stash-actions">
                 <button
@@ -122,6 +181,13 @@ export const GitStashesSection = memo(function GitStashesSection({
                 </button>
               </div>
             </div>
+            {isExpanded && (
+              <GitStashDetailPanel
+                entry={entry}
+                detailState={stashDetail}
+                onOpenFileDiff={onOpenFileDiff}
+              />
+            )}
           </li>
         )
       })}

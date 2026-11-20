@@ -13,15 +13,14 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import type {
-  GitCommitDetail,
   GitDiffRequest,
   GitGraphCommit,
   GitLogScope
 } from '@shared/git'
 import type { GitCommitDetailState, GitGraphState } from '../hooks/useGitGraphLog'
-import { formatGitTimestamp, toGitDiffRequest } from '../utils/gitFilePresentation'
+import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { normalizeGitGraphRefs, type GitGraphDisplayRef } from '../utils/gitGraphRefs'
-import { GitChangedFileRow } from './GitChangedFileRow'
+import { GitDetailFilesList } from './GitChangedFileRow'
 import {
   buildGitGraphConnectionPath,
   computeGitGraphLayout,
@@ -332,45 +331,6 @@ const GitGraphLaneSvg = memo(function GitGraphLaneSvg({
   )
 })
 
-function GitCommitDetailFiles({
-  detail,
-  onOpenFileDiff
-}: {
-  detail: GitCommitDetail
-  onOpenFileDiff: (request: GitDiffRequest) => void
-}) {
-  if (detail.files.length === 0) {
-    return <p className="git-commit-detail-empty-files">변경된 파일이 없습니다.</p>
-  }
-
-  return (
-    <div className="git-commit-detail-files-section">
-      <div className="git-commit-detail-files-header">변경된 파일 ({detail.files.length})</div>
-      <ul className="git-file-list git-commit-detail-files" aria-label="변경된 파일" role="list">
-        {detail.files.map((file) => (
-          <GitChangedFileRow
-            key={`${file.status}:${file.origPath ?? ''}:${file.path}`}
-            file={file}
-            displayMode="list"
-            onSelectFile={(selectedFile) =>
-              onOpenFileDiff(
-                toGitDiffRequest(
-                  {
-                    kind: 'commit',
-                    commitHash: detail.hash,
-                    shortHash: detail.shortHash
-                  },
-                  selectedFile
-                )
-              )
-            }
-          />
-        ))}
-      </ul>
-    </div>
-  )
-}
-
 interface GitCommitDetailPanelProps {
   shortHash: string
   detailState: GitCommitDetailState
@@ -470,7 +430,15 @@ function GitCommitDetailPanel({
               {formatGitTimestamp(loadedDetail.committedAt)}
             </span>
           </div>
-          <GitCommitDetailFiles detail={loadedDetail} onOpenFileDiff={onOpenFileDiff} />
+          <GitDetailFilesList
+            files={loadedDetail.files}
+            target={{
+              kind: 'commit',
+              commitHash: loadedDetail.hash,
+              shortHash: loadedDetail.shortHash
+            }}
+            onOpenFileDiff={onOpenFileDiff}
+          />
         </>
       )}
     </div>

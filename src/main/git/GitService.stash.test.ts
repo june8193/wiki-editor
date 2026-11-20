@@ -338,4 +338,98 @@ describe('GitService integration (stash)', () => {
       expect(await service.stashList(repoDir)).toEqual([])
       expect(await service.stashClear(repoDir)).toEqual([])
     }), 60_000)
+
+  it('loads stashDetail with tracked A/M/D/R (-M) files and 3rd-parent (^3) untracked (?) files while validating stashRef and repo boundaries', () =>
+    withGitTestSandbox(async ({ service, repoDir, nonGitDir, runGit }) => {
+      await expect(service.stashDetail(nonGitDir, 'stash@{0}')).rejects.toThrow(
+        /Git 저장소가 아닙니다/
+      )
+
+      await service.init(repoDir)
+
+      // Unborn repo & invalid refs fail cleanly
+      await expect(service.stashDetail(repoDir, 'stash@{0}')).rejects.toThrow(/Stash 항목/)
+      for (const badRef of INVALID_STASH_REFS) {
+        await expect(service.stashDetail(repoDir, badRef)).rejects.toThrow(/Stash 참조/)
+      }
+
+      await mkdir(join(repoDir, 'subws'), { recursive: true })
+      await writeFile(join(repoDir, 'subws', 'keep.md'), '# Subws Keep\n', 'utf8')
+      await writeFile(join(repoDir, 'modify.md'), '# Base Modify\nline 2\n', 'utf8')
+      await writeFile(join(repoDir, 'delete.md'), '# Base Delete\n', 'utf8')
+      await writeFile(
+        join(repoDir, '한글 이름.md'),
+        '# Rename Source\nline 1\nline 2\nline 3\n',
+        'utf8'
+      )
+      await service.stageAll(repoDir)
+      await service.commit(repoDir, 'seed stashDetail test')
+
+      await expect(service.stashDetail(repoDir, 'stash@{99}')).rejects.toThrow(/Stash 항목/)
+
+      // Stash 1 (oldest -> stash@{1} later): tracked-only changes (A/M/D/R) with NO ^3 untracked parent
+      await writeFile(join(repoDir, 'added.md'), '# Staged Add\n', 'utf8')
+      await service.stage(repoDir, ['added.md'])
+      await runGit(repoDir, ['mv', '한글 이름.md', 'subws/moved 한글.md'])
+      await writeFile(join(repoDir, 'modify.md'), '# Base Modify\nline 2 updated\n', 'utf8')
+      await rm(join(repoDir, 'delete.md'))
+      await service.stashCreate(repoDir, {
+        scope: 'all',
+        message: 'tracked only amdr',
+        includeUntracked: false
+      })
+
+      const trackedOnlyDetail = await service.stashDetail(join(repoDir, 'subws'), 'stash@{0}')
+      expect(trackedOnlyDetail).toMatchObject({
+        ref: 'stash@{0}',
+        branch: 'main',
+        message: 'tracked only amdr'
+      })
+      expect(trackedOnlyDetail.hash).toMatch(/^[0-9a-f]{40}$/i)
+      expect(Number.isNaN(Date.parse(trackedOnlyDetail.createdAt))).toBe(false)
+      expect(trackedOnlyDetail.files).toEqual(
+        expect.arrayContaining([
+          { path: 'added.md', status: 'A' },
+          { path: 'delete.md', status: 'D' },
+          { path: 'modify.md', status: 'M' },
+          { path: 'subws/moved 한글.md', origPath: '한글 이름.md', status: 'R' }
+        ])
+      )
+      expect(trackedOnlyDetail.files).toHaveLength(4)
+
+      // Stash 2 (newest -> stash@{0}): untracked-only file stored in ^3 parent
+      await writeFile(join(repoDir, 'subws', '새 초안.md'), '# Untracked Draft\n', 'utf8')
+      await service.stashCreate(repoDir, {
+        scope: 'unstaged',
+        message: 'untracked only'
+      })
+
+      const untrackedOnlyDetail = await service.stashDetail(repoDir, 'stash@{0}')
+      expect(untrackedOnlyDetail.ref).toBe('stash@{0}')
+      expect(untrackedOnlyDetail.message).toBe('untracked only')
+      expect(untrackedOnlyDetail.files).toEqual([{ path: 'subws/새 초안.md', status: '?' }])
+
+      // Stash 3 (becomes stash@{0}, shifting tracked-only to stash@{2}): mixed tracked M + untracked ?
+      await writeFile(join(repoDir, 'modify.md'), '# Mixed Modify\nline 2\n', 'utf8')
+      await writeFile(join(repoDir, 'mixed-new.md'), '# Mixed Untracked\n', 'utf8')
+      await service.stashCreate(repoDir, {
+        scope: 'unstaged',
+        message: 'mixed tracked and untracked'
+      })
+
+      const mixedDetail = await service.stashDetail(repoDir, 'stash@{0}')
+      expect(mixedDetail.message).toBe('mixed tracked and untracked')
+      expect(mixedDetail.files).toEqual(
+        expect.arrayContaining([
+          { path: 'modify.md', status: 'M' },
+          { path: 'mixed-new.md', status: '?' }
+        ])
+      )
+      expect(mixedDetail.files).toHaveLength(2)
+
+      // Former stash@{0} is now accessible at stash@{2} with the same hash
+      const shiftedDetail = await service.stashDetail(repoDir, 'stash@{2}')
+      expect(shiftedDetail.hash).toBe(trackedOnlyDetail.hash)
+      expect(shiftedDetail.files).toHaveLength(4)
+    }), 60_000)
 })

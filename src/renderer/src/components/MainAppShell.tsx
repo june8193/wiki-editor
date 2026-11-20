@@ -509,6 +509,7 @@ export function MainAppShell() {
     closeUnstagedDiffTabsExcept,
     closeStagedDiffTabsExcept,
     closeAllUnstagedDiffTabs,
+    reconcileStashDiffTabs,
     prepareWorkspacePathsForDiscard,
     finishWorkspacePathsDiscard
   } = editor
@@ -671,6 +672,7 @@ export function MainAppShell() {
     onBeforeWorkspaceBufferMutation: handleBeforeWorkspaceBufferMutation,
     onAfterWorkspaceBufferMutation: handleAfterWorkspaceBufferMutation,
     onStashCreated: handleStashCreated,
+    onStashesUpdated: reconcileStashDiffTabs,
     onWorkspaceMutated: handleGitWorkspaceMutated,
     onWorkspaceMutationActiveChange: setIsGitWorkspaceMutating
   })
@@ -1151,6 +1153,7 @@ export function MainAppShell() {
                 status={git.status}
                 branchList={git.branchList}
                 stashes={git.stashes}
+                stashDetail={git.stashDetail}
                 graphState={git.graphState}
                 pendingAction={git.pendingAction}
                 errorMessage={git.errorMessage}
@@ -1161,6 +1164,7 @@ export function MainAppShell() {
                 onChangeLogScope={(nextScope) => void git.changeLogScope(nextScope)}
                 onLoadMoreCommits={() => void git.loadMoreCommits()}
                 onToggleCommitDetail={(commitHash) => void git.toggleCommitDetail(commitHash)}
+                onToggleStashDetail={(entry) => void git.toggleStashDetail(entry)}
                 onInitRepo={() => void git.initRepo()}
                 onStageFile={(path) => void git.stageFile(path)}
                 onStageAll={() => void git.stageAll()}

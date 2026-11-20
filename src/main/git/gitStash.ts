@@ -2,9 +2,11 @@ import {
   collectGitStagedPaths,
   collectGitStatusPaths,
   collectGitUnstagedPaths,
+  type GitChangedFile,
   type GitStashEntry,
   type GitStatus
 } from '@shared/git'
+import { assertValidGitHash } from './gitCommitDetail'
 
 const STASH_REF_PATTERN = /^stash@\{\d+\}$/
 const STASH_LIST_HEADER_TOKENS = ['%gd', '%H', '%gs', '%cI'] as const
@@ -86,6 +88,29 @@ export function assertValidStashRef(stashRef: unknown): string {
     throw new Error('유효한 Stash 참조 형식이 아닙니다.')
   }
   return stashRef
+}
+
+/**
+ * Validates that a stash commit hash is strictly a 7–64 character hexadecimal hash.
+ */
+export function assertValidStashHash(stashHash: unknown): string {
+  return assertValidGitHash(stashHash, 'Stash')
+}
+
+/**
+ * Parses NUL-delimited `git ls-tree -r -z --name-only <hash>^3` output into untracked (`?`) entries.
+ */
+export function parseStashUntrackedTreeOutput(raw: string): GitChangedFile[] {
+  if (!raw) {
+    return []
+  }
+  const files: GitChangedFile[] = []
+  for (const filePath of raw.split('\0')) {
+    if (filePath) {
+      files.push({ path: filePath, status: '?' })
+    }
+  }
+  return files
 }
 
 function parseStashSubject(rawSubject: string): { branch: string | null; message: string } {

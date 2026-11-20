@@ -12,14 +12,22 @@ export const GIT_COMMIT_DETAIL_FORMAT = `--format=${COMMIT_DETAIL_HEADER_TOKENS.
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,64}$/i
 
 /**
+ * Validates that a Git object reference is strictly a 7–64 character hexadecimal hash,
+ * preventing Git CLI option injection and symbolic ref ambiguity.
+ */
+export function assertValidGitHash(hash: unknown, label = '커밋'): string {
+  if (typeof hash !== 'string' || !COMMIT_HASH_PATTERN.test(hash)) {
+    throw new Error(`유효한 ${label} 해시 형식이 아닙니다.`)
+  }
+  return hash
+}
+
+/**
  * Validates that a commit reference is strictly a 7–64 character hexadecimal hash,
  * preventing Git CLI option injection and symbolic ref ambiguity.
  */
 export function assertValidCommitHash(commitHash: unknown): string {
-  if (typeof commitHash !== 'string' || !COMMIT_HASH_PATTERN.test(commitHash)) {
-    throw new Error('유효한 커밋 해시 형식이 아닙니다.')
-  }
-  return commitHash
+  return assertValidGitHash(commitHash, '커밋')
 }
 
 function mapCommitStatusCode(code: string): GitFileStatusCode {
@@ -29,7 +37,10 @@ function mapCommitStatusCode(code: string): GitFileStatusCode {
   return 'M'
 }
 
-function parseCommitFiles(filesSection: string): GitChangedFile[] {
+/**
+ * Parses NUL-delimited `git diff --name-status -z` or `git show --name-status -z` file records.
+ */
+export function parseGitNameStatusZ(filesSection: string): GitChangedFile[] {
   const trimmed = filesSection.replace(/^(?:\0|\r?\n)+/, '')
   if (!trimmed) {
     return []
@@ -105,6 +116,6 @@ export function parseCommitDetailOutput(raw: string): GitCommitDetail {
     authorName,
     authorEmail,
     committedAt,
-    files: parseCommitFiles(filesSection)
+    files: parseGitNameStatusZ(filesSection)
   }
 }

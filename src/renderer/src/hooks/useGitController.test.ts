@@ -5,6 +5,7 @@ import {
   type GitCommitDetail,
   type GitGraphCommit,
   type GitLogResult,
+  type GitStashDetail,
   type GitStashEntry,
   type GitStatus
 } from '@shared/git'
@@ -76,6 +77,14 @@ function installMockGitWikiApi(overrides: Partial<WikiApi['git']> = {}): void {
         rawPatch: ''
       })),
       stashList: vi.fn(async () => []),
+      stashDetail: vi.fn(async (_ws: string, stashRef: string) => ({
+        ref: stashRef,
+        hash: '0000000000000000000000000000000000000000',
+        branch: null,
+        message: '',
+        createdAt: '',
+        files: []
+      })),
       stashCreate: vi.fn(),
       stashApply: vi.fn(),
       stashPop: vi.fn(),
@@ -1602,5 +1611,167 @@ describe('useGitController', () => {
     expect(result.current.stashes).toEqual([])
     expect(confirmBeforeWorkspaceMutation).toHaveBeenCalledTimes(confirmCountBeforeDrop)
     expect(onBeforeWorkspaceBufferMutation).toHaveBeenCalledTimes(bufferBeforeCountBeforeDrop)
+  })
+
+  it('toggles single inline stashDetail (loading/loaded/error/collapse), drops stale responses, prunes removed stash details, and notifies onStashesUpdated', async () => {
+    const stash0: GitStashEntry = {
+      ref: 'stash@{0}',
+      hash: '1111111111111111111111111111111111111111',
+      branch: 'main',
+      message: 'first draft',
+      createdAt: '2026-11-20T10:00:00Z'
+    }
+    const stash1: GitStashEntry = {
+      ref: 'stash@{1}',
+      hash: '2222222222222222222222222222222222222222',
+      branch: 'main',
+      message: 'second draft',
+      createdAt: '2026-11-20T09:00:00Z'
+    }
+    const detail0: GitStashDetail = {
+      ...stash0,
+      files: [{ path: 'draft.md', status: '?' }]
+    }
+    const detail1: GitStashDetail = {
+      ...stash1,
+      files: [{ path: 'notes.md', status: 'M' }]
+    }
+
+    let currentStashes: GitStashEntry[] = [stash0, stash1]
+    let resolveDelayed0!: (value: GitStashDetail) => void
+    let failSecondDetail = false
+    const stashDetailMock = vi.fn(async (_ws: string, stashRef: string) => {
+      if (stashRef === 'stash@{0}') {
+        return new Promise<GitStashDetail>((resolve) => {
+          resolveDelayed0 = resolve
+        })
+      }
+      if (failSecondDetail) {
+        throw new Error('Stash 상세 조회 실패')
+      }
+      return detail1
+    })
+
+    const status = makeStatus('main')
+    const stashApplyMock = vi.fn(async () => status)
+    const stashDropMock = vi.fn(async (_ws: string, stashRef: string) => {
+      currentStashes = currentStashes
+        .filter((entry) => entry.ref !== stashRef)
+        .map((entry, idx) => ({ ...entry, ref: `stash@{${idx}}` }))
+      return currentStashes
+    })
+    const stashClearMock = vi.fn(async () => {
+      currentStashes = []
+      return currentStashes
+    })
+
+    installMockGitWikiApi({
+      status: vi.fn(async () => status),
+      stashList: vi.fn(async () => currentStashes),
+      stashDetail: stashDetailMock,
+      stashApply: stashApplyMock,
+      stashDrop: stashDropMock,
+      stashClear: stashClearMock
+    })
+
+    const onStashesUpdated = vi.fn()
+    const { result, rerender } = renderHook(
+      ({ ws }: { ws: string | null }) =>
+        useGitController({
+          workspaceRootPath: ws,
+          onStashesUpdated
+        }),
+      { initialProps: { ws: 'C:/wiki' as string | null } }
+    )
+
+    await waitFor(() => {
+      expect(result.current.stashes).toHaveLength(2)
+    })
+    expect(result.current.stashDetail).toEqual({ status: 'idle' })
+    expect(onStashesUpdated).toHaveBeenLastCalledWith([stash0, stash1])
+
+    // 1. Start loading stash0, then immediately switch to stash1 -> stale stash0 response is ignored
+    let p0!: Promise<void>
+    act(() => {
+      p0 = result.current.toggleStashDetail(stash0)
+    })
+    expect(result.current.stashDetail).toEqual({ status: 'loading', selectedHash: stash0.hash })
+
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail).toEqual({
+      status: 'loaded',
+      selectedHash: stash1.hash,
+      detail: detail1
+    })
+
+    await act(async () => {
+      resolveDelayed0(detail0)
+      await p0
+    })
+    expect(result.current.stashDetail).toEqual({
+      status: 'loaded',
+      selectedHash: stash1.hash,
+      detail: detail1
+    })
+
+    // 2. Clicking the same expanded stash collapses it to idle
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail).toEqual({ status: 'idle' })
+
+    // 3. Error state when stashDetail fails, then clicking again collapses back to idle
+    failSecondDetail = true
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail).toEqual({
+      status: 'error',
+      selectedHash: stash1.hash,
+      errorMessage: 'Stash 상세 조회 실패'
+    })
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail).toEqual({ status: 'idle' })
+
+    // 4. Reload stash1 cleanly, then stashApply keeps it open; dropping stash0 keeps stash1 open; dropping remaining stash1 resets to idle
+    failSecondDetail = false
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail.status).toBe('loaded')
+
+    await act(async () => {
+      await result.current.stashApply('stash@{1}')
+    })
+    expect(result.current.stashDetail).toEqual({
+      status: 'loaded',
+      selectedHash: stash1.hash,
+      detail: detail1
+    })
+
+    await act(async () => {
+      await result.current.stashDrop('stash@{0}')
+    })
+    // stash1 survived (now at stash@{0}), so detail stays expanded and onStashesUpdated received renumbered list
+    expect(result.current.stashDetail.status).toBe('loaded')
+    expect(onStashesUpdated).toHaveBeenLastCalledWith([{ ...stash1, ref: 'stash@{0}' }])
+
+    await act(async () => {
+      await result.current.stashClear()
+    })
+    expect(result.current.stashDetail).toEqual({ status: 'idle' })
+    expect(onStashesUpdated).toHaveBeenLastCalledWith([])
+
+    // 5. Workspace switch resets stashDetail to idle
+    await act(async () => {
+      await result.current.toggleStashDetail(stash1)
+    })
+    expect(result.current.stashDetail.status).toBe('loaded')
+    rerender({ ws: null })
+    expect(result.current.stashDetail).toEqual({ status: 'idle' })
   })
 })

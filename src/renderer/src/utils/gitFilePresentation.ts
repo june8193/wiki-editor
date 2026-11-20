@@ -165,11 +165,17 @@ export function canOpenGitChangedFile(
 
 /**
  * Returns the short tab display label for a Diff tab, appending the abbreviated
- * commit hash when inspecting a historical commit file.
+ * commit hash or stash ref when inspecting a historical commit or stash file.
  */
 export function getGitDiffTabLabel(request: GitDiffRequest): string {
   const baseName = getGitFileBaseName(request.path)
-  return request.kind === 'commit' ? `${baseName} (${request.shortHash})` : baseName
+  if (request.kind === 'commit') {
+    return `${baseName} (${request.shortHash})`
+  }
+  if (request.kind === 'stash') {
+    return `${baseName} (${request.stashRef})`
+  }
+  return baseName
 }
 
 /**
@@ -183,6 +189,8 @@ export function getGitDiffContextLabel(request: GitDiffRequest): string {
       return 'Working Tree'
     case 'commit':
       return `Commit ${request.shortHash}`
+    case 'stash':
+      return request.stashRef
   }
 }
 
@@ -194,6 +202,9 @@ export function formatGitDiffTabKey(request: GitDiffRequest): string {
   if (request.kind === 'commit') {
     return `diff:commit:${request.commitHash}:${request.status}:${renamePart}:${request.path}`
   }
+  if (request.kind === 'stash') {
+    return `diff:stash:${request.stashHash}:${request.status}:${renamePart}:${request.path}`
+  }
   return `diff:${request.kind}:${request.status}:${renamePart}:${request.path}`
 }
 
@@ -201,9 +212,10 @@ export type GitDiffTarget =
   | 'staged'
   | 'unstaged'
   | { kind: 'commit'; commitHash: string; shortHash: string }
+  | { kind: 'stash'; stashRef: string; stashHash: string }
 
 /**
- * Builds a typed GitDiffRequest from either a Working/Staged target or a Commit target.
+ * Builds a typed GitDiffRequest from a Working/Staged, Commit, or Stash target.
  */
 export function toGitDiffRequest(
   target: GitDiffTarget,
@@ -217,10 +229,18 @@ export function toGitDiffRequest(
   if (typeof target === 'string') {
     return { kind: target, ...base }
   }
+  if (target.kind === 'commit') {
+    return {
+      kind: 'commit',
+      commitHash: target.commitHash,
+      shortHash: target.shortHash,
+      ...base
+    }
+  }
   return {
-    kind: 'commit',
-    commitHash: target.commitHash,
-    shortHash: target.shortHash,
+    kind: 'stash',
+    stashRef: target.stashRef,
+    stashHash: target.stashHash,
     ...base
   }
 }

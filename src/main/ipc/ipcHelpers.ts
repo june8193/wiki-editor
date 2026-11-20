@@ -62,15 +62,7 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
   [CLIPBOARD_IPC_CHANNELS.writeText]: ([text]) => ({
     textLength: typeof text === 'string' ? text.length : 0
   }),
-  [GIT_IPC_CHANNELS.diff]: ([workspacePath, request]) => {
-    const req = request as Partial<GitDiffRequest> | undefined
-    return {
-      workspacePath,
-      ...(req?.kind ? { kind: req.kind } : {}),
-      ...(req?.path ? { path: req.path } : {}),
-      ...(req?.kind === 'commit' && req.commitHash ? { commitHash: req.commitHash } : {})
-    }
-  },
+  [GIT_IPC_CHANNELS.diff]: (args) => extractGitDiffMetadata(args),
   [DIAGRAM_IPC_CHANNELS.copyText]: ([text]) => ({
     textLength: typeof text === 'string' ? text.length : 0
   }),
@@ -250,5 +242,17 @@ export function broadcastIpcEvent(
     if (!target.isDestroyed()) {
       target.send(channel, payload)
     }
+  }
+}
+
+function extractGitDiffMetadata([workspacePath, request]: unknown[]): Record<string, unknown> {
+  const req = request as Partial<GitDiffRequest> | undefined
+  return {
+    workspacePath,
+    ...(req?.kind ? { kind: req.kind } : {}),
+    ...(req?.path ? { path: req.path } : {}),
+    ...(req?.kind === 'commit' && req.commitHash ? { commitHash: req.commitHash } : {}),
+    ...(req?.kind === 'stash' && req.stashRef ? { stashRef: req.stashRef } : {}),
+    ...(req?.kind === 'stash' && req.stashHash ? { stashHash: req.stashHash } : {})
   }
 }

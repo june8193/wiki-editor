@@ -1,7 +1,13 @@
 import { fireEvent, render, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import type { GitDiffRequest, GitStashCreateOptions, GitStashEntry, GitStatus } from '@shared/git'
+import type {
+  GitDiffRequest,
+  GitStashCreateOptions,
+  GitStashDetail,
+  GitStashEntry,
+  GitStatus
+} from '@shared/git'
 import { App } from './App'
 import {
   getRawEditorText,
@@ -798,5 +804,369 @@ describe('Multi-window Git Stash integration (<App />)', () => {
       expect(within(liveStashesSection).getByText('보관된 Stash가 없습니다.')).toBeInTheDocument()
     })
     expect(within(liveStashesSection).getByRole('button', { name: 'Clear All' })).toBeDisabled()
+  }, 30_000)
+
+  it('toggles inline stash detail (loading/error/single-expand/button-isolation), opens/reuses kind=stash Diff tabs, and auto-closes invalidated stash Diff tabs on Pop/Drop/Clear All', async () => {
+    const user = userEvent.setup()
+    const workspaceRoot = 'C:/repo/wiki'
+    const repoRoot = 'C:/repo'
+
+    const hash0 = '1111111111111111111111111111111111111111'
+    const hash1 = '2222222222222222222222222222222222222222'
+    const hash2 = '3333333333333333333333333333333333333333'
+
+    let stashes: GitStashEntry[] = [
+      {
+        ref: 'stash@{0}',
+        hash: hash0,
+        branch: 'main',
+        message: 'WIP draft zero',
+        createdAt: '2026-11-20T12:00:00+09:00'
+      },
+      {
+        ref: 'stash@{1}',
+        hash: hash1,
+        branch: 'main',
+        message: 'Second backup one',
+        createdAt: '2026-11-20T11:00:00+09:00'
+      },
+      {
+        ref: 'stash@{2}',
+        hash: hash2,
+        branch: 'main',
+        message: 'Third backup two',
+        createdAt: '2026-11-20T10:00:00+09:00'
+      }
+    ]
+
+    let gitState: GitStatus = {
+      isRepo: true,
+      repoRoot,
+      branch: 'main',
+      isDetached: false,
+      isUnborn: false,
+      ahead: 0,
+      behind: 0,
+      hasUpstream: false,
+      hasConflicts: false,
+      staged: [],
+      unstaged: [],
+      untracked: []
+    }
+
+    const detailsByHash: Record<string, GitStashDetail['files']> = {
+      [hash0]: [
+        { path: 'wiki/notes.md', status: 'M' },
+        { path: 'wiki/stashed-new.md', status: '?' },
+        { path: 'wiki/renamed.md', origPath: 'wiki/old.md', status: 'R' }
+      ],
+      [hash1]: [
+        { path: 'wiki/notes.md', status: 'M' },
+        { path: 'wiki/other.md', status: 'M' }
+      ],
+      [hash2]: [{ path: 'wiki/third.md', status: 'M' }]
+    }
+
+    let resolveDelayedStash0!: (value: GitStashDetail) => void
+    let failStash1Once = true
+    let popAttempts = 0
+
+    const renumberStashes = (items: GitStashEntry[]): GitStashEntry[] =>
+      items.map((item, index) => ({ ...item, ref: `stash@{${index}}` }))
+
+    const stashDetailSpy = vi.fn(async (_wsPath: string, stashRef: string) => {
+      const entry = stashes.find((item) => item.ref === stashRef)
+      if (!entry) {
+        throw new Error('지정한 Stash 항목을 찾을 수 없습니다.')
+      }
+      if (entry.hash === hash0) {
+        return new Promise<GitStashDetail>((resolve) => {
+          resolveDelayedStash0 = resolve
+        })
+      }
+      if (entry.hash === hash1 && failStash1Once) {
+        failStash1Once = false
+        throw new Error('Stash 상세 로드 실패')
+      }
+      return {
+        ...entry,
+        files: detailsByHash[entry.hash] ?? []
+      }
+    })
+
+    const stashApplySpy = vi.fn(async () => gitState)
+    const stashPopSpy = vi.fn(async (_wsPath: string, stashRef: string) => {
+      popAttempts += 1
+      if (popAttempts === 1) {
+        throw new Error('병합 충돌(Conflict)이 발생했습니다.')
+      }
+      stashes = renumberStashes(stashes.filter((item) => item.ref !== stashRef))
+      return gitState
+    })
+    const stashDropSpy = vi.fn(async (_wsPath: string, stashRef: string) => {
+      stashes = renumberStashes(stashes.filter((item) => item.ref !== stashRef))
+      return stashes
+    })
+    const stashClearSpy = vi.fn(async () => {
+      stashes = []
+      return stashes
+    })
+
+    const diffSpy = vi.fn(async (_wsPath: string, request: GitDiffRequest) => {
+      if (request.kind === 'stash' && request.path === 'wiki/stashed-new.md') {
+        return {
+          path: request.path,
+          status: request.status,
+          isBinary: false,
+          isTruncated: false,
+          existsInWorkspace: false,
+          rawPatch: [
+            'diff --git a/wiki/stashed-new.md b/wiki/stashed-new.md',
+            'new file mode 100644',
+            '--- /dev/null',
+            '+++ b/wiki/stashed-new.md',
+            '@@ -0,0 +1 @@',
+            '+Stashed untracked line'
+          ].join('\n')
+        }
+      }
+      const tag = request.kind === 'stash' ? request.stashHash.slice(0, 6) : request.kind
+      return {
+        path: request.path,
+        ...(request.origPath ? { origPath: request.origPath } : {}),
+        status: request.status,
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        rawPatch: [
+          `diff --git a/${request.path} b/${request.path}`,
+          `--- a/${request.path}`,
+          `+++ b/${request.path}`,
+          '@@ -1 +1 @@',
+          '-# Workspace Base',
+          `+# Stashed ${tag} ${request.path}`
+        ].join('\n')
+      }
+    })
+
+    const harness = createHarness(
+      { autoSave: false, theme: 'light' },
+      {
+        selectedFolder: 'C:\\repo\\wiki',
+        workspaces: {
+          'C:\\repo\\wiki': {
+            'notes.md': '# Notes Current Body',
+            'other.md': '# Other Body',
+            'third.md': '# Third Body'
+          }
+        },
+        git: {
+          status: async () => gitState,
+          stashList: async () => stashes,
+          stashDetail: stashDetailSpy,
+          stashApply: stashApplySpy,
+          stashPop: stashPopSpy,
+          stashDrop: stashDropSpy,
+          stashClear: stashClearSpy,
+          diff: diffSpy
+        }
+      }
+    )
+
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+    trackDisposer(() => mainRendered.unmount())
+
+    // Open a regular workspace document first so split move is enabled
+    await openFolderAndNoteInWindow(
+      user,
+      mainRendered.container,
+      mainWin.emitMenuCommand,
+      'notes.md'
+    )
+
+    await user.click(within(mainRendered.container).getByRole('button', { name: 'Git' }))
+    const gitPanel = await within(mainRendered.container).findByLabelText('Git 소스 제어')
+    const stashesSection = within(gitPanel).getByRole('region', { name: 'Stashes' })
+
+    // Expand Stashes accordion
+    await user.click(within(stashesSection).getByRole('button', { name: /^Stashes/i }))
+    expect(within(stashesSection).getByText('WIP draft zero')).toBeInTheDocument()
+
+    // 1. Apply action button must NOT toggle inline detail
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Apply' }))
+    await waitFor(() => {
+      expect(stashApplySpy).toHaveBeenCalledTimes(1)
+    })
+    expect(stashDetailSpy).not.toHaveBeenCalled()
+
+    // 2. Click stash@{0} row -> shows loading state, then resolves to loaded file list (? included)
+    const row0Btn = within(stashesSection).getByRole('button', { name: /WIP draft zero/ })
+    await user.click(row0Btn)
+    const loadingRegion0 = await within(stashesSection).findByRole('region', {
+      name: 'stash@{0} Stash 상세'
+    })
+    expect(loadingRegion0).toHaveTextContent('Stash 상세를 불러오는 중...')
+
+    resolveDelayedStash0({
+      ...stashes[0],
+      files: detailsByHash[hash0]
+    })
+    await waitFor(() => {
+      expect(loadingRegion0).toHaveTextContent('변경된 파일 (3)')
+    })
+    expect(within(loadingRegion0).getByText('stashed-new.md')).toBeInTheDocument()
+    expect(within(loadingRegion0).getByText('old.md → renamed.md')).toBeInTheDocument()
+    expect(within(loadingRegion0).getByText('U')).toHaveClass('git-status-letter', 'is-green')
+
+    // 3. Click stash@{1} -> closes stash@{0} detail (single expand) and shows error state, then retry succeeds
+    const row1Btn = within(stashesSection).getByRole('button', { name: /Second backup one/ })
+    await user.click(row1Btn)
+    await waitFor(() => {
+      expect(within(stashesSection).queryByRole('region', { name: 'stash@{0} Stash 상세' })).toBeNull()
+      expect(within(stashesSection).getByRole('alert')).toHaveTextContent('Stash 상세 로드 실패')
+    })
+
+    // Collapse error state and re-click to load cleanly
+    await user.click(row1Btn)
+    expect(within(stashesSection).queryByRole('region', { name: 'stash@{1} Stash 상세' })).toBeNull()
+    await user.click(row1Btn)
+    const detail1Region = await within(stashesSection).findByRole('region', {
+      name: 'stash@{1} Stash 상세'
+    })
+    expect(detail1Region).toHaveTextContent('other.md')
+
+    // 4. Re-expand stash@{0} -> click untracked stashed-new.md -> opens read-only kind='stash' Diff tab with Side-by-Side/Inline toggle and disabled 파일 열기
+    await user.click(row0Btn)
+    resolveDelayedStash0({
+      ...stashes[0],
+      files: detailsByHash[hash0]
+    })
+    const detail0Region = await within(stashesSection).findByRole('region', {
+      name: 'stash@{0} Stash 상세'
+    })
+    await waitFor(() => {
+      expect(detail0Region).toHaveTextContent('변경된 파일 (3)')
+    })
+    await user.click(within(detail0Region).getByTitle('wiki/stashed-new.md'))
+
+    const primaryPane = within(mainRendered.container).getByTestId('pane-primary')
+    const untrackedDiffTab = await within(primaryPane).findByRole('tab', {
+      name: /Diff\s*stashed-new\.md \(stash@\{0\}\)/
+    })
+    expect(untrackedDiffTab).toHaveAttribute('title', 'wiki/stashed-new.md · stash@{0}')
+    expect(within(primaryPane).getByText('stash@{0}')).toBeInTheDocument()
+    expect(within(primaryPane).getByTestId('diff-side-by-side')).toBeInTheDocument()
+    expect(within(primaryPane).getByText('Stashed untracked line')).toBeInTheDocument()
+    expect(within(primaryPane).getByRole('button', { name: '파일 열기' })).toBeDisabled()
+
+    await user.click(within(primaryPane).getByRole('button', { name: '인라인' }))
+    expect(within(primaryPane).getByTestId('diff-inline')).toBeInTheDocument()
+
+    // 5. Click wiki/notes.md inside stash@{0} detail -> replaces active Diff tab in primaryPane, enables 파일 열기
+    await user.click(within(detail0Region).getByTitle('wiki/notes.md'))
+    const notesDiffTab = await within(primaryPane).findByRole('tab', {
+      name: /Diff\s*notes\.md \(stash@\{0\}\)/
+    })
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(2)
+    expect(within(primaryPane).queryByRole('tab', { name: /stashed-new\.md/ })).toBeNull()
+    const openFileBtn = await within(primaryPane).findByRole('button', { name: '파일 열기' })
+    await waitFor(() => expect(openFileBtn).toBeEnabled())
+
+    await user.click(openFileBtn)
+    const docEditor = await within(primaryPane).findByTestId('document-editor')
+    expect(getRawEditorText(docEditor)).toBe('# Notes Current Body')
+
+    // 6. Move notes.md (stash@{0}) Diff tab to secondary pane, focus primary, open third.md (stash@{2})
+    fireEvent.contextMenu(notesDiffTab)
+    await user.click(
+      within(
+        await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })
+      ).getByRole('menuitem', { name: '분할 영역으로 이동' })
+    )
+    const secondaryPane = await within(mainRendered.container).findByTestId('pane-secondary')
+    expect(
+      within(secondaryPane).getByRole('tab', { name: /Diff\s*notes\.md \(stash@\{0\}\)/ })
+    ).toBeInTheDocument()
+
+    fireEvent.mouseDown(primaryPane)
+    await user.click(within(stashesSection).getByRole('button', { name: /Third backup two/ }))
+    const detail2Region = await within(stashesSection).findByRole('region', {
+      name: 'stash@{2} Stash 상세'
+    })
+    await user.click(within(detail2Region).getByTitle('wiki/third.md'))
+    await within(primaryPane).findByRole('tab', {
+      name: /Diff\s*third\.md \(stash@\{2\}\)/
+    })
+    // Secondary stash Diff tab stays independent
+    expect(
+      within(secondaryPane).getByRole('tab', { name: /Diff\s*notes\.md \(stash@\{0\}\)/ })
+    ).toBeInTheDocument()
+
+    // 7. Apply & failed Pop keep stash@{0} Diff tab open
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Apply' }))
+    await waitFor(() => {
+      expect(stashApplySpy).toHaveBeenCalledTimes(2)
+    })
+    expect(
+      within(secondaryPane).getByRole('tab', { name: /Diff\s*notes\.md \(stash@\{0\}\)/ })
+    ).toBeInTheDocument()
+
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Pop' }))
+    await waitFor(() => {
+      expect(within(gitPanel).getByRole('alert')).toHaveTextContent(/충돌/)
+    })
+    expect(
+      within(secondaryPane).getByRole('tab', { name: /Diff\s*notes\.md \(stash@\{0\}\)/ })
+    ).toBeInTheDocument()
+
+    // 8. Successful Pop on stash@{0} removes hash0 -> closes secondary sole tab & returns to single split mode, while renumbering stash@{2} -> stash@{1} in primaryPane
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{0} Pop' }))
+    await waitFor(() => {
+      expect(within(mainRendered.container).queryByTestId('pane-secondary')).toBeNull()
+      expect(
+        within(primaryPane).getByRole('tab', { name: /Diff\s*third\.md \(stash@\{1\}\)/ })
+      ).toBeInTheDocument()
+    })
+
+    // 9. Drop stash@{1} (hash2, currently expanded) -> closes invalidated third.md Diff tab and clears inline detail
+    await user.click(within(stashesSection).getByRole('button', { name: 'stash@{1} Drop' }))
+    const dropDialog = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(dropDialog).getByRole('button', { name: 'Drop' }))
+    await waitFor(() => {
+      expect(within(primaryPane).queryByRole('tab', { name: /third\.md/ })).toBeNull()
+      expect(within(stashesSection).queryByRole('region', { name: /Stash 상세/ })).toBeNull()
+    })
+
+    // 10. Open hash1 (now stash@{0}) Diff tab in both primary and secondary panes, then Clear All -> closes both panes' stash Diff tabs & returns to single mode
+    await user.click(within(stashesSection).getByRole('button', { name: /Second backup one/ }))
+    const finalDetailRegion = await within(stashesSection).findByRole('region', {
+      name: 'stash@{0} Stash 상세'
+    })
+    await user.click(within(finalDetailRegion).getByTitle('wiki/other.md'))
+    const otherTab = await within(primaryPane).findByRole('tab', {
+      name: /Diff\s*other\.md \(stash@\{0\}\)/
+    })
+    fireEvent.contextMenu(otherTab)
+    await user.click(
+      within(
+        await within(mainRendered.container).findByRole('menu', { name: '탭 작업 메뉴' })
+      ).getByRole('menuitem', { name: '분할 영역에 복제 열기' })
+    )
+    const splitSecondary = await within(mainRendered.container).findByTestId('pane-secondary')
+    expect(
+      within(splitSecondary).getByRole('tab', { name: /Diff\s*other\.md \(stash@\{0\}\)/ })
+    ).toBeInTheDocument()
+
+    await user.click(within(stashesSection).getByRole('button', { name: 'Clear All' }))
+    const clearDialog = await within(mainRendered.container).findByRole('alertdialog')
+    await user.click(within(clearDialog).getByRole('button', { name: 'Clear All' }))
+    await waitFor(() => {
+      expect(within(mainRendered.container).queryByTestId('pane-secondary')).toBeNull()
+      expect(within(primaryPane).queryByRole('tab', { name: /Diff\s*other\.md/ })).toBeNull()
+      expect(within(stashesSection).getByText('보관된 Stash가 없습니다.')).toBeInTheDocument()
+    })
+    // Regular document tab notes.md remains open
+    expect(within(primaryPane).getByRole('tab', { name: /notes\.md/ })).toBeInTheDocument()
   }, 30_000)
 })

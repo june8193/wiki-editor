@@ -2973,8 +2973,33 @@ body.is-resizing-git-sections * {
 }
 
 .git-stash-item:hover .git-stash-row,
-.git-stash-item:focus-within .git-stash-row {
+.git-stash-item:focus-within .git-stash-row,
+.git-stash-item.is-expanded .git-stash-row {
   background-color: var(--bg-elevated);
+}
+
+.git-stash-trigger {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.git-stash-trigger:focus-visible {
+  outline: 1px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.git-stash-detail {
+  margin: 2px 4px 4px 8px;
 }
 
 .git-stash-main {
