@@ -16,42 +16,197 @@ export const DEFAULT_WORKSPACE_SEARCH_SORT: WorkspaceSearchSortSpec = {
   direction: 'asc'
 }
 
-const OPERATOR_LABELS_BY_TYPE: Readonly<
-  Record<FrontmatterFieldType, Partial<Record<FrontmatterFilterOperator, string>>>
-> = {
-  select: {
-    in: '포함',
-    'not-in': '제외',
-    'is-empty': '비어 있음'
-  },
-  'multi-select': {
-    'all-of': '모두 포함',
-    'any-of': '하나라도 포함',
-    'none-of': '제외',
-    'is-empty': '비어 있음'
-  },
+type BuiltConditionResult =
+  | { ok: true; condition: FrontmatterFilterCondition }
+  | { ok: false; error?: string }
+
+interface FilterFieldSpec {
+  operatorLabels: Partial<Record<FrontmatterFilterOperator, string>>
+  isConditionOperandsValid: (condition: FrontmatterFilterCondition) => boolean
+  formatChipLabel: (condition: FrontmatterFilterCondition, fieldLabel: string) => string
+  buildDraftCondition: (
+    fieldKey: string,
+    operator: FrontmatterFilterOperator,
+    draft: FilterPopoverDraft
+  ) => BuiltConditionResult
+}
+
+function createSelectValuesFilterSpec(options: {
+  operatorLabels: Partial<Record<FrontmatterFilterOperator, string>>
+  formatChipLabel: (condition: FrontmatterFilterCondition, fieldLabel: string) => string
+}): FilterFieldSpec {
+  return {
+    operatorLabels: options.operatorLabels,
+    isConditionOperandsValid: (condition) =>
+      Array.isArray(condition.values) &&
+      condition.values.length > 0 &&
+      condition.values.every((value) => typeof value === 'string'),
+    formatChipLabel: options.formatChipLabel,
+    buildDraftCondition: (fieldKey, operator, draft) => {
+      if (draft.selectedValues.length === 0) {
+        return { ok: false }
+      }
+      return {
+        ok: true,
+        condition: {
+          fieldKey,
+          operator,
+          values: [...draft.selectedValues]
+        }
+      }
+    }
+  }
+}
+
+function createOrderedRangeFilterSpec(options: {
+  operatorLabels: Partial<Record<FrontmatterFilterOperator, string>>
+  isValidOperand: (value: unknown) => boolean
+  parseDraftValue: (raw: string) => number | string | null
+  isEmptyDraftValue: (raw: string) => boolean
+  invalidFormatError: string
+  invalidRangeError: string
+}): FilterFieldSpec {
+  return {
+    operatorLabels: options.operatorLabels,
+    isConditionOperandsValid: (condition) =>
+      condition.operator === 'between'
+        ? options.isValidOperand(condition.min) && options.isValidOperand(condition.max)
+        : options.isValidOperand(condition.value),
+    formatChipLabel: (condition, fieldLabel) => {
+      if (condition.operator === 'between') {
+        return `${fieldLabel}: ${condition.min ?? ''} ~ ${condition.max ?? ''}`
+      }
+      const sym =
+        condition.operator === 'gte' ? '>=' : condition.operator === 'lte' ? '<=' : '='
+      return `${fieldLabel} ${sym} ${condition.value ?? ''}`
+    },
+    buildDraftCondition: (fieldKey, operator, draft) => {
+      if (operator === 'between') {
+        if (options.isEmptyDraftValue(draft.minValue) || options.isEmptyDraftValue(draft.maxValue)) {
+          return { ok: false }
+        }
+        const min = options.parseDraftValue(draft.minValue)
+        const max = options.parseDraftValue(draft.maxValue)
+        if (min === null || max === null) {
+          return { ok: false, error: options.invalidFormatError }
+        }
+        const isInverted =
+          typeof min === 'number' && typeof max === 'number'
+            ? min > max
+            : String(min) > String(max)
+        if (isInverted) {
+          return { ok: false, error: options.invalidRangeError }
+        }
+        return { ok: true, condition: { fieldKey, operator, min, max } }
+      }
+
+      if (options.isEmptyDraftValue(draft.textValue)) {
+        return { ok: false }
+      }
+      const parsed = options.parseDraftValue(draft.textValue)
+      if (parsed === null) {
+        return { ok: false, error: options.invalidFormatError }
+      }
+      return { ok: true, condition: { fieldKey, operator, value: parsed } }
+    }
+  }
+}
+
+const FILTER_FIELD_SPECS: Readonly<Record<FrontmatterFieldType, FilterFieldSpec>> = {
+  select: createSelectValuesFilterSpec({
+    operatorLabels: {
+      in: '포함',
+      'not-in': '제외',
+      'is-empty': '비어 있음'
+    },
+    formatChipLabel: (condition, fieldLabel) => {
+      const vals = (condition.values ?? []).join(', ')
+      return condition.operator === 'not-in'
+        ? `${fieldLabel} (제외): ${vals}`
+        : `${fieldLabel}: ${vals}`
+    }
+  }),
+  'multi-select': createSelectValuesFilterSpec({
+    operatorLabels: {
+      'all-of': '모두 포함',
+      'any-of': '하나라도 포함',
+      'none-of': '제외',
+      'is-empty': '비어 있음'
+    },
+    formatChipLabel: (condition, fieldLabel) => {
+      const vals = (condition.values ?? []).join(', ')
+      const opTag =
+        condition.operator === 'all-of'
+          ? '모두'
+          : condition.operator === 'any-of'
+            ? '중 하나'
+            : '제외'
+      return `${fieldLabel} (${opTag}): ${vals}`
+    }
+  }),
   text: {
-    contains: '포함',
-    equals: '일치',
-    'is-empty': '비어 있음'
+    operatorLabels: {
+      contains: '포함',
+      equals: '일치',
+      'is-empty': '비어 있음'
+    },
+    isConditionOperandsValid: (condition) =>
+      typeof condition.value === 'string' && condition.value.trim().length > 0,
+    formatChipLabel: (condition, fieldLabel) => {
+      const val = String(condition.value ?? '')
+      return condition.operator === 'contains'
+        ? `${fieldLabel} 포함 "${val}"`
+        : `${fieldLabel} = "${val}"`
+    },
+    buildDraftCondition: (fieldKey, operator, draft) => {
+      const trimmed = draft.textValue.trim()
+      if (!trimmed) return { ok: false }
+      return {
+        ok: true,
+        condition: { fieldKey, operator, value: trimmed }
+      }
+    }
   },
-  number: {
-    equals: '같음 (=)',
-    gte: '이상 (>=)',
-    lte: '이하 (<=)',
-    between: '범위',
-    'is-empty': '비어 있음'
-  },
-  date: {
-    equals: '일치 (=)',
-    gte: '이후 (>=)',
-    lte: '이전 (<=)',
-    between: '범위',
-    'is-empty': '비어 있음'
-  },
+  number: createOrderedRangeFilterSpec({
+    operatorLabels: {
+      equals: '같음 (=)',
+      gte: '이상 (>=)',
+      lte: '이하 (<=)',
+      between: '범위',
+      'is-empty': '비어 있음'
+    },
+    isValidOperand: (value) => typeof value === 'number' && Number.isFinite(value),
+    parseDraftValue: (raw) => {
+      const n = Number(raw)
+      return Number.isFinite(n) ? n : null
+    },
+    isEmptyDraftValue: (raw) => raw.trim() === '',
+    invalidFormatError: '유효한 숫자를 입력하세요.',
+    invalidRangeError: '최솟값은 최댓값보다 클 수 없습니다.'
+  }),
+  date: createOrderedRangeFilterSpec({
+    operatorLabels: {
+      equals: '일치 (=)',
+      gte: '이후 (>=)',
+      lte: '이전 (<=)',
+      between: '범위',
+      'is-empty': '비어 있음'
+    },
+    isValidOperand: (value) => typeof value === 'string' && isValidIsoCalendarDate(value),
+    parseDraftValue: (raw) => (isValidIsoCalendarDate(raw) ? raw : null),
+    isEmptyDraftValue: (raw) => raw === '',
+    invalidFormatError: '유효한 YYYY-MM-DD 날짜를 입력하세요.',
+    invalidRangeError: '시작일은 종료일보다 늦을 수 없습니다.'
+  }),
   boolean: {
-    equals: '일치',
-    'is-empty': '비어 있음'
+    operatorLabels: {
+      equals: '일치',
+      'is-empty': '비어 있음'
+    },
+    isConditionOperandsValid: (condition) => typeof condition.value === 'boolean',
+    formatChipLabel: (condition, fieldLabel) =>
+      `${fieldLabel}: ${condition.value === true ? '예' : '아니오'}`,
+    buildDraftCondition: () => ({ ok: false })
   }
 }
 
@@ -60,7 +215,7 @@ export function getFrontmatterOperatorLabel(
   fieldType: FrontmatterFieldType,
   operator: FrontmatterFilterOperator
 ): string {
-  return OPERATOR_LABELS_BY_TYPE[fieldType][operator] ?? operator
+  return FILTER_FIELD_SPECS[fieldType].operatorLabels[operator] ?? operator
 }
 
 /** Serializes a `WorkspaceSearchSortSpec` into a `<select>` option value string. */
@@ -119,40 +274,7 @@ function isFrontmatterConditionValidForField(
   if (condition.operator === 'is-empty') {
     return true
   }
-
-  switch (field.type) {
-    case 'select':
-    case 'multi-select':
-      return (
-        Array.isArray(condition.values) &&
-        condition.values.length > 0 &&
-        condition.values.every((value) => typeof value === 'string')
-      )
-    case 'text':
-      return typeof condition.value === 'string' && condition.value.trim().length > 0
-    case 'number':
-      if (condition.operator === 'between') {
-        return (
-          typeof condition.min === 'number' &&
-          Number.isFinite(condition.min) &&
-          typeof condition.max === 'number' &&
-          Number.isFinite(condition.max)
-        )
-      }
-      return typeof condition.value === 'number' && Number.isFinite(condition.value)
-    case 'date':
-      if (condition.operator === 'between') {
-        return (
-          typeof condition.min === 'string' &&
-          isValidIsoCalendarDate(condition.min) &&
-          typeof condition.max === 'string' &&
-          isValidIsoCalendarDate(condition.max)
-        )
-      }
-      return typeof condition.value === 'string' && isValidIsoCalendarDate(condition.value)
-    case 'boolean':
-      return typeof condition.value === 'boolean'
-  }
+  return FILTER_FIELD_SPECS[field.type].isConditionOperandsValid(condition)
 }
 
 /** Filters active filter conditions to those valid under `schema`. */
@@ -184,42 +306,7 @@ export function formatFilterChipLabel(
   if (condition.operator === 'is-empty') {
     return `${field.label} · 비어 있음`
   }
-
-  switch (field.type) {
-    case 'select': {
-      const vals = (condition.values ?? []).join(', ')
-      return condition.operator === 'not-in'
-        ? `${field.label} (제외): ${vals}`
-        : `${field.label}: ${vals}`
-    }
-    case 'multi-select': {
-      const vals = (condition.values ?? []).join(', ')
-      const opTag =
-        condition.operator === 'all-of'
-          ? '모두'
-          : condition.operator === 'any-of'
-            ? '중 하나'
-            : '제외'
-      return `${field.label} (${opTag}): ${vals}`
-    }
-    case 'text': {
-      const val = String(condition.value ?? '')
-      return condition.operator === 'contains'
-        ? `${field.label} 포함 "${val}"`
-        : `${field.label} = "${val}"`
-    }
-    case 'number':
-    case 'date': {
-      if (condition.operator === 'between') {
-        return `${field.label}: ${condition.min ?? ''} ~ ${condition.max ?? ''}`
-      }
-      const sym =
-        condition.operator === 'gte' ? '>=' : condition.operator === 'lte' ? '<=' : '='
-      return `${field.label} ${sym} ${condition.value ?? ''}`
-    }
-    case 'boolean':
-      return `${field.label}: ${condition.value === true ? '예' : '아니오'}`
-  }
+  return FILTER_FIELD_SPECS[field.type].formatChipLabel(condition, field.label)
 }
 
 export type SummaryBadgeValue = string | number | boolean
@@ -461,114 +548,15 @@ export function cycleListboxIndex(
   return (clamped + delta + totalCount) % totalCount
 }
 
-interface OrderedRangeDraftParser {
-  parse: (raw: string) => number | string | null
-  isEmpty: (raw: string) => boolean
-  invalidFormatError: string
-  invalidRangeError: string
-}
-
-const ORDERED_RANGE_PARSERS: Record<'number' | 'date', OrderedRangeDraftParser> = {
-  number: {
-    parse: (raw) => {
-      const n = Number(raw)
-      return Number.isFinite(n) ? n : null
-    },
-    isEmpty: (raw) => raw.trim() === '',
-    invalidFormatError: '유효한 숫자를 입력하세요.',
-    invalidRangeError: '최솟값은 최댓값보다 클 수 없습니다.'
-  },
-  date: {
-    parse: (raw) => (isValidIsoCalendarDate(raw) ? raw : null),
-    isEmpty: (raw) => raw === '',
-    invalidFormatError: '유효한 YYYY-MM-DD 날짜를 입력하세요.',
-    invalidRangeError: '시작일은 종료일보다 늦을 수 없습니다.'
-  }
-}
-
-function buildOrderedRangeCondition(
-  fieldKey: string,
-  operator: FrontmatterFilterOperator,
-  draft: FilterPopoverDraft,
-  spec: OrderedRangeDraftParser
-): { ok: true; condition: FrontmatterFilterCondition } | { ok: false; error?: string } {
-  if (operator === 'between') {
-    if (spec.isEmpty(draft.minValue) || spec.isEmpty(draft.maxValue)) {
-      return { ok: false }
-    }
-    const min = spec.parse(draft.minValue)
-    const max = spec.parse(draft.maxValue)
-    if (min === null || max === null) {
-      return { ok: false, error: spec.invalidFormatError }
-    }
-    const isInverted =
-      typeof min === 'number' && typeof max === 'number' ? min > max : String(min) > String(max)
-    if (isInverted) {
-      return { ok: false, error: spec.invalidRangeError }
-    }
-    return {
-      ok: true,
-      condition: { fieldKey, operator, min, max }
-    }
-  }
-
-  if (spec.isEmpty(draft.textValue)) {
-    return { ok: false }
-  }
-  const parsed = spec.parse(draft.textValue)
-  if (parsed === null) {
-    return { ok: false, error: spec.invalidFormatError }
-  }
-  return {
-    ok: true,
-    condition: { fieldKey, operator, value: parsed }
-  }
-}
-
 /** Validates and constructs a `FrontmatterFilterCondition` from a popover draft state. */
 export function buildConditionFromDraft(
   field: FrontmatterFieldDefinition,
   draft: FilterPopoverDraft
-): { ok: true; condition: FrontmatterFilterCondition } | { ok: false; error?: string } {
+): BuiltConditionResult {
   const operator = draft.operator
   if (!operator) return { ok: false }
   if (operator === 'is-empty') {
     return { ok: true, condition: { fieldKey: field.key, operator } }
   }
-
-  switch (field.type) {
-    case 'select':
-    case 'multi-select':
-      if (draft.selectedValues.length === 0) {
-        return { ok: false }
-      }
-      return {
-        ok: true,
-        condition: {
-          fieldKey: field.key,
-          operator,
-          values: [...draft.selectedValues]
-        }
-      }
-
-    case 'text': {
-      const trimmed = draft.textValue.trim()
-      if (!trimmed) return { ok: false }
-      return {
-        ok: true,
-        condition: {
-          fieldKey: field.key,
-          operator,
-          value: trimmed
-        }
-      }
-    }
-
-    case 'number':
-    case 'date':
-      return buildOrderedRangeCondition(field.key, operator, draft, ORDERED_RANGE_PARSERS[field.type])
-
-    case 'boolean':
-      return { ok: false }
-  }
+  return FILTER_FIELD_SPECS[field.type].buildDraftCondition(field.key, operator, draft)
 }
