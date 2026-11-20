@@ -64,12 +64,12 @@ export function getLineNumberAtOffset(text: string, offset: number): number {
  * Returns true if the given character offset sits inside a fenced code block (``` or ~~~).
  */
 export function isOffsetInCodeFence(markdown: string, offset: number): boolean {
-  if (!markdown) return false
+  if (!markdown || offset < 0) return false
   const slice = extractFrontmatterBody(markdown)
-  if (offset < slice.bodyStartOffset) {
+  const bodyOffset = offset - slice.bodyStartOffset
+  if (bodyOffset < 0) {
     return false
   }
-  const bodyOffset = offset - slice.bodyStartOffset
   const lineNumber = getLineNumberAtOffset(slice.body, bodyOffset)
   const lines = scanMarkdownLines(slice.body, 1)
   return lines[lineNumber - 1]?.inCodeFence ?? false

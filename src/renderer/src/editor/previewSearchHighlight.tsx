@@ -1,5 +1,5 @@
 import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
-import { extractFrontmatterBody } from '@shared/frontmatter'
+import { isLineInFrontmatter } from '@shared/frontmatter'
 import {
   compileSearchMatcher,
   type CompiledSearchMatcher,
@@ -877,8 +877,7 @@ export function findClosestPreviewBlockForLine(
   lineNumber: number,
   jumpHighlight?: PreviewJumpHighlightQuery | null
 ): Element | null {
-  const fmSlice = extractFrontmatterBody(markdown)
-  if (fmSlice.hasFrontmatter && lineNumber < fmSlice.bodyStartLine) {
+  if (isLineInFrontmatter(markdown, lineNumber)) {
     return null
   }
 

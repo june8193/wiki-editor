@@ -4,6 +4,8 @@ import {
   createDefaultFrontmatterSchema,
   extractFrontmatterBody,
   FRONTMATTER_SCHEMA_RELATIVE_PATH,
+  isLineInFrontmatter,
+  isOffsetInFrontmatter,
   parseFrontmatterDocument,
   parseFrontmatterSchema,
   parseFrontmatterSchemaJson,
@@ -660,26 +662,54 @@ describe('frontmatter body extraction and lossless recombination', () => {
   it('extracts body, bodyStartLine, and bodyStartOffset across valid, syntax-error, unclosed, and non-frontmatter documents', () => {
     const valid = '\uFEFF---\r\n# comment\r\ntitle: Doc\r\n...\r\n\r\n# Heading'
     const validSlice = extractFrontmatterBody(valid)
-    expect(validSlice.hasFrontmatter).toBe(true)
-    expect(validSlice.rawBlock).toBe('---\r\n# comment\r\ntitle: Doc\r\n...')
-    expect(validSlice.body).toBe('\r\n# Heading')
-    expect(validSlice.bodyStartLine).toBe(5)
-    expect(validSlice.bodyStartOffset).toBe('\uFEFF---\r\n# comment\r\ntitle: Doc\r\n...\r\n'.length)
-    expect(validSlice.lineEnding).toBe('\r\n')
+    expect(validSlice).toEqual({
+      body: '\r\n# Heading',
+      bodyStartLine: 5,
+      bodyStartOffset: '\uFEFF---\r\n# comment\r\ntitle: Doc\r\n...\r\n'.length
+    })
 
     const closedSyntaxError = '---\nbad: [unclosed\n---\n# Body'
-    const syntaxSlice = extractFrontmatterBody(closedSyntaxError)
-    expect(syntaxSlice.hasFrontmatter).toBe(true)
-    expect(syntaxSlice.rawBlock).toBe('---\nbad: [unclosed\n---')
-    expect(syntaxSlice.body).toBe('# Body')
-    expect(syntaxSlice.bodyStartLine).toBe(4)
+    expect(extractFrontmatterBody(closedSyntaxError)).toEqual({
+      body: '# Body',
+      bodyStartLine: 4,
+      bodyStartOffset: '---\nbad: [unclosed\n---\n'.length
+    })
 
     const unclosed = '---\ntitle: open\n# Body'
-    const unclosedSlice = extractFrontmatterBody(unclosed)
-    expect(unclosedSlice.hasFrontmatter).toBe(false)
-    expect(unclosedSlice.body).toBe(unclosed)
-    expect(unclosedSlice.bodyStartLine).toBe(1)
-    expect(unclosedSlice.bodyStartOffset).toBe(0)
+    expect(extractFrontmatterBody(unclosed)).toEqual({
+      body: unclosed,
+      bodyStartLine: 1,
+      bodyStartOffset: 0
+    })
+  })
+
+  it('detects whether 1-based lines and 0-based offsets fall inside a closed frontmatter block', () => {
+    const valid = '\uFEFF---\r\n# comment\r\ntitle: Doc\r\n---\r\n# Body'
+    const bodyStartOffset = '\uFEFF---\r\n# comment\r\ntitle: Doc\r\n---\r\n'.length
+
+    expect(isLineInFrontmatter(valid, 0)).toBe(false)
+    expect(isLineInFrontmatter(valid, 1)).toBe(true)
+    expect(isLineInFrontmatter(valid, 4)).toBe(true)
+    expect(isLineInFrontmatter(valid, 5)).toBe(false)
+
+    expect(isOffsetInFrontmatter(valid, -1)).toBe(false)
+    expect(isOffsetInFrontmatter(valid, 0)).toBe(true)
+    expect(isOffsetInFrontmatter(valid, bodyStartOffset - 1)).toBe(true)
+    expect(isOffsetInFrontmatter(valid, bodyStartOffset)).toBe(false)
+
+    const closedSyntaxError = '---\nbad: [unclosed\n---\n# Body'
+    expect(isLineInFrontmatter(closedSyntaxError, 3)).toBe(true)
+    expect(isLineInFrontmatter(closedSyntaxError, 4)).toBe(false)
+    expect(isOffsetInFrontmatter(closedSyntaxError, closedSyntaxError.indexOf('# Body') - 1)).toBe(true)
+    expect(isOffsetInFrontmatter(closedSyntaxError, closedSyntaxError.indexOf('# Body'))).toBe(false)
+
+    const unclosed = '---\ntitle: open\n# Body'
+    expect(isLineInFrontmatter(unclosed, 1)).toBe(false)
+    expect(isOffsetInFrontmatter(unclosed, 0)).toBe(false)
+
+    const plain = '# Plain\nText'
+    expect(isLineInFrontmatter(plain, 1)).toBe(false)
+    expect(isOffsetInFrontmatter(plain, 0)).toBe(false)
   })
 
   it('recombines edited body with original frontmatter losslessly including comments, unknown keys, nested YAML, BOM, CRLF, and blank separators', () => {

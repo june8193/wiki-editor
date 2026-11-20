@@ -2,7 +2,7 @@ import type { Code, Content, Definition, Html, List, ListItem, Parent, Root, Roo
 import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
-import { extractFrontmatterBody } from '@shared/frontmatter'
+import { extractFrontmatterBody, isLineInFrontmatter } from '@shared/frontmatter'
 import {
   compileSearchMatcher,
   type CompiledSearchMatcher,
@@ -663,8 +663,7 @@ export function analyzeMarkdownSearchJump(
   rawContent: string,
   jump: DocumentJumpLocation
 ): MarkdownJumpPlan {
-  const slice = extractFrontmatterBody(rawContent)
-  if (slice.hasFrontmatter && jump.lineNumber < slice.bodyStartLine) {
+  if (isLineInFrontmatter(rawContent, jump.lineNumber)) {
     return {
       lineNumber: Math.max(1, jump.lineNumber),
       isInFrontmatter: true,
@@ -674,6 +673,7 @@ export function analyzeMarkdownSearchJump(
     }
   }
 
+  const slice = extractFrontmatterBody(rawContent)
   const lineOffset = slice.bodyStartLine - 1
   const bodyLf = normalizeLineEndingsToLf(slice.body)
   const bodyLines = splitSearchLines(bodyLf)

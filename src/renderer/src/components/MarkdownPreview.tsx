@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import type { ThemeMode } from '@shared/config'
-import { extractFrontmatterBody } from '@shared/frontmatter'
+import { extractFrontmatterBody, isLineInFrontmatter } from '@shared/frontmatter'
 import {
   applyFindScrollNonce,
   type DocumentFindHighlightQuery,
@@ -166,8 +166,7 @@ export function MarkdownPreview({
     applyFindScrollNonce(lastHandledJumpNonceRef, jumpHighlight.nonce, {
       skipScroll: false,
       performScroll: () => {
-        const fmSlice = extractFrontmatterBody(content)
-        if (fmSlice.hasFrontmatter && jumpHighlight.lineNumber < fmSlice.bodyStartLine) {
+        if (isLineInFrontmatter(content, jumpHighlight.lineNumber)) {
           container.scrollTop = 0
           onScrollTopChangeRef.current?.(0)
           return true

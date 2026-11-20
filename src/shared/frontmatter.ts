@@ -62,12 +62,9 @@ export interface FrontmatterMutationResult {
 }
 
 export interface FrontmatterBodySlice {
-  hasFrontmatter: boolean
-  rawBlock: string
   body: string
   bodyStartLine: number
   bodyStartOffset: number
-  lineEnding: '\r\n' | '\n'
 }
 
 interface LineSpan {
@@ -854,13 +851,28 @@ const LEADING_BLANK_LINES_RE = /^(?:[ \t]*\r?\n)+/
 export function extractFrontmatterBody(markdown: string): FrontmatterBodySlice {
   const split = splitFrontmatterRegion(markdown)
   return {
-    hasFrontmatter: split.hasFrontmatter,
-    rawBlock: split.rawBlock,
     body: split.body,
     bodyStartLine: split.bodyStartLine,
-    bodyStartOffset: split.bodyStartOffset,
-    lineEnding: split.lineEnding
+    bodyStartOffset: split.bodyStartOffset
   }
+}
+
+/**
+ * Returns true when a 1-based line number falls inside a closed YAML frontmatter block.
+ */
+export function isLineInFrontmatter(markdown: string, lineNumber: number): boolean {
+  if (lineNumber < 1) return false
+  const split = splitFrontmatterRegion(markdown)
+  return split.hasFrontmatter && lineNumber < split.bodyStartLine
+}
+
+/**
+ * Returns true when a 0-based character offset falls inside a closed YAML frontmatter block.
+ */
+export function isOffsetInFrontmatter(markdown: string, offset: number): boolean {
+  if (offset < 0) return false
+  const split = splitFrontmatterRegion(markdown)
+  return split.hasFrontmatter && offset < split.bodyStartOffset
 }
 
 /**
