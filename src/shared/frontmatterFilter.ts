@@ -40,11 +40,6 @@ export type FrontmatterValueComparator = (
   b: FrontmatterFieldValue | undefined
 ) => number
 
-export interface FrontmatterFieldValuesCollector {
-  addDocumentValues(docValues: Readonly<Record<string, FrontmatterFieldValue | undefined>>): void
-  finalize(): WorkspaceFrontmatterFieldValuesResponse
-}
-
 export const FRONTMATTER_OPERATORS_BY_TYPE: Readonly<
   Record<FrontmatterFieldType, readonly FrontmatterFilterOperator[]>
 > = {
@@ -130,7 +125,7 @@ function normalizeTargetValues(values: readonly string[] | undefined): string[] 
   return values.filter((item): item is string => typeof item === 'string')
 }
 
-function compareLocaleStrings(a: string, b: string): number {
+export function compareLocaleStrings(a: string, b: string): number {
   const baseOrder = a.localeCompare(b, undefined, { sensitivity: 'base' })
   return baseOrder !== 0 ? baseOrder : a.localeCompare(b)
 }
@@ -453,43 +448,6 @@ export function collectAllowCustomMultiSelectFields(
       field.allowCustom === true &&
       (!requestedSet || requestedSet.has(field.key))
   )
-}
-
-/** Creates a stateful collector for deduplicating and sorting `allowCustom` `multi-select` field values. */
-export function createFrontmatterFieldValuesCollector(
-  targetFields: readonly FrontmatterFieldDefinition[]
-): FrontmatterFieldValuesCollector {
-  const byField = new Map<string, Set<string>>()
-  for (const field of targetFields) {
-    const set = new Set<string>()
-    for (const opt of field.options ?? []) {
-      if (opt.value.trim().length > 0) {
-        set.add(opt.value)
-      }
-    }
-    byField.set(field.key, set)
-  }
-
-  return {
-    addDocumentValues(docValues) {
-      for (const [fieldKey, valueSet] of byField.entries()) {
-        const raw = docValues[fieldKey]
-        if (!Array.isArray(raw)) continue
-        for (const item of raw) {
-          if (typeof item === 'string' && item.trim().length > 0) {
-            valueSet.add(item)
-          }
-        }
-      }
-    },
-    finalize() {
-      const valuesByField: Record<string, string[]> = {}
-      for (const [fieldKey, valueSet] of byField.entries()) {
-        valuesByField[fieldKey] = [...valueSet].sort(compareLocaleStrings)
-      }
-      return { valuesByField }
-    }
-  }
 }
 
 export interface SelectableFieldOption {

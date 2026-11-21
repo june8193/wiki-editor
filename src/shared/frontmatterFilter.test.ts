@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   collectAllowCustomMultiSelectFields,
-  createFrontmatterFieldValuesCollector,
   extractFrontmatterSummary,
   type FrontmatterFieldDefinition,
   type FrontmatterFilterCondition,
@@ -457,16 +456,6 @@ describe('frontmatter sort engine, summary extraction, and custom value collecti
       'strictTags'
     ])
     expect(filteredTargets.map((f) => f.key)).toEqual(['labels'])
-
-    const collector = createFrontmatterFieldValuesCollector(targets)
-    collector.addDocumentValues({ labels: ['zebra', 'backend', 'alpha', '  '], areas: ['docs', 'api'] })
-    collector.addDocumentValues({ labels: ['alpha', 'api'], areas: ['docs'] })
-    expect(collector.finalize()).toEqual({
-      valuesByField: {
-        labels: ['alpha', 'api', 'backend', 'security', 'zebra'],
-        areas: ['api', 'docs']
-      }
-    })
 
     expect(isFrontmatterDocumentFileName('guide.md')).toBe(true)
     expect(isFrontmatterDocumentFileName('NOTE.MARKDOWN')).toBe(true)

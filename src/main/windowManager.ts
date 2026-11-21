@@ -35,6 +35,7 @@ import {
   type OpenWorkspaceInNewWindowResult,
   type WorkspaceInfo
 } from '@shared/workspace'
+import type { WorkspaceQueryAndSchemaHub } from '@shared/workspaceQueryAndSchema'
 import type { ConfigService } from './config/ConfigService'
 import type { WebContentsLike } from './ipc/ipcHelpers'
 import {
@@ -54,14 +55,12 @@ import type {
 } from './ipc/registerWorkspaceIpc'
 import type { LogService } from './logging/LogService'
 import { createAuxiliaryWindowOptions, createMainWindowOptions } from './window'
-import { FrontmatterFieldValuesService } from './workspace/FrontmatterFieldValuesService'
-import { FrontmatterSchemaService } from './workspace/FrontmatterSchemaService'
+import { createDiskWorkspaceQueryAndSchemaHub } from './workspace/diskWorkspaceQueryAndSchema'
 import {
   resolveValidWorkspaceDirectory,
   tryResolveRealWorkspacePath,
   WorkspaceFsService
 } from './workspace/WorkspaceFsService'
-import { WorkspaceSearchService } from './workspace/WorkspaceSearchService'
 
 export interface WindowWebContentsLike extends BufferWebContentsLike {
   on?: (
@@ -124,9 +123,7 @@ export interface WorkspaceSessionHandle
     WorkspaceIpcSession,
     FrontmatterIpcSession {
   readonly workspaceService: WorkspaceFsService
-  readonly searchService: WorkspaceSearchService
-  readonly frontmatterSchemaService: FrontmatterSchemaService
-  readonly frontmatterFieldValuesService: FrontmatterFieldValuesService
+  readonly queryAndSchemaHub: WorkspaceQueryAndSchemaHub
   getTargets: () => WindowWebContentsLike[]
 }
 
@@ -149,9 +146,7 @@ interface WorkspaceSession {
   sessionId: number
   mainWebContentsId: number
   workspaceService: WorkspaceFsService
-  searchService: WorkspaceSearchService
-  frontmatterSchemaService: FrontmatterSchemaService
-  frontmatterFieldValuesService: FrontmatterFieldValuesService
+  queryAndSchemaHub: WorkspaceQueryAndSchemaHub
   bufferHub: SharedDocumentBufferHub
   dragCoordinator: TabDragCoordinator
   ownsBufferHub: boolean
@@ -332,22 +327,11 @@ export class WindowManager
   ): WorkspaceSession {
     const sessionId = this.nextSessionId++
     const { workspaceService, bufferHub, ownsBufferHub } = this.createSessionServices()
-    const frontmatterSchemaService = new FrontmatterSchemaService({
+    const queryAndSchemaHub = createDiskWorkspaceQueryAndSchemaHub({
       workspaceService,
+      bufferHub,
       watchDebounceMs: this.watchDebounceMs,
       logService: this.logService
-    })
-    const getOpenBuffers = (): ReturnType<typeof Object.values<ReturnType<typeof bufferHub.getSnapshot>['buffers'][string]>> =>
-      Object.values(bufferHub.getSnapshot().buffers)
-    const searchService = new WorkspaceSearchService({
-      workspaceService,
-      frontmatterSchemaService,
-      getOpenBuffers
-    })
-    const frontmatterFieldValuesService = new FrontmatterFieldValuesService({
-      workspaceService,
-      frontmatterSchemaService,
-      getOpenBuffers
     })
     const dragCoordinator = new TabDragCoordinator({
       nextDragSessionId: () => `drag-${++this.dragSessionCounter}`
@@ -359,9 +343,7 @@ export class WindowManager
       sessionId,
       mainWebContentsId: 0,
       workspaceService,
-      searchService,
-      frontmatterSchemaService,
-      frontmatterFieldValuesService,
+      queryAndSchemaHub,
       bufferHub,
       dragCoordinator,
       ownsBufferHub,
@@ -377,9 +359,7 @@ export class WindowManager
       handle: {
         hub: bufferHub,
         workspaceService,
-        searchService,
-        frontmatterSchemaService,
-        frontmatterFieldValuesService,
+        queryAndSchemaHub,
         getTargets,
         resolveWindowId: (sender) => {
           const live = this.resolveLiveWindowSession(sender)
@@ -399,14 +379,6 @@ export class WindowManager
     session.unsubscribeHub = bufferHub.subscribe((event) => {
       this.handleHubEvent(session, event)
     })
-    session.disposeCleanups.push(
-      frontmatterSchemaService.onSchemaChanged((result) => {
-        if (!result.exists || !result.path || !bufferHub.hasBuffer(result.path)) {
-          return
-        }
-        void bufferHub.refreshCleanWorkspaceFile(result.path).catch(() => undefined)
-      })
-    )
     session.unsubscribeDrag = dragCoordinator.onStateChanged((dragSession) => {
       if (this.disposed || session.disposed) return
       const targets = getTargets()
@@ -528,12 +500,10 @@ export class WindowManager
     session.unsubscribeHub()
     session.unsubscribeDrag()
     session.dragCoordinator.dispose()
+    session.queryAndSchemaHub.dispose()
     if (session.ownsBufferHub) {
       session.bufferHub.dispose()
     }
-    session.frontmatterSchemaService.dispose()
-    session.frontmatterFieldValuesService.dispose()
-    session.searchService.dispose()
     session.workspaceService.dispose()
 
     this.sessions.delete(session.sessionId)
@@ -789,8 +759,7 @@ export class WindowManager
         throw new Error('Only the main window can open a workspace')
       }
       try {
-        session.searchService.cancelActiveSearch()
-        session.frontmatterFieldValuesService.cancelActiveScan()
+        session.queryAndSchemaHub.cancelActiveScans()
         const info = await session.workspaceService.openWorkspace(realRoot)
         session.pendingInitialWorkspacePath = null
         if (!this.getLiveMainRecord(session)) {
@@ -1209,14 +1178,6 @@ export class WindowManager
 
     if (event.type === 'state-changed') {
       this.reconcileAuxiliaryAutoClose(session)
-      return
-    }
-
-    if (
-      event.type === 'workspace-saved' &&
-      session.frontmatterSchemaService.isSchemaFilePath(event.path)
-    ) {
-      void session.frontmatterSchemaService.reloadIfChanged()
     }
   }
 

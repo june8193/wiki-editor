@@ -1,7 +1,6 @@
 import { FRONTMATTER_IPC_CHANNELS } from '@shared/ipc'
+import type { WorkspaceQueryAndSchemaHub } from '@shared/workspaceQueryAndSchema'
 import type { LogService } from '../logging/LogService'
-import type { FrontmatterFieldValuesService } from '../workspace/FrontmatterFieldValuesService'
-import type { FrontmatterSchemaService } from '../workspace/FrontmatterSchemaService'
 import {
   broadcastIpcEvent,
   type IpcHandlerTuple,
@@ -15,8 +14,7 @@ import {
 } from './ipcHelpers'
 
 export interface FrontmatterIpcSession {
-  frontmatterSchemaService: FrontmatterSchemaService
-  frontmatterFieldValuesService?: FrontmatterFieldValuesService
+  queryAndSchemaHub: WorkspaceQueryAndSchemaHub
   getTargets: () => WebContentsLike[]
 }
 
@@ -25,8 +23,7 @@ export type FrontmatterIpcSessionSource = IpcSessionSource<FrontmatterIpcSession
 export interface RegisterFrontmatterIpcOptions {
   ipcMain: IpcMainLike
   sessionSource?: FrontmatterIpcSessionSource
-  frontmatterSchemaService?: FrontmatterSchemaService
-  frontmatterFieldValuesService?: FrontmatterFieldValuesService
+  queryAndSchemaHub?: WorkspaceQueryAndSchemaHub
   getTargets?: () => WebContentsLike[]
   logService?: LogService
 }
@@ -38,24 +35,21 @@ export interface RegisterFrontmatterIpcOptions {
 export function registerFrontmatterIpc({
   ipcMain,
   sessionSource,
-  frontmatterSchemaService,
-  frontmatterFieldValuesService,
+  queryAndSchemaHub,
   getTargets,
   logService
 }: RegisterFrontmatterIpcOptions): () => void {
   const source = resolveIpcSessionSource(
     sessionSource,
-    frontmatterSchemaService && getTargets
-      ? { frontmatterSchemaService, frontmatterFieldValuesService, getTargets }
-      : undefined,
-    'registerFrontmatterIpc requires either sessionSource or frontmatterSchemaService and getTargets'
+    queryAndSchemaHub && getTargets ? { queryAndSchemaHub, getTargets } : undefined,
+    'registerFrontmatterIpc requires either sessionSource or queryAndSchemaHub and getTargets'
   )
 
   const unsubscribeSessions = subscribeIpcSessions(
     source,
-    (session) => session.frontmatterSchemaService,
+    (session) => session.queryAndSchemaHub,
     (session) =>
-      session.frontmatterSchemaService.onSchemaChanged((result) => {
+      session.queryAndSchemaHub.onSchemaChanged((result) => {
         broadcastIpcEvent(session.getTargets, FRONTMATTER_IPC_CHANNELS.schemaChanged, result)
       })
   )
@@ -72,27 +66,24 @@ export function registerFrontmatterIpc({
   const handlers: readonly IpcHandlerTuple[] = [
     [
       FRONTMATTER_IPC_CHANNELS.getSchema,
-      (event) => requireSession(event).frontmatterSchemaService.getSchema()
+      (event) => requireSession(event).queryAndSchemaHub.getSchema()
     ],
     [
       FRONTMATTER_IPC_CHANNELS.createDefaultSchema,
-      (event) => requireSession(event).frontmatterSchemaService.createDefaultSchema()
+      (event) => requireSession(event).queryAndSchemaHub.createDefaultSchema()
     ],
     [
       FRONTMATTER_IPC_CHANNELS.saveSchema,
-      (event, schema) => requireSession(event).frontmatterSchemaService.saveSchema(schema)
+      (event, schema) => requireSession(event).queryAndSchemaHub.saveSchema(schema)
     ],
     [
       FRONTMATTER_IPC_CHANNELS.getFieldValues,
       (event, fieldKeys) => {
         const session = requireSession(event)
-        if (!session.frontmatterFieldValuesService) {
-          throw new Error('Frontmatter field values service is not configured')
-        }
         const normalizedKeys = Array.isArray(fieldKeys)
           ? fieldKeys.filter((item): item is string => typeof item === 'string')
           : undefined
-        return session.frontmatterFieldValuesService.collectFieldValues(normalizedKeys)
+        return session.queryAndSchemaHub.collectFieldValues(normalizedKeys)
       }
     ]
   ]

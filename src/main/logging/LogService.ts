@@ -7,7 +7,7 @@ import {
   type LogProcess,
   serializeError
 } from '@shared/logging'
-import { createAsyncQueue } from '../asyncQueue'
+import { createAsyncQueue } from '@shared/asyncQueue'
 import { isErrnoCode } from '../fs/pathSecurity'
 
 export const LOG_FILE_NAME = 'app.jsonl'

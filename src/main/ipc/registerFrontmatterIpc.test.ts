@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,9 +8,9 @@ import type {
   WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
 import { FRONTMATTER_IPC_CHANNELS } from '@shared/ipc'
+import type { WorkspaceQueryAndSchemaHub } from '@shared/workspaceQueryAndSchema'
 import { LogService } from '../logging/LogService'
-import { FrontmatterFieldValuesService } from '../workspace/FrontmatterFieldValuesService'
-import { FrontmatterSchemaService } from '../workspace/FrontmatterSchemaService'
+import { createDiskWorkspaceQueryAndSchemaHub } from '../workspace/diskWorkspaceQueryAndSchema'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import type { WebContentsLike } from './ipcHelpers'
 import { createFakeIpcMain } from './ipcTestHelpers'
@@ -20,21 +20,21 @@ describe('registerFrontmatterIpc', () => {
   let tempDir: string
   let workspaceDir: string
   let workspaceService: WorkspaceFsService
-  let schemaService: FrontmatterSchemaService
+  let queryAndSchemaHub: WorkspaceQueryAndSchemaHub
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'wiki-editor-fm-ipc-'))
+    tempDir = await realpath(await mkdtemp(join(tmpdir(), 'wiki-editor-fm-ipc-')))
     workspaceDir = join(tempDir, 'docs')
     await mkdir(workspaceDir, { recursive: true })
     workspaceService = new WorkspaceFsService({ watchDebounceMs: 25 })
-    schemaService = new FrontmatterSchemaService({
+    queryAndSchemaHub = createDiskWorkspaceQueryAndSchemaHub({
       workspaceService,
       watchDebounceMs: 25
     })
   })
 
   afterEach(async () => {
-    schemaService.dispose()
+    queryAndSchemaHub.dispose()
     workspaceService.dispose()
     await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 })
   })
@@ -54,7 +54,7 @@ describe('registerFrontmatterIpc', () => {
 
     const dispose = registerFrontmatterIpc({
       ipcMain,
-      frontmatterSchemaService: schemaService,
+      queryAndSchemaHub,
       getTargets: () => [liveTarget, destroyedTarget],
       logService
     })
@@ -132,16 +132,11 @@ describe('registerFrontmatterIpc', () => {
 
   it('handles frontmatter:get-field-values and redacts field values from audit logs', async () => {
     const logService = new LogService(join(tempDir, 'logs'))
-    const fieldValuesService = new FrontmatterFieldValuesService({
-      workspaceService,
-      frontmatterSchemaService: schemaService
-    })
     const ipcMain = createFakeIpcMain()
 
     const dispose = registerFrontmatterIpc({
       ipcMain,
-      frontmatterSchemaService: schemaService,
-      frontmatterFieldValuesService: fieldValuesService,
+      queryAndSchemaHub,
       getTargets: () => [],
       logService
     })
@@ -151,7 +146,7 @@ describe('registerFrontmatterIpc', () => {
     )
 
     await workspaceService.openWorkspace(workspaceDir)
-    await schemaService.saveSchema({
+    await queryAndSchemaHub.saveSchema({
       version: 1,
       fields: [
         {
@@ -183,7 +178,6 @@ describe('registerFrontmatterIpc', () => {
     expect(serializedLogs).not.toContain('SECRET_TAG')
     expect(serializedLogs).toContain(FRONTMATTER_IPC_CHANNELS.getFieldValues)
 
-    fieldValuesService.dispose()
     dispose()
   })
 })

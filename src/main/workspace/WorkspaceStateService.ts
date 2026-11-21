@@ -10,7 +10,7 @@ import {
   type WorkspaceStateDocument,
   type WorkspaceStateUpdate
 } from '@shared/workspaceState'
-import { createAsyncQueue } from '../asyncQueue'
+import { createAsyncQueue } from '@shared/asyncQueue'
 import { loadOrInitializeJsonFile, writeFileAtomic } from '../fs/atomicFile'
 import type { LogService } from '../logging/LogService'
 

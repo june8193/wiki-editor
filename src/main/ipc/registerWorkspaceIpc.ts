@@ -9,11 +9,11 @@ import type {
   WorkspaceEntryKind,
   WorkspaceInfo
 } from '@shared/workspace'
+import type { WorkspaceQueryAndSchemaHub } from '@shared/workspaceQueryAndSchema'
 import { ConfigService } from '../config/ConfigService'
 import type { LogService } from '../logging/LogService'
-import { FrontmatterSchemaService } from '../workspace/FrontmatterSchemaService'
+import { createDiskWorkspaceQueryAndSchemaHub } from '../workspace/diskWorkspaceQueryAndSchema'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
-import { WorkspaceSearchService } from '../workspace/WorkspaceSearchService'
 import {
   broadcastIpcEvent,
   IpcHandlerTuple,
@@ -25,7 +25,7 @@ import {
 
 export interface WorkspaceIpcSession {
   workspaceService: WorkspaceFsService
-  searchService: WorkspaceSearchService
+  queryAndSchemaHub: WorkspaceQueryAndSchemaHub
   getTargets: () => WebContentsLike[]
   isMainWindow: (sender: WebContentsLike | undefined) => boolean
 }
@@ -78,8 +78,7 @@ export function registerWorkspaceIpc({
   logService
 }: RegisterWorkspaceIpcOptions): () => void {
   const watchersByService = new Map<WorkspaceFsService, () => void>()
-  let ownedSearchService: WorkspaceSearchService | undefined
-  let ownedSchemaService: FrontmatterSchemaService | undefined
+  let ownedQueryAndSchemaHub: WorkspaceQueryAndSchemaHub | undefined
 
   let activeCoordinator: WorkspaceIpcCoordinator
   if (coordinator) {
@@ -90,15 +89,14 @@ export function registerWorkspaceIpc({
         'registerWorkspaceIpc requires either coordinator or workspaceService and getTargets'
       )
     }
-    ownedSchemaService = new FrontmatterSchemaService({ workspaceService, logService })
-    ownedSearchService = new WorkspaceSearchService({
+    ownedQueryAndSchemaHub = createDiskWorkspaceQueryAndSchemaHub({
       workspaceService,
-      frontmatterSchemaService: ownedSchemaService,
-      getOpenBuffers: bufferHub ? () => Object.values(bufferHub.getSnapshot().buffers) : () => []
+      bufferHub,
+      logService
     })
     const singleSession: WorkspaceIpcSession = {
       workspaceService,
-      searchService: ownedSearchService,
+      queryAndSchemaHub: ownedQueryAndSchemaHub,
       getTargets,
       isMainWindow: isMainWindowSender
     }
@@ -165,7 +163,7 @@ export function registerWorkspaceIpc({
     session: WorkspaceIpcSession,
     rootPath: string
   ): Promise<WorkspaceInfo> => {
-    session.searchService.cancelActiveSearch()
+    session.queryAndSchemaHub.cancelActiveScans()
     return session.workspaceService.openWorkspace(rootPath)
   }
 
@@ -228,7 +226,7 @@ export function registerWorkspaceIpc({
     [
       WORKSPACE_IPC_CHANNELS.search,
       (event, request) =>
-        requireSession(event).searchService.search(request as WorkspaceSearchRequest)
+        requireSession(event).queryAndSchemaHub.search(request as WorkspaceSearchRequest)
     ],
     [
       WORKSPACE_IPC_CHANNELS.readFile,
@@ -308,8 +306,7 @@ export function registerWorkspaceIpc({
   return () => {
     unsubscribeSessionDisposed?.()
     clearAllWatchers()
-    ownedSearchService?.dispose()
-    ownedSchemaService?.dispose()
+    ownedQueryAndSchemaHub?.dispose()
     removeHandlers()
   }
 }

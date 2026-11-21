@@ -86,4 +86,46 @@ describe('inMemoryWikiHarness frontmatter search & field values parity', () => {
       harness.dispose()
     }
   })
+
+  it('matches main-process non-file schema target error and corrupt-schema search fallback via shared hub', async () => {
+    const harness = createMultiWindowWikiHarness(
+      { autoSave: false },
+      {
+        workspaces: {
+          'C:\\wiki\\bad-schema-dir': {
+            [`${FRONTMATTER_SCHEMA_RELATIVE_PATH}/nested.txt`]: 'not a schema file',
+            'note.md': 'Alpha body'
+          },
+          'C:\\wiki\\corrupt-schema': {
+            [FRONTMATTER_SCHEMA_RELATIVE_PATH]: '{ broken json',
+            'note.md': '---\nstatus: todo\n---\nAlpha body'
+          }
+        }
+      }
+    )
+
+    try {
+      const mainWin = harness.createWindow({ role: 'main' })
+      await mainWin.api.workspace.open('C:\\wiki\\bad-schema-dir')
+
+      const badSchema = await mainWin.api.frontmatter!.getSchema()
+      expect(badSchema).toEqual({
+        exists: true,
+        path: `C:/wiki/bad-schema-dir/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`,
+        schema: null,
+        error: '스키마 경로가 파일이 아닙니다.'
+      })
+      await expect(mainWin.api.frontmatter!.createDefaultSchema()).rejects.toThrow(/파일이 아닙니다/)
+
+      await mainWin.api.workspace.open('C:\\wiki\\corrupt-schema')
+      const plainSearch = await mainWin.api.workspace.search!({
+        query: 'Alpha',
+        options: DEFAULT_SEARCH_MATCH_OPTIONS
+      })
+      expect(plainSearch.files.map((f) => f.relativePath)).toEqual(['note.md'])
+      expect(await mainWin.api.frontmatter!.getFieldValues!()).toEqual({ valuesByField: {} })
+    } finally {
+      harness.dispose()
+    }
+  })
 })

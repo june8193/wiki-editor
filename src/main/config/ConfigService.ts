@@ -13,7 +13,7 @@ import {
   removeFavoriteWorkspace,
   toggleFavoriteWorkspace
 } from '@shared/workspace'
-import { createAsyncQueue } from '../asyncQueue'
+import { createAsyncQueue } from '@shared/asyncQueue'
 import { loadOrInitializeJsonFile, writeFileAtomic } from '../fs/atomicFile'
 import type { LogService } from '../logging/LogService'
 

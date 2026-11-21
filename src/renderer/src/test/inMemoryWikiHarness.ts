@@ -16,45 +16,12 @@ import {
 } from '@shared/config'
 import type { SharedBufferHubEvent } from '@shared/documentBuffer'
 import {
-  cloneFrontmatterSchema,
-  collectAllowCustomMultiSelectFields,
-  createDefaultFrontmatterSchema,
-  createFrontmatterFieldValuesCollector,
-  extractFrontmatterSummary,
   FRONTMATTER_SCHEMA_DIR,
   FRONTMATTER_SCHEMA_RELATIVE_PATH,
-  type FrontmatterFieldValue,
-  type FrontmatterSchemaLoadResult,
-  isExcludedFrontmatterRelativePath,
-  isFrontmatterDocumentFileName,
-  matchesFrontmatterConditions,
-  parseFrontmatterDocument,
-  parseFrontmatterSchema,
-  parseFrontmatterSchemaJson,
-  serializeFrontmatterSchema,
-  type WorkspaceFrontmatterFieldValuesResponse,
-  type WorkspaceFrontmatterSchema
+  type FrontmatterSchemaLoadResult
 } from '@shared/frontmatter'
 import { createEmptyGitStatus } from '@shared/git'
-import {
-  buildWorkspaceSearchFileResult,
-  commitSearchCandidateSlot,
-  type CompiledSearchMatcher,
-  compileSearchMatcher,
-  createWorkspaceSearchSortPlan,
-  DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE,
-  DEFAULT_WORKSPACE_SEARCH_MAX_TOTAL_MATCHES,
-  emptyWorkspaceSearchResponse,
-  isExcludedSearchFileName,
-  normalizeWorkspaceSearchLimit,
-  scanSearchTextContent,
-  type SearchCandidateScanResult,
-  type TextMatchSpan,
-  WORKSPACE_SEARCH_MAX_FILE_BYTES,
-  type WorkspaceSearchAccumulator,
-  type WorkspaceSearchRequest,
-  type WorkspaceSearchResponse
-} from '@shared/search'
+import type { WorkspaceSearchRequest, WorkspaceSearchResponse } from '@shared/search'
 import type {
   AppMenuCommand,
   WikiApi,
@@ -101,9 +68,11 @@ import {
   filterTopLevelWorkspaceItems,
   getWorkspaceDisplayName,
   getWorkspacePathKey,
+  IGNORED_WORKSPACE_ENTRY_NAMES,
   isMarkdownFileName,
   isNestedOrSameWorkspacePath,
   isSameWorkspacePath,
+  joinWorkspacePath,
   recordRecentWorkspace,
   removeFavoriteWorkspace,
   toggleFavoriteWorkspace,
@@ -112,15 +81,14 @@ import {
   type WorkspaceEntryKind,
   type WorkspaceMovedEntry
 } from '@shared/workspace'
-
-const IGNORED_WORKSPACE_SEGMENTS = new Set([
-  '.git',
-  'node_modules',
-  '.hg',
-  '.svn',
-  '.DS_Store',
-  'Thumbs.db'
-])
+import {
+  filterSearchableTextContent,
+  SCHEMA_DIR_NOT_DIRECTORY_ERROR,
+  SCHEMA_TARGET_NOT_FILE_ERROR,
+  type SchemaRawReadResult,
+  WorkspaceQueryAndSchemaHub,
+  type WorkspaceQueryStorageListOptions
+} from '@shared/workspaceQueryAndSchema'
 
 export interface VirtualFsOptions {
   workspaces?: Record<string, Record<string, string | null>>
@@ -339,15 +307,15 @@ interface SessionWindowRecord {
 interface HarnessSession {
   sessionId: number
   hub: SharedDocumentBufferHub
+  queryAndSchemaHub: WorkspaceQueryAndSchemaHub
   dragCoordinator: TabDragCoordinator
   unsubscribeCoordinatorHub: () => void
   primaryApi: WikiApi | null
   activeRoot: string | null
-  searchSeq: number
   pendingInitialWorkspacePath: string | null
   workspaceListeners: Set<(event: WorkspaceChangeEvent) => void>
-  schemaListeners: Set<(result: FrontmatterSchemaLoadResult) => void>
-  lastSchemaFingerprint: string | null
+  rootChangedListeners: Set<(rootPath: string | null) => Promise<void> | void>
+  schemaWatchers: Set<() => void>
   dragListenersByWindow: Map<number, Set<(session: ActiveTabDragSession | null) => void>>
   openWindows: Map<number, SessionWindowRecord>
   auxiliaryHandles: InMemoryWindowHandle[]
@@ -439,15 +407,15 @@ export function createMultiWindowWikiHarness(
     const session: HarnessSession = {
       sessionId,
       hub: null as unknown as SharedDocumentBufferHub,
+      queryAndSchemaHub: null as unknown as WorkspaceQueryAndSchemaHub,
       dragCoordinator,
       unsubscribeCoordinatorHub: () => undefined,
       primaryApi: null,
       activeRoot: null,
-      searchSeq: 0,
       pendingInitialWorkspacePath: null,
       workspaceListeners: new Set(),
-      schemaListeners: new Set(),
-      lastSchemaFingerprint: null,
+      rootChangedListeners: new Set(),
+      schemaWatchers: new Set(),
       dragListenersByWindow,
       openWindows: new Map(),
       auxiliaryHandles: [],
@@ -474,7 +442,79 @@ export function createMultiWindowWikiHarness(
       }
     })
 
+    const inspectVirtualSchemaTarget = (rootPath: string): {
+      schemaDir: string
+      schemaPath: string
+      invalidError?: string
+    } => {
+      const schemaDir = joinWorkspacePath(rootPath, FRONTMATTER_SCHEMA_DIR)
+      const schemaPath = joinWorkspacePath(rootPath, FRONTMATTER_SCHEMA_RELATIVE_PATH)
+      if (files.has(schemaDir)) {
+        return {
+          schemaDir,
+          schemaPath,
+          invalidError: SCHEMA_DIR_NOT_DIRECTORY_ERROR
+        }
+      }
+      if (dirs.has(schemaPath)) {
+        return {
+          schemaDir,
+          schemaPath,
+          invalidError: SCHEMA_TARGET_NOT_FILE_ERROR
+        }
+      }
+      return { schemaDir, schemaPath }
+    }
+
     session.hub = hub
+    session.queryAndSchemaHub = new WorkspaceQueryAndSchemaHub({
+      bufferHub: hub,
+      storage: {
+        getWorkspaceRoot: () => session.activeRoot,
+        onWorkspaceRootChanged: (listener) => {
+          session.rootChangedListeners.add(listener)
+          return () => {
+            session.rootChangedListeners.delete(listener)
+          }
+        },
+        async listWorkspaceFiles(options = {}) {
+          return listSessionWorkspaceFiles(session, options)
+        },
+        async readTextFileForSearch(filePath, options = {}) {
+          if (options.signal?.aborted) {
+            return null
+          }
+          const text = files.get(normalizePosix(filePath))
+          return text === undefined ? null : filterSearchableTextContent(text)
+        },
+        async readSchemaRaw(rootPath): Promise<SchemaRawReadResult> {
+          const { schemaPath, invalidError } = inspectVirtualSchemaTarget(rootPath)
+          if (invalidError) {
+            return { kind: 'invalid-target', schemaPath, error: invalidError }
+          }
+          const rawText = files.get(schemaPath)
+          if (rawText === undefined) {
+            return { kind: 'missing', schemaPath }
+          }
+          return { kind: 'present', schemaPath, rawText }
+        },
+        async writeSchemaRaw(rootPath, serializedSchema) {
+          const { schemaDir, schemaPath, invalidError } = inspectVirtualSchemaTarget(rootPath)
+          if (invalidError) {
+            throw new Error(invalidError)
+          }
+          dirs.add(schemaDir)
+          files.set(schemaPath, serializedSchema)
+          return { schemaPath }
+        },
+        watchSchema(_rootPath, onPossibleChange) {
+          session.schemaWatchers.add(onPossibleChange)
+          return () => {
+            session.schemaWatchers.delete(onPossibleChange)
+          }
+        }
+      }
+    })
     session.unsubscribeCoordinatorHub = hub.subscribe((event) => {
       if (event.type === 'paths-remapped') {
         dragCoordinator.remapPayloadKeys(event.remappings)
@@ -485,150 +525,42 @@ export function createMultiWindowWikiHarness(
     return session
   }
 
-  const readSessionSchema = (
-    session: HarnessSession
-  ): { result: FrontmatterSchemaLoadResult; fingerprint: string } => {
+  const listSessionWorkspaceFiles = (
+    session: HarnessSession,
+    options: WorkspaceQueryStorageListOptions = {}
+  ): WorkspaceEntry[] => {
     if (!session.activeRoot) {
       throw new Error('열린 워크스페이스가 없습니다.')
     }
-    const schemaPath = `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`
-    const raw = files.get(schemaPath)
-    if (raw === undefined) {
-      const result: FrontmatterSchemaLoadResult = {
-        exists: false,
-        path: schemaPath,
-        schema: null
+    const prefix = `${session.activeRoot}/`
+    const entries: WorkspaceEntry[] = []
+    for (const filePath of files.keys()) {
+      if (options.signal?.aborted) {
+        return []
       }
-      return { result, fingerprint: `${schemaPath}|missing` }
-    }
-    const parsed = parseFrontmatterSchemaJson(raw)
-    if (!parsed.ok) {
-      const result: FrontmatterSchemaLoadResult = {
-        exists: true,
-        path: schemaPath,
-        schema: null,
-        error: parsed.error
-      }
-      return { result, fingerprint: `${schemaPath}|error|${parsed.error}|${raw}` }
-    }
-    const result: FrontmatterSchemaLoadResult = {
-      exists: true,
-      path: schemaPath,
-      schema: parsed.schema
-    }
-    return {
-      result,
-      fingerprint: `${schemaPath}|valid|${serializeFrontmatterSchema(parsed.schema)}`
-    }
-  }
-
-  const cloneSchemaResult = (result: FrontmatterSchemaLoadResult): FrontmatterSchemaLoadResult => ({
-    exists: result.exists,
-    path: result.path,
-    schema: result.schema ? cloneFrontmatterSchema(result.schema) : null,
-    ...(result.error !== undefined ? { error: result.error } : {})
-  })
-
-  const notifySessionSchemaListeners = (
-    session: HarnessSession,
-    result: FrontmatterSchemaLoadResult
-  ): void => {
-    for (const listener of [...session.schemaListeners]) {
-      listener(cloneSchemaResult(result))
-    }
-  }
-
-  const commitAndBroadcastSessionSchema = (
-    session: HarnessSession,
-    readResult: { result: FrontmatterSchemaLoadResult; fingerprint: string }
-  ): FrontmatterSchemaLoadResult => {
-    session.lastSchemaFingerprint = readResult.fingerprint
-    notifySessionSchemaListeners(session, readResult.result)
-    if (readResult.result.exists && session.hub.hasBuffer(readResult.result.path)) {
-      void session.hub.refreshCleanWorkspaceFile(readResult.result.path).catch(() => undefined)
-    }
-    return cloneSchemaResult(readResult.result)
-  }
-
-  const refreshSessionSchemaIfChanged = (session: HarnessSession): void => {
-    if (!session.activeRoot) return
-    const nextRead = readSessionSchema(session)
-    if (session.lastSchemaFingerprint === nextRead.fingerprint) {
-      return
-    }
-    commitAndBroadcastSessionSchema(session, nextRead)
-  }
-
-  const writeAndNotifySessionSchema = (
-    session: HarnessSession,
-    schema: WorkspaceFrontmatterSchema
-  ): FrontmatterSchemaLoadResult => {
-    if (!session.activeRoot) {
-      throw new Error('열린 워크스페이스가 없습니다.')
-    }
-    const schemaPath = `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`
-    dirs.add(`${session.activeRoot}/${FRONTMATTER_SCHEMA_DIR}`)
-    files.set(schemaPath, serializeFrontmatterSchema(schema))
-    return commitAndBroadcastSessionSchema(session, readSessionSchema(session))
-  }
-
-  const collectSessionOpenTextBuffers = (session: HarnessSession): Map<string, string> => {
-    const openBuffersByKey = new Map<string, string>()
-    for (const buffer of Object.values(session.hub.getSnapshot().buffers)) {
-      if (buffer.kind !== 'workspace' || buffer.contentKind !== 'text') continue
-      const key = getWorkspacePathKey(buffer.path)
-      if (key) {
-        openBuffersByKey.set(key, buffer.content)
-      }
-    }
-    return openBuffersByKey
-  }
-
-  const isReadableSearchText = (text: string): boolean =>
-    !text.includes('\0') &&
-    new TextEncoder().encode(text).byteLength <= WORKSPACE_SEARCH_MAX_FILE_BYTES
-
-  const listSessionEligibleFiles = (
-    rootPath: string,
-    onlyFrontmatterDocuments: boolean
-  ): Array<{
-    path: string
-    relativePath: string
-    name: string
-    pathKey: string
-    diskContent: string
-    isFrontmatterEligible: boolean
-  }> => {
-    const prefix = `${rootPath}/`
-    const result: Array<{
-      path: string
-      relativePath: string
-      name: string
-      pathKey: string
-      diskContent: string
-      isFrontmatterEligible: boolean
-    }> = []
-
-    for (const [filePath, diskContent] of files.entries()) {
       if (!filePath.startsWith(prefix)) continue
       const relativePath = filePath.slice(prefix.length)
-      if (relativePath.split('/').some((seg) => IGNORED_WORKSPACE_SEGMENTS.has(seg))) continue
+      if (relativePath.split('/').some((seg) => IGNORED_WORKSPACE_ENTRY_NAMES.has(seg))) {
+        continue
+      }
       const name = baseNameOf(filePath)
-      if (isExcludedSearchFileName(name)) continue
-      const isFrontmatterEligible =
-        !isExcludedFrontmatterRelativePath(relativePath) && isFrontmatterDocumentFileName(name)
-      if (onlyFrontmatterDocuments && !isFrontmatterEligible) continue
-      result.push({
+      if (options.filterFileName && !options.filterFileName(name)) {
+        continue
+      }
+      entries.push({
+        name,
         path: filePath,
         relativePath,
-        name,
-        pathKey: getWorkspacePathKey(filePath),
-        diskContent,
-        isFrontmatterEligible
+        kind: 'file'
       })
     }
+    return entries.sort(compareWorkspaceEntriesByRelativePath)
+  }
 
-    return result
+  const notifySessionSchemaWatchers = (session: HarnessSession): void => {
+    for (const watcher of [...session.schemaWatchers]) {
+      watcher()
+    }
   }
 
   const defaultSession = createSession()
@@ -779,7 +711,7 @@ export function createMultiWindowWikiHarness(
     const closeRequestedListeners = new Set<() => void>()
     const windowConfigListeners = new Set<(config: AppConfig) => void>()
     const windowWorkspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
-    const windowSchemaListeners = new Set<(result: FrontmatterSchemaLoadResult) => void>()
+    const windowSchemaUnsubscribers = new Set<() => void>()
     session.dragListenersByWindow.set(windowId, dragListeners)
 
     const closeAllOpenAuxiliaryWindows = (): void => {
@@ -814,10 +746,10 @@ export function createMultiWindowWikiHarness(
         session.workspaceListeners.delete(listener)
       }
       windowWorkspaceListeners.clear()
-      for (const listener of windowSchemaListeners) {
-        session.schemaListeners.delete(listener)
+      for (const unsubscribe of [...windowSchemaUnsubscribers]) {
+        unsubscribe()
       }
-      windowSchemaListeners.clear()
+      windowSchemaUnsubscribers.clear()
     }
 
     const forceCloseWindow = (): void => {
@@ -984,7 +916,9 @@ export function createMultiWindowWikiHarness(
           }
           session.activeRoot = normalized
           session.pendingInitialWorkspacePath = null
-          session.lastSchemaFingerprint = readSessionSchema(session).fingerprint
+          for (const listener of [...session.rootChangedListeners]) {
+            await listener(normalized)
+          }
           applyAndBroadcast({
             ...state,
             recentWorkspaces: recordRecentWorkspace(state.recentWorkspaces, rootPath)
@@ -1054,211 +988,10 @@ export function createMultiWindowWikiHarness(
           return listDir(session, dirPath ?? session.activeRoot)
         },
         async listMarkdownFiles() {
-          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
-          const prefix = `${session.activeRoot}/`
-          const markdownEntries: WorkspaceEntry[] = []
-          for (const file of files.keys()) {
-            if (!file.startsWith(prefix)) continue
-            const relativePath = file.slice(prefix.length)
-            if (relativePath.split('/').some((seg) => IGNORED_WORKSPACE_SEGMENTS.has(seg))) continue
-            const name = baseNameOf(file)
-            if (!isMarkdownFileName(name)) continue
-            markdownEntries.push({
-              name,
-              path: file,
-              relativePath,
-              kind: 'file'
-            })
-          }
-          return markdownEntries.sort(compareWorkspaceEntriesByRelativePath)
+          return listSessionWorkspaceFiles(session, { filterFileName: isMarkdownFileName })
         },
-        async search(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse> {
-          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
-          const capturedRoot = session.activeRoot
-          const seq = ++session.searchSeq
-          const query = typeof request?.query === 'string' ? request.query : ''
-          const frontmatterQuery = request?.frontmatter
-          const conditions = Array.isArray(frontmatterQuery?.conditions)
-            ? frontmatterQuery.conditions
-            : []
-          const sort = frontmatterQuery?.sort
-          const hasConditions = conditions.length > 0
-          if (query.length === 0 && !hasConditions) {
-            return emptyWorkspaceSearchResponse(query)
-          }
-
-          let compiledMatcher: CompiledSearchMatcher | null = null
-          if (query.length > 0) {
-            const compiled = compileSearchMatcher(query, request?.options)
-            if (!compiled.ok) {
-              return emptyWorkspaceSearchResponse(query, compiled.error)
-            }
-            compiledMatcher = compiled.matcher
-          }
-
-          const schema = readSessionSchema(session).result.schema
-          if (hasConditions && !schema) {
-            return emptyWorkspaceSearchResponse(query)
-          }
-
-          const maxTotalMatches = normalizeWorkspaceSearchLimit(
-            request?.maxTotalMatches,
-            DEFAULT_WORKSPACE_SEARCH_MAX_TOTAL_MATCHES
-          )
-          const maxMatchesPerFile = normalizeWorkspaceSearchLimit(
-            request?.maxMatchesPerFile,
-            DEFAULT_WORKSPACE_SEARCH_MAX_MATCHES_PER_FILE
-          )
-
-          const openBuffersByKey = collectSessionOpenTextBuffers(session)
-          const eligibleFiles = listSessionEligibleFiles(capturedRoot, hasConditions)
-          const candidates = eligibleFiles.map((entry) => ({
-            ...entry,
-            nameMatches: compiledMatcher ? compiledMatcher.findMatches(entry.relativePath) : ([] as TextMatchSpan[])
-          }))
-
-          const sortPlan = createWorkspaceSearchSortPlan(sort, schema)
-          if (!sortPlan.requiresFrontmatterValues) {
-            candidates.sort(sortPlan.compare)
-          }
-
-          const accumulator: WorkspaceSearchAccumulator = {
-            files: [],
-            committedMatchCount: 0,
-            truncated: false,
-            stopBodyScanning: false,
-            maxTotalMatches
-          }
-
-          const matchedForPostSort: Array<{
-            candidate: (typeof candidates)[number]
-            scanResult: SearchCandidateScanResult
-            values?: Record<string, FrontmatterFieldValue>
-            frontmatterSummary?: Record<string, FrontmatterFieldValue>
-          }> = []
-
-          for (const candidate of candidates) {
-            if (seq !== session.searchSeq || session.activeRoot !== capturedRoot) {
-              return emptyWorkspaceSearchResponse(query)
-            }
-            if (
-              !sortPlan.requiresFrontmatterValues &&
-              compiledMatcher &&
-              accumulator.stopBodyScanning &&
-              candidate.nameMatches.length === 0
-            ) {
-              break
-            }
-            const text = openBuffersByKey.get(candidate.pathKey) ?? candidate.diskContent
-            if (!isReadableSearchText(text)) {
-              continue
-            }
-
-            let values: Record<string, FrontmatterFieldValue> | undefined
-            let frontmatterSummary: Record<string, FrontmatterFieldValue> | undefined
-            if (schema && candidate.isFrontmatterEligible) {
-              const parsed = parseFrontmatterDocument(text, schema)
-              if (hasConditions && !matchesFrontmatterConditions(parsed.values, conditions, schema)) {
-                continue
-              }
-              values = parsed.values
-              frontmatterSummary = extractFrontmatterSummary(parsed.values, schema)
-            } else if (hasConditions) {
-              continue
-            }
-
-            let scanned: SearchCandidateScanResult = {
-              lineMatches: [],
-              totalMatchCount: 0,
-              keptMatchCount: 0,
-              truncatedInFile: false
-            }
-            if (compiledMatcher) {
-              const bodyLimit =
-                !sortPlan.requiresFrontmatterValues && accumulator.stopBodyScanning
-                  ? 0
-                  : maxMatchesPerFile
-              const result = scanSearchTextContent(text, compiledMatcher, bodyLimit)
-              if (!result) continue
-              if (candidate.nameMatches.length === 0 && result.lineMatches.length === 0) {
-                continue
-              }
-              scanned = result
-            }
-
-            if (sortPlan.requiresFrontmatterValues || !compiledMatcher) {
-              matchedForPostSort.push({ candidate, scanResult: scanned, values, frontmatterSummary })
-              continue
-            }
-
-            commitSearchCandidateSlot(
-              accumulator,
-              {
-                path: candidate.path,
-                relativePath: candidate.relativePath,
-                name: candidate.name,
-                nameMatches: candidate.nameMatches,
-                frontmatterSummary
-              },
-              scanned
-            )
-          }
-
-          if (sortPlan.requiresFrontmatterValues || !compiledMatcher) {
-            if (sortPlan.requiresFrontmatterValues) {
-              matchedForPostSort.sort((a, b) =>
-                sortPlan.compare(
-                  {
-                    relativePath: a.candidate.relativePath,
-                    nameMatches: a.candidate.nameMatches,
-                    values: a.values
-                  },
-                  {
-                    relativePath: b.candidate.relativePath,
-                    nameMatches: b.candidate.nameMatches,
-                    values: b.values
-                  }
-                )
-              )
-            }
-
-            for (const item of matchedForPostSort) {
-              if (!compiledMatcher) {
-                accumulator.files.push(
-                  buildWorkspaceSearchFileResult({
-                    path: item.candidate.path,
-                    relativePath: item.candidate.relativePath,
-                    name: item.candidate.name,
-                    nameMatches: [],
-                    lineMatches: [],
-                    totalMatchCount: 0,
-                    truncatedInFile: false,
-                    frontmatterSummary: item.frontmatterSummary
-                  })
-                )
-                continue
-              }
-              commitSearchCandidateSlot(
-                accumulator,
-                {
-                  path: item.candidate.path,
-                  relativePath: item.candidate.relativePath,
-                  name: item.candidate.name,
-                  nameMatches: item.candidate.nameMatches,
-                  frontmatterSummary: item.frontmatterSummary
-                },
-                item.scanResult
-              )
-            }
-          }
-
-          return {
-            query,
-            files: accumulator.files,
-            totalFileCount: accumulator.files.length,
-            totalMatchCount: accumulator.committedMatchCount,
-            truncated: accumulator.truncated
-          }
+        search(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse> {
+          return session.queryAndSchemaHub.search(request)
         },
         async readFile(filePath) {
           const normalized = normalizePosix(filePath)
@@ -1278,7 +1011,7 @@ export function createMultiWindowWikiHarness(
             session.activeRoot &&
             normalized === `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`
           ) {
-            refreshSessionSchemaIfChanged(session)
+            notifySessionSchemaWatchers(session)
           }
         },
         async createEntry(parentDirPath, name, kind: WorkspaceEntryKind, initialContent = '') {
@@ -1387,7 +1120,7 @@ export function createMultiWindowWikiHarness(
           const target = normalizePosix(targetPath)
           if (files.has(target)) {
             files.delete(target)
-            refreshSessionSchemaIfChanged(session)
+            notifySessionSchemaWatchers(session)
             return
           }
           if (dirs.has(target)) {
@@ -1397,7 +1130,7 @@ export function createMultiWindowWikiHarness(
             for (const f of [...files.keys()]) {
               if (f.startsWith(`${target}/`)) files.delete(f)
             }
-            refreshSessionSchemaIfChanged(session)
+            notifySessionSchemaWatchers(session)
             return
           }
           throw new Error(`경로를 찾을 수 없습니다: ${targetPath}`)
@@ -1530,70 +1263,22 @@ export function createMultiWindowWikiHarness(
         }
       },
       frontmatter: {
-        async getSchema() {
-          const { result, fingerprint } = readSessionSchema(session)
-          session.lastSchemaFingerprint = fingerprint
-          return cloneSchemaResult(result)
-        },
-        async createDefaultSchema() {
-          if (!session.activeRoot) {
-            throw new Error('열린 워크스페이스가 없습니다.')
-          }
-          const schemaPath = `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`
-          if (files.has(schemaPath)) {
-            const { result, fingerprint } = readSessionSchema(session)
-            session.lastSchemaFingerprint = fingerprint
-            return cloneSchemaResult(result)
-          }
-          return writeAndNotifySessionSchema(session, createDefaultFrontmatterSchema())
-        },
-        async saveSchema(rawSchema) {
-          if (!session.activeRoot) {
-            throw new Error('열린 워크스페이스가 없습니다.')
-          }
-          const validation = parseFrontmatterSchema(rawSchema)
-          if (!validation.ok) {
-            throw new Error(validation.error)
-          }
-          return writeAndNotifySessionSchema(session, validation.schema)
-        },
-        async getFieldValues(fieldKeys?: string[]): Promise<WorkspaceFrontmatterFieldValuesResponse> {
-          if (!session.activeRoot) {
-            throw new Error('열린 워크스페이스가 없습니다.')
-          }
-          const schema = readSessionSchema(session).result.schema
-          if (!schema) {
-            return { valuesByField: {} }
-          }
-          const targetFields = collectAllowCustomMultiSelectFields(schema, fieldKeys)
-          if (targetFields.length === 0) {
-            return { valuesByField: {} }
-          }
-
-          const openBuffersByKey = collectSessionOpenTextBuffers(session)
-          const collector = createFrontmatterFieldValuesCollector(targetFields)
-          const narrowSchema: WorkspaceFrontmatterSchema = { version: 1, fields: targetFields }
-
-          for (const candidate of listSessionEligibleFiles(session.activeRoot, true)) {
-            const text = openBuffersByKey.get(candidate.pathKey) ?? candidate.diskContent
-            if (!isReadableSearchText(text)) {
-              continue
-            }
-            const parsed = parseFrontmatterDocument(text, narrowSchema)
-            collector.addDocumentValues(parsed.values)
-          }
-          return collector.finalize()
-        },
+        getSchema: () => session.queryAndSchemaHub.getSchema(),
+        createDefaultSchema: () => session.queryAndSchemaHub.createDefaultSchema(),
+        saveSchema: (rawSchema) => session.queryAndSchemaHub.saveSchema(rawSchema),
+        getFieldValues: (fieldKeys?: string[]) =>
+          session.queryAndSchemaHub.collectFieldValues(fieldKeys),
         onSchemaChanged(listener) {
           if (destroyed) {
             return () => undefined
           }
-          session.schemaListeners.add(listener)
-          windowSchemaListeners.add(listener)
-          return () => {
-            session.schemaListeners.delete(listener)
-            windowSchemaListeners.delete(listener)
+          const unsubscribe = session.queryAndSchemaHub.onSchemaChanged(listener)
+          const cleanup = (): void => {
+            windowSchemaUnsubscribers.delete(cleanup)
+            unsubscribe()
           }
+          windowSchemaUnsubscribers.add(cleanup)
+          return cleanup
         }
       },
       git: {
@@ -1862,7 +1547,7 @@ export function createMultiWindowWikiHarness(
         for (const listener of defaultSession.workspaceListeners) {
           listener(event)
         }
-        refreshSessionSchemaIfChanged(defaultSession)
+        notifySessionSchemaWatchers(defaultSession)
         return
       }
       for (const session of sessions.values()) {
@@ -1870,7 +1555,7 @@ export function createMultiWindowWikiHarness(
           for (const listener of session.workspaceListeners) {
             listener(event)
           }
-          refreshSessionSchemaIfChanged(session)
+          notifySessionSchemaWatchers(session)
         }
       }
     },
@@ -1882,12 +1567,14 @@ export function createMultiWindowWikiHarness(
     dispose() {
       for (const session of sessions.values()) {
         session.unsubscribeCoordinatorHub()
+        session.queryAndSchemaHub.dispose()
         session.dragCoordinator.dispose()
         session.openWindows.clear()
         session.dragListenersByWindow.clear()
         session.hub.dispose()
         session.workspaceListeners.clear()
-        session.schemaListeners.clear()
+        session.rootChangedListeners.clear()
+        session.schemaWatchers.clear()
       }
       sessions.clear()
       configListeners.clear()
