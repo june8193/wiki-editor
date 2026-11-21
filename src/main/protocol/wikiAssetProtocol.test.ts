@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -16,7 +16,7 @@ describe('wikiAssetProtocol', () => {
   let service: WorkspaceFsService
 
   beforeEach(async () => {
-    tempRoot = await mkdtemp(path.join(os.tmpdir(), 'wiki-asset-protocol-'))
+    tempRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), 'wiki-asset-protocol-')))
     workspaceDir = path.join(tempRoot, 'vault')
     outsideDir = path.join(tempRoot, 'vault-outside')
     await mkdir(path.join(workspaceDir, 'assets'), { recursive: true })

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -62,7 +62,7 @@ describe('registerWorkspaceIpc', () => {
   let workspaceService: WorkspaceFsService
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'wiki-editor-ws-ipc-'))
+    tempDir = await realpath(await mkdtemp(join(tmpdir(), 'wiki-editor-ws-ipc-')))
     workspaceDir = join(tempDir, 'docs')
     configPath = join(tempDir, 'config.json')
     await mkdir(workspaceDir, { recursive: true })

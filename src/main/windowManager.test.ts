@@ -277,7 +277,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
   let fakeScreen: ScreenLike
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'wiki-editor-winmgr-'))
+    tempDir = await realpath(await mkdtemp(join(tmpdir(), 'wiki-editor-winmgr-')))
     workspaceDir = join(tempDir, 'docs')
     configPath = join(tempDir, 'config.json')
     await mkdir(workspaceDir, { recursive: true })
@@ -1603,7 +1603,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
   let disposeFns: Array<() => void>
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'wiki-editor-multi-main-'))
+    tempDir = await realpath(await mkdtemp(join(tmpdir(), 'wiki-editor-multi-main-')))
     wsAlpha = join(tempDir, 'alpha')
     wsBeta = join(tempDir, 'beta')
     wsGamma = join(tempDir, 'gamma')

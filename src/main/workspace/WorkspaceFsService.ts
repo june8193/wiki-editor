@@ -509,10 +509,19 @@ export class WorkspaceFsService {
       return buildEntry(root, logicalTarget, kind)
     }
 
-    const isWindowsCaseOnlyRename =
-      process.platform === 'win32' && logicalTarget.toLowerCase() === nextPath.toLowerCase()
+    const isCaseOnlyRename = logicalTarget.toLowerCase() === nextPath.toLowerCase()
+    const isSameFileCaseOnlyRename =
+      isCaseOnlyRename &&
+      (process.platform === 'win32' ||
+        (await lstat(nextPath).then(
+          (nextStats) =>
+            nextStats.dev === currentStats.dev &&
+            nextStats.ino === currentStats.ino &&
+            nextStats.ino !== 0,
+          () => false
+        )))
 
-    if (!isWindowsCaseOnlyRename) {
+    if (!isSameFileCaseOnlyRename) {
       await this.assertPathDoesNotExist(nextPath, validName)
     }
 

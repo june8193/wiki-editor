@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -45,7 +45,7 @@ describe('registerGitIpc', () => {
   let workspaceService: WorkspaceFsService
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'wiki-editor-git-ipc-'))
+    tempDir = await realpath(await mkdtemp(join(tmpdir(), 'wiki-editor-git-ipc-')))
     workspaceDir = join(tempDir, 'docs')
     otherDir = join(tempDir, 'other')
     await mkdir(workspaceDir, { recursive: true })

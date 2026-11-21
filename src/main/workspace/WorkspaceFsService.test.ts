@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,7 +11,7 @@ describe('WorkspaceFsService', () => {
   let service: WorkspaceFsService
 
   beforeEach(async () => {
-    tempRoot = await mkdtemp(join(tmpdir(), 'wiki-editor-ws-'))
+    tempRoot = await realpath(await mkdtemp(join(tmpdir(), 'wiki-editor-ws-')))
     workspaceDir = join(tempRoot, 'workspace')
     outsideDir = join(tempRoot, 'outside')
     await mkdir(workspaceDir, { recursive: true })
