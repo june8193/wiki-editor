@@ -108,6 +108,11 @@ export function createApplicationMenuTemplate({
       label: 'Help',
       submenu: [
         {
+          label: '사용자 매뉴얼',
+          click: (_menuItem, window) => sendCommand('open-manual', window)
+        },
+        { type: 'separator' },
+        {
           label: 'Copy Bug Report',
           click: () => {
             onCopyBugReport?.()

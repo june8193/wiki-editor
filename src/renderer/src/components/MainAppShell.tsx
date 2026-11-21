@@ -41,6 +41,8 @@ import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 import { type EntryPathCopyMode, FolderTreeSidebar } from './FolderTreeSidebar'
 import { FrontmatterFilterBar } from './FrontmatterFilterBar'
 import { GitSidebarPanel } from './GitSidebarPanel'
+import { ManualModal } from './ManualModal'
+import manualMarkdown from '../../../../docs/manual.md?raw'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { SearchSidebarPanel } from './SearchSidebarPanel'
 import { SettingsPanel } from './SettingsPanel'
@@ -101,6 +103,7 @@ export function MainAppShell() {
   } = useConfirmDialog()
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [isSchemaModalOpen, setIsSchemaModalOpen] = useState<boolean>(false)
+  const [isManualOpen, setIsManualOpen] = useState<boolean>(false)
   const gitCollaboratorsRef = useRef<GitSessionRuntimeCollaborators | null>(null)
   const gitConfirm = useMemo(
     () => ({
@@ -154,7 +157,8 @@ export function MainAppShell() {
     onInitialConfigLoaded: workspaceLifecycle.handleInitialConfigLoaded
   })
 
-  const isEditorShortcutDisabled = hasActiveModalDialog || isSettingsOpen || isSchemaModalOpen
+  const isEditorShortcutDisabled =
+    hasActiveModalDialog || isSettingsOpen || isSchemaModalOpen || isManualOpen
   const isEditorShortcutDisabledRef = useRef<boolean>(isEditorShortcutDisabled)
   isEditorShortcutDisabledRef.current = isEditorShortcutDisabled
   const editor = useEditorWorkspace({
@@ -235,7 +239,8 @@ export function MainAppShell() {
   const menuHandlersRef = useRef<Record<AppMenuCommand, () => void>>({
     'open-folder': () => undefined,
     'toggle-theme': () => undefined,
-    'toggle-settings': () => undefined
+    'toggle-settings': () => undefined,
+    'open-manual': () => undefined
   })
 
   const {
@@ -377,7 +382,13 @@ export function MainAppShell() {
     'toggle-theme': toggleTheme,
     'toggle-settings': () => {
       setIsSchemaModalOpen(false)
+      setIsManualOpen(false)
       setIsSettingsOpen((open) => !open)
+    },
+    'open-manual': () => {
+      setIsSettingsOpen(false)
+      setIsSchemaModalOpen(false)
+      setIsManualOpen(true)
     }
   }
 
@@ -594,6 +605,15 @@ export function MainAppShell() {
     />
   ) : undefined
 
+  const manualModalSlot = isManualOpen ? (
+    <ManualModal
+      content={manualMarkdown}
+      theme={config.theme}
+      isDismissDisabled={hasActiveModalDialog}
+      onClose={() => setIsManualOpen(false)}
+    />
+  ) : undefined
+
   return (
     <EditorWindowFrame
       shellRef={shellRef}
@@ -619,10 +639,12 @@ export function MainAppShell() {
       )}
       leftSidebarSlot={leftSidebarSlot}
       settingsPanelSlot={settingsPanelSlot}
+      manualModalSlot={manualModalSlot}
       isSchemaModalDismissDisabled={git.panelState.stashDialogScope !== null}
       isSchemaModalOpen={isSchemaModalOpen}
       onOpenSchemaModal={() => {
         setIsSettingsOpen(false)
+        setIsManualOpen(false)
         setIsSchemaModalOpen(true)
       }}
       onCloseSchemaModal={() => setIsSchemaModalOpen(false)}

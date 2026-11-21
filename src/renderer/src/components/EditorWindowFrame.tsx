@@ -113,6 +113,7 @@ export interface EditorWindowFrameProps {
   onCloseSchemaModal: () => void
   leftSidebarSlot?: ReactNode
   settingsPanelSlot?: ReactNode
+  manualModalSlot?: ReactNode
   isSchemaModalDismissDisabled?: boolean
 }
 
@@ -142,6 +143,7 @@ export function EditorWindowFrame({
   onCloseSchemaModal,
   leftSidebarSlot,
   settingsPanelSlot,
+  manualModalSlot,
   isSchemaModalDismissDisabled = false
 }: EditorWindowFrameProps) {
   const [rightSidebar, setRightSidebar] = useState<RightSidebarState>(() => ({
@@ -384,6 +386,8 @@ export function EditorWindowFrame({
       )}
 
       {settingsPanelSlot}
+
+      {manualModalSlot}
 
       {pendingDialog && (
         <ConfirmDialog

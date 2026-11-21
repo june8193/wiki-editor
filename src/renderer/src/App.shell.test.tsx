@@ -2205,4 +2205,45 @@ describe('App shell viewport scroll isolation and left sidebar overflow contract
       cleanup()
     }
   })
+
+  it('opens the embedded user manual modal via open-manual menu command, coordinates with settings, and closes on 닫기 or Escape', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi({})
+    window.wikiApi = api
+
+    render(<App />)
+
+    await triggerMenuCommand(emitMenuCommand, 'open-manual')
+
+    const manualDialog = await screen.findByRole('dialog', { name: '사용자 매뉴얼' })
+    expect(within(manualDialog).getByRole('navigation', { name: '매뉴얼 목차' })).toHaveTextContent(
+      '단축키 모음'
+    )
+    expect(within(manualDialog).getByTestId('manual-markdown-preview')).toHaveTextContent(
+      'Ctrl+Shift+F'
+    )
+
+    // Opening settings closes the manual modal
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    expect(screen.queryByRole('dialog', { name: '사용자 매뉴얼' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '전역 설정 패널' })).toBeInTheDocument()
+
+    // Opening manual closes settings
+    await triggerMenuCommand(emitMenuCommand, 'open-manual')
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '사용자 매뉴얼' })).toBeInTheDocument()
+
+    // Closes on Escape
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: '사용자 매뉴얼' })).not.toBeInTheDocument()
+
+    // Reopen and close via 닫기 button
+    await triggerMenuCommand(emitMenuCommand, 'open-manual')
+    await user.click(
+      within(screen.getByRole('dialog', { name: '사용자 매뉴얼' })).getByRole('button', {
+        name: '닫기'
+      })
+    )
+    expect(screen.queryByRole('dialog', { name: '사용자 매뉴얼' })).not.toBeInTheDocument()
+  })
 })

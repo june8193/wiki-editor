@@ -88,14 +88,17 @@ describe('createApplicationMenuTemplate', () => {
     ])
 
     const helpMenu = getSubmenu(template, 'Help')
-    expect(helpMenu.map((item) => item.label)).toEqual([
+    expect(helpMenu.map((item) => item.label ?? item.type)).toEqual([
+      '사용자 매뉴얼',
+      'separator',
       'Copy Bug Report',
       'Open Log Folder',
       'Version'
     ])
+    expect(helpMenu[0].accelerator).toBeUndefined()
   })
 
-  it('creates Help menu with Copy Bug Report, Open Log Folder, and Version items invoking their callbacks', () => {
+  it('creates Help menu with 사용자 매뉴얼, Copy Bug Report, Open Log Folder, and Version items invoking their callbacks', () => {
     const onCopyBugReport = vi.fn()
     const onOpenLogFolder = vi.fn()
     const onShowVersion = vi.fn()
@@ -106,18 +109,21 @@ describe('createApplicationMenuTemplate', () => {
     })
 
     const helpMenu = getSubmenu(template, 'Help')
-    expect(helpMenu.map((item) => item.label)).toEqual([
+    expect(helpMenu.map((item) => item.label ?? item.type)).toEqual([
+      '사용자 매뉴얼',
+      'separator',
       'Copy Bug Report',
       'Open Log Folder',
       'Version'
     ])
     expect(typeof helpMenu[0].click).toBe('function')
-    expect(typeof helpMenu[1].click).toBe('function')
     expect(typeof helpMenu[2].click).toBe('function')
+    expect(typeof helpMenu[3].click).toBe('function')
+    expect(typeof helpMenu[4].click).toBe('function')
 
-    helpMenu[0].click?.(undefined as never, undefined as never, undefined as never)
-    helpMenu[1].click?.(undefined as never, undefined as never, undefined as never)
     helpMenu[2].click?.(undefined as never, undefined as never, undefined as never)
+    helpMenu[3].click?.(undefined as never, undefined as never, undefined as never)
+    helpMenu[4].click?.(undefined as never, undefined as never, undefined as never)
 
     expect(onCopyBugReport).toHaveBeenCalledTimes(1)
     expect(onOpenLogFolder).toHaveBeenCalledTimes(1)
@@ -138,19 +144,23 @@ describe('createApplicationMenuTemplate', () => {
     const openFolderItem = getSubmenu(template, 'File')[0]
     const toggleThemeItem = getSubmenu(template, 'Settings')[1]
     const toggleSettingsItem = getSubmenu(template, 'Settings')[0]
+    const openManualItem = getSubmenu(template, 'Help')[0]
 
     const fakeWindow = { id: 1 } as unknown as BaseWindow
     openFolderItem.click?.(undefined as never, fakeWindow, undefined as never)
     toggleThemeItem.click?.(undefined as never, undefined, undefined as never)
     toggleSettingsItem.click?.(undefined as never, fakeWindow, undefined as never)
+    openManualItem.click?.(undefined as never, fakeWindow, undefined as never)
 
     expect(getTargetWebContents).toHaveBeenNthCalledWith(1, fakeWindow)
     expect(getTargetWebContents).toHaveBeenNthCalledWith(2, undefined)
     expect(getTargetWebContents).toHaveBeenNthCalledWith(3, fakeWindow)
+    expect(getTargetWebContents).toHaveBeenNthCalledWith(4, fakeWindow)
     expect(sent).toEqual([
       { channel: MENU_IPC_CHANNELS.command, args: ['open-folder'] },
       { channel: MENU_IPC_CHANNELS.command, args: ['toggle-theme'] },
-      { channel: MENU_IPC_CHANNELS.command, args: ['toggle-settings'] }
+      { channel: MENU_IPC_CHANNELS.command, args: ['toggle-settings'] },
+      { channel: MENU_IPC_CHANNELS.command, args: ['open-manual'] }
     ])
 
     // Destroyed or missing webContents must not throw or send

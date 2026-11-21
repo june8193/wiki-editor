@@ -22,3 +22,7 @@ Default canonical labels (`needs-triage`, `needs-info`, `ready-for-agent`, `read
 ### Domain docs
 
 Single-context layout (`CONTEXT.md` + `docs/adr/` at repo root). See `docs/agents/domain.md`.
+
+### 사용자 매뉴얼 규칙
+
+- 사용자용 기능이나 단축키를 추가·변경할 때 `docs/manual.md`를 함께 갱신합니다.

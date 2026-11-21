@@ -132,7 +132,7 @@ export const GIT_IPC_CHANNELS = {
   stashClear: 'git:stash-clear'
 } as const
 
-export type AppMenuCommand = 'open-folder' | 'toggle-theme' | 'toggle-settings'
+export type AppMenuCommand = 'open-folder' | 'toggle-theme' | 'toggle-settings' | 'open-manual'
 
 export const MENU_IPC_CHANNELS = {
   command: 'menu:command'
