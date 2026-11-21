@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { StrictMode, useEffect, useRef, useSyncExternalStore } from 'react'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -6,28 +6,22 @@ import {
   createEmptyGitStatus,
   type GitBranchList,
   type GitGraphCommit,
+  type GitLogScope,
   type GitStashEntry,
   type GitStatus
 } from '@shared/git'
-import { createInitialGitGraphState } from '../hooks/useGitGraphLog'
-import { createInitialGitDetailState } from '../hooks/useGitDetailSelection'
-import themeCss from '../styles/theme.css?raw'
+import type { WikiGitApi } from '@shared/ipc'
 import {
   createDefaultGitChangesViewState,
-  resetGitChangesTreeCollapsedDirs,
-  toggleGitChangesGroupCollapsed,
-  toggleGitChangesTreeDirCollapsed,
-  toggleGitChangesViewMode,
-  type GitChangesViewState
-} from '../utils/gitChangesView'
-import {
   createDefaultGitPanelSplitState,
-  toggleGitChangesCollapsed,
-  toggleGitGraphCollapsed,
-  toggleGitStashesCollapsed,
-  updateChangesHeightRatio,
-  type GitPanelSplitState
-} from '../utils/gitPanelSplit'
+  createInitialGitDetailState,
+  createInitialGitGraphState,
+  GitSession,
+  type GitPanelActions,
+  type GitPanelState
+} from '../stores/GitSession'
+import themeCss from '../styles/theme.css?raw'
+import type { GitCommitActionMode } from '../utils/gitPrimaryAction'
 import { GitSidebarPanel, type GitSidebarPanelProps } from './GitSidebarPanel'
 
 function buildGitStatus(overrides: Partial<GitStatus> = {}): GitStatus {
@@ -44,7 +38,45 @@ function buildGitStatus(overrides: Partial<GitStatus> = {}): GitStatus {
   }
 }
 
-function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPanelProps {
+interface GitSidebarPanelTestOverrides extends Partial<GitPanelState> {
+  onDismissError?: GitPanelActions['dismissError']
+  onRefresh?: () => void
+  onInitRepo?: () => void
+  onStageFile?: (path: string) => void
+  onStageAll?: () => void
+  onUnstageFile?: (path: string, origPath?: string) => void
+  onUnstageAll?: () => void
+  onDiscardFile?: (path: string) => void
+  onDiscardAll?: () => void
+  onStashChanges?: () => void
+  onStashFile?: (path: string) => void
+  onOpenStashDialog?: GitPanelActions['openStashDialog']
+  onPopStash?: (stashRef: string) => void
+  onApplyStash?: (stashRef: string) => void
+  onDropStash?: (stashRef: string) => void
+  onClearStashes?: () => void
+  onCommit?: (message: string, mode?: GitCommitActionMode) => Promise<boolean> | boolean | void
+  onCheckoutBranch?: (branchName: string) => void
+  onPull?: () => void
+  onPush?: () => void
+  onFetch?: () => void
+  onSync?: () => void
+  onChangeLogScope?: (nextScope: GitLogScope) => void
+  onLoadMoreCommits?: () => void
+  onToggleCommitDetail?: (commitHash: string) => void
+  onToggleStashDetail?: (entry: GitStashEntry) => void
+  onOpenFileDiff?: GitPanelActions['openFileDiff']
+  onOpenWorkspaceFile?: GitPanelActions['openWorkspaceFile']
+  onToggleChangesCollapsed?: GitPanelActions['toggleChangesCollapsed']
+  onToggleStashesCollapsed?: GitPanelActions['toggleStashesCollapsed']
+  onToggleGraphCollapsed?: GitPanelActions['toggleGraphCollapsed']
+  onResizeChangesRatio?: GitPanelActions['resizeChangesRatio']
+  onToggleChangesViewMode?: GitPanelActions['toggleChangesViewMode']
+  onToggleChangesGroupCollapsed?: GitPanelActions['toggleChangesGroupCollapsed']
+  onToggleChangesTreeDirCollapsed?: GitPanelActions['toggleChangesTreeDirCollapsed']
+}
+
+function buildProps(overrides: GitSidebarPanelTestOverrides = {}): GitSidebarPanelProps {
   const branches: GitBranchList = {
     current: 'main',
     isDetached: false,
@@ -54,84 +86,164 @@ function buildProps(overrides: Partial<GitSidebarPanelProps> = {}): GitSidebarPa
     ]
   }
 
+  const state: GitPanelState = {
+    workspaceRootPath:
+      overrides.workspaceRootPath !== undefined ? overrides.workspaceRootPath : 'C:\\wiki',
+    status: overrides.status !== undefined ? overrides.status : buildGitStatus(),
+    branchList: overrides.branchList !== undefined ? overrides.branchList : branches,
+    stashes: overrides.stashes ?? [],
+    stashDetail: overrides.stashDetail ?? createInitialGitDetailState(),
+    graphState: overrides.graphState ?? createInitialGitGraphState(),
+    pendingAction: overrides.pendingAction ?? null,
+    errorMessage: overrides.errorMessage ?? null,
+    splitState: overrides.splitState ?? createDefaultGitPanelSplitState(),
+    changesViewState: overrides.changesViewState ?? createDefaultGitChangesViewState(),
+    stashDialogScope: overrides.stashDialogScope ?? null
+  }
+
+  const actions: GitPanelActions = {
+    dismissError: overrides.onDismissError ?? vi.fn(),
+    refreshStatus: (overrides.onRefresh ?? vi.fn()) as GitPanelActions['refreshStatus'],
+    changeLogScope: (overrides.onChangeLogScope ?? vi.fn()) as GitPanelActions['changeLogScope'],
+    loadMoreCommits: (overrides.onLoadMoreCommits ?? vi.fn()) as GitPanelActions['loadMoreCommits'],
+    toggleCommitDetail: (overrides.onToggleCommitDetail ??
+      vi.fn()) as GitPanelActions['toggleCommitDetail'],
+    toggleStashDetail: (overrides.onToggleStashDetail ??
+      vi.fn()) as GitPanelActions['toggleStashDetail'],
+    initRepo: (overrides.onInitRepo ?? vi.fn()) as GitPanelActions['initRepo'],
+    stageFile: (overrides.onStageFile ?? vi.fn()) as GitPanelActions['stageFile'],
+    stageAll: (overrides.onStageAll ?? vi.fn()) as GitPanelActions['stageAll'],
+    unstageFile: (overrides.onUnstageFile ?? vi.fn()) as GitPanelActions['unstageFile'],
+    unstageAll: (overrides.onUnstageAll ?? vi.fn()) as GitPanelActions['unstageAll'],
+    discardFile: (overrides.onDiscardFile ?? vi.fn()) as GitPanelActions['discardFile'],
+    discardAll: (overrides.onDiscardAll ?? vi.fn()) as GitPanelActions['discardAll'],
+    stashChanges: (overrides.onStashChanges ?? vi.fn()) as GitPanelActions['stashChanges'],
+    stashFile: (overrides.onStashFile ?? vi.fn()) as GitPanelActions['stashFile'],
+    stashApply: (overrides.onApplyStash ?? vi.fn()) as GitPanelActions['stashApply'],
+    stashPop: (overrides.onPopStash ?? vi.fn()) as GitPanelActions['stashPop'],
+    stashDrop: (overrides.onDropStash ?? vi.fn()) as GitPanelActions['stashDrop'],
+    stashClear: (overrides.onClearStashes ?? vi.fn()) as GitPanelActions['stashClear'],
+    commit: (overrides.onCommit ?? vi.fn(async () => true)) as GitPanelActions['commit'],
+    checkoutBranch: (overrides.onCheckoutBranch ?? vi.fn()) as GitPanelActions['checkoutBranch'],
+    pull: (overrides.onPull ?? vi.fn()) as GitPanelActions['pull'],
+    push: (overrides.onPush ?? vi.fn()) as GitPanelActions['push'],
+    fetch: (overrides.onFetch ?? vi.fn()) as GitPanelActions['fetch'],
+    sync: (overrides.onSync ?? vi.fn()) as GitPanelActions['sync'],
+    openStashDialog: overrides.onOpenStashDialog ?? vi.fn(),
+    closeStashDialog: vi.fn(),
+    submitStashDialog: vi.fn(async () => true),
+    openFileDiff: overrides.onOpenFileDiff ?? vi.fn(),
+    openWorkspaceFile: overrides.onOpenWorkspaceFile ?? vi.fn(),
+    toggleChangesCollapsed: overrides.onToggleChangesCollapsed ?? vi.fn(),
+    toggleStashesCollapsed: overrides.onToggleStashesCollapsed ?? vi.fn(),
+    toggleGraphCollapsed: overrides.onToggleGraphCollapsed ?? vi.fn(),
+    resizeChangesRatio: overrides.onResizeChangesRatio ?? vi.fn(),
+    toggleChangesViewMode: overrides.onToggleChangesViewMode ?? vi.fn(),
+    toggleChangesGroupCollapsed: overrides.onToggleChangesGroupCollapsed ?? vi.fn(),
+    toggleChangesTreeDirCollapsed: overrides.onToggleChangesTreeDirCollapsed ?? vi.fn()
+  }
+
+  return { state, actions }
+}
+
+function createPendingWikiGitApi(): WikiGitApi {
+  const never = <T,>() => new Promise<T>(() => undefined)
   return {
-    workspaceRootPath: 'C:\\wiki',
-    status: buildGitStatus(),
-    branchList: branches,
-    pendingAction: null,
-    errorMessage: null,
-    onDismissError: vi.fn(),
-    onRefresh: vi.fn(),
-    onInitRepo: vi.fn(),
-    onStageFile: vi.fn(),
-    onStageAll: vi.fn(),
-    onUnstageFile: vi.fn(),
-    onUnstageAll: vi.fn(),
-    onDiscardFile: vi.fn(),
-    onDiscardAll: vi.fn(),
-    onStashChanges: vi.fn(),
-    onStashFile: vi.fn(),
-    onOpenStashDialog: vi.fn(),
-    onPopStash: vi.fn(),
-    onApplyStash: vi.fn(),
-    onDropStash: vi.fn(),
-    onClearStashes: vi.fn(),
-    onCommit: vi.fn(),
-    onCheckoutBranch: vi.fn(),
-    onPull: vi.fn(),
-    onPush: vi.fn(),
-    onFetch: vi.fn(),
-    onSync: vi.fn(),
-    stashes: [],
-    stashDetail: createInitialGitDetailState(),
-    graphState: createInitialGitGraphState(),
-    onChangeLogScope: vi.fn(),
-    onLoadMoreCommits: vi.fn(),
-    onToggleCommitDetail: vi.fn(),
-    onToggleStashDetail: vi.fn(),
-    splitState: createDefaultGitPanelSplitState(),
-    changesViewState: createDefaultGitChangesViewState(),
-    onOpenFileDiff: vi.fn(),
-    onOpenWorkspaceFile: vi.fn(),
-    onToggleChangesCollapsed: vi.fn(),
-    onToggleStashesCollapsed: vi.fn(),
-    onToggleGraphCollapsed: vi.fn(),
-    onResizeChangesRatio: vi.fn(),
-    onToggleChangesViewMode: vi.fn(),
-    onToggleChangesGroupCollapsed: vi.fn(),
-    onToggleChangesTreeDirCollapsed: vi.fn(),
-    ...overrides
+    status: () => never(),
+    diff: () => never(),
+    branches: () => never(),
+    log: () => never(),
+    commitDetail: () => never(),
+    stashList: () => never(),
+    stashDetail: () => never(),
+    init: () => never(),
+    stage: () => never(),
+    stageAll: () => never(),
+    unstage: () => never(),
+    unstageAll: () => never(),
+    discard: () => never(),
+    discardAll: () => never(),
+    stashCreate: () => never(),
+    stashApply: () => never(),
+    stashPop: () => never(),
+    stashDrop: () => never(),
+    stashClear: () => never(),
+    commit: () => never(),
+    checkout: () => never(),
+    pull: () => never(),
+    push: () => never(),
+    fetch: () => never(),
+    sync: () => never()
   }
 }
 
-function StatefulGitSidebarPanel(props: GitSidebarPanelProps) {
-  const [splitState, setSplitState] = useState<GitPanelSplitState>(() => props.splitState)
-  const [changesViewState, setChangesViewState] = useState<GitChangesViewState>(
-    () => props.changesViewState
+function StatefulGitSidebarPanel({ state, actions }: GitSidebarPanelProps) {
+  const sessionRef = useRef<GitSession | null>(null)
+  if (!sessionRef.current) {
+    const session = new GitSession({
+      gitApi: createPendingWikiGitApi(),
+      buffers: {
+        getDirtySummary: () => null,
+        saveDirtyBuffers: async () => true,
+        prepareDiscardPaths: async () => undefined,
+        finishDiscardPaths: async () => undefined,
+        reconcileWithDisk: async () => [],
+        openWorkspaceFile: () => undefined
+      },
+      diffTabs: {
+        listOpenRequests: () => [],
+        subscribe: () => () => undefined,
+        openDiffTab: () => undefined,
+        closeAllUnstagedDiffTabs: () => undefined,
+        closeUnstagedDiffTabsForPaths: () => undefined,
+        closeUnstagedDiffTabsExcept: () => undefined,
+        closeStagedDiffTabsExcept: () => undefined,
+        reconcileStashDiffTabs: () => undefined
+      },
+      confirm: {
+        confirmAction: async () => false,
+        confirmUnsavedChanges: async () => false,
+        isDialogOpen: () => false
+      },
+      refreshTree: async () => undefined,
+      workspaceRootPath: state.workspaceRootPath
+    })
+    if (!state.splitState.isStashesCollapsed) {
+      session.actions.toggleStashesCollapsed()
+    }
+    sessionRef.current = session
+  }
+
+  const session = sessionRef.current
+  const sessionSnapshot = useSyncExternalStore(
+    session.subscribe,
+    session.getSnapshot,
+    session.getSnapshot
   )
 
+  useEffect(() => session.start(), [session])
+
   useEffect(() => {
-    setChangesViewState(resetGitChangesTreeCollapsedDirs)
-  }, [props.workspaceRootPath])
+    session.setWorkspaceRootPath(state.workspaceRootPath)
+  }, [session, state.workspaceRootPath])
 
   return (
     <GitSidebarPanel
-      {...props}
-      splitState={splitState}
-      changesViewState={changesViewState}
-      onToggleChangesCollapsed={() => setSplitState(toggleGitChangesCollapsed)}
-      onToggleStashesCollapsed={() => setSplitState(toggleGitStashesCollapsed)}
-      onToggleGraphCollapsed={() => setSplitState(toggleGitGraphCollapsed)}
-      onResizeChangesRatio={(nextRatio) =>
-        setSplitState((prev) => updateChangesHeightRatio(prev, nextRatio))
-      }
-      onToggleChangesViewMode={() => setChangesViewState(toggleGitChangesViewMode)}
-      onToggleChangesGroupCollapsed={(group) =>
-        setChangesViewState((prev) => toggleGitChangesGroupCollapsed(prev, group))
-      }
-      onToggleChangesTreeDirCollapsed={(dirKey) =>
-        setChangesViewState((prev) => toggleGitChangesTreeDirCollapsed(prev, dirKey))
-      }
+      state={{
+        ...state,
+        splitState: sessionSnapshot.panelState.splitState,
+        changesViewState: sessionSnapshot.panelState.changesViewState
+      }}
+      actions={{
+        ...actions,
+        toggleChangesCollapsed: session.actions.toggleChangesCollapsed,
+        toggleStashesCollapsed: session.actions.toggleStashesCollapsed,
+        toggleGraphCollapsed: session.actions.toggleGraphCollapsed,
+        resizeChangesRatio: session.actions.resizeChangesRatio,
+        toggleChangesViewMode: session.actions.toggleChangesViewMode,
+        toggleChangesGroupCollapsed: session.actions.toggleChangesGroupCollapsed,
+        toggleChangesTreeDirCollapsed: session.actions.toggleChangesTreeDirCollapsed
+      }}
     />
   )
 }
@@ -2547,6 +2659,38 @@ describe('GitSidebarPanel', () => {
       stashHash: stash1.hash,
       path: 'notes/untracked.md',
       status: '?'
+    })
+  })
+
+  it('renders GitStashDialog internally under StrictMode, submits stash options, and closes on cancel', async () => {
+    const user = userEvent.setup()
+    const submitStashDialog = vi.fn(async () => true)
+    const closeStashDialog = vi.fn()
+    const props = buildProps({ stashDialogScope: 'all' })
+    render(
+      <StrictMode>
+        <GitSidebarPanel
+          state={props.state}
+          actions={{
+            ...props.actions,
+            submitStashDialog,
+            closeStashDialog
+          }}
+        />
+      </StrictMode>
+    )
+
+    expect(closeStashDialog).not.toHaveBeenCalled()
+    const dialog = screen.getByRole('dialog', { name: 'Stash 생성' })
+    expect(within(dialog).getByRole('radio', { name: '전체 보관 (Staged 포함)' })).toBeChecked()
+
+    await user.click(within(dialog).getByRole('button', { name: '취소' }))
+    expect(closeStashDialog).toHaveBeenCalledTimes(1)
+
+    await user.click(within(dialog).getByRole('button', { name: 'Stash 생성' }))
+    expect(submitStashDialog).toHaveBeenCalledWith({
+      scope: 'all',
+      includeUntracked: true
     })
   })
 })

@@ -114,7 +114,7 @@ export interface EditorWindowFrameProps {
   onCloseSchemaModal: () => void
   leftSidebarSlot?: ReactNode
   settingsPanelSlot?: ReactNode
-  stashDialogSlot?: ReactNode
+  isSchemaModalDismissDisabled?: boolean
 }
 
 /**
@@ -143,7 +143,7 @@ export function EditorWindowFrame({
   onCloseSchemaModal,
   leftSidebarSlot,
   settingsPanelSlot,
-  stashDialogSlot
+  isSchemaModalDismissDisabled = false
 }: EditorWindowFrameProps) {
   const [rightSidebar, setRightSidebar] = useState<RightSidebarState>(() => ({
     isCollapsed: initialRightSidebarCollapsed,
@@ -371,7 +371,7 @@ export function EditorWindowFrame({
       {isSchemaModalOpen && canManageSchema && (
         <FrontmatterSchemaModal
           schemaResult={schemaResult}
-          isDismissDisabled={pendingDialog !== null || Boolean(stashDialogSlot)}
+          isDismissDisabled={pendingDialog !== null || isSchemaModalDismissDisabled}
           shellRef={localShellRef}
           onSaveSchema={saveSchema}
           onOpenRawJson={async () => {
@@ -389,8 +389,6 @@ export function EditorWindowFrame({
       )}
 
       {settingsPanelSlot}
-
-      {stashDialogSlot}
 
       {pendingDialog && (
         <ConfirmDialog

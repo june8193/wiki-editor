@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { GitChangedFile, GitDiffRequest } from '@shared/git'
-import type { GitDetailState } from '../hooks/useGitDetailSelection'
+import type { GitDetailState } from '../stores/GitSession'
 import { toGitDiffRequest, type GitDiffTarget } from '../utils/gitFilePresentation'
 import { GitChangedFileRow } from './GitChangedFileRow'
 

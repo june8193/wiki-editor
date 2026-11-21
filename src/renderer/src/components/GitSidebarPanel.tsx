@@ -19,20 +19,16 @@ import {
 import {
   getGitChangedCount,
   type GitBranchInfo,
-  type GitBranchList,
   type GitChangedFile,
-  type GitDiffRequest,
-  type GitLogScope,
-  type GitStashDetail,
-  type GitStashEntry,
   type GitStatus
 } from '@shared/git'
 import { type DismissReason, useDismissable } from '../hooks/useDismissable'
-import type { GitDetailState } from '../hooks/useGitDetailSelection'
-import type { GitGraphState } from '../hooks/useGitGraphLog'
+import {
+  computeGitSectionLayout,
+  type GitPanelActions,
+  type GitPanelState
+} from '../stores/GitSession'
 import { toGitDiffRequest } from '../utils/gitFilePresentation'
-import type { GitChangesGroupKey, GitChangesViewState } from '../utils/gitChangesView'
-import { computeGitSectionLayout, type GitPanelSplitState } from '../utils/gitPanelSplit'
 import {
   formatGitCommitPlaceholder,
   getGitBranchLabel,
@@ -41,6 +37,7 @@ import {
 } from '../utils/gitPrimaryAction'
 import { GitChangesFileGroups, GitChangesHeaderActions } from './GitChangesSection'
 import { GitGraphHeaderActions, GitGraphSection } from './GitGraphSection'
+import { GitStashDialog } from './GitStashDialog'
 import { GitStashesHeaderActions, GitStashesSection } from './GitStashesSection'
 import { HorizontalSectionResizer } from './HorizontalSectionResizer'
 import {
@@ -66,51 +63,8 @@ const COMMIT_ACTION_MENU_ITEMS: ReadonlyArray<{ mode: GitCommitActionMode; label
 ]
 
 export interface GitSidebarPanelProps {
-  workspaceRootPath: string | null
-  status: GitStatus | null
-  branchList: GitBranchList | null
-  stashes: readonly GitStashEntry[]
-  stashDetail: GitDetailState<GitStashDetail>
-  graphState: GitGraphState
-  pendingAction: string | null
-  errorMessage: string | null
-  splitState: GitPanelSplitState
-  changesViewState: GitChangesViewState
-  onDismissError: () => void
-  onRefresh: () => void
-  onChangeLogScope: (nextScope: GitLogScope) => void
-  onLoadMoreCommits: () => void
-  onToggleCommitDetail: (commitHash: string) => void
-  onToggleStashDetail: (entry: GitStashEntry) => void
-  onInitRepo: () => void
-  onStageFile: (path: string) => void
-  onStageAll: () => void
-  onUnstageFile: (path: string, origPath?: string) => void
-  onUnstageAll: () => void
-  onDiscardFile: (path: string) => void
-  onDiscardAll: () => void
-  onStashChanges: () => void
-  onStashFile: (path: string) => void
-  onOpenStashDialog: (initialScope?: 'unstaged' | 'all') => void
-  onPopStash: (stashRef: string) => void
-  onApplyStash: (stashRef: string) => void
-  onDropStash: (stashRef: string) => void
-  onClearStashes: () => void
-  onCommit: (message: string, mode?: GitCommitActionMode) => Promise<boolean> | boolean
-  onCheckoutBranch: (branchName: string) => void
-  onPull: () => void
-  onPush: () => void
-  onFetch: () => void
-  onSync: () => void
-  onOpenFileDiff: (request: GitDiffRequest) => void
-  onOpenWorkspaceFile: (repoRelativePath: string) => void
-  onToggleChangesCollapsed: () => void
-  onToggleStashesCollapsed: () => void
-  onToggleGraphCollapsed: () => void
-  onResizeChangesRatio: (nextRatio: number) => void
-  onToggleChangesViewMode: () => void
-  onToggleChangesGroupCollapsed: (group: GitChangesGroupKey) => void
-  onToggleChangesTreeDirCollapsed: (dirKey: string) => void
+  state: GitPanelState
+  actions: GitPanelActions
 }
 
 /**
@@ -608,56 +562,26 @@ function GitCommitForm({
  * Sidebar panel for the Git panel header, 26px branch subrow, and collapsible Changes and Graph sections.
  */
 export const GitSidebarPanel = memo(function GitSidebarPanel({
-  workspaceRootPath,
-  status,
-  branchList,
-  stashes,
-  stashDetail,
-  graphState,
-  pendingAction,
-  errorMessage,
-  splitState,
-  changesViewState,
-  onDismissError,
-  onRefresh,
-  onChangeLogScope,
-  onLoadMoreCommits,
-  onToggleCommitDetail,
-  onToggleStashDetail,
-  onInitRepo,
-  onStageFile,
-  onStageAll,
-  onUnstageFile,
-  onUnstageAll,
-  onDiscardFile,
-  onDiscardAll,
-  onStashChanges,
-  onStashFile,
-  onOpenStashDialog,
-  onPopStash,
-  onApplyStash,
-  onDropStash,
-  onClearStashes,
-  onCommit,
-  onCheckoutBranch,
-  onPull,
-  onPush,
-  onFetch,
-  onSync,
-  onOpenFileDiff,
-  onOpenWorkspaceFile,
-  onToggleChangesCollapsed,
-  onToggleStashesCollapsed,
-  onToggleGraphCollapsed,
-  onResizeChangesRatio,
-  onToggleChangesViewMode,
-  onToggleChangesGroupCollapsed,
-  onToggleChangesTreeDirCollapsed
+  state,
+  actions
 }: GitSidebarPanelProps) {
+  const {
+    workspaceRootPath,
+    status,
+    branchList,
+    stashes,
+    stashDetail,
+    graphState,
+    pendingAction,
+    errorMessage,
+    splitState,
+    changesViewState,
+    stashDialogScope
+  } = state
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
 
   const isBusy = pendingAction !== null
-  const commitInput = useGitCommitInputState(workspaceRootPath, status, isBusy, onCommit)
+  const commitInput = useGitCommitInputState(workspaceRootPath, status, isBusy, actions.commit)
   const unstagedAndUntracked: GitChangedFile[] = status
     ? [...status.unstaged, ...status.untracked]
     : []
@@ -667,7 +591,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
 
   const handleHeaderCommit = (): void => {
     if (splitState.isChangesCollapsed && !commitInput.commitMessage.trim()) {
-      onToggleChangesCollapsed()
+      actions.toggleChangesCollapsed()
     }
     void commitInput.submitCommit('commit')
   }
@@ -688,7 +612,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
           type="button"
           className="btn btn-sm btn-primary"
           disabled={isBusy}
-          onClick={onInitRepo}
+          onClick={actions.initRepo}
         >
           Git 저장소 초기화 (git init)
         </button>
@@ -699,49 +623,49 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
   const hasStaged = Boolean(status && status.staged.length > 0)
   const hasUnstagedOrUntracked = unstagedAndUntracked.length > 0
   const moreMenuEntries: readonly GitMoreMenuEntry[] = [
-    { kind: 'item', label: 'Pull', disabled: isBusy, onSelect: onPull },
-    { kind: 'item', label: 'Push', disabled: isBusy, onSelect: onPush },
-    { kind: 'item', label: 'Fetch', disabled: isBusy, onSelect: onFetch },
-    { kind: 'item', label: 'Sync', disabled: isBusy, onSelect: onSync },
+    { kind: 'item', label: 'Pull', disabled: isBusy, onSelect: actions.pull },
+    { kind: 'item', label: 'Push', disabled: isBusy, onSelect: actions.push },
+    { kind: 'item', label: 'Fetch', disabled: isBusy, onSelect: actions.fetch },
+    { kind: 'item', label: 'Sync', disabled: isBusy, onSelect: actions.sync },
     { kind: 'separator', key: 'remote-changes-divider' },
     {
       kind: 'item',
       label: 'Stage All Changes',
       disabled: isBusy || !hasUnstagedOrUntracked,
-      onSelect: onStageAll
+      onSelect: actions.stageAll
     },
     {
       kind: 'item',
       label: 'Unstage All Changes',
       disabled: isBusy || !hasStaged,
-      onSelect: onUnstageAll
+      onSelect: actions.unstageAll
     },
     {
       kind: 'item',
       label: 'Discard All Changes',
       disabled: isBusy || !hasUnstagedOrUntracked,
       danger: true,
-      onSelect: onDiscardAll
+      onSelect: actions.discardAll
     },
     { kind: 'separator', key: 'changes-stash-divider' },
     {
       kind: 'item',
       label: 'Stash Changes...',
       disabled: isBusy || !hasUnstagedOrUntracked,
-      onSelect: () => onOpenStashDialog('unstaged')
+      onSelect: () => actions.openStashDialog('unstaged')
     },
     {
       kind: 'item',
       label: 'Stash All Changes...',
       disabled: isBusy || totalChangedCount === 0,
-      onSelect: () => onOpenStashDialog('all')
+      onSelect: () => actions.openStashDialog('all')
     },
     {
       kind: 'item',
       label: 'Clear All Stashes',
       disabled: isBusy || stashes.length === 0,
       danger: true,
-      onSelect: onClearStashes
+      onSelect: actions.stashClear
     }
   ]
 
@@ -751,7 +675,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
         workspaceRootPath={workspaceRootPath}
         isRefreshDisabled={!workspaceRootPath || isBusy}
         isMoreDisabled={!workspaceRootPath || !status?.isRepo || isBusy}
-        onRefresh={onRefresh}
+        onRefresh={actions.refreshStatus}
         moreMenuEntries={moreMenuEntries}
       />
 
@@ -760,7 +684,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
           <GitCommonBanners
             pendingAction={pendingAction}
             errorMessage={errorMessage}
-            onDismissError={onDismissError}
+            onDismissError={actions.dismissError}
           />
           {renderNonRepoBody()}
         </div>
@@ -771,9 +695,9 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
             status={status}
             branches={availableBranches}
             isBusy={isBusy}
-            onCheckoutBranch={onCheckoutBranch}
-            onPush={onPush}
-            onSync={onSync}
+            onCheckoutBranch={actions.checkoutBranch}
+            onPush={actions.push}
+            onSync={actions.sync}
           />
 
           {(pendingAction || errorMessage) && (
@@ -781,7 +705,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
               <GitCommonBanners
                 pendingAction={pendingAction}
                 errorMessage={errorMessage}
-                onDismissError={onDismissError}
+                onDismissError={actions.dismissError}
               />
             </div>
           )}
@@ -795,23 +719,23 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                   viewMode={changesViewState.viewMode}
                   isBusy={isBusy}
                   isCommitDisabled={commitInput.isCommitDisabled}
-                  onToggleViewMode={onToggleChangesViewMode}
+                  onToggleViewMode={actions.toggleChangesViewMode}
                   onHeaderCommit={handleHeaderCommit}
-                  onRefresh={onRefresh}
+                  onRefresh={actions.refreshStatus}
                 />
               }
               isExpanded={layout.showChangesBody}
               flexRatio={layout.changesFlexRatio}
               classNames={GIT_ACCORDION_CLASS_NAMES}
-              onToggle={onToggleChangesCollapsed}
+              onToggle={actions.toggleChangesCollapsed}
             >
               <GitCommitForm
                 workspaceRootPath={workspaceRootPath}
                 status={status}
                 isBusy={isBusy}
                 commitInput={commitInput}
-                onPush={onPush}
-                onSync={onSync}
+                onPush={actions.push}
+                onSync={actions.sync}
               />
 
               <GitChangesFileGroups
@@ -821,19 +745,23 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 isBusy={isBusy}
                 repoRoot={status.repoRoot}
                 workspaceRootPath={workspaceRootPath}
-                onToggleGroupCollapsed={onToggleChangesGroupCollapsed}
-                onToggleTreeDir={onToggleChangesTreeDirCollapsed}
-                onStageAll={onStageAll}
-                onUnstageAll={onUnstageAll}
-                onStashChanges={onStashChanges}
-                onDiscardAll={onDiscardAll}
-                onSelectStagedFile={(file) => onOpenFileDiff(toGitDiffRequest('staged', file))}
-                onSelectWorkingFile={(file) => onOpenFileDiff(toGitDiffRequest('unstaged', file))}
-                onOpenWorkspaceFile={onOpenWorkspaceFile}
-                onStageFile={(file) => onStageFile(file.path)}
-                onUnstageFile={(file) => onUnstageFile(file.path, file.origPath)}
-                onDiscardFile={(file) => onDiscardFile(file.path)}
-                onStashFile={(file) => onStashFile(file.path)}
+                onToggleGroupCollapsed={actions.toggleChangesGroupCollapsed}
+                onToggleTreeDir={actions.toggleChangesTreeDirCollapsed}
+                onStageAll={actions.stageAll}
+                onUnstageAll={actions.unstageAll}
+                onStashChanges={actions.stashChanges}
+                onDiscardAll={actions.discardAll}
+                onSelectStagedFile={(file) =>
+                  actions.openFileDiff(toGitDiffRequest('staged', file))
+                }
+                onSelectWorkingFile={(file) =>
+                  actions.openFileDiff(toGitDiffRequest('unstaged', file))
+                }
+                onOpenWorkspaceFile={actions.openWorkspaceFile}
+                onStageFile={(file) => actions.stageFile(file.path)}
+                onUnstageFile={(file) => actions.unstageFile(file.path, file.origPath)}
+                onDiscardFile={(file) => actions.discardFile(file.path)}
+                onStashFile={(file) => actions.stashFile(file.path)}
               />
             </SidebarAccordionSection>
 
@@ -843,7 +771,7 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 containerRef={splitContainerRef}
                 ariaLabel="Git 섹션 높이 조절"
                 bodyClassName="is-resizing-git-sections"
-                onResizeRatio={onResizeChangesRatio}
+                onResizeRatio={actions.resizeChangesRatio}
               />
             )}
 
@@ -855,8 +783,8 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                   hasChanges={totalChangedCount > 0}
                   stashCount={stashes.length}
                   isBusy={isBusy}
-                  onOpenStashDialog={() => onOpenStashDialog()}
-                  onClearStashes={onClearStashes}
+                  onOpenStashDialog={() => actions.openStashDialog()}
+                  onClearStashes={actions.stashClear}
                 />
               }
               isExpanded={layout.showStashesBody}
@@ -866,17 +794,17 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                   ? GIT_STASHES_COMPACT_CLASS_NAMES
                   : GIT_ACCORDION_CLASS_NAMES
               }
-              onToggle={onToggleStashesCollapsed}
+              onToggle={actions.toggleStashesCollapsed}
             >
               <GitStashesSection
                 stashes={stashes}
                 stashDetail={stashDetail}
                 isBusy={isBusy}
-                onToggleStashDetail={onToggleStashDetail}
-                onOpenFileDiff={onOpenFileDiff}
-                onPopStash={onPopStash}
-                onApplyStash={onApplyStash}
-                onDropStash={onDropStash}
+                onToggleStashDetail={actions.toggleStashDetail}
+                onOpenFileDiff={actions.openFileDiff}
+                onPopStash={actions.stashPop}
+                onApplyStash={actions.stashApply}
+                onDropStash={actions.stashDrop}
               />
             </SidebarAccordionSection>
 
@@ -887,28 +815,38 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                   scope={graphState.scope}
                   isBusy={isBusy}
                   isRefreshing={graphState.isLoading}
-                  onChangeScope={onChangeLogScope}
-                  onFetch={onFetch}
-                  onPull={onPull}
-                  onPush={onPush}
-                  onRefresh={onRefresh}
+                  onChangeScope={actions.changeLogScope}
+                  onFetch={actions.fetch}
+                  onPull={actions.pull}
+                  onPush={actions.push}
+                  onRefresh={actions.refreshStatus}
                 />
               }
               isExpanded={layout.showGraphBody}
               flexRatio={layout.graphFlexRatio}
               classNames={GIT_ACCORDION_CLASS_NAMES}
-              onToggle={onToggleGraphCollapsed}
+              onToggle={actions.toggleGraphCollapsed}
             >
               <GitGraphSection
                 isUnborn={status.isUnborn}
                 graphState={graphState}
-                onLoadMore={onLoadMoreCommits}
-                onToggleCommitDetail={onToggleCommitDetail}
-                onOpenFileDiff={onOpenFileDiff}
+                onLoadMore={actions.loadMoreCommits}
+                onToggleCommitDetail={actions.toggleCommitDetail}
+                onOpenFileDiff={actions.openFileDiff}
               />
             </SidebarAccordionSection>
           </div>
         </>
+      )}
+
+      {stashDialogScope !== null && status?.isRepo && (
+        <GitStashDialog
+          status={status}
+          initialScope={stashDialogScope}
+          isBusy={isBusy}
+          onSubmit={(options) => void actions.submitStashDialog(options)}
+          onClose={actions.closeStashDialog}
+        />
       )}
     </section>
   )

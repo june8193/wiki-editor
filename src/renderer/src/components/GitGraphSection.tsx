@@ -18,8 +18,7 @@ import type {
   GitGraphCommit,
   GitLogScope
 } from '@shared/git'
-import type { GitDetailState } from '../hooks/useGitDetailSelection'
-import type { GitGraphState } from '../hooks/useGitGraphLog'
+import type { GitDetailState, GitGraphState } from '../stores/GitSession'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { normalizeGitGraphRefs, type GitGraphDisplayRef } from '../utils/gitGraphRefs'
 import { GitDetailFilesList, GitDetailPanel } from './GitDetailPanel'

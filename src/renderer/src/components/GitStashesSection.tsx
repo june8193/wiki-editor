@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { Plus } from 'lucide-react'
 import type { GitDiffRequest, GitStashDetail, GitStashEntry } from '@shared/git'
-import type { GitDetailState } from '../hooks/useGitDetailSelection'
+import type { GitDetailState } from '../stores/GitSession'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { GitDetailFilesList, GitDetailPanel } from './GitDetailPanel'
 

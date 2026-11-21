@@ -16,7 +16,7 @@ import type {
   GitChangesGroupKey,
   GitChangesViewMode,
   GitChangesViewState
-} from '../utils/gitChangesView'
+} from '../stores/GitSession'
 import { canOpenGitChangedFile } from '../utils/gitFilePresentation'
 import { buildCompressedGitFileTree, type GitFileTreeNode } from '../utils/gitFileTree'
 import {

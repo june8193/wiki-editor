@@ -1032,6 +1032,22 @@ export class PaneTabStore {
     this.removeTabsWhere((tab) => tab.kind === 'diff')
   }
 
+  listOpenDiffRequests = (): GitDiffRequest[] => {
+    const seen = new Set<string>()
+    const requests: GitDiffRequest[] = []
+    const layout = this.getSnapshot()
+    for (const pane of [layout.panes.primary, layout.panes.secondary]) {
+      for (const tab of pane.tabs) {
+        if (tab.kind !== 'diff') continue
+        const key = formatGitDiffTabKey(tab.diff.request)
+        if (seen.has(key)) continue
+        seen.add(key)
+        requests.push(tab.diff.request)
+      }
+    }
+    return requests
+  }
+
   closeUnstagedDiffTabsForPaths = (repoRelativePaths: readonly string[]): void => {
     if (repoRelativePaths.length === 0) return
     const targetSet = new Set(repoRelativePaths)

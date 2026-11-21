@@ -295,6 +295,8 @@ export function useEditorWorkspace({
     duplicateTabToOtherPane: tabStore.duplicateTabToOtherPane,
     updateTabViewState: tabStore.updateTabViewState,
     openDiffTab: tabStore.openDiffTab,
+    listOpenDiffRequests: tabStore.listOpenDiffRequests,
+    subscribeLayout: tabStore.subscribe,
     updateDiffTabViewMode: tabStore.updateDiffTabViewMode,
     closeUnstagedDiffTabsForPaths: tabStore.closeUnstagedDiffTabsForPaths,
     closeUnstagedDiffTabsExcept: tabStore.closeUnstagedDiffTabsExcept,

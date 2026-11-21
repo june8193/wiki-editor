@@ -1,14 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand, WikiApi } from '@shared/ipc'
-import {
-  collectGitStagedPaths,
-  collectGitUnstagedPaths,
-  getGitChangedCount,
-  type GitDiffRequest,
-  type GitStashCreateOptions,
-  type GitStatus
-} from '@shared/git'
+import { getGitChangedCount } from '@shared/git'
 import type { WorkspaceSearchFileResult } from '@shared/search'
 import {
   filterTopLevelWorkspaceEntries,
@@ -16,22 +9,18 @@ import {
   formatRelativeEntryPath,
   isFavoriteWorkspacePath,
   isSameWorkspacePath,
-  resolveRepoFileInWorkspace,
   type WorkspaceChangeEvent,
   type WorkspaceEntry
 } from '@shared/workspace'
 import { useConfigController } from '../hooks/useConfigController'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
+import { promptUnsavedWorkspaceChanges } from '../utils/confirmPrompts'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
 import { useFrontmatterFieldValues } from '../hooks/useFrontmatterFieldValues'
 import { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
-import {
-  useGitController,
-  type WorkspaceBufferMutationTarget
-} from '../hooks/useGitController'
-import { useGitDiffTabs } from '../hooks/useGitDiffTabs'
+import { type GitSessionRuntimeCollaborators, useGitSession } from '../hooks/useGitSession'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
 import { useWindowWidth } from '../hooks/useWindowWidth'
@@ -39,31 +28,6 @@ import { useWorkspaceSearch } from '../hooks/useWorkspaceSearch'
 import { useWorkspaceSearchJump } from '../hooks/useWorkspaceSearchJump'
 import { useWorkspaceStatePersistence } from '../hooks/useWorkspaceStatePersistence'
 import { type RestoredWorkspaceContext, useWorkspaceTree } from '../hooks/useWorkspaceTree'
-import {
-  buildDiscardAllConfirmMessage,
-  buildStashClearConfirmMessage,
-  buildStashDropConfirmMessage,
-  getGitFileBaseName
-} from '../utils/gitFilePresentation'
-import {
-  createDefaultGitChangesViewState,
-  resetGitChangesTreeCollapsedDirs,
-  toggleGitChangesGroupCollapsed,
-  toggleGitChangesTreeDirCollapsed,
-  toggleGitChangesViewMode,
-  type GitChangesGroupKey,
-  type GitChangesViewState
-} from '../utils/gitChangesView'
-import {
-  createDefaultGitPanelSplitState,
-  resetGitStashesCollapsed,
-  setGitStashesCollapsed,
-  toggleGitChangesCollapsed,
-  toggleGitGraphCollapsed,
-  toggleGitStashesCollapsed,
-  updateChangesHeightRatio,
-  type GitPanelSplitState
-} from '../utils/gitPanelSplit'
 import {
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
@@ -79,7 +43,6 @@ import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 import { type EntryPathCopyMode, FolderTreeSidebar } from './FolderTreeSidebar'
 import { FrontmatterFilterBar } from './FrontmatterFilterBar'
 import { GitSidebarPanel } from './GitSidebarPanel'
-import { GitStashDialog } from './GitStashDialog'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { SearchSidebarPanel } from './SearchSidebarPanel'
 import { SettingsPanel } from './SettingsPanel'
@@ -135,30 +98,37 @@ export function MainAppShell() {
     isDialogOpenRef,
     confirmCloseDirtyTab,
     confirmUnsavedChanges,
-    confirmAction
+    requestUnsavedChanges,
+    requestConfirm
   } = useConfirmDialog()
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [isSchemaModalOpen, setIsSchemaModalOpen] = useState<boolean>(false)
-  const [stashDialogScope, setStashDialogScope] = useState<'unstaged' | 'all' | null>(null)
-  const stashDialogScopeRef = useRef<'unstaged' | 'all' | null>(stashDialogScope)
-  stashDialogScopeRef.current = stashDialogScope
-  const hasActiveModalDialog = pendingDialog !== null || stashDialogScope !== null
+  const gitCollaboratorsRef = useRef<GitSessionRuntimeCollaborators | null>(null)
+  const gitConfirm = useMemo(
+    () => ({
+      confirmAction: requestConfirm,
+      confirmUnsavedChanges: requestUnsavedChanges,
+      isDialogOpen: () => isDialogOpenRef.current
+    }),
+    [isDialogOpenRef, requestConfirm, requestUnsavedChanges]
+  )
+  const git = useGitSession({
+    confirm: gitConfirm,
+    collaboratorsRef: gitCollaboratorsRef
+  })
+  const { setWorkspaceRootPath: setGitWorkspaceRootPath, isStashDialogOpen } = git
+  const closeStashDialog = git.actions.closeStashDialog
+  const hasActiveModalDialog =
+    pendingDialog !== null || git.panelState.stashDialogScope !== null
   const isAnyDialogOpen = useCallback(
-    (): boolean => isDialogOpenRef.current || stashDialogScopeRef.current !== null,
-    [isDialogOpenRef]
+    (): boolean => isDialogOpenRef.current || isStashDialogOpen(),
+    [isDialogOpenRef, isStashDialogOpen]
   )
   const [leftSidebar, setLeftSidebar] = useState<LeftSidebarState>({
     activeView: 'workspace',
     isCollapsed: false,
     width: LEFT_SIDEBAR_DEFAULT_WIDTH
   })
-  const [gitPanelSplit, setGitPanelSplit] = useState<GitPanelSplitState>(
-    createDefaultGitPanelSplitState
-  )
-  const [gitChangesView, setGitChangesView] = useState<GitChangesViewState>(
-    createDefaultGitChangesViewState
-  )
-  const [isGitWorkspaceMutating, setIsGitWorkspaceMutating] = useState(false)
   const [searchFocusRequest, setSearchFocusRequest] = useState<SearchFocusRequest | null>(null)
 
   const shellRef = useRef<HTMLDivElement | null>(null)
@@ -166,10 +136,7 @@ export function MainAppShell() {
   const leftSidebarRef = useRef<LeftSidebarState>(leftSidebar)
   leftSidebarRef.current = leftSidebar
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
-  const refreshGitStatusRef = useRef<() => Promise<void>>(async () => undefined)
   const activeWorkspaceRootRef = useRef<string | null>(null)
-  const activeGitRepoRootRef = useRef<string | null>(null)
-  const activeBufferMutationPathsRef = useRef<readonly string[] | null>(null)
   const onInitialConfigLoadedRef = useRef<(loadedConfig: AppConfig) => void>(() => undefined)
   const tryStartupWorkspaceOpenRef = useRef<() => void>(() => undefined)
   const startupInitRef = useRef<{
@@ -205,9 +172,9 @@ export function MainAppShell() {
   const isEditorShortcutDisabledRef = useRef<boolean>(isEditorShortcutDisabled)
   isEditorShortcutDisabledRef.current = isEditorShortcutDisabled
   const editor = useEditorWorkspace({
-    isAutoSavePaused: hasActiveModalDialog || isGitWorkspaceMutating,
+    isAutoSavePaused: hasActiveModalDialog || git.isMutating,
     isShortcutDisabled: isEditorShortcutDisabled,
-    onWorkspaceSaved: () => void refreshGitStatusRef.current(),
+    onWorkspaceSaved: () => void git.actions.refreshStatus(),
     onError: reportErrorBanner,
     onConfirmCloseDirtyTab: confirmCloseDirtyTab
   })
@@ -234,14 +201,18 @@ export function MainAppShell() {
     (view: LeftSidebarView): void => {
       hasUserSelectedSidebarViewRef.current = true
       const current = leftSidebarRef.current
+      const next = selectLeftSidebarView(current, view)
+      if (next.isCollapsed || next.activeView !== 'git') {
+        closeStashDialog()
+      }
       const willOpenSearch =
         view === 'search' && (current.isCollapsed || current.activeView !== 'search')
-      setLeftSidebar((prev) => selectLeftSidebarView(prev, view))
+      setLeftSidebar(next)
       if (willOpenSearch) {
         focusSearchInput(false)
       }
     },
-    [focusSearchInput]
+    [closeStashDialog, focusSearchInput]
   )
 
   useEffect(() => {
@@ -275,45 +246,12 @@ export function MainAppShell() {
     setLeftSidebar((prev) => (prev.width === nextWidth ? prev : { ...prev, width: nextWidth }))
   }, [])
 
-  const handleToggleGitChangesCollapsed = useCallback((): void => {
-    setGitPanelSplit(toggleGitChangesCollapsed)
-  }, [])
-
-  const handleToggleGitStashesCollapsed = useCallback((): void => {
-    setGitPanelSplit(toggleGitStashesCollapsed)
-  }, [])
-
-  const handleStashCreated = useCallback((): void => {
-    setGitPanelSplit((prev) => setGitStashesCollapsed(prev, false))
-  }, [])
-
-  const handleToggleGitGraphCollapsed = useCallback((): void => {
-    setGitPanelSplit(toggleGitGraphCollapsed)
-  }, [])
-
-  const handleResizeGitChangesRatio = useCallback((nextRatio: number): void => {
-    setGitPanelSplit((prev) => updateChangesHeightRatio(prev, nextRatio))
-  }, [])
-
-  const handleToggleGitChangesViewMode = useCallback((): void => {
-    setGitChangesView(toggleGitChangesViewMode)
-  }, [])
-
-  const handleToggleGitChangesGroupCollapsed = useCallback((group: GitChangesGroupKey): void => {
-    setGitChangesView((prev) => toggleGitChangesGroupCollapsed(prev, group))
-  }, [])
-
-  const handleToggleGitChangesTreeDirCollapsed = useCallback((dirKey: string): void => {
-    setGitChangesView((prev) => toggleGitChangesTreeDirCollapsed(prev, dirKey))
-  }, [])
-
   const isSelectingFolderRef = useRef<boolean>(false)
   const hasWorkspaceInteractionRef = useRef<boolean>(false)
   const isStartupRestoreRef = useRef<boolean>(false)
   const hadOpenWorkspaceRef = useRef<boolean>(false)
   const isMountedRef = useRef<boolean>(true)
   const switchWorkspaceSeqRef = useRef<number>(0)
-  const pendingGitConfirmCancelRef = useRef<(() => void) | null>(null)
   const reconcileBuffersRef = useRef<
     (changeEvent?: WorkspaceChangeEvent) => Promise<readonly string[]>
   >(editor.reconcileWorkspaceBuffersWithDisk)
@@ -363,7 +301,7 @@ export function MainAppShell() {
           reportErrorBanner(warnings.join(' '))
         }
       })
-      void refreshGitStatusRef.current()
+      void git.actions.refreshStatus()
     },
     onFileCreated: editor.openCreatedFile,
     onEntryRenamed: editor.syncRenamedPath,
@@ -373,9 +311,6 @@ export function MainAppShell() {
 
   const activeWorkspaceRoot = workspace?.rootPath ?? null
   useEffect(() => {
-    setGitChangesView(resetGitChangesTreeCollapsedDirs)
-    setGitPanelSplit(resetGitStashesCollapsed)
-    setStashDialogScope(null)
     setIsSchemaModalOpen(false)
   }, [activeWorkspaceRoot])
 
@@ -500,9 +435,9 @@ export function MainAppShell() {
     isMountedRef.current = true
     return () => {
       isMountedRef.current = false
-      pendingGitConfirmCancelRef.current?.()
+      dismissDialog()
     }
-  }, [])
+  }, [dismissDialog])
 
   useWindowCloseGuard({
     wikiApi,
@@ -510,298 +445,35 @@ export function MainAppShell() {
     saveDirtyBuffers: editor.ensureCloseBuffersSaved,
     confirmUnsavedChanges,
     onBeforeShowDialog: () => {
-      setStashDialogScope(null)
-      pendingGitConfirmCancelRef.current?.()
+      closeStashDialog()
+      dismissDialog()
     },
     onBeforeApproveClose: workspaceStatePersistence.flush
   })
 
   activeWorkspaceRootRef.current = workspace?.rootPath ?? null
 
-  const {
-    ensureAllWorkspaceBuffersSaved,
-    getDirtyWorkspaceSummary,
-    closeUnstagedDiffTabsForPaths,
-    closeUnstagedDiffTabsExcept,
-    closeStagedDiffTabsExcept,
-    closeAllUnstagedDiffTabs,
-    reconcileStashDiffTabs,
-    prepareWorkspacePathsForDiscard,
-    finishWorkspacePathsDiscard
-  } = editor
-
-  const resolveTargetWorkspacePaths = useCallback((targetRepoPaths: readonly string[]): string[] => {
-    const workspaceRoot = activeWorkspaceRootRef.current
-    if (!workspaceRoot) return []
-    const repoRoot = activeGitRepoRootRef.current ?? workspaceRoot
-    const resolved: string[] = []
-    for (const repoRelativePath of targetRepoPaths) {
-      const resolvedEntry = resolveRepoFileInWorkspace(repoRoot, workspaceRoot, repoRelativePath)
-      if (resolvedEntry) {
-        resolved.push(resolvedEntry.path)
-      }
-    }
-    return resolved
-  }, [])
-
-  const awaitGitConfirm = useCallback(
-    (openDialog: (onResolve: (approved: boolean) => void) => () => void): Promise<boolean> =>
-      new Promise<boolean>((resolve) => {
-        pendingGitConfirmCancelRef.current = openDialog((approved) => {
-          pendingGitConfirmCancelRef.current = null
-          resolve(approved)
-        })
-      }),
-    []
-  )
-
-  const promptUnsavedWorkspaceChanges = useCallback(
-    (options: {
-      targetPaths?: readonly string[]
-      message: (dirtySummary: string) => string
-      confirmLabel: string
-      secondaryLabel: string
-    }): Promise<boolean> => {
-      const dirtySummary = getDirtyWorkspaceSummary(options.targetPaths)
-      if (!dirtySummary) {
-        return Promise.resolve(true)
-      }
-
-      return awaitGitConfirm((onResolve) =>
-        confirmUnsavedChanges({
-          message: options.message(dirtySummary),
-          confirmLabel: options.confirmLabel,
-          secondaryLabel: options.secondaryLabel,
-          onSave: () => ensureAllWorkspaceBuffersSaved(options.targetPaths),
-          onResolve
-        })
-      )
-    },
-    [
-      awaitGitConfirm,
-      confirmUnsavedChanges,
-      ensureAllWorkspaceBuffersSaved,
-      getDirtyWorkspaceSummary
-    ]
-  )
-
-  const confirmDirtyBuffersBeforeGitMutation = useCallback(
-    (actionLabel: string, targetRepoPaths?: readonly string[]): Promise<boolean> => {
-      const targetPaths = targetRepoPaths
-        ? resolveTargetWorkspacePaths(targetRepoPaths)
-        : undefined
-      return promptUnsavedWorkspaceChanges({
-        targetPaths,
-        message: (dirtySummary) =>
-          `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. ${actionLabel} 전에 어떻게 할까요?`,
-        confirmLabel: '저장 후 진행',
-        secondaryLabel: '저장 없이 진행'
-      })
-    },
-    [promptUnsavedWorkspaceChanges, resolveTargetWorkspacePaths]
-  )
-
-  const confirmAutoStageCommit = useCallback(
-    (): Promise<boolean> =>
-      awaitGitConfirm((onResolve) =>
-        confirmAction({
-          title: '자동 Stage 후 커밋',
-          message:
-            '스테이지된 변경 사항이 없습니다. 모든 변경 사항을 자동으로 Stage하고 커밋할까요?',
-          confirmLabel: 'Stage 후 커밋',
-          onResolve
-        })
-      ),
-    [awaitGitConfirm, confirmAction]
-  )
-
-  const handleBeforeWorkspaceBufferMutation = useCallback(
-    async (target: WorkspaceBufferMutationTarget): Promise<void> => {
-      const targetPaths = resolveTargetWorkspacePaths(target.paths)
-      activeBufferMutationPathsRef.current = targetPaths
-      if (targetPaths.length === 0) return
-      await prepareWorkspacePathsForDiscard(targetPaths)
-    },
-    [prepareWorkspacePathsForDiscard, resolveTargetWorkspacePaths]
-  )
-
-  const refreshTreeAndUnstagedDiffTabs = useCallback(
-    async (nextStatus?: GitStatus | null): Promise<void> => {
-      if (nextStatus) {
-        closeUnstagedDiffTabsExcept(new Set(collectGitUnstagedPaths(nextStatus, true)))
-      }
-      await refreshTree()
-    },
-    [closeUnstagedDiffTabsExcept, refreshTree]
-  )
-
-  const handleAfterWorkspaceBufferMutation = useCallback(
-    async (
-      target: WorkspaceBufferMutationTarget,
-      succeeded: boolean,
-      nextStatus: GitStatus | null
-    ): Promise<void> => {
-      const targetPaths =
-        activeBufferMutationPathsRef.current ?? resolveTargetWorkspacePaths(target.paths)
-      activeBufferMutationPathsRef.current = null
-      if (targetPaths.length > 0) {
-        await finishWorkspacePathsDiscard(targetPaths, succeeded)
-      }
-      if (!succeeded) return
-      if (target.kind === 'discard-all') {
-        closeAllUnstagedDiffTabs()
-        await refreshTreeAndUnstagedDiffTabs()
-        return
-      }
-      if (target.kind === 'discard-paths') {
-        closeUnstagedDiffTabsForPaths(target.paths)
-        await refreshTreeAndUnstagedDiffTabs()
-        return
-      }
-      if (target.kind === 'stash-create' && nextStatus) {
-        closeStagedDiffTabsExcept(new Set(collectGitStagedPaths(nextStatus)))
-      }
-      await refreshTreeAndUnstagedDiffTabs(nextStatus)
-    },
-    [
-      closeAllUnstagedDiffTabs,
-      closeStagedDiffTabsExcept,
-      closeUnstagedDiffTabsForPaths,
-      finishWorkspacePathsDiscard,
-      refreshTreeAndUnstagedDiffTabs,
-      resolveTargetWorkspacePaths
-    ]
-  )
-
-  const handleGitWorkspaceMutated = useCallback(
-    async (nextStatus?: GitStatus | null): Promise<readonly string[]> => {
-      await refreshTreeAndUnstagedDiffTabs(nextStatus)
-      return await reconcileBuffersRef.current()
-    },
-    [refreshTreeAndUnstagedDiffTabs]
-  )
-
-  const git = useGitController({
-    workspaceRootPath: workspace?.rootPath ?? null,
-    confirmAutoStageCommit,
-    confirmBeforeWorkspaceMutation: confirmDirtyBuffersBeforeGitMutation,
-    onBeforeWorkspaceBufferMutation: handleBeforeWorkspaceBufferMutation,
-    onAfterWorkspaceBufferMutation: handleAfterWorkspaceBufferMutation,
-    onStashCreated: handleStashCreated,
-    onStashesUpdated: reconcileStashDiffTabs,
-    onWorkspaceMutated: handleGitWorkspaceMutated,
-    onWorkspaceMutationActiveChange: setIsGitWorkspaceMutating
-  })
-  activeGitRepoRootRef.current = git.status?.repoRoot ?? null
-  refreshGitStatusRef.current = git.refreshStatus
-
-  const canStartInteractiveGitAction = useCallback(
-    (): boolean =>
-      !isAnyDialogOpen() && git.pendingAction === null && Boolean(git.status?.isRepo),
-    [git.pendingAction, git.status, isAnyDialogOpen]
-  )
-
-  const openDangerGitConfirm = useCallback(
-    (options: {
-      title: string
-      message: string
-      confirmLabel: string
-      onConfirm: () => void
-    }): void => {
-      setPendingDialog({
-        title: options.title,
-        message: options.message,
-        confirmLabel: options.confirmLabel,
-        confirmTone: 'danger',
-        onConfirm: () => {
-          setPendingDialog(null)
-          options.onConfirm()
-        }
-      })
-    },
-    [setPendingDialog]
-  )
-
-  const handleRequestDiscardAll = useCallback((): void => {
-    if (!canStartInteractiveGitAction() || !git.status) {
-      return
-    }
-    const trackedCount = git.status.unstaged.length
-    const untrackedCount = git.status.untracked.length
-    if (trackedCount === 0 && untrackedCount === 0) {
-      return
-    }
-    openDangerGitConfirm({
-      title: '전체 변경 사항 롤백',
-      message: buildDiscardAllConfirmMessage(trackedCount, untrackedCount),
-      confirmLabel: '전체 롤백',
-      onConfirm: () => void git.discardAll()
-    })
-  }, [canStartInteractiveGitAction, git.discardAll, git.status, openDangerGitConfirm])
-
-  const handleOpenStashDialog = useCallback(
-    (initialScope: 'unstaged' | 'all' = 'unstaged'): void => {
-      if (!canStartInteractiveGitAction() || getGitChangedCount(git.status) === 0) {
-        return
-      }
-      setStashDialogScope(initialScope)
-    },
-    [canStartInteractiveGitAction, git.status]
-  )
-
-  const handleSubmitStashDialog = useCallback(
-    (options: GitStashCreateOptions): void => {
-      setStashDialogScope(null)
-      void git.stashWithOptions(options)
-    },
-    [git.stashWithOptions]
-  )
-
-  const handleRequestDropStash = useCallback(
-    (stashRef: string): void => {
-      if (!canStartInteractiveGitAction()) {
-        return
-      }
-      const entry = git.stashes.find((item) => item.ref === stashRef)
-      if (!entry) {
-        return
-      }
-      openDangerGitConfirm({
-        title: 'Stash 삭제',
-        message: buildStashDropConfirmMessage(entry),
-        confirmLabel: 'Drop',
-        onConfirm: () => void git.stashDrop(stashRef)
-      })
-    },
-    [canStartInteractiveGitAction, git.stashDrop, git.stashes, openDangerGitConfirm]
-  )
-
-  const handleRequestClearStashes = useCallback((): void => {
-    if (!canStartInteractiveGitAction() || git.stashes.length === 0) {
-      return
-    }
-    openDangerGitConfirm({
-      title: '모든 Stash 삭제',
-      message: buildStashClearConfirmMessage(git.stashes.length),
-      confirmLabel: 'Clear All',
-      onConfirm: () => void git.stashClear()
-    })
-  }, [canStartInteractiveGitAction, git.stashClear, git.stashes.length, openDangerGitConfirm])
-
   const guardUnsavedWorkspaceChanges = useCallback(
     (proceed: () => Promise<unknown>): void => {
-      void promptUnsavedWorkspaceChanges({
-        message: (dirtySummary) =>
-          `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. 어떻게 할까요?`,
-        confirmLabel: '저장 후 이동',
-        secondaryLabel: '버리고 이동'
-      }).then((accepted) => {
+      void promptUnsavedWorkspaceChanges(
+        {
+          getDirtySummary: editor.getDirtyWorkspaceSummary,
+          saveDirtyBuffers: editor.ensureAllWorkspaceBuffersSaved
+        },
+        requestUnsavedChanges,
+        {
+          message: (dirtySummary) =>
+            `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. 어떻게 할까요?`,
+          confirmLabel: '저장 후 이동',
+          secondaryLabel: '버리고 이동'
+        }
+      ).then((accepted) => {
         if (accepted) {
           void proceed()
         }
       })
     },
-    [promptUnsavedWorkspaceChanges]
+    [editor.ensureAllWorkspaceBuffersSaved, editor.getDirtyWorkspaceSummary, requestUnsavedChanges]
   )
 
   /**
@@ -932,7 +604,7 @@ export function MainAppShell() {
     )
   }, [handleSwitchWorkspace, isAnyDialogOpen, reportErrorBanner, wikiApi])
 
-  const { openWorkspaceFile, openConfigDocument, openDiffTab } = editor
+  const { openWorkspaceFile, openConfigDocument } = editor
   const { searchJumpRequest, openSearchLineMatch, invalidatePendingSearchJumps } =
     useWorkspaceSearchJump({
       workspaceRootPath: workspace?.rootPath ?? null,
@@ -944,34 +616,16 @@ export function MainAppShell() {
       switchWorkspaceSeqRef,
       openWorkspaceFile
     })
-  const { diffsByKey, refreshDiffRequest } = useGitDiffTabs({
-    workspaceRootPath: workspace?.rootPath ?? null,
-    gitStatus: git.status,
-    layout: editor.layout
-  })
 
-  const handleOpenFileDiff = useCallback(
-    (request: GitDiffRequest): void => {
-      invalidatePendingSearchJumps()
-      openDiffTab(request)
-      refreshDiffRequest(request)
-    },
-    [invalidatePendingSearchJumps, openDiffTab, refreshDiffRequest]
-  )
+  gitCollaboratorsRef.current = {
+    editor,
+    refreshTree,
+    onBeforeOpenTab: invalidatePendingSearchJumps
+  }
 
-  const handleOpenRepoWorkspaceFile = useCallback(
-    (repoRelativePath: string): void => {
-      const target = resolveRepoFileInWorkspace(
-        git.status?.repoRoot,
-        workspace?.rootPath,
-        repoRelativePath
-      )
-      if (!target) return
-      invalidatePendingSearchJumps()
-      void openWorkspaceFile(target.path, undefined, getGitFileBaseName(repoRelativePath))
-    },
-    [git.status?.repoRoot, invalidatePendingSearchJumps, openWorkspaceFile, workspace?.rootPath]
-  )
+  useEffect(() => {
+    setGitWorkspaceRootPath(activeWorkspaceRoot)
+  }, [activeWorkspaceRoot, setGitWorkspaceRootPath])
   const handleOpenFile = useCallback(
     (entry: WorkspaceEntry): void => {
       invalidatePendingSearchJumps()
@@ -1080,14 +734,14 @@ export function MainAppShell() {
     () => ({
       ...editor.paneActions,
       onChangeContent: handlePaneChangeContent,
-      onOpenDiffTargetFile: handleOpenRepoWorkspaceFile
+      onOpenDiffTargetFile: git.actions.openWorkspaceFile
     }),
-    [editor.paneActions, handleOpenRepoWorkspaceFile, handlePaneChangeContent]
+    [editor.paneActions, git.actions.openWorkspaceFile, handlePaneChangeContent]
   )
 
   const isCurrentWorkspaceFavorite =
     workspace !== null && isFavoriteWorkspacePath(config.favoriteWorkspaces, workspace.rootPath)
-  const gitChangedCount = workspace?.rootPath ? getGitChangedCount(git.status) : 0
+  const gitChangedCount = workspace?.rootPath ? getGitChangedCount(git.panelState.status) : 0
 
   const leftSidebarSlot = (
     <>
@@ -1190,53 +844,7 @@ export function MainAppShell() {
             )}
 
             {leftSidebar.activeView === 'git' && (
-              <GitSidebarPanel
-                workspaceRootPath={workspace?.rootPath ?? null}
-                status={git.status}
-                branchList={git.branchList}
-                stashes={git.stashes}
-                stashDetail={git.stashDetail}
-                graphState={git.graphState}
-                pendingAction={git.pendingAction}
-                errorMessage={git.errorMessage}
-                splitState={gitPanelSplit}
-                changesViewState={gitChangesView}
-                onDismissError={git.dismissError}
-                onRefresh={() => void git.refreshStatus()}
-                onChangeLogScope={(nextScope) => void git.changeLogScope(nextScope)}
-                onLoadMoreCommits={() => void git.loadMoreCommits()}
-                onToggleCommitDetail={(commitHash) => void git.toggleCommitDetail(commitHash)}
-                onToggleStashDetail={(entry) => void git.toggleStashDetail(entry)}
-                onInitRepo={() => void git.initRepo()}
-                onStageFile={(path) => void git.stageFile(path)}
-                onStageAll={() => void git.stageAll()}
-                onUnstageFile={(path, origPath) => void git.unstageFile(path, origPath)}
-                onUnstageAll={() => void git.unstageAll()}
-                onDiscardFile={(path) => void git.discardFile(path)}
-                onDiscardAll={handleRequestDiscardAll}
-                onStashChanges={() => void git.stashChanges()}
-                onStashFile={(path) => void git.stashFile(path)}
-                onOpenStashDialog={handleOpenStashDialog}
-                onPopStash={(stashRef) => void git.stashPop(stashRef)}
-                onApplyStash={(stashRef) => void git.stashApply(stashRef)}
-                onDropStash={handleRequestDropStash}
-                onClearStashes={handleRequestClearStashes}
-                onCommit={git.commit}
-                onCheckoutBranch={(branchName) => void git.checkoutBranch(branchName)}
-                onPull={() => void git.pull()}
-                onPush={() => void git.push()}
-                onFetch={() => void git.fetch()}
-                onSync={() => void git.sync()}
-                onOpenFileDiff={handleOpenFileDiff}
-                onOpenWorkspaceFile={handleOpenRepoWorkspaceFile}
-                onToggleChangesCollapsed={handleToggleGitChangesCollapsed}
-                onToggleStashesCollapsed={handleToggleGitStashesCollapsed}
-                onToggleGraphCollapsed={handleToggleGitGraphCollapsed}
-                onResizeChangesRatio={handleResizeGitChangesRatio}
-                onToggleChangesViewMode={handleToggleGitChangesViewMode}
-                onToggleChangesGroupCollapsed={handleToggleGitChangesGroupCollapsed}
-                onToggleChangesTreeDirCollapsed={handleToggleGitChangesTreeDirCollapsed}
-              />
+              <GitSidebarPanel state={git.panelState} actions={git.actions} />
             )}
           </aside>
           <SidebarResizer
@@ -1264,17 +872,6 @@ export function MainAppShell() {
     />
   ) : undefined
 
-  const stashDialogSlot =
-    stashDialogScope !== null && git.status?.isRepo ? (
-      <GitStashDialog
-        status={git.status}
-        initialScope={stashDialogScope}
-        isBusy={git.pendingAction !== null}
-        onSubmit={handleSubmitStashDialog}
-        onClose={() => setStashDialogScope(null)}
-      />
-    ) : undefined
-
   return (
     <EditorWindowFrame
       shellRef={shellRef}
@@ -1294,13 +891,13 @@ export function MainAppShell() {
         { ...editor, paneActions },
         isEditorShortcutDisabled,
         {
-          diffsByKey,
+          diffsByKey: git.diffsByKey,
           workspaceMarkdownFiles: markdownFiles
         }
       )}
       leftSidebarSlot={leftSidebarSlot}
       settingsPanelSlot={settingsPanelSlot}
-      stashDialogSlot={stashDialogSlot}
+      isSchemaModalDismissDisabled={git.panelState.stashDialogScope !== null}
       isSchemaModalOpen={isSchemaModalOpen}
       onOpenSchemaModal={() => {
         setIsSettingsOpen(false)
