@@ -117,10 +117,14 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
         searchJumpRequest={currentJump}
         onChangeContent={(nextContent) => {
           doc = { ...doc, content: nextContent, isDirty: true }
+          currentJump = null
           rerender(renderRaw())
         }}
         onSave={vi.fn()}
         onUpdateViewState={(patch) => {
+          if (patch.mode && patch.mode !== tab.mode) {
+            currentJump = null
+          }
           tab = { ...tab, ...patch }
           rerender(renderRaw())
         }}
@@ -399,6 +403,9 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
           onChangeContent={vi.fn()}
           onSave={vi.fn()}
           onUpdateViewState={(patch) => {
+            if (patch.mode && patch.mode !== tab.mode) {
+              currentJump = null
+            }
             tab = { ...tab, ...patch }
             rerender(renderPreview())
           }}
@@ -731,6 +738,9 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
           onChangeContent={vi.fn()}
           onSave={vi.fn()}
           onUpdateViewState={(patch) => {
+            if (patch.mode && patch.mode !== tab.mode) {
+              currentJump = null
+            }
             tab = { ...tab, ...patch }
             rerender(renderWysiwyg())
           }}
@@ -781,7 +791,13 @@ describe('DocumentEditor Workspace Search Jump (<DocumentEditor />)', () => {
       ).toHaveLength(0)
 
       // Tab switch clears 위지윅 jump highlight
-      currentJump = { ...currentJump, nonce: 2 }
+      currentJump = createJumpRequest({
+        query: 'boldMark',
+        lineNumber: 3,
+        columnStart: boldIdx,
+        columnEnd: boldIdx + 'boldMark'.length,
+        nonce: 2
+      })
       rerender(renderWysiwyg())
       expect(
         screen.getByLabelText('위지윅 문서 에디터').querySelectorAll('.pm-search-jump-highlight')

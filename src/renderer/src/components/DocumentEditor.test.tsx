@@ -791,7 +791,7 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
     expect(rawScroller.scrollTop).toBe(0)
   })
 
-  it('scrolls both Raw editor and Preview to the target heading on Outline scrollRequest in Split mode and guards line 1 echo', async () => {
+  it('scrolls Raw editor directly on Outline scrollRequest in Split mode and follows in Preview via line sync', async () => {
     const origScrollIntoView = Element.prototype.scrollIntoView
     const scrollIntoViewMock = vi.fn()
     Element.prototype.scrollIntoView = scrollIntoViewMock
@@ -821,6 +821,29 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
 
       const { container, rerender } = render(buildOutlineSplitEditor())
 
+      const rawEditor = screen.getByTestId('document-editor')
+      const rawScroller = container.querySelector('.cm-scroller') as HTMLElement
+      const cmView = EditorView.findFromDOM(rawScroller)!
+      Object.defineProperty(rawScroller, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(rawScroller, 'scrollHeight', {
+        configurable: true,
+        get: () => Math.max(600, cmView.contentHeight)
+      })
+
+      const previewRegion = screen.getByTestId('split-markdown-preview')
+      Object.defineProperty(previewRegion, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(previewRegion, 'scrollHeight', { configurable: true, value: 800 })
+      previewRegion.getBoundingClientRect = () =>
+        ({ top: 0, left: 0, right: 500, bottom: 200, width: 500, height: 200, x: 0, y: 0, toJSON: () => ({}) })
+      const h1 = previewRegion.querySelector('h1[data-source-line="1"]') as HTMLElement
+      const introP = previewRegion.querySelector('p[data-source-line="3"]') as HTMLElement
+      const h2 = previewRegion.querySelector('h2[data-source-line="5"]') as HTMLElement
+      const trailingP = previewRegion.querySelector('p[data-source-line="7"]') as HTMLElement
+      mockScrollElementRect(previewRegion, h1, 0, 40)
+      mockScrollElementRect(previewRegion, introP, 60, 40)
+      mockScrollElementRect(previewRegion, h2, 240, 40)
+      mockScrollElementRect(previewRegion, trailingP, 300, 400)
+
       rerender(
         buildOutlineSplitEditor('light', {
           paneId: 'primary',
@@ -833,73 +856,18 @@ describe('DocumentEditor 4-mode switcher & roundtrip', () => {
         })
       )
 
-      const rawEditor = screen.getByTestId('document-editor')
-      const previewRegion = screen.getByTestId('split-markdown-preview')
-      const targetHeading = within(previewRegion).getByRole('heading', { level: 2, name: 'Flow' })
-
       await waitFor(() => {
         expect(rawEditor.getAttribute('data-selection-start')).toBe(String(md.indexOf('## Flow')))
-        expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
       })
-      expect(scrollIntoViewMock.mock.instances[0]).toBe(targetHeading)
+      // Preview does NOT call scrollIntoView directly in Split mode; it follows Raw via line sync
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
       expect(onChangeContent).not.toHaveBeenCalled()
 
-      // Same nonce does not re-scroll on unrelated rerender
-      scrollIntoViewMock.mockClear()
-      rerender(
-        buildOutlineSplitEditor('dark', {
-          paneId: 'primary',
-          tabId: 'tab-1',
-          mode: 'split',
-          line: 5,
-          slug: 'flow',
-          index: 1,
-          nonce: 7
-        })
-      )
-      expect(scrollIntoViewMock).not.toHaveBeenCalled()
-
-      // Outline jump to line 1 with 16px .cm-content padding and CodeMirror 5px yMargin (scrollTop = 11)
-      // must still be guarded so Raw scroll does not nudge Preview downward from 0.
-      const rawScroller = container.querySelector('.cm-scroller') as HTMLElement
-      const cmView = EditorView.findFromDOM(rawScroller)!
-      Object.defineProperty(cmView, 'documentPadding', {
-        configurable: true,
-        get: () => ({ top: 16, bottom: 16 })
-      })
-      Object.defineProperty(rawScroller, 'clientHeight', { configurable: true, value: 200 })
-      Object.defineProperty(rawScroller, 'scrollHeight', {
-        configurable: true,
-        get: () => cmView.contentHeight
-      })
-      Object.defineProperty(previewRegion, 'clientHeight', { configurable: true, value: 200 })
-      Object.defineProperty(previewRegion, 'scrollHeight', { configurable: true, value: 800 })
-      previewRegion.getBoundingClientRect = () =>
-        ({ top: 0, left: 0, right: 500, bottom: 200, width: 500, height: 200, x: 0, y: 0, toJSON: () => ({}) })
-      const h1 = previewRegion.querySelector('h1[data-source-line="1"]') as HTMLElement
-      mockScrollElementRect(previewRegion, h1, 16, 40)
-
-      previewRegion.scrollTop = 0
-      rawScroller.scrollTop = 200
-      rerender(
-        buildOutlineSplitEditor('dark', {
-          paneId: 'primary',
-          tabId: 'tab-1',
-          mode: 'split',
-          line: 1,
-          slug: 'arch',
-          index: 0,
-          nonce: 8
-        })
-      )
-
-      await waitFor(() => {
-        expect(rawEditor.getAttribute('data-selection-start')).toBe('0')
-      })
-
-      rawScroller.scrollTop = 11 // documentPadding.top (16) - CodeMirror yMargin (5)
+      // Raw scroll drives Preview scrollTop via line sync
+      const line5Top = cmView.lineBlockAt(md.indexOf('## Flow')).top
+      rawScroller.scrollTop = Math.max(80, line5Top)
       fireEvent.scroll(rawScroller)
-      expect(previewRegion.scrollTop).toBe(0)
+      expect(previewRegion.scrollTop).toBeGreaterThan(0)
     } finally {
       Element.prototype.scrollIntoView = origScrollIntoView
     }

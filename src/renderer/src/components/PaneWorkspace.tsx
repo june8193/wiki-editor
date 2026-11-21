@@ -1,11 +1,4 @@
-import {
-  DragEvent,
-  KeyboardEvent as ReactKeyboardEvent,
-  useCallback,
-  useEffect,
-  useRef,
-  useState
-} from 'react'
+import { DragEvent, useCallback, useEffect, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { DocumentSearchJumpRequest } from '@shared/search'
@@ -49,8 +42,6 @@ export interface PaneWorkspaceProps {
   actions: PaneInteractionActions
 }
 
-const KEYBOARD_RESIZE_STEP = 0.05
-
 const SPLIT_DROP_ZONES: ReadonlyArray<{
   direction: SplitDirection
   testId: string
@@ -77,53 +68,10 @@ export function PaneWorkspace({
   onActiveHeadingChange,
   actions
 }: PaneWorkspaceProps) {
-  const [isResizing, setIsResizing] = useState(false)
   const [isExternalDragOver, setIsExternalDragOver] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const externalDragDepthRef = useRef(0)
   const prevExternalSessionRef = useRef<ActiveTabDragSession | null>(dragState.externalDragSession)
-
-  useEffect(() => {
-    if (!isResizing) return
-
-    const handleMove = (event: MouseEvent): void => {
-      const container = containerRef.current
-      if (!container) return
-      const rect = container.getBoundingClientRect()
-      if (layout.splitMode === 'horizontal' && rect.width > 0) {
-        onSetSplitRatio((event.clientX - rect.left) / rect.width)
-      } else if (layout.splitMode === 'vertical' && rect.height > 0) {
-        onSetSplitRatio((event.clientY - rect.top) / rect.height)
-      }
-    }
-
-    const handleUp = (): void => {
-      setIsResizing(false)
-    }
-
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-    window.addEventListener('blur', handleUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-      window.removeEventListener('blur', handleUp)
-    }
-  }, [isResizing, layout.splitMode, onSetSplitRatio])
-
-  const handleSplitterKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    const isHorizontal = layout.splitMode === 'horizontal'
-    const decKey = isHorizontal ? 'ArrowLeft' : 'ArrowUp'
-    const incKey = isHorizontal ? 'ArrowRight' : 'ArrowDown'
-
-    if (event.key === decKey) {
-      event.preventDefault()
-      onSetSplitRatio(layout.splitRatio - KEYBOARD_RESIZE_STEP)
-    } else if (event.key === incKey) {
-      event.preventDefault()
-      onSetSplitRatio(layout.splitRatio + KEYBOARD_RESIZE_STEP)
-    }
-  }
 
   const hasDraggingTab = dragState.draggingTab !== null
 

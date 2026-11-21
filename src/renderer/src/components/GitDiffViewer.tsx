@@ -23,7 +23,7 @@ interface GitDiffViewerProps {
   viewMode: GitDiffViewMode
   state: GitDiffContentState
   onChangeViewMode: (nextMode: GitDiffViewMode) => void
-  onOpenFile: (repoRelativePath: string) => void
+  onOpenFile?: (repoRelativePath: string) => void
 }
 
 const DIFF_ROW_TYPE_CLASS: Record<UnifiedDiffSideCell['type'], string> = {
@@ -130,7 +130,7 @@ export function GitDiffViewer({
             type="button"
             className="btn btn-sm git-diff-open-btn"
             disabled={!canOpenFile}
-            onClick={() => onOpenFile(displayFile.path)}
+            onClick={() => onOpenFile?.(displayFile.path)}
           >
             파일 열기
           </button>

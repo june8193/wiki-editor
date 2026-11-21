@@ -34,11 +34,7 @@ export interface ScrollSyncLoopGuardOptions {
 }
 
 export interface ScrollSyncLoopGuard {
-  markProgrammaticScroll: (
-    side: ScrollSyncSide,
-    expectedScrollTop: number,
-    tolerancePx?: number
-  ) => void
+  markProgrammaticScroll: (side: ScrollSyncSide, expectedScrollTop: number) => void
   shouldIgnoreScroll: (side: ScrollSyncSide, actualScrollTop: number) => boolean
 }
 
@@ -394,22 +390,17 @@ export function createScrollSyncLoopGuard(
 
   const pending: Record<
     ScrollSyncSide,
-    { expectedScrollTop: number; expiresAt: number; tolerancePx: number } | null
+    { expectedScrollTop: number; expiresAt: number } | null
   > = {
     raw: null,
     preview: null
   }
 
   return {
-    markProgrammaticScroll(
-      side: ScrollSyncSide,
-      expectedScrollTop: number,
-      overrideTolerancePx?: number
-    ): void {
+    markProgrammaticScroll(side: ScrollSyncSide, expectedScrollTop: number): void {
       pending[side] = {
         expectedScrollTop,
-        expiresAt: now() + windowMs,
-        tolerancePx: overrideTolerancePx ?? tolerancePx
+        expiresAt: now() + windowMs
       }
     },
     shouldIgnoreScroll(side: ScrollSyncSide, actualScrollTop: number): boolean {
@@ -419,7 +410,7 @@ export function createScrollSyncLoopGuard(
       if (now() > entry.expiresAt) {
         return false
       }
-      return Math.abs(actualScrollTop - entry.expectedScrollTop) <= entry.tolerancePx
+      return Math.abs(actualScrollTop - entry.expectedScrollTop) <= tolerancePx
     }
   }
 }

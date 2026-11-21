@@ -255,9 +255,5 @@ describe('splitScrollSync bidirectional line-based interpolation & loop guard', 
     guard.markProgrammaticScroll('preview', 200)
     expect(guard.shouldIgnoreScroll('raw', 100)).toBe(false)
     expect(guard.shouldIgnoreScroll('preview', 200)).toBe(true)
-
-    // Custom tolerance override allows CodeMirror scrollIntoView yMargin offsets
-    guard.markProgrammaticScroll('raw', 300, 6)
-    expect(guard.shouldIgnoreScroll('raw', 295)).toBe(true)
   })
 })

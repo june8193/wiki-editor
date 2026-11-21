@@ -68,6 +68,7 @@ export function AuxiliaryAppShell() {
       frontmatterFieldValues={frontmatterFieldValues}
       openWorkspaceFile={editor.openWorkspaceFile}
       reportErrorBanner={reportErrorBanner}
+      navigation={editor.navigation}
       paneWorkspaceProps={buildPaneWorkspaceProps(config, editor, isShortcutDisabled)}
     />
   )

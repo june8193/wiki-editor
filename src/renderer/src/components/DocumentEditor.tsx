@@ -23,7 +23,7 @@ import {
   type DocumentEditorFindControl,
   useDocumentEditorFind
 } from '../hooks/useDocumentEditorFind'
-import { useDocumentSearchJump } from '../hooks/useDocumentSearchJump'
+import { resolveDocumentJumpHighlights } from '../stores/PaneNavigationCoordinator'
 import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
 import {
   DEFAULT_SPLIT_RATIO,
@@ -120,7 +120,7 @@ export function DocumentEditor({
     handleSplitPreviewScroll
   } = useSplitScrollSync({
     effectiveMode,
-    matchedScrollRequest,
+    hasOutlineScrollRequest: matchedScrollRequest !== null,
     onUpdateViewState
   })
 
@@ -143,20 +143,9 @@ export function DocumentEditor({
     domRefs: findDomRefs
   })
 
-  const docJump = useDocumentSearchJump({
-    tabId: tab.id,
-    documentKey: activeDoc.key,
-    effectiveMode,
-    isImage,
-    searchJumpRequest
-  })
-
-  const handleDocumentChangeContent = useCallback(
-    (nextContent: string): void => {
-      docJump.dismissJump()
-      onChangeContent(nextContent)
-    },
-    [docJump.dismissJump, onChangeContent]
+  const docJump = useMemo(
+    () => resolveDocumentJumpHighlights(searchJumpRequest, tab.id, effectiveMode, isImage),
+    [effectiveMode, isImage, searchJumpRequest, tab.id]
   )
 
   const handleSplitRatioChange = useCallback(
@@ -267,7 +256,7 @@ export function DocumentEditor({
         jumpHighlight={docJump.rawJumpHighlight}
         isActive={isActive}
         editorViewRef={rawEditorViewRef}
-        onChangeContent={handleDocumentChangeContent}
+        onChangeContent={onChangeContent}
         onUpdateViewState={onUpdateViewState}
         onActiveHeadingChange={
           effectiveMode === 'split'
@@ -390,7 +379,7 @@ export function DocumentEditor({
                 jumpHighlight={docJump.wysiwygJumpHighlight}
                 editorRef={wysiwygEditorRef}
                 isActive={isActive}
-                onChangeContent={handleDocumentChangeContent}
+                onChangeContent={onChangeContent}
                 onScrollTopChange={handleScrollTopChange}
                 onLinkNavigate={onNavigateLink}
                 onActiveHeadingChange={modeHeadingChangeHandlers?.wysiwyg}
@@ -446,7 +435,7 @@ export function DocumentEditor({
                     documentTitle={documentTitle}
                     mermaidHeights={tab.mermaidHeights}
                     onMermaidHeightChange={handleMermaidHeightChange}
-                    scrollRequest={previewScrollRequest}
+                    scrollRequest={null}
                     findHighlight={docFind.previewFindHighlight}
                     jumpHighlight={docJump.previewJumpHighlight}
                     isActive={isActive}

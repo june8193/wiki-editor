@@ -348,6 +348,7 @@ export class PaneTabStore {
   private state: PaneLayoutState = createInitialState()
   private nextTabSeq = 1
   private listeners = new Set<() => void>()
+  private transitionListeners = new Set<(transition: PaneTabTransition) => void>()
   private readonly onTransition?: (transition: PaneTabTransition) => void
 
   constructor(options: PaneTabStoreOptions = {}) {
@@ -358,6 +359,13 @@ export class PaneTabStore {
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
+    }
+  }
+
+  subscribeTransitions = (listener: (transition: PaneTabTransition) => void): (() => void) => {
+    this.transitionListeners.add(listener)
+    return () => {
+      this.transitionListeners.delete(listener)
     }
   }
 
@@ -378,6 +386,9 @@ export class PaneTabStore {
     this.state = nextState
     for (const transition of emitted) {
       this.onTransition?.(transition)
+      for (const listener of this.transitionListeners) {
+        listener(transition)
+      }
     }
     for (const listener of this.listeners) {
       listener()

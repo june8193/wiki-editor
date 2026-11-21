@@ -25,7 +25,6 @@ import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
 import { useWindowWidth } from '../hooks/useWindowWidth'
 import { useWorkspaceSearch } from '../hooks/useWorkspaceSearch'
-import { useWorkspaceSearchJump } from '../hooks/useWorkspaceSearchJump'
 import { useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import {
   clampSidebarWidth,
@@ -343,46 +342,35 @@ export function MainAppShell() {
   })
 
   const { openWorkspaceFile, openConfigDocument } = editor
-  const { searchJumpRequest, openSearchLineMatch, invalidatePendingSearchJumps } =
-    useWorkspaceSearchJump({
-      workspaceRootPath: activeWorkspaceRoot,
-      layout: editor.layout,
-      query: workspaceSearch.query,
-      responseQuery: workspaceSearch.response?.query ?? null,
-      options: workspaceSearch.resultOptions,
-      getSwitchSequence: workspaceLifecycle.getSwitchSequence,
-      openWorkspaceFile
-    })
+  const { resetForWorkspaceSwitch } = editor.navigation
 
   gitCollaboratorsRef.current = {
     editor,
-    refreshTree,
-    onBeforeOpenTab: invalidatePendingSearchJumps
+    refreshTree
   }
 
   useEffect(() => {
     setGitWorkspaceRootPath(activeWorkspaceRoot)
-  }, [activeWorkspaceRoot, setGitWorkspaceRootPath])
+    resetForWorkspaceSwitch()
+  }, [activeWorkspaceRoot, resetForWorkspaceSwitch, setGitWorkspaceRootPath])
+
   const handleOpenFile = useCallback(
     (entry: WorkspaceEntry): void => {
-      invalidatePendingSearchJumps()
       void openWorkspaceFile(entry)
     },
-    [invalidatePendingSearchJumps, openWorkspaceFile]
+    [openWorkspaceFile]
   )
   const handleOpenSearchResultFile = useCallback(
     (file: WorkspaceSearchFileResult): void => {
-      invalidatePendingSearchJumps()
       void openWorkspaceFile(file.path, undefined, file.name)
     },
-    [invalidatePendingSearchJumps, openWorkspaceFile]
+    [openWorkspaceFile]
   )
 
   const handleOpenConfigEditor = useCallback((): void => {
-    invalidatePendingSearchJumps()
     setIsSettingsOpen(false)
     void openConfigDocument()
-  }, [invalidatePendingSearchJumps, openConfigDocument])
+  }, [openConfigDocument])
 
   menuHandlersRef.current = {
     'open-folder': workspaceLifecycle.selectFolder,
@@ -458,22 +446,12 @@ export function MainAppShell() {
     imageTransferContextValue
   } = useWorkspaceImageTransfer(handleReportImageError)
 
-  const originalOnChangeContent = editor.paneActions.onChangeContent
-  const handlePaneChangeContent = useCallback(
-    (...args: Parameters<typeof originalOnChangeContent>): void => {
-      invalidatePendingSearchJumps()
-      originalOnChangeContent(...args)
-    },
-    [invalidatePendingSearchJumps, originalOnChangeContent]
-  )
-
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       ...editor.paneActions,
-      onChangeContent: handlePaneChangeContent,
       onOpenDiffTargetFile: git.actions.openWorkspaceFile
     }),
-    [editor.paneActions, git.actions.openWorkspaceFile, handlePaneChangeContent]
+    [editor.paneActions, git.actions.openWorkspaceFile]
   )
 
   const isCurrentWorkspaceFavorite =
@@ -575,7 +553,14 @@ export function MainAppShell() {
                 onToggleOption={workspaceSearch.onToggleOption}
                 onToggleFileCollapsed={workspaceSearch.onToggleFileCollapsed}
                 onOpenFile={handleOpenSearchResultFile}
-                onOpenLineMatch={openSearchLineMatch}
+                onOpenLineMatch={(file, line) =>
+                  void editor.navigation.openSearchLineMatch(
+                    file,
+                    line,
+                    workspaceSearch.response?.query ?? workspaceSearch.query,
+                    workspaceSearch.resultOptions
+                  )
+                }
                 onClickSummaryBadge={workspaceSearch.onUpsertBadgeCondition}
               />
             )}
@@ -641,7 +626,7 @@ export function MainAppShell() {
         setIsSchemaModalOpen(true)
       }}
       onCloseSchemaModal={() => setIsSchemaModalOpen(false)}
-      searchJumpRequest={searchJumpRequest}
+      navigation={editor.navigation}
     />
   )
 }

@@ -16,6 +16,7 @@ import {
   type PaneTabTransition,
   type TabItem
 } from '../stores/PaneTabStore'
+import { PaneNavigationCoordinator } from '../stores/PaneNavigationCoordinator'
 import {
   type DirtyTabClosePrompt,
   type OpenedWorkspaceDocument,
@@ -146,6 +147,7 @@ export function useEditorWorkspace({
     tabStore: PaneTabStore
     syncClient: RendererBufferSyncClient
     tabDragController: RendererTabDragController
+    navigation: PaneNavigationCoordinator
   } | null>(null)
   if (!storesRef.current) {
     const bufferStore = new DocumentBufferStore()
@@ -168,9 +170,14 @@ export function useEditorWorkspace({
       windowApi: wikiApi.window,
       onError: (message, error) => callbacksRef.current.onError(message, error)
     })
-    storesRef.current = { bufferStore, tabStore, syncClient, tabDragController }
+    const navigation = new PaneNavigationCoordinator({
+      tabStore,
+      bufferStore,
+      openWorkspaceFile: syncClient.openWorkspaceFile
+    })
+    storesRef.current = { bufferStore, tabStore, syncClient, tabDragController, navigation }
   }
-  const { bufferStore, tabStore, syncClient, tabDragController } = storesRef.current
+  const { bufferStore, tabStore, syncClient, tabDragController, navigation } = storesRef.current
 
   const buffers = useSyncExternalStore(bufferStore.subscribe, bufferStore.getSnapshot)
   const layout = useSyncExternalStore(tabStore.subscribe, tabStore.getSnapshot)
@@ -211,8 +218,7 @@ export function useEditorWorkspace({
       onChangeContent: syncClient.updateBufferContent,
       onSaveBuffer: syncClient.saveBufferByKey,
       onUpdateTabViewState: tabStore.updateTabViewState,
-      onChangeDiffViewMode: tabStore.updateDiffTabViewMode,
-      onOpenDiffTargetFile: () => undefined
+      onChangeDiffViewMode: tabStore.updateDiffTabViewMode
     }),
     [canDetachToNewWindow, syncClient, tabDragController, tabStore]
   )
@@ -221,10 +227,11 @@ export function useEditorWorkspace({
     const stopSync = syncClient.start()
     const stopDrag = tabDragController.start()
     return () => {
+      navigation.dispose()
       stopDrag()
       stopSync()
     }
-  }, [syncClient, tabDragController])
+  }, [navigation, syncClient, tabDragController])
 
   useEffect(() => {
     void wikiApi.buffer.setAutoSavePaused(isAutoSavePaused).catch(() => undefined)
@@ -268,39 +275,24 @@ export function useEditorWorkspace({
   return {
     buffers,
     layout,
-    activeTab,
     activeBuffer,
     activeFilePath,
-    totalTabCount,
     dragState,
     paneActions,
+    navigation,
     openWorkspaceFile: syncClient.openWorkspaceFile,
     openConfigDocument: syncClient.openConfigDocument,
     refreshCleanConfig: syncClient.refreshCleanConfig,
     openCreatedFile: syncClient.openCreatedFile,
-    updateBufferContent: syncClient.updateBufferContent,
-    saveBufferByKey: syncClient.saveBufferByKey,
-    saveActivePaneDocument: syncClient.saveActivePaneDocument,
     ensureAllWorkspaceBuffersSaved: syncClient.ensureAllWorkspaceBuffersSaved,
     getDirtyWorkspaceSummary: syncClient.getDirtyWorkspaceSummary,
     getDirtyCloseSummary: syncClient.getDirtyCloseSummary,
     ensureCloseBuffersSaved: syncClient.ensureCloseBuffersSaved,
-    requestCloseTab: syncClient.requestCloseTab,
-    forceCloseTab: syncClient.forceCloseTab,
-    saveAndCloseTab: syncClient.saveAndCloseTab,
-    detachTabToNewWindow: syncClient.detachTabToNewWindow,
-    activateTab: tabStore.activateTab,
-    focusPane: tabStore.focusPane,
-    setSplitMode: tabStore.setSplitMode,
     setSplitRatio: tabStore.setSplitRatio,
-    moveTab: tabStore.moveTab,
     splitWithTab: tabStore.splitWithTab,
-    duplicateTabToOtherPane: tabStore.duplicateTabToOtherPane,
-    updateTabViewState: tabStore.updateTabViewState,
     openDiffTab: tabStore.openDiffTab,
     listOpenDiffRequests: tabStore.listOpenDiffRequests,
     subscribeLayout: tabStore.subscribe,
-    updateDiffTabViewMode: tabStore.updateDiffTabViewMode,
     closeUnstagedDiffTabsForPaths: tabStore.closeUnstagedDiffTabsForPaths,
     closeUnstagedDiffTabsExcept: tabStore.closeUnstagedDiffTabsExcept,
     closeStagedDiffTabsExcept: tabStore.closeStagedDiffTabsExcept,

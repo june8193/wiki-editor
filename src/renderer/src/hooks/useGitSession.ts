@@ -13,7 +13,6 @@ import { useWikiApi } from './useWikiApi'
 export interface GitSessionRuntimeCollaborators {
   editor: ReturnType<typeof useEditorWorkspace>
   refreshTree: () => Promise<void>
-  onBeforeOpenTab?: () => void
 }
 
 export interface UseGitSessionOptions {
@@ -84,7 +83,6 @@ export function useGitSession({
         openWorkspaceFile: (filePath, explicitName) => {
           const runtime = collaboratorsRef.current
           if (!runtime) return
-          runtime.onBeforeOpenTab?.()
           return runtime.editor.openWorkspaceFile(filePath, undefined, explicitName)
         }
       },
@@ -103,7 +101,6 @@ export function useGitSession({
         openDiffTab: (request) => {
           const runtime = collaboratorsRef.current
           if (!runtime) return
-          runtime.onBeforeOpenTab?.()
           runtime.editor.openDiffTab(request)
         },
         closeAllUnstagedDiffTabs: () =>

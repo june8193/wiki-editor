@@ -2116,7 +2116,7 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
       )
       expect(outlineButtons()[0]).toHaveAttribute('aria-current', 'location')
 
-      // 4. Split mode: click Second Body Heading moves Raw cursor to line 9 and scrolls right Preview <h2>
+      // 4. Split mode: click Second Body Heading moves Raw cursor to line 9 without direct Preview scrollIntoView
       await user.click(within(modeGroup).getByRole('button', { name: 'Split' }))
       scrollIntoViewMock.mockClear()
       await user.click(outlineButtons()[1])
@@ -2127,7 +2127,7 @@ describe('Document Outline scroll spy in Raw, 위지윅, Tab/Editor Mode switche
         expect(outlineButtons()[1]).toHaveAttribute('aria-current', 'location')
       })
       const splitPreview = screen.getByTestId('split-markdown-preview')
-      expect(scrollIntoViewMock.mock.instances).toContain(
+      expect(scrollIntoViewMock.mock.instances).not.toContain(
         within(splitPreview).getByRole('heading', { level: 2, name: 'Second Body Heading' })
       )
     } finally {
@@ -2392,7 +2392,7 @@ describe('Split editor mode and bidirectional scroll sync', () => {
       const rawOnlyEditor = screen.getByTestId('document-editor')
       expect(getRawEditorScroller(rawOnlyEditor).scrollTop).toBeCloseTo(expectedLine34Top, 5)
 
-      // Switch back to Split and test Outline heading jump scrolls both Raw and Preview
+      // Switch back to Split and test Outline heading jump drives Raw without direct Preview scrollIntoView
       fireEvent.keyDown(rawOnlyEditor, { key: '4', ctrlKey: true })
       scrollIntoViewMock.mockClear()
 
@@ -2404,12 +2404,11 @@ describe('Split editor mode and bidirectional scroll sync', () => {
         expect(getRawEditorSelection(screen.getByTestId('document-editor')).start).toBe(
           docContent.indexOf('## Architecture')
         )
-        expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' })
         expect(archBtn).toHaveAttribute('aria-current', 'location')
       })
       const jumpedPreview = screen.getByTestId('split-markdown-preview')
       const jumpedArchHeading = within(jumpedPreview).getByRole('heading', { level: 2, name: 'Architecture' })
-      expect(scrollIntoViewMock.mock.instances).toContain(jumpedArchHeading)
+      expect(scrollIntoViewMock.mock.instances).not.toContain(jumpedArchHeading)
     } finally {
       restore()
     }

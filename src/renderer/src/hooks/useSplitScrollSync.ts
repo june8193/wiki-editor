@@ -7,30 +7,23 @@ import {
   computePreviewScrollTopFromRaw,
   computeRawScrollTopFromPreview,
   createCodeMirrorRawScrollGeometry,
-  createScrollSyncLoopGuard,
-  mapLineToRawScrollTop
+  createScrollSyncLoopGuard
 } from '../editor/splitScrollSync'
 import type { EditorMode } from '../stores/PaneTabStore'
-import { useOneShotScroll } from './useOneShotScroll'
-
-export interface SplitOutlineJumpRequest {
-  line: number
-  nonce: number
-}
 
 interface UseSplitScrollSyncOptions {
   effectiveMode: EditorMode
-  matchedScrollRequest: SplitOutlineJumpRequest | null
+  hasOutlineScrollRequest: boolean
   onUpdateViewState: (patch: { scrollTop?: number }) => void
 }
 
 /**
  * Coordinates line-based bidirectional scroll sync, boundary preservation,
- * initial Split entry sync, and Outline heading jumps between the Raw and Preview split regions.
+ * and initial Split entry sync between the Raw and Preview split regions.
  */
 export function useSplitScrollSync({
   effectiveMode,
-  matchedScrollRequest,
+  hasOutlineScrollRequest,
   onUpdateViewState
 }: UseSplitScrollSyncOptions) {
   const rawEditorViewRef = useRef<EditorView | null>(null)
@@ -126,28 +119,13 @@ export function useSplitScrollSync({
     const prevMode = prevEffectiveModeRef.current
     prevEffectiveModeRef.current = effectiveMode
 
-    if (effectiveMode === 'split' && prevMode !== 'split' && !matchedScrollRequest) {
+    if (effectiveMode === 'split' && prevMode !== 'split' && !hasOutlineScrollRequest) {
       const view = rawEditorViewRef.current
       if (view && view.scrollDOM.scrollTop > 0) {
         syncSplitScroll('raw')
       }
     }
-  }, [effectiveMode, matchedScrollRequest, syncSplitScroll])
-
-  useOneShotScroll(matchedScrollRequest, effectiveMode === 'split', (req) => {
-    const view = rawEditorViewRef.current
-    const previewEl = splitPreviewContainerRef.current
-    if (!view || !previewEl) return false
-
-    const guard = getScrollSyncGuard()
-    guard.markProgrammaticScroll('preview', previewEl.scrollTop)
-
-    const rawGeometry = createCodeMirrorRawScrollGeometry(view)
-    const expectedRawScrollTop = mapLineToRawScrollTop(req.line, rawGeometry)
-    // CodeMirror scrollIntoView({ y: 'start' }) subtracts a 5px yMargin before clamping to [0, rawMax].
-    guard.markProgrammaticScroll('raw', expectedRawScrollTop, 6)
-    return true
-  })
+  }, [effectiveMode, hasOutlineScrollRequest, syncSplitScroll])
 
   return {
     rawEditorViewRef,

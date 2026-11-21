@@ -30,7 +30,7 @@ export interface PaneInteractionActions extends TabDragDropActions {
   onSaveBuffer: (bufferKey: string) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
   onChangeDiffViewMode: (paneId: PaneId, tabId: string, viewMode: GitDiffViewMode) => void
-  onOpenDiffTargetFile: (repoRelativePath: string) => void
+  onOpenDiffTargetFile?: (repoRelativePath: string) => void
   onNavigateLink?: (paneId: PaneId, tabId: string, href: string) => void
 }
 

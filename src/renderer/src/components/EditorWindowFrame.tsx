@@ -1,13 +1,11 @@
-import { type ReactNode, type Ref, useCallback, useMemo, useRef, useState } from 'react'
+import { type ReactNode, type Ref, useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import { toErrorMessage } from '@shared/errors'
 import { FRONTMATTER_SCHEMA_FILE } from '@shared/frontmatter'
-import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { isMarkdownDocument, type SidebarDocumentContext } from '../editor/editorModes'
 import type { ConfirmDialogState } from '../hooks/useConfirmDialog'
-import { useDocumentOutline } from '../hooks/useDocumentOutline'
 import {
   ImageTransferContext,
   type ImageTransferContextValue
@@ -20,6 +18,7 @@ import {
   type UseMarkdownLinkNavigationOptions
 } from '../hooks/useMarkdownLinkNavigation'
 import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
+import type { PaneNavigationCoordinator } from '../stores/PaneNavigationCoordinator'
 import { getPaneActiveTab, type PaneId } from '../stores/PaneTabStore'
 import {
   createTwoSectionSplitState,
@@ -91,7 +90,7 @@ export type FrontmatterFieldValuesController = ReturnType<typeof useFrontmatterF
 export interface EditorWindowFrameProps {
   shellRef?: Ref<HTMLDivElement>
   paneWorkspaceProps: WindowFramePaneWorkspaceProps
-  searchJumpRequest?: DocumentSearchJumpRequest | null
+  navigation: PaneNavigationCoordinator
   showHeadingNumbers: boolean
   onToggleHeadingNumbers: () => void
   workspaceRootPath?: string | null
@@ -125,7 +124,7 @@ export interface EditorWindowFrameProps {
 export function EditorWindowFrame({
   shellRef,
   paneWorkspaceProps,
-  searchJumpRequest = null,
+  navigation,
   showHeadingNumbers,
   onToggleHeadingNumbers,
   workspaceRootPath = null,
@@ -232,27 +231,23 @@ export function EditorWindowFrame({
     shellRef: localShellRef
   })
 
-  const outline = useDocumentOutline(
-    paneWorkspaceProps.layout,
-    paneWorkspaceProps.buffers,
-    paneWorkspaceProps.actions
-  )
+  const navState = useSyncExternalStore(navigation.subscribe, navigation.getSnapshot)
 
   const handleNavigateMarkdownLink = useMarkdownLinkNavigation({
     panes: paneWorkspaceProps.layout.panes,
     buffers: paneWorkspaceProps.buffers,
     workspaceRootPath,
     openWorkspaceFile,
-    dispatchHeadingScroll: outline.dispatchHeadingScroll,
+    dispatchHeadingScroll: navigation.dispatchOutlineHeadingScroll,
     reportErrorBanner
   })
 
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
-      ...outline.paneActions,
+      ...paneWorkspaceProps.actions,
       onNavigateLink: handleNavigateMarkdownLink
     }),
-    [handleNavigateMarkdownLink, outline.paneActions]
+    [handleNavigateMarkdownLink, paneWorkspaceProps.actions]
   )
 
   const activePane = paneWorkspaceProps.layout.panes[paneWorkspaceProps.layout.activePaneId]
@@ -269,14 +264,14 @@ export function EditorWindowFrame({
     content: activeBuffer?.content ?? '',
     isMarkdownDocument: activeBuffer ? isMarkdownDocument(activeBuffer) : false
   }
-  const onOutlinePaneChangeContent = outline.paneActions.onChangeContent
+  const onPaneChangeContent = paneWorkspaceProps.actions.onChangeContent
 
   const handlePropertiesChangeContent = useCallback(
     (nextContent: string): void => {
       if (!activeBufferKey) return
-      onOutlinePaneChangeContent(activeBufferKey, nextContent)
+      onPaneChangeContent(activeBufferKey, nextContent)
     },
-    [activeBufferKey, onOutlinePaneChangeContent]
+    [activeBufferKey, onPaneChangeContent]
   )
 
   return (
@@ -295,10 +290,10 @@ export function EditorWindowFrame({
         >
           <PaneWorkspace
             {...paneWorkspaceProps}
-            scrollRequest={outline.scrollRequest}
-            searchJumpRequest={searchJumpRequest}
+            scrollRequest={navState.outlineScrollRequest}
+            searchJumpRequest={navState.searchJumpRequest}
             getPaneFindControl={paneFind.getPaneFindControl}
-            onActiveHeadingChange={outline.handleActiveHeadingChange}
+            onActiveHeadingChange={navigation.reportActiveHeading}
             actions={paneActions}
           />
         </ImageTransferContext.Provider>
@@ -324,8 +319,8 @@ export function EditorWindowFrame({
                 onTogglePropertiesCollapsed={handleTogglePropertiesCollapsed}
                 onResizeOutlineRatio={handleResizeOutlineRatio}
                 outlineProps={{
-                  activeHeadingIndex: outline.activeHeadingIndex,
-                  onSelectHeading: outline.selectHeading,
+                  activeHeadingIndex: navState.activeHeadingIndex,
+                  onSelectHeading: navigation.selectOutlineHeading,
                   showHeadingNumbers,
                   onToggleHeadingNumbers,
                   onCollapse: handleCollapseRightSidebar
