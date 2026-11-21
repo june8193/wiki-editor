@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `@shared` 통합 **모듈**이 **프론트매터 스키마** 수명주기(읽기·엄격 검증·기본 템플릿 생성·저장·직렬화 비동기 큐·`missing`/`valid`/`error` 핑거프린트·변경 브로드캐스트), 워크스페이스 문서 스캔, 텍스트/프론트매터 조건 검색 및 정렬, `allowCustom` 필드값 수집을 좁은 스토리지 **심(seam)**(워크스페이스 루트/변경 구독·대상 파일 열거·문서 텍스트 읽기·선택적 realpath 해석·스키마 raw 읽기/쓰기/감시) 뒤의 단일 구현으로 제공합니다.
 - [ ] 새 `@shared` **모듈**이 공유 **문서 버퍼** 허브와 직접 연동하여 스캔 시 미저장 **문서 버퍼**(바이너리·`2MB` 초과·`config.json` 제외)를 디스크보다 우선 오버레이하고, 스키마 저장 또는 외부 변경 감지 시 열려 있는 깨끗한(clean) `.wiki-editor/frontmatter.json` **문서 버퍼**를 자동 갱신합니다.

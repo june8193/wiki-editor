@@ -6,7 +6,7 @@
 
 **Blocked by:** 03-collapse-main-window-workspace-lifecycle
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] **편집기 영역** 단위의 단일 임시 내비게이션 **모듈**이 탭 저장소의 전이 이벤트(`tab-opened`, `tab-switched`, `editor-mode-changed`, `tab-closed`)와 **문서 버퍼** 본문 편집을 직접 구독하여 대기 중인 **검색 패널** 점프와 **문서 목차** 스크롤 요청을 한곳에서 자동 무효화합니다.
 - [ ] 중복되어 있던 두 개의 검색 점프 상태 머신(워크스페이스 점프 훅 + 문서 내 점프 훅)을 하나로 통합하고, 4단계에 걸친 `onChangeContent` 콜백 재래핑과 **메인 창** 셸 6곳의 수동 점프 무효화 호출을 제거하며, 52개 속성을 평탄하게 재노출하던 얕은 편집기 워크스페이스 훅의 통과 표면(미사용 더미 액션 포함)을 축소합니다.

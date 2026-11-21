@@ -6,7 +6,7 @@
 
 **Blocked by:** 02-deepen-git-session-and-panel-module
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 단일 깊은 **메인 창** 워크스페이스 수명주기 **모듈**이 창 초기화 컨텍스트(`getInitContext`를 앱 시작당 단일 진입으로 통합)와 초기 `config.json` 최근 워크스페이스 조인, 중복 **메인 창** 포커스 단축 분기, 공용 미저장 **문서 버퍼** 확인 가드(티켓 02에서 정돈된 공용 헬퍼 활용), 전환 시 기존 **문서 버퍼** 정리, **폴더 트리**·**편집기 영역** 레이아웃 복원, 창 닫기 전 즉시 flush를 통합 소유합니다.
 - [ ] `workspace-state.json` 영속화의 일시 중지·재개 상태 머신(`suspendAndFlush`, 복원 완료 시 `markRestored`, 워크스페이스 열기 실패 시 이전 루트로 `resumeForWorkspace` 롤백)이 수명주기 **모듈** 내부 구현으로 캡슐화되어 외부 호출자에게 노출되지 않습니다.

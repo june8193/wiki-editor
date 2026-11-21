@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 심화된 Git 세션 **모듈**이 외부 의존성(**문서 버퍼** 저장/discard/재조정, **Diff 탭** 열기/닫기/목록 조회, **확인 다이얼로그** 호출, **폴더 트리** 새로고침)만 좁은 협력자 **어댑터**로 주입받고, 저장소↔워크스페이스 경로 해석·단일/연속 Git 변경 뮤테이션 잠금·`prepare`/`finish` **문서 버퍼** discard 브래킷·**Diff 탭** 로드/캐시/프루닝(기존 Diff 탭 훅 흡수)을 단일 트랜잭션으로 소유합니다.
 - [ ] 자동 Stage 커밋 확인, 변경 전 미저장 **문서 버퍼** 보호 확인, `Discard All` 위험 확인, `Stash Drop` / `Clear All` 위험 확인 및 Stash 입력 다이얼로그 열기·닫기·제출 상태가 모두 Git 세션 **모듈**/**Git 패널** 범위 안에 응집되며, 미저장 **문서 버퍼** 확인 프롬프트는 워크스페이스 전환에서도 재사용 가능한 공용 헬퍼로 분리됩니다.

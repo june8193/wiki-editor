@@ -6,7 +6,7 @@
 
 **Blocked by:** 01-shared-workspace-query-and-schema-module
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `@shared` 멀티 윈도우 세션 **모듈**이 좁은 창 호스트 **심(seam)**(창 생성·포커스/복원·닫기·bounds 조회·닫기 요청 전달·수명주기 이벤트) 뒤에서 세션 생성/폐기, `pendingInitialWorkspacePath`/`pendingOpenWorkspacePath`/`activeRoot` 기반 중복 워크스페이스 창 탐색·포커스, **보조 창** pending transfer 등록·0탭 자동 닫기·**메인 창** 닫힘 시 연쇄 닫기, 닫기 게이트·clean flush 타임아웃 상태 머신, 세션 내부/타 세션 간 탭 드래그 격리를 단일 구현으로 소유합니다.
 - [ ] 메인 프로세스 창 매니저가 브라우저 창 생성·URL/파일 로드·입력 이벤트 전달만 담당하는 Electron 호스트 **어댑터**로 축소되고, 인메모리 테스트 하네스가 가상 창 핸들 **어댑터**를 통해 동일한 `@shared` 세션 **모듈**을 실행하면서 기존 약 450줄의 병렬 세션/창 구현을 삭제합니다.
