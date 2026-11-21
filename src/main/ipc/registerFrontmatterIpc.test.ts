@@ -13,7 +13,7 @@ import { LogService } from '../logging/LogService'
 import { createDiskWorkspaceQueryAndSchemaHub } from '../workspace/diskWorkspaceQueryAndSchema'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import type { WebContentsLike } from './ipcHelpers'
-import { createFakeIpcMain } from './ipcTestHelpers'
+import { createFakeIpcMain, createSingleIpcSessionSource } from './ipcTestHelpers'
 import { registerFrontmatterIpc } from './registerFrontmatterIpc'
 
 describe('registerFrontmatterIpc', () => {
@@ -54,8 +54,10 @@ describe('registerFrontmatterIpc', () => {
 
     const dispose = registerFrontmatterIpc({
       ipcMain,
-      queryAndSchemaHub,
-      getTargets: () => [liveTarget, destroyedTarget],
+      sessionSource: createSingleIpcSessionSource({
+        queryAndSchemaHub,
+        getTargets: () => [liveTarget, destroyedTarget]
+      }),
       logService
     })
 
@@ -136,8 +138,10 @@ describe('registerFrontmatterIpc', () => {
 
     const dispose = registerFrontmatterIpc({
       ipcMain,
-      queryAndSchemaHub,
-      getTargets: () => [],
+      sessionSource: createSingleIpcSessionSource({
+        queryAndSchemaHub,
+        getTargets: () => []
+      }),
       logService
     })
 

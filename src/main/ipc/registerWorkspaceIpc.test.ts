@@ -2,15 +2,58 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import { DEFAULT_SEARCH_MATCH_OPTIONS, type WorkspaceSearchResponse } from '@shared/search'
 import { ConfigService } from '../config/ConfigService'
 import { LogService } from '../logging/LogService'
+import { createDiskWorkspaceQueryAndSchemaHub } from '../workspace/diskWorkspaceQueryAndSchema'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
+import type { IpcMainLike } from './ipcHelpers'
 import { createFakeIpcMain } from './ipcTestHelpers'
 import { createSharedDocumentBufferHub } from './registerBufferIpc'
 import type { WebContentsLike } from './registerConfigIpc'
-import { registerWorkspaceIpc } from './registerWorkspaceIpc'
+import { registerWorkspaceIpc, type WorkspaceIpcSession } from './registerWorkspaceIpc'
+
+function registerSingleWorkspaceIpc(params: {
+  ipcMain: IpcMainLike
+  workspaceService: WorkspaceFsService
+  configService: ConfigService
+  selectDirectory: (sender?: WebContentsLike) => Promise<string | null>
+  getTargets: () => WebContentsLike[]
+  bufferHub?: SharedDocumentBufferHub
+  isMainWindow?: (sender: WebContentsLike | undefined) => boolean
+  logService?: LogService
+}): () => void {
+  const queryAndSchemaHub = createDiskWorkspaceQueryAndSchemaHub({
+    workspaceService: params.workspaceService,
+    bufferHub: params.bufferHub,
+    logService: params.logService
+  })
+  const session: WorkspaceIpcSession = {
+    workspaceService: params.workspaceService,
+    queryAndSchemaHub,
+    getTargets: params.getTargets,
+    isMainWindow: params.isMainWindow ?? (() => true)
+  }
+  const disposeIpc = registerWorkspaceIpc({
+    ipcMain: params.ipcMain,
+    configService: params.configService,
+    selectDirectory: params.selectDirectory,
+    logService: params.logService,
+    coordinator: {
+      resolveSession: () => session,
+      openWorkspaceInSession: async (_sender, rootPath) => {
+        queryAndSchemaHub.cancelActiveScans()
+        return params.workspaceService.openWorkspace(rootPath)
+      }
+    }
+  })
+  return () => {
+    disposeIpc()
+    queryAndSchemaHub.dispose()
+  }
+}
 
 describe('registerWorkspaceIpc', () => {
   let tempDir: string
@@ -43,7 +86,7 @@ describe('registerWorkspaceIpc', () => {
       }
     ]
 
-    const dispose = registerWorkspaceIpc({
+    const dispose = registerSingleWorkspaceIpc({
       ipcMain,
       workspaceService,
       configService,
@@ -51,6 +94,7 @@ describe('registerWorkspaceIpc', () => {
       getTargets: () => targets
     })
 
+    expect(ipcMain.hasHandler('workspace:activate-or-open')).toBe(false)
     expect(await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.selectFolder)).toBe(workspaceDir)
 
     const opened = await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.open, workspaceDir)
@@ -125,7 +169,7 @@ describe('registerWorkspaceIpc', () => {
     const logService = new LogService(join(tempDir, 'logs'))
     const configService = new ConfigService(configPath)
     const ipcMain = createFakeIpcMain()
-    const dispose = registerWorkspaceIpc({
+    const dispose = registerSingleWorkspaceIpc({
       ipcMain,
       workspaceService,
       configService,
@@ -187,7 +231,7 @@ describe('registerWorkspaceIpc', () => {
     const logService = new LogService(join(tempDir, 'logs'))
     const configService = new ConfigService(configPath)
     const ipcMain = createFakeIpcMain()
-    const dispose = registerWorkspaceIpc({
+    const dispose = registerSingleWorkspaceIpc({
       ipcMain,
       workspaceService,
       configService,
@@ -238,13 +282,13 @@ describe('registerWorkspaceIpc', () => {
       send: (channel, payload) => auxEvents.push({ channel, payload })
     }
 
-    const dispose = registerWorkspaceIpc({
+    const dispose = registerSingleWorkspaceIpc({
       ipcMain,
       workspaceService,
       configService,
       selectDirectory: async () => workspaceDir,
       getTargets: () => [mainTarget, auxTarget],
-      isMainWindowSender: (sender) => sender === mainTarget
+      isMainWindow: (sender) => sender === mainTarget
     })
 
     await expect(
@@ -286,7 +330,7 @@ describe('registerWorkspaceIpc', () => {
     const bufferHub = createSharedDocumentBufferHub({ workspaceService, configService })
     const ipcMain = createFakeIpcMain()
 
-    const dispose = registerWorkspaceIpc({
+    const dispose = registerSingleWorkspaceIpc({
       ipcMain,
       workspaceService,
       configService,
@@ -328,7 +372,7 @@ describe('registerWorkspaceIpc', () => {
     const bufferHub = createSharedDocumentBufferHub({ workspaceService, configService })
     const ipcMain = createFakeIpcMain()
 
-    const dispose = registerWorkspaceIpc({
+    const dispose = registerSingleWorkspaceIpc({
       ipcMain,
       workspaceService,
       configService,

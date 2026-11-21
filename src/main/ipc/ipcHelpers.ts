@@ -312,29 +312,6 @@ export interface IpcSessionSource<
 }
 
 /**
- * Uses sessionSource when provided, or wraps a single-session fallback adapter.
- */
-export function resolveIpcSessionSource<
-  TSession,
-  TWebContents extends WebContentsLike = WebContentsLike
->(
-  sessionSource: IpcSessionSource<TSession, TWebContents> | undefined,
-  fallbackSession: TSession | undefined,
-  missingError: string
-): IpcSessionSource<TSession, TWebContents> {
-  if (sessionSource) {
-    return sessionSource
-  }
-  if (!fallbackSession) {
-    throw new Error(missingError)
-  }
-  return {
-    resolveSession: () => fallbackSession,
-    forEachSession: (visitor) => visitor(fallbackSession)
-  }
-}
-
-/**
  * Attaches an event subscription to all existing and future sessions without duplicate bindings.
  */
 export function subscribeIpcSessions<

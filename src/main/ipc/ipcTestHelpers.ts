@@ -1,4 +1,14 @@
-import type { IpcMainLike } from './ipcHelpers'
+import type { IpcMainLike, IpcSessionSource, WebContentsLike } from './ipcHelpers'
+
+export function createSingleIpcSessionSource<
+  TSession,
+  TWebContents extends WebContentsLike = WebContentsLike
+>(session: TSession): IpcSessionSource<TSession, TWebContents> {
+  return {
+    resolveSession: () => session,
+    forEachSession: (visitor) => visitor(session)
+  }
+}
 
 type IpcTestHandler = (event: unknown, ...args: unknown[]) => unknown
 

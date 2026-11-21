@@ -349,11 +349,14 @@ describe('Auxiliary window shell, tab detach/merge, and close guards (<App />)',
     const aux1SoloMenu = await within(aux1Rendered.container).findByRole('menu', { name: '탭 작업 메뉴' })
     expect(within(aux1SoloMenu).getByRole('menuitem', { name: '새 창으로 이동' })).toBeDisabled()
 
-    // Closing the sole remaining tab on auxiliary automatically closes that auxiliary window, leaving main untouched
+    // Closing the sole remaining tab on auxiliary automatically closes that auxiliary window
+    // through syncWindowTabs without calling window:close-current, leaving main untouched
+    const aux1CloseSpy = vi.spyOn(aux1.api.window!, 'closeCurrent')
     await user.click(within(aux1Rendered.container).getByRole('button', { name: 'one.md 탭 닫기' }))
     await waitFor(() => {
       expect(aux1.isClosed()).toBe(true)
     })
+    expect(aux1CloseSpy).not.toHaveBeenCalled()
     expect(within(mainRendered.container).getAllByRole('tab')).toHaveLength(2)
   })
 
@@ -715,6 +718,7 @@ describe('Auxiliary window shell, tab detach/merge, and close guards (<App />)',
     })
 
     // 1. Aux1 (beta.md, sole tab) -> Main tab bar at index 0 (before alpha.md)
+    const aux1DragCloseSpy = vi.spyOn(aux1.api.window!, 'closeCurrent')
     const aux1BetaTab = within(aux1Rendered.container).getByRole('tab', { name: /beta\.md/ })
     const dt1 = createCrossWindowDataTransfer()
     fireEvent.dragStart(aux1BetaTab, { dataTransfer: dt1 })
@@ -733,6 +737,7 @@ describe('Auxiliary window shell, tab detach/merge, and close guards (<App />)',
         'alpha.md'
       ])
     })
+    expect(aux1DragCloseSpy).not.toHaveBeenCalled()
 
     // Duplicate auxiliary spawn was suppressed even though dragend fired at (2100, 900)
     expect(harness.getAuxiliaryWindows()).toHaveLength(2)

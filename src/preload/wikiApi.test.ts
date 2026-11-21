@@ -122,7 +122,8 @@ describe('createWikiApi', () => {
     await api.workspace.selectFolder()
     await api.workspace.open('C:\\wiki')
     await api.workspace.openInNewWindow?.('C:\\wiki-other')
-    await api.workspace.activateOrOpen?.('C:\\wiki-third')
+    expect('activateOrOpen' in api.workspace).toBe(false)
+    expect('activateOrOpen' in WORKSPACE_IPC_CHANNELS).toBe(false)
     await api.workspace.focusIfOpen?.('C:\\wiki-other')
     await api.workspace.readDir('C:\\wiki\\docs')
     await api.workspace.listMarkdownFiles()
@@ -153,7 +154,6 @@ describe('createWikiApi', () => {
       WORKSPACE_IPC_CHANNELS.selectFolder,
       WORKSPACE_IPC_CHANNELS.open,
       WORKSPACE_IPC_CHANNELS.openInNewWindow,
-      WORKSPACE_IPC_CHANNELS.activateOrOpen,
       WORKSPACE_IPC_CHANNELS.focusIfOpen,
       WORKSPACE_IPC_CHANNELS.readDir,
       WORKSPACE_IPC_CHANNELS.listMarkdownFiles,

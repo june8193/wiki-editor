@@ -7,7 +7,6 @@ import {
   type IpcMainLike,
   type IpcSessionSource,
   registerIpcHandlers,
-  resolveIpcSessionSource,
   resolveSenderWebContents,
   subscribeIpcSessions,
   type WebContentsLike
@@ -22,9 +21,7 @@ export type FrontmatterIpcSessionSource = IpcSessionSource<FrontmatterIpcSession
 
 export interface RegisterFrontmatterIpcOptions {
   ipcMain: IpcMainLike
-  sessionSource?: FrontmatterIpcSessionSource
-  queryAndSchemaHub?: WorkspaceQueryAndSchemaHub
-  getTargets?: () => WebContentsLike[]
+  sessionSource: FrontmatterIpcSessionSource
   logService?: LogService
 }
 
@@ -35,18 +32,10 @@ export interface RegisterFrontmatterIpcOptions {
 export function registerFrontmatterIpc({
   ipcMain,
   sessionSource,
-  queryAndSchemaHub,
-  getTargets,
   logService
 }: RegisterFrontmatterIpcOptions): () => void {
-  const source = resolveIpcSessionSource(
-    sessionSource,
-    queryAndSchemaHub && getTargets ? { queryAndSchemaHub, getTargets } : undefined,
-    'registerFrontmatterIpc requires either sessionSource or queryAndSchemaHub and getTargets'
-  )
-
   const unsubscribeSessions = subscribeIpcSessions(
-    source,
+    sessionSource,
     (session) => session.queryAndSchemaHub,
     (session) =>
       session.queryAndSchemaHub.onSchemaChanged((result) => {
@@ -56,7 +45,7 @@ export function registerFrontmatterIpc({
 
   const requireSession = (event: unknown): FrontmatterIpcSession => {
     const sender = resolveSenderWebContents(event)
-    const session = source.resolveSession(sender)
+    const session = sessionSource.resolveSession(sender)
     if (!session) {
       throw new Error('열린 워크스페이스가 없습니다.')
     }

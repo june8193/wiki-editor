@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AutoSaveConfig } from '@shared/bufferAutoSaveScheduler'
 import type {
   DocumentBuffer,
   ReconcileBuffersResult,
@@ -9,13 +10,16 @@ import type {
   SharedBufferStateSnapshot
 } from '@shared/documentBuffer'
 import { BUFFER_IPC_CHANNELS } from '@shared/ipc'
+import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import { getWorkspacePathKey } from '@shared/workspace'
 import { ConfigService } from '../config/ConfigService'
 import { LogService } from '../logging/LogService'
-import { createFakeIpcMain } from './ipcTestHelpers'
+import type { IpcMainLike } from './ipcHelpers'
+import { createFakeIpcMain, createSingleIpcSessionSource } from './ipcTestHelpers'
 import {
   createSharedDocumentBufferHub,
   registerBufferIpc,
+  type BufferIpcSession,
   type BufferWebContentsLike
 } from './registerBufferIpc'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
@@ -55,6 +59,39 @@ function createFakeWindowWebContents(id: number): FakeWindowWebContents {
   }
 }
 
+function registerSingleBufferIpcSession(params: {
+  ipcMain: IpcMainLike
+  workspaceService: WorkspaceFsService
+  configService: ConfigService
+  getTargets: () => BufferWebContentsLike[]
+  logService?: LogService
+  initialAutoSaveConfig?: AutoSaveConfig
+}): { hub: SharedDocumentBufferHub; dispose: () => void } {
+  const hub = createSharedDocumentBufferHub({
+    workspaceService: params.workspaceService,
+    configService: params.configService,
+    logService: params.logService,
+    initialAutoSaveConfig: params.initialAutoSaveConfig
+  })
+  const session: BufferIpcSession = {
+    hub,
+    getTargets: params.getTargets
+  }
+  const disposeIpc = registerBufferIpc({
+    ipcMain: params.ipcMain,
+    configService: params.configService,
+    sessionSource: createSingleIpcSessionSource<BufferIpcSession, BufferWebContentsLike>(session),
+    logService: params.logService
+  })
+  return {
+    hub,
+    dispose: () => {
+      disposeIpc()
+      hub.dispose()
+    }
+  }
+}
+
 describe('registerBufferIpc', () => {
   let tempDir: string
   let workspaceDir: string
@@ -87,10 +124,10 @@ describe('registerBufferIpc', () => {
     const win2 = createFakeWindowWebContents(102)
     const liveWindows = [win1, win2]
 
-    const dispose = registerBufferIpc({
+    const { dispose } = registerSingleBufferIpcSession({
       ipcMain,
+      workspaceService,
       configService,
-      hub: createSharedDocumentBufferHub({ workspaceService, configService }),
       getTargets: () => liveWindows
     })
 
@@ -188,10 +225,10 @@ describe('registerBufferIpc', () => {
     const win2 = createFakeWindowWebContents(202)
     const liveWindows = [win1, win2]
 
-    const dispose = registerBufferIpc({
+    const { dispose } = registerSingleBufferIpcSession({
       ipcMain,
+      workspaceService,
       configService,
-      hub: createSharedDocumentBufferHub({ workspaceService, configService }),
       getTargets: () => liveWindows
     })
 
@@ -241,17 +278,14 @@ describe('registerBufferIpc', () => {
     const ipcMain = createFakeIpcMain()
     const win1 = createFakeWindowWebContents(301)
     const win2 = createFakeWindowWebContents(302)
-    const dispose = registerBufferIpc({
+    const { dispose } = registerSingleBufferIpcSession({
       ipcMain,
+      workspaceService,
       configService,
-      hub: createSharedDocumentBufferHub({
-        workspaceService,
-        configService,
-        initialAutoSaveConfig: {
-          autoSave: initialConfig.autoSave,
-          autoSaveDelayMs: initialConfig.autoSaveDelayMs
-        }
-      }),
+      initialAutoSaveConfig: {
+        autoSave: initialConfig.autoSave,
+        autoSaveDelayMs: initialConfig.autoSaveDelayMs
+      },
       getTargets: () => [win1, win2]
     })
 
@@ -323,10 +357,10 @@ describe('registerBufferIpc', () => {
     const ipcMain = createFakeIpcMain()
     const win1 = createFakeWindowWebContents(401)
     const win2 = createFakeWindowWebContents(402)
-    const dispose = registerBufferIpc({
+    const { dispose } = registerSingleBufferIpcSession({
       ipcMain,
+      workspaceService,
       configService,
-      hub: createSharedDocumentBufferHub({ workspaceService, configService, logService }),
       getTargets: () => [win1, win2],
       logService
     })
@@ -435,10 +469,10 @@ describe('registerBufferIpc', () => {
     const win2 = createFakeWindowWebContents(102)
     const targets = [win1, win2]
 
-    const dispose = registerBufferIpc({
+    const { dispose } = registerSingleBufferIpcSession({
       ipcMain,
+      workspaceService,
       configService,
-      hub: createSharedDocumentBufferHub({ workspaceService, configService }),
       getTargets: () => targets.filter((t) => !t.isDestroyed())
     })
 
@@ -472,10 +506,10 @@ describe('registerBufferIpc', () => {
     const win2 = createFakeWindowWebContents(102)
     const targets = [win1, win2]
 
-    const dispose = registerBufferIpc({
+    const { dispose } = registerSingleBufferIpcSession({
       ipcMain,
+      workspaceService,
       configService,
-      hub: createSharedDocumentBufferHub({ workspaceService, configService }),
       getTargets: () => targets.filter((t) => !t.isDestroyed())
     })
 
@@ -522,10 +556,10 @@ describe('registerBufferIpc', () => {
 
     const ipcMain = createFakeIpcMain()
     const win1 = createFakeWindowWebContents(501)
-    const dispose = registerBufferIpc({
+    const { dispose } = registerSingleBufferIpcSession({
       ipcMain,
+      workspaceService,
       configService,
-      hub: createSharedDocumentBufferHub({ workspaceService, configService }),
       getTargets: () => [win1]
     })
 
@@ -552,5 +586,37 @@ describe('registerBufferIpc', () => {
     expect(snap.buffers[noteKey]?.isDirty).toBe(false)
 
     dispose()
+  })
+
+  it('delegates buffer:sync-window-tabs to session.syncWindowTabs when provided on BufferIpcSession', async () => {
+    const configService = new ConfigService(configPath)
+    await configService.get()
+    const hub = createSharedDocumentBufferHub({ workspaceService, configService })
+    const win1 = createFakeWindowWebContents(601)
+    const syncSpy = vi.fn((windowId: number, bufferKeys: readonly string[], options?: { releasePending?: boolean }) =>
+      hub.syncWindowTabs(windowId, bufferKeys, options)
+    )
+    const ipcMain = createFakeIpcMain()
+
+    const session = {
+      hub,
+      getTargets: () => [win1],
+      resolveWindowId: () => 601,
+      syncWindowTabs: syncSpy
+    } as BufferIpcSession & { syncWindowTabs: typeof syncSpy }
+
+    const dispose = registerBufferIpc({
+      ipcMain,
+      configService,
+      sessionSource: createSingleIpcSessionSource<BufferIpcSession, BufferWebContentsLike>(session)
+    })
+
+    await ipcMain.invokeFrom(win1, BUFFER_IPC_CHANNELS.syncWindowTabs, ['config:settings'], {
+      releasePending: true
+    })
+    expect(syncSpy).toHaveBeenCalledWith(601, ['config:settings'], { releasePending: true })
+
+    dispose()
+    hub.dispose()
   })
 })

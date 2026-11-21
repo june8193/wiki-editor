@@ -1,24 +1,49 @@
 import { WINDOW_IPC_CHANNELS } from '@shared/ipc'
 import type {
   AcceptTabDragDropInput,
+  AcceptTabDragDropResult,
+  ActiveTabDragSession,
+  DetachTabToNewWindowResult,
   TabDragEndInput,
+  TabDragEndResult,
   TabDragResolution,
   TabDragStartInput,
-  TabTransferPayload
+  TabTransferPayload,
+  WindowInitContext
 } from '@shared/window'
 import type { LogService } from '../logging/LogService'
-import type { WindowManager } from '../windowManager'
 import {
   broadcastIpcEvent,
   type IpcHandlerTuple,
   type IpcMainLike,
   registerIpcHandlers,
-  resolveSenderWebContents
+  resolveSenderWebContents,
+  type WebContentsLike
 } from './ipcHelpers'
+
+export interface WindowIpcCoordinator {
+  onTabDragStateChanged(
+    listener: (session: ActiveTabDragSession | null, targets?: WebContentsLike[]) => void
+  ): () => void
+  getWebContentsTargets(): WebContentsLike[]
+  getWindowInitContext(sender: unknown): WindowInitContext
+  detachTabToNewWindow(sender: unknown, payload: TabTransferPayload): DetachTabToNewWindowResult
+  startTabDrag(sender: unknown, input: TabDragStartInput): ActiveTabDragSession
+  updateTabDragOutcome(
+    sender: unknown,
+    dragSessionId: string,
+    outcome: TabDragResolution
+  ): ActiveTabDragSession | null
+  acceptTabDragDrop(sender: unknown, input?: AcceptTabDragDropInput): AcceptTabDragDropResult
+  endTabDrag(sender: unknown, input: TabDragEndInput): TabDragEndResult
+  closeCurrentWindow(sender: unknown): void
+  resolveCloseRequest(sender: unknown, approved: boolean): void
+  setCloseFlushEnabled(sender: unknown, enabled: boolean): void
+}
 
 export interface RegisterWindowIpcOptions {
   ipcMain: IpcMainLike
-  windowManager: WindowManager
+  windowManager: WindowIpcCoordinator
   logService?: LogService
 }
 

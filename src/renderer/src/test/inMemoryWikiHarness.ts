@@ -14,7 +14,7 @@ import {
   DEFAULT_APP_CONFIG,
   validateConfigRaw
 } from '@shared/config'
-import type { SharedBufferHubEvent } from '@shared/documentBuffer'
+import type { SharedBufferHubEvent, SharedBufferStateSnapshot, SyncWindowTabsOptions } from '@shared/documentBuffer'
 import {
   FRONTMATTER_SCHEMA_DIR,
   FRONTMATTER_SCHEMA_RELATIVE_PATH,
@@ -43,17 +43,10 @@ import {
   type WorkspaceStateDocument
 } from '@shared/workspaceState'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
-import {
-  TabDragCoordinator,
-  type BeforeInputKeyEventLike
-} from '@shared/tabDragSession'
+import type { BeforeInputKeyEventLike } from '@shared/tabDragSession'
 import {
   AUXILIARY_WINDOW_DEFAULT_HEIGHT,
   AUXILIARY_WINDOW_DEFAULT_WIDTH,
-  canDetachTabFromWindow,
-  cloneTabTransferPayloads,
-  computeOffsetAuxiliaryBounds,
-  computeOffsetMainBounds,
   MAIN_WINDOW_DEFAULT_HEIGHT,
   MAIN_WINDOW_DEFAULT_WIDTH,
   type ActiveTabDragSession,
@@ -63,6 +56,10 @@ import {
   type WindowInitContext,
   type WindowRole
 } from '@shared/window'
+import {
+  WindowSessionCoordinator,
+  type WindowSessionServices
+} from '@shared/windowSessionCoordinator'
 import {
   compareWorkspaceEntriesByRelativePath,
   filterTopLevelWorkspaceItems,
@@ -187,10 +184,6 @@ export interface CreateInMemoryWindowOptions {
   bounds?: WindowBounds
 }
 
-interface CreateSessionWindowOptions extends CreateInMemoryWindowOptions {
-  initialWorkspacePath?: string | null
-}
-
 export interface InMemoryWindowHandle {
   windowId: number
   sessionId: number
@@ -216,7 +209,12 @@ export function createHubBufferApi(
   hub: SharedDocumentBufferHub,
   windowId: number,
   bufferListeners: Set<(event: SharedBufferHubEvent) => void>,
-  isWindowDestroyed: () => boolean = () => false
+  isWindowDestroyed: () => boolean = () => false,
+  onSyncWindowTabs: (
+    bufferKeys: readonly string[],
+    options?: SyncWindowTabsOptions
+  ) => SharedBufferStateSnapshot = (bufferKeys, options) =>
+    hub.syncWindowTabs(windowId, bufferKeys, options)
 ): WikiBufferApi {
   return {
     async getSnapshot() {
@@ -238,7 +236,7 @@ export function createHubBufferApi(
       return hub.saveBuffer(key)
     },
     async syncWindowTabs(bufferKeys, options) {
-      return hub.syncWindowTabs(windowId, bufferKeys, options)
+      return onSyncWindowTabs(bufferKeys, options)
     },
     async setAutoSavePaused(paused) {
       hub.setAutoSavePaused(windowId, paused)
@@ -294,30 +292,17 @@ export interface MultiWindowWikiHarness {
   dispose: () => void
 }
 
-interface SessionWindowRecord {
-  role: WindowRole
-  isDestroyed: () => boolean
-  getBounds: () => WindowBounds
-  isMinimized: () => boolean
-  restore: () => void
-  focus: () => void
-  forceClose: () => void
-}
-
-interface HarnessSession {
-  sessionId: number
-  hub: SharedDocumentBufferHub
-  queryAndSchemaHub: WorkspaceQueryAndSchemaHub
-  dragCoordinator: TabDragCoordinator
-  unsubscribeCoordinatorHub: () => void
+interface InMemorySessionServices extends WindowSessionServices {
+  readonly sessionId: number
+  readonly hub: SharedDocumentBufferHub
+  readonly queryAndSchemaHub: WorkspaceQueryAndSchemaHub
   primaryApi: WikiApi | null
   activeRoot: string | null
-  pendingInitialWorkspacePath: string | null
   workspaceListeners: Set<(event: WorkspaceChangeEvent) => void>
   rootChangedListeners: Set<(rootPath: string | null) => Promise<void> | void>
   schemaWatchers: Set<() => void>
+  bufferListenerSets: Set<Set<(event: SharedBufferHubEvent) => void>>
   dragListenersByWindow: Map<number, Set<(session: ActiveTabDragSession | null) => void>>
-  openWindows: Map<number, SessionWindowRecord>
   auxiliaryHandles: InMemoryWindowHandle[]
   watchActive: boolean
   watchCalls: number
@@ -327,8 +312,8 @@ interface HarnessSession {
 }
 
 /**
- * Creates a multi-window in-memory WikiApi test harness supporting isolated per-main-window
- * workspace sessions, shared buffer hubs per session, and global config broadcasts.
+ * Creates a multi-window in-memory WikiApi test harness backed by `WindowSessionCoordinator`
+ * for isolated per-main-window workspace sessions, shared buffer hubs, and global config broadcasts.
  */
 export function createMultiWindowWikiHarness(
   initialOverrides: Partial<AppConfig> = {},
@@ -360,10 +345,10 @@ export function createMultiWindowWikiHarness(
     : createDefaultWorkspaceStateDocument()
   const selectedFolder: string | null = fsOptions.selectedFolder ?? null
   let nextWindowId = 1
-  let nextSessionId = 1
   const mainHandles: InMemoryWindowHandle[] = []
   const auxiliaryHandles: InMemoryWindowHandle[] = []
-  const sessions = new Map<number, HarnessSession>()
+  const handlesByWindowId = new Map<number, InMemoryWindowHandle>()
+  const allServicesById = new Map<number, InMemorySessionServices>()
   const screen: ScreenLike = fsOptions.screen ?? {
     getDisplayNearestPoint: () => ({
       workArea: { x: 0, y: 0, width: 1920, height: 1080 }
@@ -389,144 +374,8 @@ export function createMultiWindowWikiHarness(
     }
   }
 
-  const createSession = (): HarnessSession => {
-    const sessionId = nextSessionId++
-    const dragListenersByWindow = new Map<
-      number,
-      Set<(session: ActiveTabDragSession | null) => void>
-    >()
-    const dragCoordinator = new TabDragCoordinator()
-    dragCoordinator.onStateChanged((dragSession) => {
-      for (const listeners of dragListenersByWindow.values()) {
-        for (const listener of listeners) {
-          listener(dragSession)
-        }
-      }
-    })
-
-    const session: HarnessSession = {
-      sessionId,
-      hub: null as unknown as SharedDocumentBufferHub,
-      queryAndSchemaHub: null as unknown as WorkspaceQueryAndSchemaHub,
-      dragCoordinator,
-      unsubscribeCoordinatorHub: () => undefined,
-      primaryApi: null,
-      activeRoot: null,
-      pendingInitialWorkspacePath: null,
-      workspaceListeners: new Set(),
-      rootChangedListeners: new Set(),
-      schemaWatchers: new Set(),
-      dragListenersByWindow,
-      openWindows: new Map(),
-      auxiliaryHandles: [],
-      watchActive: false,
-      watchCalls: 0,
-      unwatchCalls: 0,
-      auxWatchCalls: 0,
-      auxUnwatchCalls: 0
-    }
-
-    const hub = new SharedDocumentBufferHub({
-      initialAutoSaveConfig: {
-        autoSave: state.autoSave,
-        autoSaveDelayMs: state.autoSaveDelayMs
-      },
-      storage: {
-        readWorkspaceFile: (filePath) => session.primaryApi!.workspace.readFile(filePath),
-        writeWorkspaceFile: (filePath, content) =>
-          session.primaryApi!.workspace.writeFile(filePath, content),
-        readWorkspaceDirectory: (dirPath) => session.primaryApi!.workspace.readDir(dirPath),
-        getConfigPath: () => session.primaryApi!.config.getConfigPath(),
-        readConfigRaw: () => session.primaryApi!.config.readRaw(),
-        saveConfigRaw: (raw) => session.primaryApi!.config.saveRaw(raw)
-      }
-    })
-
-    const inspectVirtualSchemaTarget = (rootPath: string): {
-      schemaDir: string
-      schemaPath: string
-      invalidError?: string
-    } => {
-      const schemaDir = joinWorkspacePath(rootPath, FRONTMATTER_SCHEMA_DIR)
-      const schemaPath = joinWorkspacePath(rootPath, FRONTMATTER_SCHEMA_RELATIVE_PATH)
-      if (files.has(schemaDir)) {
-        return {
-          schemaDir,
-          schemaPath,
-          invalidError: SCHEMA_DIR_NOT_DIRECTORY_ERROR
-        }
-      }
-      if (dirs.has(schemaPath)) {
-        return {
-          schemaDir,
-          schemaPath,
-          invalidError: SCHEMA_TARGET_NOT_FILE_ERROR
-        }
-      }
-      return { schemaDir, schemaPath }
-    }
-
-    session.hub = hub
-    session.queryAndSchemaHub = new WorkspaceQueryAndSchemaHub({
-      bufferHub: hub,
-      storage: {
-        getWorkspaceRoot: () => session.activeRoot,
-        onWorkspaceRootChanged: (listener) => {
-          session.rootChangedListeners.add(listener)
-          return () => {
-            session.rootChangedListeners.delete(listener)
-          }
-        },
-        async listWorkspaceFiles(options = {}) {
-          return listSessionWorkspaceFiles(session, options)
-        },
-        async readTextFileForSearch(filePath, options = {}) {
-          if (options.signal?.aborted) {
-            return null
-          }
-          const text = files.get(normalizePosix(filePath))
-          return text === undefined ? null : filterSearchableTextContent(text)
-        },
-        async readSchemaRaw(rootPath): Promise<SchemaRawReadResult> {
-          const { schemaPath, invalidError } = inspectVirtualSchemaTarget(rootPath)
-          if (invalidError) {
-            return { kind: 'invalid-target', schemaPath, error: invalidError }
-          }
-          const rawText = files.get(schemaPath)
-          if (rawText === undefined) {
-            return { kind: 'missing', schemaPath }
-          }
-          return { kind: 'present', schemaPath, rawText }
-        },
-        async writeSchemaRaw(rootPath, serializedSchema) {
-          const { schemaDir, schemaPath, invalidError } = inspectVirtualSchemaTarget(rootPath)
-          if (invalidError) {
-            throw new Error(invalidError)
-          }
-          dirs.add(schemaDir)
-          files.set(schemaPath, serializedSchema)
-          return { schemaPath }
-        },
-        watchSchema(_rootPath, onPossibleChange) {
-          session.schemaWatchers.add(onPossibleChange)
-          return () => {
-            session.schemaWatchers.delete(onPossibleChange)
-          }
-        }
-      }
-    })
-    session.unsubscribeCoordinatorHub = hub.subscribe((event) => {
-      if (event.type === 'paths-remapped') {
-        dragCoordinator.remapPayloadKeys(event.remappings)
-      }
-    })
-
-    sessions.set(sessionId, session)
-    return session
-  }
-
   const listSessionWorkspaceFiles = (
-    session: HarnessSession,
+    session: InMemorySessionServices,
     options: WorkspaceQueryStorageListOptions = {}
   ): WorkspaceEntry[] => {
     if (!session.activeRoot) {
@@ -557,15 +406,13 @@ export function createMultiWindowWikiHarness(
     return entries.sort(compareWorkspaceEntriesByRelativePath)
   }
 
-  const notifySessionSchemaWatchers = (session: HarnessSession): void => {
+  const notifySessionSchemaWatchers = (session: InMemorySessionServices): void => {
     for (const watcher of [...session.schemaWatchers]) {
       watcher()
     }
   }
 
-  const defaultSession = createSession()
-
-  const listDir = (session: HarnessSession, dirPath: string): WorkspaceEntry[] => {
+  const listDir = (session: InMemorySessionServices, dirPath: string): WorkspaceEntry[] => {
     const target = normalizePosix(dirPath === '.' && session.activeRoot ? session.activeRoot : dirPath)
     readDirCalls.push(target)
     if (!dirs.has(target)) {
@@ -600,15 +447,71 @@ export function createMultiWindowWikiHarness(
     })
   }
 
+  const inspectVirtualSchemaTarget = (
+    rootPath: string
+  ): { schemaDir: string; schemaPath: string; invalidError?: string } => {
+    const schemaDir = joinWorkspacePath(rootPath, FRONTMATTER_SCHEMA_DIR)
+    const schemaPath = joinWorkspacePath(rootPath, FRONTMATTER_SCHEMA_RELATIVE_PATH)
+    if (files.has(schemaDir)) {
+      return {
+        schemaDir,
+        schemaPath,
+        invalidError: SCHEMA_DIR_NOT_DIRECTORY_ERROR
+      }
+    }
+    if (dirs.has(schemaPath)) {
+      return {
+        schemaDir,
+        schemaPath,
+        invalidError: SCHEMA_TARGET_NOT_FILE_ERROR
+      }
+    }
+    return { schemaDir, schemaPath }
+  }
+
+  const relocateVirtualEntry = (
+    session: InMemorySessionServices,
+    oldPath: string,
+    nextPath: string,
+    kind: WorkspaceEntryKind
+  ): WorkspaceEntry => {
+    if (kind === 'file') {
+      const content = files.get(oldPath)!
+      files.delete(oldPath)
+      files.set(nextPath, content)
+    } else {
+      const movedDirs = [...dirs].filter((d) => d === oldPath || d.startsWith(`${oldPath}/`))
+      const movedFiles = [...files.entries()].filter(([f]) => f.startsWith(`${oldPath}/`))
+      for (const d of movedDirs) {
+        dirs.delete(d)
+        dirs.add(nextPath + d.slice(oldPath.length))
+      }
+      for (const [f, c] of movedFiles) {
+        files.delete(f)
+        files.set(nextPath + f.slice(oldPath.length), c)
+      }
+    }
+    return {
+      name: baseNameOf(nextPath),
+      path: nextPath,
+      relativePath: session.activeRoot
+        ? nextPath.slice(session.activeRoot.length + 1)
+        : baseNameOf(nextPath),
+      kind
+    }
+  }
+
+  let coordinator!: WindowSessionCoordinator<InMemorySessionServices>
+
   const applyAndBroadcast = (nextState: AppConfig): AppConfig => {
     state = cloneAppConfig(nextState)
-    for (const session of sessions.values()) {
-      session.hub.setAutoSaveConfig({
+    coordinator.forEachSession((session) => {
+      session.services.hub.setAutoSaveConfig({
         autoSave: state.autoSave,
         autoSaveDelayMs: state.autoSaveDelayMs
       })
-      void session.hub.refreshCleanConfig().catch(() => undefined)
-    }
+      void session.services.hub.refreshCleanConfig().catch(() => undefined)
+    })
     const snapshot = cloneAppConfig(state)
     for (const listener of configListeners) {
       listener(snapshot)
@@ -616,909 +519,846 @@ export function createMultiWindowWikiHarness(
     return cloneAppConfig(snapshot)
   }
 
-  const findOpenSessionByWorkspacePath = (
-    targetPath: string,
-    excludeSessionId?: number
-  ): { session: HarnessSession; mainWindow: SessionWindowRecord; mainWindowId: number } | undefined => {
-    for (const session of sessions.values()) {
-      if (session.sessionId === excludeSessionId) continue
-      const candidatePath = session.activeRoot ?? session.pendingInitialWorkspacePath
-      if (!candidatePath || !isSameWorkspacePath(candidatePath, targetPath)) {
-        continue
-      }
-      for (const [winId, winRecord] of session.openWindows.entries()) {
-        if (winRecord.role === 'main' && !winRecord.isDestroyed()) {
-          return { session, mainWindow: winRecord, mainWindowId: winId }
-        }
+  const findVirtualDir = (rawPath: string): string | null => {
+    const normalized = normalizePosix(rawPath)
+    if (dirs.has(normalized)) {
+      return normalized
+    }
+    for (const dir of dirs) {
+      if (isSameWorkspacePath(dir, normalized)) {
+        return dir
       }
     }
-    return undefined
+    return null
   }
 
-  const focusExistingMainWindow = (
-    target: { session: HarnessSession; mainWindow: SessionWindowRecord; mainWindowId: number },
-    fallbackRoot: string
-  ): { windowId: number; rootPath: string } => {
-    if (target.mainWindow.isMinimized()) {
-      target.mainWindow.restore()
+  const resolveVirtualWorkspacePath = async (rawPath: string): Promise<string> => {
+    const trimmed = rawPath.trim()
+    if (!trimmed) {
+      throw new Error('워크스페이스 경로가 비어 있습니다.')
     }
-    target.mainWindow.focus()
-    return {
-      windowId: target.mainWindowId,
-      rootPath: target.session.activeRoot ?? fallbackRoot
+    const normalized = normalizePosix(trimmed)
+    if (files.has(normalized)) {
+      throw new Error('선택한 경로는 폴더가 아닙니다.')
     }
+    const resolvedDir = findVirtualDir(trimmed)
+    if (!resolvedDir) {
+      throw new Error(`워크스페이스 폴더를 찾을 수 없습니다: ${rawPath}`)
+    }
+    return resolvedDir
   }
 
-  const hasOtherSessionPendingDrag = (excludeSessionId: number): boolean => {
-    for (const session of sessions.values()) {
-      if (session.sessionId !== excludeSessionId && session.dragCoordinator.hasPendingDrag()) {
-        return true
-      }
-    }
-    return false
-  }
+  coordinator = new WindowSessionCoordinator<InMemorySessionServices>({
+    screen,
+    resolveValidWorkspacePath: resolveVirtualWorkspacePath,
+    tryResolveWorkspacePath: async (rawPath) => {
+      const trimmed = rawPath.trim()
+      return trimmed ? findVirtualDir(trimmed) : null
+    },
+    createSessionServices: (sessionId) => {
+      let activeRoot: string | null = null
+      let primaryApi: WikiApi | null = null
+      const workspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
+      const rootChangedListeners = new Set<(rootPath: string | null) => Promise<void> | void>()
+      const schemaWatchers = new Set<() => void>()
+      const bufferListenerSets = new Set<Set<(event: SharedBufferHubEvent) => void>>()
+      const dragListenersByWindow = new Map<
+        number,
+        Set<(session: ActiveTabDragSession | null) => void>
+      >()
 
-  const getAllOpenWindowBounds = (): WindowBounds[] => {
-    const bounds: WindowBounds[] = []
-    for (const session of sessions.values()) {
-      for (const win of session.openWindows.values()) {
-        if (!win.isDestroyed() && !win.isMinimized()) {
-          bounds.push(win.getBounds())
-        }
-      }
-    }
-    return bounds
-  }
-
-  const createWindowInSession = (
-    session: HarnessSession,
-    options: CreateSessionWindowOptions = {}
-  ): InMemoryWindowHandle => {
-    const windowId = nextWindowId++
-    const role: WindowRole = options.role ?? 'main'
-    const initialTabs: TabTransferPayload[] = cloneTabTransferPayloads(options.initialTabs ?? [])
-    const initialWorkspacePath =
-      options.initialWorkspacePath !== undefined ? options.initialWorkspacePath : undefined
-    if (role === 'main' && initialWorkspacePath) {
-      session.pendingInitialWorkspacePath = normalizePosix(initialWorkspacePath)
-    }
-    const defaultBounds: WindowBounds =
-      role === 'main'
-        ? (fsOptions.mainBounds ?? {
-            x: 0,
-            y: 0,
-            width: MAIN_WINDOW_DEFAULT_WIDTH,
-            height: MAIN_WINDOW_DEFAULT_HEIGHT
-          })
-        : {
-            x: 40,
-            y: 40,
-            width: AUXILIARY_WINDOW_DEFAULT_WIDTH,
-            height: AUXILIARY_WINDOW_DEFAULT_HEIGHT
-          }
-    const windowBounds: WindowBounds = { ...(options.bounds ?? defaultBounds) }
-    let destroyed = false
-    let closing = false
-    let closePromptPending = false
-    let closeFlushEnabled = false
-    let hasSyncedNonEmptyTabs = false
-    let minimized = false
-    let focusCount = 0
-    let restoreCount = 0
-    const menuListeners = new Set<(command: AppMenuCommand) => void>()
-    const bufferListeners = new Set<(event: SharedBufferHubEvent) => void>()
-    const dragListeners = new Set<(session: ActiveTabDragSession | null) => void>()
-    const closeRequestedListeners = new Set<() => void>()
-    const windowConfigListeners = new Set<(config: AppConfig) => void>()
-    const windowWorkspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
-    const windowSchemaUnsubscribers = new Set<() => void>()
-    session.dragListenersByWindow.set(windowId, dragListeners)
-
-    const closeAllOpenAuxiliaryWindows = (): void => {
-      for (const candidate of [...session.openWindows.values()]) {
-        if (candidate.role === 'auxiliary') {
-          candidate.forceClose()
-        }
-      }
-    }
-
-    const destroyWindow = (): void => {
-      if (destroyed) return
-      destroyed = true
-      closePromptPending = false
-      if (role === 'main') {
-        closeAllOpenAuxiliaryWindows()
-      }
-      session.dragCoordinator.clearForWindow(windowId)
-      session.openWindows.delete(windowId)
-      dragListeners.clear()
-      session.dragListenersByWindow.delete(windowId)
-      closeRequestedListeners.clear()
-      unsubscribeHub()
-      session.hub.unregisterWindow(windowId)
-      menuListeners.clear()
-      bufferListeners.clear()
-      for (const listener of windowConfigListeners) {
-        configListeners.delete(listener)
-      }
-      windowConfigListeners.clear()
-      for (const listener of windowWorkspaceListeners) {
-        session.workspaceListeners.delete(listener)
-      }
-      windowWorkspaceListeners.clear()
-      for (const unsubscribe of [...windowSchemaUnsubscribers]) {
-        unsubscribe()
-      }
-      windowSchemaUnsubscribers.clear()
-    }
-
-    const forceCloseWindow = (): void => {
-      if (destroyed || closing) return
-      closing = true
-      closePromptPending = false
-      destroyWindow()
-    }
-
-    session.openWindows.set(windowId, {
-      role,
-      isDestroyed: () => destroyed,
-      getBounds: () => ({ ...windowBounds }),
-      isMinimized: () => minimized,
-      restore: () => {
-        if (minimized) {
-          minimized = false
-          restoreCount += 1
-        }
-      },
-      focus: () => {
-        if (!destroyed) {
-          focusCount += 1
-        }
-      },
-      forceClose: forceCloseWindow
-    })
-
-    if (role === 'auxiliary') {
-      for (const tab of initialTabs) {
-        session.hub.registerPendingTransfer(windowId, tab.bufferKey)
-      }
-    }
-
-    const requestCloseWindow = (): void => {
-      if (destroyed || closing || closePromptPending) return
-      const shouldPromptOrFlush =
-        session.hub.hasDirtyBuffersForWindowClose(role, windowId) ||
-        (role === 'main' && closeFlushEnabled)
-      if (!shouldPromptOrFlush) {
-        forceCloseWindow()
-        return
-      }
-      closePromptPending = true
-      for (const listener of closeRequestedListeners) {
-        listener()
-      }
-    }
-
-    const unsubscribeHub = session.hub.subscribe((event) => {
-      if (destroyed) return
-      if (role === 'auxiliary' && (event.type === 'state-changed' || event.type === 'buffers-closed')) {
-        const currentTabCount = session.hub.getWindowTabCount(windowId)
-        if (currentTabCount > 0) {
-          hasSyncedNonEmptyTabs = true
-        } else if (hasSyncedNonEmptyTabs) {
-          forceCloseWindow()
-          return
-        }
-      }
-      for (const listener of bufferListeners) {
-        listener(event)
-      }
-    })
-
-    const relocateVirtualEntry = (
-      oldPath: string,
-      nextPath: string,
-      kind: WorkspaceEntryKind
-    ): WorkspaceEntry => {
-      if (kind === 'file') {
-        const content = files.get(oldPath)!
-        files.delete(oldPath)
-        files.set(nextPath, content)
-      } else {
-        const movedDirs = [...dirs].filter(
-          (d) => d === oldPath || d.startsWith(`${oldPath}/`)
-        )
-        const movedFiles = [...files.entries()].filter(([f]) => f.startsWith(`${oldPath}/`))
-        for (const d of movedDirs) {
-          dirs.delete(d)
-          dirs.add(nextPath + d.slice(oldPath.length))
-        }
-        for (const [f, c] of movedFiles) {
-          files.delete(f)
-          files.set(nextPath + f.slice(oldPath.length), c)
-        }
-      }
-      return {
-        name: baseNameOf(nextPath),
-        path: nextPath,
-        relativePath: session.activeRoot
-          ? nextPath.slice(session.activeRoot.length + 1)
-          : baseNameOf(nextPath),
-        kind
-      }
-    }
-
-    const buildInitContext = (): WindowInitContext => ({
-      role,
-      initialTabs: cloneTabTransferPayloads(initialTabs),
-      ...(initialWorkspacePath !== undefined ? { initialWorkspacePath } : {})
-    })
-
-    const api: WikiApi = {
-      config: {
-        async get() {
-          return cloneAppConfig(state)
+      const hub = new SharedDocumentBufferHub({
+        initialAutoSaveConfig: {
+          autoSave: state.autoSave,
+          autoSaveDelayMs: state.autoSaveDelayMs
         },
-        async update(patch) {
-          return applyAndBroadcast({ ...state, ...patch, version: 1 })
-        },
-        async getConfigPath() {
-          return configPath
-        },
-        async readRaw() {
-          return JSON.stringify(state, null, 2)
-        },
-        async saveRaw(raw) {
-          const validated = validateConfigRaw(raw)
-          return applyAndBroadcast(validated)
-        },
-        async toggleFavoriteWorkspace(workspacePath, name) {
-          return applyAndBroadcast({
-            ...state,
-            favoriteWorkspaces: toggleFavoriteWorkspace(
-              state.favoriteWorkspaces,
-              workspacePath,
-              name
-            )
-          })
-        },
-        async removeFavoriteWorkspace(workspacePath) {
-          return applyAndBroadcast({
-            ...state,
-            favoriteWorkspaces: removeFavoriteWorkspace(state.favoriteWorkspaces, workspacePath)
-          })
-        },
-        onChanged(listener) {
-          configListeners.add(listener)
-          windowConfigListeners.add(listener)
-          return () => {
-            configListeners.delete(listener)
-            windowConfigListeners.delete(listener)
+        storage: {
+          readWorkspaceFile: (filePath) => primaryApi!.workspace.readFile(filePath),
+          writeWorkspaceFile: (filePath, content) =>
+            primaryApi!.workspace.writeFile(filePath, content),
+          readWorkspaceDirectory: (dirPath) => primaryApi!.workspace.readDir(dirPath),
+          getConfigPath: () => primaryApi!.config.getConfigPath(),
+          readConfigRaw: () => primaryApi!.config.readRaw(),
+          saveConfigRaw: (raw) => primaryApi!.config.saveRaw(raw)
+        }
+      })
+
+      const unsubscribeHubForward = hub.subscribe((event) => {
+        for (const listenerSet of bufferListenerSets) {
+          for (const listener of listenerSet) {
+            listener(event)
           }
         }
-      },
-      workspace: {
-        async selectFolder() {
-          return selectedFolder
-        },
-        async open(rootPath) {
-          if (role !== 'main') {
-            throw new Error('Only the main window can open a workspace')
-          }
-          const normalized = normalizePosix(rootPath)
-          if (!dirs.has(normalized)) {
-            throw new Error(`워크스페이스 폴더를 찾을 수 없습니다: ${rootPath}`)
-          }
-          const existing = findOpenSessionByWorkspacePath(normalized, session.sessionId)
-          if (existing) {
-            focusExistingMainWindow(existing, normalized)
-            throw new Error('이미 다른 창에 열려 있는 워크스페이스입니다.')
-          }
-          session.activeRoot = normalized
-          session.pendingInitialWorkspacePath = null
-          for (const listener of [...session.rootChangedListeners]) {
-            await listener(normalized)
-          }
-          applyAndBroadcast({
-            ...state,
-            recentWorkspaces: recordRecentWorkspace(state.recentWorkspaces, rootPath)
-          })
-          return {
-            rootPath: normalized,
-            name: getWorkspaceDisplayName(normalized),
-            entries: listDir(session, normalized)
-          }
-        },
-        async openInNewWindow(rootPath) {
-          if (role !== 'main') {
-            throw new Error('Only the main window can open a workspace')
-          }
-          const trimmed = rootPath.trim()
-          if (!trimmed) {
-            throw new Error('워크스페이스 경로가 비어 있습니다.')
-          }
-          const normalized = normalizePosix(trimmed)
-          if (files.has(normalized)) {
-            throw new Error('선택한 경로는 폴더가 아닙니다.')
-          }
-          if (!dirs.has(normalized)) {
-            throw new Error(`워크스페이스 폴더를 찾을 수 없습니다: ${rootPath}`)
-          }
+      })
 
-          const existing = findOpenSessionByWorkspacePath(normalized)
-          if (existing) {
-            return {
-              status: 'focused-existing',
-              ...focusExistingMainWindow(existing, normalized)
+      const queryAndSchemaHub = new WorkspaceQueryAndSchemaHub({
+        bufferHub: hub,
+        storage: {
+          getWorkspaceRoot: () => activeRoot,
+          onWorkspaceRootChanged: (listener) => {
+            rootChangedListeners.add(listener)
+            return () => {
+              rootChangedListeners.delete(listener)
+            }
+          },
+          async listWorkspaceFiles(options = {}) {
+            return listSessionWorkspaceFiles(session, options)
+          },
+          async readTextFileForSearch(filePath, options = {}) {
+            if (options.signal?.aborted) {
+              return null
+            }
+            const text = files.get(normalizePosix(filePath))
+            return text === undefined ? null : filterSearchableTextContent(text)
+          },
+          async readSchemaRaw(rootPath): Promise<SchemaRawReadResult> {
+            const { schemaPath, invalidError } = inspectVirtualSchemaTarget(rootPath)
+            if (invalidError) {
+              return { kind: 'invalid-target', schemaPath, error: invalidError }
+            }
+            const rawText = files.get(schemaPath)
+            if (rawText === undefined) {
+              return { kind: 'missing', schemaPath }
+            }
+            return { kind: 'present', schemaPath, rawText }
+          },
+          async writeSchemaRaw(rootPath, serializedSchema) {
+            const { schemaDir, schemaPath, invalidError } = inspectVirtualSchemaTarget(rootPath)
+            if (invalidError) {
+              throw new Error(invalidError)
+            }
+            dirs.add(schemaDir)
+            files.set(schemaPath, serializedSchema)
+            return { schemaPath }
+          },
+          watchSchema(_rootPath, onPossibleChange) {
+            schemaWatchers.add(onPossibleChange)
+            return () => {
+              schemaWatchers.delete(onPossibleChange)
             }
           }
+        }
+      })
 
-          const newSession = createSession()
-          const newMainWin = createWindowInSession(newSession, {
-            role: 'main',
-            initialWorkspacePath: normalized,
-            bounds: computeOffsetMainBounds(windowBounds, screen)
-          })
-          return {
-            status: 'opened',
-            windowId: newMainWin.windowId,
-            rootPath: normalized
-          }
+      const session: InMemorySessionServices = {
+        sessionId,
+        bufferHub: hub,
+        hub,
+        queryAndSchemaHub,
+        get primaryApi() {
+          return primaryApi
         },
-        async focusIfOpen(rootPath) {
-          if (role !== 'main') {
-            throw new Error('Only the main window can open a workspace')
-          }
-          const trimmed = rootPath.trim()
-          if (!trimmed) {
-            return { focused: false }
-          }
-          const normalized = normalizePosix(trimmed)
-          const existing = findOpenSessionByWorkspacePath(normalized, session.sessionId)
-          if (!existing) {
-            return { focused: false }
+        set primaryApi(api: WikiApi | null) {
+          primaryApi = api
+        },
+        get activeRoot() {
+          return activeRoot
+        },
+        set activeRoot(nextRoot: string | null) {
+          activeRoot = nextRoot
+        },
+        workspaceListeners,
+        rootChangedListeners,
+        schemaWatchers,
+        bufferListenerSets,
+        dragListenersByWindow,
+        auxiliaryHandles: [],
+        watchActive: false,
+        watchCalls: 0,
+        unwatchCalls: 0,
+        auxWatchCalls: 0,
+        auxUnwatchCalls: 0,
+        getWorkspaceRoot: () => activeRoot,
+        openWorkspace: async (resolvedRootPath) => {
+          activeRoot = resolvedRootPath
+          for (const listener of [...rootChangedListeners]) {
+            await listener(resolvedRootPath)
           }
           return {
-            focused: true,
-            ...focusExistingMainWindow(existing, normalized)
+            rootPath: resolvedRootPath,
+            name: getWorkspaceDisplayName(resolvedRootPath),
+            entries: listDir(session, resolvedRootPath)
           }
         },
-        async readDir(dirPath) {
-          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
-          return listDir(session, dirPath ?? session.activeRoot)
-        },
-        async listMarkdownFiles() {
-          return listSessionWorkspaceFiles(session, { filterFileName: isMarkdownFileName })
-        },
-        search(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse> {
-          return session.queryAndSchemaHub.search(request)
-        },
-        async readFile(filePath) {
-          const normalized = normalizePosix(filePath)
-          const content = files.get(normalized)
-          if (content === undefined) {
-            throw new Error(`파일을 찾을 수 없습니다: ${filePath}`)
-          }
-          return content
-        },
-        async writeFile(filePath, content) {
-          const normalized = normalizePosix(filePath)
-          if (!files.has(normalized) && !dirs.has(parentDirOf(normalized))) {
-            throw new Error(`경로를 찾을 수 없습니다: ${filePath}`)
-          }
-          files.set(normalized, content)
-          if (
-            session.activeRoot &&
-            normalized === `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`
-          ) {
-            notifySessionSchemaWatchers(session)
-          }
-        },
-        async createEntry(parentDirPath, name, kind: WorkspaceEntryKind, initialContent = '') {
-          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
-          const parent = normalizePosix(
-            parentDirPath === '.' ? session.activeRoot : parentDirPath
-          )
-          const target = `${parent}/${name}`
-          if (dirs.has(target) || files.has(target)) {
-            throw new Error(`이미 존재하는 파일 또는 폴더입니다: ${name}`)
-          }
-          if (kind === 'directory') {
-            dirs.add(target)
-          } else {
-            files.set(target, initialContent)
-          }
-          return {
-            name,
-            path: target,
-            relativePath: target.slice(session.activeRoot.length + 1),
-            kind
-          }
-        },
-        async renameEntry(targetPath, newName) {
-          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
-          const target = normalizePosix(targetPath)
-          const next = `${parentDirOf(target)}/${newName}`
-          if (dirs.has(next) || files.has(next)) {
-            throw new Error(`이미 존재하는 이름입니다: ${newName}`)
-          }
-          if (files.has(target)) {
-            return relocateVirtualEntry(target, next, 'file')
-          }
-          if (dirs.has(target)) {
-            return relocateVirtualEntry(target, next, 'directory')
-          }
-          throw new Error(`경로를 찾을 수 없습니다: ${targetPath}`)
-        },
-        async moveEntries(sourcePaths, targetDirPath): Promise<WorkspaceMovedEntry[]> {
-          if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
-          const targetDir = normalizePosix(
-            targetDirPath === '.' ? session.activeRoot : targetDirPath
-          )
-          if (!dirs.has(targetDir)) {
-            throw new Error(`폴더를 찾을 수 없습니다: ${targetDirPath}`)
-          }
-          if (sourcePaths.length === 0) return []
+        cancelActiveWorkspaceScans: () => queryAndSchemaHub.cancelActiveScans(),
+        dispose: () => {
+          unsubscribeHubForward()
+          queryAndSchemaHub.dispose()
+          hub.dispose()
+          workspaceListeners.clear()
+          rootChangedListeners.clear()
+          schemaWatchers.clear()
+          bufferListenerSets.clear()
+          dragListenersByWindow.clear()
+        }
+      }
 
-          const resolved: Array<{ path: string; kind: WorkspaceEntryKind }> = []
-          for (const rawSource of sourcePaths) {
-            const source = normalizePosix(rawSource === '.' ? session.activeRoot : rawSource)
-            if (source === session.activeRoot) {
-              throw new Error('워크스페이스 루트 폴더는 이동할 수 없습니다.')
-            }
-            if (dirs.has(source)) {
-              resolved.push({ path: source, kind: 'directory' })
-            } else if (files.has(source)) {
-              resolved.push({ path: source, kind: 'file' })
-            } else {
-              throw new Error(`경로를 찾을 수 없습니다: ${rawSource}`)
-            }
-          }
-
-          const topLevel = filterTopLevelWorkspaceItems(
-            resolved,
-            (item) => item.path,
-            (item) => item.kind === 'directory'
-          )
-
-          const plannedKeys = new Set<string>()
-          const existingKeys = new Set(
-            [...dirs, ...files.keys()].map((item) => getWorkspacePathKey(item))
-          )
-          const plans: Array<{ oldPath: string; nextPath: string; kind: WorkspaceEntryKind }> = []
-
-          for (const item of topLevel) {
-            if (
-              item.kind === 'directory' &&
-              isNestedOrSameWorkspacePath(targetDir, item.path)
-            ) {
-              throw new Error('폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.')
-            }
-            if (parentDirOf(item.path) === targetDir) {
-              continue
-            }
-            const name = baseNameOf(item.path)
-            const nextPath = `${targetDir}/${name}`
-            const nextKey = getWorkspacePathKey(nextPath)
-            if (plannedKeys.has(nextKey) || existingKeys.has(nextKey)) {
-              throw new Error(`이미 존재하는 이름입니다: ${name}`)
-            }
-            plannedKeys.add(nextKey)
-            plans.push({ oldPath: item.path, nextPath, kind: item.kind })
-          }
-
-          const moved: WorkspaceMovedEntry[] = []
-          for (const plan of plans) {
-            moved.push({
-              oldPath: plan.oldPath,
-              entry: relocateVirtualEntry(plan.oldPath, plan.nextPath, plan.kind)
+      allServicesById.set(sessionId, session)
+      return session
+    },
+    createWindow: ({ sessionId, role, bounds, services: session, callbacks }) => {
+      const windowId = nextWindowId++
+      const defaultBounds: WindowBounds =
+        role === 'main'
+          ? (fsOptions.mainBounds ?? {
+              x: 0,
+              y: 0,
+              width: MAIN_WINDOW_DEFAULT_WIDTH,
+              height: MAIN_WINDOW_DEFAULT_HEIGHT
             })
-          }
-          return moved
-        },
-        async deleteEntry(targetPath) {
-          const target = normalizePosix(targetPath)
-          if (files.has(target)) {
-            files.delete(target)
-            notifySessionSchemaWatchers(session)
-            return
-          }
-          if (dirs.has(target)) {
-            for (const d of [...dirs]) {
-              if (d === target || d.startsWith(`${target}/`)) dirs.delete(d)
+          : {
+              x: 40,
+              y: 40,
+              width: AUXILIARY_WINDOW_DEFAULT_WIDTH,
+              height: AUXILIARY_WINDOW_DEFAULT_HEIGHT
             }
-            for (const f of [...files.keys()]) {
-              if (f.startsWith(`${target}/`)) files.delete(f)
-            }
-            notifySessionSchemaWatchers(session)
-            return
-          }
-          throw new Error(`경로를 찾을 수 없습니다: ${targetPath}`)
-        },
-        async ingestImage(input: WorkspaceImageIngestInput): Promise<WorkspaceImageIngestResult> {
-          if (fsOptions.ingestImage) {
-            return fsOptions.ingestImage(input)
-          }
-          if (!session.activeRoot) {
-            throw new Error('열린 워크스페이스가 없습니다.')
-          }
-          const docPosix = normalizePosix(input.documentPath)
-          const docDir = parentDirOf(docPosix)
+      const windowBounds: WindowBounds = { ...defaultBounds, ...bounds }
+      let destroyed = false
+      let minimized = false
+      let focusCount = 0
+      let restoreCount = 0
 
-          const saveAsset = (stem: string, ext: string): WorkspaceImageIngestResult => {
-            const assetsDir = `${docDir}/assets`
-            dirs.add(assetsDir)
-            for (let index = 0; index < 100; index += 1) {
-              const nextStem = index === 0 ? stem : `${stem}-${index}`
-              const fileName = `${nextStem}${ext}`
-              const savedPath = `${assetsDir}/${fileName}`
-              if (!files.has(savedPath)) {
-                files.set(savedPath, `<binary:${fileName}>`)
-                return {
-                  markdownPath: toMarkdownRelativeImagePath(`assets/${fileName}`),
-                  altText: nextStem,
-                  savedPath
-                }
+      const menuListeners = new Set<(command: AppMenuCommand) => void>()
+      const bufferListeners = new Set<(event: SharedBufferHubEvent) => void>()
+      const dragListeners = new Set<(dragSession: ActiveTabDragSession | null) => void>()
+      const closeRequestedListeners = new Set<() => void>()
+      const windowConfigListeners = new Set<(config: AppConfig) => void>()
+      const windowWorkspaceListeners = new Set<(event: WorkspaceChangeEvent) => void>()
+      const windowSchemaUnsubscribers = new Set<() => void>()
+
+      session.bufferListenerSets.add(bufferListeners)
+      session.dragListenersByWindow.set(windowId, dragListeners)
+
+      const cleanupWindowResources = (): void => {
+        menuListeners.clear()
+        bufferListeners.clear()
+        session.bufferListenerSets.delete(bufferListeners)
+        dragListeners.clear()
+        session.dragListenersByWindow.delete(windowId)
+        closeRequestedListeners.clear()
+        for (const listener of windowConfigListeners) {
+          configListeners.delete(listener)
+        }
+        windowConfigListeners.clear()
+        for (const listener of windowWorkspaceListeners) {
+          session.workspaceListeners.delete(listener)
+        }
+        windowWorkspaceListeners.clear()
+        for (const unsubscribe of [...windowSchemaUnsubscribers]) {
+          unsubscribe()
+        }
+        windowSchemaUnsubscribers.clear()
+      }
+
+      const closeWindow = (): void => {
+        if (destroyed) return
+        destroyed = true
+        cleanupWindowResources()
+        callbacks.onClosed()
+      }
+
+      const api: WikiApi = {
+        config: {
+          async get() {
+            return cloneAppConfig(state)
+          },
+          async update(patch) {
+            return applyAndBroadcast({ ...state, ...patch, version: 1 })
+          },
+          async getConfigPath() {
+            return configPath
+          },
+          async readRaw() {
+            return JSON.stringify(state, null, 2)
+          },
+          async saveRaw(raw) {
+            const validated = validateConfigRaw(raw)
+            return applyAndBroadcast(validated)
+          },
+          async toggleFavoriteWorkspace(workspacePath, name) {
+            return applyAndBroadcast({
+              ...state,
+              favoriteWorkspaces: toggleFavoriteWorkspace(
+                state.favoriteWorkspaces,
+                workspacePath,
+                name
+              )
+            })
+          },
+          async removeFavoriteWorkspace(workspacePath) {
+            return applyAndBroadcast({
+              ...state,
+              favoriteWorkspaces: removeFavoriteWorkspace(state.favoriteWorkspaces, workspacePath)
+            })
+          },
+          onChanged(listener) {
+            configListeners.add(listener)
+            windowConfigListeners.add(listener)
+            return () => {
+              configListeners.delete(listener)
+              windowConfigListeners.delete(listener)
+            }
+          }
+        },
+        workspace: {
+          async selectFolder() {
+            return selectedFolder
+          },
+          async open(rootPath) {
+            const info = await coordinator.openWorkspaceInSession(windowId, rootPath)
+            applyAndBroadcast({
+              ...state,
+              recentWorkspaces: recordRecentWorkspace(state.recentWorkspaces, rootPath)
+            })
+            return info
+          },
+          async openInNewWindow(rootPath) {
+            return coordinator.openWorkspaceInNewWindow(windowId, rootPath)
+          },
+          async focusIfOpen(rootPath) {
+            return coordinator.focusWorkspaceIfOpen(windowId, rootPath)
+          },
+          async readDir(dirPath) {
+            if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+            return listDir(session, dirPath ?? session.activeRoot)
+          },
+          async listMarkdownFiles() {
+            return listSessionWorkspaceFiles(session, { filterFileName: isMarkdownFileName })
+          },
+          search(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse> {
+            return session.queryAndSchemaHub.search(request)
+          },
+          async readFile(filePath) {
+            const normalized = normalizePosix(filePath)
+            const content = files.get(normalized)
+            if (content === undefined) {
+              throw new Error(`파일을 찾을 수 없습니다: ${filePath}`)
+            }
+            return content
+          },
+          async writeFile(filePath, content) {
+            const normalized = normalizePosix(filePath)
+            if (!files.has(normalized) && !dirs.has(parentDirOf(normalized))) {
+              throw new Error(`경로를 찾을 수 없습니다: ${filePath}`)
+            }
+            files.set(normalized, content)
+            if (
+              session.activeRoot &&
+              normalized === `${session.activeRoot}/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`
+            ) {
+              notifySessionSchemaWatchers(session)
+            }
+          },
+          async createEntry(parentDirPath, name, kind: WorkspaceEntryKind, initialContent = '') {
+            if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+            const parent = normalizePosix(
+              parentDirPath === '.' ? session.activeRoot : parentDirPath
+            )
+            const target = `${parent}/${name}`
+            if (dirs.has(target) || files.has(target)) {
+              throw new Error(`이미 존재하는 파일 또는 폴더입니다: ${name}`)
+            }
+            if (kind === 'directory') {
+              dirs.add(target)
+            } else {
+              files.set(target, initialContent)
+            }
+            return {
+              name,
+              path: target,
+              relativePath: target.slice(session.activeRoot.length + 1),
+              kind
+            }
+          },
+          async renameEntry(targetPath, newName) {
+            if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+            const target = normalizePosix(targetPath)
+            const next = `${parentDirOf(target)}/${newName}`
+            if (dirs.has(next) || files.has(next)) {
+              throw new Error(`이미 존재하는 이름입니다: ${newName}`)
+            }
+            if (files.has(target)) {
+              return relocateVirtualEntry(session, target, next, 'file')
+            }
+            if (dirs.has(target)) {
+              return relocateVirtualEntry(session, target, next, 'directory')
+            }
+            throw new Error(`경로를 찾을 수 없습니다: ${targetPath}`)
+          },
+          async moveEntries(sourcePaths, targetDirPath): Promise<WorkspaceMovedEntry[]> {
+            if (!session.activeRoot) throw new Error('열린 워크스페이스가 없습니다.')
+            const targetDir = normalizePosix(
+              targetDirPath === '.' ? session.activeRoot : targetDirPath
+            )
+            if (!dirs.has(targetDir)) {
+              throw new Error(`폴더를 찾을 수 없습니다: ${targetDirPath}`)
+            }
+            if (sourcePaths.length === 0) return []
+
+            const resolved: Array<{ path: string; kind: WorkspaceEntryKind }> = []
+            for (const rawSource of sourcePaths) {
+              const source = normalizePosix(rawSource === '.' ? session.activeRoot : rawSource)
+              if (source === session.activeRoot) {
+                throw new Error('워크스페이스 루트 폴더는 이동할 수 없습니다.')
+              }
+              if (dirs.has(source)) {
+                resolved.push({ path: source, kind: 'directory' })
+              } else if (files.has(source)) {
+                resolved.push({ path: source, kind: 'file' })
+              } else {
+                throw new Error(`경로를 찾을 수 없습니다: ${rawSource}`)
               }
             }
-            throw new Error('collision limit')
-          }
 
-          if (input.source.kind === 'clipboard') {
-            const ext = getImageExtensionForMimeType(input.source.mimeType)
-            if (!ext) {
-              throw new Error(`지원하지 않는 이미지 형식입니다: ${input.source.mimeType}`)
-            }
-            const docName = baseNameOf(docPosix)
-            const docStem = docName.replace(/\.[^.]+$/, '') || 'image'
-            return saveAsset(`${docStem}-20260402-090507`, ext)
-          }
+            const topLevel = filterTopLevelWorkspaceItems(
+              resolved,
+              (item) => item.path,
+              (item) => item.kind === 'directory'
+            )
 
-          if (input.source.kind === 'fileBytes') {
-            const base = baseNameOf(input.source.fileName)
-            if (!isSupportedImageFile(base)) {
-              throw new Error(`지원하지 않는 이미지 파일입니다: ${base}`)
-            }
-            const dot = base.lastIndexOf('.')
-            return saveAsset(base.slice(0, dot), base.slice(dot).toLowerCase())
-          }
+            const plannedKeys = new Set<string>()
+            const existingKeys = new Set(
+              [...dirs, ...files.keys()].map((item) => getWorkspacePathKey(item))
+            )
+            const plans: Array<{ oldPath: string; nextPath: string; kind: WorkspaceEntryKind }> = []
 
-          const candidate = normalizePosix(input.source.filePath)
-          if (!isSupportedImageFile(candidate)) {
-            throw new Error(`지원하지 않는 이미지 파일입니다: ${candidate}`)
-          }
-          if (candidate === session.activeRoot || candidate.startsWith(`${session.activeRoot}/`)) {
-            const docParts = docDir.split('/').filter(Boolean)
-            const targetParts = candidate.split('/').filter(Boolean)
-            let common = 0
-            while (
-              common < docParts.length &&
-              common < targetParts.length &&
-              docParts[common].toLowerCase() === targetParts[common].toLowerCase()
-            ) {
-              common += 1
+            for (const item of topLevel) {
+              if (
+                item.kind === 'directory' &&
+                isNestedOrSameWorkspacePath(targetDir, item.path)
+              ) {
+                throw new Error('폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.')
+              }
+              if (parentDirOf(item.path) === targetDir) {
+                continue
+              }
+              const name = baseNameOf(item.path)
+              const nextPath = `${targetDir}/${name}`
+              const nextKey = getWorkspacePathKey(nextPath)
+              if (plannedKeys.has(nextKey) || existingKeys.has(nextKey)) {
+                throw new Error(`이미 존재하는 이름입니다: ${name}`)
+              }
+              plannedKeys.add(nextKey)
+              plans.push({ oldPath: item.path, nextPath, kind: item.kind })
             }
-            const relParts = [
-              ...Array(docParts.length - common).fill('..'),
-              ...targetParts.slice(common)
-            ]
+
+            const moved: WorkspaceMovedEntry[] = []
+            for (const plan of plans) {
+              moved.push({
+                oldPath: plan.oldPath,
+                entry: relocateVirtualEntry(session, plan.oldPath, plan.nextPath, plan.kind)
+              })
+            }
+            return moved
+          },
+          async deleteEntry(targetPath) {
+            const target = normalizePosix(targetPath)
+            if (files.has(target)) {
+              files.delete(target)
+              notifySessionSchemaWatchers(session)
+              return
+            }
+            if (dirs.has(target)) {
+              for (const d of [...dirs]) {
+                if (d === target || d.startsWith(`${target}/`)) dirs.delete(d)
+              }
+              for (const f of [...files.keys()]) {
+                if (f.startsWith(`${target}/`)) files.delete(f)
+              }
+              notifySessionSchemaWatchers(session)
+              return
+            }
+            throw new Error(`경로를 찾을 수 없습니다: ${targetPath}`)
+          },
+          async ingestImage(input: WorkspaceImageIngestInput): Promise<WorkspaceImageIngestResult> {
+            if (fsOptions.ingestImage) {
+              return fsOptions.ingestImage(input)
+            }
+            if (!session.activeRoot) {
+              throw new Error('열린 워크스페이스가 없습니다.')
+            }
+            const docPosix = normalizePosix(input.documentPath)
+            const docDir = parentDirOf(docPosix)
+
+            const saveAsset = (stem: string, ext: string): WorkspaceImageIngestResult => {
+              const assetsDir = `${docDir}/assets`
+              dirs.add(assetsDir)
+              for (let index = 0; index < 100; index += 1) {
+                const nextStem = index === 0 ? stem : `${stem}-${index}`
+                const fileName = `${nextStem}${ext}`
+                const savedPath = `${assetsDir}/${fileName}`
+                if (!files.has(savedPath)) {
+                  files.set(savedPath, `<binary:${fileName}>`)
+                  return {
+                    markdownPath: toMarkdownRelativeImagePath(`assets/${fileName}`),
+                    altText: nextStem,
+                    savedPath
+                  }
+                }
+              }
+              throw new Error('collision limit')
+            }
+
+            if (input.source.kind === 'clipboard') {
+              const ext = getImageExtensionForMimeType(input.source.mimeType)
+              if (!ext) {
+                throw new Error(`지원하지 않는 이미지 형식입니다: ${input.source.mimeType}`)
+              }
+              const docName = baseNameOf(docPosix)
+              const docStem = docName.replace(/\.[^.]+$/, '') || 'image'
+              return saveAsset(`${docStem}-20260402-090507`, ext)
+            }
+
+            if (input.source.kind === 'fileBytes') {
+              const base = baseNameOf(input.source.fileName)
+              if (!isSupportedImageFile(base)) {
+                throw new Error(`지원하지 않는 이미지 파일입니다: ${base}`)
+              }
+              const dot = base.lastIndexOf('.')
+              return saveAsset(base.slice(0, dot), base.slice(dot).toLowerCase())
+            }
+
+            const candidate = normalizePosix(input.source.filePath)
+            if (!isSupportedImageFile(candidate)) {
+              throw new Error(`지원하지 않는 이미지 파일입니다: ${candidate}`)
+            }
+            if (candidate === session.activeRoot || candidate.startsWith(`${session.activeRoot}/`)) {
+              const docParts = docDir.split('/').filter(Boolean)
+              const targetParts = candidate.split('/').filter(Boolean)
+              let common = 0
+              while (
+                common < docParts.length &&
+                common < targetParts.length &&
+                docParts[common].toLowerCase() === targetParts[common].toLowerCase()
+              ) {
+                common += 1
+              }
+              const relParts = [
+                ...Array(docParts.length - common).fill('..'),
+                ...targetParts.slice(common)
+              ]
+              const base = baseNameOf(candidate)
+              const dot = base.lastIndexOf('.')
+              return {
+                markdownPath: toMarkdownRelativeImagePath(relParts.join('/')),
+                altText: dot > 0 ? base.slice(0, dot) : base,
+                savedPath: candidate
+              }
+            }
             const base = baseNameOf(candidate)
             const dot = base.lastIndexOf('.')
-            return {
-              markdownPath: toMarkdownRelativeImagePath(relParts.join('/')),
-              altText: dot > 0 ? base.slice(0, dot) : base,
-              savedPath: candidate
+            return saveAsset(base.slice(0, dot), base.slice(dot).toLowerCase())
+          },
+          getPathForFile(file: File): string {
+            return fsOptions.getPathForFile?.(file) ?? ''
+          },
+          async watch() {
+            session.watchCalls += 1
+            if (role === 'main') {
+              session.watchActive = true
+            } else {
+              session.auxWatchCalls += 1
+            }
+          },
+          async unwatch() {
+            session.unwatchCalls += 1
+            if (role === 'main') {
+              session.watchActive = false
+            } else {
+              session.auxUnwatchCalls += 1
+            }
+          },
+          onChanged(listener) {
+            session.workspaceListeners.add(listener)
+            windowWorkspaceListeners.add(listener)
+            return () => {
+              session.workspaceListeners.delete(listener)
+              windowWorkspaceListeners.delete(listener)
             }
           }
-          const base = baseNameOf(candidate)
-          const dot = base.lastIndexOf('.')
-          return saveAsset(base.slice(0, dot), base.slice(dot).toLowerCase())
         },
-        getPathForFile(file: File): string {
-          return fsOptions.getPathForFile?.(file) ?? ''
-        },
-        async watch() {
-          session.watchCalls += 1
-          if (role === 'main') {
-            session.watchActive = true
-          } else {
-            session.auxWatchCalls += 1
-          }
-        },
-        async unwatch() {
-          session.unwatchCalls += 1
-          if (role === 'main') {
-            session.watchActive = false
-          } else {
-            session.auxUnwatchCalls += 1
+        workspaceState: {
+          async get(rootPath) {
+            if (role !== 'main') {
+              throw new Error('Only the main window can access workspace state')
+            }
+            return findWorkspaceStateInDocument(workspaceStateDoc, rootPath)
+          },
+          async save(rootPath, update) {
+            if (role !== 'main') {
+              throw new Error('Only the main window can access workspace state')
+            }
+            const { document: nextDoc, workspaceState } = applyWorkspaceStateUpdate(
+              workspaceStateDoc,
+              rootPath,
+              update
+            )
+            workspaceStateDoc = nextDoc
+            return clonePersistedWorkspaceState(workspaceState)
           }
         },
-        onChanged(listener) {
-          session.workspaceListeners.add(listener)
-          windowWorkspaceListeners.add(listener)
-          return () => {
-            session.workspaceListeners.delete(listener)
-            windowWorkspaceListeners.delete(listener)
+        frontmatter: {
+          getSchema: () => session.queryAndSchemaHub.getSchema(),
+          createDefaultSchema: () => session.queryAndSchemaHub.createDefaultSchema(),
+          saveSchema: (rawSchema) => session.queryAndSchemaHub.saveSchema(rawSchema),
+          getFieldValues: (fieldKeys?: string[]) =>
+            session.queryAndSchemaHub.collectFieldValues(fieldKeys),
+          onSchemaChanged(listener) {
+            if (destroyed) {
+              return () => undefined
+            }
+            const unsubscribe = session.queryAndSchemaHub.onSchemaChanged(listener)
+            const cleanup = (): void => {
+              windowSchemaUnsubscribers.delete(cleanup)
+              unsubscribe()
+            }
+            windowSchemaUnsubscribers.add(cleanup)
+            return cleanup
           }
-        }
-      },
-      workspaceState: {
-        async get(rootPath) {
-          if (role !== 'main') {
-            throw new Error('Only the main window can access workspace state')
-          }
-          return findWorkspaceStateInDocument(workspaceStateDoc, rootPath)
         },
-        async save(rootPath, update) {
-          if (role !== 'main') {
-            throw new Error('Only the main window can access workspace state')
-          }
-          const { document: nextDoc, workspaceState } = applyWorkspaceStateUpdate(
-            workspaceStateDoc,
-            rootPath,
-            update
-          )
-          workspaceStateDoc = nextDoc
-          return clonePersistedWorkspaceState(workspaceState)
-        }
-      },
-      frontmatter: {
-        getSchema: () => session.queryAndSchemaHub.getSchema(),
-        createDefaultSchema: () => session.queryAndSchemaHub.createDefaultSchema(),
-        saveSchema: (rawSchema) => session.queryAndSchemaHub.saveSchema(rawSchema),
-        getFieldValues: (fieldKeys?: string[]) =>
-          session.queryAndSchemaHub.collectFieldValues(fieldKeys),
-        onSchemaChanged(listener) {
-          if (destroyed) {
-            return () => undefined
-          }
-          const unsubscribe = session.queryAndSchemaHub.onSchemaChanged(listener)
-          const cleanup = (): void => {
-            windowSchemaUnsubscribers.delete(cleanup)
-            unsubscribe()
-          }
-          windowSchemaUnsubscribers.add(cleanup)
-          return cleanup
-        }
-      },
-      git: {
-        status: async (workspacePath) => createEmptyGitStatus(false, workspacePath),
-        init: async (workspacePath) => ({
-          ...createEmptyGitStatus(true, workspacePath),
-          branch: 'main',
-          isUnborn: true
-        }),
-        stage: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        stageAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        unstage: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        unstageAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        discard: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        discardAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        commit: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        branches: async () => ({ current: null, isDetached: false, branches: [] }),
-        checkout: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        pull: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        push: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        fetch: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        sync: async (workspacePath) => ({
-          status: createEmptyGitStatus(true, workspacePath),
-          pulled: true,
-          pushed: true,
-          summary: '동기화 완료'
-        }),
-        log: async () => ({ commits: [], hasMore: false }),
-        commitDetail: async (_workspacePath, commitHash) => ({
-          hash: commitHash,
-          shortHash: commitHash.slice(0, 7),
-          parents: [],
-          subject: '',
-          body: '',
-          authorName: '',
-          authorEmail: '',
-          committedAt: '',
-          files: []
-        }),
-        diff: async (_workspacePath, request) => ({
-          path: request.path,
-          ...(request.origPath ? { origPath: request.origPath } : {}),
-          status: request.status,
-          isBinary: false,
-          isTruncated: false,
-          existsInWorkspace: true,
-          rawPatch: ''
-        }),
-        stashList: async () => [],
-        stashDetail: async (_workspacePath, stashRef) => ({
-          ref: stashRef,
-          hash: '0000000000000000000000000000000000000000',
-          branch: null,
-          message: '',
-          createdAt: '',
-          files: []
-        }),
-        stashCreate: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        stashApply: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        stashPop: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
-        stashDrop: async () => [],
-        stashClear: async () => [],
-        ...fsOptions.git
-      },
-      menu: {
-        onCommand(listener) {
-          menuListeners.add(listener)
-          return () => {
-            menuListeners.delete(listener)
-          }
-        }
-      },
-      buffer: createHubBufferApi(session.hub, windowId, bufferListeners, () => destroyed),
-      diagram: {
-        copyText: vi.fn(async () => {}),
-        copyImage: vi.fn(async () => {}),
-        saveFile: vi.fn(async () => ({ canceled: true })),
-        ...fsOptions.diagram
-      },
-      clipboard: {
-        async writeText(text: string) {
-          copiedTexts.push(text)
+        git: {
+          status: async (workspacePath) => createEmptyGitStatus(false, workspacePath),
+          init: async (workspacePath) => ({
+            ...createEmptyGitStatus(true, workspacePath),
+            branch: 'main',
+            isUnborn: true
+          }),
+          stage: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          stageAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          unstage: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          unstageAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          discard: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          discardAll: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          commit: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          branches: async () => ({ current: null, isDetached: false, branches: [] }),
+          checkout: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          pull: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          push: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          fetch: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          sync: async (workspacePath) => ({
+            status: createEmptyGitStatus(true, workspacePath),
+            pulled: true,
+            pushed: true,
+            summary: '동기화 완료'
+          }),
+          log: async () => ({ commits: [], hasMore: false }),
+          commitDetail: async (_workspacePath, commitHash) => ({
+            hash: commitHash,
+            shortHash: commitHash.slice(0, 7),
+            parents: [],
+            subject: '',
+            body: '',
+            authorName: '',
+            authorEmail: '',
+            committedAt: '',
+            files: []
+          }),
+          diff: async (_workspacePath, request) => ({
+            path: request.path,
+            ...(request.origPath ? { origPath: request.origPath } : {}),
+            status: request.status,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: ''
+          }),
+          stashList: async () => [],
+          stashDetail: async (_workspacePath, stashRef) => ({
+            ref: stashRef,
+            hash: '0000000000000000000000000000000000000000',
+            branch: null,
+            message: '',
+            createdAt: '',
+            files: []
+          }),
+          stashCreate: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          stashApply: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          stashPop: async (workspacePath) => createEmptyGitStatus(true, workspacePath),
+          stashDrop: async () => [],
+          stashClear: async () => [],
+          ...fsOptions.git
         },
-        ...fsOptions.clipboard
-      },
-      window: {
+        menu: {
+          onCommand(listener) {
+            menuListeners.add(listener)
+            return () => {
+              menuListeners.delete(listener)
+            }
+          }
+        },
+        buffer: createHubBufferApi(
+          session.hub,
+          windowId,
+          bufferListeners,
+          () => destroyed,
+          (bufferKeys, options) => coordinator.syncWindowTabs(windowId, bufferKeys, options)
+        ),
+        diagram: {
+          copyText: vi.fn(async () => {}),
+          copyImage: vi.fn(async () => {}),
+          saveFile: vi.fn(async () => ({ canceled: true })),
+          ...fsOptions.diagram
+        },
+        clipboard: {
+          async writeText(text: string) {
+            copiedTexts.push(text)
+          },
+          ...fsOptions.clipboard
+        },
+        window: {
+          role,
+          async getInitContext() {
+            return coordinator.getWindowInitContext(windowId)
+          },
+          async detachTabToNewWindow(payload) {
+            return coordinator.detachTabToNewWindow(windowId, payload)
+          },
+          async startTabDrag(input) {
+            return coordinator.startTabDrag(windowId, input)
+          },
+          async updateTabDragOutcome(dragSessionId, outcome) {
+            return coordinator.updateTabDragOutcome(windowId, dragSessionId, outcome)
+          },
+          async acceptTabDragDrop(input) {
+            return coordinator.acceptTabDragDrop(windowId, input)
+          },
+          async endTabDrag(input) {
+            return coordinator.endTabDrag(windowId, input)
+          },
+          onTabDragStateChanged(listener) {
+            dragListeners.add(listener)
+            return () => {
+              dragListeners.delete(listener)
+            }
+          },
+          async closeCurrent() {
+            coordinator.closeCurrentWindow(windowId)
+          },
+          onCloseRequested(listener) {
+            closeRequestedListeners.add(listener)
+            return () => {
+              closeRequestedListeners.delete(listener)
+            }
+          },
+          async resolveCloseRequest(approved) {
+            coordinator.resolveCloseRequest(windowId, approved)
+          },
+          async setCloseFlushEnabled(enabled) {
+            coordinator.setCloseFlushEnabled(windowId, enabled)
+          }
+        },
+        ...(fsOptions.log ? { log: fsOptions.log } : {})
+      }
+
+      if (!session.primaryApi) {
+        session.primaryApi = api
+      }
+
+      const handle: InMemoryWindowHandle = {
+        windowId,
+        sessionId,
         role,
-        async getInitContext() {
-          return buildInitContext()
-        },
-        async detachTabToNewWindow(payload) {
-          if (destroyed) {
-            throw new Error('Cannot detach tab from a closed window')
-          }
-          if (!session.hub.hasBuffer(payload.bufferKey)) {
-            throw new Error('Cannot detach unknown document buffer')
-          }
-          if (!canDetachTabFromWindow(role, session.hub.getWindowTabCount(windowId))) {
-            throw new Error('Cannot detach the last tab from an auxiliary window')
-          }
-          const aux = createWindowInSession(session, {
-            role: 'auxiliary',
-            initialTabs: [payload],
-            bounds: computeOffsetAuxiliaryBounds(windowBounds, screen)
-          })
-          return { windowId: aux.windowId }
-        },
-        async startTabDrag(input) {
-          if (destroyed) {
-            throw new Error('Cannot start tab drag from a closed window')
-          }
-          if (!session.hub.hasBuffer(input.payload.bufferKey)) {
-            throw new Error('Cannot drag unknown document buffer')
-          }
-          return session.dragCoordinator.start(windowId, input)
-        },
-        async updateTabDragOutcome(dragSessionId, outcome) {
-          if (destroyed) return null
-          return session.dragCoordinator.updateOutcome(windowId, dragSessionId, outcome)
-        },
-        async acceptTabDragDrop(input) {
-          if (destroyed) {
-            return { accepted: false, reason: 'invalid-target-window' }
-          }
-          const result = session.dragCoordinator.acceptCrossWindowDrop({
-            targetWindowId: windowId,
-            dragSessionId: input?.dragSessionId,
-            bufferHub: session.hub
-          })
-          if (
-            !result.accepted &&
-            (result.reason === 'no-active-drag' || result.reason === 'session-mismatch') &&
-            hasOtherSessionPendingDrag(session.sessionId)
-          ) {
-            return { accepted: false, reason: 'different-workspace-session' }
-          }
-          return result
-        },
-        async endTabDrag(input) {
-          if (destroyed) {
-            return { detached: false, outcome: 'cancelled' }
-          }
-          const canDetach = canDetachTabFromWindow(role, session.hub.getWindowTabCount(windowId))
-          const plan = session.dragCoordinator.finish({
-            sourceWindowId: windowId,
-            input,
-            openWindowBounds: getAllOpenWindowBounds(),
-            canDetach,
-            hasBuffer: (key) => session.hub.hasBuffer(key),
-            screen
-          })
-          if (!plan.detach) {
-            return plan.result
-          }
-          const aux = createWindowInSession(session, {
-            role: 'auxiliary',
-            initialTabs: [plan.payload],
-            bounds: plan.targetBounds
-          })
-          return { detached: true, windowId: aux.windowId }
-        },
-        onTabDragStateChanged(listener) {
-          dragListeners.add(listener)
-          return () => {
-            dragListeners.delete(listener)
+        api,
+        hub: session.hub,
+        emitMenuCommand(command) {
+          if (destroyed || role !== 'main') return
+          for (const listener of menuListeners) {
+            listener(command)
           }
         },
-        async closeCurrent() {
-          if (role === 'auxiliary') {
-            forceCloseWindow()
+        emitBeforeInput(input) {
+          if (destroyed) return
+          coordinator.handleBeforeInput(input)
+        },
+        requestClose: () => {
+          if (destroyed) return
+          if (callbacks.onCloseAttempt()) {
+            closeWindow()
           }
         },
-        onCloseRequested(listener) {
-          closeRequestedListeners.add(listener)
-          return () => {
-            closeRequestedListeners.delete(listener)
+        getBounds: () => ({ ...windowBounds }),
+        getMenuListenerCount: () => menuListeners.size,
+        getFocusCount: () => focusCount,
+        getRestoreCount: () => restoreCount,
+        isMinimized: () => minimized,
+        setMinimized: (nextMinimized) => {
+          minimized = nextMinimized
+        },
+        isClosed: () => destroyed,
+        getInitContext: () => coordinator.getWindowInitContext(windowId),
+        destroy: closeWindow
+      }
+
+      handlesByWindowId.set(windowId, handle)
+      if (role === 'main') {
+        mainHandles.push(handle)
+      } else {
+        auxiliaryHandles.push(handle)
+        session.auxiliaryHandles.push(handle)
+      }
+
+      return {
+        windowId,
+        getBounds: () => ({ ...windowBounds }),
+        isDestroyed: () => destroyed,
+        isMinimized: () => minimized,
+        isFocused: () => false,
+        restore: () => {
+          if (minimized) {
+            minimized = false
+            restoreCount += 1
           }
         },
-        async resolveCloseRequest(approved) {
-          if (destroyed || !closePromptPending) return
-          closePromptPending = false
-          if (approved) {
-            forceCloseWindow()
+        focus: () => {
+          if (!destroyed) {
+            focusCount += 1
           }
         },
-        async setCloseFlushEnabled(enabled) {
-          if (!destroyed && role === 'main') {
-            closeFlushEnabled = Boolean(enabled)
+        close: closeWindow,
+        sendCloseRequested: () => {
+          for (const listener of closeRequestedListeners) {
+            listener()
           }
+        },
+        dispose: cleanupWindowResources
+      }
+    }
+  })
+
+  const unsubscribeDragBroadcast = coordinator.onTabDragStateChanged(
+    (dragSession, targetWindowIds) => {
+      for (const windowId of targetWindowIds) {
+        const win = handlesByWindowId.get(windowId)
+        if (!win) continue
+        const listeners = allServicesById.get(win.sessionId)?.dragListenersByWindow.get(windowId)
+        if (!listeners) continue
+        for (const listener of listeners) {
+          listener(dragSession)
         }
-      },
-      ...(fsOptions.log ? { log: fsOptions.log } : {})
+      }
     }
+  )
 
-    if (!session.primaryApi) {
-      session.primaryApi = api
+  const initialSession = coordinator.createSession()
+  let defaultSessionId = initialSession.sessionId
+  let latestDefaultServices = initialSession.services
+
+  const ensureDefaultSessionId = (): number => {
+    if (!coordinator.hasLiveSession(defaultSessionId)) {
+      const nextSession = coordinator.createSession()
+      defaultSessionId = nextSession.sessionId
+      latestDefaultServices = nextSession.services
     }
-
-    const handle: InMemoryWindowHandle = {
-      windowId,
-      sessionId: session.sessionId,
-      role,
-      api,
-      hub: session.hub,
-      emitMenuCommand(command) {
-        if (destroyed || role !== 'main') return
-        for (const listener of menuListeners) {
-          listener(command)
-        }
-      },
-      emitBeforeInput(input) {
-        if (destroyed) return
-        session.dragCoordinator.handleBeforeInput(input)
-      },
-      requestClose: requestCloseWindow,
-      getBounds: () => ({ ...windowBounds }),
-      getMenuListenerCount: () => menuListeners.size,
-      getFocusCount: () => focusCount,
-      getRestoreCount: () => restoreCount,
-      isMinimized: () => minimized,
-      setMinimized: (nextMinimized) => {
-        minimized = nextMinimized
-      },
-      isClosed: () => destroyed,
-      getInitContext: buildInitContext,
-      destroy: destroyWindow
-    }
-
-    if (role === 'main') {
-      mainHandles.push(handle)
-    } else {
-      auxiliaryHandles.push(handle)
-      session.auxiliaryHandles.push(handle)
-    }
-
-    return handle
+    return defaultSessionId
   }
 
   const createWindow = (options: CreateInMemoryWindowOptions = {}): InMemoryWindowHandle => {
-    return createWindowInSession(defaultSession, options)
+    const hosted = coordinator.joinSessionWindow(ensureDefaultSessionId(), {
+      role: options.role ?? 'main',
+      initialTabs: options.initialTabs,
+      bounds: options.bounds
+    })
+    return handlesByWindowId.get(hosted.windowId)!
   }
 
   return {
@@ -1529,28 +1369,32 @@ export function createMultiWindowWikiHarness(
         return [...auxiliaryHandles]
       }
       const matched = mainHandles.find((win) => win.windowId === mainWindowId)
-      const session = matched ? sessions.get(matched.sessionId) : undefined
+      const session = matched ? allServicesById.get(matched.sessionId) : undefined
       return session ? [...session.auxiliaryHandles] : []
     },
     getWatchState: () => ({
-      active: defaultSession.watchActive,
-      watchCalls: defaultSession.watchCalls,
-      unwatchCalls: defaultSession.unwatchCalls,
-      auxWatchCalls: defaultSession.auxWatchCalls,
-      auxUnwatchCalls: defaultSession.auxUnwatchCalls
+      active: latestDefaultServices.watchActive,
+      watchCalls: latestDefaultServices.watchCalls,
+      unwatchCalls: latestDefaultServices.unwatchCalls,
+      auxWatchCalls: latestDefaultServices.auxWatchCalls,
+      auxUnwatchCalls: latestDefaultServices.auxUnwatchCalls
     }),
     emitExternalChange(patch) {
       applyAndBroadcast({ ...state, ...patch, version: 1 })
     },
     emitWorkspaceChange(event) {
-      if (sessions.size === 1) {
-        for (const listener of defaultSession.workspaceListeners) {
+      const liveServices: InMemorySessionServices[] = []
+      coordinator.forEachSession((session) => {
+        liveServices.push(session.services)
+      })
+      if (liveServices.length === 1) {
+        for (const listener of liveServices[0].workspaceListeners) {
           listener(event)
         }
-        notifySessionSchemaWatchers(defaultSession)
+        notifySessionSchemaWatchers(liveServices[0])
         return
       }
-      for (const session of sessions.values()) {
+      for (const session of liveServices) {
         if (session.activeRoot && isSameWorkspacePath(session.activeRoot, event.rootPath)) {
           for (const listener of session.workspaceListeners) {
             listener(event)
@@ -1563,20 +1407,14 @@ export function createMultiWindowWikiHarness(
     getFilesSnapshot: () => new Map(files),
     readDirCalls,
     copiedTexts,
-    hub: defaultSession.hub,
+    get hub() {
+      return latestDefaultServices.hub
+    },
     dispose() {
-      for (const session of sessions.values()) {
-        session.unsubscribeCoordinatorHub()
-        session.queryAndSchemaHub.dispose()
-        session.dragCoordinator.dispose()
-        session.openWindows.clear()
-        session.dragListenersByWindow.clear()
-        session.hub.dispose()
-        session.workspaceListeners.clear()
-        session.rootChangedListeners.clear()
-        session.schemaWatchers.clear()
-      }
-      sessions.clear()
+      unsubscribeDragBroadcast()
+      coordinator.dispose()
+      handlesByWindowId.clear()
+      allServicesById.clear()
       configListeners.clear()
     }
   }

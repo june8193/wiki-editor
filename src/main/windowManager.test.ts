@@ -13,7 +13,6 @@ import {
   WINDOW_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS,
   WORKSPACE_STATE_IPC_CHANNELS,
-  type ActivateOrOpenWorkspaceResult,
   type FocusOpenWorkspaceResult,
   type OpenWorkspaceInNewWindowResult
 } from '@shared/ipc'
@@ -22,7 +21,7 @@ import type {
   WorkspaceFrontmatterFieldValuesResponse,
   WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
-import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
+import type { WorkspaceInfo } from '@shared/workspace'
 import {
   WINDOW_BASE_TITLE,
   type AcceptTabDragDropResult,
@@ -37,7 +36,7 @@ import {
 import { ConfigService } from './config/ConfigService'
 import { GitService } from './git/GitService'
 import { createFakeIpcMain, type FakeIpcMain } from './ipc/ipcTestHelpers'
-import { createSharedDocumentBufferHub, registerBufferIpc, type BufferWebContentsLike } from './ipc/registerBufferIpc'
+import { registerBufferIpc, type BufferWebContentsLike } from './ipc/registerBufferIpc'
 import { registerConfigIpc } from './ipc/registerConfigIpc'
 import { registerFrontmatterIpc } from './ipc/registerFrontmatterIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
@@ -46,7 +45,6 @@ import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { registerWorkspaceStateIpc } from './ipc/registerWorkspaceStateIpc'
 import { createApplicationMenuTemplate } from './menu'
 import { WindowManager, type BrowserWindowLike } from './windowManager'
-import { WorkspaceFsService } from './workspace/WorkspaceFsService'
 import { WorkspaceStateService } from './workspace/WorkspaceStateService'
 import { TabDragCoordinator } from '@shared/tabDragSession'
 import { DEFAULT_SEARCH_MATCH_OPTIONS, type WorkspaceSearchResponse } from '@shared/search'
@@ -271,9 +269,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
   let tempDir: string
   let workspaceDir: string
   let configPath: string
-  let workspaceService: WorkspaceFsService
   let configService: ConfigService
-  let bufferHub: SharedDocumentBufferHub
   let windowManager: WindowManager
   let ipcHarness: FakeIpcMain
   let createdWindows: FakeWindowInstance[]
@@ -288,8 +284,8 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     await writeFile(join(workspaceDir, 'alpha.md'), '# Alpha\nInitial body', 'utf8')
     await writeFile(join(workspaceDir, 'beta.md'), '# Beta\nSecond doc', 'utf8')
 
-    workspaceService = new WorkspaceFsService({ watchDebounceMs: 30 })
     configService = new ConfigService(configPath)
+    await configService.update({ autoSave: false, autoSaveDelayMs: 1000 })
     ipcHarness = createFakeIpcMain()
 
     const factory = createFakeBrowserWindowFactory()
@@ -300,16 +296,12 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       })
     }
 
-    bufferHub = createSharedDocumentBufferHub({
-      workspaceService,
-      configService,
-      initialAutoSaveConfig: { autoSave: false, autoSaveDelayMs: 1000 }
-    })
-
     windowManager = new WindowManager({
       preloadPath: 'C:\\app\\out\\preload\\index.js',
       rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
-      bufferHub,
+      configService,
+      watchDebounceMs: 30,
+      initialAutoSaveConfig: { autoSave: false, autoSaveDelayMs: 1000 },
       createWindow: factory.createWindow,
       screen: fakeScreen
     })
@@ -318,16 +310,13 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       registerBufferIpc({
         ipcMain: ipcHarness,
         configService,
-        hub: bufferHub,
-        getTargets: () => windowManager.getWebContentsTargets()
+        sessionSource: windowManager
       }),
       registerWorkspaceIpc({
         ipcMain: ipcHarness,
-        workspaceService,
         configService,
         selectDirectory: async () => workspaceDir,
-        getTargets: () => windowManager.getWebContentsTargets(),
-        isMainWindowSender: (sender) => windowManager.isMainWebContents(sender)
+        coordinator: windowManager
       }),
       registerWindowIpc({
         ipcMain: ipcHarness,
@@ -341,7 +330,6 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       dispose()
     }
     windowManager.dispose()
-    workspaceService.dispose()
     await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 })
   })
 
@@ -431,7 +419,8 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
 
     await ipcHarness.invokeFrom(auxWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [buffer.key])
     expect(auxWin.isDestroyed()).toBe(false)
-    expect(bufferHub.getSnapshot().buffers[buffer.key]?.content).toBe('# Alpha\nUnsaved detached edit')
+    const mainSessionHub = windowManager.resolveSession(mainWin.webContents)!.hub
+    expect(mainSessionHub.getSnapshot().buffers[buffer.key]?.content).toBe('# Alpha\nUnsaved detached edit')
   })
 
   it('enforces single-tab guard on auxiliary detach while allowing multi-tab auxiliary detach', async () => {
@@ -524,7 +513,7 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       preloadPath: 'C:\\app\\out\\preload\\index.js',
       rendererUrl: 'http://localhost:5173/app?foo=bar',
       rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
-      bufferHub,
+      configService,
       createWindow: devFactory.createWindow
     })
 
@@ -602,11 +591,12 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     })
     const auxWin = createdWindows[1]
     await ipcHarness.invokeFrom(mainWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [])
-    expect(bufferHub.hasBuffer(alphaBuf.key)).toBe(true)
+    const mainSessionHub = windowManager.resolveSession(mainWin.webContents)!.hub
+    expect(mainSessionHub.hasBuffer(alphaBuf.key)).toBe(true)
 
     // Aux closes before sending any buffer:* IPC
     auxWin.simulateUserClose()
-    expect(bufferHub.hasBuffer(alphaBuf.key)).toBe(false)
+    expect(mainSessionHub.hasBuffer(alphaBuf.key)).toBe(false)
   })
 
   function setupScopedDragHarness(
@@ -617,7 +607,8 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     const manager = new WindowManager({
       preloadPath: 'C:\\app\\out\\preload\\index.js',
       rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
-      bufferHub,
+      configService,
+      initialAutoSaveConfig: { autoSave: false, autoSaveDelayMs: 1000 },
       createWindow: factory.createWindow,
       screen
     })
@@ -626,16 +617,13 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       registerBufferIpc({
         ipcMain: scopedIpc,
         configService,
-        hub: bufferHub,
-        getTargets: () => manager.getWebContentsTargets()
+        sessionSource: manager
       }),
       registerWorkspaceIpc({
         ipcMain: scopedIpc,
-        workspaceService,
         configService,
         selectDirectory: async () => workspaceDir,
-        getTargets: () => manager.getWebContentsTargets(),
-        isMainWindowSender: (sender) => manager.isMainWebContents(sender)
+        coordinator: manager
       }),
       registerWindowIpc({
         ipcMain: scopedIpc,
@@ -1117,8 +1105,9 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       // Even if source syncs empty tabs BEFORE main syncs beta, dirty buffer stays alive via pending transfer
       await ipc.invokeFrom(aux1.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [])
       expect(aux1.closedCount).toBe(1)
-      expect(bufferHub.hasBuffer(betaBuf.key)).toBe(true)
-      expect(bufferHub.getBuffer(betaBuf.key)?.content).toBe('# Beta unsaved edit')
+      const scopedHub = manager.resolveSession(mainWin.webContents)!.hub
+      expect(scopedHub.hasBuffer(betaBuf.key)).toBe(true)
+      expect(scopedHub.getBuffer(betaBuf.key)?.content).toBe('# Beta unsaved edit')
 
       // Source endTabDrag does NOT spawn an extra auxiliary window even if cursor is outside all bounds
       screenCursor = { x: 1850, y: 950 }
@@ -1784,7 +1773,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     }
   })
 
-  it('prevents duplicate main-window opening across openInNewWindow, activateOrOpen, focusIfOpen, and open (including symlinks and casing) and restores/focuses existing window', async () => {
+  it('prevents duplicate main-window opening across openInNewWindow, focusIfOpen, and open (including symlinks and casing) and restores/focuses existing window', async () => {
     const main1 = manager.createMainWindow() as FakeWindowInstance
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
     const realAlpha = await realpath(wsAlpha)
@@ -1815,15 +1804,15 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     expect(main2.focusCount).toBe(1)
     expect(main2.isMinimized?.()).toBe(false)
 
-    // Now main2 activates Beta via activateOrOpen
-    const activateBeta = await ipc.invokeFrom<ActivateOrOpenWorkspaceResult>(
+    // Now main2 opens Beta via workspace:open
+    const openedBeta = await ipc.invokeFrom<{ rootPath: string }>(
       main2.webContents,
-      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      WORKSPACE_IPC_CHANNELS.open,
       realBeta
     )
-    expect(activateBeta.status).toBe('opened')
+    expect(openedBeta.rootPath).toBe(realBeta)
 
-    // Minimize main1 and test activateOrOpen + focusIfOpen + openInNewWindow + raw open from main2 targeting wsAlpha (including case/slash variant)
+    // Minimize main1 and test focusIfOpen + openInNewWindow + raw open from main2 targeting wsAlpha (including case/slash variant)
     main1.setMinimized(true)
     const alphaVariant =
       process.platform === 'win32' ? `${realAlpha.toUpperCase()}\\` : `${realAlpha}/`
@@ -1865,18 +1854,11 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     expect(main1.focusCount).toBe(2)
     expect(main1.isMinimized?.()).toBe(false)
 
-    // activateOrOpen targeting Alpha from main2 focuses main1 and preserves Beta on main2
+    // Raw workspace:open targeting Alpha from main2 ALSO focuses main1, preserves Beta on main2, and rejects duplicate open
     main1.setMinimized(true)
-    const dupActivate = await ipc.invokeFrom<ActivateOrOpenWorkspaceResult>(
-      main2.webContents,
-      WORKSPACE_IPC_CHANNELS.activateOrOpen,
-      alphaVariant
-    )
-    expect(dupActivate).toEqual({
-      status: 'focused-existing',
-      windowId: main1.webContents.id,
-      rootPath: realAlpha
-    })
+    await expect(
+      ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, alphaVariant)
+    ).rejects.toThrow(/이미 다른 창/)
     expect(main1.restoreCount).toBe(3)
     expect(main1.focusCount).toBe(3)
     expect(
@@ -1885,14 +1867,6 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
         WORKSPACE_IPC_CHANNELS.readDir
       )
     ).toEqual([expect.objectContaining({ name: 'b.md' })])
-
-    // Raw workspace:open targeting Alpha from main2 ALSO focuses main1 and rejects duplicate open
-    main1.setMinimized(true)
-    await expect(
-      ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, alphaVariant)
-    ).rejects.toThrow(/이미 다른 창/)
-    expect(main1.restoreCount).toBe(4)
-    expect(main1.focusCount).toBe(4)
 
     // Symlink / junction pointing to Alpha also resolves to existing main1 across openInNewWindow and focusIfOpen
     const alphaLink = join(tempDir, 'alpha-link')
@@ -1915,8 +1889,8 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
         windowId: main1.webContents.id,
         rootPath: realAlpha
       })
-      expect(main1.restoreCount).toBe(5)
-      expect(main1.focusCount).toBe(5)
+      expect(main1.restoreCount).toBe(4)
+      expect(main1.focusCount).toBe(4)
       expect(factory.createdWindows).toHaveLength(2)
 
       main1.setMinimized(true)
@@ -1930,8 +1904,8 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
         windowId: main1.webContents.id,
         rootPath: realAlpha
       })
-      expect(main1.restoreCount).toBe(6)
-      expect(main1.focusCount).toBe(6)
+      expect(main1.restoreCount).toBe(5)
+      expect(main1.focusCount).toBe(5)
     }
   })
 
@@ -1942,7 +1916,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
 
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
     const main2 = factory.createdWindows[1]
-    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, wsBeta)
     await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.watch)
 
     // Each session has its own workspace root & watch broadcasts
@@ -2135,12 +2109,12 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       expect(JSON.parse(snapCfg2.buffers[cfgBuf2.key]!.content).autoSave).toBe(true)
     })
 
-    // Auxiliary windows cannot open or activate workspaces directly
+    // Auxiliary windows cannot open or open-in-new-window workspaces directly
     await expect(
       ipc.invokeFrom(aux2.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsGamma)
     ).rejects.toThrow(/main window/i)
     await expect(
-      ipc.invokeFrom(aux2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsGamma)
+      ipc.invokeFrom(aux2.webContents, WORKSPACE_IPC_CHANNELS.open, wsGamma)
     ).rejects.toThrow(/main window/i)
   })
 
@@ -2149,7 +2123,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
     const main2 = factory.createdWindows[1]
-    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, wsBeta)
 
     const bufA = (await ipc.invokeFrom(
       main1.webContents,
@@ -2258,7 +2232,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
 
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
     const main2 = factory.createdWindows[1]
-    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, wsBeta)
     await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.watch)
 
     const bufA1 = (await ipc.invokeFrom(
@@ -2381,7 +2355,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
     const main2 = factory.createdWindows[1]
-    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, wsBeta)
 
     const bufA = (await ipc.invokeFrom(
       main1.webContents,
@@ -2443,7 +2417,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsGamma)
     const main2 = factory.createdWindows[1]
-    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsGamma)
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, wsGamma)
 
     // 1. Delay main1's workspaceService.openWorkspace to simulate in-flight A -> B switch
     const main1Service = manager.getWorkspaceServices()[0]
@@ -2464,9 +2438,9 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
 
     const switchPromise = ipc.invokeFrom(
       main1.webContents,
-      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      WORKSPACE_IPC_CHANNELS.open,
       wsBeta
-    ) as Promise<ActivateOrOpenWorkspaceResult>
+    ) as Promise<WorkspaceInfo>
     await openStartedPromise
 
     // Both incoming wsBeta and outgoing wsAlpha should resolve to main1 while switch is in flight
@@ -2493,9 +2467,9 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
 
     releaseOpen()
     const switchResult = await switchPromise
-    expect(switchResult.status).toBe('opened')
+    expect(switchResult.name).toBe('beta')
 
-    // 2. Deleted unmounted initialWorkspacePath clears stale reservation when activateOrOpen fails validation
+    // 2. Deleted unmounted initialWorkspacePath clears stale reservation when open fails validation
     const wsDelta = join(tempDir, 'delta')
     await mkdir(wsDelta, { recursive: true })
     await writeFile(join(wsDelta, 'd.md'), '# Delta', 'utf8')
@@ -2509,7 +2483,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
 
     await rm(wsDelta, { recursive: true, force: true })
     await expect(
-      ipc.invokeFrom(main3.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, deltaWinRes.rootPath)
+      ipc.invokeFrom(main3.webContents, WORKSPACE_IPC_CHANNELS.open, deltaWinRes.rootPath)
     ).rejects.toThrow()
 
     await mkdir(wsDelta, { recursive: true })
@@ -2554,22 +2528,22 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
 
     const switchZetaPromise = ipc.invokeFrom(
       main1.webContents,
-      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      WORKSPACE_IPC_CHANNELS.open,
       wsZeta
-    ) as Promise<ActivateOrOpenWorkspaceResult>
+    ) as Promise<WorkspaceInfo>
     await zetaStartedPromise
 
     const switchEtaPromise = ipc.invokeFrom(
       main1.webContents,
-      WORKSPACE_IPC_CHANNELS.activateOrOpen,
+      WORKSPACE_IPC_CHANNELS.open,
       wsEta
-    ) as Promise<ActivateOrOpenWorkspaceResult>
-    // Wait until activateOrOpen(wsEta) finishes directory validation and queues/registers wsEta
+    ) as Promise<WorkspaceInfo>
+    // Wait until open(wsEta) finishes directory validation and queues/registers wsEta
     await new Promise((resolve) => setTimeout(resolve, 15))
 
     // Earlier open settles while wsEta is still pending
     releaseZeta()
-    expect((await switchZetaPromise).status).toBe('opened')
+    expect((await switchZetaPromise).name).toBe('zeta')
 
     const dupEtaResult = (await ipc.invokeFrom(
       main2.webContents,
@@ -2583,7 +2557,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     expect(factory.createdWindows).toHaveLength(4)
 
     releaseEta()
-    expect((await switchEtaPromise).status).toBe('opened')
+    expect((await switchEtaPromise).name).toBe('eta')
     openSpy.mockRestore()
 
     // 3. Disposing WindowManager while openWorkspaceInNewWindow resolves does not spawn orphaned window, and clears sender lookup
@@ -2607,7 +2581,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
     const main2 = factory.createdWindows[1]
-    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, wsBeta)
 
     const alphaDoc = join(wsAlpha, 'a.md')
     const betaDoc = join(wsBeta, 'b.md')
@@ -2697,7 +2671,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
     const main2 = factory.createdWindows[1]
-    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, wsBeta)
 
     // Detach a.md into aux1 under Session 1
     const bufA = (await ipc.invokeFrom(
@@ -2888,7 +2862,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.open, wsAlpha)
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.openInNewWindow, wsBeta)
     const main2 = factory.createdWindows[1]
-    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.activateOrOpen, wsBeta)
+    await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, wsBeta)
 
     await ipc.invokeFrom(main1.webContents, FRONTMATTER_IPC_CHANNELS.createDefaultSchema)
     await ipc.invokeFrom(main2.webContents, FRONTMATTER_IPC_CHANNELS.createDefaultSchema)

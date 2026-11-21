@@ -47,6 +47,13 @@ export interface SharedBufferStateSnapshot {
   windowId?: number
 }
 
+export const EMPTY_SHARED_BUFFER_SNAPSHOT: Readonly<SharedBufferStateSnapshot> = Object.freeze({
+  buffers: Object.freeze({}),
+  tabCounts: Object.freeze({}),
+  windowTabCounts: Object.freeze({}),
+  revision: 0
+})
+
 export interface SaveBufferResult {
   ok: boolean
   buffer: DocumentBuffer | null

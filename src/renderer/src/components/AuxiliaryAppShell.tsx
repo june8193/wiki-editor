@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { formatWindowTitle } from '@shared/window'
 import { useConfigController } from '../hooks/useConfigController'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
@@ -52,17 +52,6 @@ export function AuxiliaryAppShell() {
   useEffect(() => {
     document.title = formatWindowTitle(editor.activeBuffer?.name)
   }, [editor.activeBuffer?.name])
-
-  const hadTabsRef = useRef<boolean>(false)
-  useEffect(() => {
-    if (editor.totalTabCount > 0) {
-      hadTabsRef.current = true
-      return
-    }
-    if (hadTabsRef.current) {
-      void wikiApi.window?.closeCurrent().catch(() => undefined)
-    }
-  }, [editor.totalTabCount, wikiApi])
 
   return (
     <EditorWindowFrame

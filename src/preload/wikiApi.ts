@@ -55,7 +55,6 @@ import {
   type WindowRole
 } from '@shared/window'
 import type {
-  ActivateOrOpenWorkspaceResult,
   FocusOpenWorkspaceResult,
   OpenWorkspaceInNewWindowResult,
   WorkspaceChangeEvent,
@@ -143,11 +142,6 @@ export function createWikiApi(
           WORKSPACE_IPC_CHANNELS.openInNewWindow,
           rootPath
         ) as Promise<OpenWorkspaceInNewWindowResult>,
-      activateOrOpen: (rootPath) =>
-        ipcRenderer.invoke(
-          WORKSPACE_IPC_CHANNELS.activateOrOpen,
-          rootPath
-        ) as Promise<ActivateOrOpenWorkspaceResult>,
       focusIfOpen: (rootPath) =>
         ipcRenderer.invoke(
           WORKSPACE_IPC_CHANNELS.focusIfOpen,

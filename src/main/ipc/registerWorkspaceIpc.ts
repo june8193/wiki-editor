@@ -1,9 +1,7 @@
 import type { WorkspaceImageIngestInput } from '@shared/assets'
 import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import type { WorkspaceSearchRequest } from '@shared/search'
-import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import type {
-  ActivateOrOpenWorkspaceResult,
   FocusOpenWorkspaceResult,
   OpenWorkspaceInNewWindowResult,
   WorkspaceEntryKind,
@@ -12,7 +10,6 @@ import type {
 import type { WorkspaceQueryAndSchemaHub } from '@shared/workspaceQueryAndSchema'
 import { ConfigService } from '../config/ConfigService'
 import type { LogService } from '../logging/LogService'
-import { createDiskWorkspaceQueryAndSchemaHub } from '../workspace/diskWorkspaceQueryAndSchema'
 import { WorkspaceFsService } from '../workspace/WorkspaceFsService'
 import {
   broadcastIpcEvent,
@@ -32,14 +29,10 @@ export interface WorkspaceIpcSession {
 
 export interface WorkspaceIpcCoordinator {
   resolveSession: (sender: WebContentsLike | undefined) => WorkspaceIpcSession | undefined
-  openWorkspaceInSession?: (
+  openWorkspaceInSession: (
     sender: WebContentsLike | undefined,
     rootPath: string
   ) => Promise<WorkspaceInfo>
-  activateOrOpenWorkspace?: (
-    sender: WebContentsLike | undefined,
-    rootPath: string
-  ) => Promise<ActivateOrOpenWorkspaceResult>
   openWorkspaceInNewWindow?: (
     sender: WebContentsLike | undefined,
     rootPath: string
@@ -55,11 +48,7 @@ export interface RegisterWorkspaceIpcOptions {
   ipcMain: IpcMainLike
   configService: ConfigService
   selectDirectory: (sender?: WebContentsLike) => Promise<string | null>
-  coordinator?: WorkspaceIpcCoordinator
-  workspaceService?: WorkspaceFsService
-  bufferHub?: SharedDocumentBufferHub
-  getTargets?: () => WebContentsLike[]
-  isMainWindowSender?: (sender: WebContentsLike | undefined) => boolean
+  coordinator: WorkspaceIpcCoordinator
   logService?: LogService
 }
 
@@ -68,42 +57,12 @@ export interface RegisterWorkspaceIpcOptions {
  */
 export function registerWorkspaceIpc({
   ipcMain,
-  workspaceService,
-  bufferHub,
   configService,
   selectDirectory,
   coordinator,
-  getTargets,
-  isMainWindowSender = () => true,
   logService
 }: RegisterWorkspaceIpcOptions): () => void {
   const watchersByService = new Map<WorkspaceFsService, () => void>()
-  let ownedQueryAndSchemaHub: WorkspaceQueryAndSchemaHub | undefined
-
-  let activeCoordinator: WorkspaceIpcCoordinator
-  if (coordinator) {
-    activeCoordinator = coordinator
-  } else {
-    if (!workspaceService || !getTargets) {
-      throw new Error(
-        'registerWorkspaceIpc requires either coordinator or workspaceService and getTargets'
-      )
-    }
-    ownedQueryAndSchemaHub = createDiskWorkspaceQueryAndSchemaHub({
-      workspaceService,
-      bufferHub,
-      logService
-    })
-    const singleSession: WorkspaceIpcSession = {
-      workspaceService,
-      queryAndSchemaHub: ownedQueryAndSchemaHub,
-      getTargets,
-      isMainWindow: isMainWindowSender
-    }
-    activeCoordinator = {
-      resolveSession: () => singleSession
-    }
-  }
 
   const clearWatcher = (targetService: WorkspaceFsService): void => {
     watchersByService.get(targetService)?.()
@@ -117,13 +76,13 @@ export function registerWorkspaceIpc({
     }
   }
 
-  const unsubscribeSessionDisposed = activeCoordinator.onSessionDisposed?.((session) => {
+  const unsubscribeSessionDisposed = coordinator.onSessionDisposed?.((session) => {
     clearWatcher(session.workspaceService)
   })
 
   const requireSession = (event: unknown): WorkspaceIpcSession => {
     const sender = resolveSenderWebContents(event)
-    const session = activeCoordinator.resolveSession(sender)
+    const session = coordinator.resolveSession(sender)
     if (!session) {
       throw new Error('열린 워크스페이스가 없습니다.')
     }
@@ -134,7 +93,7 @@ export function registerWorkspaceIpc({
     event: unknown
   ): { sender: WebContentsLike | undefined; session: WorkspaceIpcSession } | undefined => {
     const sender = resolveSenderWebContents(event)
-    const session = activeCoordinator.resolveSession(sender)
+    const session = coordinator.resolveSession(sender)
     if (!session || !session.isMainWindow(sender)) {
       return undefined
     }
@@ -151,67 +110,34 @@ export function registerWorkspaceIpc({
     return resolved
   }
 
-  const finalizeOpenedWorkspace = async (
-    session: WorkspaceIpcSession,
-    info: WorkspaceInfo
-  ): Promise<void> => {
-    watchersByService.delete(session.workspaceService)
-    await configService.recordRecentWorkspace(info.rootPath)
-  }
-
-  const openWorkspaceInFallbackSession = async (
-    session: WorkspaceIpcSession,
-    rootPath: string
-  ): Promise<WorkspaceInfo> => {
-    session.queryAndSchemaHub.cancelActiveScans()
-    return session.workspaceService.openWorkspace(rootPath)
-  }
-
   const handlers: readonly IpcHandlerTuple[] = [
     [WORKSPACE_IPC_CHANNELS.selectFolder, (event) => selectDirectory(resolveSenderWebContents(event))],
     [
       WORKSPACE_IPC_CHANNELS.open,
       async (event, rootPath) => {
         const { sender, session } = requireMainSession(event)
-        const info = activeCoordinator.openWorkspaceInSession
-          ? await activeCoordinator.openWorkspaceInSession(sender, rootPath as string)
-          : await openWorkspaceInFallbackSession(session, rootPath as string)
-        await finalizeOpenedWorkspace(session, info)
+        const info = await coordinator.openWorkspaceInSession(sender, rootPath as string)
+        watchersByService.delete(session.workspaceService)
+        await configService.recordRecentWorkspace(info.rootPath)
         return info
-      }
-    ],
-    [
-      WORKSPACE_IPC_CHANNELS.activateOrOpen,
-      async (event, rootPath) => {
-        const { sender, session } = requireMainSession(event)
-        const result: ActivateOrOpenWorkspaceResult = activeCoordinator.activateOrOpenWorkspace
-          ? await activeCoordinator.activateOrOpenWorkspace(sender, rootPath as string)
-          : {
-              status: 'opened',
-              info: await openWorkspaceInFallbackSession(session, rootPath as string)
-            }
-        if (result.status === 'opened') {
-          await finalizeOpenedWorkspace(session, result.info)
-        }
-        return result
       }
     ],
     [
       WORKSPACE_IPC_CHANNELS.openInNewWindow,
       (event, rootPath) => {
         const { sender } = requireMainSession(event)
-        if (!activeCoordinator.openWorkspaceInNewWindow) {
+        if (!coordinator.openWorkspaceInNewWindow) {
           throw new Error('Multi-window workspace opening is not configured')
         }
-        return activeCoordinator.openWorkspaceInNewWindow(sender, rootPath as string)
+        return coordinator.openWorkspaceInNewWindow(sender, rootPath as string)
       }
     ],
     [
       WORKSPACE_IPC_CHANNELS.focusIfOpen,
       (event, rootPath) => {
         const { sender } = requireMainSession(event)
-        return activeCoordinator.focusWorkspaceIfOpen
-          ? activeCoordinator.focusWorkspaceIfOpen(sender, rootPath as string)
+        return coordinator.focusWorkspaceIfOpen
+          ? coordinator.focusWorkspaceIfOpen(sender, rootPath as string)
           : { focused: false }
       }
     ],
@@ -306,7 +232,6 @@ export function registerWorkspaceIpc({
   return () => {
     unsubscribeSessionDisposed?.()
     clearAllWatchers()
-    ownedQueryAndSchemaHub?.dispose()
     removeHandlers()
   }
 }

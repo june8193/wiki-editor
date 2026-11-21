@@ -46,7 +46,6 @@ import type {
 import type { RendererLogPayload } from './logging'
 import type { WorkspaceSearchRequest, WorkspaceSearchResponse } from './search'
 import type {
-  ActivateOrOpenWorkspaceResult,
   FocusOpenWorkspaceResult,
   OpenWorkspaceInNewWindowResult,
   WorkspaceChangeEvent,
@@ -55,11 +54,7 @@ import type {
   WorkspaceInfo,
   WorkspaceMovedEntry
 } from './workspace'
-export type {
-  ActivateOrOpenWorkspaceResult,
-  FocusOpenWorkspaceResult,
-  OpenWorkspaceInNewWindowResult
-} from './workspace'
+export type { FocusOpenWorkspaceResult, OpenWorkspaceInNewWindowResult } from './workspace'
 import type {
   PersistedWorkspaceState,
   WorkspaceStateUpdate
@@ -80,7 +75,6 @@ export const WORKSPACE_IPC_CHANNELS = {
   selectFolder: 'workspace:select-folder',
   open: 'workspace:open',
   openInNewWindow: 'workspace:open-in-new-window',
-  activateOrOpen: 'workspace:activate-or-open',
   focusIfOpen: 'workspace:focus-if-open',
   readDir: 'workspace:read-dir',
   listMarkdownFiles: 'workspace:list-markdown-files',
@@ -217,7 +211,6 @@ export interface WikiWorkspaceApi {
   selectFolder(): Promise<string | null>
   open(rootPath: string): Promise<WorkspaceInfo>
   openInNewWindow?(rootPath: string): Promise<OpenWorkspaceInNewWindowResult>
-  activateOrOpen?(rootPath: string): Promise<ActivateOrOpenWorkspaceResult>
   focusIfOpen?(rootPath: string): Promise<FocusOpenWorkspaceResult>
   readDir(dirPath?: string): Promise<WorkspaceEntry[]>
   listMarkdownFiles(): Promise<WorkspaceEntry[]>

@@ -27,10 +27,6 @@ export type OpenWorkspaceInNewWindowResult =
   | { status: 'opened'; windowId: number; rootPath: string }
   | { status: 'focused-existing'; windowId: number; rootPath: string }
 
-export type ActivateOrOpenWorkspaceResult =
-  | { status: 'opened'; info: WorkspaceInfo }
-  | { status: 'focused-existing'; windowId: number; rootPath: string }
-
 export type FocusOpenWorkspaceResult =
   | { focused: true; windowId: number; rootPath: string }
   | { focused: false }

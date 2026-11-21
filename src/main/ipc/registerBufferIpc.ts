@@ -1,6 +1,10 @@
 import type { AutoSaveConfig } from '@shared/bufferAutoSaveScheduler'
 import { BUFFER_IPC_CHANNELS } from '@shared/ipc'
-import type { SharedBufferStateSnapshot } from '@shared/documentBuffer'
+import {
+  EMPTY_SHARED_BUFFER_SNAPSHOT,
+  type SharedBufferStateSnapshot,
+  type SyncWindowTabsOptions
+} from '@shared/documentBuffer'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import type { WorkspaceChangeEvent } from '@shared/workspace'
 import type { ConfigService } from '../config/ConfigService'
@@ -11,7 +15,6 @@ import {
   type IpcMainLike,
   type IpcSessionSource,
   registerIpcHandlers,
-  resolveIpcSessionSource,
   resolveSenderWebContents,
   subscribeIpcSessions,
   type WebContentsLike
@@ -33,6 +36,11 @@ export interface BufferIpcSession {
   hub: SharedDocumentBufferHub
   getTargets: () => BufferWebContentsLike[]
   resolveWindowId?: (sender: BufferWebContentsLike | undefined) => number | undefined
+  syncWindowTabs?: (
+    windowId: number,
+    bufferKeys: readonly string[],
+    options?: SyncWindowTabsOptions
+  ) => SharedBufferStateSnapshot
 }
 
 export type BufferIpcSessionSource = IpcSessionSource<BufferIpcSession, BufferWebContentsLike>
@@ -40,9 +48,7 @@ export type BufferIpcSessionSource = IpcSessionSource<BufferIpcSession, BufferWe
 export interface RegisterBufferIpcDependencies {
   ipcMain: IpcMainLike
   configService: ConfigService
-  hub?: SharedDocumentBufferHub
-  getTargets?: () => BufferWebContentsLike[]
-  sessionSource?: BufferIpcSessionSource
+  sessionSource: BufferIpcSessionSource
   logService?: LogService
 }
 
@@ -111,13 +117,6 @@ export function createSharedDocumentBufferHub({
   })
 }
 
-const EMPTY_BUFFER_SNAPSHOT: SharedBufferStateSnapshot = {
-  buffers: {},
-  tabCounts: {},
-  windowTabCounts: {},
-  revision: 0
-}
-
 /**
  * Registers main-process IPC handlers for shared document buffers and broadcasts hub updates
  * to each session's active renderer BrowserWindow targets.
@@ -125,23 +124,14 @@ const EMPTY_BUFFER_SNAPSHOT: SharedBufferStateSnapshot = {
 export function registerBufferIpc({
   ipcMain,
   configService,
-  hub,
-  getTargets,
   sessionSource,
   logService
 }: RegisterBufferIpcDependencies): () => void {
-  const ownsSingleHub = !sessionSource
-  const source = resolveIpcSessionSource(
-    sessionSource,
-    hub && getTargets ? { hub, getTargets } : undefined,
-    'registerBufferIpc requires either sessionSource or hub and getTargets'
-  )
-
   const resolveContext = (
     event: unknown
   ): { session: BufferIpcSession; windowId: number | undefined } | undefined => {
     const sender = resolveSenderWebContents<BufferWebContentsLike>(event)
-    const session = source.resolveSession(sender)
+    const session = sessionSource.resolveSession(sender)
     if (!session) return undefined
     const windowId = session.resolveWindowId
       ? session.resolveWindowId(sender)
@@ -162,7 +152,7 @@ export function registerBufferIpc({
   }
 
   const unsubscribeSessions = subscribeIpcSessions(
-    source,
+    sessionSource,
     (session) => session.hub,
     (session) =>
       session.hub.subscribe((hubEvent) => {
@@ -171,7 +161,7 @@ export function registerBufferIpc({
   )
 
   const unsubscribeConfig = configService.onChanged((config) => {
-    source.forEachSession((session) => {
+    sessionSource.forEachSession((session) => {
       session.hub.setAutoSaveConfig({
         autoSave: config.autoSave,
         autoSaveDelayMs: config.autoSaveDelayMs
@@ -187,7 +177,7 @@ export function registerBufferIpc({
         BUFFER_IPC_CHANNELS.getSnapshot,
         (event) => {
           const ctx = resolveContext(event)
-          return ctx ? ctx.session.hub.getSnapshot(ctx.windowId) : EMPTY_BUFFER_SNAPSHOT
+          return ctx ? ctx.session.hub.getSnapshot(ctx.windowId) : EMPTY_SHARED_BUFFER_SNAPSHOT
         }
       ],
       [
@@ -237,20 +227,21 @@ export function registerBufferIpc({
         (event, bufferKeys, options) => {
           const ctx = resolveContext(event)
           if (!ctx) {
-            return EMPTY_BUFFER_SNAPSHOT
+            return EMPTY_SHARED_BUFFER_SNAPSHOT
           }
           const releasePending = Boolean(
             options &&
               typeof options === 'object' &&
               (options as { releasePending?: unknown }).releasePending
           )
-          return ctx.windowId !== undefined
-            ? ctx.session.hub.syncWindowTabs(
-                ctx.windowId,
-                Array.isArray(bufferKeys) ? (bufferKeys as string[]) : [],
-                releasePending ? { releasePending: true } : undefined
-              )
-            : ctx.session.hub.getSnapshot()
+          if (ctx.windowId === undefined) {
+            return ctx.session.hub.getSnapshot()
+          }
+          const bufferKeyList = Array.isArray(bufferKeys) ? (bufferKeys as string[]) : []
+          const syncOptions = releasePending ? { releasePending: true } : undefined
+          return ctx.session.syncWindowTabs
+            ? ctx.session.syncWindowTabs(ctx.windowId, bufferKeyList, syncOptions)
+            : ctx.session.hub.syncWindowTabs(ctx.windowId, bufferKeyList, syncOptions)
         }
       ],
       [
@@ -323,9 +314,6 @@ export function registerBufferIpc({
   return () => {
     unsubscribeSessions()
     unsubscribeConfig()
-    if (ownsSingleHub) {
-      hub?.dispose()
-    }
     unregisterHandlers()
   }
 }
