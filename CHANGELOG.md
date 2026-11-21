@@ -5,6 +5,19 @@
 
 ---
 
+## [1.7.1] - 2026-11-21
+
+### Changed
+- 코드베이스 5개 핵심 영역의 아키텍처 심화 리팩토링(기존 사용자 기능·UI 동작 100% 보존): ([상세 스펙](.backlog/done/architecture-deepening/spec.md))
+  - 검색·프론트매터 스키마 상태 머신·`allowCustom` 필드값 수집을 좁은 스토리지 심 위의 단일 `@shared` 모듈로 통합하고 메인/테스트 하네스 이중 구현 제거 ([티켓 01](.backlog/done/architecture-deepening/issues/01-shared-workspace-query-and-schema-module.md))
+  - Git 변경 트랜잭션·문서 버퍼 discard 브래킷·Diff 탭 캐시·확인 다이얼로그·Stash 다이얼로그·Git 패널 아코디언/보기 상태를 단일 `GitSession` 모듈로 응집하고 아코디언 분할 로직 공용화 ([티켓 02](.backlog/done/architecture-deepening/issues/02-deepen-git-session-and-panel-module.md))
+  - 메인 창 시작 초기화·중복 창 포커스·미저장 확인·레이아웃 복원·`workspace-state.json` 영속화를 `MainWindowWorkspaceLifecycle` 모듈로 통합하고 폴더 트리 모듈을 순수 트리 책임으로 분리 ([티켓 03](.backlog/done/architecture-deepening/issues/03-collapse-main-window-workspace-lifecycle.md))
+  - 메인·보조 창 멀티 윈도우 세션 라우팅·닫기 게이트·0탭 자동 닫기·드래그 격리 규칙을 창 호스트 심 위의 공유 `WindowSessionCoordinator`로 추출하고 미사용 `activateOrOpen` IPC 채널 및 단독 세션 폴백 분기 제거 ([티켓 04](.backlog/done/architecture-deepening/issues/04-shared-window-session-coordinator.md))
+  - 탭 저장소 전이 이벤트 기반 `PaneNavigationCoordinator`로 검색 점프·목차 스크롤 무효화를 통합하고, `Split` 모드 목차 스크롤을 `Raw` 단일 드라이버로 통일하며 미사용 분할 리사이즈 코드 제거 ([티켓 05](.backlog/done/architecture-deepening/issues/05-unify-pane-navigation-and-split-scroll.md))
+
+### Fixed
+- 대소문자를 구분하지 않는 POSIX 파일시스템(macOS APFS 등)에서 파일·폴더 이름의 대소문자만 변경할 때 중복 이름 오류가 발생하던 문제 수정 및 테스트 임시 디렉토리 경로 정규화
+
 ## [1.7.0] - 2026-11-21
 
 ### Added
