@@ -401,10 +401,10 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     const initContextGate = new Promise<void>((resolve) => {
       releaseInitContext = resolve
     })
-    main2.api.window!.getInitContext = async () => {
+    main2.api.window!.getInitContext = vi.fn(async () => {
       await initContextGate
       return origGetInitContext()
-    }
+    })
     const main2OpenSpy = vi.spyOn(main2.api.workspace, 'open')
 
     const rendered2 = render(<App wikiApi={main2.api} />)
@@ -421,6 +421,7 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     const explorer2 = await within(rendered2.container).findByLabelText('워크스페이스 탐색기')
     expect(await within(explorer2).findByText('deep.md')).toBeInTheDocument()
     expect(within(explorer2).getByText('beta')).toHaveAttribute('title', 'C:/wiki/beta')
+    expect(main2.api.window!.getInitContext).toHaveBeenCalledTimes(1)
     expect(main2OpenSpy).toHaveBeenCalledTimes(1)
     expect(main2OpenSpy).toHaveBeenCalledWith('C:/wiki/beta')
 
@@ -1044,13 +1045,17 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     )
 
     const mainWin = harness.createWindow({ role: 'main' })
+    const mainInitSpy = vi.spyOn(mainWin.api.window!, 'getInitContext')
     render(<App wikiApi={mainWin.api} />)
 
     const auxWin = harness.createWindow({ role: 'auxiliary', initialTabs: [] })
+    const auxInitSpy = vi.spyOn(auxWin.api.window!, 'getInitContext')
     const auxRendered = render(<App wikiApi={auxWin.api} />)
 
     await waitFor(() => {
       expect(within(auxRendered.container).getByTestId('pane-workspace')).toBeInTheDocument()
+      expect(mainInitSpy).toHaveBeenCalledTimes(1)
+      expect(auxInitSpy).toHaveBeenCalledTimes(1)
     })
 
     // Focus auxiliary container and dispatch Ctrl+Shift+F -> auxiliary window ignores it

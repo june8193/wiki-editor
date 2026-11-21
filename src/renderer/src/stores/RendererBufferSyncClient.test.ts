@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { DocumentBuffer, SharedBufferHubEvent } from '@shared/documentBuffer'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
 import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
+import type { WindowInitContext } from '@shared/window'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import { createHubBufferApi } from '../test/inMemoryWikiHarness'
 import { PaneTabStore } from './PaneTabStore'
@@ -20,7 +21,8 @@ function createDeferred<T = void>() {
 function attachWindowClient(
   hub: SharedDocumentBufferHub,
   windowId: number,
-  windowApi?: WikiWindowApi
+  windowApi?: WikiWindowApi,
+  loadInitContext?: () => Promise<WindowInitContext | null>
 ) {
   const listeners = new Set<(event: SharedBufferHubEvent) => void>()
   const unsubscribeHub = hub.subscribe((event) => {
@@ -37,6 +39,7 @@ function attachWindowClient(
     tabStore,
     bufferApi,
     windowApi,
+    loadInitContext,
     onError,
     onConfirmCloseDirtyTab: vi.fn()
   })
@@ -789,6 +792,86 @@ describe('RendererBufferSyncClient race guards', () => {
       ).toBe(false)
     } finally {
       win1.detach()
+      hub.dispose()
+    }
+  })
+
+  it('reuses injected loadInitContext without calling windowApi.getInitContext directly and deduplicates fallback calls across restarts', async () => {
+    const { hub } = createNormalizedFileHub([
+      ['C:/wiki/aux.md', '# Aux'],
+      ['C:/wiki/fallback.md', '# Fallback']
+    ])
+
+    await hub.openWorkspaceFile('C:/wiki/aux.md', 'aux.md', undefined, 1)
+    await hub.openWorkspaceFile('C:/wiki/fallback.md', 'fallback.md', undefined, 1)
+    hub.syncWindowTabs(1, ['c:/wiki/aux.md', 'c:/wiki/fallback.md'])
+
+    const getInitContextSpy = vi.fn(async (): Promise<WindowInitContext> => ({
+      role: 'auxiliary',
+      initialTabs: []
+    }))
+    const sharedLoadInitContext = vi.fn(async (): Promise<WindowInitContext> => ({
+      role: 'auxiliary',
+      initialTabs: [
+        {
+          bufferKey: 'c:/wiki/aux.md',
+          mode: 'preview',
+          cursor: { selectionStart: 0, selectionEnd: 0 },
+          scrollTop: 25
+        }
+      ]
+    }))
+
+    const injectedWin = attachWindowClient(
+      hub,
+      2,
+      createMockWindowApi('auxiliary', { getInitContext: getInitContextSpy }),
+      sharedLoadInitContext
+    )
+    const stopInjected = injectedWin.client.start()
+
+    try {
+      await vi.waitFor(() => {
+        expect(injectedWin.tabStore.getBufferKeys()).toEqual(['c:/wiki/aux.md'])
+      })
+      expect(sharedLoadInitContext).toHaveBeenCalledTimes(1)
+      expect(getInitContextSpy).not.toHaveBeenCalled()
+    } finally {
+      stopInjected()
+      injectedWin.detach()
+    }
+
+    const deferredInit = createDeferred<WindowInitContext>()
+    const fallbackGetInitSpy = vi.fn(async () => deferredInit.promise)
+    const fallbackWin = attachWindowClient(
+      hub,
+      3,
+      createMockWindowApi('auxiliary', { getInitContext: fallbackGetInitSpy })
+    )
+    const stopFirst = fallbackWin.client.start()
+    stopFirst()
+    const stopSecond = fallbackWin.client.start()
+
+    try {
+      expect(fallbackGetInitSpy).toHaveBeenCalledTimes(1)
+      deferredInit.resolve({
+        role: 'auxiliary',
+        initialTabs: [
+          {
+            bufferKey: 'c:/wiki/fallback.md',
+            mode: 'raw',
+            cursor: { selectionStart: 0, selectionEnd: 0 },
+            scrollTop: 0
+          }
+        ]
+      })
+      await vi.waitFor(() => {
+        expect(fallbackWin.tabStore.getBufferKeys()).toEqual(['c:/wiki/fallback.md'])
+      })
+      expect(fallbackGetInitSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      stopSecond()
+      fallbackWin.detach()
       hub.dispose()
     }
   })

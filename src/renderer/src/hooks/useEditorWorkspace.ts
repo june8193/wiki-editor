@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
-import { canDetachTabFromWindow } from '@shared/window'
+import { canDetachTabFromWindow, type WindowInitContext } from '@shared/window'
 import type { PaneInteractionActions } from '../components/PaneTabBar'
 import {
   isImageDocument,
@@ -109,6 +109,7 @@ function logPaneTabTransition(
 interface UseEditorWorkspaceOptions {
   isAutoSavePaused: boolean
   isShortcutDisabled?: boolean
+  loadInitContext?: () => Promise<WindowInitContext | null>
   onWorkspaceSaved?: () => void
   onError: (message: string | null, error?: unknown) => void
   onConfirmCloseDirtyTab: (request: DirtyTabCloseRequest) => void
@@ -120,6 +121,7 @@ interface UseEditorWorkspaceOptions {
 export function useEditorWorkspace({
   isAutoSavePaused,
   isShortcutDisabled = isAutoSavePaused,
+  loadInitContext,
   onWorkspaceSaved,
   onError,
   onConfirmCloseDirtyTab
@@ -155,6 +157,7 @@ export function useEditorWorkspace({
       tabStore,
       bufferApi: wikiApi.buffer,
       windowApi: wikiApi.window,
+      loadInitContext,
       onWorkspaceSaved: () => callbacksRef.current.onWorkspaceSaved?.(),
       onError: (message, error) => callbacksRef.current.onError(message, error),
       onConfirmCloseDirtyTab: (request) => callbacksRef.current.onConfirmCloseDirtyTab(request)

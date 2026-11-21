@@ -1,4 +1,4 @@
-import { type RefObject, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   DocumentSearchJumpRequest,
   SearchMatchOptions,
@@ -23,8 +23,7 @@ export interface UseWorkspaceSearchJumpOptions {
   query: string
   responseQuery: string | null
   options: SearchMatchOptions
-  isMountedRef: RefObject<boolean>
-  switchWorkspaceSeqRef: RefObject<number>
+  getSwitchSequence: () => number
   openWorkspaceFile: (
     target: WorkspaceEntry | string,
     targetPaneId?: PaneId,
@@ -43,15 +42,22 @@ export function useWorkspaceSearchJump({
   query,
   responseQuery,
   options,
-  isMountedRef,
-  switchWorkspaceSeqRef,
+  getSwitchSequence,
   openWorkspaceFile
 }: UseWorkspaceSearchJumpOptions) {
   const [searchJumpRequest, setSearchJumpRequest] = useState<DocumentSearchJumpRequest | null>(
     null
   )
+  const isMountedRef = useRef<boolean>(true)
   const searchJumpSeqRef = useRef<number>(0)
   const searchJumpContextRef = useRef<JumpDispatchContext | null>(null)
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
 
   const invalidatePendingSearchJumps = useCallback((): void => {
     searchJumpSeqRef.current += 1
@@ -87,7 +93,7 @@ export function useWorkspaceSearchJump({
   const openSearchLineMatch = useCallback(
     (file: WorkspaceSearchFileResult, line: WorkspaceSearchLineMatch): void => {
       const jumpSeq = ++searchJumpSeqRef.current
-      const dispatchSwitchSeq = switchWorkspaceSeqRef.current
+      const dispatchSwitchSeq = getSwitchSequence()
       const dispatchWorkspaceRootPath = workspaceRootPath
       const dispatchQuery = responseQuery ?? query
       const dispatchOptions = options
@@ -100,7 +106,7 @@ export function useWorkspaceSearchJump({
       const isCancelled = (): boolean =>
         !isMountedRef.current ||
         searchJumpSeqRef.current !== jumpSeq ||
-        switchWorkspaceSeqRef.current !== dispatchSwitchSeq
+        getSwitchSequence() !== dispatchSwitchSeq
 
       void openWorkspaceFile(file.path, undefined, file.name, isCancelled).then((opened) => {
         if (!opened || isCancelled()) {
@@ -125,12 +131,11 @@ export function useWorkspaceSearchJump({
       })
     },
     [
-      isMountedRef,
+      getSwitchSequence,
       openWorkspaceFile,
       options,
       query,
       responseQuery,
-      switchWorkspaceSeqRef,
       workspaceRootPath
     ]
   )

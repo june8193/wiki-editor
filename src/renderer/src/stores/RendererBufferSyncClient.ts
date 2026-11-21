@@ -11,9 +11,11 @@ import { toErrorMessage } from '@shared/errors'
 import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
 import {
   canDetachTabFromWindow,
+  createWindowInitContextLoader,
   extractTabViewState,
   toTabTransferPayload,
-  type TabTransferPayload
+  type TabTransferPayload,
+  type WindowInitContext
 } from '@shared/window'
 import { countBufferKeys } from '@shared/windowTabTracker'
 import {
@@ -111,6 +113,7 @@ export interface RendererBufferSyncClientOptions {
   tabStore: PaneTabStore
   bufferApi: WikiBufferApi
   windowApi?: WikiWindowApi
+  loadInitContext?: () => Promise<WindowInitContext | null>
   onWorkspaceSaved?: () => void
   onError: (message: string | null, error?: unknown) => void
   onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
@@ -125,6 +128,8 @@ export class RendererBufferSyncClient {
   private readonly tabStore: PaneTabStore
   private readonly bufferApi: WikiBufferApi
   private readonly windowApi?: WikiWindowApi
+  private readonly resolveInitContext: () => Promise<WindowInitContext | null>
+  private readonly hasInitContextLoader: boolean
   private onWorkspaceSaved?: () => void
   private onError: (message: string | null, error?: unknown) => void
   private onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
@@ -156,6 +161,11 @@ export class RendererBufferSyncClient {
     this.tabStore = options.tabStore
     this.bufferApi = options.bufferApi
     this.windowApi = options.windowApi
+    this.hasInitContextLoader = Boolean(
+      options.loadInitContext || options.windowApi?.getInitContext
+    )
+    this.resolveInitContext =
+      options.loadInitContext ?? createWindowInitContextLoader(options.windowApi)
     this.onWorkspaceSaved = options.onWorkspaceSaved
     this.onError = options.onError
     this.onConfirmCloseDirtyTab = options.onConfirmCloseDirtyTab
@@ -174,12 +184,9 @@ export class RendererBufferSyncClient {
     this.lastSyncedTabKeys = null
     const unsubscribeHub = this.bufferApi.onEvent((event) => this.handleHubEvent(event))
 
-    const shouldLoadInitContext = Boolean(this.windowApi && !this.hasAppliedInitContext)
+    const shouldLoadInitContext = !this.hasAppliedInitContext && this.hasInitContextLoader
     const startupPromise = shouldLoadInitContext
-      ? Promise.all([
-          this.bufferApi.getSnapshot(),
-          this.windowApi!.getInitContext().catch(() => null)
-        ])
+      ? Promise.all([this.bufferApi.getSnapshot(), this.resolveInitContext()])
       : this.bufferApi.getSnapshot().then((snapshot) => [snapshot, null] as const)
 
     void startupPromise.then(

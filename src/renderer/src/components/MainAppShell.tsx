@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AppConfig } from '@shared/config'
 import type { AppMenuCommand, WikiApi } from '@shared/ipc'
 import { getGitChangedCount } from '@shared/git'
 import type { WorkspaceSearchFileResult } from '@shared/search'
@@ -8,26 +7,26 @@ import {
   formatAbsoluteEntryPath,
   formatRelativeEntryPath,
   isFavoriteWorkspacePath,
-  isSameWorkspacePath,
-  type WorkspaceChangeEvent,
   type WorkspaceEntry
 } from '@shared/workspace'
 import { useConfigController } from '../hooks/useConfigController'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
-import { promptUnsavedWorkspaceChanges } from '../utils/confirmPrompts'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
 import { useErrorBanner } from '../hooks/useErrorBanner'
 import { useFrontmatterFieldValues } from '../hooks/useFrontmatterFieldValues'
 import { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
 import { type GitSessionRuntimeCollaborators, useGitSession } from '../hooks/useGitSession'
+import {
+  type MainWorkspaceLifecycleCollaborators,
+  useMainWorkspaceLifecycle
+} from '../hooks/useMainWorkspaceLifecycle'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
 import { useWindowWidth } from '../hooks/useWindowWidth'
 import { useWorkspaceSearch } from '../hooks/useWorkspaceSearch'
 import { useWorkspaceSearchJump } from '../hooks/useWorkspaceSearchJump'
-import { useWorkspaceStatePersistence } from '../hooks/useWorkspaceStatePersistence'
-import { type RestoredWorkspaceContext, useWorkspaceTree } from '../hooks/useWorkspaceTree'
+import { useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import {
   clampSidebarWidth,
   getLeftSidebarWidthBounds,
@@ -136,22 +135,10 @@ export function MainAppShell() {
   const leftSidebarRef = useRef<LeftSidebarState>(leftSidebar)
   leftSidebarRef.current = leftSidebar
   const refreshConfigDocRef = useRef<() => Promise<void>>(async () => undefined)
-  const activeWorkspaceRootRef = useRef<string | null>(null)
-  const onInitialConfigLoadedRef = useRef<(loadedConfig: AppConfig) => void>(() => undefined)
-  const tryStartupWorkspaceOpenRef = useRef<() => void>(() => undefined)
-  const startupInitRef = useRef<{
-    initResolved: boolean
-    initialWorkspacePath: string | null
-    loadedConfig: AppConfig | null
-  }>({
-    initResolved: !wikiApi.window?.getInitContext,
-    initialWorkspacePath: null,
-    loadedConfig: null
+  const workspaceCollaboratorsRef = useRef<MainWorkspaceLifecycleCollaborators | null>(null)
+  const workspaceLifecycle = useMainWorkspaceLifecycle({
+    collaboratorsRef: workspaceCollaboratorsRef
   })
-  const onWorkspaceRestoredRef = useRef<
-    (context: RestoredWorkspaceContext) => Promise<void> | void
-  >(() => undefined)
-  const workspaceRestoreSeqRef = useRef<number>(0)
 
   const {
     config,
@@ -165,7 +152,7 @@ export function MainAppShell() {
   } = useConfigController({
     onError: reportErrorBanner,
     onExternalConfigCommitted: () => void refreshConfigDocRef.current(),
-    onInitialConfigLoaded: (loadedConfig) => onInitialConfigLoadedRef.current(loadedConfig)
+    onInitialConfigLoaded: workspaceLifecycle.handleInitialConfigLoaded
   })
 
   const isEditorShortcutDisabled = hasActiveModalDialog || isSettingsOpen || isSchemaModalOpen
@@ -174,6 +161,7 @@ export function MainAppShell() {
   const editor = useEditorWorkspace({
     isAutoSavePaused: hasActiveModalDialog || git.isMutating,
     isShortcutDisabled: isEditorShortcutDisabled,
+    loadInitContext: workspaceLifecycle.loadInitContext,
     onWorkspaceSaved: () => void git.actions.refreshStatus(),
     onError: reportErrorBanner,
     onConfirmCloseDirtyTab: confirmCloseDirtyTab
@@ -196,10 +184,9 @@ export function MainAppShell() {
     setSearchFocusRequest({ nonce: searchFocusNonceRef.current, selectAll })
   }, [])
 
-  const hasUserSelectedSidebarViewRef = useRef<boolean>(false)
   const handleSelectLeftSidebarView = useCallback(
     (view: LeftSidebarView): void => {
-      hasUserSelectedSidebarViewRef.current = true
+      workspaceLifecycle.markUserSelectedSidebarView()
       const current = leftSidebarRef.current
       const next = selectLeftSidebarView(current, view)
       if (next.isCollapsed || next.activeView !== 'git') {
@@ -212,7 +199,7 @@ export function MainAppShell() {
         focusSearchInput(false)
       }
     },
-    [closeStashDialog, focusSearchInput]
+    [closeStashDialog, focusSearchInput, workspaceLifecycle]
   )
 
   useEffect(() => {
@@ -227,7 +214,7 @@ export function MainAppShell() {
         return
       }
       event.preventDefault()
-      hasUserSelectedSidebarViewRef.current = true
+      workspaceLifecycle.markUserSelectedSidebarView()
       setLeftSidebar((prev) =>
         prev.activeView === 'search' && !prev.isCollapsed
           ? prev
@@ -240,22 +227,11 @@ export function MainAppShell() {
     return () => {
       window.removeEventListener('keydown', handleWindowKeyDown)
     }
-  }, [focusSearchInput])
+  }, [focusSearchInput, workspaceLifecycle])
 
   const handleResizeLeftSidebar = useCallback((nextWidth: number): void => {
     setLeftSidebar((prev) => (prev.width === nextWidth ? prev : { ...prev, width: nextWidth }))
   }, [])
-
-  const isSelectingFolderRef = useRef<boolean>(false)
-  const hasWorkspaceInteractionRef = useRef<boolean>(false)
-  const isStartupRestoreRef = useRef<boolean>(false)
-  const hadOpenWorkspaceRef = useRef<boolean>(false)
-  const isMountedRef = useRef<boolean>(true)
-  const switchWorkspaceSeqRef = useRef<number>(0)
-  const reconcileBuffersRef = useRef<
-    (changeEvent?: WorkspaceChangeEvent) => Promise<readonly string[]>
-  >(editor.reconcileWorkspaceBuffersWithDisk)
-  reconcileBuffersRef.current = editor.reconcileWorkspaceBuffersWithDisk
 
   const menuHandlersRef = useRef<Record<AppMenuCommand, () => void>>({
     'open-folder': () => undefined,
@@ -267,11 +243,12 @@ export function MainAppShell() {
     workspace,
     treeState,
     markdownFiles,
+    getExpandedDirs,
+    applyOpenedWorkspace,
     setSelectedTreePath,
     toggleSelectTreePath,
     selectTreePathRange,
     resolveCreateParentDir,
-    openWorkspace,
     refreshTree,
     toggleDirectory,
     ensureExpanded,
@@ -281,22 +258,8 @@ export function MainAppShell() {
     deleteEntries
   } = useWorkspaceTree({
     onError: reportErrorBanner,
-    onWorkspaceOpened: () => {
-      if (hadOpenWorkspaceRef.current) {
-        editor.clearWorkspaceBuffers()
-      }
-      if (isStartupRestoreRef.current) {
-        isStartupRestoreRef.current = false
-        if (!hasUserSelectedSidebarViewRef.current) {
-          setLeftSidebar((prev) => ({ ...prev, activeView: 'explorer', isCollapsed: false }))
-        }
-        return
-      }
-      setLeftSidebar(transitionWorkspaceSidebarToExplorer)
-    },
-    onWorkspaceRestored: (context) => onWorkspaceRestoredRef.current(context),
     onWorkspaceChanged: (event) => {
-      void reconcileBuffersRef.current(event).then((warnings) => {
+      void editor.reconcileWorkspaceBuffersWithDisk(event).then((warnings) => {
         if (warnings.length > 0) {
           reportErrorBanner(warnings.join(' '))
         }
@@ -307,7 +270,6 @@ export function MainAppShell() {
     onEntryRenamed: editor.syncRenamedPath,
     onEntryDeleted: editor.syncDeletedPath
   })
-  hadOpenWorkspaceRef.current = workspace !== null
 
   const activeWorkspaceRoot = workspace?.rootPath ?? null
   useEffect(() => {
@@ -329,112 +291,41 @@ export function MainAppShell() {
     schema: frontmatterSchema.schemaResult?.schema ?? null
   })
 
-  const workspaceStatePersistence = useWorkspaceStatePersistence({
-    workspaceRootPath: workspace?.rootPath ?? null,
-    expandedDirs: treeState.expandedDirs,
-    layoutSnapshot: editor.layoutSnapshot,
-    getLatestLayoutSnapshot: editor.getLayoutSnapshot
-  })
-  onWorkspaceRestoredRef.current = (context) => {
-    const restoreSeq = ++workspaceRestoreSeqRef.current
-    return editor
-      .restoreWorkspaceLayout({
-        rootPath: context.rootPath,
-        persistedLayout: context.persistedState?.layout ?? null,
-        rootEntries: context.rootEntries,
-        restoredChildrenByDir: context.restoredChildrenByDir,
-        readDir: (dirPath) => wikiApi.workspace.readDir(dirPath),
-        isCancelled: () => restoreSeq !== workspaceRestoreSeqRef.current
-      })
-      .then(({ restored, hadPrunedTabs, reconciledLayout }) => {
-        if (!restored || restoreSeq !== workspaceRestoreSeqRef.current) {
-          return
-        }
-        workspaceStatePersistence.markRestored({
-          rootPath: context.rootPath,
-          persistedState: context.persistedState,
-          restoredExpandedDirs: context.restoredExpandedDirs,
-          restoredLayout: reconciledLayout,
-          hadPrunedState: context.hadPrunedExpandedDirs || hadPrunedTabs
-        })
-      })
-  }
-
-  tryStartupWorkspaceOpenRef.current = () => {
-    if (
-      hasWorkspaceInteractionRef.current ||
-      isSelectingFolderRef.current ||
-      activeWorkspaceRootRef.current !== null
-    ) {
-      return
+  workspaceCollaboratorsRef.current = {
+    tree: {
+      getExpandedDirs,
+      applyOpenedWorkspace
+    },
+    editor: {
+      getDirtyWorkspaceSummary: editor.getDirtyWorkspaceSummary,
+      ensureAllWorkspaceBuffersSaved: editor.ensureAllWorkspaceBuffersSaved,
+      clearWorkspaceBuffers: editor.clearWorkspaceBuffers,
+      restoreWorkspaceLayout: editor.restoreWorkspaceLayout,
+      getLatestLayoutSnapshot: editor.getLayoutSnapshot
+    },
+    confirm: {
+      confirmUnsavedChanges: requestUnsavedChanges,
+      isDialogOpen: isAnyDialogOpen
+    },
+    ui: {
+      reportError: reportErrorBanner,
+      removeRecentWorkspace,
+      onEnterExplorerView: (reason) => {
+        setLeftSidebar((prev) =>
+          reason === 'startup'
+            ? { ...prev, activeView: 'explorer', isCollapsed: false }
+            : transitionWorkspaceSidebarToExplorer(prev)
+        )
+      }
     }
-    const { initResolved, initialWorkspacePath, loadedConfig } = startupInitRef.current
-    if (!initResolved) {
-      return
-    }
-
-    const startStartupWorkspaceOpen = (
-      targetPath: string,
-      options?: { silentError?: boolean; onSilentError?: () => void }
-    ): void => {
-      hasWorkspaceInteractionRef.current = true
-      isStartupRestoreRef.current = true
-      void openWorkspace(targetPath, options).finally(() => {
-        isStartupRestoreRef.current = false
-      })
-    }
-
-    if (initialWorkspacePath) {
-      startStartupWorkspaceOpen(initialWorkspacePath)
-      return
-    }
-
-    const lastWorkspacePath = loadedConfig?.recentWorkspaces[0]
-    if (!lastWorkspacePath) {
-      return
-    }
-    startStartupWorkspaceOpen(lastWorkspacePath, {
-      silentError: true,
-      onSilentError: () => removeRecentWorkspace(lastWorkspacePath)
-    })
-  }
-
-  onInitialConfigLoadedRef.current = (loadedConfig) => {
-    startupInitRef.current.loadedConfig = loadedConfig
-    tryStartupWorkspaceOpenRef.current()
   }
 
   useEffect(() => {
-    let cancelled = false
-    const finalizeInitContext = (initialPath: string | null): void => {
-      if (cancelled) return
-      startupInitRef.current.initResolved = true
-      startupInitRef.current.initialWorkspacePath = initialPath
-      tryStartupWorkspaceOpenRef.current()
-    }
-
-    const getInitContext = wikiApi.window?.getInitContext
-    if (!getInitContext) {
-      finalizeInitContext(null)
-      return
-    }
-
-    startupInitRef.current.initResolved = false
-    startupInitRef.current.initialWorkspacePath = null
-    void getInitContext()
-      .then((context) => context?.initialWorkspacePath?.trim() || null)
-      .catch(() => null)
-      .then(finalizeInitContext)
-
-    return () => {
-      cancelled = true
-    }
-  }, [wikiApi])
+    workspaceLifecycle.syncPersistenceState()
+  }, [activeWorkspaceRoot, editor.layoutSnapshot, treeState.expandedDirs, workspaceLifecycle])
 
   useEffect(() => {
-    isMountedRef.current = true
     return () => {
-      isMountedRef.current = false
       dismissDialog()
     }
   }, [dismissDialog])
@@ -448,172 +339,18 @@ export function MainAppShell() {
       closeStashDialog()
       dismissDialog()
     },
-    onBeforeApproveClose: workspaceStatePersistence.flush
+    onBeforeApproveClose: workspaceLifecycle.flushWorkspaceState
   })
-
-  activeWorkspaceRootRef.current = workspace?.rootPath ?? null
-
-  const guardUnsavedWorkspaceChanges = useCallback(
-    (proceed: () => Promise<unknown>): void => {
-      void promptUnsavedWorkspaceChanges(
-        {
-          getDirtySummary: editor.getDirtyWorkspaceSummary,
-          saveDirtyBuffers: editor.ensureAllWorkspaceBuffersSaved
-        },
-        requestUnsavedChanges,
-        {
-          message: (dirtySummary) =>
-            `"${dirtySummary}"에 저장하지 않은 변경 사항이 있습니다. 어떻게 할까요?`,
-          confirmLabel: '저장 후 이동',
-          secondaryLabel: '버리고 이동'
-        }
-      ).then((accepted) => {
-        if (accepted) {
-          void proceed()
-        }
-      })
-    },
-    [editor.ensureAllWorkspaceBuffersSaved, editor.getDirtyWorkspaceSummary, requestUnsavedChanges]
-  )
-
-  /**
-   * Attempts to focus an existing main window holding `targetPath` and returns
-   * whether the current window should proceed with a local workspace switch.
-   */
-  const focusExistingAndCheckProceed = useCallback(
-    async (targetPath: string, switchSeq: number): Promise<boolean> => {
-      const focusIfOpen = wikiApi.workspace.focusIfOpen
-      if (!focusIfOpen) {
-        return true
-      }
-      let focused = false
-      try {
-        focused = (await focusIfOpen(targetPath)).focused
-      } catch {
-        focused = false
-      }
-      if (!isMountedRef.current || switchSeq !== switchWorkspaceSeqRef.current) {
-        return false
-      }
-      if (focused) {
-        reportErrorBanner(null)
-        return false
-      }
-      return true
-    },
-    [reportErrorBanner, wikiApi]
-  )
-
-  const proceedSwitchAfterFocusCheck = useCallback(
-    (targetPath: string, switchSeq: number): void => {
-      if (isAnyDialogOpen()) {
-        return
-      }
-      if (!hadOpenWorkspaceRef.current) {
-        void openWorkspace(targetPath)
-        return
-      }
-      guardUnsavedWorkspaceChanges(async () => {
-        if (!(await focusExistingAndCheckProceed(targetPath, switchSeq))) {
-          return
-        }
-        const prevRoot = activeWorkspaceRootRef.current
-        await workspaceStatePersistence.suspendAndFlush()
-        const openResult = await openWorkspace(targetPath)
-        if (
-          openResult === 'failed' &&
-          prevRoot &&
-          activeWorkspaceRootRef.current &&
-          isSameWorkspacePath(activeWorkspaceRootRef.current, prevRoot)
-        ) {
-          workspaceStatePersistence.resumeForWorkspace(prevRoot)
-        }
-      })
-    },
-    [
-      focusExistingAndCheckProceed,
-      guardUnsavedWorkspaceChanges,
-      isAnyDialogOpen,
-      openWorkspace,
-      workspaceStatePersistence
-    ]
-  )
-
-  const handleSwitchWorkspace = useCallback(
-    (targetPath: string): void => {
-      hasWorkspaceInteractionRef.current = true
-      isStartupRestoreRef.current = false
-      const currentRoot = activeWorkspaceRootRef.current
-      if (currentRoot && isSameWorkspacePath(currentRoot, targetPath)) {
-        switchWorkspaceSeqRef.current += 1
-        setLeftSidebar(transitionWorkspaceSidebarToExplorer)
-        return
-      }
-      const switchSeq = ++switchWorkspaceSeqRef.current
-      if (!wikiApi.workspace.focusIfOpen) {
-        proceedSwitchAfterFocusCheck(targetPath, switchSeq)
-        return
-      }
-      void focusExistingAndCheckProceed(targetPath, switchSeq).then((shouldProceed) => {
-        if (shouldProceed) {
-          proceedSwitchAfterFocusCheck(targetPath, switchSeq)
-        }
-      })
-    },
-    [focusExistingAndCheckProceed, proceedSwitchAfterFocusCheck, wikiApi]
-  )
-
-  const handleOpenWorkspaceInNewWindow = useCallback(
-    (targetPath: string): void => {
-      const openInNewWindow = wikiApi.workspace.openInNewWindow
-      if (!openInNewWindow) {
-        reportErrorBanner('새 창에서 워크스페이스를 열 수 없습니다.')
-        return
-      }
-      reportErrorBanner(null)
-      void openInNewWindow(targetPath).catch((error: unknown) => {
-        reportErrorBanner(
-          toErrorMessage(error, '새 창에서 워크스페이스를 열지 못했습니다.'),
-          error
-        )
-      })
-    },
-    [reportErrorBanner, wikiApi]
-  )
-
-  const handleSelectFolder = useCallback((): void => {
-    if (isAnyDialogOpen() || isSelectingFolderRef.current) {
-      return
-    }
-
-    isSelectingFolderRef.current = true
-    hasWorkspaceInteractionRef.current = true
-    isStartupRestoreRef.current = false
-    reportErrorBanner(null)
-    void wikiApi.workspace.selectFolder().then(
-      (selectedPath) => {
-        isSelectingFolderRef.current = false
-        if (selectedPath && !isAnyDialogOpen()) {
-          handleSwitchWorkspace(selectedPath)
-        }
-      },
-      (error: unknown) => {
-        isSelectingFolderRef.current = false
-        reportErrorBanner(toErrorMessage(error, '폴더 선택에 실패했습니다.'), error)
-      }
-    )
-  }, [handleSwitchWorkspace, isAnyDialogOpen, reportErrorBanner, wikiApi])
 
   const { openWorkspaceFile, openConfigDocument } = editor
   const { searchJumpRequest, openSearchLineMatch, invalidatePendingSearchJumps } =
     useWorkspaceSearchJump({
-      workspaceRootPath: workspace?.rootPath ?? null,
+      workspaceRootPath: activeWorkspaceRoot,
       layout: editor.layout,
       query: workspaceSearch.query,
       responseQuery: workspaceSearch.response?.query ?? null,
       options: workspaceSearch.resultOptions,
-      isMountedRef,
-      switchWorkspaceSeqRef,
+      getSwitchSequence: workspaceLifecycle.getSwitchSequence,
       openWorkspaceFile
     })
 
@@ -648,7 +385,7 @@ export function MainAppShell() {
   }, [invalidatePendingSearchJumps, openConfigDocument])
 
   menuHandlersRef.current = {
-    'open-folder': handleSelectFolder,
+    'open-folder': workspaceLifecycle.selectFolder,
     'toggle-theme': toggleTheme,
     'toggle-settings': () => {
       setIsSchemaModalOpen(false)
@@ -765,9 +502,9 @@ export function MainAppShell() {
                 isFavorite={isCurrentWorkspaceFavorite}
                 favoriteWorkspaces={config.favoriteWorkspaces}
                 recentWorkspaces={config.recentWorkspaces}
-                onOpenFolder={handleSelectFolder}
-                onSwitchWorkspace={handleSwitchWorkspace}
-                onOpenInNewWindow={handleOpenWorkspaceInNewWindow}
+                onOpenFolder={workspaceLifecycle.selectFolder}
+                onSwitchWorkspace={workspaceLifecycle.switchWorkspace}
+                onOpenInNewWindow={workspaceLifecycle.openInNewWindow}
                 onToggleFavorite={() => {
                   if (workspace) {
                     toggleFavoriteWorkspace(workspace.rootPath, workspace.name)

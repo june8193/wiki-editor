@@ -256,6 +256,26 @@ export interface WindowInitContext {
   initialWorkspacePath?: string | null
 }
 
+/**
+ * Creates a single-flight loader around `getInitContext` so window initialization and
+ * buffer sync share at most one request per window startup.
+ */
+export function createWindowInitContextLoader(
+  windowApi?: { getInitContext?: () => Promise<WindowInitContext> }
+): () => Promise<WindowInitContext | null> {
+  let cachedPromise: Promise<WindowInitContext | null> | null = null
+  return () => {
+    const getInitContext = windowApi?.getInitContext
+    if (!getInitContext) {
+      return Promise.resolve(null)
+    }
+    if (!cachedPromise) {
+      cachedPromise = getInitContext.call(windowApi).catch(() => null)
+    }
+    return cachedPromise
+  }
+}
+
 export interface DetachTabToNewWindowResult {
   /** Hub/IPC window identifier (webContents.id) assigned to the detached auxiliary window. */
   windowId: number
