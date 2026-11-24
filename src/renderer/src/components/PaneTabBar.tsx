@@ -174,9 +174,7 @@ export function PaneTabBar({
         )
       })}
 
-      {contextMenu && (() => {
-        const contextTab = tabs.find((tab) => tab.id === contextMenu.tabId)
-        return (
+      {contextMenu && (
         <div
           ref={menuRef}
           role="menu"
@@ -213,7 +211,7 @@ export function PaneTabBar({
             type="button"
             role="menuitem"
             className="context-menu-item"
-            disabled={!actions.onDetachTabToNewWindow || contextTab?.kind !== 'document'}
+            disabled={!actions.onDetachTabToNewWindow}
             onClick={() => {
               const targetTabId = contextMenu.tabId
               setContextMenu(null)
@@ -235,8 +233,7 @@ export function PaneTabBar({
             닫기
           </button>
         </div>
-        )
-      })()}
+      )}
     </div>
   )
 }

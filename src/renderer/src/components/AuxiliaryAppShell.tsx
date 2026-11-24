@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { formatWindowTitle } from '@shared/window'
+import { useAuxiliaryDiffState } from '../hooks/useAuxiliaryDiffState'
 import { useConfigController } from '../hooks/useConfigController'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
@@ -8,7 +9,10 @@ import { useFrontmatterFieldValues } from '../hooks/useFrontmatterFieldValues'
 import { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
+import { getPaneActiveTab } from '../stores/PaneTabStore'
+import { getGitDiffTabLabel } from '../utils/gitFilePresentation'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
+import type { PaneInteractionActions } from './PaneTabBar'
 
 /**
  * Auxiliary window shell dedicated to detached document tabs: omits application menu bar,
@@ -42,6 +46,20 @@ export function AuxiliaryAppShell() {
     activeDocumentKey: editor.activeBuffer?.key ?? null
   })
 
+  const { diffsByKey, openDiffTargetFile } = useAuxiliaryDiffState({
+    layout: editor.layout,
+    gitApi: wikiApi.git,
+    openWorkspaceFile: editor.openWorkspaceFile
+  })
+
+  const paneActions = useMemo<PaneInteractionActions>(
+    () => ({
+      ...editor.paneActions,
+      onOpenDiffTargetFile: openDiffTargetFile
+    }),
+    [editor.paneActions, openDiffTargetFile]
+  )
+
   useWindowCloseGuard({
     wikiApi,
     getDirtySummary: editor.getDirtyCloseSummary,
@@ -49,9 +67,15 @@ export function AuxiliaryAppShell() {
     confirmUnsavedChanges
   })
 
+  const activeTab = getPaneActiveTab(editor.layout.panes[editor.layout.activePaneId])
+  const activeTitleName =
+    activeTab?.kind === 'diff'
+      ? getGitDiffTabLabel(activeTab.diff.request)
+      : editor.activeBuffer?.name
+
   useEffect(() => {
-    document.title = formatWindowTitle(editor.activeBuffer?.name)
-  }, [editor.activeBuffer?.name])
+    document.title = formatWindowTitle(activeTitleName)
+  }, [activeTitleName])
 
   return (
     <EditorWindowFrame
@@ -69,7 +93,12 @@ export function AuxiliaryAppShell() {
       openWorkspaceFile={editor.openWorkspaceFile}
       reportErrorBanner={reportErrorBanner}
       navigation={editor.navigation}
-      paneWorkspaceProps={buildPaneWorkspaceProps(config, editor, isShortcutDisabled)}
+      paneWorkspaceProps={buildPaneWorkspaceProps(
+        config,
+        { ...editor, paneActions },
+        isShortcutDisabled,
+        { diffsByKey }
+      )}
     />
   )
 }

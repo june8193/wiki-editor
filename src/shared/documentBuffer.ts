@@ -62,6 +62,7 @@ export interface SaveBufferResult {
 
 export interface SyncWindowTabsOptions {
   releasePending?: boolean
+  nonBufferTabCount?: number
 }
 
 export interface ReconcileBuffersResult {

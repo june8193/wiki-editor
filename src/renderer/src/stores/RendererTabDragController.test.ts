@@ -177,7 +177,9 @@ describe('RendererTabDragController', () => {
       }),
       endTabDrag: async (input) => {
         endPayloads.push(input)
-        hubRef.registerPendingTransfer(2, input.payload!.bufferKey)
+        if (input.payload && 'bufferKey' in input.payload) {
+          hubRef.registerPendingTransfer(2, input.payload.bufferKey)
+        }
         return { detached: true, windowId: 2 }
       }
     })

@@ -1,4 +1,5 @@
 import type { DocumentBuffer } from './documentBuffer'
+import type { GitDiffRequest, GitDiffViewMode } from './git'
 
 export type WindowRole = 'main' | 'auxiliary'
 
@@ -220,8 +221,40 @@ export interface TabViewState {
   splitPreviewRatio?: number
 }
 
-export interface TabTransferPayload extends TabViewState {
+export interface TabTransferDiffState {
+  request: GitDiffRequest
+  viewMode: GitDiffViewMode
+  workspaceRootPath?: string
+}
+
+export interface DocumentTabTransferPayload extends TabViewState {
+  kind?: 'document'
   bufferKey: string
+}
+
+export interface DiffTabTransferPayload {
+  kind: 'diff'
+  diff: TabTransferDiffState
+}
+
+export type TabTransferPayload = DocumentTabTransferPayload | DiffTabTransferPayload
+
+export function isDiffTabTransferPayload(
+  payload: TabTransferPayload | undefined | null
+): payload is DiffTabTransferPayload {
+  return Boolean(payload && payload.kind === 'diff' && payload.diff)
+}
+
+export function cloneTabTransferDiffState(
+  diff: TabTransferDiffState,
+  workspaceRootPathOverride?: string
+): TabTransferDiffState {
+  const workspaceRootPath = diff.workspaceRootPath ?? workspaceRootPathOverride
+  return {
+    request: { ...diff.request },
+    viewMode: diff.viewMode,
+    ...(workspaceRootPath ? { workspaceRootPath } : {})
+  }
 }
 
 export function extractTabViewState(source: TabViewState): TabViewState {
@@ -236,11 +269,21 @@ export function extractTabViewState(source: TabViewState): TabViewState {
 }
 
 export function toTabTransferPayload(
-  source: { bufferKey: string } & TabViewState
+  source:
+    | TabTransferPayload
+    | ({ kind?: 'document'; bufferKey: string } & TabViewState)
+    | { kind: 'diff'; diff: TabTransferDiffState }
 ): TabTransferPayload {
+  if (source.kind === 'diff' && source.diff) {
+    return {
+      kind: 'diff',
+      diff: cloneTabTransferDiffState(source.diff)
+    }
+  }
+  const docSource = source as DocumentTabTransferPayload
   return {
-    bufferKey: source.bufferKey,
-    ...extractTabViewState(source)
+    bufferKey: docSource.bufferKey,
+    ...extractTabViewState(docSource)
   }
 }
 
@@ -323,7 +366,7 @@ export type AcceptTabDragDropResult =
       sourceWindowId: number
       targetWindowId: number
       payload: TabTransferPayload
-      buffer: DocumentBuffer
+      buffer?: DocumentBuffer
     }
   | {
       accepted: false

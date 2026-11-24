@@ -1,6 +1,7 @@
 import type { BufferKeyRemap, DocumentBuffer } from '@shared/documentBuffer'
 import {
   computeCursorAuxiliaryBounds,
+  isDiffTabTransferPayload,
   isPointOutsideAllWindows,
   toTabTransferPayload,
   type AcceptTabDragDropResult,
@@ -192,6 +193,21 @@ export class TabDragCoordinator {
       return { accepted: false, reason: 'same-window' }
     }
 
+    if (isDiffTabTransferPayload(session.payload)) {
+      const payload = toTabTransferPayload(session.payload)
+      session.payload = payload
+      this.reclaimableEndedSession = null
+      this.transitionPendingOutcome(session, 'dropped-in-window', params.targetWindowId)
+
+      return {
+        accepted: true,
+        dragSessionId: session.dragSessionId,
+        sourceWindowId: session.sourceWindowId,
+        targetWindowId: params.targetWindowId,
+        payload
+      }
+    }
+
     const buffer = params.bufferHub.getBuffer(session.payload.bufferKey)
     if (!buffer) {
       return { accepted: false, reason: 'unknown-buffer' }
@@ -273,7 +289,7 @@ export class TabDragCoordinator {
     }
 
     const payload = toTabTransferPayload(input.payload ?? session.payload)
-    const bufferExists = hasBuffer(payload.bufferKey)
+    const bufferExists = isDiffTabTransferPayload(payload) || hasBuffer(payload.bufferKey)
     const cursorPoint = screen?.getCursorScreenPoint?.() ?? input.screenPoint
     const shouldDetach =
       canDetach &&
@@ -321,6 +337,7 @@ function remapSessionBufferKey(
   session: ActiveTabDragSession,
   keyMap: ReadonlyMap<string, string>
 ): boolean {
+  if (isDiffTabTransferPayload(session.payload)) return false
   const nextKey = keyMap.get(session.payload.bufferKey)
   if (!nextKey || nextKey === session.payload.bufferKey) return false
   session.payload.bufferKey = nextKey

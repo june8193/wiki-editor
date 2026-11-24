@@ -13,6 +13,7 @@ import {
   canDetachTabFromWindow,
   createWindowInitContextLoader,
   extractTabViewState,
+  isDiffTabTransferPayload,
   toTabTransferPayload,
   type TabTransferPayload,
   type WindowInitContext
@@ -153,6 +154,7 @@ export class RendererBufferSyncClient {
   private readonly activeRemoteOpens = new Set<Set<string>>()
   private readonly remappedKeys = new Map<string, string>()
   private lastSyncedTabKeys: readonly string[] | null = null
+  private lastSyncedNonBufferTabCount: number | null = null
   private needsPendingOpenRelease = false
   private mounted = false
 
@@ -196,6 +198,14 @@ export class RendererBufferSyncClient {
         if (initContext && !this.hasAppliedInitContext) {
           this.hasAppliedInitContext = true
           for (const tab of initContext.initialTabs) {
+            if (isDiffTabTransferPayload(tab)) {
+              this.tabStore.openDiffTab(tab.diff.request, {
+                viewMode: tab.diff.viewMode,
+                workspaceRootPath: tab.diff.workspaceRootPath
+              })
+              openedInitialTabs = true
+              continue
+            }
             const resolvedKey = this.resolveLatestKey(tab.bufferKey)
             if (resolvedKey in snapshot.buffers) {
               this.tabStore.openTab(resolvedKey, extractTabViewState(tab))
@@ -355,11 +365,23 @@ export class RendererBufferSyncClient {
     this.bufferStore.replaceSnapshot(merged)
   }
 
-  private dispatchWindowTabSync(keys: readonly string[], releasePending = false): void {
+  private dispatchWindowTabSync(
+    keys: readonly string[],
+    releasePending = false,
+    nonBufferTabCount = 0
+  ): void {
     const nextKeys = [...keys]
     this.lastSyncedTabKeys = nextKeys
+    this.lastSyncedNonBufferTabCount = nonBufferTabCount
+    const options =
+      releasePending || nonBufferTabCount > 0
+        ? {
+            ...(releasePending ? { releasePending: true } : {}),
+            ...(nonBufferTabCount > 0 ? { nonBufferTabCount } : {})
+          }
+        : undefined
     void this.bufferApi
-      .syncWindowTabs(nextKeys, releasePending ? { releasePending: true } : undefined)
+      .syncWindowTabs(nextKeys, options)
       .then((snapshot) => {
         if (this.mounted) {
           this.applyHubSnapshot(snapshot)
@@ -368,15 +390,20 @@ export class RendererBufferSyncClient {
       .catch(() => undefined)
   }
 
-  syncWindowTabs = (keys: string[]): void => {
-    if (areStringArraysEqual(this.lastSyncedTabKeys, keys)) {
+  syncWindowTabs = (keys: string[], nonBufferTabCount = 0): void => {
+    if (
+      areStringArraysEqual(this.lastSyncedTabKeys, keys) &&
+      (this.lastSyncedNonBufferTabCount ?? 0) === nonBufferTabCount
+    ) {
       return
     }
-    this.dispatchWindowTabSync(keys)
+    this.dispatchWindowTabSync(keys, false, nonBufferTabCount)
   }
 
   private syncCurrentLayoutTabs(): void {
-    this.syncWindowTabs(this.tabStore.getBufferKeys())
+    const bufferKeys = this.tabStore.getBufferKeys()
+    const nonBufferTabCount = Math.max(0, this.tabStore.getTotalTabCount() - bufferKeys.length)
+    this.syncWindowTabs(bufferKeys, nonBufferTabCount)
   }
 
   private handleHubEvent(event: SharedBufferHubEvent): void {
@@ -958,10 +985,18 @@ export class RendererBufferSyncClient {
   }
 
   acceptTransferredTab = (
-    buffer: DocumentBuffer,
+    buffer: DocumentBuffer | undefined,
     payload: TabTransferPayload,
     target?: TransferredTabDropTarget
   ): TabItem | null => {
+    if (isDiffTabTransferPayload(payload)) {
+      const accepted = this.tabStore.acceptTransferredTab(payload, target)
+      this.syncCurrentLayoutTabs()
+      return accepted
+    }
+    if (!buffer) {
+      return null
+    }
     const targetKey = this.reconcileIncomingBuffer(buffer)
     const accepted = this.tabStore.acceptTransferredTab(
       { ...payload, bufferKey: targetKey },
@@ -995,7 +1030,12 @@ export class RendererBufferSyncClient {
     }
 
     try {
-      const latestTab = await this.syncTabBufferForTransfer(paneId, tabId)
+      const initialTab = this.tabStore.getTab(paneId, tabId)
+      if (!initialTab) return
+      const latestTab =
+        initialTab.kind === 'diff'
+          ? initialTab
+          : await this.syncTabBufferForTransfer(paneId, tabId)
       if (!latestTab) return
       if (!canDetachTabFromWindow(this.windowApi.role, this.tabStore.getTotalTabCount())) {
         return

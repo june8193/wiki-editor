@@ -289,7 +289,9 @@ describe('RendererBufferSyncClient race guards', () => {
     const windowApi = createMockWindowApi('main', {
       detachTabToNewWindow: async (payload) => {
         detachTabCalls.push(payload)
-        hubRef.registerPendingTransfer(2, payload.bufferKey)
+        if ('bufferKey' in payload) {
+          hubRef.registerPendingTransfer(2, payload.bufferKey)
+        }
         return { windowId: 2 }
       }
     })

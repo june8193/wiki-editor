@@ -99,6 +99,7 @@ export interface TabCountChange {
  */
 export class WindowTabTracker {
   private readonly windowTabs = new Map<number, Record<string, number>>()
+  private readonly nonBufferTabCounts = new Map<number, number>()
   private readonly pendingOpenWindows = new Map<string, Set<number>>()
   private readonly pendingTransferWindows = new Map<string, Set<number>>()
   private tabCounts: Record<string, number> = {}
@@ -129,10 +130,11 @@ export class WindowTabTracker {
 
   getWindowTotalTabCount(windowId: number): number {
     const perWindow = this.windowTabs.get(windowId)
-    if (!perWindow) return 0
-    let total = 0
-    for (const count of Object.values(perWindow)) {
-      total += count
+    let total = this.nonBufferTabCounts.get(windowId) ?? 0
+    if (perWindow) {
+      for (const count of Object.values(perWindow)) {
+        total += count
+      }
     }
     return total
   }
@@ -212,11 +214,17 @@ export class WindowTabTracker {
       : []
 
     this.windowTabs.set(windowId, perWindow)
+    if (typeof options?.nonBufferTabCount === 'number' && options.nonBufferTabCount > 0) {
+      this.nonBufferTabCounts.set(windowId, Math.floor(options.nonBufferTabCount))
+    } else {
+      this.nonBufferTabCounts.delete(windowId)
+    }
     return this.finalizeTabCountChange(depletedPendingKeys)
   }
 
   unregisterWindow(windowId: number): TabCountChange {
     this.windowTabs.delete(windowId)
+    this.nonBufferTabCounts.delete(windowId)
     const depletedPendingKeys = Array.from(
       new Set([
         ...releasePendingOwnersForWindowInMap(this.pendingOpenWindows, windowId),

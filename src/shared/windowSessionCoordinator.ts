@@ -8,10 +8,12 @@ import type { SharedDocumentBufferHub } from './sharedDocumentBufferHub'
 import { type BeforeInputKeyEventLike, TabDragCoordinator } from './tabDragSession'
 import {
   canDetachTabFromWindow,
+  cloneTabTransferDiffState,
   cloneTabTransferPayloads,
   computeOffsetAuxiliaryBounds,
   computeOffsetMainBounds,
   formatWindowTitle,
+  isDiffTabTransferPayload,
   type AcceptTabDragDropInput,
   type AcceptTabDragDropResult,
   type ActiveTabDragSession,
@@ -306,7 +308,9 @@ export class WindowSessionCoordinator<
       this.lastActiveSessionId = session.sessionId
     } else {
       for (const tab of clonedTabs) {
-        session.services.bufferHub.registerPendingTransfer(hosted.windowId, tab.bufferKey)
+        if (!isDiffTabTransferPayload(tab)) {
+          session.services.bufferHub.registerPendingTransfer(hosted.windowId, tab.bufferKey)
+        }
       }
     }
 
@@ -433,6 +437,9 @@ export class WindowSessionCoordinator<
     payload: TabTransferPayload | undefined,
     action: string
   ): void {
+    if (isDiffTabTransferPayload(payload)) {
+      return
+    }
     if (
       !payload ||
       typeof payload.bufferKey !== 'string' ||
@@ -467,10 +474,12 @@ export class WindowSessionCoordinator<
       bounds?: Partial<WindowBounds>
     }
   ): ManagedWindowRecord {
-    const firstName =
-      options.role === 'auxiliary' && options.initialTabs.length > 0
-        ? session.services.bufferHub.getBufferName(options.initialTabs[0].bufferKey)
-        : undefined
+    const firstTab = options.role === 'auxiliary' ? options.initialTabs[0] : undefined
+    const firstName = firstTab
+      ? isDiffTabTransferPayload(firstTab)
+        ? (firstTab.diff.request.path.split(/[\\/]/).pop() ?? firstTab.diff.request.path)
+        : session.services.bufferHub.getBufferName(firstTab.bufferKey)
+      : undefined
     const record = this.registerHostedWindow(session, {
       role: options.role,
       initialTabs: options.initialTabs,
@@ -540,6 +549,20 @@ export class WindowSessionCoordinator<
     })
   }
 
+  private normalizeDiffTransferPayload(
+    session: ManagedSession<TSessionServices>,
+    payload: TabTransferPayload
+  ): TabTransferPayload {
+    if (!isDiffTabTransferPayload(payload)) return payload
+    return {
+      kind: 'diff',
+      diff: cloneTabTransferDiffState(
+        payload.diff,
+        this.getSessionEffectiveWorkspaceRoot(session) ?? undefined
+      )
+    }
+  }
+
   detachTabToNewWindow(
     senderWindowId: number | undefined,
     payload: TabTransferPayload
@@ -558,7 +581,7 @@ export class WindowSessionCoordinator<
 
     const auxRecord = this.openAuxiliaryWindowInSession(
       session,
-      [payload],
+      [this.normalizeDiffTransferPayload(session, payload)],
       computeOffsetAuxiliaryBounds(sourceRecord.hosted.getBounds(), this.host.screen)
     )
     return { windowId: auxRecord.windowId }
@@ -830,7 +853,10 @@ export class WindowSessionCoordinator<
   startTabDrag(windowId: number | undefined, input: TabDragStartInput): ActiveTabDragSession {
     const { record: sourceRecord, session } = this.requireSourceWindow(windowId, 'start tab drag')
     this.assertKnownBuffer(session, input?.payload, 'drag')
-    return session.dragCoordinator.start(sourceRecord.windowId, input)
+    return session.dragCoordinator.start(sourceRecord.windowId, {
+      ...input,
+      payload: this.normalizeDiffTransferPayload(session, input.payload)
+    })
   }
 
   updateTabDragOutcome(
@@ -1035,6 +1061,7 @@ export class WindowSessionCoordinator<
         const record = this.windowsById.get(windowId)
         if (!record || record.role !== 'auxiliary') continue
         for (const tab of record.initialTabs) {
+          if (isDiffTabTransferPayload(tab)) continue
           const nextKey = remappings.get(tab.bufferKey)
           if (nextKey) {
             tab.bufferKey = nextKey
@@ -1049,7 +1076,9 @@ export class WindowSessionCoordinator<
       for (const windowId of session.windowIds) {
         const record = this.windowsById.get(windowId)
         if (!record || record.role !== 'auxiliary') continue
-        record.initialTabs = record.initialTabs.filter((tab) => !closedKeys.has(tab.bufferKey))
+        record.initialTabs = record.initialTabs.filter(
+          (tab) => isDiffTabTransferPayload(tab) || !closedKeys.has(tab.bufferKey)
+        )
       }
       this.reconcileAuxiliaryAutoClose(session)
       return

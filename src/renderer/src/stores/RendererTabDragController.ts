@@ -2,6 +2,7 @@ import type { DocumentBuffer } from '@shared/documentBuffer'
 import { toErrorMessage } from '@shared/errors'
 import type { WikiWindowApi } from '@shared/ipc'
 import {
+  isDiffTabTransferPayload,
   toTabTransferPayload,
   type ActiveTabDragSession,
   type PaneId,
@@ -25,7 +26,7 @@ export interface TabDragBufferBridge {
   forceCloseTab(paneId: PaneId, tabId: string): void
   completeTransferredOutTab(paneId: PaneId, tabId: string): Promise<void>
   acceptTransferredTab(
-    buffer: DocumentBuffer,
+    buffer: DocumentBuffer | undefined,
     payload: TabTransferPayload,
     target?: TransferredTabDropTarget
   ): TabItem | null
@@ -50,6 +51,12 @@ interface ActiveLocalDragState {
   superseded: boolean
 }
 
+function getDragPayloadKey(payload: TabTransferPayload): string {
+  return isDiffTabTransferPayload(payload)
+    ? `diff:${payload.diff.request.kind}:${payload.diff.request.path}`
+    : `doc:${payload.bufferKey}`
+}
+
 function isSameDragSession(
   left: ActiveTabDragSession | null,
   right: ActiveTabDragSession | null
@@ -60,7 +67,7 @@ function isSameDragSession(
     left.dragSessionId === right.dragSessionId &&
     left.outcome === right.outcome &&
     left.targetWindowId === right.targetWindowId &&
-    left.payload.bufferKey === right.payload.bufferKey
+    getDragPayloadKey(left.payload) === getDragPayloadKey(right.payload)
   )
 }
 
@@ -116,7 +123,7 @@ export class RendererTabDragController {
 
     this.lastReclaimableDrag = null
     this.setDraggingTab({ paneId, tabId })
-    if (!this.windowApi || !this.mounted || initialTab.kind !== 'document') return
+    if (!this.windowApi || !this.mounted) return
 
     if (this.activeDrag) {
       this.activeDrag.superseded = true
@@ -137,10 +144,13 @@ export class RendererTabDragController {
 
     dragState.startPromise = (async () => {
       try {
-        const latestTab = this.bufferSync.isBufferReadyForImmediateDrag(initialTab.bufferKey)
-          ? this.tabStore.getTab(paneId, tabId)
-          : await this.bufferSync.syncTabBufferForTransfer(paneId, tabId)
-        if (!latestTab || latestTab.kind !== 'document' || !this.mounted || dragState.superseded) {
+        const latestTab =
+          initialTab.kind === 'diff'
+            ? this.tabStore.getTab(paneId, tabId)
+            : this.bufferSync.isBufferReadyForImmediateDrag(initialTab.bufferKey)
+              ? this.tabStore.getTab(paneId, tabId)
+              : await this.bufferSync.syncTabBufferForTransfer(paneId, tabId)
+        if (!latestTab || !this.mounted || dragState.superseded) {
           return null
         }
 
@@ -214,7 +224,11 @@ export class RendererTabDragController {
       }
 
       this.lastReclaimableDrag = { dragSessionId: session.dragSessionId, drag }
-      const latestTab = await this.bufferSync.syncTabBufferForTransfer(drag.paneId, drag.tabId)
+      const currentTab = this.tabStore.getTab(drag.paneId, drag.tabId)
+      const latestTab =
+        currentTab?.kind === 'diff'
+          ? currentTab
+          : await this.bufferSync.syncTabBufferForTransfer(drag.paneId, drag.tabId)
       if (!this.mounted) return
 
       const result = await this.endMainDragSession(drag, {

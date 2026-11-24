@@ -1,10 +1,11 @@
 import type { BufferKeyRemap } from '@shared/documentBuffer'
-import type { GitChangedFile, GitDiffRequest, GitStashEntry } from '@shared/git'
+import type { GitChangedFile, GitDiffRequest, GitDiffViewMode, GitStashEntry } from '@shared/git'
 import {
   clampSplitRatio,
   type CursorPosition,
   DEFAULT_SPLIT_RATIO,
   type EditorMode,
+  isDiffTabTransferPayload,
   MAX_SPLIT_RATIO,
   MIN_SPLIT_RATIO,
   normalizeSplitRatio,
@@ -27,11 +28,12 @@ export {
   normalizeSplitRatio,
   roundSplitRatio
 }
-export type GitDiffViewMode = 'side-by-side' | 'inline'
+export type { GitDiffViewMode }
 
 export interface DiffTabState {
   request: GitDiffRequest
   viewMode: GitDiffViewMode
+  workspaceRootPath?: string
 }
 
 export type MermaidDiagramHeightMap = Readonly<Record<string, number>>
@@ -59,6 +61,7 @@ export type TabItem = DocumentTabItem | DiffTabItem
 export interface OpenDiffTabOptions {
   paneId?: PaneId
   viewMode?: GitDiffViewMode
+  workspaceRootPath?: string
 }
 
 export interface PaneState {
@@ -431,36 +434,47 @@ export class PaneTabStore {
   acceptTransferredTab = (
     payload: TabTransferPayload,
     target?: TransferredTabDropTarget
-  ): DocumentTabItem => {
+  ): TabItem => {
+    const resolveTarget = (): {
+      paneId: PaneId
+      placement?: { targetIndex?: number; splitDirection?: SplitDirection }
+    } => {
+      if (target?.kind === 'split') {
+        if (this.state.panes.primary.tabs.length === 0) {
+          return { paneId: 'primary' }
+        }
+        return { paneId: 'secondary', placement: { splitDirection: target.direction } }
+      }
+      const requestedPaneId = target?.paneId ?? this.state.activePaneId
+      const paneId: PaneId =
+        requestedPaneId === 'secondary' && this.state.panes.primary.tabs.length === 0
+          ? 'primary'
+          : requestedPaneId
+      return { paneId, placement: { targetIndex: target?.targetIndex } }
+    }
+
+    const { paneId, placement } = resolveTarget()
+    if (isDiffTabTransferPayload(payload)) {
+      return this.openDiffTab(
+        payload.diff.request,
+        {
+          paneId,
+          viewMode: payload.diff.viewMode,
+          workspaceRootPath: payload.diff.workspaceRootPath
+        },
+        undefined,
+        placement
+      )
+    }
+
     const viewOptions: OpenTabOptions = {
       mode: payload.mode,
       cursor: payload.cursor,
       scrollTop: payload.scrollTop,
-      splitPreviewRatio: payload.splitPreviewRatio
+      splitPreviewRatio: payload.splitPreviewRatio,
+      paneId
     }
-    if (target?.kind === 'split') {
-      if (this.state.panes.primary.tabs.length === 0) {
-        return this.openOrFocusTab(payload.bufferKey, { ...viewOptions, paneId: 'primary' })
-      }
-      return this.openOrFocusTab(
-        payload.bufferKey,
-        { ...viewOptions, paneId: 'secondary' },
-        undefined,
-        { splitDirection: target.direction }
-      )
-    }
-
-    const requestedPaneId = target?.paneId ?? this.state.activePaneId
-    const paneId: PaneId =
-      requestedPaneId === 'secondary' && this.state.panes.primary.tabs.length === 0
-        ? 'primary'
-        : requestedPaneId
-    return this.openOrFocusTab(
-      payload.bufferKey,
-      { ...viewOptions, paneId },
-      undefined,
-      { targetIndex: target?.targetIndex }
-    )
+    return this.openOrFocusTab(payload.bufferKey, viewOptions, undefined, placement)
   }
 
   private resolveTargetPaneContext(
@@ -521,10 +535,12 @@ export class PaneTabStore {
   openDiffTab = (
     request: GitDiffRequest,
     options: OpenDiffTabOptions = {},
-    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string }
+    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string },
+    placement?: { targetIndex?: number; splitDirection?: SplitDirection }
   ): DiffTabItem => {
     const { targetPaneId, targetPane, nextSplitMode } = this.resolveTargetPaneContext(
-      options.paneId
+      options.paneId,
+      placement?.splitDirection
     )
     const nextDiffKey = formatGitDiffTabKey(request)
 
@@ -574,10 +590,21 @@ export class PaneTabStore {
     const created: DiffTabItem = {
       id: this.nextTabId(),
       kind: 'diff',
-      diff: { request, viewMode: options.viewMode ?? 'side-by-side' }
+      diff: {
+        request,
+        viewMode: options.viewMode ?? 'side-by-side',
+        ...(options.workspaceRootPath ? { workspaceRootPath: options.workspaceRootPath } : {})
+      }
     }
 
-    return this.appendNewTabInPane(targetPaneId, targetPane, nextSplitMode, created, duplicateFrom)
+    return this.appendNewTabInPane(
+      targetPaneId,
+      targetPane,
+      nextSplitMode,
+      created,
+      duplicateFrom,
+      placement?.targetIndex
+    )
   }
 
   private openOrFocusTab(

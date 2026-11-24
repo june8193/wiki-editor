@@ -136,6 +136,8 @@ export interface GitCompareSummaryRequest {
   mode: GitCompareMode
 }
 
+export type GitDiffViewMode = 'side-by-side' | 'inline'
+
 export type GitDiffRequest =
   | ({ kind: 'staged' } & GitChangedFile)
   | ({ kind: 'unstaged' } & GitChangedFile)

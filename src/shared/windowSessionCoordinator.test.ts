@@ -471,9 +471,9 @@ describe('WindowSessionCoordinator', () => {
         scrollTop: 0
       })
       session.services.bufferHub.syncRenamedPath('C:/wiki/alpha/one.md', 'C:/wiki/alpha/one-renamed.md')
-      expect(coordinator.getWindowInitContext(auxRenameId).initialTabs[0].bufferKey).toBe(
-        'c:/wiki/alpha/one-renamed.md'
-      )
+      expect(coordinator.getWindowInitContext(auxRenameId).initialTabs[0]).toMatchObject({
+        bufferKey: 'c:/wiki/alpha/one-renamed.md'
+      })
 
       // Deleting the sole pre-hydration initialTab closes that auxiliary window automatically
       session.services.bufferHub.syncDeletedPath('C:/wiki/alpha/one-renamed.md')
@@ -766,6 +766,80 @@ describe('WindowSessionCoordinator', () => {
       expect(aux1.isDestroyed()).toBe(true)
     } finally {
       unsubDrag()
+      coordinator.dispose()
+    }
+  })
+
+  it('detaches and drags branch-compare Diff tabs into auxiliary windows, injects initialWorkspacePath, and tracks nonBufferTabCount for auto-close', async () => {
+    const { host, createdWindows } = createInMemorySessionHost({
+      directories: ['C:/wiki/alpha'],
+      files: {
+        'C:/wiki/alpha/a.md': '# A'
+      }
+    })
+    const coordinator = new WindowSessionCoordinator(host)
+    try {
+      const mainWin = coordinator.createMainWindow({ initialWorkspacePath: 'C:/wiki/alpha' }) as FakeHostedWindow
+      await coordinator.openWorkspaceInSession(mainWin.windowId, 'C:/wiki/alpha')
+      const mainSession = coordinator.resolveSessionForWindow(mainWin.windowId)!
+      const buf = await mainSession.services.bufferHub.openWorkspaceFile('C:/wiki/alpha/a.md', 'a.md')
+      coordinator.syncWindowTabs(mainWin.windowId, [buf.key], { nonBufferTabCount: 1 })
+
+      const diffPayload = {
+        kind: 'diff' as const,
+        diff: {
+          request: {
+            kind: 'branch-compare' as const,
+            baseRef: 'main',
+            compareRef: 'feat/x',
+            mode: 'three-dot' as const,
+            path: 'docs/guide.md',
+            status: 'M' as const
+          },
+          viewMode: 'side-by-side' as const
+        }
+      }
+
+      const { windowId: auxId } = coordinator.detachTabToNewWindow(mainWin.windowId, diffPayload)
+      const auxWin = createdWindows.find((w) => w.windowId === auxId)!
+      expect(auxWin).toBeDefined()
+      const initCtx = coordinator.getWindowInitContext(auxId)
+      expect(initCtx.role).toBe('auxiliary')
+      expect(initCtx.initialTabs).toHaveLength(1)
+      expect(initCtx.initialTabs[0]).toMatchObject({
+        kind: 'diff',
+        diff: {
+          request: diffPayload.diff.request,
+          viewMode: 'side-by-side'
+        }
+      })
+      const firstInitialTab = initCtx.initialTabs[0]
+      if (firstInitialTab.kind !== 'diff') throw new Error('expected diff tab')
+      expect(firstInitialTab.diff.workspaceRootPath).toBeTruthy()
+
+      coordinator.syncWindowTabs(auxId, [], { nonBufferTabCount: 1 })
+      expect(auxWin.isDestroyed()).toBe(false)
+
+      // Dragging the diff tab from mainWin into auxWin succeeds without a document buffer
+      const dragSession = coordinator.startTabDrag(mainWin.windowId, {
+        paneId: 'primary',
+        tabId: 'diff-1',
+        payload: diffPayload
+      })
+      const dropResult = coordinator.acceptTabDragDrop(auxId, {
+        dragSessionId: dragSession.dragSessionId
+      })
+      expect(dropResult).toMatchObject({
+        accepted: true,
+        sourceWindowId: mainWin.windowId,
+        targetWindowId: auxId,
+        payload: diffPayload
+      })
+
+      // Closing all diff tabs in auxWin auto-closes the auxiliary window
+      coordinator.syncWindowTabs(auxId, [], { nonBufferTabCount: 0 })
+      expect(auxWin.isDestroyed()).toBe(true)
+    } finally {
       coordinator.dispose()
     }
   })
