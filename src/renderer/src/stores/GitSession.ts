@@ -255,7 +255,7 @@ export interface GitPanelActions {
   toggleChangesTreeDirCollapsed: (dirKey: string) => void
 }
 
-interface GitRequestContext {
+export interface GitRequestContext {
   rootPath: string
   epoch: number
 }
@@ -322,7 +322,7 @@ interface DetailSelectionSpec<TTarget, TDetail> {
   setState: (next: GitDetailState<TDetail>) => void
 }
 
-class DetailSelectionChannel<TTarget, TDetail> {
+export class DetailSelectionChannel<TTarget, TDetail> {
   private seq = 0
 
   constructor(

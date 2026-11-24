@@ -1,5 +1,6 @@
 import { toErrorMessage } from '@shared/errors'
 import type {
+  GitCommitDetail,
   GitCompareChangedFile,
   GitCompareMode,
   GitCompareRef,
@@ -8,10 +9,19 @@ import type {
   GitDiffRequest
 } from '@shared/git'
 import type { WikiGitApi } from '@shared/ipc'
+import { logRendererError } from '../logging/rendererLogger'
 import {
   buildCompressedGitFileTree,
   flattenGitFileTreeFiles
 } from '../utils/gitFileTree'
+import {
+  createInitialGitDetailState,
+  DetailSelectionChannel,
+  type GitDetailState,
+  type GitRequestContext
+} from './GitSession'
+
+export type CompareSubTab = 'files' | 'commits'
 
 export interface ComparePanelState {
   workspaceRootPath: string | null
@@ -19,9 +29,11 @@ export interface ComparePanelState {
   baseRef: string | null
   compareRef: string | null
   mode: GitCompareMode
+  subTab: CompareSubTab
   fileFilter: string
   collapsedTreeDirs: ReadonlySet<string>
   summary: GitCompareSummary | null
+  commitDetail: GitDetailState<GitCommitDetail>
   isLoadingRefs: boolean
   isLoadingSummary: boolean
   errorMessage: string | null
@@ -34,9 +46,11 @@ function createDefaultComparePanelState(workspaceRootPath: string | null = null)
     baseRef: null,
     compareRef: null,
     mode: 'three-dot',
+    subTab: 'files',
     fileFilter: '',
     collapsedTreeDirs: new Set(),
     summary: null,
+    commitDetail: createInitialGitDetailState(),
     isLoadingRefs: false,
     isLoadingSummary: false,
     errorMessage: null
@@ -54,7 +68,7 @@ export interface CompareDiffTabsCollaborator {
 }
 
 export interface CompareSessionOptions {
-  gitApi: Pick<WikiGitApi, 'compareRefs' | 'compareSummary'>
+  gitApi: Pick<WikiGitApi, 'compareRefs' | 'compareSummary' | 'commitDetail'>
   diffTabs: CompareDiffTabsCollaborator
   workspaceRootPath?: string | null
 }
@@ -64,10 +78,13 @@ export interface ComparePanelActions {
   selectCompareRef: (ref: string) => void
   swapRefs: () => void
   setMode: (mode: GitCompareMode) => void
+  setSubTab: (subTab: CompareSubTab) => void
   setFileFilter: (filter: string) => void
   toggleTreeDirCollapsed: (dirKey: string) => void
   refresh: () => Promise<void>
   openCompareFileDiff: (file: GitCompareChangedFile) => void
+  toggleCommitDetail: (commitHash: string) => void
+  openCommitFileDiff: (request: GitDiffRequest) => void
   dismissError: () => void
 }
 
@@ -120,9 +137,10 @@ export function findCompareRefOption(
  * State persists across sidebar view switches/collapses and resets on workspace change.
  */
 export class CompareSession {
-  private readonly gitApi: Pick<WikiGitApi, 'compareRefs' | 'compareSummary'>
+  private readonly gitApi: Pick<WikiGitApi, 'compareRefs' | 'compareSummary' | 'commitDetail'>
   private readonly diffTabs: CompareDiffTabsCollaborator
   private readonly listeners = new Set<() => void>()
+  private readonly commitDetailChannel: DetailSelectionChannel<string, GitCommitDetail>
 
   private state: ComparePanelState
   private workspaceEpoch = 0
@@ -136,17 +154,43 @@ export class CompareSession {
     this.gitApi = options.gitApi
     this.diffTabs = options.diffTabs
     this.state = createDefaultComparePanelState(options.workspaceRootPath ?? null)
+    this.commitDetailChannel = new DetailSelectionChannel<string, GitCommitDetail>(
+      this.isCurrentRequest,
+      () => ({ rootPath: this.state.workspaceRootPath, epoch: this.workspaceEpoch }),
+      {
+        getSelectedHash: (commitHash) => commitHash,
+        fetchDetail: (rootPath, commitHash) => this.gitApi.commitDetail(rootPath, commitHash),
+        fallbackErrorMessage: '커밋 상세 정보를 불러오지 못했습니다.',
+        logFailure: (rootPath, commitHash, errorMessage, error) => {
+          logRendererError('git', 'Compare commit detail fetch failed', {
+            data: { workspaceRootPath: rootPath, commitHash, errorMessage },
+            error
+          })
+        },
+        getState: () => this.state.commitDetail,
+        setState: (commitDetail) => {
+          this.updateState({ commitDetail })
+        }
+      }
+    )
     this.actions = {
       selectBaseRef: this.selectBaseRef,
       selectCompareRef: this.selectCompareRef,
       swapRefs: this.swapRefs,
       setMode: this.setMode,
+      setSubTab: this.setSubTab,
       setFileFilter: this.setFileFilter,
       toggleTreeDirCollapsed: this.toggleTreeDirCollapsed,
       refresh: this.refresh,
       openCompareFileDiff: this.openCompareFileDiff,
+      toggleCommitDetail: this.toggleCommitDetail,
+      openCommitFileDiff: this.openCommitFileDiff,
       dismissError: this.dismissError
     }
+  }
+
+  private isCurrentRequest = (ctx: GitRequestContext): boolean => {
+    return this.workspaceEpoch === ctx.epoch && this.state.workspaceRootPath === ctx.rootPath
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -167,6 +211,7 @@ export class CompareSession {
       this.refsSeq = 0
       this.summarySeq = 0
       this.isRepo = nextIsRepo
+      this.commitDetailChannel.invalidate()
       this.commitState(createDefaultComparePanelState(nextRootPath))
       if (nextRootPath && nextIsRepo === true) {
         void this.loadRefsAndSummary(true)
@@ -189,6 +234,7 @@ export class CompareSession {
         }
       } else if (nextIsRepo === false) {
         this.workspaceEpoch += 1
+        this.commitDetailChannel.invalidate()
         this.commitState(createDefaultComparePanelState(nextRootPath))
       }
     }
@@ -210,6 +256,11 @@ export class CompareSession {
 
   private dismissError = (): void => {
     this.updateState({ errorMessage: null })
+  }
+
+  private setSubTab = (subTab: CompareSubTab): void => {
+    if (subTab === this.state.subTab) return
+    this.updateState({ subTab })
   }
 
   private setFileFilter = (fileFilter: string): void => {
@@ -267,6 +318,15 @@ export class CompareSession {
       ...(file.origPath ? { origPath: file.origPath } : {}),
       status: file.status
     })
+  }
+
+  private toggleCommitDetail = (commitHash: string): void => {
+    if (!this.state.workspaceRootPath || this.isRepo !== true) return
+    void this.commitDetailChannel.toggle(commitHash)
+  }
+
+  private openCommitFileDiff = (request: GitDiffRequest): void => {
+    this.diffTabs.openDiffTab(request)
   }
 
   private async loadRefsAndSummary(reconcileDiffTabs: boolean): Promise<void> {
@@ -327,6 +387,7 @@ export class CompareSession {
         summary,
         isLoadingSummary: false
       })
+      this.commitDetailChannel.prune(new Set(summary.commits.map((commit) => commit.hash)))
 
       if (reconcileDiffTabs) {
         this.diffTabs.reconcileBranchCompareDiffTabs(baseRef, compareRef, mode, summary.files)

@@ -1,27 +1,24 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useMemo } from 'react'
 import {
   ArrowDown,
   ArrowUp,
-  Check,
   CircleDot,
   Cloud,
   CloudDownload,
-  Copy,
   GitBranch,
   RefreshCw,
   Tag,
   type LucideIcon
 } from 'lucide-react'
 import type {
-  GitCommitDetail,
   GitDiffRequest,
   GitGraphCommit,
   GitLogScope
 } from '@shared/git'
-import type { GitDetailState, GitGraphState } from '../stores/GitSession'
+import type { GitGraphState } from '../stores/GitSession'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { normalizeGitGraphRefs, type GitGraphDisplayRef } from '../utils/gitGraphRefs'
-import { GitDetailFilesList, GitDetailPanel } from './GitDetailPanel'
+import { GitCommitDetailPanel } from './GitDetailPanel'
 import {
   buildGitGraphConnectionPath,
   computeGitGraphLayout,
@@ -331,109 +328,6 @@ const GitGraphLaneSvg = memo(function GitGraphLaneSvg({
     </svg>
   )
 })
-
-interface GitCommitDetailPanelProps {
-  shortHash: string
-  detailState: GitDetailState<GitCommitDetail>
-  onOpenFileDiff: (request: GitDiffRequest) => void
-}
-
-/**
- * Renders read-only inline commit metadata, hash copy control, and changed files below a row.
- */
-function GitCommitDetailPanel({
-  shortHash,
-  detailState,
-  onOpenFileDiff
-}: GitCommitDetailPanelProps) {
-  const [copiedHash, setCopiedHash] = useState<string | null>(null)
-  const copyTimerRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current)
-      }
-    }
-  }, [])
-
-  async function handleCopyHash(hash: string): Promise<void> {
-    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
-      return
-    }
-    try {
-      await navigator.clipboard.writeText(hash)
-      setCopiedHash(hash)
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current)
-      }
-      copyTimerRef.current = window.setTimeout(() => {
-        setCopiedHash((current) => (current === hash ? null : current))
-        copyTimerRef.current = null
-      }, 2000)
-    } catch {
-      // Clipboard writes can fail when permissions are unavailable.
-    }
-  }
-
-  return (
-    <GitDetailPanel
-      ariaLabel={`${shortHash} 커밋 상세`}
-      detailState={detailState}
-      loadingText="커밋 상세를 불러오는 중..."
-      renderLoaded={(loadedDetail) => {
-        const isCopied = copiedHash === loadedDetail.hash
-        const hasBody = loadedDetail.body.trim().length > 0
-        return (
-          <>
-            <div className="git-commit-detail-top">
-              <code className="git-commit-detail-hash" title={loadedDetail.hash}>
-                {loadedDetail.shortHash}
-              </code>
-              <button
-                type="button"
-                className={`git-icon-btn git-commit-detail-copy-btn${isCopied ? ' is-copied' : ''}`}
-                aria-label="해시 복사"
-                title={isCopied ? '복사됨' : '전체 해시 복사'}
-                onClick={() => void handleCopyHash(loadedDetail.hash)}
-              >
-                {isCopied ? (
-                  <>
-                    <Check size={12} strokeWidth={1.75} aria-hidden="true" />
-                    <span className="git-commit-detail-copy-status">복사됨</span>
-                  </>
-                ) : (
-                  <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
-                )}
-              </button>
-            </div>
-            <div className="git-commit-detail-subject">{loadedDetail.subject}</div>
-            {hasBody && <div className="git-commit-detail-body">{loadedDetail.body}</div>}
-            <div className="git-commit-detail-meta">
-              <span className="git-commit-detail-author">
-                {loadedDetail.authorEmail
-                  ? `${loadedDetail.authorName} <${loadedDetail.authorEmail}>`
-                  : loadedDetail.authorName}
-              </span>
-              <span className="git-commit-detail-date">
-                {formatGitTimestamp(loadedDetail.committedAt)}
-              </span>
-            </div>
-            <GitDetailFilesList
-              files={loadedDetail.files}
-              target={{
-                kind: 'commit',
-                commitHash: loadedDetail.hash,
-                shortHash: loadedDetail.shortHash
-              }}
-              onOpenFileDiff={onOpenFileDiff}
-            />
-          </>
-        )
-      }}
-    />
-  )
-}
 
 /**
  * Renders the Graph accordion body with commit SVG lanes, ref badges, metadata, inline details, and pagination.

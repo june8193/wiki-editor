@@ -643,4 +643,325 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
       within(comparePanelB).getByRole('button', { name: /Base 기준 Ref 선택/ })
     ).toHaveTextContent('develop')
   })
+
+  it('switches between Files (N) and Commits (M) sub-tabs, syncs counts/data on mode or ref changes, and shows empty state for 0 commits', async () => {
+    const user = userEvent.setup()
+    const compareSummaryMock = vi.fn(
+      async (
+        _ws: string,
+        req: { baseRef: string; compareRef: string; mode: 'three-dot' | 'two-dot' }
+      ): Promise<GitCompareSummary> => {
+        if (req.baseRef === req.compareRef) {
+          return {
+            baseRef: req.baseRef,
+            compareRef: req.compareRef,
+            mode: req.mode,
+            mergeBaseHash: '1111111',
+            totalAdditions: 0,
+            totalDeletions: 0,
+            files: [],
+            commits: []
+          }
+        }
+        if (req.mode === 'two-dot') {
+          return {
+            baseRef: req.baseRef,
+            compareRef: req.compareRef,
+            mode: 'two-dot',
+            mergeBaseHash: null,
+            totalAdditions: 4,
+            totalDeletions: 1,
+            files: [{ path: 'docs/two-dot.md', status: 'M', additions: 4, deletions: 1, isBinary: false }],
+            commits: [
+              {
+                hash: 'bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222',
+                shortHash: 'bbbb222',
+                parents: ['aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111'],
+                subject: 'Two-dot extra commit',
+                authorName: 'Bob',
+                committedAt: '2026-11-24T09:30:00Z',
+                refs: []
+              }
+            ]
+          }
+        }
+        return {
+          baseRef: req.baseRef,
+          compareRef: req.compareRef,
+          mode: 'three-dot',
+          mergeBaseHash: '0000000',
+          totalAdditions: 10,
+          totalDeletions: 2,
+          files: [
+            { path: 'docs/one.md', status: 'A', additions: 7, deletions: 0, isBinary: false },
+            { path: 'docs/two.md', status: 'M', additions: 3, deletions: 2, isBinary: false }
+          ],
+          commits: [
+            {
+              hash: 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111',
+              shortHash: 'aaaa111',
+              parents: [],
+              subject: 'Add compare docs',
+              authorName: 'Alice',
+              committedAt: '2026-11-24T08:15:00Z',
+              refs: []
+            },
+            {
+              hash: 'cccc3333cccc3333cccc3333cccc3333cccc3333',
+              shortHash: 'cccc333',
+              parents: ['aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111'],
+              subject: 'Refine compare guide',
+              authorName: 'Charlie',
+              committedAt: '2026-11-24T08:45:00Z',
+              refs: []
+            }
+          ]
+        }
+      }
+    )
+
+    const { api } = createInMemoryWikiApi(
+      { recentWorkspaces: ['C:/repo'] },
+      {
+        workspaces: {
+          'C:/repo': {
+            'docs/one.md': '# One\n'
+          }
+        },
+        git: {
+          status: vi.fn(async (ws) => ({
+            ...createEmptyGitStatus(true, ws),
+            branch: 'feat/compare'
+          })),
+          compareRefs: vi.fn(async (): Promise<GitCompareRefList> => ({
+            defaultBaseRef: 'main',
+            currentRef: 'feat/compare',
+            worktrees: [],
+            localBranches: [
+              { id: 'local:main', kind: 'local-branch', ref: 'main', displayName: 'main', branchName: 'main' },
+              {
+                id: 'local:feat/compare',
+                kind: 'local-branch',
+                ref: 'feat/compare',
+                displayName: 'feat/compare',
+                branchName: 'feat/compare',
+                isCurrent: true
+              }
+            ],
+            remoteBranches: []
+          })),
+          compareSummary: compareSummaryMock
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('repo')).toBeInTheDocument()
+    })
+    await clickActivityBarButton(user, 'Compare')
+
+    const comparePanel = screen.getByRole('region', { name: '브랜치 비교' })
+    const filesTab = await within(comparePanel).findByRole('tab', { name: 'Files (2)' })
+    const commitsTab = within(comparePanel).getByRole('tab', { name: 'Commits (2)' })
+    expect(filesTab).toHaveAttribute('aria-selected', 'true')
+    expect(commitsTab).toHaveAttribute('aria-selected', 'false')
+
+    // Switch to Commits tab
+    await user.click(commitsTab)
+    expect(commitsTab).toHaveAttribute('aria-selected', 'true')
+    expect(within(comparePanel).queryByRole('textbox', { name: '변경 파일 필터' })).not.toBeInTheDocument()
+    expect(within(comparePanel).getByText('aaaa111')).toBeInTheDocument()
+    expect(within(comparePanel).getByText('Add compare docs')).toBeInTheDocument()
+    expect(within(comparePanel).getByText('Alice')).toBeInTheDocument()
+    expect(within(comparePanel).getByText('cccc333')).toBeInTheDocument()
+
+    // Switch to 2-dot mode: both Files (1) and Commits (1) counts and commit list update
+    await user.click(within(comparePanel).getByRole('button', { name: '2-dot (직접 비교)' }))
+    await waitFor(() => {
+      expect(within(comparePanel).getByRole('tab', { name: 'Files (1)' })).toBeInTheDocument()
+      expect(within(comparePanel).getByRole('tab', { name: 'Commits (1)' })).toBeInTheDocument()
+    })
+    expect(within(comparePanel).getByText('bbbb222')).toBeInTheDocument()
+    expect(within(comparePanel).getByText('Two-dot extra commit')).toBeInTheDocument()
+    expect(within(comparePanel).queryByText('Add compare docs')).not.toBeInTheDocument()
+
+    // Select same ref for Base -> 0 commits empty state
+    await user.click(within(comparePanel).getByRole('button', { name: /Base 기준 Ref 선택/ }))
+    const basePopover = screen.getByRole('dialog', { name: 'Base Ref 선택' })
+    await user.click(within(basePopover).getByRole('button', { name: /feat\/compare/ }))
+    await waitFor(() => {
+      expect(within(comparePanel).getByRole('tab', { name: 'Files (0)' })).toBeInTheDocument()
+      expect(within(comparePanel).getByRole('tab', { name: 'Commits (0)' })).toBeInTheDocument()
+    })
+    expect(within(comparePanel).getByText('비교 범위에 포함된 커밋이 없습니다.')).toBeInTheDocument()
+  })
+
+  it('toggles inline commit detail on commit click, copies full hash, and opens read-only commit Diff tab on file click', async () => {
+    const user = userEvent.setup()
+    const writeTextMock = vi.fn(async () => undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: writeTextMock }
+    })
+
+    const fullHash = 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111'
+    const commitDetailMock = vi.fn(async (_ws: string, hash: string) => ({
+      hash,
+      shortHash: 'aaaa111',
+      parents: [],
+      subject: 'Add compare docs',
+      body: 'Detailed commit body line',
+      authorName: 'Alice',
+      authorEmail: 'alice@example.com',
+      committedAt: '2026-11-24T08:15:00Z',
+      files: [{ path: 'docs/one.md', status: 'M' as const }]
+    }))
+
+    const diffMock = vi.fn(async (_ws: string, req: { kind: string; path: string; status: 'M' | 'A' | 'D' | 'R' | 'C' | '?' | 'U' }) => {
+      if (req.kind === 'commit') {
+        return {
+          path: req.path,
+          status: req.status,
+          rawPatch: 'diff --git a/docs/one.md b/docs/one.md\n@@ -1 +1 @@\n-old\n+new\n',
+          isBinary: false,
+          isTruncated: false,
+          existsInWorkspace: true
+        }
+      }
+      return {
+        path: req.path,
+        status: req.status,
+        rawPatch: '',
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true
+      }
+    })
+
+    const { api } = createInMemoryWikiApi(
+      { recentWorkspaces: ['C:/repo'] },
+      {
+        workspaces: {
+          'C:/repo': {
+            'docs/one.md': '# One\n'
+          }
+        },
+        git: {
+          status: vi.fn(async (ws) => ({
+            ...createEmptyGitStatus(true, ws),
+            branch: 'feat/compare'
+          })),
+          compareRefs: vi.fn(async (): Promise<GitCompareRefList> => ({
+            defaultBaseRef: 'main',
+            currentRef: 'feat/compare',
+            worktrees: [],
+            localBranches: [
+              { id: 'local:main', kind: 'local-branch', ref: 'main', displayName: 'main', branchName: 'main' },
+              {
+                id: 'local:feat/compare',
+                kind: 'local-branch',
+                ref: 'feat/compare',
+                displayName: 'feat/compare',
+                branchName: 'feat/compare',
+                isCurrent: true
+              }
+            ],
+            remoteBranches: []
+          })),
+          compareSummary: vi.fn(async (_ws, req): Promise<GitCompareSummary> => ({
+            baseRef: req.baseRef,
+            compareRef: req.compareRef,
+            mode: req.mode,
+            mergeBaseHash: '0000000',
+            totalAdditions: 1,
+            totalDeletions: 1,
+            files: [{ path: 'docs/one.md', status: 'M', additions: 1, deletions: 1, isBinary: false }],
+            commits:
+              req.mode === 'three-dot'
+                ? [
+                    {
+                      hash: fullHash,
+                      shortHash: 'aaaa111',
+                      parents: [],
+                      subject: 'Add compare docs',
+                      authorName: 'Alice',
+                      committedAt: '2026-11-24T08:15:00Z',
+                      refs: []
+                    }
+                  ]
+                : []
+          })),
+          commitDetail: commitDetailMock,
+          diff: diffMock
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('repo')).toBeInTheDocument()
+    })
+    await clickActivityBarButton(user, 'Compare')
+
+    const comparePanel = screen.getByRole('region', { name: '브랜치 비교' })
+    const commitsTab = await within(comparePanel).findByRole('tab', { name: 'Commits (1)' })
+    await user.click(commitsTab)
+
+    const commitRowBtn = within(comparePanel).getByRole('button', { name: /Add compare docs/ })
+    expect(commitRowBtn).toHaveAttribute('aria-expanded', 'false')
+
+    await user.click(commitRowBtn)
+
+    expect(commitDetailMock).toHaveBeenCalledWith('C:/repo', fullHash)
+    const detailRegion = await within(comparePanel).findByRole('region', {
+      name: 'aaaa111 커밋 상세'
+    })
+    expect(commitRowBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(within(detailRegion).getByText('Detailed commit body line')).toBeInTheDocument()
+    expect(within(detailRegion).getByText('Alice <alice@example.com>')).toBeInTheDocument()
+
+    // Copy full hash
+    await user.click(within(detailRegion).getByRole('button', { name: '해시 복사' }))
+    expect(writeTextMock).toHaveBeenCalledWith(fullHash)
+    expect(within(detailRegion).getByText('복사됨')).toBeInTheDocument()
+
+    // Click changed file inside inline commit detail -> opens read-only commit Diff tab
+    await user.click(within(detailRegion).getByRole('button', { name: /one\.md/ }))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    await waitFor(() => {
+      expect(within(primaryPane).getByRole('tab', { name: /one\.md \(aaaa111\)/ })).toBeInTheDocument()
+      expect(within(primaryPane).getByText('Commit aaaa111')).toBeInTheDocument()
+    })
+    expect(diffMock).toHaveBeenCalledWith('C:/repo', {
+      kind: 'commit',
+      commitHash: fullHash,
+      shortHash: 'aaaa111',
+      path: 'docs/one.md',
+      status: 'M'
+    })
+
+    // Toggle collapse by clicking commit row again
+    await user.click(commitRowBtn)
+    expect(commitRowBtn).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      within(comparePanel).queryByRole('region', { name: 'aaaa111 커밋 상세' })
+    ).not.toBeInTheDocument()
+
+    // Re-expand and switch to 2-dot where commit is absent -> detail resets
+    await user.click(commitRowBtn)
+    await within(comparePanel).findByRole('region', { name: 'aaaa111 커밋 상세' })
+    await user.click(within(comparePanel).getByRole('button', { name: '2-dot (직접 비교)' }))
+    await waitFor(() => {
+      expect(within(comparePanel).getByRole('tab', { name: 'Commits (0)' })).toBeInTheDocument()
+    })
+    expect(
+      within(comparePanel).queryByRole('region', { name: 'aaaa111 커밋 상세' })
+    ).not.toBeInTheDocument()
+  })
 })

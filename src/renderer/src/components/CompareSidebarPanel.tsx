@@ -18,11 +18,13 @@ import {
 } from '../stores/CompareSession'
 import {
   formatGitChangedFileDisplay,
+  formatGitTimestamp,
   getGitFileStatusDisplay
 } from '../utils/gitFilePresentation'
 import { buildCompressedGitFileTree, type GitFileTreeNode } from '../utils/gitFileTree'
 import { CompareRefPicker } from './CompareRefPicker'
 import { getGitTreeIndentStyle } from './GitChangedFileRow'
+import { GitCommitDetailPanel } from './GitDetailPanel'
 
 export interface CompareSidebarPanelProps {
   state: ComparePanelState
@@ -246,39 +248,107 @@ export function CompareSidebarPanel({ state, isRepo, actions }: CompareSidebarPa
                 </span>
               </div>
 
-              <div className="compare-files-section">
-                <div className="compare-filter-wrap">
-                  <Search size={13} strokeWidth={1.75} className="compare-filter-icon" aria-hidden="true" />
-                  <input
-                    type="text"
-                    className="compare-filter-input"
-                    aria-label="변경 파일 필터"
-                    placeholder="파일명 또는 경로 필터..."
-                    value={state.fileFilter}
-                    onChange={(event) => actions.setFileFilter(event.target.value)}
-                  />
-                  {state.fileFilter && (
-                    <button
-                      type="button"
-                      className="compare-filter-clear"
-                      aria-label="필터 지우기"
-                      onClick={() => actions.setFileFilter('')}
-                    >
-                      <X size={12} strokeWidth={1.75} aria-hidden="true" />
-                    </button>
-                  )}
-                </div>
-
-                <div className="compare-files-tree" role="region" aria-label="변경 파일 목록">
-                  {state.summary.files.length === 0 ? (
-                    <p className="compare-files-empty">두 Ref 사이에 변경된 파일이 없습니다.</p>
-                  ) : treeNodes.length === 0 ? (
-                    <p className="compare-files-empty">필터와 일치하는 파일이 없습니다.</p>
-                  ) : (
-                    renderTreeNodes(treeNodes, 0)
-                  )}
-                </div>
+              <div className="compare-subtabs" role="tablist" aria-label="비교 보기 전환">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={state.subTab === 'files'}
+                  className={`compare-subtab-btn${state.subTab === 'files' ? ' is-active' : ''}`}
+                  onClick={() => actions.setSubTab('files')}
+                >
+                  Files ({state.summary.files.length})
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={state.subTab === 'commits'}
+                  className={`compare-subtab-btn${state.subTab === 'commits' ? ' is-active' : ''}`}
+                  onClick={() => actions.setSubTab('commits')}
+                >
+                  Commits ({state.summary.commits.length})
+                </button>
               </div>
+
+              {state.subTab === 'files' ? (
+                <div className="compare-files-section">
+                  <div className="compare-filter-wrap">
+                    <Search size={13} strokeWidth={1.75} className="compare-filter-icon" aria-hidden="true" />
+                    <input
+                      type="text"
+                      className="compare-filter-input"
+                      aria-label="변경 파일 필터"
+                      placeholder="파일명 또는 경로 필터..."
+                      value={state.fileFilter}
+                      onChange={(event) => actions.setFileFilter(event.target.value)}
+                    />
+                    {state.fileFilter && (
+                      <button
+                        type="button"
+                        className="compare-filter-clear"
+                        aria-label="필터 지우기"
+                        onClick={() => actions.setFileFilter('')}
+                      >
+                        <X size={12} strokeWidth={1.75} aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="compare-files-tree" role="region" aria-label="변경 파일 목록">
+                    {state.summary.files.length === 0 ? (
+                      <p className="compare-files-empty">두 Ref 사이에 변경된 파일이 없습니다.</p>
+                    ) : treeNodes.length === 0 ? (
+                      <p className="compare-files-empty">필터와 일치하는 파일이 없습니다.</p>
+                    ) : (
+                      renderTreeNodes(treeNodes, 0)
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="compare-commits-section" role="region" aria-label="비교 커밋 목록">
+                  {state.summary.commits.length === 0 ? (
+                    <p className="compare-files-empty">비교 범위에 포함된 커밋이 없습니다.</p>
+                  ) : (
+                    <ul className="compare-commit-list">
+                      {state.summary.commits.map((commit) => {
+                        const isExpanded =
+                          state.commitDetail.status !== 'idle' &&
+                          state.commitDetail.selectedHash === commit.hash
+                        return (
+                          <li
+                            key={commit.hash}
+                            className={`compare-commit-item${isExpanded ? ' is-expanded' : ''}`}
+                          >
+                            <button
+                              type="button"
+                              className="compare-commit-row-btn"
+                              aria-expanded={isExpanded}
+                              onClick={() => actions.toggleCommitDetail(commit.hash)}
+                            >
+                              <div className="compare-commit-row-top">
+                                <code className="compare-commit-hash">{commit.shortHash}</code>
+                                <span className="compare-commit-subject">{commit.subject}</span>
+                              </div>
+                              <div className="compare-commit-row-meta">
+                                <span className="compare-commit-author">{commit.authorName}</span>
+                                <span className="compare-commit-date">
+                                  {formatGitTimestamp(commit.committedAt)}
+                                </span>
+                              </div>
+                            </button>
+                            {isExpanded && (
+                              <GitCommitDetailPanel
+                                shortHash={commit.shortHash}
+                                detailState={state.commitDetail}
+                                onOpenFileDiff={actions.openCommitFileDiff}
+                              />
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
