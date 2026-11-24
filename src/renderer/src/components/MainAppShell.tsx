@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppMenuCommand, WikiApi } from '@shared/ipc'
-import { getGitChangedCount } from '@shared/git'
+import { getGitChangedCount, type GitDiffRequest } from '@shared/git'
 import type { WorkspaceSearchFileResult } from '@shared/search'
 import {
   filterTopLevelWorkspaceEntries,
@@ -10,6 +10,7 @@ import {
   type WorkspaceEntry
 } from '@shared/workspace'
 import { useConfigController } from '../hooks/useConfigController'
+import { useCompareSession } from '../hooks/useCompareSession'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
@@ -37,7 +38,10 @@ import {
   type SearchFocusRequest
 } from '../utils/workspaceSearch'
 import { ActivityBar, type LeftSidebarView } from './ActivityBar'
+import { getOrderedVisibleCompareFiles } from '../stores/CompareSession'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
+import { CompareSidebarPanel } from './CompareSidebarPanel'
+import type { GitDiffNavigationProps } from './GitDiffViewer'
 import { type EntryPathCopyMode, FolderTreeSidebar } from './FolderTreeSidebar'
 import { FrontmatterFilterBar } from './FrontmatterFilterBar'
 import { GitSidebarPanel } from './GitSidebarPanel'
@@ -295,6 +299,20 @@ export function MainAppShell() {
     schema: frontmatterSchema.schemaResult?.schema ?? null
   })
 
+  const activeGitIsRepo =
+    git.panelState.workspaceRootPath === activeWorkspaceRoot
+      ? (git.panelState.status?.isRepo ?? null)
+      : null
+
+  const compare = useCompareSession({
+    workspaceRootPath: activeWorkspaceRoot,
+    isRepo: activeGitIsRepo,
+    diffTabs: {
+      openDiffTab: git.actions.openFileDiff,
+      reconcileBranchCompareDiffTabs: editor.reconcileBranchCompareDiffTabs
+    }
+  })
+
   workspaceCollaboratorsRef.current = {
     tree: {
       getExpandedDirs,
@@ -465,6 +483,58 @@ export function MainAppShell() {
     [editor.paneActions, git.actions.openWorkspaceFile]
   )
 
+  const orderedCompareFiles = useMemo(
+    () =>
+      compare.state.summary
+        ? getOrderedVisibleCompareFiles(compare.state.summary.files, compare.state.fileFilter)
+        : [],
+    [compare.state.summary, compare.state.fileFilter]
+  )
+
+  const getDiffNavigation = useCallback(
+    (request: GitDiffRequest): GitDiffNavigationProps | undefined => {
+      if (
+        request.kind !== 'branch-compare' ||
+        !compare.state.summary ||
+        compare.state.baseRef !== request.baseRef ||
+        compare.state.compareRef !== request.compareRef ||
+        compare.state.mode !== request.mode
+      ) {
+        return undefined
+      }
+      const index = orderedCompareFiles.findIndex(
+        (file) => file.path === request.path && file.origPath === request.origPath
+      )
+      if (index < 0) {
+        return undefined
+      }
+      return {
+        currentIndex: index + 1,
+        totalCount: orderedCompareFiles.length,
+        onPrevFile: () => {
+          const prev = orderedCompareFiles[index - 1]
+          if (prev) {
+            compare.actions.openCompareFileDiff(prev)
+          }
+        },
+        onNextFile: () => {
+          const next = orderedCompareFiles[index + 1]
+          if (next) {
+            compare.actions.openCompareFileDiff(next)
+          }
+        }
+      }
+    },
+    [
+      orderedCompareFiles,
+      compare.state.summary,
+      compare.state.baseRef,
+      compare.state.compareRef,
+      compare.state.mode,
+      compare.actions
+    ]
+  )
+
   const isCurrentWorkspaceFavorite =
     workspace !== null && isFavoriteWorkspacePath(config.favoriteWorkspaces, workspace.rootPath)
   const gitChangedCount = workspace?.rootPath ? getGitChangedCount(git.panelState.status) : 0
@@ -579,6 +649,14 @@ export function MainAppShell() {
             {leftSidebar.activeView === 'git' && (
               <GitSidebarPanel state={git.panelState} actions={git.actions} />
             )}
+
+            {leftSidebar.activeView === 'compare' && (
+              <CompareSidebarPanel
+                state={compare.state}
+                isRepo={activeGitIsRepo}
+                actions={compare.actions}
+              />
+            )}
           </aside>
           <SidebarResizer
             edge="right"
@@ -634,6 +712,7 @@ export function MainAppShell() {
         isEditorShortcutDisabled,
         {
           diffsByKey: git.diffsByKey,
+          getDiffNavigation,
           workspaceMarkdownFiles: markdownFiles
         }
       )}

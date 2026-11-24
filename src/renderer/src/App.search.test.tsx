@@ -52,6 +52,7 @@ describe('Workspace Search View (<App />)', () => {
       '탐색기',
       '검색',
       'Git',
+      'Compare',
       '워크스페이스'
     ])
 

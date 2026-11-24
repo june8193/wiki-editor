@@ -6,7 +6,7 @@ import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { type Mock, vi } from 'vitest'
 
-export type ActivityBarButtonLabel = '탐색기' | '검색' | 'Git' | '워크스페이스'
+export type ActivityBarButtonLabel = '탐색기' | '검색' | 'Git' | 'Compare' | '워크스페이스'
 export type PaneEditorModeLabel = 'Raw' | 'Split' | 'Preview' | '위지윅'
 
 export interface MermaidMockState {

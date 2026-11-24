@@ -3,11 +3,16 @@ import type { ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
+import type { GitDiffRequest } from '@shared/git'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 import { DocumentEditor, type DocumentEditorFindControl } from './DocumentEditor'
-import { type GitDiffContentState, GitDiffViewer } from './GitDiffViewer'
+import {
+  type GitDiffContentState,
+  type GitDiffNavigationProps,
+  GitDiffViewer
+} from './GitDiffViewer'
 import {
   allowWikiTabDragOver,
   handleTabMoveDrop,
@@ -29,6 +34,7 @@ interface PaneViewProps {
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   buffers: DocumentBufferSnapshot
   diffsByKey: Record<string, GitDiffContentState>
+  getDiffNavigation?: (request: GitDiffRequest) => GitDiffNavigationProps | undefined
   dragState: TabDragUiState
   findControl?: DocumentEditorFindControl
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
@@ -48,6 +54,7 @@ export function PaneView({
   workspaceMarkdownFiles,
   buffers,
   diffsByKey,
+  getDiffNavigation,
   dragState,
   findControl,
   onActiveHeadingChange,
@@ -117,6 +124,7 @@ export function PaneView({
             actions.onChangeDiffViewMode(pane.id, activeTab.id, nextMode)
           }
           onOpenFile={actions.onOpenDiffTargetFile}
+          navigation={getDiffNavigation?.(activeTab.diff.request)}
         />
       ) : activeTab?.kind === 'document' && activeBuffer ? (
         <DocumentEditor

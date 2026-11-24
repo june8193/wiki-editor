@@ -1,5 +1,5 @@
 import type { BufferKeyRemap } from '@shared/documentBuffer'
-import type { GitDiffRequest, GitStashEntry } from '@shared/git'
+import type { GitChangedFile, GitDiffRequest, GitStashEntry } from '@shared/git'
 import {
   clampSplitRatio,
   type CursorPosition,
@@ -1114,6 +1114,49 @@ export class PaneTabStore {
           request: {
             ...tab.diff.request,
             stashRef: nextRef
+          }
+        }
+      }
+    })
+  }
+
+  reconcileBranchCompareDiffTabs = (
+    baseRef: string,
+    compareRef: string,
+    mode: 'three-dot' | 'two-dot',
+    files: readonly { path: string; origPath?: string; status: GitChangedFile['status'] }[]
+  ): void => {
+    const fileByPath = new Map(files.map((file) => [file.path, file]))
+    this.transformPaneTabs((tab) => {
+      if (tab.kind !== 'diff' || tab.diff.request.kind !== 'branch-compare') {
+        return tab
+      }
+      const matched = fileByPath.get(tab.diff.request.path)
+      if (!matched) {
+        return null
+      }
+      const prev = tab.diff.request
+      if (
+        prev.baseRef === baseRef &&
+        prev.compareRef === compareRef &&
+        prev.mode === mode &&
+        prev.status === matched.status &&
+        prev.origPath === matched.origPath
+      ) {
+        return tab
+      }
+      return {
+        ...tab,
+        diff: {
+          ...tab.diff,
+          request: {
+            kind: 'branch-compare',
+            baseRef,
+            compareRef,
+            mode,
+            path: matched.path,
+            ...(matched.origPath ? { origPath: matched.origPath } : {}),
+            status: matched.status
           }
         }
       }

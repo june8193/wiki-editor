@@ -3,6 +3,7 @@ import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import { toErrorMessage } from '@shared/errors'
 import { FRONTMATTER_SCHEMA_FILE } from '@shared/frontmatter'
+import type { GitDiffRequest } from '@shared/git'
 import type { WorkspaceEntry } from '@shared/workspace'
 import { isMarkdownDocument, type SidebarDocumentContext } from '../editor/editorModes'
 import type { ConfirmDialogState } from '../hooks/useConfirmDialog'
@@ -35,7 +36,7 @@ import {
 } from '../utils/sidebarWidth'
 import { ConfirmDialog } from './ConfirmDialog'
 import { FrontmatterSchemaModal } from './FrontmatterSchemaModal'
-import type { GitDiffContentState } from './GitDiffViewer'
+import type { GitDiffContentState, GitDiffNavigationProps } from './GitDiffViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneWorkspace, type PaneWorkspaceProps } from './PaneWorkspace'
 import {
@@ -66,6 +67,7 @@ export function buildPaneWorkspaceProps(
   isShortcutDisabled: boolean,
   extras?: {
     diffsByKey?: Record<string, GitDiffContentState>
+    getDiffNavigation?: (request: GitDiffRequest) => GitDiffNavigationProps | undefined
     workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   }
 ): WindowFramePaneWorkspaceProps {
@@ -73,6 +75,7 @@ export function buildPaneWorkspaceProps(
     layout: editor.layout,
     buffers: editor.buffers,
     diffsByKey: extras?.diffsByKey ?? {},
+    getDiffNavigation: extras?.getDiffNavigation,
     theme: config.theme,
     autoSave: config.autoSave,
     isShortcutDisabled,

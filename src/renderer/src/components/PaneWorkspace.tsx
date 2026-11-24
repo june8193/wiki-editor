@@ -1,6 +1,7 @@
 import { DragEvent, useCallback, useEffect, useRef, useState } from 'react'
 import type { ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
+import type { GitDiffRequest } from '@shared/git'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { ActiveTabDragSession } from '@shared/window'
 import type { WorkspaceEntry } from '@shared/workspace'
@@ -19,7 +20,7 @@ import {
   type TabDragUiState
 } from '../stores/tabDragDrop'
 import type { DocumentEditorFindControl } from './DocumentEditor'
-import type { GitDiffContentState } from './GitDiffViewer'
+import type { GitDiffContentState, GitDiffNavigationProps } from './GitDiffViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
 import { SplitSplitter } from './SplitSplitter'
@@ -28,6 +29,7 @@ export interface PaneWorkspaceProps {
   layout: PaneLayoutState
   buffers: DocumentBufferSnapshot
   diffsByKey: Record<string, GitDiffContentState>
+  getDiffNavigation?: (request: GitDiffRequest) => GitDiffNavigationProps | undefined
   theme: ThemeMode
   autoSave: boolean
   scrollRequest?: OutlineScrollRequest | null
@@ -55,6 +57,7 @@ export function PaneWorkspace({
   layout,
   buffers,
   diffsByKey,
+  getDiffNavigation,
   theme,
   autoSave,
   scrollRequest = null,
@@ -150,6 +153,7 @@ export function PaneWorkspace({
     workspaceMarkdownFiles,
     buffers,
     diffsByKey,
+    getDiffNavigation,
     dragState,
     onActiveHeadingChange,
     actions
