@@ -6,7 +6,7 @@
 
 **Blocked by:** 01-branch-compare-backend-and-ipc
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] **액티비티 바**에 **Compare 뷰** 아이콘을 추가해 **왼쪽 사이드바**에서 **Compare 패널**을 단독 표시하고(활성 아이콘 재클릭 시 사이드바 접기/펼치기), 비Git 저장소/워크스페이스 미열림 상태 안내를 제공한다.
 - [ ] `Base` / `Compare` Ref 선택기 팝오버에서 `Worktrees`, `Local Branches`, `Remote Branches` 그룹 목록 및 실시간 검색 필터링을 지원하고, 초기 진입 시 기본 `Base`와 현재 `Compare`를 자동 선택하며 `⇄` 스왑과 새로고침을 동작시킨다.

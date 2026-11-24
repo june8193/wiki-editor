@@ -6,7 +6,7 @@
 
 **Blocked by:** 03-compare-view-shell-and-files-diff
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] **Compare 패널**에서 `Files (N)` / `Commits (M)` 서브 탭을 전환할 수 있으며, `Base`·`Compare`·`3-dot`/`2-dot` 변경 시 두 탭의 카운트와 데이터가 함께 갱신된다.
 - [ ] **Commits** 탭에서 커밋 목록(단축 해시, 제목, 작성자, 상대/포맷 시각)을 표시하고, 커밋이 0건일 때 빈 상태 안내를 표시한다.

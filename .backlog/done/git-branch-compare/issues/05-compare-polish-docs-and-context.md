@@ -6,7 +6,7 @@
 
 **Blocked by:** 02-diff-viewer-word-highlight-and-syntax, 04-compare-commits-tab-and-inline-detail
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `branch-compare` **Diff 탭**을 **보조 창**으로 이동하거나 다른 **편집기 영역**으로 복제·분할했을 때 단어 단위 하이라이트, 신택스 하이라이팅, `좌우 비교`/`인라인` 전환 및 `파일 열기`가 정상 동작한다.
 - [ ] `CONTEXT.md`에 **Compare 뷰**, **Compare 패널** 공식 용어를 추가하고 **액티비티 바**·**왼쪽 사이드바**·**Diff 뷰어** 설명을 현행화한다.

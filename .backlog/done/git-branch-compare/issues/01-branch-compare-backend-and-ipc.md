@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 공유 Git 타입에 `GitCompareRefList`, `GitCompareSummary`, `GitCompareChangedFile`, `GitCompareMode` 및 `GitDiffRequest`의 `'branch-compare'` 분기를 추가하고, `WikiGitApi`에 `compareRefs`·`compareSummary` 메서드를 노출한다.
 - [ ] `compareRefs`가 `refs/heads/*`, `refs/remotes/*`(`*/HEAD` 제외), `git worktree list --porcelain`(워크트리 폴더명·체크아웃 브랜치·Detached HEAD 단축 해시)을 파싱하고, `defaultBaseRef`(`origin/HEAD` → `main` → `master` 폴백)와 `currentRef`를 반환한다.

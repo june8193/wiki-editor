@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 연속된 삭제(`-`) 줄과 추가(`+`) 줄 쌍을 매칭해 토큰 단위 LCS 기반으로 실제 변경된 구간만 강조 표시(과도하게 긴 줄은 성능 보호를 위해 줄 전체 강조로 폴백)한다.
 - [ ] 이미 설치된 `@codemirror/language-data` 및 `@lezer/highlight`를 이용해 파일 확장자별 신택스 하이라이팅을 적용하고, 미지원 확장자·비정상적으로 긴 줄은 일반 텍스트로 안전하게 폴백한다.
