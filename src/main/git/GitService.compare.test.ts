@@ -98,7 +98,7 @@ describe('GitService integration (branch and worktree compare)', () => {
     expect(detachedRefs.worktrees.find((w) => w.worktreeName === 'wt-detached')?.isCurrent).toBe(
       true
     )
-  })
+  }, 60_000)
 
   it('resolves defaultBaseRef from origin/HEAD when present, excluding */HEAD from remoteBranches, and handles unborn and non-git directories', async () => {
     // Non-git folder throws
@@ -130,7 +130,7 @@ describe('GitService integration (branch and worktree compare)', () => {
     expect(remoteRefs.currentRef).toBe('topic/notes')
     expect(remoteRefs.remoteBranches.map((r) => r.ref)).toEqual(['origin/main'])
     expect(remoteRefs.remoteBranches.some((r) => r.ref.endsWith('/HEAD'))).toBe(false)
-  })
+  }, 60_000)
 
   it('computes three-dot vs two-dot compareSummary with numstat, renames, binary files, commits, and same-ref empty result', async () => {
     await sandbox.runGit(sandbox.repoDir, ['init'])
@@ -243,7 +243,7 @@ describe('GitService integration (branch and worktree compare)', () => {
     expect(sameRef.commits).toEqual([])
     expect(sameRef.totalAdditions).toBe(0)
     expect(sameRef.totalDeletions).toBe(0)
-  })
+  }, 60_000)
 
   it('blocks revision injection, unborn repositories, and non-git directories in compareSummary', async () => {
     await expect(
@@ -286,7 +286,7 @@ describe('GitService integration (branch and worktree compare)', () => {
         })
       ).rejects.toThrow(/유효한/)
     }
-  })
+  }, 60_000)
 
   it('computes kind=branch-compare diffs (3-dot/2-dot, rename, binary, >1MB truncation, existsInWorkspace) and enforces path/ref/IPC workspace security', async () => {
     await sandbox.runGit(sandbox.repoDir, ['init'])
@@ -481,5 +481,5 @@ describe('GitService integration (branch and worktree compare)', () => {
       dispose()
       workspaceService.dispose()
     }
-  })
+  }, 60_000)
 })

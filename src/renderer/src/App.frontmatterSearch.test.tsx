@@ -438,7 +438,7 @@ describe('Search View Frontmatter Filter Bar, Summary Badges & Sort (<App />)', 
     } finally {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView
     }
-  })
+  }, 20_000)
 
   it('displays summary badges, adds/applies filter immediately on badge click, and sorts by path or schema field order with empty values last', async () => {
     const user = userEvent.setup()

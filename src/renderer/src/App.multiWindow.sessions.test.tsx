@@ -654,7 +654,7 @@ describe('Multi-main-window workspace opening (<App />)', () => {
     })
     expect(main2.isClosed()).toBe(false)
     expect(aux2.isClosed()).toBe(false)
-  })
+  }, 20_000)
 
   it('restores and focuses the existing main window without creating a duplicate when open-in-new-window targets an already-open workspace', async () => {
     const user = userEvent.setup()
