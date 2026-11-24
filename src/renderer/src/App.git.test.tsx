@@ -20,6 +20,11 @@ import {
 
 vi.mock('mermaid', async () => (await import('./test/appTestHelpers')).createMermaidMockState().module)
 
+function matchDiffLineText(expected: string) {
+  return (_: string, el: Element | null) =>
+    Boolean(el?.classList.contains('git-diff-line-text') && el.textContent === expected)
+}
+
 describe('Workspace Git sidebar integration & safe buffer/tree refresh', () => {
   beforeEach(() => {
     document.documentElement.removeAttribute('data-theme')
@@ -1753,7 +1758,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     expect(within(primaryPane).getByRole('tab', { name: /guide\.md/ })).toBeInTheDocument()
     expect(within(primaryPane).getByText('Staged')).toBeInTheDocument()
     expect(within(primaryPane).getByTestId('diff-side-by-side')).toBeInTheDocument()
-    expect(within(primaryPane).getByText('old guide.md r1')).toBeInTheDocument()
+    expect(within(primaryPane).getByText(matchDiffLineText('old guide.md r1'))).toBeInTheDocument()
 
     // Switch to inline view
     await user.click(within(primaryPane).getByRole('button', { name: '인라인' }))
@@ -1881,7 +1886,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     await user.click(within(stagedList).getByText('doc.md'))
 
     const primaryPane = screen.getByTestId('pane-primary')
-    await within(primaryPane).findByText('after v1')
+    await within(primaryPane).findByText(matchDiffLineText('after v1'))
 
     // Document Outline must exclude active Diff tab even when target is .md
     const outlinePanel = screen.getByLabelText('문서 목차 (Outline)')
@@ -1904,7 +1909,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     fireEvent.mouseDown(primaryPane)
     const changesList = within(gitPanel).getByRole('group', { name: 'Changes' })
     await user.click(within(changesList).getByText('other.md'))
-    await within(primaryPane).findByText('after v1')
+    await within(primaryPane).findByText(matchDiffLineText('after v1'))
     expect(within(secondaryPane).getByRole('tab', { name: /Diff\s*doc\.md/ })).toBeInTheDocument()
 
     // Wait longer than autoSaveDelayMs (60ms) -> Diff tab never triggers writeFile
@@ -1922,13 +1927,13 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     })
     await user.click(within(primaryPane).getByRole('tab', { name: /Diff\s*other\.md/ }))
     await waitFor(() => {
-      expect(within(primaryPane).getByText('after v2')).toBeInTheDocument()
+      expect(within(primaryPane).getByText(matchDiffLineText('after v2'))).toBeInTheDocument()
     })
 
     // Stage action refreshes Git status -> open Diff tab auto-refreshes (after v3)
     await user.click(within(gitPanel).getByRole('button', { name: 'other.md Stage' }))
     await waitFor(() => {
-      expect(within(primaryPane).getByText('after v3')).toBeInTheDocument()
+      expect(within(primaryPane).getByText(matchDiffLineText('after v3'))).toBeInTheDocument()
     })
 
     // Commit -> triggers Git refresh -> open Diff tabs auto-refresh (staged doc.md empties, unstaged other.md gets v4)
@@ -1936,7 +1941,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
     await user.click(within(gitPanel).getByRole('button', { name: 'Commit' }))
 
     await waitFor(() => {
-      expect(within(primaryPane).getByText('after v4')).toBeInTheDocument()
+      expect(within(primaryPane).getByText(matchDiffLineText('after v4'))).toBeInTheDocument()
       expect(within(secondaryPane).getByText('표시할 텍스트 변경 사항이 없습니다.')).toBeInTheDocument()
     })
 
@@ -1946,7 +1951,7 @@ describe('Git Diff viewer tab and Changes section integration', () => {
       emitWorkspaceChange({ rootPath: 'C:/wiki/diff-one', eventType: 'change', relativePath: 'other.md' })
     })
     await waitFor(() => {
-      expect(within(primaryPane).getByText('after v5')).toBeInTheDocument()
+      expect(within(primaryPane).getByText(matchDiffLineText('after v5'))).toBeInTheDocument()
     })
 
     // Closing Diff tab never shows unsaved alertdialog
@@ -2117,7 +2122,7 @@ describe('Git Graph commit file diff integration', () => {
     expect(guideCommitTab).toHaveAttribute('title', 'docs/guide.md · Commit a1b2c3d')
     expect(within(primaryPane).getByText(`Commit ${shortHash}`)).toBeInTheDocument()
     expect(within(primaryPane).getByTestId('diff-side-by-side')).toBeInTheDocument()
-    expect(within(primaryPane).getByText('commit after')).toBeInTheDocument()
+    expect(within(primaryPane).getByText(matchDiffLineText('commit after'))).toBeInTheDocument()
 
     // Toggle Side-by-Side -> Inline on commit Diff tab
     await user.click(within(primaryPane).getByRole('button', { name: '인라인' }))
@@ -2148,14 +2153,14 @@ describe('Git Graph commit file diff integration', () => {
       status: 'R'
     })
     await waitFor(() => {
-      expect(within(primaryPane).getByText('renamed title')).toBeInTheDocument()
+      expect(within(primaryPane).getByText(matchDiffLineText('renamed title'))).toBeInTheDocument()
     })
 
     // 4. Open Working Tree Diff tab from Changes -> replaces commit Diff tab in active pane
     const changesList = within(gitPanel).getByRole('group', { name: 'Changes' })
     await user.click(within(changesList).getByText('notes.md'))
     await waitFor(() => {
-      expect(within(primaryPane).getByText('working after')).toBeInTheDocument()
+      expect(within(primaryPane).getByText(matchDiffLineText('working after'))).toBeInTheDocument()
     })
     expect(within(primaryPane).getAllByRole('tab')).toHaveLength(2)
 
@@ -2169,7 +2174,7 @@ describe('Git Graph commit file diff integration', () => {
 
     fireEvent.mouseDown(primaryPane)
     await user.click(within(detailRegion).getByTitle('docs/guide.md'))
-    await within(primaryPane).findByText('commit after')
+    await within(primaryPane).findByText(matchDiffLineText('commit after'))
     expect(
       within(primaryPane).getByRole('tab', { name: /Diff\s*guide\.md \(a1b2c3d\)/ })
     ).toBeInTheDocument()

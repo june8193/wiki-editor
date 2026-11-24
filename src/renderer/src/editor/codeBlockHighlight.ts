@@ -38,7 +38,7 @@ export interface CodeBlockHighlightSpan {
 
 type HighlightTree = Parameters<typeof highlightCode>[1]
 
-interface CodeParser {
+export interface CodeParser {
   parse(input: string): HighlightTree
 }
 
@@ -267,20 +267,15 @@ export function resolveCanonicalLanguageInput(input: string): string {
 }
 
 /**
- * Computes syntax-highlight spans (`[from, to)`) for a code string in the specified language.
+ * Computes syntax-highlight spans (`[from, to)`) for a code string using a Lezer parser.
  */
-export function getCodeBlockHighlightSpans(
+export function highlightCodeWithParser(
   code: string,
-  language: string | null | undefined
+  parser: CodeParser
 ): CodeBlockHighlightSpan[] {
   if (!code) {
     return []
   }
-  const parser = resolveParser(language)
-  if (!parser) {
-    return []
-  }
-
   const tree = parser.parse(code)
   const spans: CodeBlockHighlightSpan[] = []
   let offset = 0
@@ -303,4 +298,21 @@ export function getCodeBlockHighlightSpans(
   )
 
   return spans
+}
+
+/**
+ * Computes syntax-highlight spans (`[from, to)`) for a code string in the specified language.
+ */
+export function getCodeBlockHighlightSpans(
+  code: string,
+  language: string | null | undefined
+): CodeBlockHighlightSpan[] {
+  if (!code) {
+    return []
+  }
+  const parser = resolveParser(language)
+  if (!parser) {
+    return []
+  }
+  return highlightCodeWithParser(code, parser)
 }

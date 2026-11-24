@@ -28,8 +28,10 @@
   --table-stripe-bg: #f6f8fa;
   --diff-add-bg: #dafbe1;
   --diff-add-gutter-bg: #ccffd8;
+  --diff-add-word-bg: rgba(26, 127, 55, 0.24);
   --diff-del-bg: #ffebe9;
   --diff-del-gutter-bg: #ffd7d5;
+  --diff-del-word-bg: rgba(207, 34, 46, 0.24);
   --diff-hunk-bg: #ddf4ff;
   --diff-hunk-text: #0969da;
   --diff-empty-bg: #f6f8fa;
@@ -79,8 +81,10 @@
   --table-stripe-bg: #161b22;
   --diff-add-bg: rgba(46, 160, 67, 0.18);
   --diff-add-gutter-bg: rgba(46, 160, 67, 0.28);
+  --diff-add-word-bg: rgba(63, 185, 80, 0.36);
   --diff-del-bg: rgba(248, 81, 73, 0.18);
   --diff-del-gutter-bg: rgba(248, 81, 73, 0.28);
+  --diff-del-word-bg: rgba(248, 81, 73, 0.36);
   --diff-hunk-bg: rgba(56, 139, 253, 0.15);
   --diff-hunk-text: #79c0ff;
   --diff-empty-bg: #161b22;
@@ -1385,53 +1389,63 @@ body.is-resizing-sidebar .pane-workspace {
 }
 
 .markdown-preview code .tok-keyword,
-.wysiwyg-prosemirror code .tok-keyword {
+.wysiwyg-prosemirror code .tok-keyword,
+.git-diff-line-text .tok-keyword {
   color: var(--cm-keyword);
 }
 
 .markdown-preview code .tok-string,
-.wysiwyg-prosemirror code .tok-string {
+.wysiwyg-prosemirror code .tok-string,
+.git-diff-line-text .tok-string {
   color: var(--cm-string);
 }
 
 .markdown-preview code .tok-number,
-.wysiwyg-prosemirror code .tok-number {
+.wysiwyg-prosemirror code .tok-number,
+.git-diff-line-text .tok-number {
   color: var(--cm-number);
 }
 
 .markdown-preview code .tok-comment,
-.wysiwyg-prosemirror code .tok-comment {
+.wysiwyg-prosemirror code .tok-comment,
+.git-diff-line-text .tok-comment {
   color: var(--text-secondary);
   font-style: italic;
 }
 
 .markdown-preview code .tok-type,
-.wysiwyg-prosemirror code .tok-type {
+.wysiwyg-prosemirror code .tok-type,
+.git-diff-line-text .tok-type {
   color: var(--cm-type);
 }
 
 .markdown-preview code .tok-function,
-.wysiwyg-prosemirror code .tok-function {
+.wysiwyg-prosemirror code .tok-function,
+.git-diff-line-text .tok-function {
   color: var(--cm-function);
 }
 
 .markdown-preview code .tok-property,
-.wysiwyg-prosemirror code .tok-property {
+.wysiwyg-prosemirror code .tok-property,
+.git-diff-line-text .tok-property {
   color: var(--cm-property);
 }
 
 .markdown-preview code .tok-variable,
-.wysiwyg-prosemirror code .tok-variable {
+.wysiwyg-prosemirror code .tok-variable,
+.git-diff-line-text .tok-variable {
   color: var(--text-primary);
 }
 
 .markdown-preview code .tok-operator,
-.wysiwyg-prosemirror code .tok-operator {
+.wysiwyg-prosemirror code .tok-operator,
+.git-diff-line-text .tok-operator {
   color: var(--cm-operator);
 }
 
 .markdown-preview code .tok-heading,
-.wysiwyg-prosemirror code .tok-heading {
+.wysiwyg-prosemirror code .tok-heading,
+.git-diff-line-text .tok-heading {
   color: var(--cm-heading);
   font-weight: 700;
 }
@@ -3877,6 +3891,43 @@ body.is-resizing-right-sections * {
   flex-shrink: 0;
 }
 
+.git-diff-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.git-diff-nav-btn {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.git-diff-nav-btn:hover:not(:disabled) {
+  background-color: var(--bg-elevated);
+}
+
+.git-diff-nav-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.git-diff-nav-counter {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+}
+
 .git-diff-mode-toggle {
   display: inline-flex;
   border: 1px solid var(--border-color);
@@ -4015,6 +4066,22 @@ body.is-resizing-right-sections * {
 .git-diff-code.is-note {
   color: var(--text-secondary);
   font-style: italic;
+}
+
+.git-diff-word-highlight {
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.git-diff-row.is-add .git-diff-word-highlight,
+.git-diff-code.is-add .git-diff-word-highlight {
+  background-color: var(--diff-add-word-bg);
+}
+
+.git-diff-row.is-delete .git-diff-word-highlight,
+.git-diff-code.is-delete .git-diff-word-highlight {
+  background-color: var(--diff-del-word-bg);
 }
 
 .search-sidebar {

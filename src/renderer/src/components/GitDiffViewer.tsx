@@ -1,6 +1,8 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { GitDiffRequest, GitFileDiff } from '@shared/git'
+import type { CodeBlockHighlightSpan, CodeParser } from '../editor/codeBlockHighlight'
 import type { GitDiffViewMode } from '../stores/PaneTabStore'
+import { getDiffLineSyntaxSpans, loadDiffLanguageParser } from '../utils/diffSyntaxHighlight'
 import {
   formatGitFileLabel,
   getGitDiffContextLabel,
@@ -10,6 +12,7 @@ import {
   buildInlineDiffRows,
   buildSideBySideDiffRows,
   parseUnifiedDiff,
+  type DiffTextRange,
   type UnifiedDiffSideCell
 } from '../utils/unifiedDiff'
 
@@ -18,12 +21,21 @@ export type GitDiffContentState =
   | { status: 'loaded'; diff: GitFileDiff }
   | { status: 'error'; errorMessage: string }
 
+export interface GitDiffNavigationProps {
+  /** 1-based index of the current file in the navigation list */
+  currentIndex: number
+  totalCount: number
+  onPrevFile: () => void
+  onNextFile: () => void
+}
+
 interface GitDiffViewerProps {
   request: GitDiffRequest
   viewMode: GitDiffViewMode
   state: GitDiffContentState
   onChangeViewMode: (nextMode: GitDiffViewMode) => void
   onOpenFile?: (repoRelativePath: string) => void
+  navigation?: GitDiffNavigationProps
 }
 
 const DIFF_ROW_TYPE_CLASS: Record<UnifiedDiffSideCell['type'], string> = {
@@ -33,18 +45,116 @@ const DIFF_ROW_TYPE_CLASS: Record<UnifiedDiffSideCell['type'], string> = {
   note: ' is-note'
 }
 
-function DiffCodeContent({ marker, content }: { marker: string; content: string }) {
+function addRangeBoundaries(
+  boundarySet: Set<number>,
+  ranges: readonly { from: number; to: number }[] | undefined,
+  maxLength: number
+): void {
+  if (!ranges) {
+    return
+  }
+  for (const range of ranges) {
+    if (range.from >= 0 && range.from <= maxLength) {
+      boundarySet.add(range.from)
+    }
+    if (range.to >= 0 && range.to <= maxLength) {
+      boundarySet.add(range.to)
+    }
+  }
+}
+
+function renderHighlightedContent(
+  content: string,
+  wordHighlights?: DiffTextRange[],
+  syntaxSpans?: CodeBlockHighlightSpan[]
+) {
+  if (!content) {
+    return content
+  }
+  const hasWordHighlights = Boolean(wordHighlights && wordHighlights.length > 0)
+  const hasSyntaxSpans = Boolean(syntaxSpans && syntaxSpans.length > 0)
+  if (!hasWordHighlights && !hasSyntaxSpans) {
+    return content
+  }
+
+  const boundarySet = new Set<number>([0, content.length])
+  addRangeBoundaries(boundarySet, wordHighlights, content.length)
+  addRangeBoundaries(boundarySet, syntaxSpans, content.length)
+
+  const boundaries = Array.from(boundarySet).sort((a, b) => a - b)
+  const nodes: ReactNode[] = []
+
+  for (let i = 0; i < boundaries.length - 1; i += 1) {
+    const segFrom = boundaries[i]
+    const segTo = boundaries[i + 1]
+    if (segTo <= segFrom) {
+      continue
+    }
+    const text = content.slice(segFrom, segTo)
+    const isWordChanged =
+      wordHighlights?.some((range) => range.from <= segFrom && segTo <= range.to) ?? false
+    const syntaxClass =
+      syntaxSpans?.find((span) => span.from <= segFrom && segTo <= span.to)?.className ?? null
+
+    if (isWordChanged) {
+      nodes.push(
+        <mark
+          key={i}
+          className={
+            syntaxClass ? `git-diff-word-highlight ${syntaxClass}` : 'git-diff-word-highlight'
+          }
+        >
+          {text}
+        </mark>
+      )
+    } else if (syntaxClass) {
+      nodes.push(
+        <span key={i} className={syntaxClass}>
+          {text}
+        </span>
+      )
+    } else {
+      nodes.push(text)
+    }
+  }
+
+  return nodes
+}
+
+function DiffCodeContent({
+  marker,
+  content,
+  wordHighlights,
+  syntaxSpans
+}: {
+  marker: string
+  content: string
+  wordHighlights?: DiffTextRange[]
+  syntaxSpans?: CodeBlockHighlightSpan[]
+}) {
   return (
     <>
       <span className="git-diff-marker" aria-hidden="true">
         {marker}
       </span>
-      <span className="git-diff-line-text">{content}</span>
+      <span className="git-diff-line-text">
+        {renderHighlightedContent(content, wordHighlights, syntaxSpans)}
+      </span>
     </>
   )
 }
 
-function SideCell({ cell, side }: { cell: UnifiedDiffSideCell | null; side: 'old' | 'new' }) {
+function SideCell({
+  cell,
+  side,
+  filePath,
+  syntaxParser
+}: {
+  cell: UnifiedDiffSideCell | null
+  side: 'old' | 'new'
+  filePath: string
+  syntaxParser: CodeParser | null
+}) {
   if (!cell) {
     return (
       <>
@@ -55,6 +165,8 @@ function SideCell({ cell, side }: { cell: UnifiedDiffSideCell | null; side: 'old
   }
 
   const lineClass = DIFF_ROW_TYPE_CLASS[cell.type]
+  const syntaxSpans =
+    cell.type === 'note' ? undefined : getDiffLineSyntaxSpans(cell.content, filePath, syntaxParser)
 
   return (
     <>
@@ -62,7 +174,12 @@ function SideCell({ cell, side }: { cell: UnifiedDiffSideCell | null; side: 'old
         {cell.lineNumber ?? ''}
       </td>
       <td className={`git-diff-code${lineClass} is-${side}`}>
-        <DiffCodeContent marker={cell.marker} content={cell.content} />
+        <DiffCodeContent
+          marker={cell.marker}
+          content={cell.content}
+          wordHighlights={cell.wordHighlights}
+          syntaxSpans={syntaxSpans}
+        />
       </td>
     </>
   )
@@ -73,13 +190,35 @@ export function GitDiffViewer({
   viewMode,
   state,
   onChangeViewMode,
-  onOpenFile
+  onOpenFile,
+  navigation
 }: GitDiffViewerProps) {
   const loadedDiff = state.status === 'loaded' ? state.diff : null
   const displayFile = loadedDiff ?? request
   const displayPath = formatGitFileLabel(displayFile)
   const contextLabel = getGitDiffContextLabel(request)
-  const canOpenFile = loadedDiff?.existsInWorkspace === true
+  const canOpenFile = loadedDiff?.existsInWorkspace === true && displayFile.status !== 'D'
+
+  const [loadedParserState, setLoadedParserState] = useState<{
+    path: string
+    parser: CodeParser | null
+  }>({ path: '', parser: null })
+
+  useEffect(() => {
+    let cancelled = false
+    const targetPath = displayFile.path
+    void loadDiffLanguageParser(targetPath).then((parser) => {
+      if (!cancelled) {
+        setLoadedParserState({ path: targetPath, parser })
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [displayFile.path])
+
+  const activeSyntaxParser =
+    loadedParserState.path === displayFile.path ? loadedParserState.parser : null
 
   const parsed = useMemo(
     () => (loadedDiff && !loadedDiff.isBinary ? parseUnifiedDiff(loadedDiff.rawPatch) : null),
@@ -108,6 +247,33 @@ export function GitDiffViewer({
         </div>
 
         <div className="git-diff-actions">
+          {navigation && navigation.totalCount > 0 && (
+            <div className="git-diff-nav" role="group" aria-label="파일 탐색">
+              <button
+                type="button"
+                className="git-diff-nav-btn"
+                aria-label="이전 파일"
+                title="이전 파일"
+                disabled={navigation.currentIndex <= 1}
+                onClick={navigation.onPrevFile}
+              >
+                ↑
+              </button>
+              <span className="git-diff-nav-counter">
+                {`${navigation.currentIndex} / ${navigation.totalCount}`}
+              </span>
+              <button
+                type="button"
+                className="git-diff-nav-btn"
+                aria-label="다음 파일"
+                title="다음 파일"
+                disabled={navigation.currentIndex >= navigation.totalCount}
+                onClick={navigation.onNextFile}
+              >
+                ↓
+              </button>
+            </div>
+          )}
           <div className="git-diff-mode-toggle" role="group" aria-label="Diff 보기 방식">
             <button
               type="button"
@@ -172,8 +338,18 @@ export function GitDiffViewer({
                   </tr>
                 ) : (
                   <tr key={`row-${idx}`} className="git-diff-row">
-                    <SideCell cell={row.oldCell} side="old" />
-                    <SideCell cell={row.newCell} side="new" />
+                    <SideCell
+                      cell={row.oldCell}
+                      side="old"
+                      filePath={displayFile.path}
+                      syntaxParser={activeSyntaxParser}
+                    />
+                    <SideCell
+                      cell={row.newCell}
+                      side="new"
+                      filePath={displayFile.path}
+                      syntaxParser={activeSyntaxParser}
+                    />
                   </tr>
                 )
               )}
@@ -201,7 +377,20 @@ export function GitDiffViewer({
                     <td className="git-diff-gutter">{row.oldLineNumber ?? ''}</td>
                     <td className="git-diff-gutter">{row.newLineNumber ?? ''}</td>
                     <td className="git-diff-code">
-                      <DiffCodeContent marker={row.marker} content={row.content} />
+                      <DiffCodeContent
+                        marker={row.marker}
+                        content={row.content}
+                        wordHighlights={row.wordHighlights}
+                        syntaxSpans={
+                          row.lineType === 'note'
+                            ? undefined
+                            : getDiffLineSyntaxSpans(
+                                row.content,
+                                displayFile.path,
+                                activeSyntaxParser
+                              )
+                        }
+                      />
                     </td>
                   </tr>
                 )
