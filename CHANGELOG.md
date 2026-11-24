@@ -5,6 +5,15 @@
 
 ---
 
+## [1.9.0] - 2026-11-24
+
+### Added
+- 액티비티 바 전용 `Compare` 뷰 및 브랜치·워크트리 간 코드 Diff 비교 기능 추가: 검색 가능한 `Base`/`Compare` Ref 피커(`Worktrees` 커밋된 `HEAD`·`Local Branches`·`Remote Branches`), `⇄` 스왑, `3-dot (PR 방식)`/`2-dot (직접 비교)` 모드 전환, 전체·파일별 `+N -M` 통계와 경로 압축 폴더 트리·파일명 필터를 제공하는 `Files` 서브 탭, 단일 파일 포커스 읽기 전용 `branch-compare` Diff 탭 및 헤더 이전/다음(`↑`/`↓`) 파일 순회 네비게이션, 비교 범위 내 커밋 목록·인라인 상세(해시 복사·본문·변경 파일)·커밋 Diff 탭을 연동한 `Commits` 서브 탭 지원 ([상세 스펙](.backlog/done/git-branch-compare/spec.md), [티켓 01](.backlog/done/git-branch-compare/issues/01-branch-compare-backend-and-ipc.md), [티켓 03](.backlog/done/git-branch-compare/issues/03-compare-view-shell-and-files-diff.md), [티켓 04](.backlog/done/git-branch-compare/issues/04-compare-commits-tab-and-inline-detail.md))
+- Diff 탭의 보조 창(Auxiliary Window) 분리·드래그 이동 및 다중 창 Diff 뷰어 동기화 지원 ([티켓 05](.backlog/done/git-branch-compare/issues/05-compare-polish-docs-and-context.md))
+
+### Changed
+- `Changes` · `Stashes` · `Graph` · `Compare`가 공유하는 공통 `Diff 뷰어`를 고도화하여 좌우 비교(Side-by-Side)·인라인(Inline) 양쪽 모드 모두에서 수정된 줄 내 실제 변경 토큰을 강조하는 단어 단위(Intra-line) 하이라이트와 파일 확장자별 코드 구문 강조(Syntax Highlighting) 적용 ([티켓 02](.backlog/done/git-branch-compare/issues/02-diff-viewer-word-highlight-and-syntax.md))
+
 ## [1.8.0] - 2026-11-21
 
 ### Added
