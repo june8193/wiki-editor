@@ -90,6 +90,52 @@ export interface GitCommitDetail {
 export const GIT_EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 export const GIT_DIFF_MAX_BYTES = 1024 * 1024
 
+export type GitCompareRefKind = 'worktree' | 'local-branch' | 'remote-branch'
+export type GitCompareMode = 'three-dot' | 'two-dot'
+
+export interface GitCompareRef {
+  id: string
+  kind: GitCompareRefKind
+  ref: string
+  displayName: string
+  worktreeName?: string
+  branchName?: string | null
+  shortHash?: string
+  isDetached?: boolean
+  isCurrent?: boolean
+}
+
+export interface GitCompareRefList {
+  defaultBaseRef: string | null
+  currentRef: string | null
+  worktrees: GitCompareRef[]
+  localBranches: GitCompareRef[]
+  remoteBranches: GitCompareRef[]
+}
+
+export interface GitCompareChangedFile extends GitChangedFile {
+  additions: number | null
+  deletions: number | null
+  isBinary: boolean
+}
+
+export interface GitCompareSummary {
+  baseRef: string
+  compareRef: string
+  mode: GitCompareMode
+  mergeBaseHash: string | null
+  totalAdditions: number
+  totalDeletions: number
+  files: GitCompareChangedFile[]
+  commits: GitGraphCommit[]
+}
+
+export interface GitCompareSummaryRequest {
+  baseRef: string
+  compareRef: string
+  mode: GitCompareMode
+}
+
 export type GitDiffRequest =
   | ({ kind: 'staged' } & GitChangedFile)
   | ({ kind: 'unstaged' } & GitChangedFile)
@@ -102,6 +148,12 @@ export type GitDiffRequest =
       kind: 'stash'
       stashRef: string
       stashHash: string
+    } & GitChangedFile)
+  | ({
+      kind: 'branch-compare'
+      baseRef: string
+      compareRef: string
+      mode: GitCompareMode
     } & GitChangedFile)
 
 export type GitStashScope = 'unstaged' | 'all' | 'paths'

@@ -19,6 +19,9 @@ import type {
 import type {
   GitBranchList,
   GitCommitDetail,
+  GitCompareRefList,
+  GitCompareSummary,
+  GitCompareSummaryRequest,
   GitDiffRequest,
   GitFileDiff,
   GitLogResult,
@@ -287,6 +290,14 @@ export function createWikiApi(
         ) as Promise<GitCommitDetail>,
       diff: (workspacePath, request: GitDiffRequest) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.diff, workspacePath, request) as Promise<GitFileDiff>,
+      compareRefs: (workspacePath) =>
+        ipcRenderer.invoke(GIT_IPC_CHANNELS.compareRefs, workspacePath) as Promise<GitCompareRefList>,
+      compareSummary: (workspacePath, request: GitCompareSummaryRequest) =>
+        ipcRenderer.invoke(
+          GIT_IPC_CHANNELS.compareSummary,
+          workspacePath,
+          request
+        ) as Promise<GitCompareSummary>,
       stashList: (workspacePath) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.stashList, workspacePath) as Promise<GitStashEntry[]>,
       stashDetail: (workspacePath, stashRef) =>

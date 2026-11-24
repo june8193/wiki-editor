@@ -20,6 +20,9 @@ import type {
 import type {
   GitBranchList,
   GitCommitDetail,
+  GitCompareRefList,
+  GitCompareSummary,
+  GitCompareSummaryRequest,
   GitDiffRequest,
   GitFileDiff,
   GitLogOptions,
@@ -123,6 +126,8 @@ export const GIT_IPC_CHANNELS = {
   log: 'git:log',
   commitDetail: 'git:commit-detail',
   diff: 'git:diff',
+  compareRefs: 'git:compare-refs',
+  compareSummary: 'git:compare-summary',
   stashList: 'git:stash-list',
   stashDetail: 'git:stash-detail',
   stashCreate: 'git:stash-create',
@@ -252,6 +257,11 @@ export interface WikiGitApi {
   log(workspacePath: string, options?: GitLogOptions): Promise<GitLogResult>
   commitDetail(workspacePath: string, commitHash: string): Promise<GitCommitDetail>
   diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff>
+  compareRefs(workspacePath: string): Promise<GitCompareRefList>
+  compareSummary(
+    workspacePath: string,
+    request: GitCompareSummaryRequest
+  ): Promise<GitCompareSummary>
   stashList(workspacePath: string): Promise<GitStashEntry[]>
   stashDetail(workspacePath: string, stashRef: string): Promise<GitStashDetail>
   stashCreate(workspacePath: string, options: GitStashCreateOptions): Promise<GitStatus>

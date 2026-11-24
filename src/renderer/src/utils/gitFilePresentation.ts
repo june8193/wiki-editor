@@ -188,6 +188,14 @@ function describeGitDiffRequest(request: GitDiffRequest): GitDiffPresentationDes
         contextLabel: request.stashRef,
         keyScope: `stash:${request.stashHash}`
       }
+    case 'branch-compare': {
+      const separator = request.mode === 'three-dot' ? '...' : '..'
+      return {
+        tabLabel: `${baseName} (${request.baseRef}${separator}${request.compareRef})`,
+        contextLabel: `${request.baseRef}${separator}${request.compareRef}`,
+        keyScope: `branch-compare:${request.mode}:${request.baseRef}:${request.compareRef}`
+      }
+    }
   }
 }
 

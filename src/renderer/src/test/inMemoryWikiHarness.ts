@@ -1162,6 +1162,23 @@ export function createMultiWindowWikiHarness(
             existsInWorkspace: true,
             rawPatch: ''
           }),
+          compareRefs: async () => ({
+            defaultBaseRef: null,
+            currentRef: null,
+            worktrees: [],
+            localBranches: [],
+            remoteBranches: []
+          }),
+          compareSummary: async (_workspacePath, request) => ({
+            baseRef: request.baseRef,
+            compareRef: request.compareRef,
+            mode: request.mode,
+            mergeBaseHash: null,
+            totalAdditions: 0,
+            totalDeletions: 0,
+            files: [],
+            commits: []
+          }),
           stashList: async () => [],
           stashDetail: async (_workspacePath, stashRef) => ({
             ref: stashRef,

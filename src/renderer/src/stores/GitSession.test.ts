@@ -99,6 +99,23 @@ function createTestGitApi(overrides: Partial<WikiGitApi> = {}): WikiGitApi {
       existsInWorkspace: true,
       rawPatch: ''
     })),
+    compareRefs: vi.fn(async () => ({
+      defaultBaseRef: 'main',
+      currentRef: 'main',
+      worktrees: [],
+      localBranches: [],
+      remoteBranches: []
+    })),
+    compareSummary: vi.fn(async (_ws, req) => ({
+      baseRef: req.baseRef,
+      compareRef: req.compareRef,
+      mode: req.mode,
+      mergeBaseHash: null,
+      totalAdditions: 0,
+      totalDeletions: 0,
+      files: [],
+      commits: []
+    })),
     stashList: vi.fn(async () => []),
     stashDetail: vi.fn(async (_ws, ref) => ({
       ref,

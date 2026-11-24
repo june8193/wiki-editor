@@ -8,6 +8,9 @@ import {
   type GitBranchInfo,
   type GitBranchList,
   type GitCommitDetail,
+  type GitCompareRefList,
+  type GitCompareSummary,
+  type GitCompareSummaryRequest,
   type GitDiffRequest,
   type GitFileDiff,
   type GitLogOptions,
@@ -36,6 +39,17 @@ import {
   GIT_COMMIT_DETAIL_FORMAT,
   parseCommitDetailOutput
 } from './gitCommitDetail'
+import {
+  assertValidGitCompareMode,
+  assertValidGitCompareRef,
+  buildCompareDiffRange,
+  buildEmptyCompareRefList,
+  mergeCompareFilesWithNumstat,
+  parseCompareForEachRefOutput,
+  parseGitNumstatZ,
+  parseWorktreeListPorcelain,
+  resolveDefaultBaseRef
+} from './gitCompare'
 import { computeGitDiff, validateGitDiffTarget } from './gitDiff'
 import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
 import { assertValidGitHash, parseGitNameStatusZ } from './gitObjectParsing'
@@ -570,7 +584,17 @@ export class GitService {
     const [safePath, safeOrigPath] = await this.validateRepoRelativePaths(repoRoot, rawPaths)
 
     try {
-      const hasHeadCommit = target.kind === 'staged' ? await this.hasHeadCommit(repoRoot) : true
+      const hasHeadCommit =
+        target.kind === 'staged' || target.kind === 'branch-compare'
+          ? await this.hasHeadCommit(repoRoot)
+          : true
+      if (target.kind === 'branch-compare' && !hasHeadCommit) {
+        throw new Error('아직 커밋된 내역이 없어 브랜치를 비교할 수 없습니다.')
+      }
+      const hasMergeBase =
+        target.kind === 'branch-compare' && target.mode === 'three-dot'
+          ? (await this.resolveMergeBaseHash(repoRoot, target.baseRef, target.compareRef)) !== null
+          : true
       return await computeGitDiff({
         repoRoot,
         workspaceRealRoot,
@@ -579,6 +603,7 @@ export class GitService {
         safePath,
         safeOrigPath,
         hasHeadCommit,
+        hasMergeBase,
         execOptions: {
           env: this.createGitChildEnv(),
           timeoutMs: this.localTimeoutMs,
@@ -587,6 +612,154 @@ export class GitService {
       })
     } catch (error) {
       throw await this.formatAndLogGitError('diff', error)
+    }
+  }
+
+  async compareRefs(workspacePath: string): Promise<GitCompareRefList> {
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const headHash = await this.resolveRevisionHash(repoRoot, 'HEAD')
+    if (!headHash) {
+      return buildEmptyCompareRefList()
+    }
+
+    try {
+      const [headRefName, forEachRefRaw, worktreeRaw] = await Promise.all([
+        this.resolveSymbolicHeadRef(repoRoot),
+        this.execGit(repoRoot, [
+          'for-each-ref',
+          '--format=%(objectname)%09%(refname)%09%(refname:short)%09%(symref)',
+          'refs/heads',
+          'refs/remotes'
+        ]),
+        this.execGit(repoRoot, ['worktree', 'list', '--porcelain'])
+      ])
+
+      const { localBranches, remoteBranches, originHeadTarget } = parseCompareForEachRefOutput(
+        forEachRefRaw,
+        headRefName
+      )
+      const worktrees = parseWorktreeListPorcelain(worktreeRaw, repoRoot)
+      const defaultBaseRef = resolveDefaultBaseRef(originHeadTarget, localBranches, remoteBranches)
+      const currentRef =
+        headRefName && headRefName.startsWith('refs/heads/')
+          ? headRefName.slice('refs/heads/'.length)
+          : headHash.slice(0, 7)
+
+      return {
+        defaultBaseRef,
+        currentRef,
+        worktrees,
+        localBranches,
+        remoteBranches
+      }
+    } catch (error) {
+      throw await this.formatAndLogGitError('compareRefs', error)
+    }
+  }
+
+  async compareSummary(
+    workspacePath: string,
+    request: GitCompareSummaryRequest
+  ): Promise<GitCompareSummary> {
+    const baseRef = assertValidGitCompareRef(request?.baseRef, '기준 Ref')
+    const compareRef = assertValidGitCompareRef(request?.compareRef, '비교 Ref')
+    const mode = assertValidGitCompareMode(request?.mode)
+
+    const repoRoot = await this.requireRepoRoot(workspacePath)
+    const headHash = await this.resolveRevisionHash(repoRoot, 'HEAD')
+    if (!headHash) {
+      throw new Error('아직 커밋된 내역이 없어 브랜치를 비교할 수 없습니다.')
+    }
+
+    const [baseHash, compareHash] = await Promise.all([
+      this.resolveRevisionHash(repoRoot, `${baseRef}^{commit}`),
+      this.resolveRevisionHash(repoRoot, `${compareRef}^{commit}`)
+    ])
+    if (!baseHash) {
+      throw new GitFormattedError(`기준 Ref를 찾을 수 없습니다: ${baseRef}`)
+    }
+    if (!compareHash) {
+      throw new GitFormattedError(`비교 Ref를 찾을 수 없습니다: ${compareRef}`)
+    }
+
+    try {
+      const mergeBaseHash = await this.resolveMergeBaseHash(repoRoot, baseRef, compareRef)
+      const diffRange = buildCompareDiffRange(baseRef, compareRef, mode, mergeBaseHash !== null)
+      const commitRange = `${baseRef}..${compareRef}`
+
+      const [nameStatusRaw, numstatRaw, headRefName, forEachRefRaw, logRaw] = await Promise.all([
+        this.execGit(repoRoot, [
+          '-c',
+          'core.quotePath=false',
+          'diff',
+          '--name-status',
+          '-z',
+          '-M',
+          diffRange,
+          '--'
+        ]),
+        this.execGit(repoRoot, [
+          '-c',
+          'core.quotePath=false',
+          'diff',
+          '--numstat',
+          '-z',
+          '-M',
+          diffRange,
+          '--'
+        ]),
+        this.resolveSymbolicHeadRef(repoRoot),
+        this.execGit(repoRoot, [
+          'for-each-ref',
+          '--format=%(objectname)%09%(*objectname)%09%(refname)%09%(refname:short)%09%(symref)',
+          'refs/heads',
+          'refs/remotes',
+          'refs/tags'
+        ]),
+        this.execGit(repoRoot, [
+          'log',
+          '--topo-order',
+          '-z',
+          '--format=%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%cI',
+          commitRange,
+          '--'
+        ])
+      ])
+
+      const parsedFiles = parseGitNameStatusZ(nameStatusRaw)
+      const numstatMap = parseGitNumstatZ(numstatRaw)
+      const { files, totalAdditions, totalDeletions } = mergeCompareFilesWithNumstat(
+        parsedFiles,
+        numstatMap
+      )
+      const refsByHash = parseForEachRefOutput(forEachRefRaw, headRefName)
+      const commits = parseGitLogOutput(logRaw, refsByHash, headHash)
+
+      return {
+        baseRef,
+        compareRef,
+        mode,
+        mergeBaseHash,
+        totalAdditions,
+        totalDeletions,
+        files,
+        commits
+      }
+    } catch (error) {
+      throw await this.formatAndLogGitError('compareSummary', error)
+    }
+  }
+
+  private async resolveMergeBaseHash(
+    repoRoot: string,
+    baseRef: string,
+    compareRef: string
+  ): Promise<string | null> {
+    try {
+      const hash = (await this.execGit(repoRoot, ['merge-base', '--', baseRef, compareRef])).trim()
+      return hash || null
+    } catch {
+      return null
     }
   }
 

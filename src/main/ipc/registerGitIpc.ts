@@ -1,4 +1,9 @@
-import type { GitDiffRequest, GitLogOptions, GitStashCreateOptions } from '@shared/git'
+import type {
+  GitCompareSummaryRequest,
+  GitDiffRequest,
+  GitLogOptions,
+  GitStashCreateOptions
+} from '@shared/git'
 import { GIT_IPC_CHANNELS } from '@shared/ipc'
 import { isSameWorkspacePath } from '@shared/workspace'
 import type { GitService } from '../git/GitService'
@@ -117,6 +122,16 @@ export function registerGitIpc({
       GIT_IPC_CHANNELS.diff,
       withWorkspace<[GitDiffRequest], Awaited<ReturnType<GitService['diff']>>>(
         (rootPath, request) => gitService.diff(rootPath, request)
+      )
+    ],
+    [
+      GIT_IPC_CHANNELS.compareRefs,
+      withWorkspace((rootPath) => gitService.compareRefs(rootPath))
+    ],
+    [
+      GIT_IPC_CHANNELS.compareSummary,
+      withWorkspace<[GitCompareSummaryRequest], Awaited<ReturnType<GitService['compareSummary']>>>(
+        (rootPath, request) => gitService.compareSummary(rootPath, request)
       )
     ],
     [GIT_IPC_CHANNELS.stashList, withWorkspace((rootPath) => gitService.stashList(rootPath))],

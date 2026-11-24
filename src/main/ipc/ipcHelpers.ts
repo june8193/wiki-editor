@@ -298,7 +298,10 @@ function extractGitDiffMetadata([workspacePath, request]: unknown[]): Record<str
     ...(req?.path ? { path: req.path } : {}),
     ...(req?.kind === 'commit' && req.commitHash ? { commitHash: req.commitHash } : {}),
     ...(req?.kind === 'stash' && req.stashRef ? { stashRef: req.stashRef } : {}),
-    ...(req?.kind === 'stash' && req.stashHash ? { stashHash: req.stashHash } : {})
+    ...(req?.kind === 'stash' && req.stashHash ? { stashHash: req.stashHash } : {}),
+    ...(req?.kind === 'branch-compare' && req.baseRef ? { baseRef: req.baseRef } : {}),
+    ...(req?.kind === 'branch-compare' && req.compareRef ? { compareRef: req.compareRef } : {}),
+    ...(req?.kind === 'branch-compare' && req.mode ? { mode: req.mode } : {})
   }
 }
 

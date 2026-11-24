@@ -5,11 +5,17 @@ import {
   GIT_DIFF_MAX_BYTES,
   GIT_EMPTY_TREE_HASH,
   type GitChangedFile,
+  type GitCompareMode,
   type GitDiffRequest,
   type GitFileDiff
 } from '@shared/git'
 import { hasBlockedPathSegment, isMissingPathError, isPathInsideRoot } from '../fs/pathSecurity'
 import { IGNORED_ENTRY_NAMES } from '../workspace/WorkspaceFsService'
+import {
+  assertValidGitCompareMode,
+  assertValidGitCompareRef,
+  buildCompareDiffRange
+} from './gitCompare'
 import { assertValidGitHash } from './gitObjectParsing'
 import { assertValidStashRef } from './gitStash'
 
@@ -338,6 +344,7 @@ export type ValidatedGitDiffTarget =
   | { kind: 'unstaged'; isUntracked: boolean }
   | { kind: 'commit'; commitHash: string }
   | { kind: 'stash'; stashHash: string; isUntracked: boolean }
+  | { kind: 'branch-compare'; baseRef: string; compareRef: string; mode: GitCompareMode }
 
 /**
  * Validates target identifiers on a GitDiffRequest once before resolving repository paths.
@@ -360,6 +367,13 @@ export function validateGitDiffTarget(request: GitDiffRequest): ValidatedGitDiff
         stashHash: assertValidGitHash(request.stashHash, 'Stash'),
         isUntracked: request.status === '?'
       }
+    case 'branch-compare':
+      return {
+        kind: 'branch-compare',
+        baseRef: assertValidGitCompareRef(request.baseRef, '기준 Ref'),
+        compareRef: assertValidGitCompareRef(request.compareRef, '비교 Ref'),
+        mode: assertValidGitCompareMode(request.mode)
+      }
     default:
       throw new Error('유효하지 않은 Diff 요청 형식입니다.')
   }
@@ -373,6 +387,7 @@ export interface ComputeGitDiffOptions {
   safePath: string
   safeOrigPath?: string
   hasHeadCommit: boolean
+  hasMergeBase?: boolean
   execOptions: GitDiffExecOptions
 }
 
@@ -384,6 +399,7 @@ export async function computeGitDiff({
   safePath,
   safeOrigPath,
   hasHeadCommit,
+  hasMergeBase = true,
   execOptions
 }: ComputeGitDiffOptions): Promise<GitFileDiff> {
   const { existsOnDisk, existsInWorkspace } = await inspectTargetFileState(
@@ -455,6 +471,26 @@ export async function computeGitDiff({
         '--unified=3',
         `${target.stashHash}^1`,
         target.stashHash,
+        '--',
+        ...pathArgs
+      ]
+      break
+    }
+    case 'branch-compare': {
+      const diffRange = buildCompareDiffRange(
+        target.baseRef,
+        target.compareRef,
+        target.mode,
+        hasMergeBase
+      )
+      gitArgs = [
+        '-c',
+        'core.quotePath=false',
+        'diff',
+        '-M',
+        '--find-renames',
+        '--unified=3',
+        diffRange,
         '--',
         ...pathArgs
       ]

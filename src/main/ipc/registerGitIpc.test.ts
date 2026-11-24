@@ -96,6 +96,23 @@ describe('registerGitIpc', () => {
         { path: 'draft.md', status: '?' as const }
       ]
     }
+    const sampleCompareRefs = {
+      defaultBaseRef: 'main',
+      currentRef: 'feature/compare',
+      worktrees: [],
+      localBranches: [],
+      remoteBranches: []
+    }
+    const sampleCompareSummary = {
+      baseRef: 'main',
+      compareRef: 'feature/compare',
+      mode: 'three-dot' as const,
+      mergeBaseHash: 'abc1234def567890123456789012345678901234',
+      totalAdditions: 3,
+      totalDeletions: 1,
+      files: [{ path: 'README.md', status: 'M' as const, additions: 3, deletions: 1, isBinary: false }],
+      commits: []
+    }
     const fakeGitService: Pick<
       GitService,
       | 'status'
@@ -116,6 +133,8 @@ describe('registerGitIpc', () => {
       | 'log'
       | 'commitDetail'
       | 'diff'
+      | 'compareRefs'
+      | 'compareSummary'
       | 'stashList'
       | 'stashDetail'
       | 'stashCreate'
@@ -146,6 +165,8 @@ describe('registerGitIpc', () => {
       log: vi.fn(async () => sampleLog),
       commitDetail: vi.fn(async () => sampleCommitDetail),
       diff: vi.fn(async () => sampleDiff),
+      compareRefs: vi.fn(async () => sampleCompareRefs),
+      compareSummary: vi.fn(async () => sampleCompareSummary),
       stashList: vi.fn(async () => sampleStashList),
       stashDetail: vi.fn(async () => sampleStashDetail),
       stashCreate: vi.fn(async () => sampleStatus),
@@ -163,6 +184,11 @@ describe('registerGitIpc', () => {
     })
 
     const diffRequest = { kind: 'staged' as const, path: 'README.md', status: 'M' as const }
+    const compareSummaryRequest = {
+      baseRef: 'main',
+      compareRef: 'feature/compare',
+      mode: 'three-dot' as const
+    }
     const stashCreateOptions = { scope: 'unstaged' as const, includeUntracked: true }
 
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.status, workspaceDir)).rejects.toThrow(/열린 워크스페이스/)
@@ -180,6 +206,12 @@ describe('registerGitIpc', () => {
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.diff, workspaceDir, diffRequest)).rejects.toThrow(
       /열린 워크스페이스/
     )
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.compareRefs, workspaceDir)).rejects.toThrow(
+      /열린 워크스페이스/
+    )
+    await expect(
+      ipcMain.invoke(GIT_IPC_CHANNELS.compareSummary, workspaceDir, compareSummaryRequest)
+    ).rejects.toThrow(/열린 워크스페이스/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.stashList, workspaceDir)).rejects.toThrow(
       /열린 워크스페이스/
     )
@@ -219,6 +251,12 @@ describe('registerGitIpc', () => {
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.diff, otherDir, diffRequest)).rejects.toThrow(
       /일치하지 않습니다/
     )
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.compareRefs, otherDir)).rejects.toThrow(
+      /일치하지 않습니다/
+    )
+    await expect(
+      ipcMain.invoke(GIT_IPC_CHANNELS.compareSummary, otherDir, compareSummaryRequest)
+    ).rejects.toThrow(/일치하지 않습니다/)
     await expect(ipcMain.invoke(GIT_IPC_CHANNELS.stashList, otherDir)).rejects.toThrow(
       /일치하지 않습니다/
     )
@@ -303,6 +341,14 @@ describe('registerGitIpc', () => {
     expect(await ipcMain.invoke(GIT_IPC_CHANNELS.diff, workspaceDir, diffRequest)).toEqual(sampleDiff)
     expect(fakeGitService.diff).toHaveBeenCalledWith(opened.rootPath, diffRequest)
 
+    expect(await ipcMain.invoke(GIT_IPC_CHANNELS.compareRefs, workspaceDir)).toEqual(sampleCompareRefs)
+    expect(fakeGitService.compareRefs).toHaveBeenCalledWith(opened.rootPath)
+
+    expect(
+      await ipcMain.invoke(GIT_IPC_CHANNELS.compareSummary, workspaceDir, compareSummaryRequest)
+    ).toEqual(sampleCompareSummary)
+    expect(fakeGitService.compareSummary).toHaveBeenCalledWith(opened.rootPath, compareSummaryRequest)
+
     expect(await ipcMain.invoke(GIT_IPC_CHANNELS.stashList, workspaceDir)).toEqual(sampleStashList)
     expect(fakeGitService.stashList).toHaveBeenCalledWith(opened.rootPath)
 
@@ -363,6 +409,8 @@ describe('registerGitIpc', () => {
       | 'log'
       | 'commitDetail'
       | 'diff'
+      | 'compareRefs'
+      | 'compareSummary'
       | 'stashList'
       | 'stashDetail'
       | 'stashCreate'
@@ -405,6 +453,23 @@ describe('registerGitIpc', () => {
         isTruncated: false,
         existsInWorkspace: true,
         rawPatch: ''
+      })),
+      compareRefs: vi.fn(async () => ({
+        defaultBaseRef: 'main',
+        currentRef: 'main',
+        worktrees: [],
+        localBranches: [],
+        remoteBranches: []
+      })),
+      compareSummary: vi.fn(async () => ({
+        baseRef: 'main',
+        compareRef: 'main',
+        mode: 'three-dot' as const,
+        mergeBaseHash: null,
+        totalAdditions: 0,
+        totalDeletions: 0,
+        files: [],
+        commits: []
       })),
       stashList: vi.fn(async () => []),
       stashDetail: vi.fn(async () => ({
