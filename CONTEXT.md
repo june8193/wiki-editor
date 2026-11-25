@@ -15,7 +15,7 @@ _Avoid_: 기본 창, 부모 창, 루트 윈도우
 _Avoid_: 팝업 창, 서브 창, 자식 윈도우, 독립 창
 
 **애플리케이션 메뉴 바 (Application Menu Bar)**:
-창 최상단 프레임에 위치하는 OS/Electron 네이티브 메뉴(`File`, `Settings`, `Help`)로, `File > 폴더 열기...`, `Settings > 설정 패널`, `Settings > 테마 전환`, `Help > Copy Bug Report` 등 전역 앱 명령을 제공합니다.
+창 최상단 프레임에 위치하는 OS/Electron 네이티브 메뉴(`File`, `Terminal`, `Settings`, `Help`)로, `File > 폴더 열기...`, `Terminal > 터미널 토글`, `Terminal > 새 터미널`, `Settings > 설정 패널`, `Settings > 테마 전환`, `Help > Copy Bug Report` 등 전역 앱 명령을 제공합니다.
 _Avoid_: 시스템 툴바, 파일 메뉴, 상단 네이티브 바
 
 **액티비티 바 (Activity Bar)**:
@@ -39,7 +39,7 @@ _Avoid_: 스플리터, 사이드바 구분선, 사이드바 경계선
 _Avoid_: 콘솔 창, 셸 드로어, 하단 셸 바
 
 **터미널 탭 (Terminal Tab)**:
-**터미널 패널** 상단 헤더에 나열되는 개별 PTY 셸 세션 단위로, `+` 버튼으로 추가하고 클릭 전환·실행 중/종료 코드 상태 표시·`×` 닫기(PTY 종료)를 지원합니다.
+**터미널 패널** 상단 헤더에 나열되는 개별 PTY 셸 세션 단위로, `+` 버튼(기본 셸)과 `+ ▾` 셸 프로필 드롭다운(`pwsh.exe`, `powershell.exe`, `cmd.exe`, Git Bash 등)으로 추가하고 클릭 전환·실행 중/종료 코드 상태 표시·`×` 닫기(PTY 종료)를 지원합니다.
 _Avoid_: 셸 탭, 콘솔 세션 탭
 
 **터미널 리사이저 (Terminal Resizer)**:
@@ -129,7 +129,7 @@ _Avoid_: 메타데이터 템플릿, 속성 설정 파일
 _Avoid_: 스키마 설정 팝업, 필드 편집 창
 
 **전역 설정 패널 (Settings Panel)**:
-애플리케이션 메뉴 바의 `Settings > 설정 패널` 메뉴로 여닫는 가운데 모달로, 테마, 자동 저장, `config.json` 편집 진입을 제공합니다.
+애플리케이션 메뉴 바의 `Settings > 설정 패널` 메뉴로 여닫는 가운데 모달로, 테마, 자동 저장, 기본 터미널 프로필(`defaultTerminalProfile`), `config.json` 편집 진입을 제공합니다.
 _Avoid_: 환경설정 모달, 옵션 창, 프리퍼런스
 
 ### 편집 공간, 분할 및 탭 (Pane Workspace, Split & Tabs)
