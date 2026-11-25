@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `package.json`에 `node-pty` 런타임 의존성과 `electron-builder` `asarUnpack` 설정을 반영하고, `packaging.test.ts`를 `node-pty`만 허용하는 패키징 계약으로 갱신해 통과한다.
 - [ ] Windows 셸 프로필 감지기(`pwsh.exe` 우선 → `powershell.exe` 폴백, `cmd.exe`, Git Bash 등)가 사용 가능한 `TerminalShellProfile` 목록을 반환한다.

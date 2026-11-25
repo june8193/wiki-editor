@@ -4,7 +4,7 @@
 
 **Blocked by:** 02-terminal-panel-shell-and-multi-tabs
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **What to build:** **터미널 패널** 헤더의 `+ ▾` 드롭다운에서 감지된 셸 프로필을 선택해 새 **터미널 탭**을 여는 기능과, `config.json` 및 **전역 설정 패널**에 `defaultTerminalProfile` 설정을 추가해 기본 셸을 지정·유지하는 기능을 구현합니다.
 

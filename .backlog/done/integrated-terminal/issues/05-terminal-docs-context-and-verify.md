@@ -4,7 +4,7 @@
 
 **Blocked by:** 03-shell-profile-dropdown-and-config, 04-terminal-smart-clipboard-and-links
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **What to build:** 통합 터미널 기능에 도입된 공식 도메인 어휘를 `CONTEXT.md`에 등재하고 `docs/manual.md`에 사용법·단축키를 문서화하며, 전체 타입체크·테스트·패키징 빌드를 최종 검증합니다.
 

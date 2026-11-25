@@ -4,7 +4,7 @@
 
 **Blocked by:** 01-terminal-pty-backend-and-packaging
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **What to build:** **메인 창**의 중앙 **편집 공간** 하단에 `@xterm/xterm` 기반 **터미널 패널**을 배치하고, **터미널 리사이저**(드래그·키보드·더블클릭), **다중 터미널 탭**(`+` 추가·전환·닫기·실행/종료 상태), **애플리케이션 메뉴 바**(`터미널 토글`, `새 터미널`) 및 단축키(`Ctrl+`` / `Ctrl+Shift+``), 테마 동기화, 접힘 중 백그라운드 프로세스 유지 및 워크스페이스 전환 시 세션 초기화를 구현합니다.
 

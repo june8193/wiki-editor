@@ -4,7 +4,7 @@
 
 **Blocked by:** 02-terminal-panel-shell-and-multi-tabs
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **What to build:** **터미널 패널**에 VS Code 스타일 스마트 복사/붙여넣기(선택 텍스트 유무에 따른 `Ctrl+C` 복사/SIGINT 분기, `Ctrl+V` 및 우클릭 붙여넣기)와 `Ctrl+클릭` 링크 열기(외부 `http`/`https` URL 브라우저 열기, 활성 워크스페이스 내 로컬 파일 경로 및 `:line` **편집기 영역** 탭 열기)를 구현합니다.
 
