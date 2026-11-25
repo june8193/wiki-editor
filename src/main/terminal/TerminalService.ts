@@ -68,6 +68,26 @@ function clampTerminalDimension(
   return Math.max(min, Math.min(max, Math.floor(value)))
 }
 
+function clampTerminalSize(cols: number | undefined, rows: number | undefined): {
+  cols: number
+  rows: number
+} {
+  return {
+    cols: clampTerminalDimension(
+      cols,
+      TERMINAL_DEFAULT_COLS,
+      TERMINAL_MIN_COLS,
+      TERMINAL_MAX_COLS
+    ),
+    rows: clampTerminalDimension(
+      rows,
+      TERMINAL_DEFAULT_ROWS,
+      TERMINAL_MIN_ROWS,
+      TERMINAL_MAX_ROWS
+    )
+  }
+}
+
 function defaultPtyFactory(
   executable: string,
   args: string[],
@@ -120,18 +140,7 @@ export class TerminalService {
 
     const profiles = this.listProfiles()
     const profile = this.resolveAllowedProfile(profiles, request.profileId)
-    const cols = clampTerminalDimension(
-      request.cols,
-      TERMINAL_DEFAULT_COLS,
-      TERMINAL_MIN_COLS,
-      TERMINAL_MAX_COLS
-    )
-    const rows = clampTerminalDimension(
-      request.rows,
-      TERMINAL_DEFAULT_ROWS,
-      TERMINAL_MIN_ROWS,
-      TERMINAL_MAX_ROWS
-    )
+    const { cols, rows } = clampTerminalSize(request.cols, request.rows)
 
     const sessionId = `term-${this.nextSessionSeq++}`
     const pty = this.ptyFactory(profile.executable, [...profile.args], {
@@ -196,18 +205,7 @@ export class TerminalService {
 
   resize(sessionId: string, cols: number, rows: number): void {
     const record = this.requireActiveSession(sessionId)
-    const safeCols = clampTerminalDimension(
-      cols,
-      TERMINAL_DEFAULT_COLS,
-      TERMINAL_MIN_COLS,
-      TERMINAL_MAX_COLS
-    )
-    const safeRows = clampTerminalDimension(
-      rows,
-      TERMINAL_DEFAULT_ROWS,
-      TERMINAL_MIN_ROWS,
-      TERMINAL_MAX_ROWS
-    )
+    const { cols: safeCols, rows: safeRows } = clampTerminalSize(cols, rows)
     record.pty.resize(safeCols, safeRows)
   }
 
