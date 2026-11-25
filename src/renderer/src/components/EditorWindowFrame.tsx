@@ -114,6 +114,7 @@ export interface EditorWindowFrameProps {
   isSchemaModalOpen: boolean
   onOpenSchemaModal: () => void
   onCloseSchemaModal: () => void
+  titleBarSlot?: ReactNode
   leftSidebarSlot?: ReactNode
   settingsPanelSlot?: ReactNode
   manualModalSlot?: ReactNode
@@ -144,6 +145,7 @@ export function EditorWindowFrame({
   isSchemaModalOpen,
   onOpenSchemaModal,
   onCloseSchemaModal,
+  titleBarSlot,
   leftSidebarSlot,
   settingsPanelSlot,
   manualModalSlot,
@@ -281,6 +283,7 @@ export function EditorWindowFrame({
 
   return (
     <div ref={setMergedShellRef} className="app-shell" data-theme={paneWorkspaceProps.theme}>
+      {titleBarSlot}
       {errorMessage && (
         <div className="error-banner" role="alert">
           {errorMessage}

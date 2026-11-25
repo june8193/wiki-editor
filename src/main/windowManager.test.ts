@@ -333,9 +333,9 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 })
   })
 
-  it('creates main window with menu preserved and detaches tab into clamped offset auxiliary window without menu', async () => {
+  it('creates main window without native menu and detaches tab into clamped offset auxiliary window without menu', async () => {
     const mainWin = windowManager.createMainWindow() as FakeWindowInstance
-    expect(mainWin.removedMenu).toBe(false)
+    expect(mainWin.removedMenu).toBe(true)
     expect(mainWin.loadedFiles).toEqual([{ filePath: 'C:\\app\\out\\renderer\\index.html', query: undefined }])
     expect(windowManager.isMainWebContents(mainWin.webContents)).toBe(true)
 
@@ -1714,7 +1714,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       windowId: main2.webContents.id,
       rootPath: realBeta
     })
-    expect(main2.removedMenu).toBe(false)
+    expect(main2.removedMenu).toBe(true)
     expect(main2.options).toMatchObject({
       width: 1280,
       height: 820,

@@ -1,9 +1,11 @@
 import type { BrowserWindowConstructorOptions } from 'electron'
 import type { AutoSaveConfig } from '@shared/bufferAutoSaveScheduler'
+import type { ThemeMode } from '@shared/config'
 import { WINDOW_IPC_CHANNELS } from '@shared/ipc'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import type { BeforeInputKeyEventLike } from '@shared/tabDragSession'
 import {
+  getTitleBarOverlayOptions,
   WINDOW_ROLE_QUERY_PARAM,
   type AcceptTabDragDropInput,
   type AcceptTabDragDropResult,
@@ -15,6 +17,7 @@ import {
   type TabDragResolution,
   type TabDragStartInput,
   type TabTransferPayload,
+  type TitleBarOverlayOptions,
   type WindowBounds,
   type WindowInitContext,
   type WindowRole
@@ -80,6 +83,7 @@ export interface BrowserWindowLike {
   restore?(): void
   focus?(): void
   removeMenu(): void
+  setTitleBarOverlay?(options: TitleBarOverlayOptions): void
   show(): void
   close(): void
   isDestroyed(): boolean
@@ -101,6 +105,8 @@ export interface WindowManagerDependencies {
   trashItem?: (targetPath: string) => Promise<void>
   watchDebounceMs?: number
   initialAutoSaveConfig?: AutoSaveConfig
+  initialTheme?: ThemeMode
+  appVersion?: string
   createWindow: (options: BrowserWindowConstructorOptions) => BrowserWindowLike
   screen?: ScreenLike
   getFocusedWindow?: () => BrowserWindowLike | undefined
@@ -163,12 +169,14 @@ export class WindowManager
   private readonly watchDebounceMs?: number
   private readonly createBrowserWindow: (options: BrowserWindowConstructorOptions) => BrowserWindowLike
   private readonly getFocusedWindow?: () => BrowserWindowLike | undefined
+  private readonly appVersion?: string
 
   private readonly windowsByWebContentsId = new Map<number, BrowserWindowLike>()
   private readonly windowIdByWebContents = new WeakMap<object, number>()
   private readonly coordinator: WindowSessionCoordinator<ElectronSessionServices>
 
   private latestAutoSaveConfig?: AutoSaveConfig
+  private latestTheme: ThemeMode
   private readonly unsubscribeConfig: () => void
 
   constructor({
@@ -180,6 +188,8 @@ export class WindowManager
     trashItem,
     watchDebounceMs,
     initialAutoSaveConfig,
+    initialTheme,
+    appVersion,
     createWindow,
     screen,
     getFocusedWindow
@@ -192,21 +202,31 @@ export class WindowManager
     this.trashItem = trashItem
     this.watchDebounceMs = watchDebounceMs
     this.latestAutoSaveConfig = initialAutoSaveConfig
+    this.latestTheme = initialTheme ?? 'light'
+    this.appVersion = appVersion
     this.createBrowserWindow = createWindow
     this.getFocusedWindow = getFocusedWindow
 
     this.coordinator = new WindowSessionCoordinator<ElectronSessionServices>({
       screen,
+      appVersion: this.appVersion,
       createSessionServices: (sessionId) => this.createElectronSessionServices(sessionId),
       createWindow: ({ role, bounds, title, services, callbacks }) => {
         const options =
           role === 'auxiliary'
-            ? createAuxiliaryWindowOptions(this.preloadPath, { bounds, title })
-            : createMainWindowOptions(this.preloadPath, { bounds })
+            ? createAuxiliaryWindowOptions(this.preloadPath, {
+                bounds,
+                title,
+                theme: this.latestTheme,
+                appVersion: this.appVersion
+              })
+            : createMainWindowOptions(this.preloadPath, {
+                bounds,
+                theme: this.latestTheme,
+                appVersion: this.appVersion
+              })
         const win = this.createBrowserWindow(options)
-        if (role === 'auxiliary') {
-          win.removeMenu()
-        }
+        win.removeMenu()
 
         const webContentsId = trackHubWindowWebContents(services.bufferHub, win.webContents, win.id)
         this.windowsByWebContentsId.set(webContentsId, win)
@@ -286,8 +306,9 @@ export class WindowManager
         autoSave: config.autoSave,
         autoSaveDelayMs: config.autoSaveDelayMs
       }
+      this.syncTitleBarOverlayTheme(config.theme)
     })
-    if (!this.latestAutoSaveConfig) {
+    if (!this.latestAutoSaveConfig || !initialTheme) {
       void this.configService
         .get()
         .then((config) => {
@@ -297,8 +318,22 @@ export class WindowManager
               autoSaveDelayMs: config.autoSaveDelayMs
             }
           }
+          if (!initialTheme) {
+            this.syncTitleBarOverlayTheme(config.theme)
+          }
         })
         .catch(() => undefined)
+    }
+  }
+
+  private syncTitleBarOverlayTheme(theme: ThemeMode): void {
+    if (theme === this.latestTheme) return
+    this.latestTheme = theme
+    const overlayOptions = getTitleBarOverlayOptions(theme)
+    for (const win of this.windowsByWebContentsId.values()) {
+      if (!win.isDestroyed()) {
+        win.setTitleBarOverlay?.(overlayOptions)
+      }
     }
   }
 

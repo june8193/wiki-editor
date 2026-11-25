@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AppMenuCommand, WikiApi } from '@shared/ipc'
+import type { AppMenuCommand, MainMenuAction, WikiApi } from '@shared/ipc'
 import { getGitChangedCount, type GitDiffRequest } from '@shared/git'
 import type { WorkspaceSearchFileResult } from '@shared/search'
 import {
@@ -24,6 +24,7 @@ import {
 } from '../hooks/useMainWorkspaceLifecycle'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
+import { useWindowTitle } from '../hooks/useWindowTitle'
 import { useWindowWidth } from '../hooks/useWindowWidth'
 import { useWorkspaceSearch } from '../hooks/useWorkspaceSearch'
 import { useWorkspaceTree } from '../hooks/useWorkspaceTree'
@@ -32,11 +33,7 @@ import {
   getLeftSidebarWidthBounds,
   LEFT_SIDEBAR_DEFAULT_WIDTH
 } from '../utils/sidebarWidth'
-import {
-  isEventOutsideShell,
-  isWorkspaceSearchShortcut,
-  type SearchFocusRequest
-} from '../utils/workspaceSearch'
+import { isKeyboardEventComposing, isEventOutsideShell, isWorkspaceSearchShortcut, type SearchFocusRequest } from '../utils/workspaceSearch'
 import { ActivityBar, type LeftSidebarView } from './ActivityBar'
 import { getOrderedVisibleCompareFiles } from '../stores/CompareSession'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
@@ -51,6 +48,7 @@ import type { PaneInteractionActions } from './PaneTabBar'
 import { SearchSidebarPanel } from './SearchSidebarPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { SidebarResizer } from './SidebarResizer'
+import { TitleBar, type TitleBarMenuGroup } from './TitleBar'
 import { WorkspaceView } from './WorkspaceView'
 import { toErrorMessage } from '@shared/errors'
 
@@ -214,10 +212,21 @@ export function MainAppShell() {
       if (event.defaultPrevented || isEditorShortcutDisabledRef.current) {
         return
       }
-      if (!isWorkspaceSearchShortcut(event)) {
+      if (isEventOutsideShell(event.target, shellRef.current)) {
         return
       }
-      if (isEventOutsideShell(event.target, shellRef.current)) {
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !isKeyboardEventComposing(event) &&
+        event.key.toLowerCase() === 'o'
+      ) {
+        event.preventDefault()
+        workspaceLifecycle.selectFolder()
+        return
+      }
+      if (!isWorkspaceSearchShortcut(event)) {
         return
       }
       event.preventDefault()
@@ -235,6 +244,8 @@ export function MainAppShell() {
       window.removeEventListener('keydown', handleWindowKeyDown)
     }
   }, [focusSearchInput, workspaceLifecycle])
+
+  const windowTitle = useWindowTitle(workspaceLifecycle.loadInitContext)
 
   const handleResizeLeftSidebar = useCallback((nextWidth: number): void => {
     setLeftSidebar((prev) => (prev.width === nextWidth ? prev : { ...prev, width: nextWidth }))
@@ -692,9 +703,106 @@ export function MainAppShell() {
     />
   ) : undefined
 
+  const runMenuCommand = useCallback((command: AppMenuCommand): void => {
+    if (!isEditorShortcutDisabledRef.current) {
+      menuHandlersRef.current[command]()
+    }
+  }, [])
+
+  const runMenuAction = useCallback(
+    (action: MainMenuAction): void => {
+      void wikiApi.menu.runAction?.(action)?.catch((error: unknown) => {
+        reportErrorBanner(toErrorMessage(error, '메뉴 작업을 실행하지 못했습니다.'), error)
+      })
+    },
+    [reportErrorBanner, wikiApi.menu]
+  )
+
+  const titleBarMenus = useMemo<TitleBarMenuGroup[]>(
+    () => [
+      {
+        id: 'file',
+        label: 'File',
+        items: [
+          {
+            kind: 'item',
+            id: 'open-folder',
+            label: '폴더 열기...',
+            shortcut: 'Ctrl+O',
+            onSelect: () => runMenuCommand('open-folder')
+          },
+          { kind: 'separator', id: 'file-sep' },
+          {
+            kind: 'item',
+            id: 'quit',
+            label: 'Quit',
+            onSelect: () => runMenuAction('quit')
+          }
+        ]
+      },
+      {
+        id: 'settings',
+        label: 'Settings',
+        items: [
+          {
+            kind: 'item',
+            id: 'toggle-settings',
+            label: '설정 패널',
+            onSelect: () => runMenuCommand('toggle-settings')
+          },
+          {
+            kind: 'item',
+            id: 'toggle-theme',
+            label: '테마 전환',
+            onSelect: () => runMenuCommand('toggle-theme')
+          }
+        ]
+      },
+      {
+        id: 'help',
+        label: 'Help',
+        items: [
+          {
+            kind: 'item',
+            id: 'open-manual',
+            label: '사용자 매뉴얼',
+            onSelect: () => runMenuCommand('open-manual')
+          },
+          { kind: 'separator', id: 'help-sep' },
+          {
+            kind: 'item',
+            id: 'copy-bug-report',
+            label: 'Copy Bug Report',
+            onSelect: () => runMenuAction('copy-bug-report')
+          },
+          {
+            kind: 'item',
+            id: 'open-log-folder',
+            label: 'Open Log Folder',
+            onSelect: () => runMenuAction('open-log-folder')
+          },
+          {
+            kind: 'item',
+            id: 'show-version',
+            label: 'Version',
+            onSelect: () => runMenuAction('show-version')
+          }
+        ]
+      }
+    ],
+    [runMenuAction, runMenuCommand]
+  )
+
   return (
     <EditorWindowFrame
       shellRef={shellRef}
+      titleBarSlot={
+        <TitleBar
+          title={windowTitle}
+          menus={titleBarMenus}
+          isMenuDisabled={isEditorShortcutDisabled}
+        />
+      }
       errorMessage={errorMessage}
       pendingDialog={pendingDialog}
       onDismissDialog={dismissDialog}

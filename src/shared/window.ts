@@ -1,3 +1,4 @@
+import type { ThemeMode } from './config'
 import type { DocumentBuffer } from './documentBuffer'
 import type { GitDiffRequest, GitDiffViewMode } from './git'
 
@@ -297,6 +298,7 @@ export interface WindowInitContext {
   role: WindowRole
   initialTabs: TabTransferPayload[]
   initialWorkspacePath?: string | null
+  appVersion?: string
 }
 
 /**
@@ -390,11 +392,48 @@ export type TabDragEndResult =
     }
 
 export const WINDOW_BASE_TITLE = 'Wiki Editor'
+export const TITLE_BAR_HEIGHT = 32
+
+export interface TitleBarOverlayOptions {
+  color: string
+  symbolColor: string
+  height: number
+}
 
 /**
- * Formats an OS window title from the active document display name.
+ * Returns Windows titleBarOverlay colors matched to the active application theme.
  */
-export function formatWindowTitle(activeDocumentName?: string | null): string {
+export function getTitleBarOverlayOptions(theme: ThemeMode = 'light'): TitleBarOverlayOptions {
+  if (theme === 'dark') {
+    return {
+      color: '#21262d',
+      symbolColor: '#e6edf3',
+      height: TITLE_BAR_HEIGHT
+    }
+  }
+  return {
+    color: '#f0f3f7',
+    symbolColor: '#1f2328',
+    height: TITLE_BAR_HEIGHT
+  }
+}
+
+/**
+ * Formats the base application title with an optional normalized version suffix (`Wiki Editor vX.Y.Z`).
+ */
+export function formatBaseWindowTitle(appVersion?: string | null): string {
+  const normalized = appVersion?.trim().replace(/^[vV]/, '')
+  return normalized ? `${WINDOW_BASE_TITLE} v${normalized}` : WINDOW_BASE_TITLE
+}
+
+/**
+ * Formats an OS/title-bar window title from the active document display name and optional version.
+ */
+export function formatWindowTitle(
+  activeDocumentName?: string | null,
+  appVersion?: string | null
+): string {
+  const baseTitle = formatBaseWindowTitle(appVersion)
   const trimmed = activeDocumentName?.trim()
-  return trimmed ? `${trimmed} - ${WINDOW_BASE_TITLE}` : WINDOW_BASE_TITLE
+  return trimmed ? `${trimmed} - ${baseTitle}` : baseTitle
 }

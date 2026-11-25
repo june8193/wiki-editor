@@ -134,6 +134,120 @@ body,
   color: var(--text-primary);
 }
 
+.app-titlebar {
+  position: relative;
+  height: 32px;
+  flex: 0 0 32px;
+  display: flex;
+  align-items: center;
+  background-color: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-color);
+  user-select: none;
+  -webkit-app-region: drag;
+  z-index: 40;
+}
+
+.app-titlebar-menus {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 6px;
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar-menu-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.app-titlebar-menu-trigger {
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 20px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.app-titlebar-menu-trigger:hover:not(:disabled),
+.app-titlebar-menu-trigger.is-open:not(:disabled) {
+  background-color: var(--bg-surface);
+}
+
+.app-titlebar-menu-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.app-titlebar-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  min-width: 204px;
+  padding: 4px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  z-index: 50;
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 18px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-titlebar-dropdown-item:hover,
+.app-titlebar-dropdown-item:focus-visible {
+  background-color: var(--bg-elevated);
+  outline: none;
+}
+
+.app-titlebar-dropdown-shortcut {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.app-titlebar-dropdown-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background-color: var(--border-color);
+}
+
+.app-titlebar-title {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 144px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  pointer-events: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .btn {
   padding: 6px 12px;
   border-radius: 6px;

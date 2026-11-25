@@ -138,9 +138,11 @@ export const GIT_IPC_CHANNELS = {
 } as const
 
 export type AppMenuCommand = 'open-folder' | 'toggle-theme' | 'toggle-settings' | 'open-manual'
+export type MainMenuAction = 'quit' | 'copy-bug-report' | 'open-log-folder' | 'show-version'
 
 export const MENU_IPC_CHANNELS = {
-  command: 'menu:command'
+  command: 'menu:command',
+  runAction: 'menu:run-action'
 } as const
 
 export const BUFFER_IPC_CHANNELS = {
@@ -273,6 +275,7 @@ export interface WikiGitApi {
 
 export interface WikiMenuApi {
   onCommand(listener: (command: AppMenuCommand) => void): () => void
+  runAction?(action: MainMenuAction): Promise<void>
 }
 
 export interface WikiBufferApi {
