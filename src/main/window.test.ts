@@ -45,6 +45,12 @@ describe('createMainWindowOptions', () => {
       minWidth: 900,
       minHeight: 600
     })
+    expect(options.icon).toBeUndefined()
+
+    const iconOptions = createMainWindowOptions(preloadPath, {
+      icon: 'C:\\app\\build\\icon.png'
+    })
+    expect(iconOptions.icon).toBe('C:\\app\\build\\icon.png')
   })
 
   it('prevents accidental file drop and external URL navigation via will-navigate', () => {
@@ -133,6 +139,12 @@ describe('createAuxiliaryWindowOptions', () => {
         sandbox: true
       }
     })
+    expect(options.icon).toBeUndefined()
+
+    const iconOptions = createAuxiliaryWindowOptions(preloadPath, {
+      icon: 'C:\\app\\build\\icon.png'
+    })
+    expect(iconOptions.icon).toBe('C:\\app\\build\\icon.png')
   })
 })
 

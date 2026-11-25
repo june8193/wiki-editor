@@ -96,6 +96,7 @@ export interface WindowManagerDependencies {
   preloadPath: string
   rendererUrl?: string
   rendererFilePath: string
+  windowIconPath?: string
   configService: ConfigService
   logService?: LogService
   trashItem?: (targetPath: string) => Promise<void>
@@ -157,6 +158,7 @@ export class WindowManager
   private readonly preloadPath: string
   private readonly rendererUrl?: string
   private readonly rendererFilePath: string
+  private readonly windowIconPath?: string
   private readonly configService: ConfigService
   private readonly logService?: LogService
   private readonly trashItem?: (targetPath: string) => Promise<void>
@@ -175,6 +177,7 @@ export class WindowManager
     preloadPath,
     rendererUrl,
     rendererFilePath,
+    windowIconPath,
     configService,
     logService,
     trashItem,
@@ -187,6 +190,7 @@ export class WindowManager
     this.preloadPath = preloadPath
     this.rendererUrl = rendererUrl
     this.rendererFilePath = rendererFilePath
+    this.windowIconPath = windowIconPath
     this.configService = configService
     this.logService = logService
     this.trashItem = trashItem
@@ -201,8 +205,15 @@ export class WindowManager
       createWindow: ({ role, bounds, title, services, callbacks }) => {
         const options =
           role === 'auxiliary'
-            ? createAuxiliaryWindowOptions(this.preloadPath, { bounds, title })
-            : createMainWindowOptions(this.preloadPath, { bounds })
+            ? createAuxiliaryWindowOptions(this.preloadPath, {
+                bounds,
+                title,
+                icon: this.windowIconPath
+              })
+            : createMainWindowOptions(this.preloadPath, {
+                bounds,
+                icon: this.windowIconPath
+              })
         const win = this.createBrowserWindow(options)
         if (role === 'auxiliary') {
           win.removeMenu()

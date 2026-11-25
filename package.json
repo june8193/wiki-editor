@@ -21,10 +21,12 @@
       "output": "dist"
     },
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "build/icon.png"
     ],
     "win": {
-      "target": "dir"
+      "target": "dir",
+      "icon": "build/icon.ico"
     }
   },
   "devDependencies": {

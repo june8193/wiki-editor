@@ -533,6 +533,32 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
     devWinMgr.dispose()
   })
 
+  it('forwards windowIconPath to both main and auxiliary BrowserWindow options', () => {
+    const iconFactory = createFakeBrowserWindowFactory()
+    const iconPath = 'C:\\app\\build\\icon.png'
+    const iconWinMgr = new WindowManager({
+      preloadPath: 'C:\\app\\out\\preload\\index.js',
+      rendererFilePath: 'C:\\app\\out\\renderer\\index.html',
+      windowIconPath: iconPath,
+      configService,
+      createWindow: iconFactory.createWindow
+    })
+
+    const mainWin = iconWinMgr.createMainWindow() as FakeWindowInstance
+    const auxWin = iconWinMgr.createAuxiliaryWindow([
+      {
+        bufferKey: 'c:/wiki/alpha.md',
+        mode: 'raw',
+        cursor: { selectionStart: 0, selectionEnd: 0 },
+        scrollTop: 0
+      }
+    ]) as FakeWindowInstance
+
+    expect(mainWin.options.icon).toBe(iconPath)
+    expect(auxWin.options.icon).toBe(iconPath)
+    iconWinMgr.dispose()
+  })
+
   it('keeps workspace watch owned solely by main window across auxiliary mount/unmount and broadcasts to all', async () => {
     const mainWin = windowManager.createMainWindow() as FakeWindowInstance
     const auxWin = windowManager.createAuxiliaryWindow([

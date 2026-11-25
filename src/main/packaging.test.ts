@@ -8,6 +8,9 @@ interface PackageManifest {
   build?: {
     npmRebuild?: boolean
     files?: string[]
+    win?: {
+      icon?: string
+    }
   }
 }
 
@@ -19,8 +22,9 @@ describe('package.json Electron packaging configuration', () => {
     expect(Object.keys(manifest.dependencies ?? {})).toEqual([])
   })
 
-  it('disables unnecessary native npmRebuild and restricts packaged files to out/**/*', () => {
+  it('disables unnecessary native npmRebuild, restricts packaged files to out/**/* and runtime icon, and sets Windows icon', () => {
     expect(manifest.build?.npmRebuild).toBe(false)
-    expect(manifest.build?.files).toEqual(['out/**/*'])
+    expect(manifest.build?.files).toEqual(['out/**/*', 'build/icon.png'])
+    expect(manifest.build?.win?.icon).toBe('build/icon.ico')
   })
 })

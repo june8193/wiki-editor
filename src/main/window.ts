@@ -21,11 +21,13 @@ export {
 
 export interface MainWindowOptionsInput {
   bounds?: Partial<WindowBounds>
+  icon?: string
 }
 
 export interface AuxiliaryWindowOptionsInput {
   bounds?: Partial<WindowBounds>
   title?: string
+  icon?: string
 }
 
 export interface NavigationGuardedWebContents {
@@ -97,7 +99,7 @@ function createSecureWebPreferences(preloadPath: string): WebPreferences {
 function buildWindowOptions(
   preloadPath: string,
   defaults: { width: number; height: number; minWidth: number; minHeight: number },
-  options?: { bounds?: Partial<WindowBounds>; title?: string }
+  options?: { bounds?: Partial<WindowBounds>; title?: string; icon?: string }
 ): BrowserWindowConstructorOptions {
   const width = options?.bounds?.width ?? defaults.width
   const height = options?.bounds?.height ?? defaults.height
@@ -109,6 +111,7 @@ function buildWindowOptions(
     minHeight: defaults.minHeight,
     ...(options?.bounds?.x !== undefined ? { x: options.bounds.x } : {}),
     ...(options?.bounds?.y !== undefined ? { y: options.bounds.y } : {}),
+    ...(options?.icon ? { icon: options.icon } : {}),
     show: false,
     title: options?.title ?? WINDOW_BASE_TITLE,
     webPreferences: createSecureWebPreferences(preloadPath)

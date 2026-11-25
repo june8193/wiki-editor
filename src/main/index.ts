@@ -137,6 +137,7 @@ void app.whenReady().then(async () => {
     preloadPath: join(__dirname, '../preload/index.js'),
     rendererUrl: process.env.ELECTRON_RENDERER_URL,
     rendererFilePath: join(__dirname, '../renderer/index.html'),
+    windowIconPath: join(__dirname, '../../build/icon.png'),
     configService,
     logService,
     trashItem: (targetPath) => shell.trashItem(targetPath),
