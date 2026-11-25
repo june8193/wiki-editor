@@ -71,16 +71,23 @@ export function TerminalPanel({
   const pendingOutputRef = useRef<Map<string, string[]>>(new Map())
   const lastSizeRef = useRef<Map<string, { cols: number; rows: number }>>(new Map())
 
-  const fitAndSyncSession = useCallback((sessionId: string): void => {
-    const instance = instancesRef.current.get(sessionId)
-    if (!instance) return
-    const measured = instance.fit()
-    if (!measured) return
+  const syncSessionSize = useCallback((sessionId: string, cols: number, rows: number): void => {
     const prev = lastSizeRef.current.get(sessionId)
-    if (prev && prev.cols === measured.cols && prev.rows === measured.rows) return
-    lastSizeRef.current.set(sessionId, measured)
-    callbacksRef.current.onResizeSession(sessionId, measured.cols, measured.rows)
+    if (prev && prev.cols === cols && prev.rows === rows) return
+    lastSizeRef.current.set(sessionId, { cols, rows })
+    callbacksRef.current.onResizeSession(sessionId, cols, rows)
   }, [])
+
+  const fitAndSyncSession = useCallback(
+    (sessionId: string): void => {
+      const instance = instancesRef.current.get(sessionId)
+      if (!instance) return
+      const measured = instance.fit()
+      if (!measured) return
+      syncSessionSize(sessionId, measured.cols, measured.rows)
+    },
+    [syncSessionSize]
+  )
 
   // Subscribe to PTY output and route to live xterm instances (buffering until mounted).
   useEffect(() => {
@@ -122,10 +129,7 @@ export function TerminalPanel({
           callbacksRef.current.onWriteSession(tab.id, data)
         },
         onResize: (cols, rows) => {
-          const prev = lastSizeRef.current.get(tab.id)
-          if (prev && prev.cols === cols && prev.rows === rows) return
-          lastSizeRef.current.set(tab.id, { cols, rows })
-          callbacksRef.current.onResizeSession(tab.id, cols, rows)
+          syncSessionSize(tab.id, cols, rows)
         }
       })
 
