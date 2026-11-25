@@ -5,6 +5,15 @@
 
 ---
 
+## [1.10.0] - 2026-11-25
+
+### Added
+- 메인 창 중앙 편집 공간 하단에 내장 통합 터미널(`node-pty` ConPTY + `@xterm/xterm`) 추가: `Terminal` 메뉴(`터미널 토글`, `새 터미널`) 및 단축키(``Ctrl+` `` / ``Ctrl+Shift+` ``), 지연 PTY 생성·접힘 시 백그라운드 프로세스 유지, 다중 터미널 탭(`+` 기본 셸, `+ ▾` 셸 프로필 드롭다운: `pwsh.exe`·`powershell.exe`·`cmd.exe`·Git Bash 자동 감지), 전역 설정 패널 기본 터미널 프로필(`defaultTerminalProfile`), 상단 수평 리사이저(드래그·방향키·더블클릭 초기화), 라이트/다크 테마 팔레트 동기화, 스마트 복사/붙여넣기(선택 시 `Ctrl+C` 복사·미선택 시 SIGINT, `Ctrl+V`·우클릭 붙여넣기), `Ctrl+클릭` 외부 `http`/`https` URL 및 워크스페이스 로컬 파일(`path:line`) 열기, 워크스페이스 전환·창 종료 시 PTY 자동 정리 지원 ([상세 스펙](.backlog/done/integrated-terminal/spec.md), [티켓 01](.backlog/done/integrated-terminal/issues/01-terminal-pty-backend-and-packaging.md), [티켓 02](.backlog/done/integrated-terminal/issues/02-terminal-panel-shell-and-multi-tabs.md), [티켓 03](.backlog/done/integrated-terminal/issues/03-shell-profile-dropdown-and-config.md), [티켓 04](.backlog/done/integrated-terminal/issues/04-terminal-smart-clipboard-and-links.md), [티켓 05](.backlog/done/integrated-terminal/issues/05-terminal-docs-context-and-verify.md))
+- 전용 `wiki-editor` 앱 로고 및 아이콘 추가: Windows 패키징 아이콘(`build/icon.ico`), 런타임 창 아이콘(`build/icon.png`), 렌더러 파비콘(`icon.svg`) 적용
+
+### Changed
+- 메인 창과 보조 창의 상단 타이틀 바와 애플리케이션 메뉴 바를 32px 통합 타이틀 바(`titleBarStyle: 'hidden'` + `titleBarOverlay`)로 통합: 메인 창 좌측에 `File`, `Settings`, `Terminal`, `Help` 커스텀 드롭다운 메뉴(키보드 탐색 및 `menu:run-action` IPC 연동), 중앙에 앱 이름·버전(`Wiki Editor v{version}`, 보조 창은 `<문서명> - Wiki Editor v{version}`), 우측에 테마와 동기화된 네이티브 창 제어 버튼 배치
+
 ## [1.9.0] - 2026-11-24
 
 ### Added
