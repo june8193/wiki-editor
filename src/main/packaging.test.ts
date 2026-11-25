@@ -8,6 +8,7 @@ interface PackageManifest {
   build?: {
     npmRebuild?: boolean
     files?: string[]
+    asarUnpack?: string[]
   }
 }
 
@@ -15,12 +16,13 @@ describe('package.json Electron packaging configuration', () => {
   const packageJsonPath = resolve(import.meta.dirname, '../../package.json')
   const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as PackageManifest
 
-  it('keeps runtime dependencies empty so electron-builder does not pack bundled node_modules into app.asar', () => {
-    expect(Object.keys(manifest.dependencies ?? {})).toEqual([])
+  it('restricts runtime dependencies to node-pty so only its native module is bundled', () => {
+    expect(Object.keys(manifest.dependencies ?? {})).toEqual(['node-pty'])
   })
 
-  it('disables unnecessary native npmRebuild and restricts packaged files to out/**/*', () => {
+  it('disables unnecessary native npmRebuild, restricts packaged files to out/**/*, and unpacks node-pty from app.asar', () => {
     expect(manifest.build?.npmRebuild).toBe(false)
     expect(manifest.build?.files).toEqual(['out/**/*'])
+    expect(manifest.build?.asarUnpack).toContain('node_modules/node-pty/**/*')
   })
 })
