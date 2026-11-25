@@ -15,7 +15,7 @@ _Avoid_: 기본 창, 부모 창, 루트 윈도우
 _Avoid_: 팝업 창, 서브 창, 자식 윈도우, 독립 창
 
 **애플리케이션 메뉴 바 (Application Menu Bar)**:
-**메인 창** 최상단 32px 통합 타이틀 바(`titleBarStyle: 'hidden'` + `titleBarOverlay`) 좌측에 위치해 `File`, `Settings`, `Help` 커스텀 드롭다운 메뉴를 제공하며, 중앙에 앱 이름·버전(`Wiki Editor v{version}`), 우측에 테마와 동기화된 네이티브 창 제어 버튼을 배치해 `File > 폴더 열기...`, `Settings > 설정 패널`, `Settings > 테마 전환`, `Help > Copy Bug Report` 등 전역 앱 명령을 제공합니다.
+**메인 창** 최상단 32px 통합 타이틀 바(`titleBarStyle: 'hidden'` + `titleBarOverlay`) 좌측에 위치해 `File`, `Settings`, `Terminal`, `Help` 커스텀 드롭다운 메뉴를 제공하며, 중앙에 앱 이름·버전(`Wiki Editor v{version}`), 우측에 테마와 동기화된 네이티브 창 제어 버튼을 배치해 `File > 폴더 열기...`, `Settings > 설정 패널`, `Settings > 테마 전환`, `Terminal > 터미널 토글`, `Terminal > 새 터미널`, `Help > Copy Bug Report` 등 전역 앱 명령을 제공합니다.
 _Avoid_: 시스템 툴바, 파일 메뉴, 상단 네이티브 바
 
 **액티비티 바 (Activity Bar)**:
@@ -33,6 +33,18 @@ _Avoid_: 우측 패널, 아웃라인 사이드바
 **사이드바 리사이저 (Sidebar Resizer)**:
 사이드바 경계에 배치되어 포인터 드래그와 좌·우 방향키로 사이드바 너비를 조절하고 더블클릭으로 기본 너비를 복원하는 핸들입니다(편집기 영역 사이 비율을 조절하는 **분할 구분선**과 구분).
 _Avoid_: 스플리터, 사이드바 구분선, 사이드바 경계선
+
+**터미널 패널 (Terminal Panel)**:
+**메인 창**의 **왼쪽 사이드바**와 **우측 사이드바** 사이 중앙 **편집 공간** 하단에 배치되는 내장 터미널 영역입니다(**보조 창**에는 미제공). **애플리케이션 메뉴 바**(`Terminal > 터미널 토글` / `새 터미널`) 및 `Ctrl+``(`Cmd+``) / `Ctrl+Shift+``(`Cmd+Shift+``) 단축키로 여닫으며, 열기 전에는 PTY를 생성하지 않고(지연 생성), 접힘 상태에서도 실행 중인 백그라운드 프로세스와 출력을 유지하며, 라이트/다크 테마 전환 시 `xterm.js` 팔레트를 동기화하고, 워크스페이스 전환 시 기존 탭·세션을 초기화합니다.
+_Avoid_: 콘솔 창, 셸 드로어, 하단 셸 바
+
+**터미널 탭 (Terminal Tab)**:
+**터미널 패널** 상단 헤더에 나열되는 개별 PTY 셸 세션 단위로, `+` 버튼(기본 셸)과 `+ ▾` 셸 프로필 드롭다운(`pwsh.exe`, `powershell.exe`, `cmd.exe`, Git Bash 등)으로 추가하고 클릭 전환·실행 중/종료 코드 상태 표시·`×` 닫기(PTY 종료)를 지원합니다.
+_Avoid_: 셸 탭, 콘솔 세션 탭
+
+**터미널 리사이저 (Terminal Resizer)**:
+**터미널 패널** 상단 경계에 배치되는 수평 조절 바(`role="separator"`)로, 포인터 드래그·`ArrowUp`/`ArrowDown` 키보드 조절·더블클릭 기본 높이 복원 및 최소·최대 높이 범위 제한을 적용하며 활성 `xterm.js` 터미널 `fit`과 PTY `resize`를 동기화합니다.
+_Avoid_: 터미널 스플리터, 하단 패널 구분선
 
 **오류 배너 (Error Banner)**:
 창 최상단(본문 위)에 표시되어 전역 오류 메시지를 알리는 띠입니다.
@@ -117,7 +129,7 @@ _Avoid_: 메타데이터 템플릿, 속성 설정 파일
 _Avoid_: 스키마 설정 팝업, 필드 편집 창
 
 **전역 설정 패널 (Settings Panel)**:
-애플리케이션 메뉴 바의 `Settings > 설정 패널` 메뉴로 여닫는 가운데 모달로, 테마, 자동 저장, `config.json` 편집 진입을 제공합니다.
+애플리케이션 메뉴 바의 `Settings > 설정 패널` 메뉴로 여닫는 가운데 모달로, 테마, 자동 저장, 기본 터미널 프로필(`defaultTerminalProfile`), `config.json` 편집 진입을 제공합니다.
 _Avoid_: 환경설정 모달, 옵션 창, 프리퍼런스
 
 ### 편집 공간, 분할 및 탭 (Pane Workspace, Split & Tabs)

@@ -24,8 +24,10 @@ import {
 } from '../hooks/useMainWorkspaceLifecycle'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
+import { useWindowHeight } from '../hooks/useWindowHeight'
 import { useWindowTitle } from '../hooks/useWindowTitle'
 import { useWindowWidth } from '../hooks/useWindowWidth'
+import { useTerminalSession } from '../hooks/useTerminalSession'
 import { useWorkspaceSearch } from '../hooks/useWorkspaceSearch'
 import { useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import {
@@ -33,7 +35,16 @@ import {
   getLeftSidebarWidthBounds,
   LEFT_SIDEBAR_DEFAULT_WIDTH
 } from '../utils/sidebarWidth'
-import { isKeyboardEventComposing, isEventOutsideShell, isWorkspaceSearchShortcut, type SearchFocusRequest } from '../utils/workspaceSearch'
+import {
+  isNewTerminalShortcut,
+  isTerminalToggleShortcut
+} from '../utils/terminalShortcuts'
+import {
+  isEventOutsideShell,
+  isKeyboardEventComposing,
+  isWorkspaceSearchShortcut,
+  type SearchFocusRequest
+} from '../utils/workspaceSearch'
 import { ActivityBar, type LeftSidebarView } from './ActivityBar'
 import { getOrderedVisibleCompareFiles } from '../stores/CompareSession'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
@@ -48,6 +59,7 @@ import type { PaneInteractionActions } from './PaneTabBar'
 import { SearchSidebarPanel } from './SearchSidebarPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { SidebarResizer } from './SidebarResizer'
+import { TerminalPanel } from './TerminalPanel'
 import { TitleBar, type TitleBarMenuGroup } from './TitleBar'
 import { WorkspaceView } from './WorkspaceView'
 import { toErrorMessage } from '@shared/errors'
@@ -150,6 +162,7 @@ export function MainAppShell() {
     toggleTheme,
     toggleAutoSave,
     toggleShowHeadingNumbers,
+    setDefaultTerminalProfile,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     removeRecentWorkspace
@@ -175,6 +188,7 @@ export function MainAppShell() {
   refreshConfigDocRef.current = editor.refreshCleanConfig
 
   const windowWidth = useWindowWidth()
+  const windowHeight = useWindowHeight()
   const leftSidebarBounds = getLeftSidebarWidthBounds(windowWidth)
   const leftSidebarWidth = clampSidebarWidth(leftSidebar.width, leftSidebarBounds)
 
@@ -226,6 +240,16 @@ export function MainAppShell() {
         workspaceLifecycle.selectFolder()
         return
       }
+      if (isTerminalToggleShortcut(event)) {
+        event.preventDefault()
+        terminalActionsRef.current.toggleTerminal()
+        return
+      }
+      if (isNewTerminalShortcut(event)) {
+        event.preventDefault()
+        void terminalActionsRef.current.createNewTerminal()
+        return
+      }
       if (!isWorkspaceSearchShortcut(event)) {
         return
       }
@@ -255,7 +279,9 @@ export function MainAppShell() {
     'open-folder': () => undefined,
     'toggle-theme': () => undefined,
     'toggle-settings': () => undefined,
-    'open-manual': () => undefined
+    'open-manual': () => undefined,
+    'toggle-terminal': () => undefined,
+    'new-terminal': () => undefined
   })
 
   const {
@@ -291,6 +317,14 @@ export function MainAppShell() {
   })
 
   const activeWorkspaceRoot = workspace?.rootPath ?? null
+  const terminal = useTerminalSession({
+    wikiApi,
+    workspaceRootPath: activeWorkspaceRoot,
+    windowHeight,
+    defaultTerminalProfile: config.defaultTerminalProfile
+  })
+  const terminalActionsRef = useRef(terminal.actions)
+  terminalActionsRef.current = terminal.actions
   useEffect(() => {
     setIsSchemaModalOpen(false)
   }, [activeWorkspaceRoot])
@@ -418,6 +452,10 @@ export function MainAppShell() {
       setIsSettingsOpen(false)
       setIsSchemaModalOpen(false)
       setIsManualOpen(true)
+    },
+    'toggle-terminal': terminal.actions.toggleTerminal,
+    'new-terminal': () => {
+      void terminal.actions.createNewTerminal()
     }
   }
 
@@ -685,10 +723,13 @@ export function MainAppShell() {
     <SettingsPanel
       theme={config.theme}
       autoSave={config.autoSave}
+      defaultTerminalProfile={config.defaultTerminalProfile}
+      terminalProfiles={terminal.profiles}
       configPath={configPath}
       isDismissDisabled={hasActiveModalDialog}
       onToggleTheme={toggleTheme}
       onToggleAutoSave={toggleAutoSave}
+      onChangeDefaultTerminalProfile={setDefaultTerminalProfile}
       onOpenConfigEditor={handleOpenConfigEditor}
       onClose={() => setIsSettingsOpen(false)}
     />
@@ -759,6 +800,26 @@ export function MainAppShell() {
         ]
       },
       {
+        id: 'terminal',
+        label: 'Terminal',
+        items: [
+          {
+            kind: 'item',
+            id: 'toggle-terminal',
+            label: '터미널 토글',
+            shortcut: 'Ctrl+`',
+            onSelect: () => runMenuCommand('toggle-terminal')
+          },
+          {
+            kind: 'item',
+            id: 'new-terminal',
+            label: '새 터미널',
+            shortcut: 'Ctrl+Shift+`',
+            onSelect: () => runMenuCommand('new-terminal')
+          }
+        ]
+      },
+      {
         id: 'help',
         label: 'Help',
         items: [
@@ -793,6 +854,34 @@ export function MainAppShell() {
     [runMenuAction, runMenuCommand]
   )
 
+  const terminalPanelSlot = (
+    <TerminalPanel
+      isOpen={terminal.isOpen}
+      height={terminal.height}
+      heightBounds={terminal.heightBounds}
+      theme={config.theme}
+      tabs={terminal.tabs}
+      activeTabId={terminal.activeTabId}
+      profiles={terminal.profiles}
+      workspaceRootPath={activeWorkspaceRoot}
+      errorMessage={terminal.errorMessage}
+      onSelectTab={terminal.actions.selectTab}
+      onCloseTab={terminal.actions.closeTab}
+      onNewTerminal={(profileId) => void terminal.actions.createNewTerminal(profileId)}
+      onCollapse={terminal.actions.collapsePanel}
+      onResizeHeight={terminal.actions.resizePanel}
+      onWriteSession={terminal.actions.writeSession}
+      onResizeSession={terminal.actions.resizeSession}
+      subscribeSessionData={terminal.actions.subscribeSessionData}
+      onOpenExternalUrl={(url) => {
+        void wikiApi.terminal?.openExternalUrl(url).catch(() => undefined)
+      }}
+      onOpenWorkspaceFile={(filePath, lineNumber, column) => {
+        void editor.navigation.openFileAtLine(filePath, lineNumber, column)
+      }}
+    />
+  )
+
   return (
     <EditorWindowFrame
       shellRef={shellRef}
@@ -825,6 +914,7 @@ export function MainAppShell() {
         }
       )}
       leftSidebarSlot={leftSidebarSlot}
+      terminalPanelSlot={terminalPanelSlot}
       settingsPanelSlot={settingsPanelSlot}
       manualModalSlot={manualModalSlot}
       isSchemaModalDismissDisabled={git.panelState.stashDialogScope !== null}

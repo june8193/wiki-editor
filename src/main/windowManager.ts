@@ -45,12 +45,17 @@ import type {
   FrontmatterIpcSession,
   FrontmatterIpcSessionSource
 } from './ipc/registerFrontmatterIpc'
+import type {
+  TerminalIpcSession,
+  TerminalIpcSessionSource
+} from './ipc/registerTerminalIpc'
 import type { WindowIpcCoordinator } from './ipc/registerWindowIpc'
 import type {
   WorkspaceIpcCoordinator,
   WorkspaceIpcSession
 } from './ipc/registerWorkspaceIpc'
 import type { LogService } from './logging/LogService'
+import { TerminalService } from './terminal/TerminalService'
 import { createAuxiliaryWindowOptions, createMainWindowOptions } from './window'
 import { createDiskWorkspaceQueryAndSchemaHub } from './workspace/diskWorkspaceQueryAndSchema'
 import {
@@ -121,9 +126,11 @@ export interface CreateMainWindowOptions {
 export interface WorkspaceSessionHandle
   extends BufferIpcSession,
     WorkspaceIpcSession,
-    FrontmatterIpcSession {
+    FrontmatterIpcSession,
+    TerminalIpcSession {
   readonly workspaceService: WorkspaceFsService
   readonly queryAndSchemaHub: WorkspaceQueryAndSchemaHub
+  readonly terminalService: TerminalService
   getTargets: () => WindowWebContentsLike[]
 }
 
@@ -131,6 +138,7 @@ interface ElectronSessionServices extends WindowSessionServices {
   readonly workspaceService: WorkspaceFsService
   readonly queryAndSchemaHub: WorkspaceQueryAndSchemaHub
   readonly bufferHub: SharedDocumentBufferHub
+  readonly terminalService: TerminalService
   readonly handle: WorkspaceSessionHandle
 }
 
@@ -159,6 +167,7 @@ export class WindowManager
     BufferIpcSessionSource,
     WorkspaceIpcCoordinator,
     FrontmatterIpcSessionSource,
+    TerminalIpcSessionSource,
     WindowIpcCoordinator
 {
   private readonly preloadPath: string
@@ -360,12 +369,24 @@ export class WindowManager
       watchDebounceMs: this.watchDebounceMs,
       logService: this.logService
     })
+    const terminalService = new TerminalService({
+      getWorkspaceRoot: () => workspaceService.getWorkspaceRoot(),
+      logService: this.logService
+    })
 
     const handle: WorkspaceSessionHandle = {
       hub: bufferHub,
       workspaceService,
       queryAndSchemaHub,
+      terminalService,
+      getWorkspaceRoot: () => workspaceService.getWorkspaceRoot(),
+      onWorkspaceRootChanged: (listener) =>
+        workspaceService.onWorkspaceRootChanged((rootPath) => {
+          listener(rootPath)
+        }),
       getTargets: () => this.getSessionWebContentsTargets(sessionId),
+      getMainWindowTarget: () =>
+        this.getSessionWebContentsTargets(sessionId).find((target) => handle.isMainWindow(target)),
       resolveWindowId: (sender) => {
         const windowId = this.resolveWindowIdFromSender(sender)
         if (windowId === undefined) return undefined
@@ -387,11 +408,13 @@ export class WindowManager
       workspaceService,
       queryAndSchemaHub,
       bufferHub,
+      terminalService,
       handle,
       getWorkspaceRoot: () => workspaceService.getWorkspaceRoot(),
       openWorkspace: (resolvedRootPath) => workspaceService.openWorkspace(resolvedRootPath),
       cancelActiveWorkspaceScans: () => queryAndSchemaHub.cancelActiveScans(),
       dispose: () => {
+        terminalService.dispose()
         queryAndSchemaHub.dispose()
         bufferHub.dispose()
         workspaceService.dispose()

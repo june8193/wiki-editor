@@ -43,6 +43,7 @@ import {
   LOG_IPC_CHANNELS,
   type MainMenuAction,
   MENU_IPC_CHANNELS,
+  TERMINAL_IPC_CHANNELS,
   WikiApi,
   WINDOW_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS,
@@ -71,6 +72,12 @@ import type {
   WorkspaceStateUpdate
 } from '@shared/workspaceState'
 import type { WorkspaceSearchRequest, WorkspaceSearchResponse } from '@shared/search'
+import type {
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalSessionInfo,
+  TerminalShellProfile
+} from '@shared/terminal'
 
 export interface IpcRendererLike {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>
@@ -448,6 +455,27 @@ export function createWikiApi(
         ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyImage, pngBytes) as Promise<void>,
       saveFile: (request) =>
         ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.saveFile, request) as Promise<DiagramSaveResult>
+    },
+    terminal: {
+      listProfiles: () =>
+        ipcRenderer.invoke(TERMINAL_IPC_CHANNELS.listProfiles) as Promise<TerminalShellProfile[]>,
+      createSession: (request) =>
+        ipcRenderer.invoke(
+          TERMINAL_IPC_CHANNELS.createSession,
+          request
+        ) as Promise<TerminalSessionInfo>,
+      write: (sessionId, data) =>
+        ipcRenderer.invoke(TERMINAL_IPC_CHANNELS.write, sessionId, data) as Promise<void>,
+      resize: (sessionId, cols, rows) =>
+        ipcRenderer.invoke(TERMINAL_IPC_CHANNELS.resize, sessionId, cols, rows) as Promise<void>,
+      closeSession: (sessionId) =>
+        ipcRenderer.invoke(TERMINAL_IPC_CHANNELS.closeSession, sessionId) as Promise<void>,
+      openExternalUrl: (url) =>
+        ipcRenderer.invoke(TERMINAL_IPC_CHANNELS.openExternalUrl, url) as Promise<boolean>,
+      onData: (listener) =>
+        subscribeChannel<TerminalDataEvent>(ipcRenderer, TERMINAL_IPC_CHANNELS.data, listener),
+      onExit: (listener) =>
+        subscribeChannel<TerminalExitEvent>(ipcRenderer, TERMINAL_IPC_CHANNELS.exit, listener)
     }
   }
 }

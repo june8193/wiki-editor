@@ -31,6 +31,7 @@ describe('ConfigService', () => {
       autoSave: false,
       autoSaveDelayMs: 1000,
       showHeadingNumbers: true,
+      defaultTerminalProfile: null,
       favoriteWorkspaces: [],
       recentWorkspaces: []
     })
@@ -62,6 +63,7 @@ describe('ConfigService', () => {
       autoSave: true,
       autoSaveDelayMs: 1000,
       showHeadingNumbers: true,
+      defaultTerminalProfile: null,
       favoriteWorkspaces: [],
       recentWorkspaces: ['C:\\docs']
     })
@@ -115,6 +117,18 @@ describe('ConfigService', () => {
     expect(reloaded.autoSave).toBe(true)
     expect(reloaded.autoSaveDelayMs).toBe(1000)
     expect(reloaded.showHeadingNumbers).toBe(true)
+  })
+
+  it('persists defaultTerminalProfile and allows resetting back to null', async () => {
+    const service = new ConfigService(configPath)
+    const updated = await service.update({ defaultTerminalProfile: 'cmd' })
+    expect(updated.defaultTerminalProfile).toBe('cmd')
+
+    const reloaded = await new ConfigService(configPath).get()
+    expect(reloaded.defaultTerminalProfile).toBe('cmd')
+
+    const reset = await service.update({ defaultTerminalProfile: null })
+    expect(reset.defaultTerminalProfile).toBeNull()
   })
 
   it('serializes concurrent updates so neither change is lost', async () => {

@@ -62,6 +62,13 @@ import type {
   PersistedWorkspaceState,
   WorkspaceStateUpdate
 } from './workspaceState'
+import type {
+  TerminalCreateRequest,
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalSessionInfo,
+  TerminalShellProfile
+} from './terminal'
 
 export const CONFIG_IPC_CHANNELS = {
   get: 'config:get',
@@ -137,7 +144,13 @@ export const GIT_IPC_CHANNELS = {
   stashClear: 'git:stash-clear'
 } as const
 
-export type AppMenuCommand = 'open-folder' | 'toggle-theme' | 'toggle-settings' | 'open-manual'
+export type AppMenuCommand =
+  | 'open-folder'
+  | 'toggle-theme'
+  | 'toggle-settings'
+  | 'open-manual'
+  | 'toggle-terminal'
+  | 'new-terminal'
 export type MainMenuAction = 'quit' | 'copy-bug-report' | 'open-log-folder' | 'show-version'
 
 export const MENU_IPC_CHANNELS = {
@@ -202,6 +215,17 @@ export const WINDOW_IPC_CHANNELS = {
   closeRequested: 'window:close-requested',
   resolveCloseRequest: 'window:resolve-close-request',
   setCloseFlushEnabled: 'window:set-close-flush-enabled'
+} as const
+
+export const TERMINAL_IPC_CHANNELS = {
+  listProfiles: 'terminal:list-profiles',
+  createSession: 'terminal:create-session',
+  write: 'terminal:write',
+  resize: 'terminal:resize',
+  closeSession: 'terminal:close-session',
+  openExternalUrl: 'terminal:open-external-url',
+  data: 'terminal:data',
+  exit: 'terminal:exit'
 } as const
 export interface WikiConfigApi {
   get(): Promise<AppConfig>
@@ -350,6 +374,17 @@ export interface WikiFrontmatterApi {
   onSchemaChanged(listener: (result: FrontmatterSchemaLoadResult) => void): () => void
 }
 
+export interface WikiTerminalApi {
+  listProfiles(): Promise<TerminalShellProfile[]>
+  createSession(request: TerminalCreateRequest): Promise<TerminalSessionInfo>
+  write(sessionId: string, data: string): Promise<void>
+  resize(sessionId: string, cols: number, rows: number): Promise<void>
+  closeSession(sessionId: string): Promise<void>
+  openExternalUrl(url: string): Promise<boolean>
+  onData(listener: (event: TerminalDataEvent) => void): () => void
+  onExit(listener: (event: TerminalExitEvent) => void): () => void
+}
+
 export interface WikiApi {
   config: WikiConfigApi
   workspace: WikiWorkspaceApi
@@ -362,4 +397,5 @@ export interface WikiApi {
   clipboard?: WikiClipboardApi
   window?: WikiWindowApi
   diagram?: WikiDiagramApi
+  terminal?: WikiTerminalApi
 }

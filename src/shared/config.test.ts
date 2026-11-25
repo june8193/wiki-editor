@@ -13,6 +13,7 @@ describe('shared config validation and normalization', () => {
       autoSave: true,
       autoSaveDelayMs: 2500,
       showHeadingNumbers: false,
+      defaultTerminalProfile: 'pwsh',
       favoriteWorkspaces: [
         { path: 'C:\\wiki', name: 'Wiki', pinnedAt: '2026-11-14T00:00:00.000Z' }
       ],
@@ -20,7 +21,11 @@ describe('shared config validation and normalization', () => {
     })
 
     expect(patch.theme).toBe('dark')
+    expect(patch.defaultTerminalProfile).toBe('pwsh')
     expect(patch.favoriteWorkspaces).toHaveLength(1)
+    expect(validateConfigPatch({ defaultTerminalProfile: null })).toEqual({
+      defaultTerminalProfile: null
+    })
   })
 
   it('rejects invalid config patch values with descriptive errors', () => {
@@ -30,6 +35,12 @@ describe('shared config validation and normalization', () => {
     expect(() => validateConfigPatch({ autoSaveDelayMs: 0 })).toThrow(/autoSaveDelayMs/i)
     expect(() => validateConfigPatch({ autoSaveDelayMs: 0.4 })).toThrow(/autoSaveDelayMs/i)
     expect(() => validateConfigPatch({ showHeadingNumbers: 1 })).toThrow(/showHeadingNumbers/i)
+    expect(() => validateConfigPatch({ defaultTerminalProfile: 123 })).toThrow(
+      /defaultTerminalProfile/i
+    )
+    expect(() => validateConfigPatch({ defaultTerminalProfile: '   ' })).toThrow(
+      /defaultTerminalProfile/i
+    )
     expect(() => validateConfigPatch({ favoriteWorkspaces: [{ path: 123 }] })).toThrow(
       /favoriteWorkspaces/i
     )
@@ -55,6 +66,13 @@ describe('shared config validation and normalization', () => {
     expect(normalized.favoriteWorkspaces).toEqual([
       { path: 'C:\\ok', name: 'OK', pinnedAt: '2026-11-14T00:00:00.000Z' }
     ])
+    expect(normalized.defaultTerminalProfile).toBeNull()
+    expect(
+      normalizeAppConfig(
+        { defaultTerminalProfile: null },
+        { ...DEFAULT_APP_CONFIG, defaultTerminalProfile: 'cmd' }
+      ).defaultTerminalProfile
+    ).toBeNull()
   })
 
   it('validates raw config.json text strictly and rejects malformed JSON, unknown keys including customCommands, and invalid field types', () => {

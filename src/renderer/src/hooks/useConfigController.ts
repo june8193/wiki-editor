@@ -162,6 +162,17 @@ export function useConfigController({
     toggleBooleanConfig('showHeadingNumbers', '목차 번호 표시 설정 변경에 실패했습니다.')
   }, [toggleBooleanConfig])
 
+  const setDefaultTerminalProfile = useCallback(
+    (profileId: string | null): void => {
+      void runConfigMutation(
+        (prev) => ({ ...prev, defaultTerminalProfile: profileId }),
+        () => wikiApi.config.update({ defaultTerminalProfile: profileId }),
+        '기본 터미널 프로필 설정 저장에 실패했습니다.'
+      )
+    },
+    [runConfigMutation, wikiApi]
+  )
+
 
   const toggleFavoriteWorkspace = useCallback(
     (workspacePath: string, name: string): void => {
@@ -206,6 +217,7 @@ export function useConfigController({
     toggleTheme,
     toggleAutoSave,
     toggleShowHeadingNumbers,
+    setDefaultTerminalProfile,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     removeRecentWorkspace

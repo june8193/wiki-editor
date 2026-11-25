@@ -12,6 +12,7 @@ import {
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
+  TERMINAL_IPC_CHANNELS,
   WINDOW_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS,
   WORKSPACE_STATE_IPC_CHANNELS
@@ -570,5 +571,44 @@ describe('createWikiApi', () => {
 
     unsubscribe()
     expect(ipc.listenerCount(FRONTMATTER_IPC_CHANNELS.schemaChanged)).toBe(0)
+  })
+
+  it('routes terminal.* methods through expected IPC channels and unsubscribes data/exit listeners', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+
+    await api.terminal.listProfiles()
+    await api.terminal.createSession({ profileId: 'pwsh', cols: 100, rows: 30 })
+    await api.terminal.write('term-1', 'echo hi\r')
+    await api.terminal.resize('term-1', 120, 40)
+    await api.terminal.closeSession('term-1')
+    await api.terminal.openExternalUrl('https://example.com')
+
+    expect(ipc.lastInvoked).toEqual([
+      { channel: TERMINAL_IPC_CHANNELS.listProfiles, args: [] },
+      {
+        channel: TERMINAL_IPC_CHANNELS.createSession,
+        args: [{ profileId: 'pwsh', cols: 100, rows: 30 }]
+      },
+      { channel: TERMINAL_IPC_CHANNELS.write, args: ['term-1', 'echo hi\r'] },
+      { channel: TERMINAL_IPC_CHANNELS.resize, args: ['term-1', 120, 40] },
+      { channel: TERMINAL_IPC_CHANNELS.closeSession, args: ['term-1'] },
+      { channel: TERMINAL_IPC_CHANNELS.openExternalUrl, args: ['https://example.com'] }
+    ])
+
+    const dataEvents: unknown[] = []
+    const exitEvents: unknown[] = []
+    const unsubData = api.terminal.onData((event) => dataEvents.push(event))
+    const unsubExit = api.terminal.onExit((event) => exitEvents.push(event))
+
+    ipc.emit(TERMINAL_IPC_CHANNELS.data, { sessionId: 'term-1', data: 'hi\r\n' })
+    ipc.emit(TERMINAL_IPC_CHANNELS.exit, { sessionId: 'term-1', exitCode: 0 })
+    expect(dataEvents).toEqual([{ sessionId: 'term-1', data: 'hi\r\n' }])
+    expect(exitEvents).toEqual([{ sessionId: 'term-1', exitCode: 0 }])
+
+    unsubData()
+    unsubExit()
+    expect(ipc.listenerCount(TERMINAL_IPC_CHANNELS.data)).toBe(0)
+    expect(ipc.listenerCount(TERMINAL_IPC_CHANNELS.exit)).toBe(0)
   })
 })

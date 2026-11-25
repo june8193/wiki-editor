@@ -23,6 +23,12 @@ import {
 import { createEmptyGitStatus } from '@shared/git'
 import type { WorkspaceSearchRequest, WorkspaceSearchResponse } from '@shared/search'
 import type {
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalSessionInfo,
+  TerminalShellProfile
+} from '@shared/terminal'
+import type {
   AppMenuCommand,
   WikiApi,
   WikiBufferApi,
@@ -288,6 +294,12 @@ export interface MultiWindowWikiHarness {
   getFilesSnapshot: () => Map<string, string>
   readDirCalls: string[]
   copiedTexts: string[]
+  emitTerminalData: (sessionId: string, data: string) => void
+  emitTerminalExit: (sessionId: string, exitCode: number | null, signal?: number) => void
+  getTerminalSessions: () => TerminalSessionInfo[]
+  getTerminalClosedIds: () => string[]
+  getTerminalWrites: () => Array<{ sessionId: string; data: string }>
+  getTerminalResizes: () => Array<{ sessionId: string; cols: number; rows: number }>
   hub: SharedDocumentBufferHub
   dispose: () => void
 }
@@ -330,6 +342,17 @@ export function createMultiWindowWikiHarness(
   const files = new Map<string, string>()
   const readDirCalls: string[] = []
   const copiedTexts: string[] = []
+  const terminalSessions = new Map<string, TerminalSessionInfo>()
+  const terminalClosedIds: string[] = []
+  const terminalWrites: Array<{ sessionId: string; data: string }> = []
+  const terminalResizes: Array<{ sessionId: string; cols: number; rows: number }> = []
+  const terminalDataListeners = new Set<(event: TerminalDataEvent) => void>()
+  const terminalExitListeners = new Set<(event: TerminalExitEvent) => void>()
+  let nextTerminalSessionSeq = 1
+  const defaultProfiles: TerminalShellProfile[] = [
+    { id: 'pwsh', label: 'PowerShell', executable: 'pwsh.exe', args: ['-NoLogo'], isDefault: true },
+    { id: 'cmd', label: 'Command Prompt', executable: 'cmd.exe', args: [], isDefault: false }
+  ]
   const seededWorkspaces: Record<string, PersistedWorkspaceState> = {}
   for (const [rawKey, partial] of Object.entries(fsOptions.workspaceStates ?? {})) {
     const rootPath = partial.rootPath ?? rawKey
@@ -1264,7 +1287,62 @@ export function createMultiWindowWikiHarness(
             coordinator.setCloseFlushEnabled(windowId, enabled)
           }
         },
-        ...(fsOptions.log ? { log: fsOptions.log } : {})
+        ...(fsOptions.log ? { log: fsOptions.log } : {}),
+        terminal: {
+          async listProfiles() {
+            return defaultProfiles.map((profile) => ({ ...profile, args: [...profile.args] }))
+          },
+          async createSession(request) {
+            if (role !== 'main') {
+              throw new Error('보조 창에서는 터미널을 사용할 수 없습니다.')
+            }
+            if (!session.activeRoot) {
+              throw new Error('열린 워크스페이스가 없습니다.')
+            }
+            const profile =
+              defaultProfiles.find((candidate) => candidate.id === request.profileId) ??
+              defaultProfiles[0]
+            const id = `term-${nextTerminalSessionSeq++}`
+            const info: TerminalSessionInfo = {
+              id,
+              profileId: profile.id,
+              title: profile.label,
+              cwd: session.activeRoot,
+              pid: 1000 + nextTerminalSessionSeq,
+              isRunning: true
+            }
+            terminalSessions.set(id, info)
+            return { ...info }
+          },
+          async write(sessionId, data) {
+            terminalWrites.push({ sessionId, data })
+          },
+          async resize(sessionId, cols, rows) {
+            terminalResizes.push({ sessionId, cols, rows })
+          },
+          async closeSession(sessionId) {
+            terminalClosedIds.push(sessionId)
+            const existing = terminalSessions.get(sessionId)
+            if (existing) {
+              terminalSessions.set(sessionId, { ...existing, isRunning: false })
+            }
+          },
+          async openExternalUrl() {
+            return true
+          },
+          onData(listener) {
+            terminalDataListeners.add(listener)
+            return () => {
+              terminalDataListeners.delete(listener)
+            }
+          },
+          onExit(listener) {
+            terminalExitListeners.add(listener)
+            return () => {
+              terminalExitListeners.delete(listener)
+            }
+          }
+        }
       }
 
       if (!session.primaryApi) {
@@ -1424,6 +1502,24 @@ export function createMultiWindowWikiHarness(
     getFilesSnapshot: () => new Map(files),
     readDirCalls,
     copiedTexts,
+    emitTerminalData(sessionId, data) {
+      for (const listener of terminalDataListeners) {
+        listener({ sessionId, data })
+      }
+    },
+    emitTerminalExit(sessionId, exitCode, signal) {
+      const existing = terminalSessions.get(sessionId)
+      if (existing) {
+        terminalSessions.set(sessionId, { ...existing, isRunning: false })
+      }
+      for (const listener of terminalExitListeners) {
+        listener({ sessionId, exitCode, signal })
+      }
+    },
+    getTerminalSessions: () => [...terminalSessions.values()],
+    getTerminalClosedIds: () => [...terminalClosedIds],
+    getTerminalWrites: () => [...terminalWrites],
+    getTerminalResizes: () => [...terminalResizes],
     get hub() {
       return latestDefaultServices.hub
     },
@@ -1450,6 +1546,12 @@ export function createInMemoryWikiApi(
   getFilesSnapshot: () => Map<string, string>
   readDirCalls: string[]
   copiedTexts: string[]
+  emitTerminalData: (sessionId: string, data: string) => void
+  emitTerminalExit: (sessionId: string, exitCode: number | null, signal?: number) => void
+  getTerminalSessions: () => TerminalSessionInfo[]
+  getTerminalClosedIds: () => string[]
+  getTerminalWrites: () => Array<{ sessionId: string; data: string }>
+  getTerminalResizes: () => Array<{ sessionId: string; cols: number; rows: number }>
   dispose: () => void
 } {
   const harness = createMultiWindowWikiHarness(initialOverrides, fsOptions)
@@ -1465,6 +1567,12 @@ export function createInMemoryWikiApi(
     getFilesSnapshot: harness.getFilesSnapshot,
     readDirCalls: harness.readDirCalls,
     copiedTexts: harness.copiedTexts,
+    emitTerminalData: harness.emitTerminalData,
+    emitTerminalExit: harness.emitTerminalExit,
+    getTerminalSessions: harness.getTerminalSessions,
+    getTerminalClosedIds: harness.getTerminalClosedIds,
+    getTerminalWrites: harness.getTerminalWrites,
+    getTerminalResizes: harness.getTerminalResizes,
     dispose: harness.dispose
   }
 }

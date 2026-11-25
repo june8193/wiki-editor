@@ -12,6 +12,7 @@ export interface AppConfig {
   autoSave: boolean
   autoSaveDelayMs: number
   showHeadingNumbers: boolean
+  defaultTerminalProfile: string | null
   favoriteWorkspaces: FavoriteWorkspace[]
   recentWorkspaces: string[]
 }
@@ -22,6 +23,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   autoSave: false,
   autoSaveDelayMs: 1000,
   showHeadingNumbers: true,
+  defaultTerminalProfile: null,
   favoriteWorkspaces: [],
   recentWorkspaces: []
 }
@@ -45,46 +47,57 @@ function isFavoriteWorkspace(value: unknown): value is FavoriteWorkspace {
   )
 }
 
+const PARSE_FAILED = Symbol('PARSE_FAILED')
+
 function parseTypedArray<T>(
   value: unknown,
   guard: (item: unknown) => item is T,
   cloneItem: (item: T) => T,
   strict: boolean
-): T[] | null {
-  if (!Array.isArray(value)) return null
-  if (strict && !value.every(guard)) return null
+): T[] | typeof PARSE_FAILED {
+  if (!Array.isArray(value)) return PARSE_FAILED
+  if (strict && !value.every(guard)) return PARSE_FAILED
   return value.filter(guard).map(cloneItem)
 }
 
 interface FieldSpec<K extends keyof AppConfig> {
-  parse: (value: unknown, strict: boolean) => AppConfig[K] | null
+  parse: (value: unknown, strict: boolean) => AppConfig[K] | typeof PARSE_FAILED
   errorMessage: string
 }
 
 const CONFIG_FIELD_SPECS: { [K in keyof AppConfig]: FieldSpec<K> } = {
   version: {
-    parse: (value) => (value === 1 ? 1 : null),
+    parse: (value) => (value === 1 ? 1 : PARSE_FAILED),
     errorMessage: 'Invalid config version: expected 1'
   },
   theme: {
-    parse: (value) => (value === 'light' || value === 'dark' ? value : null),
+    parse: (value) => (value === 'light' || value === 'dark' ? value : PARSE_FAILED),
     errorMessage: 'Invalid theme: expected "light" or "dark"'
   },
   autoSave: {
-    parse: (value) => (typeof value === 'boolean' ? value : null),
+    parse: (value) => (typeof value === 'boolean' ? value : PARSE_FAILED),
     errorMessage: 'Invalid autoSave: expected boolean'
   },
   autoSaveDelayMs: {
     parse: (value) => {
-      if (typeof value !== 'number' || !Number.isFinite(value)) return null
+      if (typeof value !== 'number' || !Number.isFinite(value)) return PARSE_FAILED
       const rounded = Math.round(value)
-      return rounded > 0 ? rounded : null
+      return rounded > 0 ? rounded : PARSE_FAILED
     },
     errorMessage: 'Invalid autoSaveDelayMs: expected positive finite number'
   },
   showHeadingNumbers: {
-    parse: (value) => (typeof value === 'boolean' ? value : null),
+    parse: (value) => (typeof value === 'boolean' ? value : PARSE_FAILED),
     errorMessage: 'Invalid showHeadingNumbers: expected boolean'
+  },
+  defaultTerminalProfile: {
+    parse: (value) => {
+      if (value === null) return null
+      if (typeof value !== 'string') return PARSE_FAILED
+      const trimmed = value.trim()
+      return trimmed.length > 0 ? trimmed : PARSE_FAILED
+    },
+    errorMessage: 'Invalid defaultTerminalProfile: expected non-empty string or null'
   },
   favoriteWorkspaces: {
     parse: (value, strict) => parseTypedArray(value, isFavoriteWorkspace, shallowClone, strict),
@@ -119,7 +132,7 @@ export function normalizeAppConfig(
   const result = cloneAppConfig(base)
   for (const key of CONFIG_KEYS) {
     const parsed = CONFIG_FIELD_SPECS[key].parse(raw[key], false)
-    if (parsed !== null) {
+    if (parsed !== PARSE_FAILED) {
       ;(result as Record<keyof AppConfig, unknown>)[key] = parsed
     }
   }
@@ -140,7 +153,7 @@ export function validateConfigPatch(raw: unknown): Partial<AppConfig> {
     if (key in raw && raw[key] !== undefined) {
       const spec = CONFIG_FIELD_SPECS[key]
       const parsed = spec.parse(raw[key], true)
-      if (parsed === null) {
+      if (parsed === PARSE_FAILED) {
         throw new Error(spec.errorMessage)
       }
       ;(patch as Record<keyof AppConfig, unknown>)[key] = parsed

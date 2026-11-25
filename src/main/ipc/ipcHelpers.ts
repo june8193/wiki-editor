@@ -15,6 +15,7 @@ import {
   FRONTMATTER_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
+  TERMINAL_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS,
   WORKSPACE_STATE_IPC_CHANNELS
 } from '@shared/ipc'
@@ -159,6 +160,18 @@ const CHANNEL_METADATA_EXTRACTORS: Record<string, (args: unknown[]) => Record<st
   },
   [FRONTMATTER_IPC_CHANNELS.getFieldValues]: ([fieldKeys]) => ({
     fieldKeyCount: Array.isArray(fieldKeys) ? fieldKeys.length : 0
+  }),
+  [TERMINAL_IPC_CHANNELS.write]: ([sessionId, data]) => ({
+    sessionId,
+    dataLength: typeof data === 'string' ? data.length : 0
+  }),
+  [TERMINAL_IPC_CHANNELS.resize]: ([sessionId, cols, rows]) => ({
+    sessionId,
+    cols,
+    rows
+  }),
+  [TERMINAL_IPC_CHANNELS.closeSession]: ([sessionId]) => ({
+    sessionId
   })
 }
 
