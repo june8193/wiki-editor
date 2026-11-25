@@ -1,14 +1,16 @@
 import type { BrowserWindowConstructorOptions, WebPreferences } from 'electron'
+import type { ThemeMode } from '@shared/config'
 import {
   AUXILIARY_WINDOW_DEFAULT_HEIGHT,
   AUXILIARY_WINDOW_DEFAULT_WIDTH,
   AUXILIARY_WINDOW_MIN_HEIGHT,
   AUXILIARY_WINDOW_MIN_WIDTH,
+  formatBaseWindowTitle,
+  getTitleBarOverlayOptions,
   MAIN_WINDOW_DEFAULT_HEIGHT,
   MAIN_WINDOW_DEFAULT_WIDTH,
   MAIN_WINDOW_MIN_HEIGHT,
   MAIN_WINDOW_MIN_WIDTH,
-  WINDOW_BASE_TITLE,
   type WindowBounds
 } from '@shared/window'
 
@@ -22,12 +24,16 @@ export {
 export interface MainWindowOptionsInput {
   bounds?: Partial<WindowBounds>
   icon?: string
+  theme?: ThemeMode
+  appVersion?: string
 }
 
 export interface AuxiliaryWindowOptionsInput {
   bounds?: Partial<WindowBounds>
   title?: string
   icon?: string
+  theme?: ThemeMode
+  appVersion?: string
 }
 
 export interface NavigationGuardedWebContents {
@@ -99,7 +105,13 @@ function createSecureWebPreferences(preloadPath: string): WebPreferences {
 function buildWindowOptions(
   preloadPath: string,
   defaults: { width: number; height: number; minWidth: number; minHeight: number },
-  options?: { bounds?: Partial<WindowBounds>; title?: string; icon?: string }
+  options?: {
+    bounds?: Partial<WindowBounds>
+    title?: string
+    icon?: string
+    theme?: ThemeMode
+    appVersion?: string
+  }
 ): BrowserWindowConstructorOptions {
   const width = options?.bounds?.width ?? defaults.width
   const height = options?.bounds?.height ?? defaults.height
@@ -113,7 +125,10 @@ function buildWindowOptions(
     ...(options?.bounds?.y !== undefined ? { y: options.bounds.y } : {}),
     ...(options?.icon ? { icon: options.icon } : {}),
     show: false,
-    title: options?.title ?? WINDOW_BASE_TITLE,
+    title: options?.title ?? formatBaseWindowTitle(options?.appVersion),
+    titleBarStyle: 'hidden',
+    titleBarOverlay: getTitleBarOverlayOptions(options?.theme ?? 'light'),
+    autoHideMenuBar: true,
     webPreferences: createSecureWebPreferences(preloadPath)
   }
 }

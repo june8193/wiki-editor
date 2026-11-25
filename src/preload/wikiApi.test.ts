@@ -319,7 +319,7 @@ describe('createWikiApi', () => {
     ])
   })
 
-  it('subscribes to menu:command without exposing Electron event and cleans up on unsubscribe', () => {
+  it('subscribes to menu:command without exposing Electron event and cleans up on unsubscribe', async () => {
     const ipc = createFakeIpcRenderer()
     const api = createWikiApi(ipc)
     const commands: AppMenuCommand[] = []
@@ -340,6 +340,11 @@ describe('createWikiApi', () => {
 
     ipc.emit(MENU_IPC_CHANNELS.command, 'open-folder')
     expect(commands).toHaveLength(3)
+
+    await api.menu.runAction?.('show-version')
+    expect(ipc.lastInvoked).toEqual([
+      { channel: MENU_IPC_CHANNELS.runAction, args: ['show-version'] }
+    ])
   })
 
   it('exposes workspace.ingestImage via IPC and workspace.getPathForFile via injected resolver', async () => {

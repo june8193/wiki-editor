@@ -80,6 +80,7 @@ export interface WindowSessionHost<
   TSessionServices extends WindowSessionServices = WindowSessionServices
 > {
   readonly screen?: ScreenLike
+  readonly appVersion?: string
   createSessionServices(sessionId: number): TSessionServices
   createWindow(params: CreateHostedWindowParams<TSessionServices>): HostedWindow
   mountWindow?(window: HostedWindow, role: WindowRole): void
@@ -484,7 +485,8 @@ export class WindowSessionCoordinator<
       role: options.role,
       initialTabs: options.initialTabs,
       bounds: options.bounds,
-      title: options.role === 'auxiliary' ? formatWindowTitle(firstName) : undefined
+      title:
+        options.role === 'auxiliary' ? formatWindowTitle(firstName, this.host.appVersion) : undefined
     })
     this.host.mountWindow?.(record.hosted, options.role)
     return record
@@ -589,8 +591,13 @@ export class WindowSessionCoordinator<
 
   getWindowInitContext(windowId: number | undefined): WindowInitContext {
     const live = this.resolveLiveWindow(windowId)
+    const appVersionField = this.host.appVersion ? { appVersion: this.host.appVersion } : {}
     if (!live) {
-      return { role: 'main', initialTabs: [] }
+      return {
+        role: 'main',
+        initialTabs: [],
+        ...appVersionField
+      }
     }
     const { record } = live
     return {
@@ -598,7 +605,8 @@ export class WindowSessionCoordinator<
       initialTabs: cloneTabTransferPayloads(record.initialTabs),
       ...(record.initialWorkspacePath !== undefined
         ? { initialWorkspacePath: record.initialWorkspacePath }
-        : {})
+        : {}),
+      ...appVersionField
     }
   }
 

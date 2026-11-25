@@ -4,7 +4,9 @@ import {
   computeCursorAuxiliaryBounds,
   computeOffsetAuxiliaryBounds,
   computeOffsetMainBounds,
+  formatBaseWindowTitle,
   formatWindowTitle,
+  getTitleBarOverlayOptions,
   isPointInsideWindowBounds,
   isPointOutsideAllWindows
 } from '@shared/window'
@@ -16,9 +18,12 @@ import {
 } from './window'
 
 describe('createMainWindowOptions', () => {
-  it('enforces 1280x820 defaults, 900x600 minimums, optional bounds, and secure webPreferences', () => {
+  it('enforces 1280x820 defaults, 900x600 minimums, optional bounds, hidden titleBarOverlay, and secure webPreferences', () => {
     const preloadPath = 'C:\\app\\out\\preload\\index.js'
-    const options = createMainWindowOptions(preloadPath)
+    const options = createMainWindowOptions(preloadPath, {
+      appVersion: '1.9.0',
+      theme: 'dark'
+    })
 
     expect(options).toMatchObject({
       width: 1280,
@@ -26,6 +31,14 @@ describe('createMainWindowOptions', () => {
       minWidth: 900,
       minHeight: 600,
       show: false,
+      title: 'Wiki Editor v1.9.0',
+      titleBarStyle: 'hidden',
+      autoHideMenuBar: true,
+      titleBarOverlay: {
+        color: '#21262d',
+        symbolColor: '#e6edf3',
+        height: 32
+      },
       webPreferences: {
         preload: preloadPath,
         contextIsolation: true,
@@ -43,7 +56,15 @@ describe('createMainWindowOptions', () => {
       width: 1280,
       height: 820,
       minWidth: 900,
-      minHeight: 600
+      minHeight: 600,
+      title: 'Wiki Editor',
+      titleBarStyle: 'hidden',
+      autoHideMenuBar: true,
+      titleBarOverlay: {
+        color: '#f0f3f7',
+        symbolColor: '#1f2328',
+        height: 32
+      }
     })
     expect(options.icon).toBeUndefined()
 
@@ -116,11 +137,12 @@ describe('registerWindowNavigationGuard', () => {
 })
 
 describe('createAuxiliaryWindowOptions', () => {
-  it('enforces 960x760 defaults, 520x420 minimums, security webPreferences, and formatted title', () => {
+  it('enforces 960x760 defaults, 520x420 minimums, hidden titleBarOverlay, security webPreferences, and formatted title', () => {
     const preloadPath = 'C:\\app\\out\\preload\\index.js'
     const options = createAuxiliaryWindowOptions(preloadPath, {
       bounds: { x: 140, y: 140 },
-      title: formatWindowTitle('guide.md')
+      title: formatWindowTitle('guide.md', '1.9.0'),
+      theme: 'light'
     })
 
     expect(options).toMatchObject({
@@ -131,7 +153,14 @@ describe('createAuxiliaryWindowOptions', () => {
       x: 140,
       y: 140,
       show: false,
-      title: 'guide.md - Wiki Editor',
+      title: 'guide.md - Wiki Editor v1.9.0',
+      titleBarStyle: 'hidden',
+      autoHideMenuBar: true,
+      titleBarOverlay: {
+        color: '#f0f3f7',
+        symbolColor: '#1f2328',
+        height: 32
+      },
       webPreferences: {
         preload: preloadPath,
         contextIsolation: true,
@@ -148,13 +177,38 @@ describe('createAuxiliaryWindowOptions', () => {
   })
 })
 
-describe('formatWindowTitle', () => {
-  it('formats title with active document name or falls back to Wiki Editor', () => {
+describe('formatBaseWindowTitle, formatWindowTitle, and getTitleBarOverlayOptions', () => {
+  it('formats base window title with optional normalized version', () => {
+    expect(formatBaseWindowTitle('1.9.0')).toBe('Wiki Editor v1.9.0')
+    expect(formatBaseWindowTitle('v1.9.0')).toBe('Wiki Editor v1.9.0')
+    expect(formatBaseWindowTitle('  V2.0.0  ')).toBe('Wiki Editor v2.0.0')
+    expect(formatBaseWindowTitle('')).toBe('Wiki Editor')
+    expect(formatBaseWindowTitle('   ')).toBe('Wiki Editor')
+    expect(formatBaseWindowTitle(null)).toBe('Wiki Editor')
+    expect(formatBaseWindowTitle(undefined)).toBe('Wiki Editor')
+  })
+
+  it('formats title with active document name and optional version or falls back to base title', () => {
     expect(formatWindowTitle('notes.md')).toBe('notes.md - Wiki Editor')
+    expect(formatWindowTitle('notes.md', '1.9.0')).toBe('notes.md - Wiki Editor v1.9.0')
+    expect(formatWindowTitle(null, '1.9.0')).toBe('Wiki Editor v1.9.0')
     expect(formatWindowTitle('')).toBe('Wiki Editor')
     expect(formatWindowTitle('   ')).toBe('Wiki Editor')
     expect(formatWindowTitle(null)).toBe('Wiki Editor')
     expect(formatWindowTitle(undefined)).toBe('Wiki Editor')
+  })
+
+  it('returns theme-matched titleBarOverlay options', () => {
+    expect(getTitleBarOverlayOptions('light')).toEqual({
+      color: '#f0f3f7',
+      symbolColor: '#1f2328',
+      height: 32
+    })
+    expect(getTitleBarOverlayOptions('dark')).toEqual({
+      color: '#21262d',
+      symbolColor: '#e6edf3',
+      height: 32
+    })
   })
 })
 

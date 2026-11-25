@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { formatWindowTitle } from '@shared/window'
+import { useMemo, useState } from 'react'
+import { createWindowInitContextLoader } from '@shared/window'
 import { useAuxiliaryDiffState } from '../hooks/useAuxiliaryDiffState'
 import { useConfigController } from '../hooks/useConfigController'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
@@ -9,10 +9,12 @@ import { useFrontmatterFieldValues } from '../hooks/useFrontmatterFieldValues'
 import { useFrontmatterSchema } from '../hooks/useFrontmatterSchema'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
+import { useWindowTitle } from '../hooks/useWindowTitle'
 import { getPaneActiveTab } from '../stores/PaneTabStore'
 import { getGitDiffTabLabel } from '../utils/gitFilePresentation'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 import type { PaneInteractionActions } from './PaneTabBar'
+import { TitleBar } from './TitleBar'
 
 /**
  * Auxiliary window shell dedicated to detached document tabs: omits application menu bar,
@@ -28,11 +30,16 @@ export function AuxiliaryAppShell() {
     onError: reportErrorBanner
   })
   const [isSchemaModalOpen, setIsSchemaModalOpen] = useState(false)
+  const loadInitContext = useMemo(
+    () => createWindowInitContextLoader(wikiApi.window),
+    [wikiApi.window]
+  )
   const isDialogOpen = pendingDialog !== null
   const isShortcutDisabled = isDialogOpen || isSchemaModalOpen
   const editor = useEditorWorkspace({
     isAutoSavePaused: isDialogOpen,
     isShortcutDisabled,
+    loadInitContext,
     onError: reportErrorBanner,
     onConfirmCloseDirtyTab: confirmCloseDirtyTab
   })
@@ -73,13 +80,12 @@ export function AuxiliaryAppShell() {
       ? getGitDiffTabLabel(activeTab.diff.request)
       : editor.activeBuffer?.name
 
-  useEffect(() => {
-    document.title = formatWindowTitle(activeTitleName)
-  }, [activeTitleName])
+  const windowTitle = useWindowTitle(loadInitContext, activeTitleName)
 
   return (
     <EditorWindowFrame
       initialRightSidebarCollapsed
+      titleBarSlot={<TitleBar title={windowTitle} />}
       errorMessage={errorMessage}
       pendingDialog={pendingDialog}
       onDismissDialog={dismissDialog}

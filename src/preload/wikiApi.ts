@@ -41,6 +41,7 @@ import {
   FRONTMATTER_IPC_CHANNELS,
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
+  type MainMenuAction,
   MENU_IPC_CHANNELS,
   WikiApi,
   WINDOW_IPC_CHANNELS,
@@ -331,7 +332,9 @@ export function createWikiApi(
     },
     menu: {
       onCommand: (listener) =>
-        subscribeChannel<AppMenuCommand>(ipcRenderer, MENU_IPC_CHANNELS.command, listener)
+        subscribeChannel<AppMenuCommand>(ipcRenderer, MENU_IPC_CHANNELS.command, listener),
+      runAction: (action: MainMenuAction) =>
+        ipcRenderer.invoke(MENU_IPC_CHANNELS.runAction, action) as Promise<void>
     },
     buffer: {
       getSnapshot: () =>

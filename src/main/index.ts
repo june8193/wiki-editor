@@ -29,6 +29,7 @@ import { registerDiagramIpc } from './ipc/registerDiagramIpc'
 import { registerFrontmatterIpc } from './ipc/registerFrontmatterIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerLogIpc } from './ipc/registerLogIpc'
+import { registerMenuIpc } from './ipc/registerMenuIpc'
 import { registerWindowIpc } from './ipc/registerWindowIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { registerWorkspaceStateIpc } from './ipc/registerWorkspaceStateIpc'
@@ -36,7 +37,7 @@ import type { AppEnvironmentInfo } from './logging/formatBugReport'
 import { createHelpMenuActions } from './logging/helpMenuActions'
 import { LogService } from './logging/LogService'
 import { registerProcessLifecycleLogging } from './logging/processLifecycleLogging'
-import { createApplicationMenuTemplate, createVersionMessageBoxOptions } from './menu'
+import { createVersionMessageBoxOptions } from './menu'
 import { WindowManager } from './windowManager'
 import { WorkspaceStateService } from './workspace/WorkspaceStateService'
 import { registerWindowNavigationGuard } from './window'
@@ -68,6 +69,7 @@ let disposeGitIpc: (() => void) | undefined
 let disposeWindowIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
 let disposeClipboardIpc: (() => void) | undefined
+let disposeMenuIpc: (() => void) | undefined
 let disposeWikiAssetProtocol: (() => void) | undefined
 let windowManager: WindowManager | undefined
 let workspaceStateService: WorkspaceStateService | undefined
@@ -79,6 +81,8 @@ function disposeMainResources(): Promise<void> | undefined {
   disposeWikiAssetProtocol = undefined
   disposeWindowIpc?.()
   disposeWindowIpc = undefined
+  disposeMenuIpc?.()
+  disposeMenuIpc = undefined
   disposeClipboardIpc?.()
   disposeClipboardIpc = undefined
   disposeLogIpc?.()
@@ -145,6 +149,8 @@ void app.whenReady().then(async () => {
       autoSave: initialConfig.autoSave,
       autoSaveDelayMs: initialConfig.autoSaveDelayMs
     },
+    initialTheme: initialConfig.theme,
+    appVersion: app.getVersion(),
     createWindow: (options) => {
       const win = new BrowserWindow(options)
       registerWindowNavigationGuard(win.webContents)
@@ -155,8 +161,6 @@ void app.whenReady().then(async () => {
   })
 
   const getTargets = () => windowManager?.getWebContentsTargets() ?? []
-  const getMenuTargetWebContents = (targetWindow?: unknown) =>
-    windowManager?.getMenuTargetWebContents(targetWindow)
 
   disposeLogIpc = registerLogIpc(ipcMain, logService)
   disposeClipboardIpc = registerClipboardIpc({
@@ -249,8 +253,11 @@ void app.whenReady().then(async () => {
     openPath: (targetPath) => shell.openPath(targetPath)
   })
 
-  const menuTemplate = createApplicationMenuTemplate({
-    getTargetWebContents: getMenuTargetWebContents,
+  disposeMenuIpc = registerMenuIpc({
+    ipcMain,
+    onQuit: () => {
+      app.quit()
+    },
     onCopyBugReport: () => {
       void onCopyBugReport()
     },
@@ -260,9 +267,10 @@ void app.whenReady().then(async () => {
     onShowVersion: () => {
       const options = createVersionMessageBoxOptions(environment)
       void showMessageBox(options)
-    }
+    },
+    logService
   })
-  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate))
+  Menu.setApplicationMenu(null)
 
   windowManager.createMainWindow()
 })
