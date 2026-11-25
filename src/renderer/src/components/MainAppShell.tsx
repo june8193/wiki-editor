@@ -24,7 +24,9 @@ import {
 } from '../hooks/useMainWorkspaceLifecycle'
 import { useWikiApi } from '../hooks/useWikiApi'
 import { useWindowCloseGuard } from '../hooks/useWindowCloseGuard'
+import { useWindowHeight } from '../hooks/useWindowHeight'
 import { useWindowWidth } from '../hooks/useWindowWidth'
+import { useTerminalSession } from '../hooks/useTerminalSession'
 import { useWorkspaceSearch } from '../hooks/useWorkspaceSearch'
 import { useWorkspaceTree } from '../hooks/useWorkspaceTree'
 import {
@@ -32,6 +34,10 @@ import {
   getLeftSidebarWidthBounds,
   LEFT_SIDEBAR_DEFAULT_WIDTH
 } from '../utils/sidebarWidth'
+import {
+  isNewTerminalShortcut,
+  isTerminalToggleShortcut
+} from '../utils/terminalShortcuts'
 import {
   isEventOutsideShell,
   isWorkspaceSearchShortcut,
@@ -51,6 +57,7 @@ import type { PaneInteractionActions } from './PaneTabBar'
 import { SearchSidebarPanel } from './SearchSidebarPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { SidebarResizer } from './SidebarResizer'
+import { TerminalPanel } from './TerminalPanel'
 import { WorkspaceView } from './WorkspaceView'
 import { toErrorMessage } from '@shared/errors'
 
@@ -177,6 +184,7 @@ export function MainAppShell() {
   refreshConfigDocRef.current = editor.refreshCleanConfig
 
   const windowWidth = useWindowWidth()
+  const windowHeight = useWindowHeight()
   const leftSidebarBounds = getLeftSidebarWidthBounds(windowWidth)
   const leftSidebarWidth = clampSidebarWidth(leftSidebar.width, leftSidebarBounds)
 
@@ -214,10 +222,20 @@ export function MainAppShell() {
       if (event.defaultPrevented || isEditorShortcutDisabledRef.current) {
         return
       }
-      if (!isWorkspaceSearchShortcut(event)) {
+      if (isEventOutsideShell(event.target, shellRef.current)) {
         return
       }
-      if (isEventOutsideShell(event.target, shellRef.current)) {
+      if (isTerminalToggleShortcut(event)) {
+        event.preventDefault()
+        terminalActionsRef.current.toggleTerminal()
+        return
+      }
+      if (isNewTerminalShortcut(event)) {
+        event.preventDefault()
+        void terminalActionsRef.current.createNewTerminal()
+        return
+      }
+      if (!isWorkspaceSearchShortcut(event)) {
         return
       }
       event.preventDefault()
@@ -244,7 +262,9 @@ export function MainAppShell() {
     'open-folder': () => undefined,
     'toggle-theme': () => undefined,
     'toggle-settings': () => undefined,
-    'open-manual': () => undefined
+    'open-manual': () => undefined,
+    'toggle-terminal': () => undefined,
+    'new-terminal': () => undefined
   })
 
   const {
@@ -280,6 +300,13 @@ export function MainAppShell() {
   })
 
   const activeWorkspaceRoot = workspace?.rootPath ?? null
+  const terminal = useTerminalSession({
+    wikiApi,
+    workspaceRootPath: activeWorkspaceRoot,
+    windowHeight
+  })
+  const terminalActionsRef = useRef(terminal.actions)
+  terminalActionsRef.current = terminal.actions
   useEffect(() => {
     setIsSchemaModalOpen(false)
   }, [activeWorkspaceRoot])
@@ -407,6 +434,10 @@ export function MainAppShell() {
       setIsSettingsOpen(false)
       setIsSchemaModalOpen(false)
       setIsManualOpen(true)
+    },
+    'toggle-terminal': terminal.actions.toggleTerminal,
+    'new-terminal': () => {
+      void terminal.actions.createNewTerminal()
     }
   }
 
@@ -692,6 +723,26 @@ export function MainAppShell() {
     />
   ) : undefined
 
+  const terminalPanelSlot = (
+    <TerminalPanel
+      isOpen={terminal.isOpen}
+      height={terminal.height}
+      heightBounds={terminal.heightBounds}
+      theme={config.theme}
+      tabs={terminal.tabs}
+      activeTabId={terminal.activeTabId}
+      errorMessage={terminal.errorMessage}
+      onSelectTab={terminal.actions.selectTab}
+      onCloseTab={terminal.actions.closeTab}
+      onNewTerminal={() => void terminal.actions.createNewTerminal()}
+      onCollapse={terminal.actions.collapsePanel}
+      onResizeHeight={terminal.actions.resizePanel}
+      onWriteSession={terminal.actions.writeSession}
+      onResizeSession={terminal.actions.resizeSession}
+      subscribeSessionData={terminal.actions.subscribeSessionData}
+    />
+  )
+
   return (
     <EditorWindowFrame
       shellRef={shellRef}
@@ -717,6 +768,7 @@ export function MainAppShell() {
         }
       )}
       leftSidebarSlot={leftSidebarSlot}
+      terminalPanelSlot={terminalPanelSlot}
       settingsPanelSlot={settingsPanelSlot}
       manualModalSlot={manualModalSlot}
       isSchemaModalDismissDisabled={git.panelState.stashDialogScope !== null}

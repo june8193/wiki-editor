@@ -105,6 +105,21 @@ export function createApplicationMenuTemplate({
       ]
     },
     {
+      label: 'Terminal',
+      submenu: [
+        {
+          label: '터미널 토글',
+          accelerator: 'CmdOrCtrl+`',
+          click: (_menuItem, window) => sendCommand('toggle-terminal', window)
+        },
+        {
+          label: '새 터미널',
+          accelerator: 'CmdOrCtrl+Shift+`',
+          click: (_menuItem, window) => sendCommand('new-terminal', window)
+        }
+      ]
+    },
+    {
       label: 'Help',
       submenu: [
         {

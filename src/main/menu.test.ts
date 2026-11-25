@@ -71,7 +71,7 @@ describe('createApplicationMenuTemplate', () => {
       onShowVersion: () => {}
     })
 
-    expect(template.map((item) => item.label)).toEqual(['File', 'Settings', 'Help'])
+    expect(template.map((item) => item.label)).toEqual(['File', 'Settings', 'Terminal', 'Help'])
 
     const fileMenu = getSubmenu(template, 'File')
     expect(fileMenu.map((item) => item.label ?? item.role ?? item.type)).toEqual([
@@ -86,6 +86,14 @@ describe('createApplicationMenuTemplate', () => {
       '설정 패널',
       '테마 전환'
     ])
+
+    const terminalMenu = getSubmenu(template, 'Terminal')
+    expect(terminalMenu.map((item) => item.label ?? item.role ?? item.type)).toEqual([
+      '터미널 토글',
+      '새 터미널'
+    ])
+    expect(terminalMenu[0].accelerator).toBe('CmdOrCtrl+`')
+    expect(terminalMenu[1].accelerator).toBe('CmdOrCtrl+Shift+`')
 
     const helpMenu = getSubmenu(template, 'Help')
     expect(helpMenu.map((item) => item.label ?? item.type)).toEqual([
@@ -144,22 +152,30 @@ describe('createApplicationMenuTemplate', () => {
     const openFolderItem = getSubmenu(template, 'File')[0]
     const toggleThemeItem = getSubmenu(template, 'Settings')[1]
     const toggleSettingsItem = getSubmenu(template, 'Settings')[0]
+    const toggleTerminalItem = getSubmenu(template, 'Terminal')[0]
+    const newTerminalItem = getSubmenu(template, 'Terminal')[1]
     const openManualItem = getSubmenu(template, 'Help')[0]
 
     const fakeWindow = { id: 1 } as unknown as BaseWindow
     openFolderItem.click?.(undefined as never, fakeWindow, undefined as never)
     toggleThemeItem.click?.(undefined as never, undefined, undefined as never)
     toggleSettingsItem.click?.(undefined as never, fakeWindow, undefined as never)
+    toggleTerminalItem.click?.(undefined as never, fakeWindow, undefined as never)
+    newTerminalItem.click?.(undefined as never, fakeWindow, undefined as never)
     openManualItem.click?.(undefined as never, fakeWindow, undefined as never)
 
     expect(getTargetWebContents).toHaveBeenNthCalledWith(1, fakeWindow)
     expect(getTargetWebContents).toHaveBeenNthCalledWith(2, undefined)
     expect(getTargetWebContents).toHaveBeenNthCalledWith(3, fakeWindow)
     expect(getTargetWebContents).toHaveBeenNthCalledWith(4, fakeWindow)
+    expect(getTargetWebContents).toHaveBeenNthCalledWith(5, fakeWindow)
+    expect(getTargetWebContents).toHaveBeenNthCalledWith(6, fakeWindow)
     expect(sent).toEqual([
       { channel: MENU_IPC_CHANNELS.command, args: ['open-folder'] },
       { channel: MENU_IPC_CHANNELS.command, args: ['toggle-theme'] },
       { channel: MENU_IPC_CHANNELS.command, args: ['toggle-settings'] },
+      { channel: MENU_IPC_CHANNELS.command, args: ['toggle-terminal'] },
+      { channel: MENU_IPC_CHANNELS.command, args: ['new-terminal'] },
       { channel: MENU_IPC_CHANNELS.command, args: ['open-manual'] }
     ])
 

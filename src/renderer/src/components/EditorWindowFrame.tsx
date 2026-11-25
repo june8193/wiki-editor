@@ -115,6 +115,7 @@ export interface EditorWindowFrameProps {
   onOpenSchemaModal: () => void
   onCloseSchemaModal: () => void
   leftSidebarSlot?: ReactNode
+  terminalPanelSlot?: ReactNode
   settingsPanelSlot?: ReactNode
   manualModalSlot?: ReactNode
   isSchemaModalDismissDisabled?: boolean
@@ -145,6 +146,7 @@ export function EditorWindowFrame({
   onOpenSchemaModal,
   onCloseSchemaModal,
   leftSidebarSlot,
+  terminalPanelSlot,
   settingsPanelSlot,
   manualModalSlot,
   isSchemaModalDismissDisabled = false
@@ -290,18 +292,21 @@ export function EditorWindowFrame({
       <main className="app-main">
         {leftSidebarSlot}
 
-        <ImageTransferContext.Provider
-          value={imageTransferContextValue ?? DEFAULT_IMAGE_TRANSFER_CONTEXT}
-        >
-          <PaneWorkspace
-            {...paneWorkspaceProps}
-            scrollRequest={navState.outlineScrollRequest}
-            searchJumpRequest={navState.searchJumpRequest}
-            getPaneFindControl={paneFind.getPaneFindControl}
-            onActiveHeadingChange={navigation.reportActiveHeading}
-            actions={paneActions}
-          />
-        </ImageTransferContext.Provider>
+        <div className="center-workspace-column">
+          <ImageTransferContext.Provider
+            value={imageTransferContextValue ?? DEFAULT_IMAGE_TRANSFER_CONTEXT}
+          >
+            <PaneWorkspace
+              {...paneWorkspaceProps}
+              scrollRequest={navState.outlineScrollRequest}
+              searchJumpRequest={navState.searchJumpRequest}
+              getPaneFindControl={paneFind.getPaneFindControl}
+              onActiveHeadingChange={navigation.reportActiveHeading}
+              actions={paneActions}
+            />
+          </ImageTransferContext.Provider>
+          {terminalPanelSlot}
+        </div>
 
         {!rightSidebar.isCollapsed ? (
           <>
