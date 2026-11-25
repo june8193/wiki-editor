@@ -737,6 +737,7 @@ export function MainAppShell() {
       tabs={terminal.tabs}
       activeTabId={terminal.activeTabId}
       profiles={terminal.profiles}
+      workspaceRootPath={activeWorkspaceRoot}
       errorMessage={terminal.errorMessage}
       onSelectTab={terminal.actions.selectTab}
       onCloseTab={terminal.actions.closeTab}
@@ -746,6 +747,12 @@ export function MainAppShell() {
       onWriteSession={terminal.actions.writeSession}
       onResizeSession={terminal.actions.resizeSession}
       subscribeSessionData={terminal.actions.subscribeSessionData}
+      onOpenExternalUrl={(url) => {
+        void wikiApi.terminal?.openExternalUrl(url).catch(() => undefined)
+      }}
+      onOpenWorkspaceFile={(filePath, lineNumber, column) => {
+        void editor.navigation.openFileAtLine(filePath, lineNumber, column)
+      }}
     />
   )
 

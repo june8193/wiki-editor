@@ -12,7 +12,11 @@ interface MockXtermTracker {
   sessionId: string
   theme: unknown
   writes: string[]
+  selection: string
   disposed: boolean
+  emitData: (data: string) => void
+  emitKeyEvent?: (event: KeyboardEvent) => boolean
+  emitActivateLink?: (text: string, event: MouseEvent) => void
 }
 
 const mockXtermRecords = new Map<string, MockXtermTracker>()
@@ -20,16 +24,26 @@ const mockXtermRecords = new Map<string, MockXtermTracker>()
 vi.mock('./terminal/xtermAdapter', () => ({
   createXtermInstance: ({
     sessionId,
-    theme
+    theme,
+    onData,
+    onKeyEvent,
+    onActivateLink
   }: {
     sessionId: string
     theme: unknown
+    onData: (data: string) => void
+    onKeyEvent?: (event: KeyboardEvent) => boolean
+    onActivateLink?: (text: string, event: MouseEvent) => void
   }) => {
     const record: MockXtermTracker = {
       sessionId,
       theme,
       writes: [],
-      disposed: false
+      selection: '',
+      disposed: false,
+      emitData: onData,
+      emitKeyEvent: onKeyEvent,
+      emitActivateLink: onActivateLink
     }
     mockXtermRecords.set(sessionId, record)
     return {
@@ -41,6 +55,14 @@ vi.mock('./terminal/xtermAdapter', () => ({
       focus: vi.fn(),
       setTheme: (nextTheme: unknown) => {
         record.theme = nextTheme
+      },
+      hasSelection: () => record.selection.length > 0,
+      getSelection: () => record.selection,
+      clearSelection: () => {
+        record.selection = ''
+      },
+      paste: (data: string) => {
+        record.emitData(data)
       },
       dispose: () => {
         record.disposed = true
@@ -271,6 +293,85 @@ describe('App integrated terminal integration', () => {
       expect(getTerminalSessions()).toHaveLength(4)
     })
     expect(getTerminalSessions()[3].profileId).toBe('cmd')
+
+    dispose()
+  })
+
+  it('supports smart copy/paste, Ctrl+click http/https URL opening, and workspace-scoped file:line:col navigation', async () => {
+    const { api, getTerminalSessions, getTerminalWrites, dispose } = createInMemoryWikiApi(
+      {
+        theme: 'light',
+        recentWorkspaces: ['C:\\wiki-a']
+      },
+      {
+        workspaces: {
+          'C:\\wiki-a': {
+            'a.md': '# A\n',
+            'docs/guide.md': '# Guide\nLine 2\nTarget Line 3\nLine 4\n'
+          }
+        }
+      }
+    )
+
+    const writeTextMock = vi.fn().mockResolvedValue(undefined)
+    const readTextMock = vi.fn().mockResolvedValue('pwd')
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: writeTextMock,
+        readText: readTextMock
+      }
+    })
+    const openExternalSpy = vi.spyOn(api.terminal!, 'openExternalUrl')
+
+    render(<App wikiApi={api} />)
+    await waitFor(() => {
+      expect(screen.getByText('a.md')).toBeInTheDocument()
+    })
+
+    fireEvent.keyDown(window, { key: '`', code: 'Backquote', ctrlKey: true })
+    await waitFor(() => {
+      expect(getTerminalSessions()).toHaveLength(1)
+    })
+    const sessionId = getTerminalSessions()[0].id
+    await waitFor(() => {
+      expect(mockXtermRecords.get(sessionId)).toBeDefined()
+    })
+    const record = mockXtermRecords.get(sessionId)!
+
+    // Smart copy with selection
+    record.selection = 'selected terminal text'
+    expect(
+      record.emitKeyEvent?.(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+    ).toBe(false)
+    expect(writeTextMock).toHaveBeenCalledWith('selected terminal text')
+
+    // Ctrl+V paste
+    expect(
+      record.emitKeyEvent?.(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true }))
+    ).toBe(false)
+    await waitFor(() => {
+      expect(getTerminalWrites()).toContainEqual({ sessionId, data: 'pwd' })
+    })
+
+    // Ctrl+click external http/https URL
+    const ctrlClick = new MouseEvent('click', { ctrlKey: true })
+    record.emitActivateLink?.('https://example.com/wiki', ctrlClick)
+    record.emitActivateLink?.('javascript:alert(1)', ctrlClick)
+    expect(openExternalSpy).toHaveBeenCalledTimes(1)
+    expect(openExternalSpy).toHaveBeenCalledWith('https://example.com/wiki')
+
+    // Ctrl+click outside-workspace path is ignored
+    record.emitActivateLink?.('..\\outside.md:2', ctrlClick)
+    record.emitActivateLink?.('C:\\Windows\\win.ini:1', ctrlClick)
+
+    // Ctrl+click workspace file:line:col opens tab and jumps to line 3
+    record.emitActivateLink?.('docs/guide.md:3:1', ctrlClick)
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /guide\.md/ })).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('tab', { name: /outside\.md/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /win\.ini/ })).not.toBeInTheDocument()
 
     dispose()
   })

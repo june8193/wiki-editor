@@ -3,6 +3,7 @@ import { ChevronDown, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import type { ThemeMode } from '@shared/config'
 import type { TerminalShellProfile } from '@shared/terminal'
 import { getTerminalXtermTheme } from '../terminal/terminalTheme'
+import { resolveTerminalLinkTarget } from '../terminal/terminalLinks'
 import {
   createXtermInstance as defaultCreateXtermInstance,
   type XtermInstance,
@@ -27,6 +28,7 @@ export interface TerminalPanelProps {
   tabs: readonly TerminalTabState[]
   activeTabId: string | null
   profiles?: readonly TerminalShellProfile[]
+  workspaceRootPath?: string | null
   errorMessage: string | null
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
@@ -36,7 +38,25 @@ export interface TerminalPanelProps {
   onWriteSession: (sessionId: string, data: string) => void
   onResizeSession: (sessionId: string, cols: number, rows: number) => void
   subscribeSessionData: (listener: (sessionId: string, data: string) => void) => () => void
+  onOpenExternalUrl?: (url: string) => void
+  onOpenWorkspaceFile?: (filePath: string, lineNumber?: number, column?: number) => void
+  readClipboardText?: () => Promise<string>
+  writeClipboardText?: (text: string) => Promise<void>
   createXtermInstance?: XtermInstanceFactory
+}
+
+function defaultReadClipboardText(): Promise<string> {
+  if (typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function') {
+    return navigator.clipboard.readText()
+  }
+  return Promise.resolve('')
+}
+
+function defaultWriteClipboardText(text: string): Promise<void> {
+  if (typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function') {
+    return navigator.clipboard.writeText(text)
+  }
+  return Promise.resolve()
 }
 
 /**
@@ -51,6 +71,7 @@ export function TerminalPanel({
   tabs,
   activeTabId,
   profiles = [],
+  workspaceRootPath = null,
   errorMessage,
   onSelectTab,
   onCloseTab,
@@ -60,6 +81,10 @@ export function TerminalPanel({
   onWriteSession,
   onResizeSession,
   subscribeSessionData,
+  onOpenExternalUrl,
+  onOpenWorkspaceFile,
+  readClipboardText = defaultReadClipboardText,
+  writeClipboardText = defaultWriteClipboardText,
   createXtermInstance = defaultCreateXtermInstance
 }: TerminalPanelProps) {
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
@@ -68,13 +93,98 @@ export function TerminalPanel({
   const xtermThemeRef = useRef(xtermTheme)
   xtermThemeRef.current = xtermTheme
 
-  const callbacksRef = useRef({ onWriteSession, onResizeSession })
-  callbacksRef.current = { onWriteSession, onResizeSession }
+  const callbacksRef = useRef({
+    onWriteSession,
+    onResizeSession,
+    onOpenExternalUrl,
+    onOpenWorkspaceFile,
+    workspaceRootPath,
+    readClipboardText,
+    writeClipboardText
+  })
+  callbacksRef.current = {
+    onWriteSession,
+    onResizeSession,
+    onOpenExternalUrl,
+    onOpenWorkspaceFile,
+    workspaceRootPath,
+    readClipboardText,
+    writeClipboardText
+  }
 
   const instancesRef = useRef<Map<string, XtermInstance>>(new Map())
   const containersRef = useRef<Map<string, HTMLDivElement>>(new Map())
   const pendingOutputRef = useRef<Map<string, string[]>>(new Map())
   const lastSizeRef = useRef<Map<string, { cols: number; rows: number }>>(new Map())
+  const handledKeyEventsRef = useRef<WeakSet<KeyboardEvent>>(new WeakSet())
+
+  const pasteClipboardToSession = useCallback((sessionId: string): void => {
+    void callbacksRef.current
+      .readClipboardText()
+      .then((text) => {
+        if (!text) return
+        const instance = instancesRef.current.get(sessionId)
+        if (instance) {
+          instance.paste(text)
+        } else {
+          callbacksRef.current.onWriteSession(sessionId, text)
+        }
+      })
+      .catch(() => undefined)
+  }, [])
+
+  const handleTerminalKeyEvent = useCallback(
+    (sessionId: string, event: KeyboardEvent): boolean => {
+      if (handledKeyEventsRef.current.has(event)) {
+        return true
+      }
+      handledKeyEventsRef.current.add(event)
+
+      if (event.type !== 'keydown') {
+        return true
+      }
+
+      const hasPrimaryModifier = (event.ctrlKey || event.metaKey) && !event.altKey
+      if (!hasPrimaryModifier) {
+        return true
+      }
+
+      const key = event.key.toLowerCase()
+      if (key === 'c') {
+        const instance = instancesRef.current.get(sessionId)
+        if (instance?.hasSelection()) {
+          const selectedText = instance.getSelection()
+          if (selectedText) {
+            void callbacksRef.current.writeClipboardText(selectedText).catch(() => undefined)
+          }
+          instance.clearSelection()
+          return false
+        }
+        return !event.shiftKey
+      }
+
+      if (key === 'v') {
+        pasteClipboardToSession(sessionId)
+        return false
+      }
+
+      return true
+    },
+    [pasteClipboardToSession]
+  )
+
+  const handleActivateLink = useCallback((rawText: string, event: MouseEvent): void => {
+    if (!event.ctrlKey && !event.metaKey) {
+      return
+    }
+    const target = resolveTerminalLinkTarget(rawText, callbacksRef.current.workspaceRootPath)
+    if (!target) return
+    if (target.kind === 'external') {
+      callbacksRef.current.onOpenExternalUrl?.(target.url)
+      return
+    }
+    callbacksRef.current.onOpenWorkspaceFile?.(target.targetPath, target.line, target.column)
+  }, [])
 
   const syncSessionSize = useCallback((sessionId: string, cols: number, rows: number): void => {
     const prev = lastSizeRef.current.get(sessionId)
@@ -135,7 +245,9 @@ export function TerminalPanel({
         },
         onResize: (cols, rows) => {
           syncSessionSize(tab.id, cols, rows)
-        }
+        },
+        onKeyEvent: (event) => handleTerminalKeyEvent(tab.id, event),
+        onActivateLink: handleActivateLink
       })
 
       instancesRef.current.set(tab.id, instance)
@@ -347,6 +459,17 @@ export function TerminalPanel({
               key={tab.id}
               data-testid={`terminal-instance-${tab.id}`}
               className={`terminal-instance${isActive ? ' is-active' : ''}`}
+              onKeyDown={(event) => {
+                const allowDefault = handleTerminalKeyEvent(tab.id, event.nativeEvent)
+                if (!allowDefault) {
+                  event.preventDefault()
+                }
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                instancesRef.current.get(tab.id)?.focus()
+                pasteClipboardToSession(tab.id)
+              }}
               ref={(node) => {
                 if (node) {
                   containersRef.current.set(tab.id, node)

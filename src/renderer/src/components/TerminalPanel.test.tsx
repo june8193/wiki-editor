@@ -8,26 +8,41 @@ interface MockXtermRecord {
   sessionId: string
   theme: unknown
   writes: string[]
+  pastes: string[]
+  selection: string
   fitCalls: number
   focusCalls: number
   disposed: boolean
   emitData: (data: string) => void
   emitResize: (cols: number, rows: number) => void
+  emitKeyEvent?: (event: KeyboardEvent) => boolean
+  emitActivateLink?: (text: string, event: MouseEvent) => void
 }
 
 function createMockXtermFactory() {
   const records = new Map<string, MockXtermRecord>()
 
-  const factory: XtermInstanceFactory = ({ sessionId, theme, onData, onResize }) => {
+  const factory: XtermInstanceFactory = ({
+    sessionId,
+    theme,
+    onData,
+    onResize,
+    onKeyEvent,
+    onActivateLink
+  }) => {
     const record: MockXtermRecord = {
       sessionId,
       theme,
       writes: [],
+      pastes: [],
+      selection: '',
       fitCalls: 0,
       focusCalls: 0,
       disposed: false,
       emitData: onData,
-      emitResize: onResize
+      emitResize: onResize,
+      emitKeyEvent: onKeyEvent,
+      emitActivateLink: onActivateLink
     }
     records.set(sessionId, record)
 
@@ -45,6 +60,15 @@ function createMockXtermFactory() {
       },
       setTheme: (nextTheme) => {
         record.theme = nextTheme
+      },
+      hasSelection: () => record.selection.length > 0,
+      getSelection: () => record.selection,
+      clearSelection: () => {
+        record.selection = ''
+      },
+      paste: (data: string) => {
+        record.pastes.push(data)
+        record.emitData(data)
       },
       dispose: () => {
         record.disposed = true
@@ -347,5 +371,128 @@ describe('TerminalPanel', () => {
     )
 
     expect(records.get('term-1')?.writes).toEqual(['hello ', 'world'])
+  })
+
+  it('supports VS Code style smart copy (Ctrl+C with/without selection) and paste (Ctrl+V and right-click)', async () => {
+    const { factory, records } = createMockXtermFactory()
+    const onWriteSession = vi.fn()
+    const writeClipboardText = vi.fn().mockResolvedValue(undefined)
+    const readClipboardText = vi.fn().mockResolvedValue('echo pasted')
+
+    render(
+      <TerminalPanel
+        isOpen
+        height={240}
+        heightBounds={{ min: 120, max: 500, defaultHeight: 240 }}
+        theme="dark"
+        tabs={[SAMPLE_TABS[0]]}
+        activeTabId="term-1"
+        errorMessage={null}
+        onSelectTab={vi.fn()}
+        onCloseTab={vi.fn()}
+        onNewTerminal={vi.fn()}
+        onCollapse={vi.fn()}
+        onResizeHeight={vi.fn()}
+        onWriteSession={onWriteSession}
+        onResizeSession={vi.fn()}
+        subscribeSessionData={() => () => undefined}
+        writeClipboardText={writeClipboardText}
+        readClipboardText={readClipboardText}
+        createXtermInstance={factory}
+      />
+    )
+
+    const record = records.get('term-1')!
+
+    // 1. Ctrl+C with selection copies text and blocks SIGINT (returns false)
+    record.selection = 'copied output'
+    const copyEvent = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, cancelable: true })
+    expect(record.emitKeyEvent?.(copyEvent)).toBe(false)
+    expect(writeClipboardText).toHaveBeenCalledWith('copied output')
+    expect(onWriteSession).not.toHaveBeenCalled()
+
+    // 2. Ctrl+C without selection passes through to xterm (returns true -> SIGINT)
+    record.selection = ''
+    const sigintEvent = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, cancelable: true })
+    expect(record.emitKeyEvent?.(sigintEvent)).toBe(true)
+
+    // 3. Ctrl+V reads clipboard and pastes into active session
+    const pasteEvent = new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, cancelable: true })
+    expect(record.emitKeyEvent?.(pasteEvent)).toBe(false)
+    await vi.waitFor(() => {
+      expect(onWriteSession).toHaveBeenCalledWith('term-1', 'echo pasted')
+    })
+
+    // 4. Right-click on terminal container prevents default and pastes clipboard text
+    readClipboardText.mockResolvedValueOnce('echo right-click')
+    const instanceEl = screen.getByTestId('terminal-instance-term-1')
+    const contextMenuEvent = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    instanceEl.dispatchEvent(contextMenuEvent)
+    expect(contextMenuEvent.defaultPrevented).toBe(true)
+    await vi.waitFor(() => {
+      expect(onWriteSession).toHaveBeenCalledWith('term-1', 'echo right-click')
+    })
+  })
+
+  it('activates http/https URLs and workspace-scoped file:line:col links only on Ctrl+click, blocking unsafe schemes and outside paths', () => {
+    const { factory, records } = createMockXtermFactory()
+    const onOpenExternalUrl = vi.fn()
+    const onOpenWorkspaceFile = vi.fn()
+
+    render(
+      <TerminalPanel
+        isOpen
+        height={240}
+        heightBounds={{ min: 120, max: 500, defaultHeight: 240 }}
+        theme="dark"
+        tabs={[SAMPLE_TABS[0]]}
+        activeTabId="term-1"
+        workspaceRootPath="C:\\wiki-a"
+        errorMessage={null}
+        onSelectTab={vi.fn()}
+        onCloseTab={vi.fn()}
+        onNewTerminal={vi.fn()}
+        onCollapse={vi.fn()}
+        onResizeHeight={vi.fn()}
+        onWriteSession={vi.fn()}
+        onResizeSession={vi.fn()}
+        subscribeSessionData={() => () => undefined}
+        onOpenExternalUrl={onOpenExternalUrl}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+        createXtermInstance={factory}
+      />
+    )
+
+    const record = records.get('term-1')!
+    const plainClick = new MouseEvent('click', { ctrlKey: false, metaKey: false })
+    const ctrlClick = new MouseEvent('click', { ctrlKey: true })
+
+    // Plain click without Ctrl/Cmd does not activate links
+    record.emitActivateLink?.('https://example.com', plainClick)
+    record.emitActivateLink?.('docs/guide.md:12', plainClick)
+    expect(onOpenExternalUrl).not.toHaveBeenCalled()
+    expect(onOpenWorkspaceFile).not.toHaveBeenCalled()
+
+    // Ctrl+click on http/https URLs opens external browser
+    record.emitActivateLink?.('https://example.com/docs?q=1', ctrlClick)
+    expect(onOpenExternalUrl).toHaveBeenCalledWith('https://example.com/docs?q=1')
+
+    // Unsafe schemes are blocked
+    record.emitActivateLink?.('javascript:alert(1)', ctrlClick)
+    record.emitActivateLink?.('file:///C:/Windows/win.ini', ctrlClick)
+    record.emitActivateLink?.('cmd:calc', ctrlClick)
+    expect(onOpenExternalUrl).toHaveBeenCalledTimes(1)
+
+    // Ctrl+click on workspace-relative and workspace-absolute file links with :line and :line:col
+    record.emitActivateLink?.('docs/guide.md:12:4', ctrlClick)
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith('C:\\wiki-a\\docs\\guide.md', 12, 4)
+
+    record.emitActivateLink?.('C:\\wiki-a\\note.md:5', ctrlClick)
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith('C:\\wiki-a\\note.md', 5, undefined)
+
+    // Outside workspace paths are ignored
+    record.emitActivateLink?.('../outside.md:3', ctrlClick)
+    record.emitActivateLink?.('C:\\other\\secret.md:10', ctrlClick)
+    expect(onOpenWorkspaceFile).toHaveBeenCalledTimes(2)
   })
 })

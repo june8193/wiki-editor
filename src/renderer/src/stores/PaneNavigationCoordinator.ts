@@ -245,19 +245,70 @@ export class PaneNavigationCoordinator {
     query: string,
     options: SearchMatchOptions
   ): Promise<void> => {
-    const jumpSeq = ++this.searchJumpSeq
-    const targetBufferKey = getWorkspacePathKey(file.path)
-    this.inFlightJump = { seq: jumpSeq, targetBufferKey }
-    this.activeJump = null
-    this.syncSnapshot()
-
     const firstSpan = line.matches[0]
     const columnStart = firstSpan ? line.lineOffset + firstSpan.start : 0
     const columnEnd = firstSpan ? line.lineOffset + firstSpan.end : 0
 
+    await this.openFileWithJump({
+      filePath: file.path,
+      explicitName: file.name,
+      lineNumber: line.lineNumber,
+      columnStart,
+      columnEnd,
+      query,
+      options
+    })
+  }
+
+  /**
+   * Opens a workspace file in the active pane and optionally jumps to a 1-based line/column.
+   */
+  openFileAtLine = async (
+    filePath: string,
+    lineNumber?: number,
+    column?: number
+  ): Promise<void> => {
+    if (lineNumber === undefined) {
+      await this.openWorkspaceFileFn(filePath)
+      return
+    }
+    const columnOffset = column && column >= 1 ? column - 1 : 0
+    await this.openFileWithJump({
+      filePath,
+      lineNumber,
+      columnStart: columnOffset,
+      columnEnd: columnOffset,
+      query: '',
+      options: { caseSensitive: false, wholeWord: false, useRegex: false }
+    })
+  }
+
+  private openFileWithJump = async ({
+    filePath,
+    explicitName,
+    lineNumber,
+    columnStart,
+    columnEnd,
+    query,
+    options
+  }: {
+    filePath: string
+    explicitName?: string
+    lineNumber: number
+    columnStart: number
+    columnEnd: number
+    query: string
+    options: SearchMatchOptions
+  }): Promise<void> => {
+    const jumpSeq = ++this.searchJumpSeq
+    const targetBufferKey = getWorkspacePathKey(filePath)
+    this.inFlightJump = { seq: jumpSeq, targetBufferKey }
+    this.activeJump = null
+    this.syncSnapshot()
+
     const isCancelled = (): boolean => this.disposed || this.searchJumpSeq !== jumpSeq
 
-    const opened = await this.openWorkspaceFileFn(file.path, undefined, file.name, isCancelled)
+    const opened = await this.openWorkspaceFileFn(filePath, undefined, explicitName, isCancelled)
     if (this.inFlightJump?.seq === jumpSeq) {
       this.inFlightJump = null
     }
@@ -281,7 +332,7 @@ export class PaneNavigationCoordinator {
         tabId: opened.tab.id,
         query,
         options,
-        lineNumber: line.lineNumber,
+        lineNumber,
         columnStart,
         columnEnd,
         nonce: jumpSeq

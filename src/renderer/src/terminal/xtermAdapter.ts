@@ -1,6 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit'
-import { Terminal, type ITheme } from '@xterm/xterm'
+import { Terminal, type IDisposable, type ITheme } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
+import { findTerminalLineLinks } from './terminalLinks'
 
 export interface XtermSize {
   cols: number
@@ -13,6 +14,10 @@ export interface XtermInstance {
   fit(): XtermSize | null
   focus(): void
   setTheme(theme: ITheme): void
+  hasSelection(): boolean
+  getSelection(): string
+  clearSelection(): void
+  paste(data: string): void
   dispose(): void
 }
 
@@ -21,6 +26,8 @@ export interface XtermInstanceOptions {
   theme: ITheme
   onData: (data: string) => void
   onResize: (cols: number, rows: number) => void
+  onKeyEvent?: (event: KeyboardEvent) => boolean
+  onActivateLink?: (text: string, event: MouseEvent) => void
 }
 
 export type XtermInstanceFactory = (options: XtermInstanceOptions) => XtermInstance
@@ -31,7 +38,9 @@ export type XtermInstanceFactory = (options: XtermInstanceOptions) => XtermInsta
 export const createXtermInstance: XtermInstanceFactory = ({
   theme,
   onData,
-  onResize
+  onResize,
+  onKeyEvent,
+  onActivateLink
 }) => {
   const terminal = new Terminal({
     cursorBlink: true,
@@ -42,6 +51,45 @@ export const createXtermInstance: XtermInstanceFactory = ({
   })
   const fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
+
+  if (onKeyEvent) {
+    terminal.attachCustomKeyEventHandler(onKeyEvent)
+  }
+
+  let linkProviderDisposable: IDisposable | null = null
+  if (onActivateLink) {
+    linkProviderDisposable = terminal.registerLinkProvider({
+      provideLinks(bufferLineNumber, callback) {
+        const line = terminal.buffer.active.getLine(bufferLineNumber - 1)
+        if (!line) {
+          callback(undefined)
+          return
+        }
+        const lineText = line.translateToString(true)
+        const spans = findTerminalLineLinks(lineText)
+        if (spans.length === 0) {
+          callback(undefined)
+          return
+        }
+        callback(
+          spans.map((span) => ({
+            range: {
+              start: { x: span.startIndex + 1, y: bufferLineNumber },
+              end: { x: span.endIndex, y: bufferLineNumber }
+            },
+            text: span.text,
+            decorations: {
+              pointerCursor: true,
+              underline: true
+            },
+            activate(event, text) {
+              onActivateLink(text, event)
+            }
+          }))
+        )
+      }
+    })
+  }
 
   const dataDisposable = terminal.onData(onData)
   const resizeDisposable = terminal.onResize(({ cols, rows }) => {
@@ -74,9 +122,22 @@ export const createXtermInstance: XtermInstanceFactory = ({
     setTheme(nextTheme) {
       terminal.options.theme = nextTheme
     },
+    hasSelection() {
+      return terminal.hasSelection()
+    },
+    getSelection() {
+      return terminal.getSelection()
+    },
+    clearSelection() {
+      terminal.clearSelection()
+    },
+    paste(data) {
+      terminal.paste(data)
+    },
     dispose() {
       dataDisposable.dispose()
       resizeDisposable.dispose()
+      linkProviderDisposable?.dispose()
       terminal.dispose()
       openedContainer = null
     }
