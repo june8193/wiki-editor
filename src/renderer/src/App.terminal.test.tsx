@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { getTerminalXtermTheme } from './terminal/terminalTheme'
@@ -191,4 +191,94 @@ describe('App integrated terminal integration', () => {
 
     dispose()
   })
+
+  it('configures defaultTerminalProfile in SettingsPanel, uses it for + / Ctrl+Shift+`, supports + dropdown selection, and falls back when missing', async () => {
+    const {
+      api,
+      emitMenuCommand,
+      getTerminalSessions,
+      dispose
+    } = createInMemoryWikiApi(
+      {
+        theme: 'light',
+        defaultTerminalProfile: 'missing-shell',
+        recentWorkspaces: ['C:\\wiki-a']
+      },
+      {
+        workspaces: {
+          'C:\\wiki-a': {
+            'a.md': '# A\n'
+          }
+        }
+      }
+    )
+
+    render(<App wikiApi={api} />)
+    await waitFor(() => {
+      expect(screen.getByText('a.md')).toBeInTheDocument()
+    })
+
+    // Missing defaultTerminalProfile falls back safely to auto-detected default ('pwsh')
+    fireEvent.keyDown(window, { key: '`', code: 'Backquote', ctrlKey: true })
+    await waitFor(() => {
+      expect(getTerminalSessions()).toHaveLength(1)
+    })
+    expect(getTerminalSessions()[0].profileId).toBe('pwsh')
+
+    // Open SettingsPanel and change defaultTerminalProfile to 'cmd'
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    const settingsDialog = await screen.findByRole('dialog', { name: '전역 설정 패널' })
+    const profileSelect = within(settingsDialog).getByLabelText('기본 터미널 프로필')
+    expect(profileSelect).toHaveValue('')
+
+    fireEvent.change(profileSelect, { target: { value: 'cmd' } })
+    await waitFor(async () => {
+      const savedConfig = await api.config.get()
+      expect(savedConfig.defaultTerminalProfile).toBe('cmd')
+    })
+
+    await userEventCloseSettings(settingsDialog)
+
+    // + button and Ctrl+Shift+` now use 'cmd'
+    fireEvent.click(screen.getByRole('button', { name: '새 터미널' }))
+    await waitFor(() => {
+      expect(getTerminalSessions()).toHaveLength(2)
+    })
+    expect(getTerminalSessions()[1].profileId).toBe('cmd')
+
+    fireEvent.keyDown(window, { key: '`', code: 'Backquote', ctrlKey: true, shiftKey: true })
+    await waitFor(() => {
+      expect(getTerminalSessions()).toHaveLength(3)
+    })
+    expect(getTerminalSessions()[2].profileId).toBe('cmd')
+
+    // Reset defaultTerminalProfile to auto-detect (null)
+    await triggerMenuCommand(emitMenuCommand, 'toggle-settings')
+    const reopenedSettings = await screen.findByRole('dialog', { name: '전역 설정 패널' })
+    fireEvent.change(within(reopenedSettings).getByLabelText('기본 터미널 프로필'), {
+      target: { value: '' }
+    })
+    await waitFor(async () => {
+      const savedConfig = await api.config.get()
+      expect(savedConfig.defaultTerminalProfile).toBeNull()
+    })
+    await userEventCloseSettings(reopenedSettings)
+
+    // + dropdown still allows explicitly picking 'cmd'
+    fireEvent.click(screen.getByRole('button', { name: '셸 프로필 선택' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Command Prompt/ }))
+    await waitFor(() => {
+      expect(getTerminalSessions()).toHaveLength(4)
+    })
+    expect(getTerminalSessions()[3].profileId).toBe('cmd')
+
+    dispose()
+  })
 })
+
+async function userEventCloseSettings(dialog: HTMLElement): Promise<void> {
+  fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }))
+  await waitFor(() => {
+    expect(screen.queryByRole('dialog', { name: '전역 설정 패널' })).not.toBeInTheDocument()
+  })
+}

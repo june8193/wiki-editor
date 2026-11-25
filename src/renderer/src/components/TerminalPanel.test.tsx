@@ -155,6 +155,62 @@ describe('TerminalPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '새 터미널' }))
     expect(onNewTerminal).toHaveBeenCalledTimes(1)
+    expect(onNewTerminal).toHaveBeenCalledWith()
+  })
+
+  it('opens the + dropdown with detected shell profiles, creates a terminal for the selected profile, and closes on Escape or outside click', () => {
+    const { factory } = createMockXtermFactory()
+    const onNewTerminal = vi.fn()
+    const profiles = [
+      { id: 'pwsh', label: 'PowerShell', executable: 'pwsh.exe', args: ['-NoLogo'], isDefault: true },
+      { id: 'cmd', label: 'Command Prompt', executable: 'cmd.exe', args: [], isDefault: false }
+    ]
+
+    render(
+      <TerminalPanel
+        isOpen
+        height={240}
+        heightBounds={{ min: 120, max: 500, defaultHeight: 240 }}
+        theme="light"
+        tabs={SAMPLE_TABS}
+        activeTabId="term-1"
+        profiles={profiles}
+        errorMessage={null}
+        onSelectTab={vi.fn()}
+        onCloseTab={vi.fn()}
+        onNewTerminal={onNewTerminal}
+        onCollapse={vi.fn()}
+        onResizeHeight={vi.fn()}
+        onWriteSession={vi.fn()}
+        onResizeSession={vi.fn()}
+        subscribeSessionData={() => () => undefined}
+        createXtermInstance={factory}
+      />
+    )
+
+    const trigger = screen.getByRole('button', { name: '셸 프로필 선택' })
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    const menu = screen.getByRole('menu', { name: '셸 프로필 목록' })
+    expect(menu).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /Command Prompt/ }))
+    expect(onNewTerminal).toHaveBeenCalledWith('cmd')
+    expect(screen.queryByRole('menu', { name: '셸 프로필 목록' })).not.toBeInTheDocument()
+
+    // Reopen and close via Escape
+    fireEvent.click(trigger)
+    expect(screen.getByRole('menu', { name: '셸 프로필 목록' })).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('menu', { name: '셸 프로필 목록' })).not.toBeInTheDocument()
+
+    // Reopen and close via outside pointerDown
+    fireEvent.click(trigger)
+    expect(screen.getByRole('menu', { name: '셸 프로필 목록' })).toBeInTheDocument()
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('menu', { name: '셸 프로필 목록' })).not.toBeInTheDocument()
   })
 
   it('synchronizes xterm palette when theme changes between light and dark', () => {

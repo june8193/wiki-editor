@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import type { ThemeMode } from '@shared/config'
+import type { TerminalShellProfile } from '@shared/terminal'
 import { getTerminalXtermTheme } from '../terminal/terminalTheme'
 import {
   createXtermInstance as defaultCreateXtermInstance,
@@ -25,10 +26,11 @@ export interface TerminalPanelProps {
   theme: ThemeMode
   tabs: readonly TerminalTabState[]
   activeTabId: string | null
+  profiles?: readonly TerminalShellProfile[]
   errorMessage: string | null
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
-  onNewTerminal: () => void
+  onNewTerminal: (profileId?: string) => void
   onCollapse: () => void
   onResizeHeight: (nextHeight: number) => void
   onWriteSession: (sessionId: string, data: string) => void
@@ -48,6 +50,7 @@ export function TerminalPanel({
   theme,
   tabs,
   activeTabId,
+  profiles = [],
   errorMessage,
   onSelectTab,
   onCloseTab,
@@ -59,6 +62,8 @@ export function TerminalPanel({
   subscribeSessionData,
   createXtermInstance = defaultCreateXtermInstance
 }: TerminalPanelProps) {
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
+  const profileMenuRef = useRef<HTMLDivElement | null>(null)
   const xtermTheme = useMemo(() => getTerminalXtermTheme(theme), [theme])
   const xtermThemeRef = useRef(xtermTheme)
   xtermThemeRef.current = xtermTheme
@@ -181,6 +186,33 @@ export function TerminalPanel({
     instancesRef.current.get(activeTabId)?.focus()
   }, [isOpen, activeTabId, height, fitAndSyncSession])
 
+  // Close profile dropdown on outside click or Escape, or when panel collapses.
+  useEffect(() => {
+    if (!isOpen) {
+      setIsProfileMenuOpen(false)
+      return
+    }
+    if (!isProfileMenuOpen) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setIsProfileMenuOpen(false)
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsProfileMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isOpen, isProfileMenuOpen])
+
   if (!isOpen && tabs.length === 0) {
     return null
   }
@@ -246,15 +278,49 @@ export function TerminalPanel({
         </div>
 
         <div className="terminal-panel-actions">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="새 터미널"
-            title="새 터미널 (Ctrl+Shift+`)"
-            onClick={onNewTerminal}
-          >
-            <Plus size={14} strokeWidth={1.75} aria-hidden="true" />
-          </button>
+          <div className="terminal-new-split" ref={profileMenuRef}>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="새 터미널"
+              title="새 터미널 (Ctrl+Shift+`)"
+              onClick={() => onNewTerminal()}
+            >
+              <Plus size={14} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="icon-btn terminal-profile-trigger"
+              aria-label="셸 프로필 선택"
+              title="셸 프로필 선택"
+              aria-haspopup="menu"
+              aria-expanded={isProfileMenuOpen}
+              disabled={profiles.length === 0}
+              onClick={() => setIsProfileMenuOpen((prev) => !prev)}
+            >
+              <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+
+            {isProfileMenuOpen && profiles.length > 0 && (
+              <div className="terminal-profile-menu" role="menu" aria-label="셸 프로필 목록">
+                {profiles.map((profile) => (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    role="menuitem"
+                    className="terminal-profile-menu-item"
+                    onClick={() => {
+                      setIsProfileMenuOpen(false)
+                      onNewTerminal(profile.id)
+                    }}
+                  >
+                    <span className="terminal-profile-menu-label">{profile.label}</span>
+                    <span className="terminal-profile-menu-exec">{profile.executable}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             className="icon-btn"

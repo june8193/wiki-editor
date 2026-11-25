@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toErrorMessage } from '@shared/errors'
 import type { WikiApi } from '@shared/ipc'
-import { TERMINAL_DEFAULT_COLS, TERMINAL_DEFAULT_ROWS } from '@shared/terminal'
+import {
+  TERMINAL_DEFAULT_COLS,
+  TERMINAL_DEFAULT_ROWS,
+  type TerminalShellProfile
+} from '@shared/terminal'
 import type { TerminalTabState } from '../components/TerminalPanel'
 import {
   clampTerminalHeight,
@@ -13,6 +17,7 @@ export interface UseTerminalSessionOptions {
   wikiApi: WikiApi
   workspaceRootPath: string | null
   windowHeight: number
+  defaultTerminalProfile?: string | null
 }
 
 /**
@@ -22,12 +27,14 @@ export interface UseTerminalSessionOptions {
 export function useTerminalSession({
   wikiApi,
   workspaceRootPath,
-  windowHeight
+  windowHeight,
+  defaultTerminalProfile = null
 }: UseTerminalSessionOptions) {
   const heightBounds = useMemo(() => getTerminalHeightBounds(windowHeight), [windowHeight])
   const [isOpen, setIsOpen] = useState(false)
   const [tabs, setTabs] = useState<TerminalTabState[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
+  const [profiles, setProfiles] = useState<TerminalShellProfile[]>([])
   const [rawHeight, setRawHeight] = useState(TERMINAL_DEFAULT_HEIGHT)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
@@ -37,6 +44,10 @@ export function useTerminalSession({
   isOpenRef.current = isOpen
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
+  const profilesRef = useRef(profiles)
+  profilesRef.current = profiles
+  const defaultProfileRef = useRef(defaultTerminalProfile)
+  defaultProfileRef.current = defaultTerminalProfile
   const workspaceRootRef = useRef(workspaceRootPath)
   workspaceRootRef.current = workspaceRootPath
   const prevWorkspaceRootRef = useRef<string | null>(workspaceRootPath)
@@ -45,6 +56,15 @@ export function useTerminalSession({
   useEffect(() => {
     const terminalApi = wikiApi.terminal
     if (!terminalApi) return
+
+    let active = true
+    void terminalApi
+      .listProfiles()
+      .then((detected) => {
+        if (!active) return
+        setProfiles(detected)
+      })
+      .catch(() => undefined)
 
     const unsubData = terminalApi.onData((event) => {
       for (const listener of dataListenersRef.current) {
@@ -62,6 +82,7 @@ export function useTerminalSession({
     })
 
     return () => {
+      active = false
       unsubData()
       unsubExit()
     }
@@ -97,8 +118,21 @@ export function useTerminalSession({
 
       const startedRoot = workspaceRootRef.current
       try {
+        let resolvedProfileId = profileId
+        if (resolvedProfileId === undefined) {
+          const configuredDefault = defaultProfileRef.current
+          if (configuredDefault) {
+            const availableProfiles =
+              profilesRef.current.length > 0
+                ? profilesRef.current
+                : await terminalApi.listProfiles().catch(() => [] as TerminalShellProfile[])
+            if (availableProfiles.some((profile) => profile.id === configuredDefault)) {
+              resolvedProfileId = configuredDefault
+            }
+          }
+        }
         const session = await terminalApi.createSession({
-          profileId,
+          profileId: resolvedProfileId,
           cols: TERMINAL_DEFAULT_COLS,
           rows: TERMINAL_DEFAULT_ROWS
         })
@@ -201,6 +235,7 @@ export function useTerminalSession({
     isOpen,
     tabs,
     activeTabId,
+    profiles,
     height,
     heightBounds,
     errorMessage,

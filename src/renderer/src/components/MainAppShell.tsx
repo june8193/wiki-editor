@@ -159,6 +159,7 @@ export function MainAppShell() {
     toggleTheme,
     toggleAutoSave,
     toggleShowHeadingNumbers,
+    setDefaultTerminalProfile,
     toggleFavoriteWorkspace,
     removeFavoriteWorkspace,
     removeRecentWorkspace
@@ -303,7 +304,8 @@ export function MainAppShell() {
   const terminal = useTerminalSession({
     wikiApi,
     workspaceRootPath: activeWorkspaceRoot,
-    windowHeight
+    windowHeight,
+    defaultTerminalProfile: config.defaultTerminalProfile
   })
   const terminalActionsRef = useRef(terminal.actions)
   terminalActionsRef.current = terminal.actions
@@ -705,10 +707,13 @@ export function MainAppShell() {
     <SettingsPanel
       theme={config.theme}
       autoSave={config.autoSave}
+      defaultTerminalProfile={config.defaultTerminalProfile}
+      terminalProfiles={terminal.profiles}
       configPath={configPath}
       isDismissDisabled={hasActiveModalDialog}
       onToggleTheme={toggleTheme}
       onToggleAutoSave={toggleAutoSave}
+      onChangeDefaultTerminalProfile={setDefaultTerminalProfile}
       onOpenConfigEditor={handleOpenConfigEditor}
       onClose={() => setIsSettingsOpen(false)}
     />
@@ -731,10 +736,11 @@ export function MainAppShell() {
       theme={config.theme}
       tabs={terminal.tabs}
       activeTabId={terminal.activeTabId}
+      profiles={terminal.profiles}
       errorMessage={terminal.errorMessage}
       onSelectTab={terminal.actions.selectTab}
       onCloseTab={terminal.actions.closeTab}
-      onNewTerminal={() => void terminal.actions.createNewTerminal()}
+      onNewTerminal={(profileId) => void terminal.actions.createNewTerminal(profileId)}
       onCollapse={terminal.actions.collapsePanel}
       onResizeHeight={terminal.actions.resizePanel}
       onWriteSession={terminal.actions.writeSession}
