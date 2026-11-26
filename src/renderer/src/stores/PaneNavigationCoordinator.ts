@@ -864,54 +864,40 @@ export class PaneNavigationCoordinator {
       }
     }
 
-    if (this.activeDiffJump) {
-      if (
-        (transition.type === 'tab-opened' || transition.type === 'tab-switched') &&
-        transition.paneId === this.activeDiffJump.paneId &&
-        transition.tab.id !== this.activeDiffJump.tabId
-      ) {
-        this.activeDiffJump = null
-        changed = true
-      } else if (
-        transition.type === 'tab-closed' &&
-        transition.paneId === this.activeDiffJump.paneId &&
-        transition.closedTab.id === this.activeDiffJump.tabId
-      ) {
-        this.activeDiffJump = null
-        changed = true
-      } else if (transition.type === 'tab-moved' && transition.tab.id === this.activeDiffJump.tabId) {
-        this.activeDiffJump = null
-        changed = true
-      }
+    if (this.activeDiffJump && this.shouldInvalidateTabJump(this.activeDiffJump, transition)) {
+      this.activeDiffJump = null
+      changed = true
     }
 
-    if (this.activeSnapshotJump) {
-      if (
-        (transition.type === 'tab-opened' || transition.type === 'tab-switched') &&
-        transition.paneId === this.activeSnapshotJump.paneId &&
-        transition.tab.id !== this.activeSnapshotJump.tabId
-      ) {
-        this.activeSnapshotJump = null
-        changed = true
-      } else if (
-        transition.type === 'tab-closed' &&
-        transition.paneId === this.activeSnapshotJump.paneId &&
-        transition.closedTab.id === this.activeSnapshotJump.tabId
-      ) {
-        this.activeSnapshotJump = null
-        changed = true
-      } else if (
-        transition.type === 'tab-moved' &&
-        transition.tab.id === this.activeSnapshotJump.tabId
-      ) {
-        this.activeSnapshotJump = null
-        changed = true
-      }
+    if (this.activeSnapshotJump && this.shouldInvalidateTabJump(this.activeSnapshotJump, transition)) {
+      this.activeSnapshotJump = null
+      changed = true
     }
 
     if (changed) {
       this.syncSnapshot()
     }
+  }
+
+  private shouldInvalidateTabJump(
+    jump: { paneId: PaneId; tabId: string },
+    transition: PaneTabTransition
+  ): boolean {
+    if (
+      (transition.type === 'tab-opened' || transition.type === 'tab-switched') &&
+      transition.paneId === jump.paneId &&
+      transition.tab.id !== jump.tabId
+    ) {
+      return true
+    }
+    if (
+      transition.type === 'tab-closed' &&
+      transition.paneId === jump.paneId &&
+      transition.closedTab.id === jump.tabId
+    ) {
+      return true
+    }
+    return transition.type === 'tab-moved' && transition.tab.id === jump.tabId
   }
 
   private shouldInvalidateTarget(

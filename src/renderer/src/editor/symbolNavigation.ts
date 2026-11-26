@@ -252,3 +252,67 @@ export async function resolveSymbolDefinitions(
   }
   return { status: 'multiple', candidates: ranked }
 }
+
+/**
+ * Resolves all Lezer-verified identifier references for a symbol in the given `CodeSourceScope`,
+ * excluding comments and string literals, and ranked by locality and active diff/compare changes.
+ */
+export async function resolveSymbolReferences(
+  options: ResolveSymbolDefinitionsOptions
+): Promise<SymbolCandidateMatch[]> {
+  const {
+    symbolName,
+    scope,
+    currentFilePath,
+    currentFileContent,
+    changedFilePaths,
+    isInActiveDiffHunk,
+    searchSymbols,
+    readFileContent,
+    getParserForPath
+  } = options
+
+  const verifiedByKey = new Map<string, SymbolCandidateMatch>()
+  const contentCache = new Map<string, string | null>()
+  if (currentFileContent !== null) {
+    contentCache.set(normalizeRepoPath(currentFilePath), currentFileContent)
+  }
+
+  const rawCandidates = await searchSymbols(symbolName, scope)
+  let filesRead = 0
+  for (const candidate of rawCandidates) {
+    const normPath = normalizeRepoPath(candidate.path)
+    const key = `${normPath}:${candidate.lineNumber}:${candidate.columnStart}`
+    if (verifiedByKey.has(key)) continue
+
+    let content = contentCache.get(normPath)
+    if (content === undefined) {
+      if (filesRead >= MAX_CANDIDATE_FILES_TO_VERIFY) continue
+      filesRead += 1
+      content = await readFileContent(normPath, scope)
+      contentCache.set(normPath, content)
+    }
+    if (content === null) continue
+
+    const parser = await getParserForPath(normPath)
+    if (!parser) continue
+
+    const token = extractIdentifierAtPosition(
+      content,
+      { lineNumber: candidate.lineNumber, column: candidate.columnStart },
+      parser
+    )
+    if (token && token.name === symbolName) {
+      verifiedByKey.set(key, {
+        ...candidate,
+        path: normPath
+      })
+    }
+  }
+
+  return rankDeclarationCandidates(Array.from(verifiedByKey.values()), {
+    currentFilePath,
+    changedFilePaths,
+    isInActiveDiffHunk
+  })
+}

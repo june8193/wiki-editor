@@ -5,7 +5,8 @@ import type { SymbolCandidateMatch } from '@shared/symbol'
 import {
   rankDeclarationCandidates,
   resolveDiffLineScope,
-  resolveSymbolDefinitions
+  resolveSymbolDefinitions,
+  resolveSymbolReferences
 } from './symbolNavigation'
 
 describe('symbolNavigation', () => {
@@ -186,6 +187,42 @@ describe('symbolNavigation', () => {
           'src/b.ts:1'
         ])
       }
+    })
+  })
+
+  describe('resolveSymbolReferences', () => {
+    it('filters out comments and strings via Lezer AST and ranks changed files before other files', async () => {
+      const tsParser = javascript({ typescript: true }).language.parser
+      const files: Record<string, string> = {
+        'src/caller.ts': 'import { greet } from "./helper"\ngreet()',
+        'src/comment.ts': '// greet() in comment\nconst s = "greet() in string"',
+        'other/unchanged.ts': 'greet()',
+        'diff/changed.ts': 'const x = greet()'
+      }
+
+      const refs = await resolveSymbolReferences({
+        symbolName: 'greet',
+        scope: { kind: 'working-tree' },
+        currentFilePath: 'src/caller.ts',
+        currentFileContent: files['src/caller.ts'],
+        workspaceRootPath: 'C:/repo',
+        changedFilePaths: new Set(['diff/changed.ts']),
+        searchSymbols: async () => [
+          { path: 'other/unchanged.ts', lineNumber: 1, lineText: 'greet()', columnStart: 0, columnEnd: 5 },
+          { path: 'src/comment.ts', lineNumber: 1, lineText: '// greet() in comment', columnStart: 3, columnEnd: 8 },
+          { path: 'src/comment.ts', lineNumber: 2, lineText: 'const s = "greet() in string"', columnStart: 11, columnEnd: 16 },
+          { path: 'diff/changed.ts', lineNumber: 1, lineText: 'const x = greet()', columnStart: 10, columnEnd: 15 },
+          { path: 'src/caller.ts', lineNumber: 2, lineText: 'greet()', columnStart: 0, columnEnd: 5 }
+        ],
+        readFileContent: async (p) => files[p] ?? null,
+        getParserForPath: () => tsParser
+      })
+
+      expect(refs.map((r) => `${r.path}:${r.lineNumber}`)).toEqual([
+        'src/caller.ts:2',
+        'diff/changed.ts:1',
+        'other/unchanged.ts:1'
+      ])
     })
   })
 })

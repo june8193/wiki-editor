@@ -91,6 +91,23 @@ function clearSymbolHover(view: EditorView): void {
   }
 }
 
+function resolveRawSymbolTokenAtEvent(
+  view: EditorView,
+  event: MouseEvent,
+  targetName: string,
+  cachedParser: { path: string; parser: Parameters<typeof extractIdentifierAtPosition>[2] }
+) {
+  const parser =
+    cachedParser.path === targetName
+      ? cachedParser.parser
+      : resolveDiffLanguageParserSync(targetName).parser
+  const offset = resolveRawClickOffset(view, event)
+  if (offset === null || !parser) {
+    return null
+  }
+  return extractIdentifierAtPosition(view.state.doc.toString(), offset, parser)
+}
+
 export interface UseRawCodeMirrorEditorOptions {
   content: string
   language: RawEditorLanguage
@@ -501,15 +518,12 @@ export function useRawCodeMirrorEditor({
               clearSymbolHover(view)
               return false
             }
-            const parser =
-              symbolParserRef.current.path === targetName
-                ? symbolParserRef.current.parser
-                : resolveDiffLanguageParserSync(targetName).parser
-            const offset = resolveRawClickOffset(view, event)
-            const token =
-              offset !== null && parser
-                ? extractIdentifierAtPosition(view.state.doc.toString(), offset, parser)
-                : null
+            const token = resolveRawSymbolTokenAtEvent(
+              view,
+              event,
+              targetName,
+              symbolParserRef.current
+            )
             if (!token) {
               clearSymbolHover(view)
               return false
@@ -560,15 +574,12 @@ export function useRawCodeMirrorEditor({
             if (!symbolNavigate || !isSymbolSupportedFile(targetName)) {
               return false
             }
-            const parser =
-              symbolParserRef.current.path === targetName
-                ? symbolParserRef.current.parser
-                : resolveDiffLanguageParserSync(targetName).parser
-            const offset = resolveRawClickOffset(view, event)
-            if (offset === null || !parser) {
-              return false
-            }
-            const token = extractIdentifierAtPosition(view.state.doc.toString(), offset, parser)
+            const token = resolveRawSymbolTokenAtEvent(
+              view,
+              event,
+              targetName,
+              symbolParserRef.current
+            )
             if (!token) {
               return false
             }
