@@ -1,5 +1,5 @@
 import type { BufferKeyRemap } from '@shared/documentBuffer'
-import type { GitChangedFile, GitDiffRequest, GitDiffViewMode, GitStashEntry } from '@shared/git'
+import type { GitChangedFile, GitCompareMode, GitDiffRequest, GitDiffViewMode, GitStashEntry } from '@shared/git'
 import {
   clampSplitRatio,
   type CursorPosition,
@@ -347,6 +347,14 @@ export function countLayoutTabs(layout: PaneLayoutState): number {
 /**
  * Manages up to 2 split panes, independent per-pane tab bars, and lightweight inactive tab state.
  */
+export interface ReconcileBranchCompareDiffTabsParams {
+  baseRef: string
+  compareRef: string
+  mode: GitCompareMode
+  files: readonly { path: string; origPath?: string; status: GitChangedFile['status'] }[]
+  mergeBaseHash?: string | null
+}
+
 export class PaneTabStore {
   private state: PaneLayoutState = createInitialState()
   private nextTabSeq = 1
@@ -1147,12 +1155,13 @@ export class PaneTabStore {
     })
   }
 
-  reconcileBranchCompareDiffTabs = (
-    baseRef: string,
-    compareRef: string,
-    mode: 'three-dot' | 'two-dot',
-    files: readonly { path: string; origPath?: string; status: GitChangedFile['status'] }[]
-  ): void => {
+  reconcileBranchCompareDiffTabs = ({
+    baseRef,
+    compareRef,
+    mode,
+    files,
+    mergeBaseHash
+  }: ReconcileBranchCompareDiffTabsParams): void => {
     const fileByPath = new Map(files.map((file) => [file.path, file]))
     this.transformPaneTabs((tab) => {
       if (tab.kind !== 'diff' || tab.diff.request.kind !== 'branch-compare') {
@@ -1167,6 +1176,7 @@ export class PaneTabStore {
         prev.baseRef === baseRef &&
         prev.compareRef === compareRef &&
         prev.mode === mode &&
+        prev.mergeBaseHash === mergeBaseHash &&
         prev.status === matched.status &&
         prev.origPath === matched.origPath
       ) {
@@ -1181,6 +1191,7 @@ export class PaneTabStore {
             baseRef,
             compareRef,
             mode,
+            ...(mergeBaseHash !== undefined ? { mergeBaseHash } : {}),
             path: matched.path,
             ...(matched.origPath ? { origPath: matched.origPath } : {}),
             status: matched.status

@@ -452,6 +452,14 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
       expect(within(primaryPane).getByText('main...feat/compare')).toBeInTheDocument()
       expect(within(primaryPane).getByText(matchDiffLineText('new three-dot'))).toBeInTheDocument()
     })
+    expect(diffMock).toHaveBeenLastCalledWith(
+      'C:/repo',
+      expect.objectContaining({
+        kind: 'branch-compare',
+        mode: 'three-dot',
+        mergeBaseHash: '0000000'
+      })
+    )
 
     // Switch to 2-dot and verify open Diff tab updates immediately
     await user.click(within(comparePanelReopened).getByRole('button', { name: '2-dot (직접 비교)' }))
@@ -459,6 +467,14 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
       expect(within(primaryPane).getByText('main..feat/compare')).toBeInTheDocument()
       expect(within(primaryPane).getByText(matchDiffLineText('new two-dot'))).toBeInTheDocument()
     })
+    expect(diffMock).toHaveBeenLastCalledWith(
+      'C:/repo',
+      expect.objectContaining({
+        kind: 'branch-compare',
+        mode: 'two-dot',
+        mergeBaseHash: null
+      })
+    )
   })
 
   it('navigates between filtered compare files via ↑/↓ in Diff viewer, opens editable files, and resets Compare session state on workspace switch', async () => {

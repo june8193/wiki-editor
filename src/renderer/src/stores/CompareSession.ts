@@ -14,6 +14,7 @@ import {
   buildCompressedGitFileTree,
   flattenGitFileTreeFiles
 } from '../utils/gitFileTree'
+import type { ReconcileBranchCompareDiffTabsParams } from './PaneTabStore'
 import {
   createInitialGitDetailState,
   DetailSelectionChannel,
@@ -59,12 +60,7 @@ function createDefaultComparePanelState(workspaceRootPath: string | null = null)
 
 export interface CompareDiffTabsCollaborator {
   openDiffTab(request: GitDiffRequest): void
-  reconcileBranchCompareDiffTabs(
-    baseRef: string,
-    compareRef: string,
-    mode: GitCompareMode,
-    files: readonly GitCompareChangedFile[]
-  ): void
+  reconcileBranchCompareDiffTabs(params: ReconcileBranchCompareDiffTabsParams): void
 }
 
 export interface CompareSessionOptions {
@@ -307,13 +303,14 @@ export class CompareSession {
   }
 
   private openCompareFileDiff = (file: GitCompareChangedFile): void => {
-    const { baseRef, compareRef, mode } = this.state
+    const { baseRef, compareRef, mode, summary } = this.state
     if (!baseRef || !compareRef) return
     this.diffTabs.openDiffTab({
       kind: 'branch-compare',
       baseRef,
       compareRef,
       mode,
+      ...(summary ? { mergeBaseHash: summary.mergeBaseHash } : {}),
       path: file.path,
       ...(file.origPath ? { origPath: file.origPath } : {}),
       status: file.status
@@ -390,7 +387,13 @@ export class CompareSession {
       this.commitDetailChannel.prune(new Set(summary.commits.map((commit) => commit.hash)))
 
       if (reconcileDiffTabs) {
-        this.diffTabs.reconcileBranchCompareDiffTabs(baseRef, compareRef, mode, summary.files)
+        this.diffTabs.reconcileBranchCompareDiffTabs({
+          baseRef,
+          compareRef,
+          mode,
+          files: summary.files,
+          mergeBaseHash: summary.mergeBaseHash
+        })
       }
     } catch (error: unknown) {
       if (this.workspaceEpoch !== epoch || this.summarySeq !== seq) return

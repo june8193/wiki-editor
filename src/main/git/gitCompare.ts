@@ -4,7 +4,8 @@ import type {
   GitCompareChangedFile,
   GitCompareMode,
   GitCompareRef,
-  GitCompareRefList
+  GitCompareRefList,
+  GitFileStatusCode
 } from '@shared/git'
 import { isSameWorkspacePath } from '@shared/workspace'
 
@@ -101,17 +102,26 @@ export function parseWorktreeListPorcelain(raw: string, currentRepoRoot: string)
 }
 
 /**
- * Builds a `git diff` revision range expression (`three-dot` when a merge-base exists, `two-dot` otherwise).
+ * Builds a `git diff` revision range expression (`<mergeBaseHash>..<compareRef>` when a resolved
+ * merge-base hash is supplied, `<baseRef>..<compareRef>` when `two-dot` or `mergeBaseHash === null`,
+ * or `<baseRef>...<compareRef>` when `mergeBaseHash` is omitted in `three-dot` mode).
  */
 export function buildCompareDiffRange(
   baseRef: string,
   compareRef: string,
   mode: GitCompareMode,
-  hasMergeBase: boolean
+  mergeBaseHash?: string | null
 ): string {
-  return mode === 'three-dot' && hasMergeBase
-    ? `${baseRef}...${compareRef}`
-    : `${baseRef}..${compareRef}`
+  if (mode !== 'three-dot') {
+    return `${baseRef}..${compareRef}`
+  }
+  if (typeof mergeBaseHash === 'string') {
+    return `${mergeBaseHash}..${compareRef}`
+  }
+  if (mergeBaseHash === null) {
+    return `${baseRef}..${compareRef}`
+  }
+  return `${baseRef}...${compareRef}`
 }
 
 /**
@@ -204,17 +214,9 @@ export interface NumstatEntry {
   isBinary: boolean
 }
 
-/**
- * Parses `git diff --numstat -z` output into a map keyed by destination file path.
- * Note: For renames (`-M`), `-z` emits `added\tdeleted\0origPath\0newPath\0` when `-z` is used with `--numstat`:
- * specifically `added\tdeleted\t\0origPath\0newPath\0` (an empty field before the two NUL-separated paths).
- */
-export function parseGitNumstatZ(raw: string): Map<string, NumstatEntry> {
+function parseNumstatTokens(tokens: readonly string[], startIndex: number): Map<string, NumstatEntry> {
   const stats = new Map<string, NumstatEntry>()
-  if (!raw) return stats
-
-  const tokens = raw.split('\0')
-  for (let i = 0; i < tokens.length; i += 1) {
+  for (let i = startIndex; i < tokens.length; i += 1) {
     const token = tokens[i]
     if (!token) continue
 
@@ -244,6 +246,69 @@ export function parseGitNumstatZ(raw: string): Map<string, NumstatEntry> {
   }
 
   return stats
+}
+
+/**
+ * Parses `git diff --numstat -z` output into a map keyed by destination file path.
+ * Note: For renames (`-M`), `-z` emits `added\tdeleted\0origPath\0newPath\0` when `-z` is used with `--numstat`:
+ * specifically `added\tdeleted\t\0origPath\0newPath\0` (an empty field before the two NUL-separated paths).
+ */
+export function parseGitNumstatZ(raw: string): Map<string, NumstatEntry> {
+  if (!raw) return new Map()
+  return parseNumstatTokens(raw.split('\0'), 0)
+}
+
+function mapRawStatusCode(code: string): GitFileStatusCode {
+  if (code === 'A' || code === 'M' || code === 'D' || code === 'U') {
+    return code
+  }
+  return 'M'
+}
+
+/**
+ * Parses combined `git diff --raw --numstat -z -M` output into file entries and line-count stats.
+ */
+export function parseGitRawAndNumstatZ(raw: string): {
+  files: GitChangedFile[]
+  numstatMap: Map<string, NumstatEntry>
+} {
+  if (!raw) {
+    return { files: [], numstatMap: new Map() }
+  }
+
+  const tokens = raw.split('\0')
+  const files: GitChangedFile[] = []
+  let i = 0
+
+  for (; i < tokens.length; i += 1) {
+    const token = tokens[i]
+    if (!token) continue
+    if (!token.startsWith(':')) break
+
+    const spaceIdx = token.lastIndexOf(' ')
+    const statusToken = spaceIdx >= 0 ? token.slice(spaceIdx + 1) : ''
+    const code = statusToken[0] ?? 'M'
+
+    if (code === 'R' || code === 'C') {
+      const origPath = tokens[i + 1]
+      const nextPath = tokens[i + 2]
+      if (origPath && nextPath) {
+        files.push({ path: nextPath, origPath, status: code })
+      }
+      i += 2
+    } else {
+      const filePath = tokens[i + 1]
+      if (filePath) {
+        files.push({ path: filePath, status: mapRawStatusCode(code) })
+      }
+      i += 1
+    }
+  }
+
+  return {
+    files,
+    numstatMap: parseNumstatTokens(tokens, i)
+  }
 }
 
 /**

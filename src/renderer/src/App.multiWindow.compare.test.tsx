@@ -165,6 +165,14 @@ describe('Compare Diff tab split/duplicate and auxiliary window compatibility (<
 
     const auxPrimaryPane = await within(auxRendered.container).findByTestId('pane-primary')
     await expectDiffHighlights(auxPrimaryPane)
+    expect(gitOverrides.diff).toHaveBeenLastCalledWith(
+      'C:/wiki/repo',
+      expect.objectContaining({
+        kind: 'branch-compare',
+        mode: 'three-dot',
+        mergeBaseHash: '1111111'
+      })
+    )
 
     // Toggle 좌우 비교 <-> 인라인 in auxiliary window
     await user.click(within(auxPrimaryPane).getByRole('button', { name: '인라인' }))

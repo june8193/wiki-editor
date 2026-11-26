@@ -156,6 +156,7 @@ export type GitDiffRequest =
       baseRef: string
       compareRef: string
       mode: GitCompareMode
+      mergeBaseHash?: string | null
     } & GitChangedFile)
 
 export type GitStashScope = 'unstaged' | 'all' | 'paths'

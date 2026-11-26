@@ -344,7 +344,13 @@ export type ValidatedGitDiffTarget =
   | { kind: 'unstaged'; isUntracked: boolean }
   | { kind: 'commit'; commitHash: string }
   | { kind: 'stash'; stashHash: string; isUntracked: boolean }
-  | { kind: 'branch-compare'; baseRef: string; compareRef: string; mode: GitCompareMode }
+  | {
+      kind: 'branch-compare'
+      baseRef: string
+      compareRef: string
+      mode: GitCompareMode
+      mergeBaseHash?: string | null
+    }
 
 /**
  * Validates target identifiers on a GitDiffRequest once before resolving repository paths.
@@ -367,13 +373,21 @@ export function validateGitDiffTarget(request: GitDiffRequest): ValidatedGitDiff
         stashHash: assertValidGitHash(request.stashHash, 'Stash'),
         isUntracked: request.status === '?'
       }
-    case 'branch-compare':
+    case 'branch-compare': {
+      const mergeBaseHash =
+        request.mergeBaseHash === undefined
+          ? undefined
+          : request.mergeBaseHash === null
+            ? null
+            : assertValidGitHash(request.mergeBaseHash, '공통 조상')
       return {
         kind: 'branch-compare',
         baseRef: assertValidGitCompareRef(request.baseRef, '기준 Ref'),
         compareRef: assertValidGitCompareRef(request.compareRef, '비교 Ref'),
-        mode: assertValidGitCompareMode(request.mode)
+        mode: assertValidGitCompareMode(request.mode),
+        ...(mergeBaseHash !== undefined ? { mergeBaseHash } : {})
       }
+    }
     default:
       throw new Error('유효하지 않은 Diff 요청 형식입니다.')
   }
@@ -387,7 +401,6 @@ export interface ComputeGitDiffOptions {
   safePath: string
   safeOrigPath?: string
   hasHeadCommit: boolean
-  hasMergeBase?: boolean
   execOptions: GitDiffExecOptions
 }
 
@@ -399,7 +412,6 @@ export async function computeGitDiff({
   safePath,
   safeOrigPath,
   hasHeadCommit,
-  hasMergeBase = true,
   execOptions
 }: ComputeGitDiffOptions): Promise<GitFileDiff> {
   const { existsOnDisk, existsInWorkspace } = await inspectTargetFileState(
@@ -481,7 +493,7 @@ export async function computeGitDiff({
         target.baseRef,
         target.compareRef,
         target.mode,
-        hasMergeBase
+        target.mergeBaseHash
       )
       gitArgs = [
         '-c',
