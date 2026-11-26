@@ -2442,4 +2442,74 @@ describe('WysiwygMarkdownEditor local image rendering and path sync', () => {
       expect(onReportError).toHaveBeenCalledWith('이미지 삽입에 실패했습니다.', expect.any(Error))
     })
   })
+
+  it('handles Tab, Shift+Tab, and Enter indentation in regular and Mermaid WYSIWYG code blocks without losing focus', async () => {
+    const onChangeContent = vi.fn()
+    const initialMarkdown = [
+      '```ts',
+      'const a = 1',
+      '```',
+      '',
+      '```mermaid',
+      'graph LR',
+      '  A --> B',
+      '```'
+    ].join('\n')
+
+    render(
+      <WysiwygMarkdownEditor
+        content={initialMarkdown}
+        scrollTop={0}
+        onChangeContent={onChangeContent}
+      />
+    )
+
+    const editorEl = screen.getByTestId('document-editor')
+    const codeBlock = await screen.findByTestId('wysiwyg-code-block')
+    const codeEl = codeBlock.querySelector('pre code')!
+    placeCaretInProseMirror(editorEl, codeEl)
+
+    const tabEvent = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      bubbles: true,
+      cancelable: true
+    })
+    editorEl.dispatchEvent(tabEvent)
+    expect(tabEvent.defaultPrevented).toBe(true)
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```ts\n  const a = 1\n```')
+
+    const shiftTabEvent = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true
+    })
+    editorEl.dispatchEvent(shiftTabEvent)
+    expect(shiftTabEvent.defaultPrevented).toBe(true)
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('```ts\nconst a = 1\n```')
+
+    // Test Enter preserving indent in Mermaid source editor
+    const mermaidCard = await screen.findByTestId('wysiwyg-mermaid-block')
+    fireEvent.click(within(mermaidCard).getByRole('button', { name: '코드 편집' }))
+    const mermaidCodeEl = mermaidCard.querySelector('pre.mermaid-node-source code')!
+    placeCaretInProseMirror(editorEl, mermaidCodeEl)
+
+    const mermaidTabEvent = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      bubbles: true,
+      cancelable: true
+    })
+    editorEl.dispatchEvent(mermaidTabEvent)
+    expect(mermaidTabEvent.defaultPrevented).toBe(true)
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('  A --> B  ')
+
+    const mermaidEnterEvent = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true
+    })
+    editorEl.dispatchEvent(mermaidEnterEvent)
+    expect(mermaidEnterEvent.defaultPrevented).toBe(true)
+    expect(onChangeContent.mock.calls.at(-1)?.[0]).toContain('  A --> B  \n  ')
+  })
 })

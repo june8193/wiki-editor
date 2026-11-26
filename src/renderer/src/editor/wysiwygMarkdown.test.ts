@@ -792,3 +792,183 @@ describe('wysiwygMarkdown external plain-text Markdown paste and indented block 
     expect(selectionLinkEditor.getMarkdown()).not.toContain('evil.example')
   })
 })
+
+function dispatchCodeBlockKey(
+  editor: Editor,
+  key: 'Tab' | 'Enter',
+  options: { shiftKey?: boolean } = {}
+): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', {
+    key,
+    shiftKey: options.shiftKey ?? false,
+    bubbles: true,
+    cancelable: true
+  })
+  editor.view.dom.dispatchEvent(event)
+  return event
+}
+
+function findCodeBlockContentStart(editor: Editor): number {
+  let contentStart = -1
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'codeBlock') {
+      contentStart = pos + 1
+      return false
+    }
+    return true
+  })
+  return contentStart
+}
+
+describe('wysiwygMarkdown code block Tab / Shift+Tab / Enter indentation', () => {
+  it('inserts 2 spaces on Tab for empty selection in empty, mid-line, and end-of-line positions', () => {
+    const emptyEditor = createTestWysiwygEditor('```ts\n\n```')
+    const emptyStart = findCodeBlockContentStart(emptyEditor)
+    emptyEditor.commands.setTextSelection(emptyStart)
+    const emptyEvent = dispatchCodeBlockKey(emptyEditor, 'Tab')
+    expect(emptyEvent.defaultPrevented).toBe(true)
+    expect(emptyEditor.state.doc.textContent).toBe('  ')
+    expect(emptyEditor.state.selection.from).toBe(emptyStart + 2)
+
+    const lineEditor = createTestWysiwygEditor('```ts\nconst x = 1\n```')
+    const lineStart = findCodeBlockContentStart(lineEditor)
+    lineEditor.commands.setTextSelection(lineStart + 'const'.length)
+    dispatchCodeBlockKey(lineEditor, 'Tab')
+    expect(lineEditor.state.doc.textContent).toBe('const   x = 1')
+    expect(lineEditor.state.selection.from).toBe(lineStart + 'const  '.length)
+
+    lineEditor.commands.setTextSelection(lineStart + 'const   x = 1'.length)
+    dispatchCodeBlockKey(lineEditor, 'Tab')
+    expect(lineEditor.state.doc.textContent).toBe('const   x = 1  ')
+  })
+
+  it('indents line start by 2 spaces on Tab for single-line partial selection and preserves selection', () => {
+    const editor = createTestWysiwygEditor('```ts\nconst alpha = 1\n```')
+    const start = findCodeBlockContentStart(editor)
+    const selFrom = start + 'const '.length
+    const selTo = selFrom + 'alpha'.length
+    editor.commands.setTextSelection({ from: selFrom, to: selTo })
+
+    const event = dispatchCodeBlockKey(editor, 'Tab')
+    expect(event.defaultPrevented).toBe(true)
+    expect(editor.state.doc.textContent).toBe('  const alpha = 1')
+    expect(editor.state.selection.from).toBe(selFrom + 2)
+    expect(editor.state.selection.to).toBe(selTo + 2)
+    expect(
+      editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to)
+    ).toBe('alpha')
+  })
+
+  it('indents all spanned lines on Tab for multi-line selection, preserves direction, and excludes trailing col-0 line', () => {
+    const editor = createTestWysiwygEditor('```ts\nline1\nline2\nline3\n```')
+    const start = findCodeBlockContentStart(editor)
+    // Backward selection spanning line1..line2
+    const anchor = start + 'line1\nli'.length
+    const head = start + 2
+    editor.commands.setTextSelection({ from: anchor, to: head })
+
+    dispatchCodeBlockKey(editor, 'Tab')
+    expect(editor.state.doc.textContent).toBe('  line1\n  line2\nline3')
+    expect(editor.state.selection.anchor).toBe(anchor + 4)
+    expect(editor.state.selection.head).toBe(head + 2)
+
+    // Selection ending at column 0 of line3 should not indent line3
+    const editor2 = createTestWysiwygEditor('```ts\nline1\nline2\nline3\n```')
+    const start2 = findCodeBlockContentStart(editor2)
+    const from2 = start2
+    const to2 = start2 + 'line1\nline2\n'.length
+    editor2.commands.setTextSelection({ from: from2, to: to2 })
+
+    dispatchCodeBlockKey(editor2, 'Tab')
+    expect(editor2.state.doc.textContent).toBe('  line1\n  line2\nline3')
+    expect(editor2.state.selection.from).toBe(from2 + 2)
+    expect(editor2.state.selection.to).toBe(to2 + 4)
+  })
+
+  it('outdents up to 2 spaces or 1 tab on Shift+Tab for single caret and multi-line selection, and consumes event even at 0 indent', () => {
+    const editor = createTestWysiwygEditor('```ts\n    a\n b\n\tc\nd\n```')
+    const start = findCodeBlockContentStart(editor)
+    const from = start + 2
+    const to = start + '    a\n b\n\tc\nd'.length
+    editor.commands.setTextSelection({ from, to })
+
+    const event = dispatchCodeBlockKey(editor, 'Tab', { shiftKey: true })
+    expect(event.defaultPrevented).toBe(true)
+    expect(editor.state.doc.textContent).toBe('  a\nb\nc\nd')
+    expect(editor.state.selection.from).toBe(start)
+    expect(editor.state.selection.to).toBe(start + '  a\nb\nc\nd'.length)
+
+    // Single caret at 0 indent still prevents default (does not blur)
+    const noIndentEditor = createTestWysiwygEditor('```ts\nplain\n```')
+    const noIndentStart = findCodeBlockContentStart(noIndentEditor)
+    noIndentEditor.commands.setTextSelection(noIndentStart + 2)
+    const noIndentEvent = dispatchCodeBlockKey(noIndentEditor, 'Tab', { shiftKey: true })
+    expect(noIndentEvent.defaultPrevented).toBe(true)
+    expect(noIndentEditor.state.doc.textContent).toBe('plain')
+    expect(noIndentEditor.state.selection.from).toBe(noIndentStart + 2)
+  })
+
+  it('preserves leading spaces and tabs on Enter, copies only prefix before caret, replaces selection, and preserves exitOnTripleEnter', () => {
+    const editor = createTestWysiwygEditor('```ts\n    const a = 1\n```')
+    const start = findCodeBlockContentStart(editor)
+    editor.commands.setTextSelection(start + '    const a = 1'.length)
+    const enterEvent = dispatchCodeBlockKey(editor, 'Enter')
+    expect(enterEvent.defaultPrevented).toBe(true)
+    expect(editor.state.doc.textContent).toBe('    const a = 1\n    ')
+
+    // Caret in the middle of leading spaces copies only spaces before caret
+    const midIndentEditor = createTestWysiwygEditor('```ts\n    code\n```')
+    const midStart = findCodeBlockContentStart(midIndentEditor)
+    midIndentEditor.commands.setTextSelection(midStart + 2)
+    dispatchCodeBlockKey(midIndentEditor, 'Enter')
+    expect(midIndentEditor.state.doc.textContent).toBe('  \n    code')
+
+    // Tab-indented line + range selection replacement
+    const tabIndentEditor = createTestWysiwygEditor('```ts\n\tlet x = 1\n```')
+    const tabStart = findCodeBlockContentStart(tabIndentEditor)
+    tabIndentEditor.commands.setTextSelection({
+      from: tabStart + '\tlet '.length,
+      to: tabStart + '\tlet x'.length
+    })
+    dispatchCodeBlockKey(tabIndentEditor, 'Enter')
+    expect(tabIndentEditor.state.doc.textContent).toBe('\tlet \n\t = 1')
+
+    // No leading indent falls through to TipTap default Enter (exitOnTripleEnter)
+    const exitEditor = createTestWysiwygEditor('```ts\nline1\n```')
+    const exitStart = findCodeBlockContentStart(exitEditor)
+    exitEditor.commands.setTextSelection(exitStart + 'line1'.length)
+    dispatchCodeBlockKey(exitEditor, 'Enter')
+    dispatchCodeBlockKey(exitEditor, 'Enter')
+    dispatchCodeBlockKey(exitEditor, 'Enter')
+    expect(exitEditor.state.doc.lastChild?.type.name).toBe('paragraph')
+  })
+
+  it('prioritizes code block Tab/Shift+Tab over nested list item indentation and roundtrips markdown', () => {
+    const listWithCode = '- item\n\n  ```ts\n    const x = 1\n  ```'
+    const editor = createTestWysiwygEditor(listWithCode)
+    const codeStart = findCodeBlockContentStart(editor)
+    expect(codeStart).toBeGreaterThan(0)
+    editor.commands.setTextSelection(codeStart)
+
+    const tabEvent = dispatchCodeBlockKey(editor, 'Tab')
+    expect(tabEvent.defaultPrevented).toBe(true)
+    expect(editor.state.doc.textBetween(codeStart, codeStart + 4)).toBe('    ')
+
+    const shiftTabEvent = dispatchCodeBlockKey(editor, 'Tab', { shiftKey: true })
+    expect(shiftTabEvent.defaultPrevented).toBe(true)
+    expect(editor.getMarkdown()).toContain('  ```ts\n    const x = 1\n  ```')
+  })
+
+  it('leaves Tab, Shift+Tab, and Enter outside code blocks unaffected', () => {
+    const editor = createTestWysiwygEditor('  paragraph')
+    const pPos = findTextPos(editor, 'paragraph')
+    editor.commands.setTextSelection(pPos + 'paragraph'.length)
+
+    const tabEvent = dispatchCodeBlockKey(editor, 'Tab')
+    expect(tabEvent.defaultPrevented).toBe(false)
+
+    const enterEvent = dispatchCodeBlockKey(editor, 'Enter')
+    expect(enterEvent.defaultPrevented).toBe(true)
+    expect(editor.state.doc.childCount).toBe(2)
+  })
+})
