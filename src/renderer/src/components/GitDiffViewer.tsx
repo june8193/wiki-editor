@@ -8,10 +8,12 @@ import {
   resolveDiffLanguageParserSync
 } from '../utils/diffSyntaxHighlight'
 import {
+  formatGitDiffTabKey,
   formatGitFileLabel,
   getGitDiffContextLabel,
   getGitFileBadgeModifier
 } from '../utils/gitFilePresentation'
+import { useDiffVirtualScroll } from '../hooks/useDiffVirtualScroll'
 import {
   buildInlineDiffRows,
   buildSideBySideDiffRows,
@@ -189,6 +191,46 @@ function SideCell({
   )
 }
 
+function DiffSpacerRow({ height, colSpan }: { height: number; colSpan: number }) {
+  if (height <= 0) {
+    return null
+  }
+  return (
+    <tr className="git-diff-spacer-row" aria-hidden="true">
+      <td colSpan={colSpan} style={{ height: `${height}px`, padding: 0, border: 0 }} />
+    </tr>
+  )
+}
+
+function VirtualizedDiffBody<TRow>({
+  rows,
+  colSpan,
+  isVirtualized,
+  startIndex,
+  topSpacerHeight,
+  bottomSpacerHeight,
+  renderRow
+}: {
+  rows: readonly TRow[]
+  colSpan: number
+  isVirtualized: boolean
+  startIndex: number
+  topSpacerHeight: number
+  bottomSpacerHeight: number
+  renderRow: (row: TRow, idx: number, dataRowIndex: number | undefined) => ReactNode
+}) {
+  return (
+    <tbody>
+      {isVirtualized && <DiffSpacerRow height={topSpacerHeight} colSpan={colSpan} />}
+      {rows.map((row, offset) => {
+        const idx = isVirtualized ? startIndex + offset : offset
+        return renderRow(row, idx, isVirtualized ? idx : undefined)
+      })}
+      {isVirtualized && <DiffSpacerRow height={bottomSpacerHeight} colSpan={colSpan} />}
+    </tbody>
+  )
+}
+
 function areNavigationPropsEqual(
   prev: GitDiffNavigationProps | undefined,
   next: GitDiffNavigationProps | undefined
@@ -277,6 +319,25 @@ function GitDiffViewerInner({
     () => (parsed && viewMode === 'inline' ? buildInlineDiffRows(parsed) : []),
     [parsed, viewMode]
   )
+  const fileKey = useMemo(() => formatGitDiffTabKey(request), [request])
+  const totalRows = viewMode === 'side-by-side' ? sideBySideRows.length : inlineRows.length
+  const {
+    isVirtualized,
+    startIndex,
+    endIndex,
+    topSpacerHeight,
+    bottomSpacerHeight,
+    scrollContainerRef
+  } = useDiffVirtualScroll({
+    totalRows,
+    fileKey,
+    viewMode,
+    patchIdentity: parsed
+  })
+  const visibleSideBySideRows = isVirtualized
+    ? sideBySideRows.slice(startIndex, endIndex)
+    : sideBySideRows
+  const visibleInlineRows = isVirtualized ? inlineRows.slice(startIndex, endIndex) : inlineRows
 
   return (
     <section className="git-diff-viewer" aria-label={`${displayFile.path} Diff 뷰어`}>
@@ -365,7 +426,11 @@ function GitDiffViewerInner({
       ) : !parsed || parsed.hunks.length === 0 ? (
         <div className="git-diff-empty-state">표시할 텍스트 변경 사항이 없습니다.</div>
       ) : viewMode === 'side-by-side' ? (
-        <div className="git-diff-scroll" data-testid="diff-side-by-side">
+        <div
+          ref={scrollContainerRef}
+          className="git-diff-scroll"
+          data-testid="diff-side-by-side"
+        >
           <table className="git-diff-table git-diff-table--split">
             <colgroup>
               <col className="git-diff-col-gutter" />
@@ -373,16 +438,26 @@ function GitDiffViewerInner({
               <col className="git-diff-col-gutter" />
               <col className="git-diff-col-code" />
             </colgroup>
-            <tbody>
-              {sideBySideRows.map((row, idx) =>
+            <VirtualizedDiffBody
+              rows={visibleSideBySideRows}
+              colSpan={4}
+              isVirtualized={isVirtualized}
+              startIndex={startIndex}
+              topSpacerHeight={topSpacerHeight}
+              bottomSpacerHeight={bottomSpacerHeight}
+              renderRow={(row, idx, dataRowIndex) =>
                 row.kind === 'hunk' ? (
-                  <tr key={`hunk-${idx}`} className="git-diff-hunk-row">
+                  <tr
+                    key={`hunk-${idx}`}
+                    data-row-index={dataRowIndex}
+                    className="git-diff-hunk-row"
+                  >
                     <td colSpan={4} className="git-diff-hunk-cell">
                       {row.header}
                     </td>
                   </tr>
                 ) : (
-                  <tr key={`row-${idx}`} className="git-diff-row">
+                  <tr key={`row-${idx}`} data-row-index={dataRowIndex} className="git-diff-row">
                     <SideCell
                       cell={row.oldCell}
                       side="old"
@@ -397,28 +472,42 @@ function GitDiffViewerInner({
                     />
                   </tr>
                 )
-              )}
-            </tbody>
+              }
+            />
           </table>
         </div>
       ) : (
-        <div className="git-diff-scroll" data-testid="diff-inline">
+        <div ref={scrollContainerRef} className="git-diff-scroll" data-testid="diff-inline">
           <table className="git-diff-table git-diff-table--inline">
             <colgroup>
               <col className="git-diff-col-gutter" />
               <col className="git-diff-col-gutter" />
               <col className="git-diff-col-code" />
             </colgroup>
-            <tbody>
-              {inlineRows.map((row, idx) =>
+            <VirtualizedDiffBody
+              rows={visibleInlineRows}
+              colSpan={3}
+              isVirtualized={isVirtualized}
+              startIndex={startIndex}
+              topSpacerHeight={topSpacerHeight}
+              bottomSpacerHeight={bottomSpacerHeight}
+              renderRow={(row, idx, dataRowIndex) =>
                 row.kind === 'hunk' ? (
-                  <tr key={`hunk-${idx}`} className="git-diff-hunk-row">
+                  <tr
+                    key={`hunk-${idx}`}
+                    data-row-index={dataRowIndex}
+                    className="git-diff-hunk-row"
+                  >
                     <td colSpan={3} className="git-diff-hunk-cell">
                       {row.header}
                     </td>
                   </tr>
                 ) : (
-                  <tr key={`row-${idx}`} className={`git-diff-row${DIFF_ROW_TYPE_CLASS[row.lineType]}`}>
+                  <tr
+                    key={`row-${idx}`}
+                    data-row-index={dataRowIndex}
+                    className={`git-diff-row${DIFF_ROW_TYPE_CLASS[row.lineType]}`}
+                  >
                     <td className="git-diff-gutter">{row.oldLineNumber ?? ''}</td>
                     <td className="git-diff-gutter">{row.newLineNumber ?? ''}</td>
                     <td className="git-diff-code">
@@ -439,8 +528,8 @@ function GitDiffViewerInner({
                     </td>
                   </tr>
                 )
-              )}
-            </tbody>
+              }
+            />
           </table>
         </div>
       )}
