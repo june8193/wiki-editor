@@ -140,6 +140,32 @@ describe('gitFilePresentation', () => {
     expect(formatGitDiffTabKey(stashA)).not.toBe(formatGitDiffTabKey(stashB))
   })
 
+  it('keeps branch-compare tab keys invariant regardless of mergeBaseHash presence', () => {
+    const baseRequest = {
+      kind: 'branch-compare' as const,
+      baseRef: 'main',
+      compareRef: 'feat/perf',
+      mode: 'three-dot' as const,
+      path: 'docs/guide.md',
+      origPath: 'docs/old-guide.md',
+      status: 'R' as const
+    }
+
+    const expectedKey = formatGitDiffTabKey(baseRequest)
+    expect(
+      formatGitDiffTabKey({
+        ...baseRequest,
+        mergeBaseHash: '0123456789abcdef0123456789abcdef01234567'
+      })
+    ).toBe(expectedKey)
+    expect(
+      formatGitDiffTabKey({
+        ...baseRequest,
+        mergeBaseHash: null
+      })
+    ).toBe(expectedKey)
+  })
+
   it('maps every GitFileStatusCode to VS Code UI display char, tone, label, and strikethrough without mutating input code', () => {
     const cases: Array<{
       code: GitFileStatusCode

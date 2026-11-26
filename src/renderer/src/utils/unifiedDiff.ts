@@ -282,16 +282,19 @@ function computeIntraLineHighlights(
   }
 
   if (oldMidLen > 0 && newMidLen > 0) {
-    const dp: number[][] = Array.from({ length: oldMidLen + 1 }, () =>
-      new Array<number>(newMidLen + 1).fill(0)
-    )
+    const cols = newMidLen + 1
+    const dp = new Uint16Array((oldMidLen + 1) * cols)
     for (let i = oldMidLen - 1; i >= 0; i -= 1) {
       const oldTok = oldTokens[prefix + i].text
+      const rowOffset = i * cols
+      const nextRowOffset = (i + 1) * cols
       for (let j = newMidLen - 1; j >= 0; j -= 1) {
         if (oldTok === newTokens[prefix + j].text) {
-          dp[i][j] = dp[i + 1][j + 1] + 1
+          dp[rowOffset + j] = dp[nextRowOffset + j + 1] + 1
         } else {
-          dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1])
+          const down = dp[nextRowOffset + j]
+          const right = dp[rowOffset + j + 1]
+          dp[rowOffset + j] = down >= right ? down : right
         }
       }
     }
@@ -304,7 +307,7 @@ function computeIntraLineHighlights(
         newMatched[prefix + j] = true
         i += 1
         j += 1
-      } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      } else if (dp[(i + 1) * cols + j] >= dp[i * cols + j + 1]) {
         i += 1
       } else {
         j += 1
@@ -354,26 +357,38 @@ function forEachHunkChangeRun(
   flushRun()
 }
 
-function buildHunkWordHighlightMap(hunk: UnifiedDiffHunk): Map<UnifiedDiffLine, DiffTextRange[]> {
+const parsedWordHighlightCache = new WeakMap<
+  ParsedUnifiedDiff,
+  Map<UnifiedDiffLine, DiffTextRange[]>
+>()
+
+function getParsedWordHighlightMap(parsed: ParsedUnifiedDiff): Map<UnifiedDiffLine, DiffTextRange[]> {
+  const cached = parsedWordHighlightCache.get(parsed)
+  if (cached) {
+    return cached
+  }
   const map = new Map<UnifiedDiffLine, DiffTextRange[]>()
-  forEachHunkChangeRun(hunk.lines, (deletedRun, addedRun) => {
-    if (deletedRun.length > 0 && deletedRun.length === addedRun.length) {
-      for (let i = 0; i < deletedRun.length; i += 1) {
-        const delLine = deletedRun[i]
-        const addLine = addedRun[i]
-        const { oldRanges, newRanges } = computeIntraLineHighlights(
-          delLine.content,
-          addLine.content
-        )
-        if (oldRanges.length > 0) {
-          map.set(delLine, oldRanges)
-        }
-        if (newRanges.length > 0) {
-          map.set(addLine, newRanges)
+  for (const hunk of parsed.hunks) {
+    forEachHunkChangeRun(hunk.lines, (deletedRun, addedRun) => {
+      if (deletedRun.length > 0 && deletedRun.length === addedRun.length) {
+        for (let i = 0; i < deletedRun.length; i += 1) {
+          const delLine = deletedRun[i]
+          const addLine = addedRun[i]
+          const { oldRanges, newRanges } = computeIntraLineHighlights(
+            delLine.content,
+            addLine.content
+          )
+          if (oldRanges.length > 0) {
+            map.set(delLine, oldRanges)
+          }
+          if (newRanges.length > 0) {
+            map.set(addLine, newRanges)
+          }
         }
       }
-    }
-  })
+    })
+  }
+  parsedWordHighlightCache.set(parsed, map)
   return map
 }
 
@@ -382,9 +397,9 @@ function buildHunkWordHighlightMap(hunk: UnifiedDiffHunk): Map<UnifiedDiffLine, 
  */
 export function buildInlineDiffRows(parsed: ParsedUnifiedDiff): UnifiedDiffInlineRow[] {
   const rows: UnifiedDiffInlineRow[] = []
+  const wordHighlights = getParsedWordHighlightMap(parsed)
   for (const hunk of parsed.hunks) {
     rows.push({ kind: 'hunk', header: hunk.header })
-    const wordHighlights = buildHunkWordHighlightMap(hunk)
     for (const line of hunk.lines) {
       rows.push({
         kind: 'line',
@@ -419,10 +434,10 @@ function toSideCell(
  */
 export function buildSideBySideDiffRows(parsed: ParsedUnifiedDiff): UnifiedDiffSideBySideRow[] {
   const rows: UnifiedDiffSideBySideRow[] = []
+  const wordHighlights = getParsedWordHighlightMap(parsed)
 
   for (const hunk of parsed.hunks) {
     rows.push({ kind: 'hunk', header: hunk.header })
-    const wordHighlights = buildHunkWordHighlightMap(hunk)
     let lastChangedSide: 'old' | 'new' | 'both' = 'both'
 
     forEachHunkChangeRun(

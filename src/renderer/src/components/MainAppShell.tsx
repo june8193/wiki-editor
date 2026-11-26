@@ -557,6 +557,11 @@ export function MainAppShell() {
         : [],
     [compare.state.summary, compare.state.fileFilter]
   )
+  const orderedCompareFilesRef = useRef(orderedCompareFiles)
+  orderedCompareFilesRef.current = orderedCompareFiles
+  const openCompareFileDiffRef = useRef(compare.actions.openCompareFileDiff)
+  openCompareFileDiffRef.current = compare.actions.openCompareFileDiff
+  const diffNavigationCacheRef = useRef<Map<string, GitDiffNavigationProps>>(new Map())
 
   const getDiffNavigation = useCallback(
     (request: GitDiffRequest): GitDiffNavigationProps | undefined => {
@@ -575,30 +580,38 @@ export function MainAppShell() {
       if (index < 0) {
         return undefined
       }
-      return {
-        currentIndex: index + 1,
-        totalCount: orderedCompareFiles.length,
+      const currentIndex = index + 1
+      const totalCount = orderedCompareFiles.length
+      const cacheKey = `${currentIndex}:${totalCount}`
+      const cached = diffNavigationCacheRef.current.get(cacheKey)
+      if (cached) {
+        return cached
+      }
+      const nav: GitDiffNavigationProps = {
+        currentIndex,
+        totalCount,
         onPrevFile: () => {
-          const prev = orderedCompareFiles[index - 1]
+          const prev = orderedCompareFilesRef.current[index - 1]
           if (prev) {
-            compare.actions.openCompareFileDiff(prev)
+            openCompareFileDiffRef.current(prev)
           }
         },
         onNextFile: () => {
-          const next = orderedCompareFiles[index + 1]
+          const next = orderedCompareFilesRef.current[index + 1]
           if (next) {
-            compare.actions.openCompareFileDiff(next)
+            openCompareFileDiffRef.current(next)
           }
         }
       }
+      diffNavigationCacheRef.current.set(cacheKey, nav)
+      return nav
     },
     [
       orderedCompareFiles,
       compare.state.summary,
       compare.state.baseRef,
       compare.state.compareRef,
-      compare.state.mode,
-      compare.actions
+      compare.state.mode
     ]
   )
 

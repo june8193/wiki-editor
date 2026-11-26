@@ -38,6 +38,11 @@ import {
   getGitFileBaseName,
   toGitDiffRequest
 } from '../utils/gitFilePresentation'
+import {
+  ImmutableDiffLruCache,
+  isImmutableDiffKind,
+  reconcileDiffMapWithCache
+} from '../utils/immutableDiffCache'
 import { getGitPrimaryActionState, type GitCommitActionMode } from '../utils/gitPrimaryAction'
 
 export type GitDetailState<TDetail> =
@@ -476,6 +481,7 @@ export class GitSession {
 
   private readonly inFlightDiffSeq = new Map<string, number>()
   private readonly pendingDiffKeys = new Set<string>()
+  private readonly immutableDiffCache = new ImmutableDiffLruCache()
   private openDiffKeys = new Set<string>()
   private unsubscribeDiffTabs: (() => void) | null = null
   private isStatusRefreshInFlight = false
@@ -639,6 +645,7 @@ export class GitSession {
     this.unsubscribeDiffTabs?.()
     this.unsubscribeDiffTabs = null
     this.resetTransientTracking()
+    this.immutableDiffCache.clear()
 
     const prevDiffs = this.snapshot.diffsByKey
     const hasLoadingDiff = Object.values(prevDiffs).some((entry) => entry.status === 'loading')
@@ -703,6 +710,7 @@ export class GitSession {
       return
     }
     this.resetTransientTracking()
+    this.immutableDiffCache.clear()
 
     const prevSplit = this.snapshot.panelState.splitState
     const nextSplit: GitPanelSplitState = prevSplit.isStashesCollapsed
@@ -777,7 +785,9 @@ export class GitSession {
   }
 
   private syncStashesState(nextStashes: GitStashEntry[]): void {
-    this.stashDetailChannel.prune(new Set(nextStashes.map((entry) => entry.hash)))
+    const activeStashHashes = new Set(nextStashes.map((entry) => entry.hash))
+    this.stashDetailChannel.prune(activeStashHashes)
+    this.immutableDiffCache.pruneStashes(activeStashHashes)
     this.updatePanelState({ stashes: nextStashes })
     this.diffTabs.reconcileStashDiffTabs(nextStashes)
     this.syncOpenDiffTabs()
@@ -818,6 +828,7 @@ export class GitSession {
       .diff(ctx.rootPath, effectiveRequest)
       .then((diff) => {
         if (!isCurrentOpenRequest()) return
+        this.immutableDiffCache.storeIfImmutable(tabKey, request, diff, this.openDiffKeys)
         this.setDiffCacheEntry(tabKey, { status: 'loaded', diff })
       })
       .catch((error: unknown) => {
@@ -836,35 +847,34 @@ export class GitSession {
 
   private syncOpenDiffTabs = (): void => {
     const openMap = collectOpenDiffRequests(this.diffTabs.listOpenRequests())
-    this.openDiffKeys = new Set(openMap.keys())
+    const openKeys = new Set(openMap.keys())
+    this.openDiffKeys = openKeys
     for (const key of this.pendingDiffKeys) {
       if (!openMap.has(key)) {
         this.pendingDiffKeys.delete(key)
       }
     }
 
-    const prevDiffs = this.snapshot.diffsByKey
-    const staleKeys = Object.keys(prevDiffs).filter((key) => !openMap.has(key))
-    if (staleKeys.length > 0) {
-      const nextDiffs: Record<string, GitDiffContentState> = {}
-      for (const [key, value] of Object.entries(prevDiffs)) {
-        if (openMap.has(key)) {
-          nextDiffs[key] = value
-        }
-      }
+    const ctx = this.currentRequestContext()
+    const entries = Array.from(openMap.entries(), ([tabKey, request]) => ({ tabKey, request }))
+    const { nextDiffs, changed, toFetch } = reconcileDiffMapWithCache({
+      prevDiffs: this.snapshot.diffsByKey,
+      entries,
+      openKeys,
+      cache: this.immutableDiffCache,
+      canStartFetch: (entry) => Boolean(ctx) && !this.pendingDiffKeys.has(entry.tabKey)
+    })
+
+    if (changed) {
       this.commitSnapshot({
         ...this.snapshot,
         diffsByKey: nextDiffs
       })
     }
 
-    const ctx = this.currentRequestContext()
     if (!ctx) return
-
-    for (const [tabKey, request] of openMap.entries()) {
-      if (!this.snapshot.diffsByKey[tabKey] && !this.pendingDiffKeys.has(tabKey)) {
-        this.fetchDiffForKey(tabKey, request, ctx, true)
-      }
+    for (const { tabKey, request } of toFetch) {
+      this.fetchDiffForKey(tabKey, request, ctx, false)
     }
   }
 
@@ -884,12 +894,31 @@ export class GitSession {
     const tabKey = formatGitDiffTabKey(request)
     const seqBefore = this.inFlightDiffSeq.get(tabKey) ?? 0
     this.diffTabs.openDiffTab(request, options)
-    if ((this.inFlightDiffSeq.get(tabKey) ?? 0) === seqBefore) {
-      const ctx = this.currentRequestContext()
-      if (!ctx) return
-      this.openDiffKeys.add(tabKey)
-      this.fetchDiffForKey(tabKey, request, ctx, true)
+    if ((this.inFlightDiffSeq.get(tabKey) ?? 0) !== seqBefore) {
+      return
     }
+
+    const currentEntry = this.snapshot.diffsByKey[tabKey]
+    if (isImmutableDiffKind(request.kind)) {
+      if (currentEntry?.status === 'loaded') {
+        this.immutableDiffCache.touch(tabKey)
+        return
+      }
+      if (currentEntry?.status === 'loading' || this.pendingDiffKeys.has(tabKey)) {
+        return
+      }
+      const cachedDiff = this.immutableDiffCache.get(tabKey)
+      if (cachedDiff) {
+        this.openDiffKeys.add(tabKey)
+        this.setDiffCacheEntry(tabKey, { status: 'loaded', diff: cachedDiff })
+        return
+      }
+    }
+
+    const ctx = this.currentRequestContext()
+    if (!ctx) return
+    this.openDiffKeys.add(tabKey)
+    this.fetchDiffForKey(tabKey, request, ctx, true)
   }
 
   private isCurrentLogRequest(

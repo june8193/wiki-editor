@@ -46,7 +46,7 @@ import {
   buildEmptyCompareRefList,
   mergeCompareFilesWithNumstat,
   parseCompareForEachRefOutput,
-  parseGitNumstatZ,
+  parseGitRawAndNumstatZ,
   parseWorktreeListPorcelain,
   resolveDefaultBaseRef
 } from './gitCompare'
@@ -73,6 +73,7 @@ const DEFAULT_LOCAL_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_BUFFER_BYTES = 10 * 1024 * 1024
 const GIT_METADATA_NAMES: ReadonlySet<string> = new Set(['.git'])
 const OUTSIDE_REPO_PATH_MESSAGE = '워크스페이스 저장소 밖의 경로에는 접근할 수 없습니다.'
+const UNBORN_COMPARE_ERROR_MESSAGE = '아직 커밋된 내역이 없어 브랜치를 비교할 수 없습니다.'
 
 export interface GitServiceOptions {
   env?: NodeJS.ProcessEnv
@@ -99,6 +100,7 @@ export class GitService {
   private readonly logService?: LogService
   private readonly trashItem?: (targetPath: string) => Promise<void>
   private readonly failedExecMeta = new WeakMap<object, { cwd: string; args: readonly string[] }>()
+  private readonly repoRootCache = new Map<string, string>()
 
   constructor(options: GitServiceOptions = {}) {
     this.env = options.env
@@ -123,6 +125,7 @@ export class GitService {
     } catch (error) {
       throw await this.formatAndLogGitError('init', error)
     }
+    this.repoRootCache.clear()
     return this.status(resolvedDir)
   }
 
@@ -578,32 +581,34 @@ export class GitService {
 
   async diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff> {
     const target = validateGitDiffTarget(request)
-    const repoRoot = await this.requireRepoRoot(workspacePath)
-    const workspaceRealRoot = await realpath(resolve(workspacePath))
+    const { repoRoot, workspaceRealRoot } = await this.requireRepoContext(workspacePath)
     const rawPaths = request.origPath ? [request.path, request.origPath] : [request.path]
     const [safePath, safeOrigPath] = await this.validateRepoRelativePaths(repoRoot, rawPaths)
 
     try {
-      const hasHeadCommit =
-        target.kind === 'staged' || target.kind === 'branch-compare'
-          ? await this.hasHeadCommit(repoRoot)
-          : true
-      if (target.kind === 'branch-compare' && !hasHeadCommit) {
-        throw new Error('아직 커밋된 내역이 없어 브랜치를 비교할 수 없습니다.')
-      }
-      const hasMergeBase =
-        target.kind === 'branch-compare' && target.mode === 'three-dot'
-          ? (await this.resolveMergeBaseHash(repoRoot, target.baseRef, target.compareRef)) !== null
-          : true
+      const needsHeadCheck = target.kind === 'staged'
+      const needsMergeBaseCheck =
+        target.kind === 'branch-compare' &&
+        target.mergeBaseHash === undefined &&
+        target.mode === 'three-dot'
+
+      const [hasHeadCommit, resolvedMergeBase] = await Promise.all([
+        needsHeadCheck ? this.hasHeadCommit(repoRoot) : Promise.resolve(true),
+        needsMergeBaseCheck
+          ? this.resolveMergeBaseHash(repoRoot, target.baseRef, target.compareRef)
+          : Promise.resolve(null)
+      ])
+      const effectiveTarget = needsMergeBaseCheck
+        ? { ...target, mergeBaseHash: resolvedMergeBase }
+        : target
       return await computeGitDiff({
         repoRoot,
         workspaceRealRoot,
-        target,
+        target: effectiveTarget,
         status: request.status,
         safePath,
         safeOrigPath,
         hasHeadCommit,
-        hasMergeBase,
         execOptions: {
           env: this.createGitChildEnv(),
           timeoutMs: this.localTimeoutMs,
@@ -611,6 +616,9 @@ export class GitService {
         }
       })
     } catch (error) {
+      if (target.kind === 'branch-compare' && !(await this.hasHeadCommit(repoRoot))) {
+        throw await this.formatAndLogGitError('diff', new Error(UNBORN_COMPARE_ERROR_MESSAGE))
+      }
       throw await this.formatAndLogGitError('diff', error)
     }
   }
@@ -666,55 +674,48 @@ export class GitService {
     const mode = assertValidGitCompareMode(request?.mode)
 
     const repoRoot = await this.requireRepoRoot(workspacePath)
-    const headHash = await this.resolveRevisionHash(repoRoot, 'HEAD')
-    if (!headHash) {
-      throw new Error('아직 커밋된 내역이 없어 브랜치를 비교할 수 없습니다.')
-    }
-
-    const [baseHash, compareHash] = await Promise.all([
-      this.resolveRevisionHash(repoRoot, `${baseRef}^{commit}`),
-      this.resolveRevisionHash(repoRoot, `${compareRef}^{commit}`)
-    ])
-    if (!baseHash) {
-      throw new GitFormattedError(`기준 Ref를 찾을 수 없습니다: ${baseRef}`)
-    }
-    if (!compareHash) {
-      throw new GitFormattedError(`비교 Ref를 찾을 수 없습니다: ${compareRef}`)
-    }
 
     try {
-      const mergeBaseHash = await this.resolveMergeBaseHash(repoRoot, baseRef, compareRef)
-      const diffRange = buildCompareDiffRange(baseRef, compareRef, mode, mergeBaseHash !== null)
+      const [headHash, baseHash, compareHash, mergeBaseHash, headRefName, forEachRefRaw] =
+        await Promise.all([
+          this.resolveRevisionHash(repoRoot, 'HEAD'),
+          this.resolveRevisionHash(repoRoot, `${baseRef}^{commit}`),
+          this.resolveRevisionHash(repoRoot, `${compareRef}^{commit}`),
+          this.resolveMergeBaseHash(repoRoot, baseRef, compareRef),
+          this.resolveSymbolicHeadRef(repoRoot),
+          this.execGit(repoRoot, [
+            'for-each-ref',
+            '--format=%(objectname)%09%(*objectname)%09%(refname)%09%(refname:short)%09%(symref)',
+            'refs/heads',
+            'refs/remotes',
+            'refs/tags'
+          ])
+        ])
+
+      if (!headHash) {
+        throw new Error(UNBORN_COMPARE_ERROR_MESSAGE)
+      }
+      if (!baseHash) {
+        throw new GitFormattedError(`기준 Ref를 찾을 수 없습니다: ${baseRef}`)
+      }
+      if (!compareHash) {
+        throw new GitFormattedError(`비교 Ref를 찾을 수 없습니다: ${compareRef}`)
+      }
+
+      const diffRange = buildCompareDiffRange(baseRef, compareRef, mode, mergeBaseHash)
       const commitRange = `${baseRef}..${compareRef}`
 
-      const [nameStatusRaw, numstatRaw, headRefName, forEachRefRaw, logRaw] = await Promise.all([
+      const [rawAndNumstat, logRaw] = await Promise.all([
         this.execGit(repoRoot, [
           '-c',
           'core.quotePath=false',
           'diff',
-          '--name-status',
-          '-z',
-          '-M',
-          diffRange,
-          '--'
-        ]),
-        this.execGit(repoRoot, [
-          '-c',
-          'core.quotePath=false',
-          'diff',
+          '--raw',
           '--numstat',
           '-z',
           '-M',
           diffRange,
           '--'
-        ]),
-        this.resolveSymbolicHeadRef(repoRoot),
-        this.execGit(repoRoot, [
-          'for-each-ref',
-          '--format=%(objectname)%09%(*objectname)%09%(refname)%09%(refname:short)%09%(symref)',
-          'refs/heads',
-          'refs/remotes',
-          'refs/tags'
         ]),
         this.execGit(repoRoot, [
           'log',
@@ -726,8 +727,7 @@ export class GitService {
         ])
       ])
 
-      const parsedFiles = parseGitNameStatusZ(nameStatusRaw)
-      const numstatMap = parseGitNumstatZ(numstatRaw)
+      const { files: parsedFiles, numstatMap } = parseGitRawAndNumstatZ(rawAndNumstat)
       const { files, totalAdditions, totalDeletions } = mergeCompareFilesWithNumstat(
         parsedFiles,
         numstatMap
@@ -1069,26 +1069,85 @@ export class GitService {
     return realDir
   }
 
-  private async findRepoRoot(workspacePath: string): Promise<string | null> {
-    const workspaceDir = await this.resolveExistingDirectory(workspacePath)
+  private async hasGitMetadataEntry(dir: string): Promise<boolean> {
     try {
-      const topLevel = (await this.execGit(workspaceDir, ['rev-parse', '--show-toplevel'])).trim()
-      return await realpath(topLevel)
+      await lstat(join(dir, '.git'))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async isCachedRepoRootValid(
+    workspaceRealRoot: string,
+    cachedRepoRoot: string
+  ): Promise<boolean> {
+    if (!(await this.hasGitMetadataEntry(cachedRepoRoot))) {
+      return false
+    }
+    let current = workspaceRealRoot
+    while (current !== cachedRepoRoot) {
+      if (await this.hasGitMetadataEntry(current)) {
+        return false
+      }
+      const parent = dirname(current)
+      if (parent === current) {
+        return false
+      }
+      current = parent
+    }
+    return true
+  }
+
+  private async resolveRepoContext(
+    workspacePath: string
+  ): Promise<{ workspaceRealRoot: string; repoRoot: string | null }> {
+    const workspaceRealRoot = await this.resolveExistingDirectory(workspacePath)
+    const hasCustomGitDir = Boolean(this.createGitChildEnv().GIT_DIR)
+    if (!hasCustomGitDir) {
+      const cached = this.repoRootCache.get(workspaceRealRoot)
+      if (cached) {
+        if (await this.isCachedRepoRootValid(workspaceRealRoot, cached)) {
+          return { workspaceRealRoot, repoRoot: cached }
+        }
+        this.repoRootCache.delete(workspaceRealRoot)
+      }
+    }
+
+    try {
+      const topLevel = (
+        await this.execGit(workspaceRealRoot, ['rev-parse', '--show-toplevel'])
+      ).trim()
+      const repoRoot = await realpath(topLevel)
+      if (!hasCustomGitDir) {
+        this.repoRootCache.set(workspaceRealRoot, repoRoot)
+      }
+      return { workspaceRealRoot, repoRoot }
     } catch (error) {
       const detail = extractGitErrorDetail(error).toLowerCase()
       if (detail.includes('not a git repository')) {
-        return null
+        return { workspaceRealRoot, repoRoot: null }
       }
       throw await this.formatAndLogGitError('findRepoRoot', error)
     }
   }
 
-  private async requireRepoRoot(workspacePath: string): Promise<string> {
-    const repoRoot = await this.findRepoRoot(workspacePath)
-    if (!repoRoot) {
+  private async requireRepoContext(
+    workspacePath: string
+  ): Promise<{ workspaceRealRoot: string; repoRoot: string }> {
+    const context = await this.resolveRepoContext(workspacePath)
+    if (!context.repoRoot) {
       throw new GitFormattedError('현재 워크스페이스는 Git 저장소가 아닙니다.')
     }
-    return repoRoot
+    return { workspaceRealRoot: context.workspaceRealRoot, repoRoot: context.repoRoot }
+  }
+
+  private async findRepoRoot(workspacePath: string): Promise<string | null> {
+    return (await this.resolveRepoContext(workspacePath)).repoRoot
+  }
+
+  private async requireRepoRoot(workspacePath: string): Promise<string> {
+    return (await this.requireRepoContext(workspacePath)).repoRoot
   }
 
   private async hasHeadCommit(repoRoot: string): Promise<boolean> {

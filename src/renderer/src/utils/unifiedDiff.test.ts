@@ -127,4 +127,37 @@ describe('unifiedDiff parser and row alignment', () => {
     expect(buildInlineDiffRows(renameOnly)).toEqual([])
     expect(buildSideBySideDiffRows(renameOnly)).toEqual([])
   })
+
+  it('computes intra-line word highlights once per parsed patch and shares them across side-by-side and inline rows', () => {
+    const patch = [
+      'diff --git a/src/app.ts b/src/app.ts',
+      '--- a/src/app.ts',
+      '+++ b/src/app.ts',
+      '@@ -1,2 +1,2 @@',
+      '-const result = computeValue(alpha, beta, gamma)',
+      '+const result = computeValue(alpha, delta, gamma)'
+    ].join('\n')
+
+    const parsed = parseUnifiedDiff(patch)
+    const sideRows = buildSideBySideDiffRows(parsed)
+    const inlineRows = buildInlineDiffRows(parsed)
+
+    const sidePair = sideRows[1]
+    expect(sidePair.kind).toBe('pair')
+    if (sidePair.kind !== 'pair') return
+
+    const inlineDel = inlineRows[1]
+    const inlineAdd = inlineRows[2]
+    expect(inlineDel.kind).toBe('line')
+    expect(inlineAdd.kind).toBe('line')
+    if (inlineDel.kind !== 'line' || inlineAdd.kind !== 'line') return
+
+    // Exact token highlight ranges
+    expect(sidePair.oldCell?.wordHighlights).toEqual([{ from: 35, to: 39 }]) // 'beta'
+    expect(sidePair.newCell?.wordHighlights).toEqual([{ from: 35, to: 40 }]) // 'delta'
+
+    // Shared reference between side-by-side and inline without recomputation
+    expect(inlineDel.wordHighlights).toBe(sidePair.oldCell?.wordHighlights)
+    expect(inlineAdd.wordHighlights).toBe(sidePair.newCell?.wordHighlights)
+  })
 })

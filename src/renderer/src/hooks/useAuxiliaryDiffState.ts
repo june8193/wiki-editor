@@ -6,6 +6,7 @@ import { resolveRepoFileInWorkspace } from '@shared/workspace'
 import type { GitDiffContentState } from '../components/GitDiffViewer'
 import type { PaneId, PaneLayoutState } from '../stores/PaneTabStore'
 import { formatGitDiffTabKey, getGitFileBaseName } from '../utils/gitFilePresentation'
+import { ImmutableDiffLruCache, reconcileDiffMapWithCache } from '../utils/immutableDiffCache'
 
 interface UseAuxiliaryDiffStateOptions {
   layout: PaneLayoutState
@@ -24,8 +25,8 @@ interface OpenDiffTargetEntry {
 }
 
 /**
- * Loads Git diff contents for any Diff tabs open in an auxiliary window and
- * handles `파일 열기` into the auxiliary window's editor.
+ * Loads Git diff contents for any Diff tabs open in an auxiliary window with
+ * bounded LRU caching for immutable diffs and handles `파일 열기` into the auxiliary editor.
  */
 export function useAuxiliaryDiffState({
   layout,
@@ -33,13 +34,20 @@ export function useAuxiliaryDiffState({
   openWorkspaceFile
 }: UseAuxiliaryDiffStateOptions) {
   const [diffsByKey, setDiffsByKey] = useState<Record<string, GitDiffContentState>>({})
+  const diffsByKeyRef = useRef<Record<string, GitDiffContentState>>({})
   const inFlightKeysRef = useRef<Set<string>>(new Set())
+  const openKeysRef = useRef<Set<string>>(new Set())
+  const immutableCacheRef = useRef<ImmutableDiffLruCache | null>(null)
+  if (!immutableCacheRef.current) {
+    immutableCacheRef.current = new ImmutableDiffLruCache()
+  }
   const mountedRef = useRef(true)
 
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      immutableCacheRef.current?.clear()
     }
   }, [])
 
@@ -63,49 +71,58 @@ export function useAuxiliaryDiffState({
   }, [layout.panes.primary, layout.panes.secondary])
 
   useEffect(() => {
+    const cache = immutableCacheRef.current!
     const openKeys = new Set(openDiffEntries.map((entry) => entry.tabKey))
+    openKeysRef.current = openKeys
 
-    setDiffsByKey((prev) => {
-      const staleKeys = Object.keys(prev).filter((key) => !openKeys.has(key))
-      if (staleKeys.length === 0) return prev
-      const next: Record<string, GitDiffContentState> = {}
-      for (const [key, value] of Object.entries(prev)) {
-        if (openKeys.has(key)) {
-          next[key] = value
-        }
-      }
-      return next
+    const { nextDiffs, changed, toFetch } = reconcileDiffMapWithCache({
+      prevDiffs: diffsByKeyRef.current,
+      entries: openDiffEntries,
+      openKeys,
+      cache,
+      canStartFetch: (entry) =>
+        Boolean(entry.workspaceRootPath) && !inFlightKeysRef.current.has(entry.tabKey)
     })
 
-    for (const entry of openDiffEntries) {
-      if (!entry.workspaceRootPath || inFlightKeysRef.current.has(entry.tabKey)) {
-        continue
-      }
-      setDiffsByKey((prev) => {
-        if (prev[entry.tabKey]) return prev
-        inFlightKeysRef.current.add(entry.tabKey)
-        const rootPath = entry.workspaceRootPath!
-        void gitApi
-          .diff(rootPath, entry.request)
-          .then((diff) => {
-            if (!mountedRef.current) return
-            setDiffsByKey((current) => ({ ...current, [entry.tabKey]: { status: 'loaded', diff } }))
+    if (changed) {
+      diffsByKeyRef.current = nextDiffs
+      setDiffsByKey(nextDiffs)
+    }
+
+    for (const entry of toFetch) {
+      const rootPath = entry.workspaceRootPath!
+      inFlightKeysRef.current.add(entry.tabKey)
+      void gitApi
+        .diff(rootPath, entry.request)
+        .then((diff) => {
+          if (!mountedRef.current) return
+          cache.storeIfImmutable(entry.tabKey, entry.request, diff, openKeysRef.current)
+          setDiffsByKey((current) => {
+            const updated: Record<string, GitDiffContentState> = {
+              ...current,
+              [entry.tabKey]: { status: 'loaded', diff }
+            }
+            diffsByKeyRef.current = updated
+            return updated
           })
-          .catch((error: unknown) => {
-            if (!mountedRef.current) return
-            setDiffsByKey((current) => ({
+        })
+        .catch((error: unknown) => {
+          if (!mountedRef.current) return
+          setDiffsByKey((current) => {
+            const updated: Record<string, GitDiffContentState> = {
               ...current,
               [entry.tabKey]: {
                 status: 'error',
                 errorMessage: toErrorMessage(error, 'Diff를 불러오지 못했습니다.')
               }
-            }))
+            }
+            diffsByKeyRef.current = updated
+            return updated
           })
-          .finally(() => {
-            inFlightKeysRef.current.delete(entry.tabKey)
-          })
-        return { ...prev, [entry.tabKey]: { status: 'loading' } }
-      })
+        })
+        .finally(() => {
+          inFlightKeysRef.current.delete(entry.tabKey)
+        })
     }
   }, [gitApi, openDiffEntries])
 
