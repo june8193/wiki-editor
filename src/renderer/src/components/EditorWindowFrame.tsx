@@ -1,4 +1,4 @@
-import { type ReactNode, type Ref, useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { type ReactNode, type Ref, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import { toErrorMessage } from '@shared/errors'
@@ -19,8 +19,9 @@ import {
   type UseMarkdownLinkNavigationOptions
 } from '../hooks/useMarkdownLinkNavigation'
 import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
-import type { PaneNavigationCoordinator, PaneDiffJumpRequest } from '../stores/PaneNavigationCoordinator'
-import { getPaneActiveTab, type PaneId } from '../stores/PaneTabStore'
+import { useSymbolNavigationController } from '../hooks/useSymbolNavigationController'
+import type { PaneNavigationCoordinator } from '../stores/PaneNavigationCoordinator'
+import { formatGitSnapshotTabKey, getPaneActiveTab, type PaneId } from '../stores/PaneTabStore'
 import {
   createTwoSectionSplitState,
   toggleBottomSectionCollapsed,
@@ -37,6 +38,7 @@ import {
 import { ConfirmDialog } from './ConfirmDialog'
 import { FrontmatterSchemaModal } from './FrontmatterSchemaModal'
 import type { GitDiffContentState, GitDiffNavigationProps } from './GitDiffViewer'
+import type { SnapshotContentState } from './SnapshotViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneWorkspace, type PaneWorkspaceProps } from './PaneWorkspace'
 import {
@@ -44,6 +46,7 @@ import {
   RightSidebarPanel
 } from './RightSidebarPanel'
 import { SidebarResizer } from './SidebarResizer'
+import { SymbolCandidatePopover } from './SymbolCandidatePopover'
 
 const DEFAULT_IMAGE_TRANSFER_CONTEXT: ImageTransferContextValue = {}
 
@@ -54,7 +57,13 @@ interface RightSidebarState {
 
 export type WindowFramePaneWorkspaceProps = Omit<
   PaneWorkspaceProps,
-  'scrollRequest' | 'searchJumpRequest' | 'diffJumpRequest' | 'onActiveHeadingChange' | 'getPaneFindControl'
+  | 'scrollRequest'
+  | 'searchJumpRequest'
+  | 'diffJumpRequest'
+  | 'snapshotJumpRequest'
+  | 'historyByPane'
+  | 'onActiveHeadingChange'
+  | 'getPaneFindControl'
 >
 
 export function buildPaneWorkspaceProps(
@@ -67,6 +76,7 @@ export function buildPaneWorkspaceProps(
   isShortcutDisabled: boolean,
   extras?: {
     diffsByKey?: Record<string, GitDiffContentState>
+    snapshotsByKey?: Record<string, SnapshotContentState>
     getDiffNavigation?: (request: GitDiffRequest) => GitDiffNavigationProps | undefined
     workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   }
@@ -75,6 +85,7 @@ export function buildPaneWorkspaceProps(
     layout: editor.layout,
     buffers: editor.buffers,
     diffsByKey: extras?.diffsByKey ?? {},
+    snapshotsByKey: extras?.snapshotsByKey,
     getDiffNavigation: extras?.getDiffNavigation,
     theme: config.theme,
     autoSave: config.autoSave,
@@ -97,6 +108,7 @@ export interface EditorWindowFrameProps {
   showHeadingNumbers: boolean
   onToggleHeadingNumbers: () => void
   workspaceRootPath?: string | null
+  getActiveDiffChangedFiles?: (request: GitDiffRequest) => ReadonlySet<string> | undefined
   frontmatterSchema: FrontmatterSchemaController
   frontmatterFieldValues: FrontmatterFieldValuesController
   openWorkspaceFile: (
@@ -134,6 +146,7 @@ export function EditorWindowFrame({
   showHeadingNumbers,
   onToggleHeadingNumbers,
   workspaceRootPath = null,
+  getActiveDiffChangedFiles,
   frontmatterSchema,
   frontmatterFieldValues,
   openWorkspaceFile,
@@ -251,13 +264,60 @@ export function EditorWindowFrame({
     reportErrorBanner
   })
 
+  const symbolNav = useSymbolNavigationController({
+    layout: paneWorkspaceProps.layout,
+    buffers: paneWorkspaceProps.buffers,
+    diffsByKey: paneWorkspaceProps.diffsByKey,
+    snapshotsByKey: paneWorkspaceProps.snapshotsByKey,
+    workspaceRootPath,
+    navigation,
+    openSnapshotTab: paneWorkspaceProps.actions.onOpenSnapshotTab,
+    getActiveDiffChangedFiles,
+    wikiApi: window.wikiApi
+  })
+
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       ...paneWorkspaceProps.actions,
-      onNavigateLink: handleNavigateMarkdownLink
+      onNavigateLink: handleNavigateMarkdownLink,
+      onSymbolNavigate: symbolNav.handleSymbolNavigate,
+      onGoBack: (paneId) => void navigation.goBack(paneId),
+      onGoForward: (paneId) => void navigation.goForward(paneId)
     }),
-    [handleNavigateMarkdownLink, paneWorkspaceProps.actions]
+    [handleNavigateMarkdownLink, navigation, paneWorkspaceProps.actions, symbolNav.handleSymbolNavigate]
   )
+
+  const activePaneId = paneWorkspaceProps.layout.activePaneId
+  const isShortcutDisabled = Boolean(paneWorkspaceProps.isShortcutDisabled)
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || isShortcutDisabled) return
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        void navigation.goBack(activePaneId)
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        void navigation.goForward(activePaneId)
+      }
+    }
+    const handleMouseUp = (event: MouseEvent): void => {
+      if (isShortcutDisabled) return
+      if (event.button === 3) {
+        event.preventDefault()
+        void navigation.goBack(activePaneId)
+      } else if (event.button === 4) {
+        event.preventDefault()
+        void navigation.goForward(activePaneId)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [activePaneId, isShortcutDisabled, navigation])
 
   const activePane = paneWorkspaceProps.layout.panes[paneWorkspaceProps.layout.activePaneId]
   const activeTab = getPaneActiveTab(activePane)
@@ -267,6 +327,11 @@ export function EditorWindowFrame({
   const activeDiffKey =
     activeTab?.kind === 'diff' ? formatGitDiffTabKey(activeTab.diff.request) : null
   const activeDiffState = activeDiffKey ? paneWorkspaceProps.diffsByKey[activeDiffKey] : undefined
+  const activeSnapshotKey =
+    activeTab?.kind === 'snapshot' ? formatGitSnapshotTabKey(activeTab.snapshot.request) : null
+  const activeSnapshotState = activeSnapshotKey
+    ? paneWorkspaceProps.snapshotsByKey?.[activeSnapshotKey]
+    : undefined
   const rightSidebarDocument: SidebarDocumentContext =
     activeTab?.kind === 'diff'
       ? {
@@ -281,12 +346,22 @@ export function EditorWindowFrame({
             status: activeTab.diff.request.status
           }
         }
-      : {
-          documentName: activeBuffer?.name ?? null,
-          documentKey: activeBufferKey,
-          content: activeBuffer?.content ?? '',
-          isMarkdownDocument: activeBuffer ? isMarkdownDocument(activeBuffer) : false
-        }
+      : activeTab?.kind === 'snapshot'
+        ? {
+            documentName: getGitFileBaseName(activeTab.snapshot.request.path),
+            documentKey: activeSnapshotKey,
+            content:
+              activeSnapshotState?.status === 'loaded' && !activeSnapshotState.snapshot.isBinary
+                ? activeSnapshotState.snapshot.content
+                : '',
+            isMarkdownDocument: false
+          }
+        : {
+            documentName: activeBuffer?.name ?? null,
+            documentKey: activeBufferKey,
+            content: activeBuffer?.content ?? '',
+            isMarkdownDocument: activeBuffer ? isMarkdownDocument(activeBuffer) : false
+          }
   const onPaneChangeContent = paneWorkspaceProps.actions.onChangeContent
 
   const handlePropertiesChangeContent = useCallback(
@@ -318,6 +393,8 @@ export function EditorWindowFrame({
               scrollRequest={navState.outlineScrollRequest}
               searchJumpRequest={navState.searchJumpRequest}
               diffJumpRequest={navState.diffJumpRequest}
+              snapshotJumpRequest={navState.snapshotJumpRequest}
+              historyByPane={navState.historyByPane}
               getPaneFindControl={paneFind.getPaneFindControl}
               onActiveHeadingChange={navigation.reportActiveHeading}
               actions={paneActions}
@@ -415,6 +492,13 @@ export function EditorWindowFrame({
       {settingsPanelSlot}
 
       {manualModalSlot}
+
+      <SymbolCandidatePopover
+        popover={symbolNav.candidatePopover}
+        notFoundNotice={symbolNav.notFoundTooltip}
+        onSelectCandidate={symbolNav.selectCandidate}
+        onDismiss={symbolNav.dismissPopover}
+      />
 
       {pendingDialog && (
         <ConfirmDialog

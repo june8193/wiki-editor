@@ -856,4 +856,71 @@ describe('GitDiffViewer', () => {
       resizeObserver.restore()
     }
   })
+
+  it('highlights valid identifiers on Ctrl+hover (excluding keywords/comments/strings) and emits side-aware Ctrl+click navigation', () => {
+    const patch = [
+      'diff --git a/src/sample.ts b/src/sample.ts',
+      '--- a/src/sample.ts',
+      '+++ b/src/sample.ts',
+      '@@ -1,1 +1,2 @@',
+      '-const legacyVal = oldHelper()',
+      '+const nextVal = newHelper() // ignoreComment',
+      '+const label = "ignoredString"'
+    ].join('\n')
+
+    const onSymbolNavigate = vi.fn()
+    const { container } = render(
+      <GitDiffViewer
+        request={{ kind: 'unstaged', path: 'src/sample.ts', status: 'M' }}
+        viewMode="side-by-side"
+        state={{
+          status: 'loaded',
+          diff: makeDiff({ path: 'src/sample.ts', rawPatch: patch })
+        }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+        onSymbolNavigate={onSymbolNavigate}
+      />
+    )
+
+    // Hovering keyword `const` with Ctrl does not mark hover target
+    const constToken = screen.getAllByText('const')[0]
+    fireEvent.mouseMove(constToken, { ctrlKey: true })
+    expect(container.querySelector('.symbol-hover-target')).toBeNull()
+
+    // Hovering comment or string with Ctrl does not mark hover target
+    const commentToken = screen.getByText('// ignoreComment')
+    fireEvent.mouseMove(commentToken, { ctrlKey: true })
+    expect(container.querySelector('.symbol-hover-target')).toBeNull()
+
+    const stringToken = screen.getByText('"ignoredString"')
+    fireEvent.mouseMove(stringToken, { ctrlKey: true })
+    expect(container.querySelector('.symbol-hover-target')).toBeNull()
+
+    // Hovering valid identifier `oldHelper` with Ctrl marks `.symbol-hover-target`
+    const oldHelperEl = screen.getByText('oldHelper')
+    fireEvent.mouseMove(oldHelperEl, { ctrlKey: true })
+    expect(container.querySelector('.symbol-hover-target')?.textContent).toBe('oldHelper')
+
+    // Ctrl+Click on old-side `oldHelper` emits side: 'old'
+    fireEvent.click(oldHelperEl, { ctrlKey: true })
+    expect(onSymbolNavigate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        symbolName: 'oldHelper',
+        lineNumber: 1,
+        side: 'old'
+      })
+    )
+
+    // Ctrl+Click on new-side `newHelper` emits side: 'new'
+    const newHelperEl = screen.getByText('newHelper')
+    fireEvent.click(newHelperEl, { ctrlKey: true })
+    expect(onSymbolNavigate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        symbolName: 'newHelper',
+        lineNumber: 1,
+        side: 'new'
+      })
+    )
+  })
 })

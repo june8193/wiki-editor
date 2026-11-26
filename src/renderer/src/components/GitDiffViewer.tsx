@@ -1,6 +1,13 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { GitDiffRequest, GitFileDiff } from '@shared/git'
 import type { CodeBlockHighlightSpan, CodeParser } from '../editor/codeBlockHighlight'
+import { isSymbolSupportedFile } from '../editor/codeSymbolExtractor'
+import {
+  type HoveredSymbolRange,
+  renderSyntaxLineWithHover,
+  type SymbolNavigateRequest
+} from '../editor/symbolHoverDom'
+import { isSymbolModifierPressed } from '../editor/symbolNavigation'
 import type { GitDiffViewMode } from '../stores/PaneTabStore'
 import {
   getDiffLineSyntaxSpans,
@@ -14,6 +21,7 @@ import {
   getGitFileBadgeModifier
 } from '../utils/gitFilePresentation'
 import { useDiffVirtualScroll } from '../hooks/useDiffVirtualScroll'
+import { useLineSymbolHover } from '../hooks/useSymbolHoverCleanup'
 import {
   buildInlineDiffRows,
   buildSideBySideDiffRows,
@@ -47,6 +55,7 @@ interface GitDiffViewerProps {
   state: GitDiffContentState
   onChangeViewMode: (nextMode: GitDiffViewMode) => void
   onOpenFile?: (repoRelativePath: string) => void
+  onSymbolNavigate?: (request: SymbolNavigateRequest) => void
   navigation?: GitDiffNavigationProps
   jumpRequest?: DiffJumpRequest | null
 }
@@ -58,100 +67,37 @@ const DIFF_ROW_TYPE_CLASS: Record<UnifiedDiffSideCell['type'], string> = {
   note: ' is-note'
 }
 
-function addRangeBoundaries(
-  boundarySet: Set<number>,
-  ranges: readonly { from: number; to: number }[] | undefined,
-  maxLength: number
-): void {
-  if (!ranges) {
-    return
-  }
-  for (const range of ranges) {
-    if (range.from >= 0 && range.from <= maxLength) {
-      boundarySet.add(range.from)
-    }
-    if (range.to >= 0 && range.to <= maxLength) {
-      boundarySet.add(range.to)
-    }
-  }
-}
-
-function renderHighlightedContent(
-  content: string,
-  wordHighlights?: DiffTextRange[],
-  syntaxSpans?: CodeBlockHighlightSpan[]
-) {
-  if (!content) {
-    return content
-  }
-  const hasWordHighlights = Boolean(wordHighlights && wordHighlights.length > 0)
-  const hasSyntaxSpans = Boolean(syntaxSpans && syntaxSpans.length > 0)
-  if (!hasWordHighlights && !hasSyntaxSpans) {
-    return content
-  }
-
-  const boundarySet = new Set<number>([0, content.length])
-  addRangeBoundaries(boundarySet, wordHighlights, content.length)
-  addRangeBoundaries(boundarySet, syntaxSpans, content.length)
-
-  const boundaries = Array.from(boundarySet).sort((a, b) => a - b)
-  const nodes: ReactNode[] = []
-
-  for (let i = 0; i < boundaries.length - 1; i += 1) {
-    const segFrom = boundaries[i]
-    const segTo = boundaries[i + 1]
-    if (segTo <= segFrom) {
-      continue
-    }
-    const text = content.slice(segFrom, segTo)
-    const isWordChanged =
-      wordHighlights?.some((range) => range.from <= segFrom && segTo <= range.to) ?? false
-    const syntaxClass =
-      syntaxSpans?.find((span) => span.from <= segFrom && segTo <= span.to)?.className ?? null
-
-    if (isWordChanged) {
-      nodes.push(
-        <mark
-          key={i}
-          className={
-            syntaxClass ? `git-diff-word-highlight ${syntaxClass}` : 'git-diff-word-highlight'
-          }
-        >
-          {text}
-        </mark>
-      )
-    } else if (syntaxClass) {
-      nodes.push(
-        <span key={i} className={syntaxClass}>
-          {text}
-        </span>
-      )
-    } else {
-      nodes.push(text)
-    }
-  }
-
-  return nodes
-}
-
 function DiffCodeContent({
   marker,
   content,
   wordHighlights,
-  syntaxSpans
+  syntaxSpans,
+  hoverRange,
+  onMouseMove,
+  onMouseLeave,
+  onClick
 }: {
   marker: string
   content: string
   wordHighlights?: DiffTextRange[]
   syntaxSpans?: CodeBlockHighlightSpan[]
+  hoverRange?: { columnStart: number; columnEnd: number } | null
+  onMouseMove?: (event: React.MouseEvent<HTMLSpanElement>) => void
+  onMouseLeave?: () => void
+  onClick?: (event: React.MouseEvent<HTMLSpanElement>) => void
 }) {
   return (
     <>
       <span className="git-diff-marker" aria-hidden="true">
         {marker}
       </span>
-      <span className="git-diff-line-text">
-        {renderHighlightedContent(content, wordHighlights, syntaxSpans)}
+      <span
+        className="git-diff-line-text"
+        onMouseMove={onMouseMove}
+        onMouseLeave={onMouseLeave}
+        onClick={onClick}
+      >
+        {renderSyntaxLineWithHover(content, syntaxSpans, hoverRange ?? null, wordHighlights)}
       </span>
     </>
   )
@@ -161,12 +107,30 @@ function SideCell({
   cell,
   side,
   filePath,
-  syntaxParser
+  syntaxParser,
+  hoveredSymbol,
+  onLineMouseMove,
+  onLineMouseLeave,
+  onLineClick
 }: {
   cell: UnifiedDiffSideCell | null
   side: 'old' | 'new'
   filePath: string
   syntaxParser: CodeParser | null
+  hoveredSymbol: HoveredSymbolRange | null
+  onLineMouseMove?: (
+    lineText: string,
+    lineNumber: number,
+    side: 'old' | 'new',
+    event: React.MouseEvent<HTMLSpanElement>
+  ) => void
+  onLineMouseLeave?: (lineNumber: number, side: 'old' | 'new') => void
+  onLineClick?: (
+    lineText: string,
+    lineNumber: number,
+    side: 'old' | 'new',
+    event: React.MouseEvent<HTMLSpanElement>
+  ) => void
 }) {
   if (!cell) {
     return (
@@ -180,6 +144,14 @@ function SideCell({
   const lineClass = DIFF_ROW_TYPE_CLASS[cell.type]
   const syntaxSpans =
     cell.type === 'note' ? undefined : getDiffLineSyntaxSpans(cell.content, filePath, syntaxParser)
+  const lineNumber = cell.lineNumber
+  const hoverRange =
+    lineNumber !== null &&
+    hoveredSymbol &&
+    hoveredSymbol.lineNumber === lineNumber &&
+    hoveredSymbol.side === side
+      ? { columnStart: hoveredSymbol.columnStart, columnEnd: hoveredSymbol.columnEnd }
+      : null
 
   return (
     <>
@@ -192,6 +164,22 @@ function SideCell({
           content={cell.content}
           wordHighlights={cell.wordHighlights}
           syntaxSpans={syntaxSpans}
+          hoverRange={hoverRange}
+          onMouseMove={
+            lineNumber !== null && cell.type !== 'note' && onLineMouseMove
+              ? (event) => onLineMouseMove(cell.content, lineNumber, side, event)
+              : undefined
+          }
+          onMouseLeave={
+            lineNumber !== null && onLineMouseLeave
+              ? () => onLineMouseLeave(lineNumber, side)
+              : undefined
+          }
+          onClick={
+            lineNumber !== null && cell.type !== 'note' && onLineClick
+              ? (event) => onLineClick(cell.content, lineNumber, side, event)
+              : undefined
+          }
         />
       </td>
     </>
@@ -266,6 +254,7 @@ function areGitDiffViewerPropsEqual(
     prev.state === next.state &&
     prev.onChangeViewMode === next.onChangeViewMode &&
     prev.onOpenFile === next.onOpenFile &&
+    prev.onSymbolNavigate === next.onSymbolNavigate &&
     prev.jumpRequest === next.jumpRequest &&
     areNavigationPropsEqual(prev.navigation, next.navigation)
   )
@@ -297,6 +286,7 @@ function GitDiffViewerInner({
   state,
   onChangeViewMode,
   onOpenFile,
+  onSymbolNavigate,
   navigation,
   jumpRequest = null
 }: GitDiffViewerProps) {
@@ -366,10 +356,23 @@ function GitDiffViewerInner({
   })
 
   const [highlightedRowIndex, setHighlightedRowIndex] = useState<number | null>(null)
+  const isSymbolNavEnabled = isSymbolSupportedFile(displayFile.path) && activeSyntaxParser !== null
+  const {
+    hoveredSymbol,
+    clearHover,
+    handleLineMouseMove,
+    handleLineMouseLeave,
+    handleLineClick
+  } = useLineSymbolHover({
+    isSymbolNavEnabled,
+    activeSyntaxParser,
+    onSymbolNavigate
+  })
 
   useEffect(() => {
     setHighlightedRowIndex(null)
-  }, [fileKey])
+    clearHover()
+  }, [clearHover, fileKey])
 
   useEffect(() => {
     if (!jumpRequest || jumpRequest.nonce <= 0 || totalRows === 0) {
@@ -538,12 +541,20 @@ function GitDiffViewerInner({
                       side="old"
                       filePath={displayFile.path}
                       syntaxParser={activeSyntaxParser}
+                      hoveredSymbol={hoveredSymbol}
+                      onLineMouseMove={handleLineMouseMove}
+                      onLineMouseLeave={handleLineMouseLeave}
+                      onLineClick={handleLineClick}
                     />
                     <SideCell
                       cell={row.newCell}
                       side="new"
                       filePath={displayFile.path}
                       syntaxParser={activeSyntaxParser}
+                      hoveredSymbol={hoveredSymbol}
+                      onLineMouseMove={handleLineMouseMove}
+                      onLineMouseLeave={handleLineMouseLeave}
+                      onLineClick={handleLineClick}
                     />
                   </tr>
                 )
@@ -566,44 +577,88 @@ function GitDiffViewerInner({
               startIndex={startIndex}
               topSpacerHeight={topSpacerHeight}
               bottomSpacerHeight={bottomSpacerHeight}
-              renderRow={(row, idx, dataRowIndex) =>
-                row.kind === 'hunk' ? (
-                  <tr
-                    key={`hunk-${idx}`}
-                    data-row-index={dataRowIndex}
-                    className="git-diff-hunk-row"
-                  >
-                    <td colSpan={3} className="git-diff-hunk-cell">
-                      {row.header}
-                    </td>
-                  </tr>
-                ) : (
-                  <tr
-                    key={`row-${idx}`}
-                    data-row-index={dataRowIndex}
-                    className={`git-diff-row${DIFF_ROW_TYPE_CLASS[row.lineType]}${highlightedRowIndex === idx ? ' is-jump-highlight' : ''}`}
-                  >
-                    <td className="git-diff-gutter">{row.oldLineNumber ?? ''}</td>
-                    <td className="git-diff-gutter">{row.newLineNumber ?? ''}</td>
-                    <td className="git-diff-code">
-                      <DiffCodeContent
-                        marker={row.marker}
-                        content={row.content}
-                        wordHighlights={row.wordHighlights}
-                        syntaxSpans={
-                          row.lineType === 'note'
-                            ? undefined
-                            : getDiffLineSyntaxSpans(
-                                row.content,
-                                displayFile.path,
-                                activeSyntaxParser
-                              )
+              renderRow={(row, idx, dataRowIndex) => {
+                if (row.kind === 'hunk') {
+                  return (
+                    <tr
+                      key={`hunk-${idx}`}
+                      data-row-index={dataRowIndex}
+                      className="git-diff-hunk-row"
+                    >
+                      <td colSpan={3} className="git-diff-hunk-cell">
+                        {row.header}
+                      </td>
+                    </tr>
+                  )
+                }
+                const inlineSide: 'old' | 'new' = row.lineType === 'delete' ? 'old' : 'new'
+                  const inlineLineNumber =
+                    inlineSide === 'old' ? row.oldLineNumber : row.newLineNumber
+                  const inlineHoverRange =
+                    inlineLineNumber !== null &&
+                    hoveredSymbol &&
+                    hoveredSymbol.lineNumber === inlineLineNumber &&
+                    hoveredSymbol.side === inlineSide
+                      ? {
+                          columnStart: hoveredSymbol.columnStart,
+                          columnEnd: hoveredSymbol.columnEnd
                         }
-                      />
-                    </td>
-                  </tr>
-                )
-              }
+                      : null
+                  return (
+                    <tr
+                      key={`row-${idx}`}
+                      data-row-index={dataRowIndex}
+                      className={`git-diff-row${DIFF_ROW_TYPE_CLASS[row.lineType]}${highlightedRowIndex === idx ? ' is-jump-highlight' : ''}`}
+                    >
+                      <td className="git-diff-gutter">{row.oldLineNumber ?? ''}</td>
+                      <td className="git-diff-gutter">{row.newLineNumber ?? ''}</td>
+                      <td className="git-diff-code">
+                        <DiffCodeContent
+                          marker={row.marker}
+                          content={row.content}
+                          wordHighlights={row.wordHighlights}
+                          syntaxSpans={
+                            row.lineType === 'note'
+                              ? undefined
+                              : getDiffLineSyntaxSpans(
+                                  row.content,
+                                  displayFile.path,
+                                  activeSyntaxParser
+                                )
+                          }
+                          hoverRange={inlineHoverRange}
+                          onMouseMove={
+                            inlineLineNumber !== null && row.lineType !== 'note'
+                              ? (event) =>
+                                  handleLineMouseMove(
+                                    row.content,
+                                    inlineLineNumber,
+                                    inlineSide,
+                                    event
+                                  )
+                              : undefined
+                          }
+                          onMouseLeave={
+                            inlineLineNumber !== null
+                              ? () => handleLineMouseLeave(inlineLineNumber, inlineSide)
+                              : undefined
+                          }
+                          onClick={
+                            inlineLineNumber !== null && row.lineType !== 'note'
+                              ? (event) =>
+                                  handleLineClick(
+                                    row.content,
+                                    inlineLineNumber,
+                                    inlineSide,
+                                    event
+                                  )
+                              : undefined
+                          }
+                        />
+                      </td>
+                    </tr>
+                  )
+              }}
             />
           </table>
         </div>

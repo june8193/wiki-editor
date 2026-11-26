@@ -17,6 +17,7 @@ import {
   createWindowInitContextLoader,
   extractTabViewState,
   isDiffTabTransferPayload,
+  isSnapshotTabTransferPayload,
   toTabTransferPayload,
   type TabTransferPayload,
   type WindowInitContext
@@ -215,6 +216,15 @@ export class RendererBufferSyncClient {
               this.tabStore.openDiffTab(tab.diff.request, {
                 viewMode: tab.diff.viewMode,
                 workspaceRootPath: tab.diff.workspaceRootPath,
+                pinned: true
+              })
+              openedInitialTabs = true
+              continue
+            }
+            if (isSnapshotTabTransferPayload(tab)) {
+              this.tabStore.openSnapshotTab(tab.snapshot.request, {
+                scrollTop: tab.snapshot.scrollTop,
+                workspaceRootPath: tab.snapshot.workspaceRootPath,
                 pinned: true
               })
               openedInitialTabs = true
@@ -1062,7 +1072,7 @@ export class RendererBufferSyncClient {
     payload: TabTransferPayload,
     target?: TransferredTabDropTarget
   ): TabItem | null => {
-    if (isDiffTabTransferPayload(payload)) {
+    if (isDiffTabTransferPayload(payload) || isSnapshotTabTransferPayload(payload)) {
       const accepted = this.tabStore.acceptTransferredTab(payload, target)
       this.syncCurrentLayoutTabs()
       return accepted
@@ -1135,6 +1145,7 @@ export class RendererBufferSyncClient {
       this.cleanupClosedLocalBuffers(localWorkspaceKeys)
     }
     this.tabStore.closeAllDiffTabs()
+    this.tabStore.closeAllSnapshotTabs()
     void this.bufferApi.clearWorkspaceBuffers().catch(() => undefined)
   }
 

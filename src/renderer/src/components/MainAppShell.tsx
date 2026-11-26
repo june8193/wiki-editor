@@ -11,6 +11,7 @@ import {
 } from '@shared/workspace'
 import { useConfigController } from '../hooks/useConfigController'
 import { useCompareSession } from '../hooks/useCompareSession'
+import { useSnapshotTabState } from '../hooks/useSnapshotTabState'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useWorkspaceImageTransfer } from '../hooks/useEditorImageTransfer'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
@@ -542,12 +543,21 @@ export function MainAppShell() {
     imageTransferContextValue
   } = useWorkspaceImageTransfer(handleReportImageError)
 
+  const { snapshotsByKey, openSnapshotTargetFile } = useSnapshotTabState({
+    layout: editor.layout,
+    workspaceRootPath: activeWorkspaceRoot,
+    repoRoot: git.panelState.status?.repoRoot ?? null,
+    gitApi: wikiApi.git,
+    openWorkspaceFile: editor.openWorkspaceFile
+  })
+
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       ...editor.paneActions,
-      onOpenDiffTargetFile: git.actions.openWorkspaceFile
+      onOpenDiffTargetFile: git.actions.openWorkspaceFile,
+      onOpenSnapshotTargetFile: openSnapshotTargetFile
     }),
-    [editor.paneActions, git.actions.openWorkspaceFile]
+    [editor.paneActions, git.actions.openWorkspaceFile, openSnapshotTargetFile]
   )
 
   const orderedCompareFiles = useMemo(
@@ -935,6 +945,34 @@ export function MainAppShell() {
       showHeadingNumbers={config.showHeadingNumbers}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
       workspaceRootPath={workspace?.rootPath ?? null}
+      getActiveDiffChangedFiles={(request) => {
+        if (request.kind === 'branch-compare' && compare.state.summary) {
+          return new Set(compare.state.summary.files.map((f) => f.path))
+        }
+        const commitDetail = git.panelState.graphState.commitDetail
+        if (
+          request.kind === 'commit' &&
+          commitDetail.status === 'loaded' &&
+          commitDetail.detail.hash === request.commitHash
+        ) {
+          return new Set(commitDetail.detail.files.map((f) => f.path))
+        }
+        const stashDetail = git.panelState.stashDetail
+        if (
+          request.kind === 'stash' &&
+          stashDetail.status === 'loaded' &&
+          stashDetail.detail.hash === request.stashHash
+        ) {
+          return new Set(stashDetail.detail.files.map((f) => f.path))
+        }
+        if (request.kind === 'unstaged' && git.panelState.status) {
+          return new Set(git.panelState.status.unstaged.map((f) => f.path))
+        }
+        if (request.kind === 'staged' && git.panelState.status) {
+          return new Set(git.panelState.status.staged.map((f) => f.path))
+        }
+        return undefined
+      }}
       frontmatterSchema={frontmatterSchema}
       frontmatterFieldValues={frontmatterFieldValues}
       openWorkspaceFile={openWorkspaceFile}
@@ -946,6 +984,7 @@ export function MainAppShell() {
         isEditorShortcutDisabled,
         {
           diffsByKey: git.diffsByKey,
+          snapshotsByKey,
           getDiffNavigation,
           workspaceMarkdownFiles: markdownFiles
         }

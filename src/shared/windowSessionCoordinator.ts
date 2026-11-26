@@ -9,11 +9,14 @@ import { type BeforeInputKeyEventLike, TabDragCoordinator } from './tabDragSessi
 import {
   canDetachTabFromWindow,
   cloneTabTransferDiffState,
+  cloneTabTransferSnapshotState,
   cloneTabTransferPayloads,
   computeOffsetAuxiliaryBounds,
   computeOffsetMainBounds,
   formatWindowTitle,
   isDiffTabTransferPayload,
+  isSnapshotTabTransferPayload,
+  isVirtualTabTransferPayload,
   type AcceptTabDragDropInput,
   type AcceptTabDragDropResult,
   type ActiveTabDragSession,
@@ -309,7 +312,7 @@ export class WindowSessionCoordinator<
       this.lastActiveSessionId = session.sessionId
     } else {
       for (const tab of clonedTabs) {
-        if (!isDiffTabTransferPayload(tab)) {
+        if (!isVirtualTabTransferPayload(tab)) {
           session.services.bufferHub.registerPendingTransfer(hosted.windowId, tab.bufferKey)
         }
       }
@@ -438,7 +441,7 @@ export class WindowSessionCoordinator<
     payload: TabTransferPayload | undefined,
     action: string
   ): void {
-    if (isDiffTabTransferPayload(payload)) {
+    if (isVirtualTabTransferPayload(payload)) {
       return
     }
     if (
@@ -479,7 +482,9 @@ export class WindowSessionCoordinator<
     const firstName = firstTab
       ? isDiffTabTransferPayload(firstTab)
         ? (firstTab.diff.request.path.split(/[\\/]/).pop() ?? firstTab.diff.request.path)
-        : session.services.bufferHub.getBufferName(firstTab.bufferKey)
+        : isSnapshotTabTransferPayload(firstTab)
+          ? (firstTab.snapshot.request.path.split(/[\\/]/).pop() ?? firstTab.snapshot.request.path)
+          : session.services.bufferHub.getBufferName(firstTab.bufferKey)
       : undefined
     const record = this.registerHostedWindow(session, {
       role: options.role,
@@ -555,14 +560,25 @@ export class WindowSessionCoordinator<
     session: ManagedSession<TSessionServices>,
     payload: TabTransferPayload
   ): TabTransferPayload {
-    if (!isDiffTabTransferPayload(payload)) return payload
-    return {
-      kind: 'diff',
-      diff: cloneTabTransferDiffState(
-        payload.diff,
-        this.getSessionEffectiveWorkspaceRoot(session) ?? undefined
-      )
+    if (isDiffTabTransferPayload(payload)) {
+      return {
+        kind: 'diff',
+        diff: cloneTabTransferDiffState(
+          payload.diff,
+          this.getSessionEffectiveWorkspaceRoot(session) ?? undefined
+        )
+      }
     }
+    if (isSnapshotTabTransferPayload(payload)) {
+      return {
+        kind: 'snapshot',
+        snapshot: cloneTabTransferSnapshotState(
+          payload.snapshot,
+          this.getSessionEffectiveWorkspaceRoot(session) ?? undefined
+        )
+      }
+    }
+    return payload
   }
 
   detachTabToNewWindow(
@@ -1069,7 +1085,7 @@ export class WindowSessionCoordinator<
         const record = this.windowsById.get(windowId)
         if (!record || record.role !== 'auxiliary') continue
         for (const tab of record.initialTabs) {
-          if (isDiffTabTransferPayload(tab)) continue
+          if (isVirtualTabTransferPayload(tab)) continue
           const nextKey = remappings.get(tab.bufferKey)
           if (nextKey) {
             tab.bufferKey = nextKey
@@ -1085,7 +1101,7 @@ export class WindowSessionCoordinator<
         const record = this.windowsById.get(windowId)
         if (!record || record.role !== 'auxiliary') continue
         record.initialTabs = record.initialTabs.filter(
-          (tab) => isDiffTabTransferPayload(tab) || !closedKeys.has(tab.bufferKey)
+          (tab) => isVirtualTabTransferPayload(tab) || !closedKeys.has(tab.bufferKey)
         )
       }
       this.reconcileAuxiliaryAutoClose(session)

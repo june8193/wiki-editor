@@ -5,8 +5,17 @@ import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { GitDiffRequest } from '@shared/git'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
-import type { PaneDiffJumpRequest } from '../stores/PaneNavigationCoordinator'
-import { getPaneActiveTab, GitDiffViewMode, PaneState, SplitMode } from '../stores/PaneTabStore'
+import type {
+  PaneDiffJumpRequest,
+  PaneSnapshotJumpRequest
+} from '../stores/PaneNavigationCoordinator'
+import {
+  formatGitSnapshotTabKey,
+  getPaneActiveTab,
+  GitDiffViewMode,
+  PaneState,
+  SplitMode
+} from '../stores/PaneTabStore'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 import { DocumentEditor, type DocumentEditorFindControl } from './DocumentEditor'
 import {
@@ -14,6 +23,7 @@ import {
   type GitDiffNavigationProps,
   GitDiffViewer
 } from './GitDiffViewer'
+import { type SnapshotContentState, SnapshotViewer } from './SnapshotViewer'
 import {
   allowWikiTabDragOver,
   handleTabMoveDrop,
@@ -32,18 +42,22 @@ interface PaneViewProps {
   scrollRequest?: OutlineScrollRequest | null
   searchJumpRequest?: DocumentSearchJumpRequest | null
   diffJumpRequest?: PaneDiffJumpRequest | null
+  snapshotJumpRequest?: PaneSnapshotJumpRequest | null
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   buffers: DocumentBufferSnapshot
   diffsByKey: Record<string, GitDiffContentState>
+  snapshotsByKey?: Record<string, SnapshotContentState>
   getDiffNavigation?: (request: GitDiffRequest) => GitDiffNavigationProps | undefined
   dragState: TabDragUiState
+  history?: { canGoBack: boolean; canGoForward: boolean }
   findControl?: DocumentEditorFindControl
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
   actions: PaneInteractionActions
 }
 
 const LOADING_DIFF_STATE: GitDiffContentState = { status: 'loading' }
+const LOADING_SNAPSHOT_STATE: SnapshotContentState = { status: 'loading' }
 
 export function PaneView({
   pane,
@@ -55,12 +69,15 @@ export function PaneView({
   scrollRequest = null,
   searchJumpRequest = null,
   diffJumpRequest = null,
+  snapshotJumpRequest = null,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   buffers,
   diffsByKey,
+  snapshotsByKey,
   getDiffNavigation,
   dragState,
+  history,
   findControl,
   onActiveHeadingChange,
   actions
@@ -72,6 +89,11 @@ export function PaneView({
     activeTab?.kind === 'diff'
       ? (diffsByKey[formatGitDiffTabKey(activeTab.diff.request)] ?? LOADING_DIFF_STATE)
       : null
+  const activeSnapshotState =
+    activeTab?.kind === 'snapshot'
+      ? (snapshotsByKey?.[formatGitSnapshotTabKey(activeTab.snapshot.request)] ??
+          LOADING_SNAPSHOT_STATE)
+      : null
   const activeDiffTabId = activeTab?.kind === 'diff' ? activeTab.id : null
   const handleChangeDiffViewMode = useCallback(
     (nextMode: GitDiffViewMode) => {
@@ -80,6 +102,15 @@ export function PaneView({
       }
     },
     [actions.onChangeDiffViewMode, pane.id, activeDiffTabId]
+  )
+  const onSymbolNavigate = actions.onSymbolNavigate
+  const handleDiffSymbolNavigate = useCallback(
+    (req: import('../editor/symbolHoverDom').SymbolNavigateRequest) => {
+      if (activeDiffTabId) {
+        onSymbolNavigate?.(pane.id, activeDiffTabId, req)
+      }
+    },
+    [onSymbolNavigate, pane.id, activeDiffTabId]
   )
   const diffNavigation = useMemo(
     () => (activeTab?.kind === 'diff' ? getDiffNavigation?.(activeTab.diff.request) : undefined),
@@ -102,6 +133,13 @@ export function PaneView({
     diffJumpRequest.paneId === pane.id &&
     diffJumpRequest.tabId === activeTab.id
       ? diffJumpRequest
+      : null
+  const activeSnapshotJumpRequest =
+    activeTab?.kind === 'snapshot' &&
+    snapshotJumpRequest &&
+    snapshotJumpRequest.paneId === pane.id &&
+    snapshotJumpRequest.tabId === activeTab.id
+      ? snapshotJumpRequest
       : null
   const canMoveToSplit = !(splitMode === 'single' && pane.tabs.length <= 1)
   const paneStyle: CSSProperties | undefined =
@@ -136,6 +174,7 @@ export function PaneView({
           canMoveToSplit={canMoveToSplit}
           buffers={buffers}
           dragState={dragState}
+          history={history}
           actions={actions}
         />
       )}
@@ -147,8 +186,22 @@ export function PaneView({
           state={activeDiffState}
           onChangeViewMode={handleChangeDiffViewMode}
           onOpenFile={actions.onOpenDiffTargetFile}
+          onSymbolNavigate={onSymbolNavigate ? handleDiffSymbolNavigate : undefined}
           navigation={diffNavigation}
           jumpRequest={activeDiffJumpRequest}
+        />
+      ) : activeTab?.kind === 'snapshot' && activeSnapshotState ? (
+        <SnapshotViewer
+          key={activeTab.id}
+          request={activeTab.snapshot.request}
+          state={activeSnapshotState}
+          scrollTop={activeTab.snapshot.scrollTop}
+          jumpRequest={activeSnapshotJumpRequest}
+          onScrollTopChange={(nextScrollTop) =>
+            actions.onUpdateSnapshotScrollTop?.(pane.id, activeTab.id, nextScrollTop)
+          }
+          onOpenLocalFile={actions.onOpenSnapshotTargetFile}
+          onSymbolNavigate={(req) => actions.onSymbolNavigate?.(pane.id, activeTab.id, req)}
         />
       ) : activeTab?.kind === 'document' && activeBuffer ? (
         <DocumentEditor
@@ -173,6 +226,11 @@ export function PaneView({
           }
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}
           onNavigateLink={(href) => actions.onNavigateLink?.(pane.id, activeTab.id, href)}
+          onSymbolNavigate={
+            actions.onSymbolNavigate
+              ? (req) => actions.onSymbolNavigate!(pane.id, activeTab.id, req)
+              : undefined
+          }
           onActiveHeadingChange={
             onActiveHeadingChange
               ? (update) =>

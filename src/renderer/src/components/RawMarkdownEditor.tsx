@@ -6,6 +6,7 @@ import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
 import type { RawFindHighlightRequest, RawJumpHighlightRequest } from '../editor/rawSearchHighlight'
 import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
+import type { SymbolNavigateRequest } from '../editor/symbolHoverDom'
 import type { CursorPosition } from '../stores/PaneTabStore'
 import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
 
@@ -31,6 +32,7 @@ interface RawMarkdownEditorProps {
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onLinkNavigate?: (href: string) => void
+  onSymbolNavigate?: (request: SymbolNavigateRequest) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
   onRawScroll?: () => void
 }
@@ -74,6 +76,7 @@ export function RawMarkdownEditor({
   onChangeContent,
   onUpdateViewState,
   onLinkNavigate,
+  onSymbolNavigate,
   onActiveHeadingChange,
   onRawScroll
 }: RawMarkdownEditorProps) {
@@ -100,6 +103,7 @@ export function RawMarkdownEditor({
       onChangeContent,
       onUpdateViewState,
       onLinkNavigate,
+      onSymbolNavigate,
       onActiveHeadingChange,
       onRawScroll
     })

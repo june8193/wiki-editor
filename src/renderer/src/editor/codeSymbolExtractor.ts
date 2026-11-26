@@ -72,6 +72,26 @@ const IDENTIFIER_NODE_NAMES = new Set([
   'Definition'
 ])
 
+const IMPORT_ANCESTOR_NAMES = new Set([
+  'ImportDeclaration',
+  'ImportSpecifier',
+  'ImportGroup',
+  'ImportStatement',
+  'ImportFromStatement',
+  'UseDeclaration'
+])
+
+function isInsideImportSubtree(node: SyntaxNode): boolean {
+  let current: SyntaxNode | null = node.parent
+  while (current) {
+    if (IMPORT_ANCESTOR_NAMES.has(current.name)) {
+      return true
+    }
+    current = current.parent
+  }
+  return false
+}
+
 const DECLARATION_IDENTIFIER_NAMES = new Set([
   'VariableDefinition',
   'PropertyDefinition',
@@ -482,7 +502,8 @@ export function extractIdentifierAtPosition(
 
   const parentName = node.parent?.name ?? ''
   const isDeclaration =
-    DECLARATION_IDENTIFIER_NAMES.has(node.name) || DECLARATION_PARENT_NAMES.has(parentName)
+    !isInsideImportSubtree(node) &&
+    (DECLARATION_IDENTIFIER_NAMES.has(node.name) || DECLARATION_PARENT_NAMES.has(parentName))
 
   return {
     name,

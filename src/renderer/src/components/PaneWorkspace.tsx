@@ -6,7 +6,11 @@ import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { ActiveTabDragSession } from '@shared/window'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
-import type { PaneDiffJumpRequest } from '../stores/PaneNavigationCoordinator'
+import type {
+  PaneDiffJumpRequest,
+  PaneHistoryAvailability,
+  PaneSnapshotJumpRequest
+} from '../stores/PaneNavigationCoordinator'
 import {
   canAcceptIncomingSplitDrop,
   canSplitWithTab,
@@ -24,18 +28,22 @@ import type { DocumentEditorFindControl } from './DocumentEditor'
 import type { GitDiffContentState, GitDiffNavigationProps } from './GitDiffViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneView } from './PaneView'
+import type { SnapshotContentState } from './SnapshotViewer'
 import { SplitSplitter } from './SplitSplitter'
 
 export interface PaneWorkspaceProps {
   layout: PaneLayoutState
   buffers: DocumentBufferSnapshot
   diffsByKey: Record<string, GitDiffContentState>
+  snapshotsByKey?: Record<string, SnapshotContentState>
   getDiffNavigation?: (request: GitDiffRequest) => GitDiffNavigationProps | undefined
   theme: ThemeMode
   autoSave: boolean
   scrollRequest?: OutlineScrollRequest | null
   searchJumpRequest?: DocumentSearchJumpRequest | null
   diffJumpRequest?: PaneDiffJumpRequest | null
+  snapshotJumpRequest?: PaneSnapshotJumpRequest | null
+  historyByPane?: Record<PaneId, PaneHistoryAvailability>
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   dragState: TabDragUiState
@@ -59,12 +67,15 @@ export function PaneWorkspace({
   layout,
   buffers,
   diffsByKey,
+  snapshotsByKey,
   getDiffNavigation,
   theme,
   autoSave,
   scrollRequest = null,
   searchJumpRequest = null,
   diffJumpRequest = null,
+  snapshotJumpRequest = null,
+  historyByPane,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   dragState,
@@ -153,10 +164,12 @@ export function PaneWorkspace({
     scrollRequest,
     searchJumpRequest,
     diffJumpRequest,
+    snapshotJumpRequest,
     isShortcutDisabled,
     workspaceMarkdownFiles,
     buffers,
     diffsByKey,
+    snapshotsByKey,
     getDiffNavigation,
     dragState,
     onActiveHeadingChange,
@@ -178,6 +191,7 @@ export function PaneWorkspace({
         pane={layout.panes.primary}
         isActivePane={layout.activePaneId === 'primary'}
         flexRatio={isSplit ? layout.splitRatio : undefined}
+        history={historyByPane?.primary}
         findControl={getPaneFindControl?.('primary')}
         {...sharedPaneProps}
       />
@@ -218,6 +232,7 @@ export function PaneWorkspace({
             pane={layout.panes.secondary}
             isActivePane={layout.activePaneId === 'secondary'}
             flexRatio={1 - layout.splitRatio}
+            history={historyByPane?.secondary}
             findControl={getPaneFindControl?.('secondary')}
             {...sharedPaneProps}
           />

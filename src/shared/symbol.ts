@@ -70,6 +70,12 @@ export interface SymbolCandidateMatch {
   columnEnd: number
 }
 
+export interface SnapshotTabState {
+  request: GitBlobSnapshotRequest
+  isPreview?: boolean
+  scrollTop: number
+}
+
 export const MAX_SYMBOL_QUERY_RESULTS = 1000
 
 export interface NormalizedSymbolQuery {

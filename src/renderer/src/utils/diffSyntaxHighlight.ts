@@ -55,6 +55,11 @@ export function resolveDiffLanguageParserSync(filePath: string): DiffLanguagePar
  * Loads a Lezer parser for the given file path via `@codemirror/language-data`, caching results.
  */
 export async function loadDiffLanguageParser(filePath: string): Promise<CodeParser | null> {
+  const ext = getFileExtension(filePath)
+  const bundledParser = ext ? resolveCodeBlockParser(ext) : null
+  if (bundledParser) {
+    return bundledParser
+  }
   const desc = LanguageDescription.matchFilename(languages, filePath)
   if (!desc) {
     return null

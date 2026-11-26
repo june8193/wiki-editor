@@ -156,7 +156,7 @@ export function usePaneDocumentFind({
       }
 
       event.preventDefault()
-      if (activeTab.kind === 'diff') {
+      if (activeTab.kind !== 'document') {
         return
       }
       const activeBuffer = buffersRef.current[activeTab.bufferKey]

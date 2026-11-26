@@ -1,6 +1,7 @@
 import type { ThemeMode } from './config'
 import type { DocumentBuffer } from './documentBuffer'
 import type { GitDiffRequest, GitDiffViewMode } from './git'
+import type { GitBlobSnapshotRequest } from './symbol'
 
 export type WindowRole = 'main' | 'auxiliary'
 
@@ -238,12 +239,38 @@ export interface DiffTabTransferPayload {
   diff: TabTransferDiffState
 }
 
-export type TabTransferPayload = DocumentTabTransferPayload | DiffTabTransferPayload
+export interface TabTransferSnapshotState {
+  request: GitBlobSnapshotRequest
+  scrollTop: number
+  workspaceRootPath?: string
+}
+
+export interface SnapshotTabTransferPayload {
+  kind: 'snapshot'
+  snapshot: TabTransferSnapshotState
+}
+
+export type TabTransferPayload =
+  | DocumentTabTransferPayload
+  | DiffTabTransferPayload
+  | SnapshotTabTransferPayload
 
 export function isDiffTabTransferPayload(
   payload: TabTransferPayload | undefined | null
 ): payload is DiffTabTransferPayload {
   return Boolean(payload && payload.kind === 'diff' && payload.diff)
+}
+
+export function isSnapshotTabTransferPayload(
+  payload: TabTransferPayload | undefined | null
+): payload is SnapshotTabTransferPayload {
+  return Boolean(payload && payload.kind === 'snapshot' && payload.snapshot)
+}
+
+export function isVirtualTabTransferPayload(
+  payload: TabTransferPayload | undefined | null
+): payload is DiffTabTransferPayload | SnapshotTabTransferPayload {
+  return isDiffTabTransferPayload(payload) || isSnapshotTabTransferPayload(payload)
 }
 
 export function cloneTabTransferDiffState(
@@ -254,6 +281,21 @@ export function cloneTabTransferDiffState(
   return {
     request: { ...diff.request },
     viewMode: diff.viewMode,
+    ...(workspaceRootPath ? { workspaceRootPath } : {})
+  }
+}
+
+export function cloneTabTransferSnapshotState(
+  snapshot: TabTransferSnapshotState,
+  workspaceRootPathOverride?: string
+): TabTransferSnapshotState {
+  const workspaceRootPath = snapshot.workspaceRootPath ?? workspaceRootPathOverride
+  return {
+    request: {
+      ...snapshot.request,
+      scope: { ...snapshot.request.scope }
+    },
+    scrollTop: snapshot.scrollTop,
     ...(workspaceRootPath ? { workspaceRootPath } : {})
   }
 }
@@ -274,11 +316,18 @@ export function toTabTransferPayload(
     | TabTransferPayload
     | ({ kind?: 'document'; bufferKey: string } & TabViewState)
     | { kind: 'diff'; diff: TabTransferDiffState }
+    | { kind: 'snapshot'; snapshot: TabTransferSnapshotState }
 ): TabTransferPayload {
   if (source.kind === 'diff' && source.diff) {
     return {
       kind: 'diff',
       diff: cloneTabTransferDiffState(source.diff)
+    }
+  }
+  if (source.kind === 'snapshot' && source.snapshot) {
+    return {
+      kind: 'snapshot',
+      snapshot: cloneTabTransferSnapshotState(source.snapshot)
     }
   }
   const docSource = source as DocumentTabTransferPayload
