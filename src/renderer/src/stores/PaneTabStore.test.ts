@@ -970,10 +970,15 @@ describe('PaneTabStore', () => {
     expect(transferred.kind === 'diff' && transferred.diff.isPreview).toBe(false)
 
     // reconcileBranchCompareDiffTabs updates all branch-compare tabs, closes out-of-range, and preserves isPreview
-    store.reconcileBranchCompareDiffTabs('main', 'feat', 'two-dot', [
-      { path: 'a.md', status: 'M' },
-      { path: 'b.md', status: 'A' }
-    ])
+    store.reconcileBranchCompareDiffTabs({
+      baseRef: 'main',
+      compareRef: 'feat',
+      mode: 'two-dot',
+      files: [
+        { path: 'a.md', status: 'M' },
+        { path: 'b.md', status: 'A' }
+      ]
+    })
     const afterReconcile = store
       .getSnapshot()
       .panes.primary.tabs.filter(
