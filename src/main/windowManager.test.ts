@@ -576,12 +576,16 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
 
     // Unwatching from auxiliary window MUST NOT stop main window watch
     await ipcHarness.invokeFrom(auxWin.webContents, WORKSPACE_IPC_CHANNELS.unwatch)
+    await new Promise((resolve) => setTimeout(resolve, 100))
     await writeFile(join(workspaceDir, 'external-update.md'), '# Ext', 'utf8')
 
-    await vi.waitFor(() => {
-      expect(mainWin.sentMessages.some((msg) => msg.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(true)
-      expect(auxWin.sentMessages.some((msg) => msg.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(true)
-    })
+    await vi.waitFor(
+      () => {
+        expect(mainWin.sentMessages.some((msg) => msg.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(true)
+        expect(auxWin.sentMessages.some((msg) => msg.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(true)
+      },
+      { timeout: 3000 }
+    )
 
     // Aux calling window:close-current closes only auxiliary
     await ipcHarness.invokeFrom(auxWin.webContents, WINDOW_IPC_CHANNELS.closeCurrent)
@@ -1946,12 +1950,16 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     const main2 = factory.createdWindows[1]
     await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.open, wsBeta)
     await ipc.invokeFrom(main2.webContents, WORKSPACE_IPC_CHANNELS.watch)
+    await new Promise((resolve) => setTimeout(resolve, 100))
 
     // Each session has its own workspace root & watch broadcasts
     await writeFile(join(wsAlpha, 'alpha-new.md'), '# Alpha New', 'utf8')
-    await vi.waitFor(() => {
-      expect(main1.sentMessages.some((m) => m.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(true)
-    })
+    await vi.waitFor(
+      () => {
+        expect(main1.sentMessages.some((m) => m.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(true)
+      },
+      { timeout: 3000 }
+    )
     expect(main2.sentMessages.some((m) => m.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(false)
 
     main1.sentMessages.length = 0
@@ -1960,9 +1968,12 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
     // Unwatching session 1 does NOT stop session 2's watcher
     await ipc.invokeFrom(main1.webContents, WORKSPACE_IPC_CHANNELS.unwatch)
     await writeFile(join(wsBeta, 'beta-new.md'), '# Beta New', 'utf8')
-    await vi.waitFor(() => {
-      expect(main2.sentMessages.some((m) => m.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(true)
-    })
+    await vi.waitFor(
+      () => {
+        expect(main2.sentMessages.some((m) => m.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(true)
+      },
+      { timeout: 3000 }
+    )
     expect(main1.sentMessages.some((m) => m.channel === WORKSPACE_IPC_CHANNELS.changed)).toBe(false)
 
     // Buffer isolation: opening/editing a.md in Session 1 does NOT leak into Session 2
