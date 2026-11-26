@@ -5,6 +5,19 @@
 
 ---
 
+## [1.11.0] - 2026-11-26
+
+### Added
+- `UTF-8` 및 `EUC-KR`(내부 CP949 코덱) 텍스트 인코딩 지원 추가: 파일 열기·워크스페이스 검색·프론트매터 색인·Git Diff(일반 패치 줄 단위 및 미추적 새 파일 전체 버퍼)에서 엄격 UTF-8 검증 후 EUC-KR 자동 감지 및 인코딩 보존, 에디터 헤더 우측 인코딩 메뉴(`인코딩으로 다시 열기(Reopen)`·`인코딩 변경(변환)`), `EUC-KR` 저장 시 표현 불가 문자 사전 감지(수동 저장 시 `'?'` 대체 확인 다이얼로그, 자동 저장 시 무음 손실 방지 보류 및 오류 배너 안내), `config.json`·`.wiki-editor/frontmatter.json` `UTF-8` 고정 및 다중 창 실시간 동기화 지원 ([상세 스펙](.backlog/done/euc-kr-encoding/spec.md), [티켓 01](.backlog/done/euc-kr-encoding/issues/01-text-encoding-codec-and-workspace-fs.md), [티켓 02](.backlog/done/euc-kr-encoding/issues/02-shared-buffer-encoding-and-ipc.md), [티켓 03](.backlog/done/euc-kr-encoding/issues/03-editor-header-encoding-ui-and-dialogs.md), [티켓 04](.backlog/done/euc-kr-encoding/issues/04-git-diff-euckr-decoding.md), [티켓 05](.backlog/done/euc-kr-encoding/issues/05-encoding-docs-and-context-update.md))
+- 모든 Diff 소스(`Compare`, `Changes`, `Graph`, `Stashes`)에 VS Code식 Preview + Pin 다중 Diff 탭 모델 추가: 단일 클릭은 편집기 영역당 최대 1개의 임시 Preview 탭(제목 이탤릭체)을 재사용하고 `Shift+클릭`·더블클릭·우클릭 `새 탭에서 Diff 열기`·탭 바 더블클릭으로 고정(Pinned)하여 여러 Diff 탭 동시 유지, `Compare` Ref/모드 변경 시 고정 여부와 무관하게 열려 있는 `branch-compare` Diff 탭 일괄 갱신·정리 지원 ([상세 스펙](.backlog/done/compare-tree-and-multi-diff-tabs/spec.md), [티켓 02](.backlog/done/compare-tree-and-multi-diff-tabs/issues/02-preview-pin-multi-diff-tabs.md))
+- `Compare` 패널 폴더 트리 및 `Git` `Changes` 섹션(리스트·트리) 우클릭 컨텍스트 메뉴 추가: 파일 행에서 `새 탭에서 Diff 열기`·`상대 경로 복사`·`절대 경로 복사`, 폴더 행에서 `상대 경로 복사`·`절대 경로 복사` 지원 ([티켓 03](.backlog/done/compare-tree-and-multi-diff-tabs/issues/03-git-compare-tree-context-menu.md))
+
+### Changed
+- `Compare` 패널 및 공통 `Diff 뷰어` 로딩·렌더링 성능 최적화: 저장소 루트 캐싱·`mergeBaseHash` 재사용·`compareSummary` 사전 검증 병렬화 및 단일 `git diff` 통합으로 자식 프로세스 스폰 최소화, 동기 파서 조회·단어 단위 하이라이트 1회 계산·줄 단위 구문 강조 메모이제이션·`React.memo` 리렌더 격리, 대용량 Diff 뷰포트 가상 스크롤(Windowing) 및 파일 전환 시 스크롤 최상단 초기화, 메인·보조 창 불변 Diff(`branch-compare`·`commit`·`stash`) 바운드 LRU 캐시(워크스페이스 전환·Stash 삭제 시 자동 무효화, 워킹 트리 Diff 최신성 유지) 적용 ([상세 스펙](.backlog/done/compare-diff-performance/spec.md), [티켓 01](.backlog/done/compare-diff-performance/issues/01-fast-branch-compare-git-backend.md), [티켓 02](.backlog/done/compare-diff-performance/issues/02-diff-viewer-fast-syntax-and-memo.md), [티켓 03](.backlog/done/compare-diff-performance/issues/03-diff-viewer-virtual-scroll.md), [티켓 04](.backlog/done/compare-diff-performance/issues/04-immutable-diff-lru-cache.md))
+
+### Fixed
+- `Compare` 패널 폴더 트리에서 폴더 행 버튼에 기본 회색 배경 음영이 노출되던 스타일 불일치를 `Git` 변경 파일 트리와 동일한 투명 배경·호버/포커스 스타일로 수정 ([티켓 01](.backlog/done/compare-tree-and-multi-diff-tabs/issues/01-fix-compare-folder-shading.md))
+
 ## [1.10.0] - 2026-11-25
 
 ### Added
