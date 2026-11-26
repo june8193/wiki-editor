@@ -1,10 +1,6 @@
 import type { DocumentBuffer } from '@shared/documentBuffer'
 import type { EditorMode } from '../stores/PaneTabStore'
-import {
-  hasKnownCodeFilename,
-  type RawEditorLanguage,
-  resolveRawEditorLanguageId
-} from './rawEditorLanguage'
+import { hasKnownCodeFilename } from './rawEditorLanguage'
 
 export interface ModeShortcutEvent {
   key: string
@@ -83,13 +79,6 @@ export function resolveEffectiveEditorMode(
     allowRichModes,
     effectiveMode: allowRichModes ? requestedMode : 'raw'
   }
-}
-
-/**
- * Resolves the CodeMirror syntax language for Raw mode.
- */
-export function getRawEditorLanguage(doc: Pick<DocumentBuffer, 'kind' | 'name'>): RawEditorLanguage {
-  return resolveRawEditorLanguageId(doc)
 }
 
 /**
