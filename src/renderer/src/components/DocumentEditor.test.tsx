@@ -29,6 +29,8 @@ function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
     name: 'doc.md',
     content: '# Heading\n\n*   exact   spacing',
     savedContent: '# Heading\n\n*   exact   spacing',
+    encoding: 'utf-8',
+    savedEncoding: 'utf-8',
     isDirty: false,
     version: 1,
     isSaving: false,
@@ -1152,6 +1154,8 @@ describe('DocumentEditor local markdown image rendering across modes', () => {
       path: '/vault/docs/guide.md',
       content: markdown,
       savedContent: markdown,
+      encoding: 'utf-8' as const,
+      savedEncoding: 'utf-8' as const,
       isDirty: false,
       isSaving: false,
       version: 1

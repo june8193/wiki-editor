@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DocumentBuffer, SharedBufferHubEvent } from '@shared/documentBuffer'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
+import { UnencodableCharactersError } from '@shared/encoding'
 import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
 import type { WindowInitContext } from '@shared/window'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
@@ -378,6 +379,8 @@ describe('RendererBufferSyncClient race guards', () => {
         name: 'solo.md',
         content: '# Solo',
         savedContent: '# Solo',
+        encoding: 'utf-8',
+        savedEncoding: 'utf-8',
         isDirty: false,
         version: 1,
         isSaving: false
@@ -438,6 +441,8 @@ describe('RendererBufferSyncClient race guards', () => {
         name: 'doomed.md',
         content: '# Doomed',
         savedContent: '# Doomed',
+        encoding: 'utf-8',
+        savedEncoding: 'utf-8',
         isDirty: false,
         version: 1,
         isSaving: false
@@ -874,6 +879,142 @@ describe('RendererBufferSyncClient race guards', () => {
     } finally {
       stopSecond()
       fallbackWin.detach()
+      hub.dispose()
+    }
+  })
+
+  it('syncs setEncoding, reopenWithEncoding, and saveBuffer options across windows via RendererBufferSyncClient', async () => {
+    const win1 = createHubClientHarness(1)
+    const { hub, files } = win1
+    files.set('C:/wiki/note.md', '초기 내용')
+    const stop1 = win1.client.start()
+    const win2 = attachWindowClient(hub, 2)
+    const stop2 = win2.client.start()
+
+    try {
+      await win1.client.openWorkspaceFile({
+        name: 'note.md',
+        path: 'C:/wiki/note.md',
+        relativePath: 'note.md',
+        kind: 'file'
+      })
+      await win2.client.openWorkspaceFile({
+        name: 'note.md',
+        path: 'C:/wiki/note.md',
+        relativePath: 'note.md',
+        kind: 'file'
+      })
+
+      const converted = await win1.client.setEncoding('c:/wiki/note.md', 'euc-kr')
+      expect(converted?.encoding).toBe('euc-kr')
+      expect(converted?.isDirty).toBe(true)
+
+      await vi.waitFor(() => {
+        expect(win2.bufferStore.getBuffer('c:/wiki/note.md')?.encoding).toBe('euc-kr')
+        expect(win2.bufferStore.getBuffer('c:/wiki/note.md')?.isDirty).toBe(true)
+      })
+
+      const saveResult = await win1.client.saveBuffer('c:/wiki/note.md')
+      expect(saveResult.ok).toBe(true)
+      expect(win2.bufferStore.getBuffer('c:/wiki/note.md')?.savedEncoding).toBe('euc-kr')
+      expect(win2.bufferStore.getBuffer('c:/wiki/note.md')?.isDirty).toBe(false)
+
+      const reopened = await win2.client.reopenWithEncoding('c:/wiki/note.md', 'utf-8')
+      expect(reopened?.encoding).toBe('utf-8')
+      expect(reopened?.savedEncoding).toBe('utf-8')
+      expect(reopened?.isDirty).toBe(false)
+
+      await vi.waitFor(() => {
+        expect(win1.bufferStore.getBuffer('c:/wiki/note.md')?.encoding).toBe('utf-8')
+      })
+    } finally {
+      stop1()
+      stop2()
+      win1.detach()
+      win2.detach()
+      hub.dispose()
+    }
+  })
+
+  it('prompts onConfirmLossySave on manual save unencodableChars and retries with allowLossy: true only when confirmed', async () => {
+    let diskContent = '초기'
+    const listeners = new Set<(event: SharedBufferHubEvent) => void>()
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async () => diskContent,
+        readWorkspaceFileWithEncoding: async () => ({ content: diskContent, encoding: 'euc-kr' }),
+        writeWorkspaceFile: async (_filePath, content, options) => {
+          if (options?.encoding === 'euc-kr' && content.includes('😀')) {
+            if (!options.allowLossy) {
+              throw new UnencodableCharactersError('euc-kr', { count: 1, samples: ['😀'] })
+            }
+            diskContent = content.replace(/😀/g, '?')
+            return
+          }
+          diskContent = content
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+    const unsubscribeHub = hub.subscribe((event) => {
+      for (const listener of listeners) {
+        listener(event)
+      }
+    })
+    const bufferApi = createHubBufferApi(hub, 1, listeners)
+    const bufferStore = new DocumentBufferStore()
+    const tabStore = new PaneTabStore()
+    const onError = vi.fn()
+    let confirmResponse = false
+    const onConfirmLossySave = vi.fn(async () => confirmResponse)
+    const client = new RendererBufferSyncClient({
+      bufferStore,
+      tabStore,
+      bufferApi,
+      onError,
+      onConfirmCloseDirtyTab: vi.fn(),
+      onConfirmLossySave
+    })
+    const stop = client.start()
+
+    try {
+      await client.openWorkspaceFile({
+        name: 'lossy.md',
+        path: 'C:/wiki/lossy.md',
+        relativePath: 'lossy.md',
+        kind: 'file'
+      })
+      client.updateBufferContent('c:/wiki/lossy.md', '안녕 😀')
+
+      // 1. Cancel lossy save -> no error banner, disk untouched, still dirty
+      confirmResponse = false
+      client.saveBufferByKey('c:/wiki/lossy.md')
+      await vi.waitFor(() => {
+        expect(onConfirmLossySave).toHaveBeenCalledTimes(1)
+      })
+      expect(onConfirmLossySave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          encoding: 'euc-kr',
+          unencodableChars: { count: 1, samples: ['😀'] }
+        })
+      )
+      expect(onError).not.toHaveBeenCalledWith(expect.any(String), expect.anything())
+      expect(diskContent).toBe('초기')
+      expect(bufferStore.getBuffer('c:/wiki/lossy.md')?.isDirty).toBe(true)
+
+      // 2. Confirm lossy save -> retries with allowLossy: true and saves '?'
+      confirmResponse = true
+      client.saveBufferByKey('c:/wiki/lossy.md')
+      await vi.waitFor(() => {
+        expect(diskContent).toBe('안녕 ?')
+      })
+      expect(bufferStore.getBuffer('c:/wiki/lossy.md')?.isDirty).toBe(false)
+    } finally {
+      stop()
+      unsubscribeHub()
       hub.dispose()
     }
   })

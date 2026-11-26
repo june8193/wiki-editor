@@ -1,5 +1,6 @@
 import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import iconv from 'iconv-lite'
 import { describe, expect, it } from 'vitest'
 import { GIT_DIFF_MAX_BYTES } from '@shared/git'
 import { withGitTestSandbox } from './gitTestSandbox'
@@ -745,5 +746,241 @@ describe('GitService integration (working-tree and commit diffs)', () => {
       })
       expect(afterApplyUntracked.existsInWorkspace).toBe(true)
       expect(afterApplyUntracked.rawPatch).toContain('+# Untracked Heading')
+    }), 60_000)
+
+  it('decodes EUC-KR diffs across unstaged, staged, commit, stash, and branch-compare modes', () =>
+    withGitTestSandbox(async (sandbox) => {
+      const { service, repoDir, runGit } = sandbox
+      await service.init(repoDir)
+
+      await writeFile(
+        join(repoDir, 'legacy.md'),
+        iconv.encode('초기 제목\n기존 EUC-KR 본문\n', 'cp949')
+      )
+      await service.stage(repoDir, ['legacy.md'])
+      await service.commit(repoDir, 'initial euckr')
+      const baseHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+      // Unstaged EUC-KR modification
+      await writeFile(
+        join(repoDir, 'legacy.md'),
+        iconv.encode('초기 제목\n수정된 EUC-KR 본문\n', 'cp949')
+      )
+      const unstagedDiff = await service.diff(repoDir, {
+        kind: 'unstaged',
+        path: 'legacy.md',
+        status: 'M'
+      })
+      expect(unstagedDiff.rawPatch).toContain('-기존 EUC-KR 본문')
+      expect(unstagedDiff.rawPatch).toContain('+수정된 EUC-KR 본문')
+      expect(unstagedDiff.rawPatch).not.toContain('\uFFFD')
+
+      // Staged EUC-KR modification
+      await service.stage(repoDir, ['legacy.md'])
+      const stagedDiff = await service.diff(repoDir, {
+        kind: 'staged',
+        path: 'legacy.md',
+        status: 'M'
+      })
+      expect(stagedDiff.rawPatch).toContain('-기존 EUC-KR 본문')
+      expect(stagedDiff.rawPatch).toContain('+수정된 EUC-KR 본문')
+      expect(stagedDiff.rawPatch).not.toContain('\uFFFD')
+
+      // Commit EUC-KR modification on feature branch
+      await runGit(repoDir, ['checkout', '-b', 'feature/euckr'])
+      await service.commit(repoDir, 'update euckr')
+      const featureHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+      const commitDiff = await service.diff(repoDir, {
+        kind: 'commit',
+        commitHash: featureHash,
+        shortHash: featureHash.slice(0, 7),
+        path: 'legacy.md',
+        status: 'M'
+      })
+      expect(commitDiff.rawPatch).toContain('-기존 EUC-KR 본문')
+      expect(commitDiff.rawPatch).toContain('+수정된 EUC-KR 본문')
+      expect(commitDiff.rawPatch).not.toContain('\uFFFD')
+
+      // Branch-compare EUC-KR modification
+      const compareDiff = await service.diff(repoDir, {
+        kind: 'branch-compare',
+        baseRef: baseHash,
+        compareRef: 'feature/euckr',
+        mode: 'two-dot',
+        path: 'legacy.md',
+        status: 'M'
+      })
+      expect(compareDiff.rawPatch).toContain('-기존 EUC-KR 본문')
+      expect(compareDiff.rawPatch).toContain('+수정된 EUC-KR 본문')
+      expect(compareDiff.rawPatch).not.toContain('\uFFFD')
+
+      // Stash EUC-KR modification
+      await writeFile(
+        join(repoDir, 'legacy.md'),
+        iconv.encode('초기 제목\n스태시 EUC-KR 본문\n', 'cp949')
+      )
+      await service.stashCreate(repoDir, { scope: 'unstaged', message: 'euckr stash' })
+      const [stash] = await service.stashList(repoDir)
+      const stashDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash.ref,
+        stashHash: stash.hash,
+        path: 'legacy.md',
+        status: 'M'
+      })
+      expect(stashDiff.rawPatch).toContain('-수정된 EUC-KR 본문')
+      expect(stashDiff.rawPatch).toContain('+스태시 EUC-KR 본문')
+      expect(stashDiff.rawPatch).not.toContain('\uFFFD')
+    }), 60_000)
+
+  it('decodes mixed-encoding patches (EUC-KR <-> UTF-8) without corrupting either side', () =>
+    withGitTestSandbox(async (sandbox) => {
+      const { service, repoDir, runGit } = sandbox
+      await service.init(repoDir)
+
+      // 1. EUC-KR -> UTF-8 transition in one commit
+      await writeFile(
+        join(repoDir, 'mixed.md'),
+        iconv.encode('공통 머리말\n기존 EUC-KR 줄\n', 'cp949')
+      )
+      await service.stage(repoDir, ['mixed.md'])
+      await service.commit(repoDir, 'euckr base')
+
+      await writeFile(join(repoDir, 'mixed.md'), '공통 머리말\n새 UTF-8 줄\n', 'utf8')
+      await service.stage(repoDir, ['mixed.md'])
+      await service.commit(repoDir, 'convert to utf8')
+      const toUtf8Hash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+      const toUtf8Diff = await service.diff(repoDir, {
+        kind: 'commit',
+        commitHash: toUtf8Hash,
+        shortHash: toUtf8Hash.slice(0, 7),
+        path: 'mixed.md',
+        status: 'M'
+      })
+      expect(toUtf8Diff.rawPatch).toContain('-기존 EUC-KR 줄')
+      expect(toUtf8Diff.rawPatch).toContain('+새 UTF-8 줄')
+      expect(toUtf8Diff.rawPatch).not.toContain('\uFFFD')
+
+      // 2. UTF-8 -> EUC-KR transition in one commit
+      await writeFile(
+        join(repoDir, 'mixed.md'),
+        iconv.encode('공통 머리말\n다시 EUC-KR 줄\n', 'cp949')
+      )
+      await service.stage(repoDir, ['mixed.md'])
+      await service.commit(repoDir, 'convert back to euckr')
+      const toEuckrHash = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
+
+      const toEuckrDiff = await service.diff(repoDir, {
+        kind: 'commit',
+        commitHash: toEuckrHash,
+        shortHash: toEuckrHash.slice(0, 7),
+        path: 'mixed.md',
+        status: 'M'
+      })
+      expect(toEuckrDiff.rawPatch).toContain('-새 UTF-8 줄')
+      expect(toEuckrDiff.rawPatch).toContain('+다시 EUC-KR 줄')
+      expect(toEuckrDiff.rawPatch).not.toContain('\uFFFD')
+    }), 60_000)
+
+  it('decodes untracked EUC-KR files in working tree and stash ^3 blobs', () =>
+    withGitTestSandbox(async (sandbox) => {
+      const { service, repoDir } = sandbox
+      await service.init(repoDir)
+
+      await writeFile(join(repoDir, 'base.md'), 'base\n', 'utf8')
+      await service.stage(repoDir, ['base.md'])
+      await service.commit(repoDir, 'base')
+
+      await writeFile(
+        join(repoDir, 'untracked-euckr.md'),
+        iconv.encode('미추적 EUC-KR 제목\n한글 본문\n', 'cp949')
+      )
+
+      const untrackedDiff = await service.diff(repoDir, {
+        kind: 'unstaged',
+        path: 'untracked-euckr.md',
+        status: '?'
+      })
+      expect(untrackedDiff.isBinary).toBe(false)
+      expect(untrackedDiff.rawPatch).toContain('+미추적 EUC-KR 제목')
+      expect(untrackedDiff.rawPatch).toContain('+한글 본문')
+      expect(untrackedDiff.rawPatch).not.toContain('\uFFFD')
+
+      await service.stashCreate(repoDir, {
+        scope: 'unstaged',
+        includeUntracked: true,
+        message: 'untracked euckr'
+      })
+      const [stash] = await service.stashList(repoDir)
+      const stashUntrackedDiff = await service.diff(repoDir, {
+        kind: 'stash',
+        stashRef: stash.ref,
+        stashHash: stash.hash,
+        path: 'untracked-euckr.md',
+        status: '?'
+      })
+      expect(stashUntrackedDiff.isBinary).toBe(false)
+      expect(stashUntrackedDiff.rawPatch).toContain('+미추적 EUC-KR 제목')
+      expect(stashUntrackedDiff.rawPatch).toContain('+한글 본문')
+      expect(stashUntrackedDiff.rawPatch).not.toContain('\uFFFD')
+    }), 60_000)
+
+  it('truncates >1MB EUC-KR and mixed-encoding diffs at safe multibyte character boundaries', () =>
+    withGitTestSandbox(async (sandbox) => {
+      const { service, repoDir } = sandbox
+      await service.init(repoDir)
+
+      // 1. Untracked EUC-KR file with 2-byte CP949 char straddling GIT_DIFF_MAX_BYTES
+      await writeFile(
+        join(repoDir, 'huge-euckr-untracked.md'),
+        iconv.encode('x'.repeat(GIT_DIFF_MAX_BYTES - 1) + '가'.repeat(20), 'cp949')
+      )
+      const hugeUntracked = await service.diff(repoDir, {
+        kind: 'unstaged',
+        path: 'huge-euckr-untracked.md',
+        status: '?'
+      })
+      expect(hugeUntracked.isTruncated).toBe(true)
+      expect(hugeUntracked.rawPatch).not.toContain('\uFFFD')
+      expect(Buffer.byteLength(hugeUntracked.rawPatch, 'utf8')).toBeLessThanOrEqual(
+        GIT_DIFF_MAX_BYTES
+      )
+
+      // 2. Tracked EUC-KR unified diff > GIT_DIFF_MAX_BYTES with CP949 char straddling boundary
+      await writeFile(
+        join(repoDir, 'huge-euckr-tracked.md'),
+        iconv.encode('초기 EUC-KR 줄\n', 'cp949')
+      )
+      await service.stage(repoDir, ['huge-euckr-tracked.md'])
+      await service.commit(repoDir, 'base huge euckr')
+
+      await writeFile(
+        join(repoDir, 'huge-euckr-tracked.md'),
+        iconv.encode('x'.repeat(GIT_DIFF_MAX_BYTES - 500) + '가'.repeat(500) + '\n', 'cp949')
+      )
+      const hugeTrackedEuckr = await service.diff(repoDir, {
+        kind: 'unstaged',
+        path: 'huge-euckr-tracked.md',
+        status: 'M'
+      })
+      expect(hugeTrackedEuckr.isTruncated).toBe(true)
+      expect(hugeTrackedEuckr.rawPatch).toContain('-초기 EUC-KR 줄')
+      expect(hugeTrackedEuckr.rawPatch).not.toContain('\uFFFD')
+
+      // 3. Mixed-encoding unified diff > GIT_DIFF_MAX_BYTES where boundary line is UTF-8 after EUC-KR line
+      await writeFile(
+        join(repoDir, 'huge-euckr-tracked.md'),
+        'x'.repeat(GIT_DIFF_MAX_BYTES - 500) + '가'.repeat(500) + '\n',
+        'utf8'
+      )
+      const hugeMixed = await service.diff(repoDir, {
+        kind: 'unstaged',
+        path: 'huge-euckr-tracked.md',
+        status: 'M'
+      })
+      expect(hugeMixed.isTruncated).toBe(true)
+      expect(hugeMixed.rawPatch).toContain('-초기 EUC-KR 줄')
+      expect(hugeMixed.rawPatch).not.toContain('\uFFFD')
     }), 60_000)
 })

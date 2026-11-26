@@ -1,4 +1,6 @@
+import type { TextEncoding, UnencodableCharsInfo } from './encoding'
 import { toErrorMessage } from './errors'
+import { FRONTMATTER_SCHEMA_RELATIVE_PATH } from './frontmatterSchema'
 import { normalizeWorkspacePath } from './workspace'
 
 export type DocumentKind = 'workspace' | 'config'
@@ -12,6 +14,8 @@ export interface DocumentBuffer {
   name: string
   content: string
   savedContent: string
+  encoding: TextEncoding
+  savedEncoding: TextEncoding
   isDirty: boolean
   version: number
   isSaving: boolean
@@ -24,6 +28,7 @@ export type OpenBufferInput =
       path: string
       name?: string
       content: string
+      encoding?: TextEncoding
     }
   | {
       kind: 'workspace'
@@ -54,10 +59,15 @@ export const EMPTY_SHARED_BUFFER_SNAPSHOT: Readonly<SharedBufferStateSnapshot> =
   revision: 0
 })
 
+export interface SaveBufferOptions {
+  allowLossy?: boolean
+}
+
 export interface SaveBufferResult {
   ok: boolean
   buffer: DocumentBuffer | null
   errorMessage?: string
+  unencodableChars?: UnencodableCharsInfo
 }
 
 export interface SyncWindowTabsOptions {
@@ -102,6 +112,23 @@ export type SharedBufferHubEvent =
       path: string
       message: string
     }
+
+export function isFrontmatterSchemaKey(key: string): boolean {
+  return (
+    key === FRONTMATTER_SCHEMA_RELATIVE_PATH ||
+    key.endsWith(`/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`)
+  )
+}
+
+export function isEncodingLockedBuffer(
+  buffer: Pick<DocumentBuffer, 'kind' | 'contentKind' | 'key'>
+): boolean {
+  return (
+    buffer.kind === 'config' ||
+    buffer.contentKind === 'image' ||
+    isFrontmatterSchemaKey(buffer.key)
+  )
+}
 
 // Electron contextBridge strips Error subclasses/errno codes, so deleted workspace files match localized/ENOENT messages.
 export function isMissingWorkspaceFileError(error: unknown): boolean {

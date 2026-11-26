@@ -1,6 +1,7 @@
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import iconv from 'iconv-lite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   type FrontmatterSchemaLoadResult,
@@ -296,5 +297,57 @@ describe('diskWorkspaceQueryAndSchema adapter', () => {
       spy.mockRestore()
       sequentialHub.dispose()
     }
+  })
+
+  it('indexes and filters EUC-KR documents across body search and frontmatter properties while preserving 2MB and null-byte exclusions', async () => {
+    await workspaceService.openWorkspace(workspaceDir)
+    await hub.saveSchema(TEST_SCHEMA)
+
+    const smallEucKrDoc = '---\nstatus: todo\nlabels: [한글태그]\n---\n레거시 한글 검색어 본문'
+    await writeFile(join(workspaceDir, 'legacy-small.md'), iconv.encode(smallEucKrDoc, 'cp949'))
+
+    // >8KB EUC-KR document to exercise chunked read path
+    const padding = '가나다라마바사아자차카타파하 '.repeat(400)
+    const largeEucKrDoc = `---\nstatus: done\nlabels: [대용량태그]\n---\n${padding}\n레거시 한글 검색어 청크`
+    await writeFile(join(workspaceDir, 'legacy-large.md'), iconv.encode(largeEucKrDoc, 'cp949'))
+
+    // Excluded: null-byte binary and >2MB EUC-KR file
+    await writeFile(
+      join(workspaceDir, 'binary.md'),
+      Buffer.concat([iconv.encode('레거시 한글 검색어', 'cp949'), Buffer.from([0x00, 0x01])])
+    )
+    const oversizedEucKr = iconv.encode('레거시 한글 검색어\n', 'cp949')
+    const repeatCount = Math.ceil((2 * 1024 * 1024 + 100) / oversizedEucKr.byteLength)
+    await writeFile(
+      join(workspaceDir, 'oversized-euckr.md'),
+      Buffer.concat(Array.from({ length: repeatCount }, () => oversizedEucKr))
+    )
+
+    const bodySearch = await hub.search({
+      query: '레거시 한글 검색어',
+      options: DEFAULT_SEARCH_MATCH_OPTIONS
+    })
+    expect(bodySearch.files.map((f) => f.relativePath)).toEqual([
+      'legacy-large.md',
+      'legacy-small.md'
+    ])
+    expect(bodySearch.files[1].frontmatterSummary).toEqual({
+      status: 'todo',
+      labels: ['한글태그']
+    })
+
+    const filteredSearch = await hub.search({
+      query: '',
+      options: DEFAULT_SEARCH_MATCH_OPTIONS,
+      frontmatter: {
+        conditions: [{ fieldKey: 'labels', operator: 'any-of', values: ['한글태그'] }]
+      }
+    })
+    expect(filteredSearch.files.map((f) => f.relativePath)).toEqual(['legacy-small.md'])
+
+    const fieldValues = await hub.collectFieldValues(['labels'])
+    expect(fieldValues.valuesByField.labels).toEqual(
+      expect.arrayContaining(['한글태그', '대용량태그'])
+    )
   })
 })

@@ -21,6 +21,8 @@ function createDoc(overrides: Partial<DocumentBuffer> = {}): DocumentBuffer {
     name: 'doc.md',
     content: 'Alpha beta alpha\nSecond line gamma\nThird line alpha',
     savedContent: 'Alpha beta alpha\nSecond line gamma\nThird line alpha',
+    encoding: 'utf-8',
+    savedEncoding: 'utf-8',
     isDirty: false,
     version: 1,
     isSaving: false,

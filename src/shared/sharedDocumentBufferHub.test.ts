@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import type { SharedBufferHubEvent } from './documentBuffer'
+import { UnencodableCharactersError } from './encoding'
 import { SharedDocumentBufferHub } from './sharedDocumentBufferHub'
 
 function createDeferred<T = void>() {
@@ -453,6 +455,275 @@ describe('SharedDocumentBufferHub race guards', () => {
       firstRead.resolve('B')
       await slowRefresh
       expect(hub.getBuffer(opened.key)?.content).toBe('A')
+    } finally {
+      hub.dispose()
+    }
+  })
+})
+
+describe('SharedDocumentBufferHub encoding state and protections', () => {
+  it('initializes encoding from storage, toggles isDirty on setEncoding/revert, and schedules/cancels auto-save', async () => {
+    const writes: Array<{ filePath: string; content: string; encoding?: string }> = []
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: true, autoSaveDelayMs: 40 },
+      storage: {
+        readWorkspaceFile: async () => '초기 본문',
+        readWorkspaceFileWithEncoding: async () => ({
+          content: '초기 본문',
+          encoding: 'euc-kr'
+        }),
+        writeWorkspaceFile: async (filePath, content, options) => {
+          writes.push({ filePath, content, encoding: options?.encoding })
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+
+    try {
+      const opened = await hub.openWorkspaceFile('C:/wiki/legacy.md', 'legacy.md', undefined, 1)
+      hub.syncWindowTabs(1, [opened.key])
+
+      expect(opened.encoding).toBe('euc-kr')
+      expect(opened.savedEncoding).toBe('euc-kr')
+      expect(opened.isDirty).toBe(false)
+
+      // Change encoding to utf-8 -> dirty, content preserved
+      const changed = hub.setEncoding(opened.key, 'utf-8')
+      expect(changed?.content).toBe('초기 본문')
+      expect(changed?.encoding).toBe('utf-8')
+      expect(changed?.savedEncoding).toBe('euc-kr')
+      expect(changed?.isDirty).toBe(true)
+
+      // Revert encoding back to euc-kr before auto-save fires -> clean & timer cancelled
+      const reverted = hub.setEncoding(opened.key, 'euc-kr')
+      expect(reverted?.isDirty).toBe(false)
+
+      await new Promise((resolve) => setTimeout(resolve, 70))
+      expect(writes).toEqual([])
+
+      // Change again and let auto-save persist with the new encoding
+      hub.setEncoding(opened.key, 'utf-8')
+      await new Promise((resolve) => setTimeout(resolve, 70))
+      expect(writes).toEqual([
+        { filePath: 'C:/wiki/legacy.md', content: '초기 본문', encoding: 'utf-8' }
+      ])
+      expect(hub.getBuffer(opened.key)?.savedEncoding).toBe('utf-8')
+      expect(hub.getBuffer(opened.key)?.isDirty).toBe(false)
+    } finally {
+      hub.dispose()
+    }
+  })
+
+  it('reopenWithEncoding re-decodes disk bytes with target encoding and resets isDirty', async () => {
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async () => 'garbled',
+        readWorkspaceFileWithEncoding: async (_filePath, encoding) =>
+          encoding === 'euc-kr'
+            ? { content: '한글 복원', encoding: 'euc-kr' }
+            : { content: 'garbled', encoding: 'utf-8' },
+        writeWorkspaceFile: async () => undefined,
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+
+    try {
+      const opened = await hub.openWorkspaceFile('C:/wiki/note.md', 'note.md', undefined, 1)
+      hub.syncWindowTabs(1, [opened.key])
+      hub.updateContent(opened.key, 'unsaved local edit')
+      expect(hub.getBuffer(opened.key)?.isDirty).toBe(true)
+
+      const reopened = await hub.reopenWithEncoding(opened.key, 'euc-kr')
+      expect(reopened?.content).toBe('한글 복원')
+      expect(reopened?.savedContent).toBe('한글 복원')
+      expect(reopened?.encoding).toBe('euc-kr')
+      expect(reopened?.savedEncoding).toBe('euc-kr')
+      expect(reopened?.isDirty).toBe(false)
+    } finally {
+      hub.dispose()
+    }
+  })
+
+  it('locks config.json, .wiki-editor/frontmatter.json, and image buffers to utf-8 and rejects encoding changes or reopen', async () => {
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async () => '{}',
+        readWorkspaceFileWithEncoding: async () => ({ content: '{}', encoding: 'utf-8' }),
+        writeWorkspaceFile: async () => undefined,
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+
+    try {
+      const configBuf = await hub.openConfigDocument(1)
+      const schemaBuf = await hub.openWorkspaceFile(
+        'C:/wiki/.wiki-editor/frontmatter.json',
+        'frontmatter.json',
+        undefined,
+        1
+      )
+      const imageBuf = await hub.openWorkspaceFile('C:/wiki/assets/pic.png', 'pic.png', undefined, 1)
+
+      for (const lockedBuf of [configBuf, schemaBuf, imageBuf]) {
+        expect(lockedBuf.encoding).toBe('utf-8')
+        expect(lockedBuf.savedEncoding).toBe('utf-8')
+        expect(() => hub.setEncoding(lockedBuf.key, 'euc-kr')).toThrow()
+        await expect(hub.reopenWithEncoding(lockedBuf.key, 'euc-kr')).rejects.toThrow()
+        expect(hub.getBuffer(lockedBuf.key)?.encoding).toBe('utf-8')
+        expect(hub.getBuffer(lockedBuf.key)?.savedEncoding).toBe('utf-8')
+      }
+    } finally {
+      hub.dispose()
+    }
+  })
+
+  it('saveBuffer returns unencodableChars without save-error on manual lossy failure and saves with allowLossy: true', async () => {
+    let diskContent = '초기 본문'
+    let diskEncoding: 'utf-8' | 'euc-kr' = 'euc-kr'
+    const events: SharedBufferHubEvent[] = []
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async () => diskContent,
+        readWorkspaceFileWithEncoding: async () => ({
+          content: diskContent,
+          encoding: diskEncoding
+        }),
+        writeWorkspaceFile: async (_filePath, content, options) => {
+          if (options?.encoding === 'euc-kr' && content.includes('😀')) {
+            if (!options.allowLossy) {
+              throw new UnencodableCharactersError('euc-kr', { count: 1, samples: ['😀'] })
+            }
+            diskContent = content.replace(/😀/g, '?')
+            diskEncoding = 'euc-kr'
+            return
+          }
+          diskContent = content
+          diskEncoding = options?.encoding ?? 'utf-8'
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+    hub.subscribe((event) => events.push(event))
+
+    try {
+      const opened = await hub.openWorkspaceFile('C:/wiki/lossy.md', 'lossy.md', undefined, 1)
+      hub.syncWindowTabs(1, [opened.key])
+      hub.updateContent(opened.key, '안녕 😀')
+
+      // Manual save without allowLossy fails with unencodableChars, touches neither disk nor save-error
+      const blocked = await hub.saveBuffer(opened.key)
+      expect(blocked.ok).toBe(false)
+      expect(blocked.unencodableChars).toEqual({ count: 1, samples: ['😀'] })
+      expect(diskContent).toBe('초기 본문')
+      expect(events.some((e) => e.type === 'save-error')).toBe(false)
+
+      // Manual save with allowLossy: true writes '?' replacement and updates savedEncoding
+      const forced = await hub.saveBuffer(opened.key, { allowLossy: true })
+      expect(forced.ok).toBe(true)
+      expect(diskContent).toBe('안녕 ?')
+      expect(diskEncoding).toBe('euc-kr')
+      expect(forced.buffer?.savedEncoding).toBe('euc-kr')
+      expect(forced.buffer?.isDirty).toBe(false)
+    } finally {
+      hub.dispose()
+    }
+  })
+
+  it('auto-save runs with allowLossy: false, emits save-error, stops retrying, and retries after content or encoding change', async () => {
+    let writeAttempts = 0
+    const events: SharedBufferHubEvent[] = []
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: true, autoSaveDelayMs: 25 },
+      storage: {
+        readWorkspaceFile: async () => '초기',
+        readWorkspaceFileWithEncoding: async () => ({ content: '초기', encoding: 'euc-kr' }),
+        writeWorkspaceFile: async (_filePath, content, options) => {
+          writeAttempts += 1
+          if (options?.encoding === 'euc-kr' && !options.allowLossy && content.includes('😀')) {
+            throw new UnencodableCharactersError('euc-kr', { count: 1, samples: ['😀'] })
+          }
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+    hub.subscribe((event) => events.push(event))
+
+    try {
+      const opened = await hub.openWorkspaceFile('C:/wiki/auto.md', 'auto.md', undefined, 1)
+      hub.syncWindowTabs(1, [opened.key])
+      hub.updateContent(opened.key, '이모지 😀')
+
+      await new Promise((resolve) => setTimeout(resolve, 90))
+      expect(writeAttempts).toBe(1)
+      expect(events.filter((e) => e.type === 'save-error')).toHaveLength(1)
+
+      // Wait another cycle: must not infinitely retry for the same version
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      expect(writeAttempts).toBe(1)
+
+      // Changing encoding to utf-8 bumps version and triggers a new auto-save attempt that succeeds
+      hub.setEncoding(opened.key, 'utf-8')
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      expect(writeAttempts).toBe(2)
+      expect(hub.getBuffer(opened.key)?.isDirty).toBe(false)
+      expect(hub.getBuffer(opened.key)?.savedEncoding).toBe('utf-8')
+    } finally {
+      hub.dispose()
+    }
+  })
+
+  it('reconcileWorkspaceBuffersWithDisk re-detects encoding for clean files and warns on encoding conflict for dirty files', async () => {
+    let diskContent = 'Hello'
+    let diskEncoding: 'utf-8' | 'euc-kr' = 'utf-8'
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async () => diskContent,
+        readWorkspaceFileWithEncoding: async () => ({
+          content: diskContent,
+          encoding: diskEncoding
+        }),
+        writeWorkspaceFile: async () => undefined,
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+
+    try {
+      const cleanBuf = await hub.openWorkspaceFile('C:/wiki/clean.md', 'clean.md', undefined, 1)
+      const dirtyBuf = await hub.openWorkspaceFile('C:/wiki/dirty.md', 'dirty.md', undefined, 1)
+      hub.syncWindowTabs(1, [cleanBuf.key, dirtyBuf.key])
+
+      hub.updateContent(dirtyBuf.key, 'local dirty edit')
+
+      // External change alters both content & encoding for clean.md and encoding for dirty.md
+      diskContent = '외부 EUC-KR'
+      diskEncoding = 'euc-kr'
+
+      const result = await hub.reconcileWorkspaceBuffersWithDisk()
+      const updatedClean = hub.getBuffer(cleanBuf.key)!
+      expect(updatedClean.content).toBe('외부 EUC-KR')
+      expect(updatedClean.savedContent).toBe('외부 EUC-KR')
+      expect(updatedClean.encoding).toBe('euc-kr')
+      expect(updatedClean.savedEncoding).toBe('euc-kr')
+      expect(updatedClean.isDirty).toBe(false)
+
+      expect(result.warnings).toHaveLength(1)
+      expect(result.warnings[0]).toContain('dirty.md')
     } finally {
       hub.dispose()
     }

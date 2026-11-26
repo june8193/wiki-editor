@@ -1,8 +1,9 @@
-import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef } from 'react'
-import { Search } from 'lucide-react'
+import { KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
+import { Check, Search } from 'lucide-react'
 import type { Editor } from '@tiptap/core'
 import type { ThemeMode } from '@shared/config'
-import type { DocumentBuffer } from '@shared/documentBuffer'
+import { isEncodingLockedBuffer, type DocumentBuffer } from '@shared/documentBuffer'
+import { TEXT_ENCODING_LABELS, type TextEncoding } from '@shared/encoding'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import {
@@ -23,6 +24,7 @@ import {
   type DocumentEditorFindControl,
   useDocumentEditorFind
 } from '../hooks/useDocumentEditorFind'
+import { useDismissable } from '../hooks/useDismissable'
 import { resolveDocumentJumpHighlights } from '../stores/PaneNavigationCoordinator'
 import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
 import {
@@ -56,10 +58,14 @@ interface DocumentEditorProps {
   findControl?: DocumentEditorFindControl
   onChangeContent: (nextContent: string) => void
   onSave: () => void
+  onChangeEncoding?: (nextEncoding: TextEncoding) => void
+  onReopenWithEncoding?: (targetEncoding: TextEncoding) => void
   onUpdateViewState: (patch: TabViewPatch) => void
   onNavigateLink?: (href: string) => void
   onActiveHeadingChange?: (update: DocumentOutlineSpyUpdate) => void
 }
+
+const ENCODING_OPTIONS: readonly TextEncoding[] = ['utf-8', 'euc-kr']
 
 const EDITOR_MODE_OPTIONS: ReadonlyArray<{
   mode: EditorMode
@@ -87,12 +93,50 @@ export function DocumentEditor({
   findControl,
   onChangeContent,
   onSave,
+  onChangeEncoding,
+  onReopenWithEncoding,
   onUpdateViewState,
   onNavigateLink,
   onActiveHeadingChange
 }: DocumentEditorProps) {
   const activeFilePath = activeDoc.kind === 'workspace' ? activeDoc.path : null
   const isImage = isImageDocument(activeDoc)
+  const isEncodingLocked = isEncodingLockedBuffer(activeDoc)
+  const currentEncodingLabel = TEXT_ENCODING_LABELS[activeDoc.encoding]
+  const [isEncodingMenuOpen, setIsEncodingMenuOpen] = useState(false)
+  const encodingMenuRef = useRef<HTMLDivElement | null>(null)
+  const closeEncodingMenu = useCallback(() => setIsEncodingMenuOpen(false), [])
+  useDismissable(isEncodingMenuOpen && !isEncodingLocked, encodingMenuRef, closeEncodingMenu)
+
+  const renderEncodingMenuGroup = (
+    keyPrefix: string,
+    groupLabel: string,
+    options: { disableCurrent: boolean; onSelect: ((encoding: TextEncoding) => void) | undefined }
+  ) => (
+    <div className="editor-encoding-menu-group" role="group" aria-label={groupLabel}>
+      <div className="editor-encoding-menu-label">{groupLabel}</div>
+      {ENCODING_OPTIONS.map((encodingOption) => {
+        const label = TEXT_ENCODING_LABELS[encodingOption]
+        const isCurrent = activeDoc.encoding === encodingOption
+        return (
+          <button
+            key={`${keyPrefix}-${encodingOption}`}
+            type="button"
+            role="menuitem"
+            className={`editor-encoding-menu-item${isCurrent ? ' is-current' : ''}`}
+            disabled={options.disableCurrent && isCurrent}
+            onClick={() => {
+              setIsEncodingMenuOpen(false)
+              options.onSelect?.(encodingOption)
+            }}
+          >
+            <span>{label}</span>
+            {isCurrent && <Check size={12} strokeWidth={2} aria-hidden="true" />}
+          </button>
+        )
+      })}
+    </div>
+  )
   const { allowRichModes, effectiveMode } = resolveEffectiveEditorMode(activeDoc, tab.mode)
   const rawRatio = normalizeSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
   const previewRatio = roundSplitRatio(1 - rawRatio)
@@ -318,6 +362,39 @@ export function DocumentEditor({
         </div>
 
         <div className="editor-header-actions">
+          {!isImage && (
+            <div ref={encodingMenuRef} className="editor-encoding-menu-anchor">
+              <button
+                type="button"
+                className={`btn btn-sm editor-encoding-btn${isEncodingMenuOpen ? ' is-open' : ''}`}
+                aria-label={`문서 인코딩 (${currentEncodingLabel})`}
+                aria-haspopup="menu"
+                aria-expanded={isEncodingMenuOpen}
+                disabled={isEncodingLocked}
+                title={
+                  isEncodingLocked
+                    ? '이 문서는 UTF-8 인코딩으로 고정되어 있습니다.'
+                    : `현재 인코딩: ${currentEncodingLabel} (클릭하여 다시 열기 또는 변경)`
+                }
+                onClick={() => setIsEncodingMenuOpen((open) => !open)}
+              >
+                {currentEncodingLabel}
+              </button>
+              {isEncodingMenuOpen && !isEncodingLocked && (
+                <div className="editor-encoding-menu" role="menu" aria-label="인코딩 메뉴">
+                  {renderEncodingMenuGroup('reopen', '인코딩으로 다시 열기', {
+                    disableCurrent: false,
+                    onSelect: onReopenWithEncoding
+                  })}
+                  <div className="editor-encoding-menu-divider" role="separator" />
+                  {renderEncodingMenuGroup('convert', '인코딩 변경', {
+                    disableCurrent: true,
+                    onSelect: onChangeEncoding
+                  })}
+                </div>
+              )}
+            </div>
+          )}
           <button
             type="button"
             className={`icon-btn editor-find-btn${docFind.isFindActive ? ' is-active' : ''}`}

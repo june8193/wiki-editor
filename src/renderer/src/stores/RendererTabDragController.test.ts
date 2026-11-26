@@ -457,6 +457,8 @@ describe('RendererTabDragController', () => {
           contentKind: 'text',
           content: '# Dirty external content',
           savedContent: '# Clean disk',
+          encoding: 'utf-8',
+          savedEncoding: 'utf-8',
           isDirty: true,
           version: 2,
           isSaving: false

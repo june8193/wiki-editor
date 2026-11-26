@@ -8,6 +8,7 @@ import {
   isKeyNestedOrSame,
   type OpenBufferInput
 } from './documentBuffer'
+import { DEFAULT_TEXT_ENCODING, type TextEncoding } from './encoding'
 import { getWorkspaceDisplayName, getWorkspacePathKey } from './workspace'
 
 function areDocumentBuffersEqual(left: DocumentBuffer, right: DocumentBuffer): boolean {
@@ -19,10 +20,21 @@ function areDocumentBuffersEqual(left: DocumentBuffer, right: DocumentBuffer): b
     left.name === right.name &&
     left.content === right.content &&
     left.savedContent === right.savedContent &&
+    left.encoding === right.encoding &&
+    left.savedEncoding === right.savedEncoding &&
     left.isDirty === right.isDirty &&
     left.version === right.version &&
     left.isSaving === right.isSaving
   )
+}
+
+function isTextBufferDirty(
+  content: string,
+  savedContent: string,
+  encoding: TextEncoding,
+  savedEncoding: TextEncoding
+): boolean {
+  return content !== savedContent || encoding !== savedEncoding
 }
 
 /** Creates an initialized DocumentBuffer from open input without requiring store mutation. */
@@ -34,6 +46,10 @@ export function createDocumentBuffer(input: OpenBufferInput): DocumentBuffer {
 
   const contentKind: DocumentContentKind = input.contentKind === 'image' ? 'image' : 'text'
   const initialContent = input.contentKind === 'image' ? '' : input.content
+  const initialEncoding: TextEncoding =
+    input.contentKind === 'image'
+      ? DEFAULT_TEXT_ENCODING
+      : (input.encoding ?? DEFAULT_TEXT_ENCODING)
 
   return {
     key,
@@ -43,6 +59,8 @@ export function createDocumentBuffer(input: OpenBufferInput): DocumentBuffer {
     name: input.name?.trim() || getWorkspaceDisplayName(input.path),
     content: initialContent,
     savedContent: initialContent,
+    encoding: initialEncoding,
+    savedEncoding: initialEncoding,
     isDirty: false,
     version: 1,
     isSaving: false
@@ -60,7 +78,12 @@ export function mergePendingLocalBuffer(
   return {
     ...hubBuffer,
     content: localBuffer.content,
-    isDirty: localBuffer.content !== hubBuffer.savedContent,
+    isDirty: isTextBufferDirty(
+      localBuffer.content,
+      hubBuffer.savedContent,
+      hubBuffer.encoding,
+      hubBuffer.savedEncoding
+    ),
     version: Math.max(localBuffer.version, hubBuffer.version)
   }
 }
@@ -185,17 +208,49 @@ export class DocumentBufferStore {
       return {
         ...current,
         content: nextContent,
-        isDirty: nextContent !== current.savedContent,
+        isDirty: isTextBufferDirty(
+          nextContent,
+          current.savedContent,
+          current.encoding,
+          current.savedEncoding
+        ),
         version: current.version + 1
       }
     })
   }
 
-  markSaved(pathOrKey: string, savedContent: string): void {
+  setEncoding(pathOrKey: string, nextEncoding: TextEncoding): boolean {
+    return this.updateMutableTextBuffer(pathOrKey, (current) => {
+      if (current.encoding === nextEncoding) return null
+      return {
+        ...current,
+        encoding: nextEncoding,
+        isDirty: isTextBufferDirty(
+          current.content,
+          current.savedContent,
+          nextEncoding,
+          current.savedEncoding
+        ),
+        version: current.version + 1
+      }
+    })
+  }
+
+  markSaved(
+    pathOrKey: string,
+    savedContent: string,
+    savedEncoding: TextEncoding = DEFAULT_TEXT_ENCODING
+  ): void {
     this.updateMutableTextBuffer(pathOrKey, (current) => ({
       ...current,
       savedContent,
-      isDirty: current.content !== savedContent,
+      savedEncoding,
+      isDirty: isTextBufferDirty(
+        current.content,
+        savedContent,
+        current.encoding,
+        savedEncoding
+      ),
       version: current.version + 1
     }))
   }
@@ -210,14 +265,27 @@ export class DocumentBufferStore {
     })
   }
 
-  refreshCleanContent(pathOrKey: string, freshContent: string): boolean {
+  refreshCleanContent(
+    pathOrKey: string,
+    freshContent: string,
+    freshEncoding: TextEncoding = DEFAULT_TEXT_ENCODING
+  ): boolean {
     return this.updateMutableTextBuffer(pathOrKey, (current) => {
       if (current.isDirty) return null
-      if (current.content === freshContent && current.savedContent === freshContent) return null
+      if (
+        current.content === freshContent &&
+        current.savedContent === freshContent &&
+        current.encoding === freshEncoding &&
+        current.savedEncoding === freshEncoding
+      ) {
+        return null
+      }
       return {
         ...current,
         content: freshContent,
         savedContent: freshContent,
+        encoding: freshEncoding,
+        savedEncoding: freshEncoding,
         isDirty: false,
         version: current.version + 1
       }
@@ -227,13 +295,19 @@ export class DocumentBufferStore {
   /**
    * Resets a workspace or config text buffer to authoritative disk content even when dirty.
    */
-  forceSyncContent(pathOrKey: string, diskContent: string): boolean {
+  forceSyncContent(
+    pathOrKey: string,
+    diskContent: string,
+    diskEncoding: TextEncoding = DEFAULT_TEXT_ENCODING
+  ): boolean {
     return this.updateMutableTextBuffer(pathOrKey, (current) => {
       if (
         !current.isDirty &&
         !current.isSaving &&
         current.content === diskContent &&
-        current.savedContent === diskContent
+        current.savedContent === diskContent &&
+        current.encoding === diskEncoding &&
+        current.savedEncoding === diskEncoding
       ) {
         return null
       }
@@ -241,6 +315,8 @@ export class DocumentBufferStore {
         ...current,
         content: diskContent,
         savedContent: diskContent,
+        encoding: diskEncoding,
+        savedEncoding: diskEncoding,
         isDirty: false,
         isSaving: false,
         version: current.version + 1

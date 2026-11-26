@@ -619,4 +619,96 @@ describe('registerBufferIpc', () => {
     dispose()
     hub.dispose()
   })
+
+  it('supports EUC-KR open, setEncoding, reopenWithEncoding, lossy save protection, and external encoding reconciliation over IPC', async () => {
+    const iconv = await import('iconv-lite')
+    const workspaceInfo = await workspaceService.openWorkspace(workspaceDir)
+    const legacyPath = join(workspaceInfo.rootPath, 'legacy.md')
+    await writeFile(legacyPath, iconv.default.encode('한글 본문', 'cp949'))
+
+    const configService = new ConfigService(configPath)
+    await configService.get()
+    const win1 = createFakeWindowWebContents(701)
+    const win2 = createFakeWindowWebContents(702)
+    const ipcMain = createFakeIpcMain()
+
+    const { dispose } = registerSingleBufferIpcSession({
+      ipcMain,
+      workspaceService,
+      configService,
+      getTargets: () => [win1, win2]
+    })
+
+    // 1. Open auto-detects EUC-KR
+    const opened = (await ipcMain.invokeFrom(
+      win1,
+      BUFFER_IPC_CHANNELS.openWorkspaceFile,
+      legacyPath,
+      'legacy.md'
+    )) as DocumentBuffer
+    expect(opened.content).toBe('한글 본문')
+    expect(opened.encoding).toBe('euc-kr')
+    expect(opened.savedEncoding).toBe('euc-kr')
+    expect(opened.isDirty).toBe(false)
+
+    await ipcMain.invokeFrom(win1, BUFFER_IPC_CHANNELS.syncWindowTabs, [opened.key], {
+      releasePending: true
+    })
+
+    // 2. Edit with unencodable emoji -> saveBuffer without allowLossy returns unencodableChars & keeps disk untouched
+    await ipcMain.invokeFrom(win1, BUFFER_IPC_CHANNELS.updateContent, opened.key, '한글 😀')
+    const blockedSave = (await ipcMain.invokeFrom(
+      win1,
+      BUFFER_IPC_CHANNELS.saveBuffer,
+      opened.key
+    )) as { ok: boolean; unencodableChars?: { count: number; samples: string[] } }
+    expect(blockedSave.ok).toBe(false)
+    expect(blockedSave.unencodableChars).toEqual({ count: 1, samples: ['😀'] })
+    expect(iconv.default.decode(await readFile(legacyPath), 'cp949')).toBe('한글 본문')
+
+    // 3. saveBuffer with allowLossy: true writes '?' replacement
+    const forcedSave = (await ipcMain.invokeFrom(
+      win1,
+      BUFFER_IPC_CHANNELS.saveBuffer,
+      opened.key,
+      { allowLossy: true }
+    )) as { ok: boolean; buffer: DocumentBuffer | null }
+    expect(forcedSave.ok).toBe(true)
+    expect(forcedSave.buffer?.isDirty).toBe(false)
+    expect(iconv.default.decode(await readFile(legacyPath), 'cp949')).toBe('한글 ?')
+
+    // 4. setEncoding to utf-8 marks dirty; reopenWithEncoding reloads disk bytes in euc-kr
+    const converted = (await ipcMain.invokeFrom(
+      win1,
+      BUFFER_IPC_CHANNELS.setEncoding,
+      opened.key,
+      'utf-8'
+    )) as DocumentBuffer
+    expect(converted.encoding).toBe('utf-8')
+    expect(converted.savedEncoding).toBe('euc-kr')
+    expect(converted.isDirty).toBe(true)
+
+    const reopened = (await ipcMain.invokeFrom(
+      win2,
+      BUFFER_IPC_CHANNELS.reopenWithEncoding,
+      opened.key,
+      'euc-kr'
+    )) as DocumentBuffer
+    expect(reopened.encoding).toBe('euc-kr')
+    expect(reopened.savedEncoding).toBe('euc-kr')
+    expect(reopened.isDirty).toBe(false)
+
+    // 5. External disk rewrite in UTF-8 is detected and synced on reconcile
+    await writeFile(legacyPath, '외부 UTF-8 😀', 'utf8')
+    await ipcMain.invokeFrom(win1, BUFFER_IPC_CHANNELS.reconcileWorkspaceBuffersWithDisk)
+    const snap = (await ipcMain.invokeFrom(
+      win2,
+      BUFFER_IPC_CHANNELS.getSnapshot
+    )) as SharedBufferStateSnapshot
+    expect(snap.buffers[opened.key]?.content).toBe('외부 UTF-8 😀')
+    expect(snap.buffers[opened.key]?.encoding).toBe('utf-8')
+    expect(snap.buffers[opened.key]?.savedEncoding).toBe('utf-8')
+
+    dispose()
+  })
 })
