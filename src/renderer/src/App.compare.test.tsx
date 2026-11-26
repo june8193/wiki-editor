@@ -427,9 +427,25 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
     await waitFor(() => {
       expect(within(comparePanel).getByText('src/features/auth')).toBeInTheDocument()
     })
+    const dirButton = within(comparePanel).getByRole('button', { name: 'src/features/auth' })
+    expect(dirButton).toHaveClass('git-tree-dir-btn')
+    expect(dirButton).not.toHaveClass('git-tree-dir-row')
+    expect(dirButton.parentElement).toHaveClass('git-tree-dir-item')
+    expect(dirButton.parentElement).not.toHaveClass('git-tree-branch')
+    expect(dirButton).toHaveAttribute('aria-expanded', 'true')
+    expect(dirButton).toHaveAttribute('title', 'src/features/auth')
+
     expect(within(comparePanel).getByText('login.ts')).toBeInTheDocument()
     expect(within(comparePanel).getByText('session.ts')).toBeInTheDocument()
     expect(within(comparePanel).getByText('Binary')).toBeInTheDocument()
+
+    // Collapse and re-expand folder row
+    await user.click(dirButton)
+    expect(dirButton).toHaveAttribute('aria-expanded', 'false')
+    expect(within(comparePanel).queryByText('login.ts')).not.toBeInTheDocument()
+    await user.click(dirButton)
+    expect(dirButton).toHaveAttribute('aria-expanded', 'true')
+    expect(within(comparePanel).getByText('login.ts')).toBeInTheDocument()
 
     // Filter files
     const filterInput = within(comparePanel).getByRole('textbox', { name: '변경 파일 필터' })

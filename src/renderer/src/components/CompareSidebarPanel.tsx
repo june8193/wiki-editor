@@ -52,10 +52,10 @@ export function CompareSidebarPanel({ state, isRepo, actions }: CompareSidebarPa
       if (node.kind === 'dir') {
         const isCollapsed = state.collapsedTreeDirs.has(node.path)
         return (
-          <div key={`dir:${node.path}`} className="git-tree-branch">
+          <div key={`dir:${node.path}`} className="git-tree-dir-item">
             <button
               type="button"
-              className="git-tree-dir-row"
+              className="git-tree-dir-btn"
               style={getGitTreeIndentStyle(depth)}
               aria-expanded={!isCollapsed}
               title={node.path}
