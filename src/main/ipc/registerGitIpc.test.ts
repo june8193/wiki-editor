@@ -133,6 +133,7 @@ describe('registerGitIpc', () => {
       | 'log'
       | 'commitDetail'
       | 'diff'
+      | 'readBlobSnapshot'
       | 'compareRefs'
       | 'compareSummary'
       | 'stashList'
@@ -165,6 +166,15 @@ describe('registerGitIpc', () => {
       log: vi.fn(async () => sampleLog),
       commitDetail: vi.fn(async () => sampleCommitDetail),
       diff: vi.fn(async () => sampleDiff),
+      readBlobSnapshot: vi.fn(async () => ({
+        path: 'README.md',
+        scope: { kind: 'git-ref' as const, ref: 'HEAD', displayRef: 'HEAD' },
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        encoding: 'utf-8' as const,
+        content: '# Hello'
+      })),
       compareRefs: vi.fn(async () => sampleCompareRefs),
       compareSummary: vi.fn(async () => sampleCompareSummary),
       stashList: vi.fn(async () => sampleStashList),
@@ -341,6 +351,18 @@ describe('registerGitIpc', () => {
     expect(await ipcMain.invoke(GIT_IPC_CHANNELS.diff, workspaceDir, diffRequest)).toEqual(sampleDiff)
     expect(fakeGitService.diff).toHaveBeenCalledWith(opened.rootPath, diffRequest)
 
+    const blobRequest = {
+      path: 'README.md',
+      scope: { kind: 'git-ref' as const, ref: 'HEAD', displayRef: 'HEAD' }
+    }
+    await expect(ipcMain.invoke(GIT_IPC_CHANNELS.readBlobSnapshot, otherDir, blobRequest)).rejects.toThrow(
+      /일치하지 않습니다/
+    )
+    expect(
+      await ipcMain.invoke(GIT_IPC_CHANNELS.readBlobSnapshot, workspaceDir, blobRequest)
+    ).toMatchObject({ path: 'README.md', content: '# Hello' })
+    expect(fakeGitService.readBlobSnapshot).toHaveBeenCalledWith(opened.rootPath, blobRequest)
+
     expect(await ipcMain.invoke(GIT_IPC_CHANNELS.compareRefs, workspaceDir)).toEqual(sampleCompareRefs)
     expect(fakeGitService.compareRefs).toHaveBeenCalledWith(opened.rootPath)
 
@@ -409,6 +431,7 @@ describe('registerGitIpc', () => {
       | 'log'
       | 'commitDetail'
       | 'diff'
+      | 'readBlobSnapshot'
       | 'compareRefs'
       | 'compareSummary'
       | 'stashList'
@@ -453,6 +476,15 @@ describe('registerGitIpc', () => {
         isTruncated: false,
         existsInWorkspace: true,
         rawPatch: ''
+      })),
+      readBlobSnapshot: vi.fn(async () => ({
+        path: 'README.md',
+        scope: { kind: 'git-ref' as const, ref: 'HEAD', displayRef: 'HEAD' },
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        encoding: 'utf-8' as const,
+        content: '# Hello'
       })),
       compareRefs: vi.fn(async () => ({
         defaultBaseRef: 'main',

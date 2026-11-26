@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import { DEFAULT_SEARCH_MATCH_OPTIONS, type WorkspaceSearchResponse } from '@shared/search'
+import type { SymbolCandidateMatch } from '@shared/symbol'
 import { ConfigService } from '../config/ConfigService'
 import { LogService } from '../logging/LogService'
 import { createDiskWorkspaceQueryAndSchemaHub } from '../workspace/diskWorkspaceQueryAndSchema'
@@ -128,6 +129,12 @@ describe('registerWorkspaceIpc', () => {
       WORKSPACE_IPC_CHANNELS.listMarkdownFiles
     )) as Array<{ relativePath: string }>
     expect(markdownFiles.map((item) => item.relativePath)).toEqual(['guides/intro.md'])
+
+    const symbolMatches = (await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.searchSymbols, {
+      symbolName: 'Edited',
+      scope: { kind: 'working-tree' }
+    })) as Array<{ path: string; lineNumber: number }>
+    expect(symbolMatches).toEqual([expect.objectContaining({ path: 'guides/intro.md', lineNumber: 1 })])
 
     const renamed = (await ipcMain.invoke(
       WORKSPACE_IPC_CHANNELS.renameEntry,
@@ -431,5 +438,45 @@ describe('registerWorkspaceIpc', () => {
 
     dispose()
     bufferHub.dispose()
+  })
+
+  it('routes workspace:search-symbols through the active session queryAndSchemaHub', async () => {
+    const configService = new ConfigService(configPath)
+    await configService.get()
+    const ipcMain = createFakeIpcMain()
+
+    const dispose = registerSingleWorkspaceIpc({
+      ipcMain,
+      workspaceService,
+      configService,
+      selectDirectory: async () => workspaceDir,
+      getTargets: () => []
+    })
+
+    const opened = (await ipcMain.invoke(WORKSPACE_IPC_CHANNELS.open, workspaceDir)) as {
+      rootPath: string
+    }
+    await writeFile(
+      join(opened.rootPath, 'math.ts'),
+      'export function sumValues(a: number, b: number) { return a + b }\n',
+      'utf8'
+    )
+
+    const matches = await ipcMain.invoke<SymbolCandidateMatch[]>(
+      WORKSPACE_IPC_CHANNELS.searchSymbols,
+      {
+        symbolName: 'sumValues',
+        scope: { kind: 'working-tree' }
+      }
+    )
+    expect(matches).toHaveLength(1)
+    expect(matches[0]).toMatchObject({
+      path: 'math.ts',
+      lineNumber: 1,
+      columnStart: 16,
+      columnEnd: 25
+    })
+
+    dispose()
   })
 })

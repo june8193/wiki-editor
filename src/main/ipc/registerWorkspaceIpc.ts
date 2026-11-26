@@ -1,6 +1,7 @@
 import type { WorkspaceImageIngestInput } from '@shared/assets'
 import { WORKSPACE_IPC_CHANNELS } from '@shared/ipc'
 import type { WorkspaceSearchRequest } from '@shared/search'
+import type { SymbolQueryRequest } from '@shared/symbol'
 import type {
   FocusOpenWorkspaceResult,
   OpenWorkspaceInNewWindowResult,
@@ -153,6 +154,11 @@ export function registerWorkspaceIpc({
       WORKSPACE_IPC_CHANNELS.search,
       (event, request) =>
         requireSession(event).queryAndSchemaHub.search(request as WorkspaceSearchRequest)
+    ],
+    [
+      WORKSPACE_IPC_CHANNELS.searchSymbols,
+      (event, request) =>
+        requireSession(event).queryAndSchemaHub.searchSymbols(request as SymbolQueryRequest)
     ],
     [
       WORKSPACE_IPC_CHANNELS.readFile,

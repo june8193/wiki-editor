@@ -151,6 +151,7 @@ function createPendingWikiGitApi(): WikiGitApi {
   return {
     status: () => never(),
     diff: () => never(),
+    readBlobSnapshot: () => never(),
     compareRefs: () => never(),
     compareSummary: () => never(),
     branches: () => never(),

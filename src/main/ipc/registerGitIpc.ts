@@ -4,6 +4,7 @@ import type {
   GitLogOptions,
   GitStashCreateOptions
 } from '@shared/git'
+import type { GitBlobSnapshotRequest } from '@shared/symbol'
 import { GIT_IPC_CHANNELS } from '@shared/ipc'
 import { isSameWorkspacePath } from '@shared/workspace'
 import type { GitService } from '../git/GitService'
@@ -122,6 +123,12 @@ export function registerGitIpc({
       GIT_IPC_CHANNELS.diff,
       withWorkspace<[GitDiffRequest], Awaited<ReturnType<GitService['diff']>>>(
         (rootPath, request) => gitService.diff(rootPath, request)
+      )
+    ],
+    [
+      GIT_IPC_CHANNELS.readBlobSnapshot,
+      withWorkspace<[GitBlobSnapshotRequest], Awaited<ReturnType<GitService['readBlobSnapshot']>>>(
+        (rootPath, request) => gitService.readBlobSnapshot(rootPath, request)
       )
     ],
     [
