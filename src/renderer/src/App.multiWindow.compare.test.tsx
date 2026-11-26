@@ -174,6 +174,18 @@ describe('Compare Diff tab split/duplicate and auxiliary window compatibility (<
       })
     )
 
+    // Duplicate in auxiliary window and close primary -> keeps cached diff without extra git.diff IPC calls
+    const auxDiffCallsAfterOpen = gitOverrides.diff.mock.calls.length
+    const auxTabTrigger = within(auxPrimaryPane).getByRole('tab', { name: /login\.ts/ })
+    await user.pointer({ target: auxTabTrigger, keys: '[MouseRight]' })
+    const auxMenu = await within(auxRendered.container).findByRole('menu', {
+      name: '탭 작업 메뉴'
+    })
+    await user.click(within(auxMenu).getByRole('menuitem', { name: '분할 영역에 복제 열기' }))
+    const auxSecondaryPane = await within(auxRendered.container).findByTestId('pane-secondary')
+    await expectDiffHighlights(auxSecondaryPane)
+    expect(gitOverrides.diff).toHaveBeenCalledTimes(auxDiffCallsAfterOpen)
+
     // Toggle 좌우 비교 <-> 인라인 in auxiliary window
     await user.click(within(auxPrimaryPane).getByRole('button', { name: '인라인' }))
     expect(within(auxPrimaryPane).getByRole('button', { name: '인라인' })).toHaveAttribute(

@@ -1275,4 +1275,305 @@ describe('GitSession', () => {
 
     session.dispose()
   })
+
+  it('caches loaded immutable diffs across tab switches, merges snapshot commits, and does not cache error states', async () => {
+    const tabStore = new PaneTabStore()
+    let failErrFile = true
+    const diffMock = vi.fn<WikiGitApi['diff']>(async (_ws, req) => {
+      if (req.path === 'err.md' && failErrFile) {
+        throw new Error('network error')
+      }
+      return {
+        path: req.path,
+        status: req.status,
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        rawPatch: `patch:${req.path}`
+      }
+    })
+
+    const session = new GitSession({
+      gitApi: createTestGitApi({ diff: diffMock }),
+      buffers: createStubBuffers(),
+      diffTabs: createPaneTabDiffAdapter(tabStore),
+      confirm: createStubConfirm(),
+      refreshTree: vi.fn(async () => undefined),
+      workspaceRootPath: 'C:/repo'
+    })
+    session.start()
+    await flushAsync()
+
+    const reqA: GitDiffRequest = {
+      kind: 'branch-compare',
+      baseRef: 'main',
+      compareRef: 'feat/a',
+      mode: 'three-dot',
+      mergeBaseHash: '1111111',
+      path: 'a.md',
+      status: 'M'
+    }
+    const reqB: GitDiffRequest = {
+      kind: 'branch-compare',
+      baseRef: 'main',
+      compareRef: 'feat/a',
+      mode: 'three-dot',
+      mergeBaseHash: '1111111',
+      path: 'b.md',
+      status: 'M'
+    }
+    const keyA = formatGitDiffTabKey(reqA)
+    const keyB = formatGitDiffTabKey(reqB)
+
+    // Load A, then replace with B (miss -> single merged snapshot commit for pruning A + loading B)
+    session.actions.openFileDiff(reqA)
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(1)
+
+    const missSnapshots: string[] = []
+    const unsubMiss = session.subscribe(() => {
+      missSnapshots.push(session.getSnapshot().diffsByKey[keyB]?.status ?? 'missing')
+    })
+    session.actions.openFileDiff(reqB)
+    unsubMiss()
+    expect(missSnapshots).toEqual(['loading'])
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(2)
+    expect(session.getSnapshot().diffsByKey[keyA]).toBeUndefined()
+
+    // Revisit A -> cache hit: 0 IPC calls, single snapshot commit, no 'loading' state
+    const hitStatuses: string[] = []
+    const unsubHit = session.subscribe(() => {
+      hitStatuses.push(session.getSnapshot().diffsByKey[keyA]?.status ?? 'missing')
+    })
+    session.actions.openFileDiff(reqA)
+    unsubHit()
+    expect(diffMock).toHaveBeenCalledTimes(2)
+    expect(hitStatuses).toEqual(['loaded'])
+    expect(session.getSnapshot().diffsByKey[keyA]).toMatchObject({
+      status: 'loaded',
+      diff: { rawPatch: 'patch:a.md' }
+    })
+
+    // Error state is not cached and retries on revisit
+    const reqErr: GitDiffRequest = {
+      kind: 'commit',
+      commitHash: 'deadbeef',
+      shortHash: 'deadbee',
+      path: 'err.md',
+      status: 'M'
+    }
+    session.actions.openFileDiff(reqErr)
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(3)
+    expect(session.getSnapshot().diffsByKey[formatGitDiffTabKey(reqErr)]?.status).toBe('error')
+
+    session.actions.openFileDiff(reqA)
+    expect(diffMock).toHaveBeenCalledTimes(3)
+
+    failErrFile = false
+    session.actions.openFileDiff(reqErr)
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(4)
+    expect(session.getSnapshot().diffsByKey[formatGitDiffTabKey(reqErr)]).toMatchObject({
+      status: 'loaded',
+      diff: { rawPatch: 'patch:err.md' }
+    })
+
+    session.dispose()
+  })
+
+  it('evicts least-recently-used non-open immutable diffs when exceeding entry count or byte budget', async () => {
+    const tabStore = new PaneTabStore()
+    let patchSize = 10
+    const diffMock = vi.fn<WikiGitApi['diff']>(async (_ws, req) => ({
+      path: req.path,
+      status: req.status,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: true,
+      rawPatch: 'x'.repeat(patchSize)
+    }))
+
+    const session = new GitSession({
+      gitApi: createTestGitApi({ diff: diffMock }),
+      buffers: createStubBuffers(),
+      diffTabs: createPaneTabDiffAdapter(tabStore),
+      confirm: createStubConfirm(),
+      refreshTree: vi.fn(async () => undefined),
+      workspaceRootPath: 'C:/repo'
+    })
+    session.start()
+    await flushAsync()
+
+    const makeCompareReq = (name: string): GitDiffRequest => ({
+      kind: 'branch-compare',
+      baseRef: 'main',
+      compareRef: 'feat/lru',
+      mode: 'three-dot',
+      mergeBaseHash: '1111111',
+      path: name,
+      status: 'M'
+    })
+
+    // 1. Entry count bound (40): open f-0 .. f-39
+    for (let i = 0; i < 40; i++) {
+      session.actions.openFileDiff(makeCompareReq(`f-${i}.md`))
+      await flushAsync()
+    }
+    expect(diffMock).toHaveBeenCalledTimes(40)
+
+    // Revisit f-0 -> promotes f-0 to MRU (f-1 becomes LRU) without calling diffMock
+    session.actions.openFileDiff(makeCompareReq('f-0.md'))
+    expect(diffMock).toHaveBeenCalledTimes(40)
+
+    // Open f-40 (41st) -> evicts f-1, keeps f-0
+    session.actions.openFileDiff(makeCompareReq('f-40.md'))
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(41)
+
+    session.actions.openFileDiff(makeCompareReq('f-0.md'))
+    expect(diffMock).toHaveBeenCalledTimes(41)
+
+    session.actions.openFileDiff(makeCompareReq('f-1.md'))
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(42)
+
+    // 2. Byte budget bound (12MB): open 13 x 1MB patches -> oldest 1MB entry evicted, open tab protected
+    patchSize = 1024 * 1024
+    for (let i = 0; i < 12; i++) {
+      session.actions.openFileDiff(makeCompareReq(`big-${i}.md`))
+      await flushAsync()
+    }
+    const callsAfter12 = diffMock.mock.calls.length
+    // Keep big-0 open in secondary pane to verify open tabs are protected from eviction
+    session.actions.openFileDiff(makeCompareReq('big-0.md'))
+    expect(diffMock).toHaveBeenCalledTimes(callsAfter12)
+    const big0Tab = tabStore.getActiveTab('primary')!
+    tabStore.duplicateTabToOtherPane('primary', big0Tab.id)
+    tabStore.focusPane('primary')
+
+    // Open big-12 (13th 1MB patch) -> big-0 is open so big-1 is evicted instead
+    session.actions.openFileDiff(makeCompareReq('big-12.md'))
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(callsAfter12 + 1)
+
+    // Close big-0 in secondary, revisit big-0 (still cached), then revisit big-1 (evicted -> refetches)
+    const secTab = tabStore.getActiveTab('secondary')!
+    tabStore.closeTab('secondary', secTab.id)
+    session.actions.openFileDiff(makeCompareReq('big-0.md'))
+    expect(diffMock).toHaveBeenCalledTimes(callsAfter12 + 1)
+
+    session.actions.openFileDiff(makeCompareReq('big-1.md'))
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(callsAfter12 + 2)
+
+    session.dispose()
+  })
+
+  it('invalidates cached stash diffs when stash is dropped, and clears all immutable caches on workspace switch or dispose', async () => {
+    const tabStore = new PaneTabStore()
+    const stash0: GitStashEntry = {
+      ref: 'stash@{0}',
+      hash: 'hash-s0',
+      branch: 'main',
+      message: 's0',
+      createdAt: '2026-11-15T12:00:00+09:00'
+    }
+    const stash1: GitStashEntry = {
+      ref: 'stash@{1}',
+      hash: 'hash-s1',
+      branch: 'main',
+      message: 's1',
+      createdAt: '2026-11-15T11:00:00+09:00'
+    }
+    let activeStashes: GitStashEntry[] = [stash0, stash1]
+    const diffMock = vi.fn<WikiGitApi['diff']>(async (_ws, req) => ({
+      path: req.path,
+      status: req.status,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: true,
+      rawPatch: `patch:${req.path}`
+    }))
+
+    const session = new GitSession({
+      gitApi: createTestGitApi({
+        stashList: vi.fn(async () => activeStashes),
+        stashDrop: vi.fn(async () => {
+          activeStashes = [{ ...stash1, ref: 'stash@{0}' }]
+          return activeStashes
+        }),
+        diff: diffMock
+      }),
+      buffers: createStubBuffers(),
+      diffTabs: createPaneTabDiffAdapter(tabStore),
+      confirm: createStubConfirm(),
+      refreshTree: vi.fn(async () => undefined),
+      workspaceRootPath: 'C:/repo-a'
+    })
+    session.start()
+    await flushAsync()
+
+    const stash0Req: GitDiffRequest = {
+      kind: 'stash',
+      stashRef: stash0.ref,
+      stashHash: stash0.hash,
+      path: 's0.md',
+      status: 'M'
+    }
+    const stash1Req: GitDiffRequest = {
+      kind: 'stash',
+      stashRef: stash1.ref,
+      stashHash: stash1.hash,
+      path: 's1.md',
+      status: 'M'
+    }
+    const commitReq: GitDiffRequest = {
+      kind: 'commit',
+      commitHash: 'abc1234',
+      shortHash: 'abc1234',
+      path: 'c.md',
+      status: 'M'
+    }
+
+    // Load stash0, stash1, then switch single tab to commitReq (so stash0 & stash1 are only in LRU cache)
+    session.actions.openFileDiff(stash0Req)
+    await flushAsync()
+    session.actions.openFileDiff(stash1Req)
+    await flushAsync()
+    session.actions.openFileDiff(commitReq)
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(3)
+
+    // Drop stash@{0} -> hash-s0 pruned from LRU cache, hash-s1 preserved
+    await session.actions.stashDrop('stash@{0}')
+    await flushAsync()
+
+    session.actions.openFileDiff(stash1Req)
+    expect(diffMock).toHaveBeenCalledTimes(3)
+
+    session.actions.openFileDiff(stash0Req)
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(4)
+
+    // Workspace switch clears cache
+    session.setWorkspaceRootPath('C:/repo-b')
+    await flushAsync()
+    session.setWorkspaceRootPath('C:/repo-a')
+    await flushAsync()
+    session.actions.openFileDiff(commitReq)
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(5)
+
+    // dispose() clears immutable LRU cache (revisiting non-open stash1Req refetches)
+    session.dispose()
+    session.start()
+    await flushAsync()
+    session.actions.openFileDiff(stash1Req)
+    await flushAsync()
+    expect(diffMock).toHaveBeenCalledTimes(6)
+
+    session.dispose()
+  })
 })

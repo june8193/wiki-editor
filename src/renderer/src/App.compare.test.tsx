@@ -1094,4 +1094,165 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
 
     spanSpy.mockRestore()
   })
+
+  it('revisits cached branch-compare files via click and ↑/↓ with 0 git.diff calls and no loading flicker, evicts LRU over 40 entries, clears on workspace switch, and keeps working-tree diffs fresh', async () => {
+    const user = userEvent.setup()
+    const files = Array.from({ length: 41 }, (_, i) => ({
+      path: `docs/file-${String(i).padStart(2, '0')}.md`,
+      status: 'M' as const,
+      additions: 1,
+      deletions: 1,
+      isBinary: false
+    }))
+    const summary: GitCompareSummary = {
+      baseRef: 'main',
+      compareRef: 'feat/compare',
+      mode: 'three-dot',
+      mergeBaseHash: '1111111',
+      totalAdditions: 41,
+      totalDeletions: 41,
+      files,
+      commits: []
+    }
+
+    let unstagedRev = 1
+    let currentWs = 'C:/repo-a'
+    const diffMock = vi.fn(async (_ws: string, req: { kind: string; path: string; status: 'M' | 'A' | 'D' | 'R' | 'C' | 'U' | '?' }) => ({
+      path: req.path,
+      status: req.status,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: true,
+      rawPatch:
+        req.kind === 'unstaged'
+          ? `diff --git a/${req.path} b/${req.path}\n--- a/${req.path}\n+++ b/${req.path}\n@@ -1 +1 @@\n-old\n+rev-${unstagedRev}`
+          : `diff --git a/${req.path} b/${req.path}\n--- a/${req.path}\n+++ b/${req.path}\n@@ -1 +1 @@\n-old\n+new-${req.path}`
+    }))
+
+    const { api } = createInMemoryWikiApi(
+      { recentWorkspaces: ['C:/repo-a', 'C:/repo-b'] },
+      {
+        selectedFolder: 'C:/repo-a',
+        workspaces: {
+          'C:/repo-a': {
+            'docs/file-00.md': '# 00\n',
+            'working.md': '# working\n'
+          },
+          'C:/repo-b': {
+            'README.md': '# B\n'
+          }
+        },
+        git: {
+          status: vi.fn(async (ws) => {
+            currentWs = ws
+            return {
+              ...createEmptyGitStatus(true, ws),
+              branch: 'feat/compare',
+              unstaged: ws.includes('repo-a') ? [{ path: 'working.md', status: 'M' as const }] : []
+            }
+          }),
+          compareRefs: vi.fn(async (): Promise<GitCompareRefList> => ({
+            defaultBaseRef: 'main',
+            currentRef: 'feat/compare',
+            worktrees: [],
+            localBranches: [
+              { id: 'local:main', kind: 'local-branch', ref: 'main', displayName: 'main', isCurrent: false },
+              {
+                id: 'local:feat/compare',
+                kind: 'local-branch',
+                ref: 'feat/compare',
+                displayName: 'feat/compare',
+                isCurrent: true
+              }
+            ],
+            remoteBranches: []
+          })),
+          compareSummary: vi.fn(async () => summary),
+          diff: diffMock
+        }
+      }
+    )
+    window.wikiApi = api
+
+    const { container } = render(<App />)
+    await waitFor(() => {
+      expect(screen.getByText('repo-a')).toBeInTheDocument()
+    })
+
+    await clickActivityBarButton(user, 'Compare')
+    const comparePanel = screen.getByRole('region', { name: '브랜치 비교' })
+
+    // 1. Open file-00.md, then navigate ↓ to file-01.md
+    await user.click(await within(comparePanel).findByRole('button', { name: /file-00\.md/ }))
+    const primaryPane = screen.getByTestId('pane-primary')
+    await within(primaryPane).findByText(matchDiffLineText('new-docs/file-00.md'))
+    expect(diffMock).toHaveBeenCalledTimes(1)
+
+    await user.click(within(primaryPane).getByRole('button', { name: '다음 파일' }))
+    await within(primaryPane).findByText(matchDiffLineText('new-docs/file-01.md'))
+    expect(diffMock).toHaveBeenCalledTimes(2)
+
+    // 2. Navigate ↑ back to file-00.md -> 0 extra git.diff calls and no loading screen
+    let sawLoadingOnRevisit = false
+    const observer = new MutationObserver(() => {
+      if (primaryPane.textContent?.includes('Diff 불러오는 중...')) {
+        sawLoadingOnRevisit = true
+      }
+    })
+    observer.observe(primaryPane, { childList: true, subtree: true, characterData: true })
+
+    await user.click(within(primaryPane).getByRole('button', { name: '이전 파일' }))
+    await within(primaryPane).findByText(matchDiffLineText('new-docs/file-00.md'))
+    observer.disconnect()
+
+    expect(sawLoadingOnRevisit).toBe(false)
+    expect(diffMock).toHaveBeenCalledTimes(2)
+
+    // 3. Navigate ↓ through file-01 .. file-40 -> 41st file evicts file-00 (oldest non-open)
+    for (let i = 1; i < 41; i++) {
+      await user.click(within(primaryPane).getByRole('button', { name: '다음 파일' }))
+      await within(primaryPane).findByText(
+        matchDiffLineText(`new-docs/file-${String(i).padStart(2, '0')}.md`)
+      )
+    }
+    expect(diffMock).toHaveBeenCalledTimes(41)
+
+    // Revisit file-01 -> still cached (0 calls)
+    await user.click(await within(comparePanel).findByRole('button', { name: /file-01\.md/ }))
+    await within(primaryPane).findByText(matchDiffLineText('new-docs/file-01.md'))
+    expect(diffMock).toHaveBeenCalledTimes(41)
+
+    // Revisit file-00 -> was evicted -> calls git.diff (42 calls)
+    await user.click(await within(comparePanel).findByRole('button', { name: /file-00\.md/ }))
+    await within(primaryPane).findByText(matchDiffLineText('new-docs/file-00.md'))
+    expect(diffMock).toHaveBeenCalledTimes(42)
+
+    // 4. Switch workspace to repo-b and back to repo-a -> cache cleared
+    await switchWorkspaceFromView(user, /^repo-b$/)
+    await waitFor(() => {
+      expect(currentWs).toContain('repo-b')
+    })
+    await switchWorkspaceFromView(user, /^repo-a$/)
+    await waitFor(() => {
+      expect(currentWs).toContain('repo-a')
+    })
+    await clickActivityBarButton(user, 'Compare')
+    await user.click(await within(screen.getByRole('region', { name: '브랜치 비교' })).findByRole('button', { name: /file-01\.md/ }))
+    await within(screen.getByTestId('pane-primary')).findByText(matchDiffLineText('new-docs/file-01.md'))
+    expect(diffMock).toHaveBeenCalledTimes(43)
+
+    // 5. Working-tree (unstaged) diff stays fresh on re-open
+    await clickActivityBarButton(user, 'Git')
+    const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
+    await user.click(await within(gitRegion).findByText('working.md'))
+    await within(screen.getByTestId('pane-primary')).findByText(matchDiffLineText('rev-1'))
+    expect(diffMock).toHaveBeenCalledTimes(44)
+
+    unstagedRev = 2
+    await user.click(await within(gitRegion).findByText('working.md'))
+    await within(screen.getByTestId('pane-primary')).findByText(matchDiffLineText('rev-2'))
+    expect(diffMock).toHaveBeenCalledTimes(45)
+
+    void container
+  })
 })
