@@ -176,11 +176,16 @@ export function truncateBufferAtCharBoundary(
     return buffer
   }
 
-  const resolvedEncoding: TextEncoding =
-    encoding === 'auto' ? (isStrictUtf8(buffer) ? 'utf-8' : 'euc-kr') : encoding
+  if (encoding === 'auto') {
+    const utf8End = findUtf8BoundaryEnd(buffer, maxBytes)
+    if (isStrictUtf8(buffer.subarray(0, utf8End))) {
+      return buffer.subarray(0, utf8End)
+    }
+    return buffer.subarray(0, findCp949BoundaryEnd(buffer, maxBytes))
+  }
 
   const safeEnd =
-    resolvedEncoding === 'utf-8'
+    encoding === 'utf-8'
       ? findUtf8BoundaryEnd(buffer, maxBytes)
       : findCp949BoundaryEnd(buffer, maxBytes)
 

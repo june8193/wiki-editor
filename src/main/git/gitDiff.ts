@@ -9,6 +9,7 @@ import {
   type GitDiffRequest,
   type GitFileDiff
 } from '@shared/git'
+import { decodeTextAuto, truncateBufferAtCharBoundary } from '../encoding/textEncoding'
 import { hasBlockedPathSegment, isMissingPathError, isPathInsideRoot } from '../fs/pathSecurity'
 import { IGNORED_ENTRY_NAMES } from '../workspace/WorkspaceFsService'
 import {
@@ -37,34 +38,36 @@ export interface GitDiffExecArgs {
   execOptions: GitDiffExecOptions
 }
 
-function utf8SequenceLength(leadByte: number): number {
-  if ((leadByte & 0x80) === 0) return 1
-  if ((leadByte & 0xe0) === 0xc0) return 2
-  if ((leadByte & 0xf0) === 0xe0) return 3
-  if ((leadByte & 0xf8) === 0xf0) return 4
-  return 1
-}
-
-export function truncateUtf8BufferToMaxBytes(
+function truncateUnifiedPatchBuffer(
   buffer: Buffer,
   maxBytes: number = GIT_DIFF_MAX_BYTES
-): { text: string; isTruncated: boolean } {
-  if (buffer.length <= maxBytes) {
-    return { text: buffer.toString('utf8'), isTruncated: false }
+): Buffer {
+  if (buffer.byteLength <= maxBytes) {
+    return buffer
   }
+  const lastNewline = buffer.lastIndexOf(0x0a, maxBytes - 1)
+  const lineStart = lastNewline >= 0 ? lastNewline + 1 : 0
+  const boundaryLine = truncateBufferAtCharBoundary(
+    buffer.subarray(lineStart),
+    maxBytes - lineStart,
+    'auto'
+  )
+  return buffer.subarray(0, lineStart + boundaryLine.byteLength)
+}
 
-  let charStart = maxBytes - 1
-  while (charStart > 0 && (buffer[charStart] & 0xc0) === 0x80) {
-    charStart -= 1
+function decodePatchLinesAuto(buffer: Buffer): string {
+  const lines: string[] = []
+  let start = 0
+  while (start <= buffer.byteLength) {
+    const nlIndex = buffer.indexOf(0x0a, start)
+    const end = nlIndex === -1 ? buffer.byteLength : nlIndex
+    lines.push(decodeTextAuto(buffer.subarray(start, end)).content)
+    if (nlIndex === -1) {
+      break
+    }
+    start = nlIndex + 1
   }
-  const seqLen = utf8SequenceLength(buffer[charStart])
-  const charEnd = charStart + seqLen
-  const end = charEnd <= maxBytes ? charEnd : charStart
-
-  return {
-    text: buffer.subarray(0, end).toString('utf8'),
-    isTruncated: true
-  }
+  return lines.join('\n')
 }
 
 export function isGitBinaryPatchOutput(patchText: string, hasNullByte: boolean): boolean {
@@ -262,16 +265,18 @@ function buildUntrackedBlobDiffResult(
     }
   }
 
-  const { text, isTruncated: textTruncated } = truncateUtf8BufferToMaxBytes(
-    result.buffer,
-    GIT_DIFF_MAX_BYTES
-  )
+  const textTruncated = result.buffer.byteLength > GIT_DIFF_MAX_BYTES
+  const boundedInput = truncateBufferAtCharBoundary(result.buffer, GIT_DIFF_MAX_BYTES, 'auto')
+  const { content: text } = decodeTextAuto(boundedInput)
+
   const fullPatch = buildUntrackedUnifiedPatch(safePath, text)
   const patchBuffer = Buffer.from(fullPatch, 'utf8')
-  const { text: boundedPatch, isTruncated: patchExceeded } = truncateUtf8BufferToMaxBytes(
+  const patchExceeded = patchBuffer.byteLength > GIT_DIFF_MAX_BYTES
+  const boundedPatch = truncateBufferAtCharBoundary(
     patchBuffer,
-    GIT_DIFF_MAX_BYTES
-  )
+    GIT_DIFF_MAX_BYTES,
+    'utf-8'
+  ).toString('utf8')
 
   return {
     path: safePath,
@@ -504,8 +509,10 @@ export async function computeGitDiff({
     execOptions
   })
 
-  const preliminaryText = buffer.toString('utf8')
-  const isBinary = isGitBinaryPatchOutput(preliminaryText, hasNullByte)
+  const byteLimitExceeded = buffer.byteLength > GIT_DIFF_MAX_BYTES
+  const boundedBuffer = truncateUnifiedPatchBuffer(buffer, GIT_DIFF_MAX_BYTES)
+  const boundedPatch = decodePatchLinesAuto(boundedBuffer)
+  const isBinary = isGitBinaryPatchOutput(boundedPatch, hasNullByte)
   if (isBinary) {
     return {
       path: safePath,
@@ -518,17 +525,12 @@ export async function computeGitDiff({
     }
   }
 
-  const { text: boundedPatch, isTruncated: utf8Truncated } = truncateUtf8BufferToMaxBytes(
-    buffer,
-    GIT_DIFF_MAX_BYTES
-  )
-
   return {
     path: safePath,
     ...(safeOrigPath ? { origPath: safeOrigPath } : {}),
     status,
     isBinary: false,
-    isTruncated: truncated || utf8Truncated,
+    isTruncated: truncated || byteLimitExceeded,
     existsInWorkspace,
     rawPatch: boundedPatch
   }
