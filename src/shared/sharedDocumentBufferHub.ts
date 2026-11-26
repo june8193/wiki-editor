@@ -8,13 +8,22 @@ import {
   isMissingWorkspaceFileError,
   type OpenBufferInput,
   type ReconcileBuffersResult,
+  type SaveBufferOptions,
   type SaveBufferResult,
   type SharedBufferHubEvent,
   type SharedBufferStateSnapshot,
   type SyncWindowTabsOptions
 } from './documentBuffer'
 import { createDocumentBuffer, DocumentBufferStore } from './documentBufferStore'
+import {
+  DEFAULT_TEXT_ENCODING,
+  type ReadFileWithEncodingResult,
+  type TextEncoding,
+  UnencodableCharactersError,
+  type WriteFileWithEncodingOptions
+} from './encoding'
 import { toErrorMessage } from './errors'
+import { FRONTMATTER_SCHEMA_RELATIVE_PATH } from './frontmatterSchema'
 import type { WindowRole } from './window'
 import { type TabCountChange, WindowTabTracker } from './windowTabTracker'
 import {
@@ -31,11 +40,34 @@ type TextOpenBufferInput = Extract<OpenBufferInput, { content: string }>
 
 export interface SharedDocumentBufferStorage {
   readWorkspaceFile: (filePath: string) => Promise<string>
-  writeWorkspaceFile: (filePath: string, content: string) => Promise<void>
+  readWorkspaceFileWithEncoding?: (
+    filePath: string,
+    encoding?: TextEncoding
+  ) => Promise<ReadFileWithEncodingResult>
+  writeWorkspaceFile: (
+    filePath: string,
+    content: string,
+    options?: WriteFileWithEncodingOptions
+  ) => Promise<void>
   readWorkspaceDirectory?: (dirPath: string) => Promise<WorkspaceEntry[]>
   getConfigPath: () => Promise<string>
   readConfigRaw: () => Promise<string>
   saveConfigRaw: (raw: string) => Promise<unknown>
+}
+
+function isFrontmatterSchemaKey(key: string): boolean {
+  return (
+    key === FRONTMATTER_SCHEMA_RELATIVE_PATH ||
+    key.endsWith(`/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`)
+  )
+}
+
+function isEncodingLockedBuffer(buffer: DocumentBuffer): boolean {
+  return (
+    buffer.kind === 'config' ||
+    buffer.contentKind === 'image' ||
+    isFrontmatterSchemaKey(buffer.key)
+  )
 }
 
 export interface SharedDocumentBufferHubOptions {
@@ -186,7 +218,7 @@ export class SharedDocumentBufferHub {
       isSuppressed: (key) => this.isKeyDiscarding(key),
       getLatestBuffer: (key) => this.store.getBuffer(key),
       onTriggerSave: (buffer) => {
-        void this.executeSave(buffer)
+        void this.executeSave(buffer, { isAutoSave: true })
       }
     })
   }
@@ -270,10 +302,29 @@ export class SharedDocumentBufferHub {
     return { ...created }
   }
 
+  private async readWorkspaceFileWithEncoding(
+    filePath: string,
+    encoding?: TextEncoding
+  ): Promise<ReadFileWithEncodingResult> {
+    const key = getWorkspacePathKey(filePath)
+    const forcedEncoding = isFrontmatterSchemaKey(key) ? DEFAULT_TEXT_ENCODING : encoding
+    if (this.storage.readWorkspaceFileWithEncoding) {
+      const result = await this.storage.readWorkspaceFileWithEncoding(filePath, forcedEncoding)
+      return isFrontmatterSchemaKey(key)
+        ? { content: result.content, encoding: DEFAULT_TEXT_ENCODING }
+        : result
+    }
+    const content = await this.storage.readWorkspaceFile(filePath)
+    return {
+      content,
+      encoding: forcedEncoding ?? DEFAULT_TEXT_ENCODING
+    }
+  }
+
   private async loadAndOpenBuffer(
-    input: Omit<TextOpenBufferInput, 'content'>,
+    input: Omit<TextOpenBufferInput, 'content' | 'encoding'>,
     windowId: number | undefined,
-    readContent: () => Promise<string>
+    readContent: () => Promise<ReadFileWithEncodingResult>
   ): Promise<DocumentBuffer> {
     const initialKey = getWorkspacePathKey(input.path)
     this.tabTracker.registerPendingOpenOwner(initialKey, windowId)
@@ -286,7 +337,7 @@ export class SharedDocumentBufferHub {
           promise: Promise.resolve({} as DocumentBuffer)
         }
         createdEntry.promise = (async () => {
-          const content = await readContent()
+          const { content, encoding } = await readContent()
           const latestKey = createdEntry.currentKey
           const latestInput = createdEntry.currentInput
           const latest = this.store.getBuffer(latestKey)
@@ -298,9 +349,9 @@ export class SharedDocumentBufferHub {
             createdEntry.deleted ||
             (windowId !== undefined && !this.tabTracker.hasActiveOrPendingOwner(latestKey))
           ) {
-            return createDocumentBuffer({ ...latestInput, content })
+            return createDocumentBuffer({ ...latestInput, content, encoding })
           }
-          return this.createBuffer({ ...latestInput, content })
+          return this.createBuffer({ ...latestInput, content, encoding })
         })().finally(() => {
           if (this.inFlightOpens.get(createdEntry.currentKey) === createdEntry) {
             this.inFlightOpens.delete(createdEntry.currentKey)
@@ -350,9 +401,14 @@ export class SharedDocumentBufferHub {
     }
 
     return this.loadAndOpenBuffer({ kind: 'workspace', path: filePath, name }, windowId, () =>
-      this.storage.readWorkspaceFile(filePath)
+      this.readWorkspaceFileWithEncoding(filePath)
     )
   }
+
+  private readConfigWithEncoding = async (): Promise<ReadFileWithEncodingResult> => ({
+    content: await this.storage.readConfigRaw(),
+    encoding: DEFAULT_TEXT_ENCODING
+  })
 
   async openConfigDocument(windowId?: number): Promise<DocumentBuffer> {
     const existingConfig = this.store.getConfigBuffer()
@@ -369,13 +425,13 @@ export class SharedDocumentBufferHub {
     return this.loadAndOpenBuffer(
       { kind: 'config', path: configPath, name: 'config.json' },
       windowId,
-      () => this.storage.readConfigRaw()
+      this.readConfigWithEncoding
     )
   }
 
   private async refreshCleanBufferFromStorage(
     getBuffer: () => DocumentBuffer | undefined,
-    readRaw: (buffer: DocumentBuffer) => Promise<string>
+    readRaw: (buffer: DocumentBuffer) => Promise<ReadFileWithEncodingResult>
   ): Promise<DocumentBuffer | null> {
     const existing = getBuffer()
     if (!existing || existing.isDirty || existing.isSaving || this.inFlightSaves.has(existing.key)) {
@@ -385,7 +441,7 @@ export class SharedDocumentBufferHub {
     const refreshToken = ++this.nextCleanRefreshToken
     this.cleanRefreshTokens.set(existing.key, refreshToken)
 
-    const freshRaw = await readRaw(existing)
+    const { content: freshRaw, encoding: freshEncoding } = await readRaw(existing)
     if (this.disposed) {
       return null
     }
@@ -402,7 +458,7 @@ export class SharedDocumentBufferHub {
       return latest ? { ...latest } : null
     }
 
-    if (this.store.refreshCleanContent(latest.key, freshRaw)) {
+    if (this.store.refreshCleanContent(latest.key, freshRaw, freshEncoding)) {
       this.emitStateChanged()
     }
     const updated = this.store.getBuffer(latest.key)
@@ -419,7 +475,7 @@ export class SharedDocumentBufferHub {
   async refreshCleanConfig(): Promise<DocumentBuffer | null> {
     return this.refreshCleanBufferFromStorage(
       () => this.store.getConfigBuffer(),
-      () => this.storage.readConfigRaw()
+      this.readConfigWithEncoding
     )
   }
 
@@ -429,7 +485,7 @@ export class SharedDocumentBufferHub {
   async refreshCleanWorkspaceFile(filePath: string): Promise<DocumentBuffer | null> {
     return this.refreshCleanBufferFromStorage(
       () => this.getReconcilableWorkspaceTextBuffer(filePath),
-      (buffer) => this.storage.readWorkspaceFile(buffer.path)
+      (buffer) => this.readWorkspaceFileWithEncoding(buffer.path)
     )
   }
 
@@ -455,7 +511,90 @@ export class SharedDocumentBufferHub {
     return { ...updated }
   }
 
-  private executeSave(snapshot: DocumentBuffer): Promise<SaveBufferResult> {
+  private resolveMutableEncodingBuffer(
+    pathOrKey: string
+  ): { buffer: DocumentBuffer; discarding: boolean } | null {
+    const resolved = this.store.getBuffer(pathOrKey)
+    if (!resolved) return null
+    if (isEncodingLockedBuffer(resolved)) {
+      throw new Error('고정 UTF-8 문서는 인코딩을 변경하거나 다시 열 수 없습니다.')
+    }
+    return {
+      buffer: resolved,
+      discarding: this.isKeyDiscarding(resolved.key)
+    }
+  }
+
+  setEncoding(pathOrKey: string, nextEncoding: TextEncoding): DocumentBuffer | null {
+    const target = this.resolveMutableEncodingBuffer(pathOrKey)
+    if (!target) return null
+    if (target.discarding) {
+      return { ...target.buffer }
+    }
+
+    const changed = this.store.setEncoding(target.buffer.key, nextEncoding)
+    const updated = this.store.getBuffer(target.buffer.key)
+    if (!updated) return null
+
+    if (changed) {
+      if (!updated.isDirty) {
+        this.autoSaveScheduler.clearAttempt(updated.key)
+      }
+      this.reconcileAutoSaveTimers()
+      this.emitStateChanged()
+    }
+
+    return { ...updated }
+  }
+
+  async reopenWithEncoding(
+    pathOrKey: string,
+    targetEncoding: TextEncoding
+  ): Promise<DocumentBuffer | null> {
+    const target = this.resolveMutableEncodingBuffer(pathOrKey)
+    if (!target) return null
+    if (target.discarding) {
+      return { ...target.buffer }
+    }
+    const resolved = target.buffer
+
+    const inFlightSave = this.inFlightSaves.get(resolved.key)
+    if (inFlightSave) {
+      await inFlightSave.promise.catch(() => undefined)
+    }
+    if (this.disposed) return null
+
+    const currentBeforeRead = this.store.getBuffer(resolved.key)
+    if (!currentBeforeRead || this.isKeyDiscarding(currentBeforeRead.key)) {
+      return currentBeforeRead ? { ...currentBeforeRead } : null
+    }
+
+    const { content, encoding } = await this.readWorkspaceFileWithEncoding(
+      currentBeforeRead.path,
+      targetEncoding
+    )
+    if (this.disposed) return null
+
+    const latest = this.store.getBuffer(currentBeforeRead.key)
+    if (!latest || this.isKeyDiscarding(latest.key)) {
+      return latest ? { ...latest } : null
+    }
+
+    const changed = this.store.forceSyncContent(latest.key, content, encoding)
+    this.autoSaveScheduler.clearForKeys([latest.key])
+    this.reconcileAutoSaveTimers()
+    if (changed) {
+      this.emitStateChanged()
+    }
+
+    const updated = this.store.getBuffer(latest.key)
+    return updated ? { ...updated } : null
+  }
+
+  private executeSave(
+    snapshot: DocumentBuffer,
+    options: { allowLossy?: boolean; isAutoSave?: boolean } = {}
+  ): Promise<SaveBufferResult> {
     const existing = this.inFlightSaves.get(snapshot.key)
     if (existing) {
       return existing.promise
@@ -469,12 +608,17 @@ export class SharedDocumentBufferHub {
       promise: Promise.resolve({ ok: false, buffer: null })
     }
 
+    const allowLossy = options.isAutoSave ? false : Boolean(options.allowLossy)
+
     const run = (async (): Promise<SaveBufferResult> => {
       try {
         if (snapshot.kind === 'config') {
           await this.storage.saveConfigRaw(snapshot.content)
         } else {
-          await this.storage.writeWorkspaceFile(snapshot.path, snapshot.content)
+          await this.storage.writeWorkspaceFile(snapshot.path, snapshot.content, {
+            encoding: snapshot.encoding,
+            allowLossy
+          })
         }
 
         if (this.disposed) {
@@ -482,7 +626,7 @@ export class SharedDocumentBufferHub {
         }
 
         const currentBeforeMark = this.store.getBuffer(entry.currentKey)
-        this.store.markSaved(entry.currentKey, snapshot.content)
+        this.store.markSaved(entry.currentKey, snapshot.content, snapshot.encoding)
         const savedPath = currentBeforeMark?.path ?? snapshot.path
 
         if (snapshot.kind === 'workspace') {
@@ -496,13 +640,15 @@ export class SharedDocumentBufferHub {
         return { ok: true, buffer: afterMark ? { ...afterMark } : null }
       } catch (error: unknown) {
         const message = toErrorMessage(error, '문서 저장에 실패했습니다.')
+        const unencodableChars =
+          error instanceof UnencodableCharactersError ? error.unencodableChars : undefined
         this.logError?.('Failed to save shared document buffer', {
           key: entry.currentKey,
           kind: snapshot.kind,
           errorMessage: message
         })
         const current = this.store.getBuffer(entry.currentKey)
-        if (!this.disposed) {
+        if (!this.disposed && !(unencodableChars && !options.isAutoSave)) {
           this.emit({
             type: 'save-error',
             key: entry.currentKey,
@@ -514,7 +660,8 @@ export class SharedDocumentBufferHub {
         return {
           ok: false,
           buffer: current ? { ...current } : null,
-          errorMessage: message
+          errorMessage: message,
+          ...(unencodableChars ? { unencodableChars } : {})
         }
       } finally {
         if (this.inFlightSaves.get(entry.currentKey) === entry) {
@@ -533,12 +680,14 @@ export class SharedDocumentBufferHub {
     return run
   }
 
-  async saveBuffer(pathOrKey: string): Promise<SaveBufferResult> {
+  async saveBuffer(pathOrKey: string, options?: SaveBufferOptions): Promise<SaveBufferResult> {
     let targetKey = this.store.getBuffer(pathOrKey)?.key ?? getWorkspacePathKey(pathOrKey)
     const inFlight = this.inFlightSaves.get(targetKey)
     if (inFlight) {
       const firstResult = await inFlight.promise
-      if (!firstResult.ok) return firstResult
+      if (!firstResult.ok && !(options?.allowLossy && firstResult.unencodableChars)) {
+        return firstResult
+      }
       targetKey = inFlight.currentKey
     }
 
@@ -550,7 +699,7 @@ export class SharedDocumentBufferHub {
       return { ok: true, buffer: { ...latest } }
     }
 
-    return this.executeSave({ ...latest })
+    return this.executeSave({ ...latest }, { allowLossy: options?.allowLossy, isAutoSave: false })
   }
 
   setAutoSaveConfig(config: AutoSaveConfig): void {
@@ -835,13 +984,14 @@ export class SharedDocumentBufferHub {
         Promise.all(
           textBuffers.map(async (buffer) => {
             try {
-              const diskContent = await this.storage.readWorkspaceFile(buffer.path)
+              const { content: diskContent, encoding: diskEncoding } =
+                await this.readWorkspaceFileWithEncoding(buffer.path)
               if (this.disposed) return
               const current = this.store.getBuffer(buffer.key)
               if (!current || current.kind !== 'workspace' || current.contentKind === 'image') {
                 return
               }
-              this.store.forceSyncContent(current.key, diskContent)
+              this.store.forceSyncContent(current.key, diskContent, diskEncoding)
               syncedKeys.push(current.key)
             } catch (error: unknown) {
               if (this.disposed || !isMissingWorkspaceFileError(error)) return
@@ -922,7 +1072,8 @@ export class SharedDocumentBufferHub {
         if (!latest || latest.contentKind === 'image') return
 
         try {
-          const diskContent = await this.storage.readWorkspaceFile(latest.path)
+          const { content: diskContent, encoding: diskEncoding } =
+            await this.readWorkspaceFileWithEncoding(latest.path)
           if (this.disposed) return
 
           const current = this.getReconcilableWorkspaceBuffer(latest.key)
@@ -930,10 +1081,10 @@ export class SharedDocumentBufferHub {
 
           if (!current.isDirty) {
             this.autoSaveScheduler.clearTimer(current.key)
-            if (this.store.refreshCleanContent(current.key, diskContent)) {
+            if (this.store.refreshCleanContent(current.key, diskContent, diskEncoding)) {
               refreshedClean = true
             }
-          } else if (diskContent !== current.savedContent) {
+          } else if (diskContent !== current.savedContent || diskEncoding !== current.savedEncoding) {
             conflictNames.push(current.name)
           }
         } catch (error: unknown) {

@@ -1,3 +1,4 @@
+import type { TextEncoding, UnencodableCharsInfo } from './encoding'
 import { toErrorMessage } from './errors'
 import { normalizeWorkspacePath } from './workspace'
 
@@ -12,6 +13,8 @@ export interface DocumentBuffer {
   name: string
   content: string
   savedContent: string
+  encoding: TextEncoding
+  savedEncoding: TextEncoding
   isDirty: boolean
   version: number
   isSaving: boolean
@@ -24,6 +27,7 @@ export type OpenBufferInput =
       path: string
       name?: string
       content: string
+      encoding?: TextEncoding
     }
   | {
       kind: 'workspace'
@@ -54,10 +58,15 @@ export const EMPTY_SHARED_BUFFER_SNAPSHOT: Readonly<SharedBufferStateSnapshot> =
   revision: 0
 })
 
+export interface SaveBufferOptions {
+  allowLossy?: boolean
+}
+
 export interface SaveBufferResult {
   ok: boolean
   buffer: DocumentBuffer | null
   errorMessage?: string
+  unencodableChars?: UnencodableCharsInfo
 }
 
 export interface SyncWindowTabsOptions {

@@ -208,4 +208,48 @@ describe('DocumentBufferStore', () => {
     store.upsertBuffer({ ...opened, content: 'v1', isDirty: true, version: 2 })
     expect(listener).toHaveBeenCalledTimes(1)
   })
+
+  it('tracks encoding and savedEncoding (default utf-8) with isDirty invariant and reverts cleanly', () => {
+    const store = new DocumentBufferStore()
+    const buf = store.openBuffer({
+      kind: 'workspace',
+      path: 'C:/wiki/legacy.md',
+      name: 'legacy.md',
+      content: '안녕하세요'
+    })
+
+    expect(buf.encoding).toBe('utf-8')
+    expect(buf.savedEncoding).toBe('utf-8')
+    expect(buf.isDirty).toBe(false)
+
+    // Changing encoding without changing content marks buffer dirty
+    expect(store.setEncoding(buf.key, 'euc-kr')).toBe(true)
+    let current = store.getBuffer(buf.key)!
+    expect(current.content).toBe('안녕하세요')
+    expect(current.encoding).toBe('euc-kr')
+    expect(current.savedEncoding).toBe('utf-8')
+    expect(current.isDirty).toBe(true)
+
+    // Reverting encoding before save restores isDirty to false
+    expect(store.setEncoding(buf.key, 'utf-8')).toBe(true)
+    current = store.getBuffer(buf.key)!
+    expect(current.encoding).toBe('utf-8')
+    expect(current.isDirty).toBe(false)
+
+    // Saving under euc-kr updates savedEncoding and clears dirty
+    store.setEncoding(buf.key, 'euc-kr')
+    store.markSaved(buf.key, '안녕하세요', 'euc-kr')
+    current = store.getBuffer(buf.key)!
+    expect(current.savedEncoding).toBe('euc-kr')
+    expect(current.isDirty).toBe(false)
+
+    // External clean refresh updates both content and encoding
+    expect(store.refreshCleanContent(buf.key, '새 본문', 'utf-8')).toBe(true)
+    current = store.getBuffer(buf.key)!
+    expect(current.content).toBe('새 본문')
+    expect(current.savedContent).toBe('새 본문')
+    expect(current.encoding).toBe('utf-8')
+    expect(current.savedEncoding).toBe('utf-8')
+    expect(current.isDirty).toBe(false)
+  })
 })

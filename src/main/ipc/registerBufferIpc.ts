@@ -2,9 +2,11 @@ import type { AutoSaveConfig } from '@shared/bufferAutoSaveScheduler'
 import { BUFFER_IPC_CHANNELS } from '@shared/ipc'
 import {
   EMPTY_SHARED_BUFFER_SNAPSHOT,
+  type SaveBufferOptions,
   type SharedBufferStateSnapshot,
   type SyncWindowTabsOptions
 } from '@shared/documentBuffer'
+import type { TextEncoding } from '@shared/encoding'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
 import type { WorkspaceChangeEvent } from '@shared/workspace'
 import type { ConfigService } from '../config/ConfigService'
@@ -105,7 +107,10 @@ export function createSharedDocumentBufferHub({
     initialAutoSaveConfig,
     storage: {
       readWorkspaceFile: (filePath) => workspaceService.readFile(filePath),
-      writeWorkspaceFile: (filePath, content) => workspaceService.writeFile(filePath, content),
+      readWorkspaceFileWithEncoding: (filePath, encoding) =>
+        workspaceService.readFileWithEncoding(filePath, encoding),
+      writeWorkspaceFile: (filePath, content, options) =>
+        workspaceService.writeFile(filePath, content, options),
       readWorkspaceDirectory: (dirPath) => workspaceService.readDir(dirPath),
       getConfigPath: () => Promise.resolve(configService.getConfigPath()),
       readConfigRaw: () => configService.readRaw(),
@@ -214,11 +219,27 @@ export function registerBufferIpc({
         }
       ],
       [
-        BUFFER_IPC_CHANNELS.saveBuffer,
-        (event, key) => {
+        BUFFER_IPC_CHANNELS.setEncoding,
+        (event, key, encoding) => {
+          const ctx = resolveContext(event)
+          return ctx ? ctx.session.hub.setEncoding(key as string, encoding as TextEncoding) : null
+        }
+      ],
+      [
+        BUFFER_IPC_CHANNELS.reopenWithEncoding,
+        (event, key, encoding) => {
           const ctx = resolveContext(event)
           return ctx
-            ? ctx.session.hub.saveBuffer(key as string)
+            ? ctx.session.hub.reopenWithEncoding(key as string, encoding as TextEncoding)
+            : null
+        }
+      ],
+      [
+        BUFFER_IPC_CHANNELS.saveBuffer,
+        (event, key, options) => {
+          const ctx = resolveContext(event)
+          return ctx
+            ? ctx.session.hub.saveBuffer(key as string, options as SaveBufferOptions | undefined)
             : { ok: false, buffer: null }
         }
       ],

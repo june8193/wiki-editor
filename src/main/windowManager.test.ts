@@ -1239,6 +1239,8 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       contentKind: 'text',
       content: '# Beta dirty',
       savedContent: '# Beta disk',
+      encoding: 'utf-8',
+      savedEncoding: 'utf-8',
       isDirty: true,
       version: 2,
       isSaving: false

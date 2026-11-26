@@ -238,8 +238,14 @@ export function createHubBufferApi(
     async updateContent(key, nextContent) {
       return hub.updateContent(key, nextContent)
     },
-    async saveBuffer(key) {
-      return hub.saveBuffer(key)
+    async setEncoding(key, encoding) {
+      return hub.setEncoding(key, encoding)
+    },
+    async reopenWithEncoding(key, encoding) {
+      return hub.reopenWithEncoding(key, encoding)
+    },
+    async saveBuffer(key, options) {
+      return hub.saveBuffer(key, options)
     },
     async syncWindowTabs(bufferKeys, options) {
       return onSyncWindowTabs(bufferKeys, options)

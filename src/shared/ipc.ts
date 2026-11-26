@@ -7,11 +7,13 @@ import type {
   BufferKeyRemap,
   DocumentBuffer,
   ReconcileBuffersResult,
+  SaveBufferOptions,
   SaveBufferResult,
   SharedBufferHubEvent,
   SharedBufferStateSnapshot,
   SyncWindowTabsOptions
 } from './documentBuffer'
+import type { TextEncoding } from './encoding'
 import type {
   FrontmatterSchemaLoadResult,
   WorkspaceFrontmatterFieldValuesResponse,
@@ -164,6 +166,8 @@ export const BUFFER_IPC_CHANNELS = {
   openConfigDocument: 'buffer:open-config-document',
   refreshCleanConfig: 'buffer:refresh-clean-config',
   updateContent: 'buffer:update-content',
+  setEncoding: 'buffer:set-encoding',
+  reopenWithEncoding: 'buffer:reopen-with-encoding',
   saveBuffer: 'buffer:save-buffer',
   syncWindowTabs: 'buffer:sync-window-tabs',
   setAutoSavePaused: 'buffer:set-auto-save-paused',
@@ -312,7 +316,9 @@ export interface WikiBufferApi {
   openConfigDocument(): Promise<DocumentBuffer>
   refreshCleanConfig(): Promise<DocumentBuffer | null>
   updateContent(key: string, nextContent: string): Promise<DocumentBuffer | null>
-  saveBuffer(key: string): Promise<SaveBufferResult>
+  setEncoding(key: string, encoding: TextEncoding): Promise<DocumentBuffer | null>
+  reopenWithEncoding(key: string, encoding: TextEncoding): Promise<DocumentBuffer | null>
+  saveBuffer(key: string, options?: SaveBufferOptions): Promise<SaveBufferResult>
   syncWindowTabs(
     bufferKeys: string[],
     options?: SyncWindowTabsOptions

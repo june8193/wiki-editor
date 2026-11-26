@@ -3,10 +3,13 @@ import {
   type BufferKeyRemap,
   type DocumentBuffer,
   type DocumentBufferSnapshot,
+  type SaveBufferOptions,
+  type SaveBufferResult,
   type SharedBufferHubEvent,
   type SharedBufferStateSnapshot
 } from '@shared/documentBuffer'
 import { DocumentBufferStore, mergePendingLocalBuffer } from '@shared/documentBufferStore'
+import type { TextEncoding } from '@shared/encoding'
 import { toErrorMessage } from '@shared/errors'
 import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
 import {
@@ -737,14 +740,58 @@ export class RendererBufferSyncClient {
     return currentKey
   }
 
-  private async runSaveBufferRequest(key: string): Promise<boolean> {
-    const initialKey = this.resolveLatestKey(key)
+  setEncoding = async (
+    bufferKey: string,
+    encoding: TextEncoding
+  ): Promise<DocumentBuffer | null> => {
+    const initialKey = this.resolveLatestKey(bufferKey)
+    const currentKey = this.needsAsyncHubSync(initialKey)
+      ? await this.syncBufferKeyToHub(initialKey)
+      : initialKey
+    const updated = await this.bufferApi.setEncoding(currentKey, encoding)
+    if (updated && this.mounted) {
+      this.reconcileIncomingBuffer(updated)
+    }
+    return updated
+  }
+
+  reopenWithEncoding = async (
+    bufferKey: string,
+    encoding: TextEncoding
+  ): Promise<DocumentBuffer | null> => {
+    const initialKey = this.resolveLatestKey(bufferKey)
+    const currentKey = this.hasPendingUpdatesForKey(initialKey)
+      ? await this.flushPendingUpdatesForKey(initialKey)
+      : initialKey
+    this.deleteTrackedKeyVariants(this.unsyncedLocalKeys, currentKey)
+    this.pendingLocalEditCounts.delete(currentKey)
+    const reopened = await this.bufferApi.reopenWithEncoding(currentKey, encoding)
+    if (reopened && this.mounted) {
+      this.bufferStore.upsertBuffer(reopened)
+      this.latestHubBuffers = { ...this.latestHubBuffers, [reopened.key]: reopened }
+    }
+    return reopened
+  }
+
+  saveBuffer = async (
+    bufferKey: string,
+    options?: SaveBufferOptions
+  ): Promise<SaveBufferResult> => {
+    const initialKey = this.resolveLatestKey(bufferKey)
     this.pendingManualSaveKeys.add(initialKey)
     try {
       const currentKey = this.needsAsyncHubSync(initialKey)
         ? await this.syncBufferKeyToHub(initialKey)
         : initialKey
-      const result = await this.bufferApi.saveBuffer(currentKey)
+      return await this.bufferApi.saveBuffer(currentKey, options)
+    } finally {
+      this.deleteTrackedKeyVariants(this.pendingManualSaveKeys, initialKey)
+    }
+  }
+
+  private async runSaveBufferRequest(key: string): Promise<boolean> {
+    try {
+      const result = await this.saveBuffer(key)
       if (!result.ok && result.errorMessage && this.mounted) {
         this.onError(result.errorMessage, new Error(result.errorMessage))
       }
@@ -754,8 +801,6 @@ export class RendererBufferSyncClient {
         this.onError(toErrorMessage(error, '문서 저장에 실패했습니다.'), error)
       }
       return false
-    } finally {
-      this.deleteTrackedKeyVariants(this.pendingManualSaveKeys, initialKey)
     }
   }
 

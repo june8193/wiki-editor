@@ -378,6 +378,8 @@ describe('RendererBufferSyncClient race guards', () => {
         name: 'solo.md',
         content: '# Solo',
         savedContent: '# Solo',
+        encoding: 'utf-8',
+        savedEncoding: 'utf-8',
         isDirty: false,
         version: 1,
         isSaving: false
@@ -438,6 +440,8 @@ describe('RendererBufferSyncClient race guards', () => {
         name: 'doomed.md',
         content: '# Doomed',
         savedContent: '# Doomed',
+        encoding: 'utf-8',
+        savedEncoding: 'utf-8',
         isDirty: false,
         version: 1,
         isSaving: false
@@ -874,6 +878,59 @@ describe('RendererBufferSyncClient race guards', () => {
     } finally {
       stopSecond()
       fallbackWin.detach()
+      hub.dispose()
+    }
+  })
+
+  it('syncs setEncoding, reopenWithEncoding, and saveBuffer options across windows via RendererBufferSyncClient', async () => {
+    const win1 = createHubClientHarness(1)
+    const { hub, files } = win1
+    files.set('C:/wiki/note.md', '초기 내용')
+    const stop1 = win1.client.start()
+    const win2 = attachWindowClient(hub, 2)
+    const stop2 = win2.client.start()
+
+    try {
+      await win1.client.openWorkspaceFile({
+        name: 'note.md',
+        path: 'C:/wiki/note.md',
+        relativePath: 'note.md',
+        kind: 'file'
+      })
+      await win2.client.openWorkspaceFile({
+        name: 'note.md',
+        path: 'C:/wiki/note.md',
+        relativePath: 'note.md',
+        kind: 'file'
+      })
+
+      const converted = await win1.client.setEncoding('c:/wiki/note.md', 'euc-kr')
+      expect(converted?.encoding).toBe('euc-kr')
+      expect(converted?.isDirty).toBe(true)
+
+      await vi.waitFor(() => {
+        expect(win2.bufferStore.getBuffer('c:/wiki/note.md')?.encoding).toBe('euc-kr')
+        expect(win2.bufferStore.getBuffer('c:/wiki/note.md')?.isDirty).toBe(true)
+      })
+
+      const saveResult = await win1.client.saveBuffer('c:/wiki/note.md')
+      expect(saveResult.ok).toBe(true)
+      expect(win2.bufferStore.getBuffer('c:/wiki/note.md')?.savedEncoding).toBe('euc-kr')
+      expect(win2.bufferStore.getBuffer('c:/wiki/note.md')?.isDirty).toBe(false)
+
+      const reopened = await win2.client.reopenWithEncoding('c:/wiki/note.md', 'utf-8')
+      expect(reopened?.encoding).toBe('utf-8')
+      expect(reopened?.savedEncoding).toBe('utf-8')
+      expect(reopened?.isDirty).toBe(false)
+
+      await vi.waitFor(() => {
+        expect(win1.bufferStore.getBuffer('c:/wiki/note.md')?.encoding).toBe('utf-8')
+      })
+    } finally {
+      stop1()
+      stop2()
+      win1.detach()
+      win2.detach()
       hub.dispose()
     }
   })

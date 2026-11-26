@@ -7,10 +7,12 @@ import type {
   BufferKeyRemap,
   DocumentBuffer,
   ReconcileBuffersResult,
+  SaveBufferOptions,
   SaveBufferResult,
   SharedBufferHubEvent,
   SharedBufferStateSnapshot
 } from '@shared/documentBuffer'
+import type { TextEncoding } from '@shared/encoding'
 import type {
   FrontmatterSchemaLoadResult,
   WorkspaceFrontmatterFieldValuesResponse,
@@ -363,8 +365,24 @@ export function createWikiApi(
           key,
           nextContent
         ) as Promise<DocumentBuffer | null>,
-      saveBuffer: (key) =>
-        ipcRenderer.invoke(BUFFER_IPC_CHANNELS.saveBuffer, key) as Promise<SaveBufferResult>,
+      setEncoding: (key, encoding) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.setEncoding,
+          key,
+          encoding
+        ) as Promise<DocumentBuffer | null>,
+      reopenWithEncoding: (key, encoding) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.reopenWithEncoding,
+          key,
+          encoding
+        ) as Promise<DocumentBuffer | null>,
+      saveBuffer: (key, options) =>
+        ipcRenderer.invoke(
+          BUFFER_IPC_CHANNELS.saveBuffer,
+          key,
+          ...(options ? [options] : [])
+        ) as Promise<SaveBufferResult>,
       syncWindowTabs: (bufferKeys, options) =>
         ipcRenderer.invoke(
           BUFFER_IPC_CHANNELS.syncWindowTabs,
