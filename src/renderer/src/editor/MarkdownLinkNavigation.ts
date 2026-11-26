@@ -1,9 +1,9 @@
+import { normalizeAllowedHttpUrl } from '@shared/urlSecurity'
 import {
   isAbsoluteOrDrivePrefix,
   isMarkdownFileName,
   resolveRelativeWorkspacePath
 } from '@shared/workspace'
-import { isExternalLinkScheme } from './MarkdownLinkSyntax'
 import { decodeSlugSafely } from './MarkdownTocEngine'
 
 export interface MarkdownLinkContext {
@@ -12,7 +12,8 @@ export interface MarkdownLinkContext {
 }
 
 export type ResolvedMarkdownLinkTarget =
-  | { kind: 'external' }
+  | { kind: 'external'; url: string }
+  | { kind: 'noop' }
   | { kind: 'same-doc-section'; slug: string }
   | { kind: 'workspace-file'; targetPath: string; slug: string | null }
   | { kind: 'error'; message: string }
@@ -47,8 +48,15 @@ export function resolveMarkdownLinkTarget(
   if (trimmed.length === 0) {
     return { kind: 'error', message: '링크 대상을 찾을 수 없습니다.' }
   }
-  if (isExternalLinkScheme(trimmed)) {
-    return { kind: 'external' }
+  if (/^mailto:/i.test(trimmed)) {
+    return { kind: 'noop' }
+  }
+  if (/^https?:/i.test(trimmed)) {
+    const normalizedUrl = normalizeAllowedHttpUrl(trimmed)
+    if (!normalizedUrl) {
+      return { kind: 'error', message: `잘못된 외부 웹 링크입니다: ${trimmed}` }
+    }
+    return { kind: 'external', url: normalizedUrl }
   }
   if (isAbsoluteOrDrivePrefix(trimmed)) {
     return outsideWorkspaceError(trimmed)

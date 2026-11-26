@@ -1,6 +1,6 @@
 import { TERMINAL_IPC_CHANNELS } from '@shared/ipc'
 import type { TerminalCreateRequest } from '@shared/terminal'
-import { inspectUriScheme } from '@shared/urlSecurity'
+import { normalizeAllowedHttpUrl } from '@shared/urlSecurity'
 import type { LogService } from '../logging/LogService'
 import type { TerminalService } from '../terminal/TerminalService'
 import {
@@ -28,24 +28,6 @@ export interface RegisterTerminalIpcOptions {
   sessionSource: TerminalIpcSessionSource
   openExternal: (url: string) => Promise<void>
   logService?: LogService
-}
-
-const ALLOWED_EXTERNAL_URL_SCHEMES = new Set(['http', 'https'])
-
-function isAllowedExternalUrl(rawUrl: unknown): rawUrl is string {
-  if (typeof rawUrl !== 'string') return false
-  const trimmed = rawUrl.trim()
-  if (!trimmed) return false
-  const { valid, scheme } = inspectUriScheme(trimmed)
-  if (!valid || !scheme || !ALLOWED_EXTERNAL_URL_SCHEMES.has(scheme)) {
-    return false
-  }
-  try {
-    const parsed = new URL(trimmed)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-  } catch {
-    return false
-  }
 }
 
 /**
@@ -157,10 +139,11 @@ export function registerTerminalIpc({
       TERMINAL_IPC_CHANNELS.openExternalUrl,
       async (event, rawUrl) => {
         requireMainSession(event)
-        if (!isAllowedExternalUrl(rawUrl)) {
+        const normalizedUrl = normalizeAllowedHttpUrl(rawUrl)
+        if (!normalizedUrl) {
           return false
         }
-        await openExternal(rawUrl.trim())
+        await openExternal(normalizedUrl)
         return true
       }
     ]

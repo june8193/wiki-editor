@@ -3157,7 +3157,7 @@ describe('Link autocomplete menu & Ctrl+K integration', () => {
 })
 
 describe('Markdown link navigation and missing target banner', () => {
-  it('navigates same-doc sections across Preview/Raw/WYSIWYG modes, ignores external URLs, and opens relative links with optional #slug in clicked split pane', async () => {
+  it('navigates same-doc sections and opens external http/https URLs across Preview/Raw/WYSIWYG/Split modes, ignores mailto, and opens relative links with optional #slug in clicked split pane', async () => {
     const user = userEvent.setup()
     const { api, emitMenuCommand } = createInMemoryWikiApi(
       { theme: 'light', autoSave: false, showHeadingNumbers: false },
@@ -3193,6 +3193,7 @@ describe('Markdown link navigation and missing target banner', () => {
       }
     )
     const readFileSpy = vi.spyOn(api.workspace, 'readFile')
+    const openExternalUrlSpy = vi.spyOn(api.shell!, 'openExternalUrl')
     const { mock: scrollIntoViewMock, restore } = mockPrototypeScrollIntoView()
     const getHeadingScrollTargets = (): HTMLElement[] =>
       scrollIntoViewMock.mock.calls.flatMap((args, idx) =>
@@ -3223,7 +3224,14 @@ describe('Markdown link navigation and missing target banner', () => {
 
       const readCallsBeforeExternal = readFileSpy.mock.calls.length
       expect(fireEvent.click(within(primaryPane).getByRole('link', { name: '외부' }))).toBe(false)
+      await waitFor(() => {
+        expect(openExternalUrlSpy).toHaveBeenCalledTimes(1)
+      })
+      expect(openExternalUrlSpy).toHaveBeenLastCalledWith('https://example.com')
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
       expect(fireEvent.click(within(primaryPane).getByRole('link', { name: '메일' }))).toBe(false)
+      expect(openExternalUrlSpy).toHaveBeenCalledTimes(1)
       expect(readFileSpy).toHaveBeenCalledTimes(readCallsBeforeExternal)
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
@@ -3247,6 +3255,10 @@ describe('Markdown link navigation and missing target banner', () => {
         expect(rawView.state.selection.main.head).toBe(headingOffset)
       })
       fireEvent.click(externalSpan, { ctrlKey: true })
+      await waitFor(() => {
+        expect(openExternalUrlSpy).toHaveBeenCalledTimes(2)
+      })
+      expect(openExternalUrlSpy).toHaveBeenLastCalledWith('https://example.com')
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
       const rawRelSpan = Array.from(rawCmContent.querySelectorAll('span')).find((el) =>
@@ -3280,6 +3292,15 @@ describe('Markdown link navigation and missing target banner', () => {
       })
       expect(getHeadingScrollTargets()[0].textContent).toContain('세부 항목')
 
+      const wysiwygExternalLink = Array.from(wysiwygEl.querySelectorAll('a')).find(
+        (a) => a.getAttribute('href') === 'https://example.com'
+      )!
+      expect(fireEvent.click(wysiwygExternalLink)).toBe(false)
+      await waitFor(() => {
+        expect(openExternalUrlSpy).toHaveBeenCalledTimes(3)
+      })
+      expect(openExternalUrlSpy).toHaveBeenLastCalledWith('https://example.com')
+
       const wysiwygRelLink = Array.from(wysiwygEl.querySelectorAll('a')).find(
         (a) => a.getAttribute('href') === './wysiwyg-target.md'
       )!
@@ -3289,6 +3310,14 @@ describe('Markdown link navigation and missing target banner', () => {
       })
       expect(wysiwygTargetTab).toHaveAttribute('aria-selected', 'true')
       await user.click(within(primaryPane).getByRole('tab', { name: /current\.md/i }))
+
+      // 3b) Split mode: Preview click opens external URL via shell bridge
+      await switchPaneEditorMode(user, primaryPane, 'Split')
+      expect(fireEvent.click(within(primaryPane).getByRole('link', { name: '외부' }))).toBe(false)
+      await waitFor(() => {
+        expect(openExternalUrlSpy).toHaveBeenCalledTimes(4)
+      })
+      expect(openExternalUrlSpy).toHaveBeenLastCalledWith('https://example.com')
 
       // 4) Preview relative file link with percent encoding + #slug opens tab and jumps to target heading
       await switchPaneEditorMode(user, primaryPane, 'Preview')
@@ -3352,6 +3381,63 @@ describe('Markdown link navigation and missing target banner', () => {
     } finally {
       restore()
     }
+  })
+
+  it('shows error banner for malformed http(s) links, openExternalUrl failures, or missing shell bridge while keeping mailto silent', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:/wiki-ext-errors',
+        workspaces: {
+          'C:/wiki-ext-errors': {
+            'docs/index.md': [
+              '# 외부 링크 테스트',
+              '',
+              '- [유효 웹](https://example.com/ok)',
+              '- [깨진 웹](https://)',
+              '- [메일](mailto:wiki@example.com)'
+            ].join('\n')
+          }
+        }
+      }
+    )
+    const openExternalUrlSpy = vi.spyOn(api.shell!, 'openExternalUrl')
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('docs'))
+    await user.click(await within(explorer).findByText('index.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    await switchPaneEditorMode(user, primaryPane, 'Preview')
+
+    // 1) mailto: stays silent with no error banner
+    fireEvent.click(within(primaryPane).getByRole('link', { name: '메일' }))
+    expect(openExternalUrlSpy).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    // 2) Malformed http(s) URL shows error banner without calling shell IPC
+    fireEvent.click(within(primaryPane).getByRole('link', { name: '깨진 웹' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/잘못된 외부 웹 링크/)
+    expect(openExternalUrlSpy).not.toHaveBeenCalled()
+
+    // 3) openExternalUrl returning false shows error banner
+    openExternalUrlSpy.mockResolvedValueOnce(false)
+    fireEvent.click(within(primaryPane).getByRole('link', { name: '유효 웹' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/외부 링크를 열 수 없습니다/)
+
+    // 4) openExternalUrl rejecting shows error banner
+    openExternalUrlSpy.mockRejectedValueOnce(new Error('Shell failed'))
+    fireEvent.click(within(primaryPane).getByRole('link', { name: '유효 웹' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/외부 링크를 열 수 없습니다/)
+
+    // 5) Missing shell bridge shows error banner
+    delete api.shell
+    fireEvent.click(within(primaryPane).getByRole('link', { name: '유효 웹' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/외부 링크를 열 수 없습니다/)
   })
 
   it('displays error banner without creating files for missing targets or workspace escapes, and opens target file even when its #slug is missing', async () => {

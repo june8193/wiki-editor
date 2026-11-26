@@ -1320,6 +1320,11 @@ export function createMultiWindowWikiHarness(
           },
           ...fsOptions.clipboard
         },
+        shell: {
+          async openExternalUrl() {
+            return true
+          }
+        },
         window: {
           role,
           async getInitContext() {

@@ -188,6 +188,10 @@ export const CLIPBOARD_IPC_CHANNELS = {
   writeText: 'clipboard:write-text'
 } as const
 
+export const SHELL_IPC_CHANNELS = {
+  openExternalUrl: 'shell:open-external-url'
+} as const
+
 export const DIAGRAM_IPC_CHANNELS = {
   copyText: 'diagram:copy-text',
   copyImage: 'diagram:copy-image',
@@ -343,6 +347,10 @@ export interface WikiClipboardApi {
   writeText(text: string): Promise<void>
 }
 
+export interface WikiShellApi {
+  openExternalUrl(url: string): Promise<boolean>
+}
+
 export interface WikiDiagramApi {
   copyText(text: string): Promise<void>
   copyImage(pngBytes: Uint8Array): Promise<void>
@@ -401,6 +409,7 @@ export interface WikiApi {
   buffer: WikiBufferApi
   log?: WikiLogApi
   clipboard?: WikiClipboardApi
+  shell?: WikiShellApi
   window?: WikiWindowApi
   diagram?: WikiDiagramApi
   terminal?: WikiTerminalApi
