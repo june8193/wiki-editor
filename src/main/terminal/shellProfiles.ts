@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs'
-import { delimiter, dirname, join } from 'node:path'
+import { win32 as win32Path } from 'node:path'
 import type { TerminalShellProfile } from '@shared/terminal'
+
+const { delimiter, dirname, join } = win32Path
 
 export interface DetectWindowsShellProfilesDeps {
   platform?: NodeJS.Platform

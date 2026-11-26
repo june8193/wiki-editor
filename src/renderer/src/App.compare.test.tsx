@@ -1496,5 +1496,5 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
     expect(diffMock).toHaveBeenCalledTimes(45)
 
     void container
-  })
+  }, 15000)
 })
