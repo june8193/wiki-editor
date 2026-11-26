@@ -12,6 +12,15 @@ export function isSymbolModifierPressed(
   return (event.ctrlKey || event.metaKey) && !event.altKey
 }
 
+/**
+ * Returns true when the Find References shortcut (`Shift+F12` without other modifiers) is pressed.
+ */
+export function isFindReferencesShortcut(
+  event: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'ctrlKey' | 'metaKey' | 'altKey'>
+): boolean {
+  return event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && event.key === 'F12'
+}
+
 const MAX_CANDIDATE_FILES_TO_VERIFY = 30
 
 function normalizeRepoPath(filePath: string): string {
@@ -155,54 +164,26 @@ export type SymbolDefinitionResolution =
   | { status: 'multiple'; candidates: SymbolCandidateMatch[] }
   | { status: 'not-found' }
 
-/**
- * Resolves declaration targets for a symbol in the given `CodeSourceScope`,
- * verifying candidates against Lezer syntax trees to exclude comments, strings, and usages.
- */
-export async function resolveSymbolDefinitions(
-  options: ResolveSymbolDefinitionsOptions
-): Promise<SymbolDefinitionResolution> {
+async function collectVerifiedCandidates(
+  options: Pick<
+    ResolveSymbolDefinitionsOptions,
+    'symbolName' | 'scope' | 'currentFilePath' | 'currentFileContent' | 'searchSymbols' | 'readFileContent' | 'getParserForPath'
+  >,
+  verifiedByKey: Map<string, SymbolCandidateMatch>,
+  policy: {
+    getKey: (normPath: string, candidate: SymbolCandidateMatch) => string
+    acceptToken: (token: NonNullable<ReturnType<typeof extractIdentifierAtPosition>>) => boolean
+  }
+): Promise<void> {
   const {
     symbolName,
     scope,
     currentFilePath,
     currentFileContent,
-    changedFilePaths,
-    isInActiveDiffHunk,
     searchSymbols,
     readFileContent,
     getParserForPath
   } = options
-
-  const verifiedByKey = new Map<string, SymbolCandidateMatch>()
-  const addVerified = (match: SymbolCandidateMatch) => {
-    const key = `${normalizeRepoPath(match.path)}:${match.lineNumber}`
-    if (!verifiedByKey.has(key)) {
-      verifiedByKey.set(key, {
-        ...match,
-        path: normalizeRepoPath(match.path)
-      })
-    }
-  }
-
-  if (currentFileContent !== null) {
-    const currentParser = await getParserForPath(currentFilePath)
-    if (currentParser) {
-      const lines = currentFileContent.replace(/\r\n/g, '\n').split('\n')
-      const symbols = extractDocumentSymbols(currentFileContent, currentParser)
-      for (const sym of symbols) {
-        if (sym.name === symbolName) {
-          addVerified({
-            path: currentFilePath,
-            lineNumber: sym.lineNumber,
-            lineText: lines[sym.lineNumber - 1] ?? '',
-            columnStart: sym.columnStart,
-            columnEnd: sym.columnEnd
-          })
-        }
-      }
-    }
-  }
 
   const rawCandidates = await searchSymbols(symbolName, scope)
   const contentCache = new Map<string, string | null>()
@@ -213,7 +194,7 @@ export async function resolveSymbolDefinitions(
   let filesRead = 0
   for (const candidate of rawCandidates) {
     const normPath = normalizeRepoPath(candidate.path)
-    const key = `${normPath}:${candidate.lineNumber}`
+    const key = policy.getKey(normPath, candidate)
     if (verifiedByKey.has(key)) continue
 
     let content = contentCache.get(normPath)
@@ -233,10 +214,60 @@ export async function resolveSymbolDefinitions(
       { lineNumber: candidate.lineNumber, column: candidate.columnStart },
       parser
     )
-    if (token && token.name === symbolName && token.isDeclaration) {
-      addVerified(candidate)
+    if (token && token.name === symbolName && policy.acceptToken(token)) {
+      verifiedByKey.set(key, {
+        ...candidate,
+        path: normPath
+      })
     }
   }
+}
+
+/**
+ * Resolves declaration targets for a symbol in the given `CodeSourceScope`,
+ * verifying candidates against Lezer syntax trees to exclude comments, strings, and usages.
+ */
+export async function resolveSymbolDefinitions(
+  options: ResolveSymbolDefinitionsOptions
+): Promise<SymbolDefinitionResolution> {
+  const {
+    symbolName,
+    currentFilePath,
+    currentFileContent,
+    changedFilePaths,
+    isInActiveDiffHunk,
+    getParserForPath
+  } = options
+
+  const verifiedByKey = new Map<string, SymbolCandidateMatch>()
+
+  if (currentFileContent !== null) {
+    const currentParser = await getParserForPath(currentFilePath)
+    if (currentParser) {
+      const lines = currentFileContent.replace(/\r\n/g, '\n').split('\n')
+      const symbols = extractDocumentSymbols(currentFileContent, currentParser)
+      for (const sym of symbols) {
+        if (sym.name === symbolName) {
+          const normPath = normalizeRepoPath(currentFilePath)
+          const key = `${normPath}:${sym.lineNumber}`
+          if (!verifiedByKey.has(key)) {
+            verifiedByKey.set(key, {
+              path: normPath,
+              lineNumber: sym.lineNumber,
+              lineText: lines[sym.lineNumber - 1] ?? '',
+              columnStart: sym.columnStart,
+              columnEnd: sym.columnEnd
+            })
+          }
+        }
+      }
+    }
+  }
+
+  await collectVerifiedCandidates(options, verifiedByKey, {
+    getKey: (normPath, candidate) => `${normPath}:${candidate.lineNumber}`,
+    acceptToken: (token) => token.isDeclaration
+  })
 
   const ranked = rankDeclarationCandidates(Array.from(verifiedByKey.values()), {
     currentFilePath,
@@ -260,59 +291,16 @@ export async function resolveSymbolDefinitions(
 export async function resolveSymbolReferences(
   options: ResolveSymbolDefinitionsOptions
 ): Promise<SymbolCandidateMatch[]> {
-  const {
-    symbolName,
-    scope,
-    currentFilePath,
-    currentFileContent,
-    changedFilePaths,
-    isInActiveDiffHunk,
-    searchSymbols,
-    readFileContent,
-    getParserForPath
-  } = options
-
   const verifiedByKey = new Map<string, SymbolCandidateMatch>()
-  const contentCache = new Map<string, string | null>()
-  if (currentFileContent !== null) {
-    contentCache.set(normalizeRepoPath(currentFilePath), currentFileContent)
-  }
 
-  const rawCandidates = await searchSymbols(symbolName, scope)
-  let filesRead = 0
-  for (const candidate of rawCandidates) {
-    const normPath = normalizeRepoPath(candidate.path)
-    const key = `${normPath}:${candidate.lineNumber}:${candidate.columnStart}`
-    if (verifiedByKey.has(key)) continue
-
-    let content = contentCache.get(normPath)
-    if (content === undefined) {
-      if (filesRead >= MAX_CANDIDATE_FILES_TO_VERIFY) continue
-      filesRead += 1
-      content = await readFileContent(normPath, scope)
-      contentCache.set(normPath, content)
-    }
-    if (content === null) continue
-
-    const parser = await getParserForPath(normPath)
-    if (!parser) continue
-
-    const token = extractIdentifierAtPosition(
-      content,
-      { lineNumber: candidate.lineNumber, column: candidate.columnStart },
-      parser
-    )
-    if (token && token.name === symbolName) {
-      verifiedByKey.set(key, {
-        ...candidate,
-        path: normPath
-      })
-    }
-  }
+  await collectVerifiedCandidates(options, verifiedByKey, {
+    getKey: (normPath, candidate) => `${normPath}:${candidate.lineNumber}:${candidate.columnStart}`,
+    acceptToken: () => true
+  })
 
   return rankDeclarationCandidates(Array.from(verifiedByKey.values()), {
-    currentFilePath,
-    changedFilePaths,
-    isInActiveDiffHunk
+    currentFilePath: options.currentFilePath,
+    changedFilePaths: options.changedFilePaths,
+    isInActiveDiffHunk: options.isInActiveDiffHunk
   })
 }

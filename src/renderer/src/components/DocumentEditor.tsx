@@ -64,6 +64,8 @@ interface DocumentEditorProps {
   onUpdateViewState: (patch: TabViewPatch) => void
   onNavigateLink?: (href: string) => void
   onSymbolNavigate?: (request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (request: SymbolNavigateRequest) => void
+  onFindReferences?: (request: SymbolNavigateRequest) => void
   onActiveHeadingChange?: (update: DocumentOutlineSpyUpdate) => void
 }
 
@@ -100,6 +102,8 @@ export function DocumentEditor({
   onUpdateViewState,
   onNavigateLink,
   onSymbolNavigate,
+  onSymbolContextMenu,
+  onFindReferences,
   onActiveHeadingChange
 }: DocumentEditorProps) {
   const activeFilePath = activeDoc.kind === 'workspace' ? activeDoc.path : null
@@ -314,6 +318,8 @@ export function DocumentEditor({
         onRawScroll={effectiveMode === 'split' ? handleSplitRawScroll : undefined}
         onLinkNavigate={allowRichModes ? onNavigateLink : undefined}
         onSymbolNavigate={!allowRichModes ? onSymbolNavigate : undefined}
+        onSymbolContextMenu={!allowRichModes ? onSymbolContextMenu : undefined}
+        onFindReferences={!allowRichModes ? onFindReferences : undefined}
       />
     ) : null
 

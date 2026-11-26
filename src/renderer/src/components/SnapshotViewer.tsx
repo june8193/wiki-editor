@@ -31,6 +31,8 @@ export interface SnapshotViewerProps {
   onScrollTopChange?: (scrollTop: number) => void
   onOpenLocalFile?: (repoRelativePath: string) => void
   onSymbolNavigate?: (request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (request: SymbolNavigateRequest) => void
+  onFindReferences?: (request: SymbolNavigateRequest) => void
 }
 
 function SnapshotViewerInner({
@@ -40,7 +42,9 @@ function SnapshotViewerInner({
   jumpRequest = null,
   onScrollTopChange,
   onOpenLocalFile,
-  onSymbolNavigate
+  onSymbolNavigate,
+  onSymbolContextMenu,
+  onFindReferences
 }: SnapshotViewerProps) {
   const loadedSnapshot = state.status === 'loaded' ? state.snapshot : null
   const displayRef = request.scope.displayRef
@@ -90,11 +94,15 @@ function SnapshotViewerInner({
     clearHover,
     handleLineMouseMove,
     handleLineMouseLeave,
-    handleLineClick
+    handleLineClick,
+    handleLineContextMenu,
+    handleViewerKeyDown
   } = useLineSymbolHover({
     isSymbolNavEnabled,
     activeSyntaxParser,
-    onSymbolNavigate
+    onSymbolNavigate,
+    onSymbolContextMenu,
+    onFindReferences
   })
 
   useEffect(() => {
@@ -127,6 +135,8 @@ function SnapshotViewerInner({
       className="snapshot-viewer"
       data-testid="snapshot-viewer"
       aria-label={`${request.path} 스냅샷 뷰어`}
+      tabIndex={-1}
+      onKeyDown={handleViewerKeyDown}
     >
       <header className="snapshot-viewer-header">
         <div className="snapshot-viewer-title-group">
@@ -205,6 +215,9 @@ function SnapshotViewerInner({
                       }
                       onMouseLeave={() => handleLineMouseLeave(lineNumber)}
                       onClick={(event) => handleLineClick(lineText, lineNumber, undefined, event)}
+                      onContextMenu={(event) =>
+                        handleLineContextMenu(lineText, lineNumber, undefined, event)
+                      }
                     >
                       {renderSyntaxLineWithHover(lineText, syntaxSpans, hoverRange)}
                     </td>

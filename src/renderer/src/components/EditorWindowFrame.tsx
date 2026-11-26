@@ -47,6 +47,7 @@ import {
 } from './RightSidebarPanel'
 import { SidebarResizer } from './SidebarResizer'
 import { SymbolCandidatePopover } from './SymbolCandidatePopover'
+import { SymbolContextMenu } from './SymbolContextMenu'
 
 const DEFAULT_IMAGE_TRANSFER_CONTEXT: ImageTransferContextValue = {}
 
@@ -215,6 +216,13 @@ export function EditorWindowFrame({
     )
   }, [])
 
+  const handleEnsureReferencesVisible = useCallback((): void => {
+    setRightSidebar((prev) => (prev.isCollapsed ? { ...prev, isCollapsed: false } : prev))
+    setRightSidebarSplit((prev) =>
+      prev.isBottomCollapsed ? toggleBottomSectionCollapsed(prev) : prev
+    )
+  }, [])
+
   const {
     schemaResult,
     isSchemaLoading,
@@ -273,6 +281,7 @@ export function EditorWindowFrame({
     navigation,
     openSnapshotTab: paneWorkspaceProps.actions.onOpenSnapshotTab,
     getActiveDiffChangedFiles,
+    onRevealReferencesSection: handleEnsureReferencesVisible,
     wikiApi: window.wikiApi
   })
 
@@ -281,10 +290,19 @@ export function EditorWindowFrame({
       ...paneWorkspaceProps.actions,
       onNavigateLink: handleNavigateMarkdownLink,
       onSymbolNavigate: symbolNav.handleSymbolNavigate,
+      onSymbolContextMenu: symbolNav.handleSymbolContextMenu,
+      onFindReferences: symbolNav.handleFindReferences,
       onGoBack: (paneId) => void navigation.goBack(paneId),
       onGoForward: (paneId) => void navigation.goForward(paneId)
     }),
-    [handleNavigateMarkdownLink, navigation, paneWorkspaceProps.actions, symbolNav.handleSymbolNavigate]
+    [
+      handleNavigateMarkdownLink,
+      navigation,
+      paneWorkspaceProps.actions,
+      symbolNav.handleFindReferences,
+      symbolNav.handleSymbolNavigate,
+      symbolNav.handleSymbolContextMenu
+    ]
   )
 
   const activePaneId = paneWorkspaceProps.layout.activePaneId
@@ -453,6 +471,9 @@ export function EditorWindowFrame({
                     })
                   }
                 }}
+                referencesProps={{
+                  state: symbolNav.referencesState
+                }}
               />
             </aside>
           </>
@@ -498,6 +519,14 @@ export function EditorWindowFrame({
         notFoundNotice={symbolNav.notFoundTooltip}
         onSelectCandidate={symbolNav.selectCandidate}
         onDismiss={symbolNav.dismissPopover}
+      />
+
+      <SymbolContextMenu
+        menu={symbolNav.contextMenu}
+        onGoToDefinition={symbolNav.runContextMenuGoToDefinition}
+        onFindReferences={symbolNav.runContextMenuFindReferences}
+        onDismiss={symbolNav.dismissContextMenu}
+        onClampPosition={symbolNav.clampContextMenuPosition}
       />
 
       {pendingDialog && (

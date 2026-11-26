@@ -33,6 +33,8 @@ interface RawMarkdownEditorProps {
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onLinkNavigate?: (href: string) => void
   onSymbolNavigate?: (request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (request: SymbolNavigateRequest) => void
+  onFindReferences?: (request: SymbolNavigateRequest) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
   onRawScroll?: () => void
 }
@@ -77,6 +79,8 @@ export function RawMarkdownEditor({
   onUpdateViewState,
   onLinkNavigate,
   onSymbolNavigate,
+  onSymbolContextMenu,
+  onFindReferences,
   onActiveHeadingChange,
   onRawScroll
 }: RawMarkdownEditorProps) {
@@ -104,6 +108,8 @@ export function RawMarkdownEditor({
       onUpdateViewState,
       onLinkNavigate,
       onSymbolNavigate,
+      onSymbolContextMenu,
+      onFindReferences,
       onActiveHeadingChange,
       onRawScroll
     })

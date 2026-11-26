@@ -56,6 +56,8 @@ export interface PaneInteractionActions extends TabDragDropActions {
   onGoForward?: (paneId: PaneId) => void
   onNavigateLink?: (paneId: PaneId, tabId: string, href: string) => void
   onSymbolNavigate?: (paneId: PaneId, tabId: string, request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (paneId: PaneId, tabId: string, request: SymbolNavigateRequest) => void
+  onFindReferences?: (paneId: PaneId, tabId: string, request: SymbolNavigateRequest) => void
 }
 
 interface TabContextMenuState {

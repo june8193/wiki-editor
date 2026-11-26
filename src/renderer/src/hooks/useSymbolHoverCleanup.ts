@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent
+} from 'react'
 import type { CodeParser } from '../editor/codeBlockHighlight'
 import {
   type HoveredSymbolRange,
   resolveSingleLineSymbolAtEvent,
   type SymbolNavigateRequest
 } from '../editor/symbolHoverDom'
-import { isSymbolModifierPressed } from '../editor/symbolNavigation'
+import { isFindReferencesShortcut, isSymbolModifierPressed } from '../editor/symbolNavigation'
 
 /**
  * Clears an active Ctrl/Cmd hover underline when the modifier key is released or the window loses focus.
@@ -30,19 +37,42 @@ export function useSymbolHoverCleanup(
   }, [hasHoveredSymbol, onClearHover])
 }
 
+function buildSymbolRequest(
+  resolved: HoveredSymbolRange,
+  side: 'old' | 'new' | undefined,
+  event: Pick<MouseEvent, 'clientX' | 'clientY' | 'shiftKey'>
+): SymbolNavigateRequest {
+  return {
+    symbolName: resolved.name,
+    lineNumber: resolved.lineNumber,
+    ...(side ? { side } : {}),
+    columnStart: resolved.columnStart,
+    columnEnd: resolved.columnEnd,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    shiftKey: event.shiftKey
+  }
+}
+
 /**
- * Shared line-level Ctrl/Cmd hover & click symbol-navigation controller for `GitDiffViewer` and `SnapshotViewer`.
+ * Shared line-level Ctrl/Cmd hover, click, right-click context menu, and Shift+F12
+ * symbol-navigation controller for `GitDiffViewer` and `SnapshotViewer`.
  */
 export function useLineSymbolHover({
   isSymbolNavEnabled,
   activeSyntaxParser,
-  onSymbolNavigate
+  onSymbolNavigate,
+  onSymbolContextMenu,
+  onFindReferences
 }: {
   isSymbolNavEnabled: boolean
   activeSyntaxParser: CodeParser | null
   onSymbolNavigate?: (request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (request: SymbolNavigateRequest) => void
+  onFindReferences?: (request: SymbolNavigateRequest) => void
 }) {
   const [hoveredSymbol, setHoveredSymbol] = useState<HoveredSymbolRange | null>(null)
+  const activeSymbolRef = useRef<SymbolNavigateRequest | null>(null)
   const clearHover = useCallback(() => setHoveredSymbol(null), [])
 
   useSymbolHoverCleanup(hoveredSymbol !== null, clearHover)
@@ -66,6 +96,9 @@ export function useLineSymbolHover({
         event.currentTarget,
         activeSyntaxParser
       )
+      if (resolved) {
+        activeSymbolRef.current = buildSymbolRequest(resolved, side, event)
+      }
       setHoveredSymbol(resolved)
     },
     [activeSyntaxParser, isSymbolNavEnabled]
@@ -87,7 +120,7 @@ export function useLineSymbolHover({
       side: 'old' | 'new' | undefined,
       event: ReactMouseEvent<HTMLElement>
     ): void => {
-      if (!onSymbolNavigate || !isSymbolNavEnabled || !isSymbolModifierPressed(event.nativeEvent)) {
+      if (!isSymbolNavEnabled) {
         return
       }
       const resolved = resolveSingleLineSymbolAtEvent(
@@ -98,21 +131,61 @@ export function useLineSymbolHover({
         event.currentTarget,
         activeSyntaxParser
       )
-      if (!resolved) return
+      if (resolved) {
+        activeSymbolRef.current = buildSymbolRequest(resolved, side, event)
+      }
+      if (!onSymbolNavigate || !isSymbolModifierPressed(event.nativeEvent) || !resolved) {
+        return
+      }
       event.preventDefault()
       event.stopPropagation()
-      onSymbolNavigate({
-        symbolName: resolved.name,
-        lineNumber: resolved.lineNumber,
-        ...(side ? { side } : {}),
-        columnStart: resolved.columnStart,
-        columnEnd: resolved.columnEnd,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        shiftKey: event.shiftKey
-      })
+      onSymbolNavigate(buildSymbolRequest(resolved, side, event))
     },
     [activeSyntaxParser, isSymbolNavEnabled, onSymbolNavigate]
+  )
+
+  const handleLineContextMenu = useCallback(
+    (
+      lineText: string,
+      lineNumber: number,
+      side: 'old' | 'new' | undefined,
+      event: ReactMouseEvent<HTMLElement>
+    ): void => {
+      if (!onSymbolContextMenu || !isSymbolNavEnabled) {
+        return
+      }
+      const resolved = resolveSingleLineSymbolAtEvent(
+        lineText,
+        lineNumber,
+        side,
+        event.nativeEvent,
+        event.currentTarget,
+        activeSyntaxParser
+      )
+      if (!resolved) {
+        return
+      }
+      const request = buildSymbolRequest(resolved, side, event)
+      activeSymbolRef.current = request
+      event.preventDefault()
+      event.stopPropagation()
+      onSymbolContextMenu(request)
+    },
+    [activeSyntaxParser, isSymbolNavEnabled, onSymbolContextMenu]
+  )
+
+  const handleViewerKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLElement>): void => {
+      if (!onFindReferences || !isSymbolNavEnabled || !isFindReferencesShortcut(event)) {
+        return
+      }
+      const active = activeSymbolRef.current
+      if (!active) return
+      event.preventDefault()
+      event.stopPropagation()
+      onFindReferences(active)
+    },
+    [isSymbolNavEnabled, onFindReferences]
   )
 
   return {
@@ -120,6 +193,8 @@ export function useLineSymbolHover({
     clearHover,
     handleLineMouseMove,
     handleLineMouseLeave,
-    handleLineClick
+    handleLineClick,
+    handleLineContextMenu,
+    handleViewerKeyDown
   }
 }

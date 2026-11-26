@@ -39,7 +39,7 @@ import { isLinkNavigationClick, type RawEditorLanguage } from '../editor/editorM
 import { extractMarkdownLinkHrefAtOffset } from '../editor/MarkdownLinkSyntax'
 import { extractIdentifierAtPosition, isSymbolSupportedFile } from '../editor/codeSymbolExtractor'
 import type { SymbolNavigateRequest } from '../editor/symbolHoverDom'
-import { isSymbolModifierPressed } from '../editor/symbolNavigation'
+import { isFindReferencesShortcut, isSymbolModifierPressed } from '../editor/symbolNavigation'
 import { loadDiffLanguageParser, resolveDiffLanguageParserSync } from '../utils/diffSyntaxHighlight'
 import {
   loadRawCodeLanguage,
@@ -91,6 +91,21 @@ function clearSymbolHover(view: EditorView): void {
   }
 }
 
+function buildRawSymbolRequest(
+  token: NonNullable<ReturnType<typeof extractIdentifierAtPosition>>,
+  event?: Pick<MouseEvent, 'clientX' | 'clientY' | 'shiftKey'>
+): SymbolNavigateRequest {
+  return {
+    symbolName: token.name,
+    lineNumber: token.lineNumber,
+    columnStart: token.columnStart,
+    columnEnd: token.columnEnd,
+    clientX: event?.clientX ?? 0,
+    clientY: event?.clientY ?? 0,
+    shiftKey: event?.shiftKey ?? false
+  }
+}
+
 function resolveRawSymbolTokenAtEvent(
   view: EditorView,
   event: MouseEvent,
@@ -131,6 +146,8 @@ export interface UseRawCodeMirrorEditorOptions {
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onLinkNavigate?: (href: string) => void
   onSymbolNavigate?: (request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (request: SymbolNavigateRequest) => void
+  onFindReferences?: (request: SymbolNavigateRequest) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
   onRawScroll?: () => void
 }
@@ -312,6 +329,8 @@ export function useRawCodeMirrorEditor({
   onUpdateViewState,
   onLinkNavigate,
   onSymbolNavigate,
+  onSymbolContextMenu,
+  onFindReferences,
   onActiveHeadingChange,
   onRawScroll
 }: UseRawCodeMirrorEditorOptions) {
@@ -345,6 +364,8 @@ export function useRawCodeMirrorEditor({
     onUpdateViewState,
     onLinkNavigate,
     onSymbolNavigate,
+    onSymbolContextMenu,
+    onFindReferences,
     onRawScroll
   })
   runtimeRef.current = {
@@ -362,6 +383,8 @@ export function useRawCodeMirrorEditor({
     onUpdateViewState,
     onLinkNavigate,
     onSymbolNavigate,
+    onSymbolContextMenu,
+    onFindReferences,
     onRawScroll
   }
   const symbolParserRef = useRef<{ path: string; parser: ReturnType<typeof resolveDiffLanguageParserSync>['parser'] }>({
@@ -584,15 +607,61 @@ export function useRawCodeMirrorEditor({
               return false
             }
             event.preventDefault()
-            symbolNavigate({
-              symbolName: token.name,
-              lineNumber: token.lineNumber,
-              columnStart: token.columnStart,
-              columnEnd: token.columnEnd,
-              clientX: event.clientX,
-              clientY: event.clientY,
-              shiftKey: event.shiftKey
-            })
+            symbolNavigate(buildRawSymbolRequest(token, event))
+            return true
+          },
+          contextmenu: (event, view) => {
+            if (runtimeRef.current.language === 'markdown') {
+              return false
+            }
+            const symbolContextMenu = runtimeRef.current.onSymbolContextMenu
+            const targetName = runtimeRef.current.fileName ?? documentPath ?? ''
+            if (!symbolContextMenu || !isSymbolSupportedFile(targetName)) {
+              return false
+            }
+            const token = resolveRawSymbolTokenAtEvent(
+              view,
+              event,
+              targetName,
+              symbolParserRef.current
+            )
+            if (!token) {
+              return false
+            }
+            event.preventDefault()
+            symbolContextMenu(buildRawSymbolRequest(token, event))
+            return true
+          },
+          keydown: (event, view) => {
+            if (
+              runtimeRef.current.isShortcutDisabled ||
+              runtimeRef.current.language === 'markdown' ||
+              !isFindReferencesShortcut(event)
+            ) {
+              return false
+            }
+            const findReferences = runtimeRef.current.onFindReferences
+            const targetName = runtimeRef.current.fileName ?? documentPath ?? ''
+            if (!findReferences || !isSymbolSupportedFile(targetName)) {
+              return false
+            }
+            const parser =
+              symbolParserRef.current.path === targetName
+                ? symbolParserRef.current.parser
+                : resolveDiffLanguageParserSync(targetName).parser
+            if (!parser) {
+              return false
+            }
+            const token = extractIdentifierAtPosition(
+              view.state.doc.toString(),
+              view.state.selection.main.head,
+              parser
+            )
+            if (!token) {
+              return false
+            }
+            event.preventDefault()
+            findReferences(buildRawSymbolRequest(token))
             return true
           }
         }),

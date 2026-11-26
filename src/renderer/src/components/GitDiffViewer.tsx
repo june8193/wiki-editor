@@ -56,6 +56,8 @@ interface GitDiffViewerProps {
   onChangeViewMode: (nextMode: GitDiffViewMode) => void
   onOpenFile?: (repoRelativePath: string) => void
   onSymbolNavigate?: (request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (request: SymbolNavigateRequest) => void
+  onFindReferences?: (request: SymbolNavigateRequest) => void
   navigation?: GitDiffNavigationProps
   jumpRequest?: DiffJumpRequest | null
 }
@@ -75,7 +77,8 @@ function DiffCodeContent({
   hoverRange,
   onMouseMove,
   onMouseLeave,
-  onClick
+  onClick,
+  onContextMenu
 }: {
   marker: string
   content: string
@@ -85,6 +88,7 @@ function DiffCodeContent({
   onMouseMove?: (event: React.MouseEvent<HTMLSpanElement>) => void
   onMouseLeave?: () => void
   onClick?: (event: React.MouseEvent<HTMLSpanElement>) => void
+  onContextMenu?: (event: React.MouseEvent<HTMLSpanElement>) => void
 }) {
   return (
     <>
@@ -96,6 +100,7 @@ function DiffCodeContent({
         onMouseMove={onMouseMove}
         onMouseLeave={onMouseLeave}
         onClick={onClick}
+        onContextMenu={onContextMenu}
       >
         {renderSyntaxLineWithHover(content, syntaxSpans, hoverRange ?? null, wordHighlights)}
       </span>
@@ -111,7 +116,8 @@ function SideCell({
   hoveredSymbol,
   onLineMouseMove,
   onLineMouseLeave,
-  onLineClick
+  onLineClick,
+  onLineContextMenu
 }: {
   cell: UnifiedDiffSideCell | null
   side: 'old' | 'new'
@@ -126,6 +132,12 @@ function SideCell({
   ) => void
   onLineMouseLeave?: (lineNumber: number, side: 'old' | 'new') => void
   onLineClick?: (
+    lineText: string,
+    lineNumber: number,
+    side: 'old' | 'new',
+    event: React.MouseEvent<HTMLSpanElement>
+  ) => void
+  onLineContextMenu?: (
     lineText: string,
     lineNumber: number,
     side: 'old' | 'new',
@@ -178,6 +190,11 @@ function SideCell({
           onClick={
             lineNumber !== null && cell.type !== 'note' && onLineClick
               ? (event) => onLineClick(cell.content, lineNumber, side, event)
+              : undefined
+          }
+          onContextMenu={
+            lineNumber !== null && cell.type !== 'note' && onLineContextMenu
+              ? (event) => onLineContextMenu(cell.content, lineNumber, side, event)
               : undefined
           }
         />
@@ -255,6 +272,8 @@ function areGitDiffViewerPropsEqual(
     prev.onChangeViewMode === next.onChangeViewMode &&
     prev.onOpenFile === next.onOpenFile &&
     prev.onSymbolNavigate === next.onSymbolNavigate &&
+    prev.onSymbolContextMenu === next.onSymbolContextMenu &&
+    prev.onFindReferences === next.onFindReferences &&
     prev.jumpRequest === next.jumpRequest &&
     areNavigationPropsEqual(prev.navigation, next.navigation)
   )
@@ -287,6 +306,8 @@ function GitDiffViewerInner({
   onChangeViewMode,
   onOpenFile,
   onSymbolNavigate,
+  onSymbolContextMenu,
+  onFindReferences,
   navigation,
   jumpRequest = null
 }: GitDiffViewerProps) {
@@ -362,11 +383,15 @@ function GitDiffViewerInner({
     clearHover,
     handleLineMouseMove,
     handleLineMouseLeave,
-    handleLineClick
+    handleLineClick,
+    handleLineContextMenu,
+    handleViewerKeyDown
   } = useLineSymbolHover({
     isSymbolNavEnabled,
     activeSyntaxParser,
-    onSymbolNavigate
+    onSymbolNavigate,
+    onSymbolContextMenu,
+    onFindReferences
   })
 
   useEffect(() => {
@@ -414,7 +439,12 @@ function GitDiffViewerInner({
   const visibleInlineRows = isVirtualized ? inlineRows.slice(startIndex, endIndex) : inlineRows
 
   return (
-    <section className="git-diff-viewer" aria-label={`${displayFile.path} Diff 뷰어`}>
+    <section
+      className="git-diff-viewer"
+      aria-label={`${displayFile.path} Diff 뷰어`}
+      tabIndex={-1}
+      onKeyDown={handleViewerKeyDown}
+    >
       <header className="git-diff-header">
         <div className="git-diff-meta">
           <span className={`git-badge git-badge--${getGitFileBadgeModifier(displayFile.status)}`}>
@@ -545,6 +575,7 @@ function GitDiffViewerInner({
                       onLineMouseMove={handleLineMouseMove}
                       onLineMouseLeave={handleLineMouseLeave}
                       onLineClick={handleLineClick}
+                      onLineContextMenu={handleLineContextMenu}
                     />
                     <SideCell
                       cell={row.newCell}
@@ -555,6 +586,7 @@ function GitDiffViewerInner({
                       onLineMouseMove={handleLineMouseMove}
                       onLineMouseLeave={handleLineMouseLeave}
                       onLineClick={handleLineClick}
+                      onLineContextMenu={handleLineContextMenu}
                     />
                   </tr>
                 )
@@ -647,6 +679,17 @@ function GitDiffViewerInner({
                             inlineLineNumber !== null && row.lineType !== 'note'
                               ? (event) =>
                                   handleLineClick(
+                                    row.content,
+                                    inlineLineNumber,
+                                    inlineSide,
+                                    event
+                                  )
+                              : undefined
+                          }
+                          onContextMenu={
+                            inlineLineNumber !== null && row.lineType !== 'note'
+                              ? (event) =>
+                                  handleLineContextMenu(
                                     row.content,
                                     inlineLineNumber,
                                     inlineSide,

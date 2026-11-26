@@ -923,4 +923,45 @@ describe('GitDiffViewer', () => {
       })
     )
   })
+
+  it('emits onSymbolContextMenu on right-click and onFindReferences on Shift+F12 for code identifiers', () => {
+    const patch = ['@@ -1,1 +1,1 @@', '-const a = oldSym()', '+const b = newSym()'].join('\n')
+    const onSymbolContextMenu = vi.fn()
+    const onFindReferences = vi.fn()
+
+    const { container } = render(
+      <GitDiffViewer
+        request={{ kind: 'unstaged', path: 'src/sample.ts', status: 'M' }}
+        viewMode="side-by-side"
+        state={{
+          status: 'loaded',
+          diff: makeDiff({ path: 'src/sample.ts', rawPatch: patch })
+        }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+        onSymbolContextMenu={onSymbolContextMenu}
+        onFindReferences={onFindReferences}
+      />
+    )
+
+    const newSymEl = screen.getByText('newSym')
+    fireEvent.contextMenu(newSymEl)
+    expect(onSymbolContextMenu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbolName: 'newSym',
+        lineNumber: 1,
+        side: 'new'
+      })
+    )
+
+    const viewer = container.querySelector('.git-diff-viewer') as HTMLElement
+    fireEvent.keyDown(viewer, { key: 'F12', shiftKey: true })
+    expect(onFindReferences).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbolName: 'newSym',
+        lineNumber: 1,
+        side: 'new'
+      })
+    )
+  })
 })

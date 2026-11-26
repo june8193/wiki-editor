@@ -104,13 +104,35 @@ export function PaneView({
     [actions.onChangeDiffViewMode, pane.id, activeDiffTabId]
   )
   const onSymbolNavigate = actions.onSymbolNavigate
-  const handleDiffSymbolNavigate = useCallback(
-    (req: import('../editor/symbolHoverDom').SymbolNavigateRequest) => {
-      if (activeDiffTabId) {
-        onSymbolNavigate?.(pane.id, activeDiffTabId, req)
-      }
-    },
-    [onSymbolNavigate, pane.id, activeDiffTabId]
+  const onSymbolContextMenu = actions.onSymbolContextMenu
+  const onFindReferences = actions.onFindReferences
+  const bindDiffSymbolHandler = useCallback(
+    (
+      handler:
+        | ((
+            paneId: typeof pane.id,
+            tabId: string,
+            req: import('../editor/symbolHoverDom').SymbolNavigateRequest
+          ) => void)
+        | undefined
+    ) =>
+      handler && activeDiffTabId
+        ? (req: import('../editor/symbolHoverDom').SymbolNavigateRequest) =>
+            handler(pane.id, activeDiffTabId, req)
+        : undefined,
+    [pane.id, activeDiffTabId]
+  )
+  const handleDiffSymbolNavigate = useMemo(
+    () => bindDiffSymbolHandler(onSymbolNavigate),
+    [bindDiffSymbolHandler, onSymbolNavigate]
+  )
+  const handleDiffSymbolContextMenu = useMemo(
+    () => bindDiffSymbolHandler(onSymbolContextMenu),
+    [bindDiffSymbolHandler, onSymbolContextMenu]
+  )
+  const handleDiffFindReferences = useMemo(
+    () => bindDiffSymbolHandler(onFindReferences),
+    [bindDiffSymbolHandler, onFindReferences]
   )
   const diffNavigation = useMemo(
     () => (activeTab?.kind === 'diff' ? getDiffNavigation?.(activeTab.diff.request) : undefined),
@@ -187,6 +209,8 @@ export function PaneView({
           onChangeViewMode={handleChangeDiffViewMode}
           onOpenFile={actions.onOpenDiffTargetFile}
           onSymbolNavigate={onSymbolNavigate ? handleDiffSymbolNavigate : undefined}
+          onSymbolContextMenu={onSymbolContextMenu ? handleDiffSymbolContextMenu : undefined}
+          onFindReferences={onFindReferences ? handleDiffFindReferences : undefined}
           navigation={diffNavigation}
           jumpRequest={activeDiffJumpRequest}
         />
@@ -202,6 +226,8 @@ export function PaneView({
           }
           onOpenLocalFile={actions.onOpenSnapshotTargetFile}
           onSymbolNavigate={(req) => actions.onSymbolNavigate?.(pane.id, activeTab.id, req)}
+          onSymbolContextMenu={(req) => actions.onSymbolContextMenu?.(pane.id, activeTab.id, req)}
+          onFindReferences={(req) => actions.onFindReferences?.(pane.id, activeTab.id, req)}
         />
       ) : activeTab?.kind === 'document' && activeBuffer ? (
         <DocumentEditor
@@ -229,6 +255,16 @@ export function PaneView({
           onSymbolNavigate={
             actions.onSymbolNavigate
               ? (req) => actions.onSymbolNavigate!(pane.id, activeTab.id, req)
+              : undefined
+          }
+          onSymbolContextMenu={
+            actions.onSymbolContextMenu
+              ? (req) => actions.onSymbolContextMenu!(pane.id, activeTab.id, req)
+              : undefined
+          }
+          onFindReferences={
+            actions.onFindReferences
+              ? (req) => actions.onFindReferences!(pane.id, activeTab.id, req)
               : undefined
           }
           onActiveHeadingChange={

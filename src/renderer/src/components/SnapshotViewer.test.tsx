@@ -100,4 +100,47 @@ describe('SnapshotViewer', () => {
     expect(highlighted).toBeTruthy()
     expect(highlighted?.textContent).toContain('target')
   })
+
+  it('emits onSymbolContextMenu on right-click and onFindReferences on Shift+F12', () => {
+    const onSymbolContextMenu = vi.fn()
+    const onFindReferences = vi.fn()
+    const state: SnapshotContentState = {
+      status: 'loaded',
+      snapshot: {
+        path: 'src/utils/helper.ts',
+        scope: baseRequest.scope,
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        encoding: 'utf-8',
+        content: 'export function targetFn() { return 42 }'
+      }
+    }
+
+    render(
+      <SnapshotViewer
+        request={baseRequest}
+        state={state}
+        onSymbolContextMenu={onSymbolContextMenu}
+        onFindReferences={onFindReferences}
+      />
+    )
+
+    const targetEl = screen.getByText('targetFn')
+    fireEvent.contextMenu(targetEl)
+    expect(onSymbolContextMenu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbolName: 'targetFn',
+        lineNumber: 1
+      })
+    )
+
+    fireEvent.keyDown(screen.getByTestId('snapshot-viewer'), { key: 'F12', shiftKey: true })
+    expect(onFindReferences).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbolName: 'targetFn',
+        lineNumber: 1
+      })
+    )
+  })
 })
