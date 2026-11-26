@@ -202,7 +202,10 @@ const codeTagHighlighter = tagHighlighter([
   }
 ])
 
-function resolveParser(language: string | null | undefined): CodeParser | null {
+/**
+ * Resolves a statically bundled Lezer parser for a language name or file extension.
+ */
+export function resolveCodeBlockParser(language: string | null | undefined): CodeParser | null {
   if (!language) {
     return null
   }
@@ -310,7 +313,7 @@ export function getCodeBlockHighlightSpans(
   if (!code) {
     return []
   }
-  const parser = resolveParser(language)
+  const parser = resolveCodeBlockParser(language)
   if (!parser) {
     return []
   }

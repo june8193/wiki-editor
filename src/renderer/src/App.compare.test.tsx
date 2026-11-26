@@ -9,6 +9,7 @@ import {
 import { App } from './App'
 import { clickActivityBarButton, switchWorkspaceFromView } from './test/appTestHelpers'
 import { createInMemoryWikiApi } from './test/inMemoryWikiHarness'
+import * as diffSyntaxHighlight from './utils/diffSyntaxHighlight'
 
 vi.mock('mermaid', async () => (await import('./test/appTestHelpers')).createMermaidMockState().module)
 
@@ -979,5 +980,118 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
     expect(
       within(comparePanel).queryByRole('region', { name: 'aaaa111 커밋 상세' })
     ).not.toBeInTheDocument()
+  })
+
+  it('isolates open GitDiffViewer from Compare panel filter typing, folder toggling, subtab switches, and sidebar resizing', async () => {
+    const user = userEvent.setup()
+    const summary: GitCompareSummary = {
+      baseRef: 'main',
+      compareRef: 'feat/compare',
+      mode: 'three-dot',
+      mergeBaseHash: 'base1111',
+      files: [
+        { path: 'docs/alpha.md', status: 'M', additions: 1, deletions: 1, isBinary: false },
+        { path: 'docs/beta.md', status: 'M', additions: 1, deletions: 0, isBinary: false }
+      ],
+      commits: [],
+      totalAdditions: 2,
+      totalDeletions: 1
+    }
+
+    const { api } = createInMemoryWikiApi(
+      {
+        recentWorkspaces: ['C:/repo']
+      },
+      {
+        workspaces: {
+          'C:/repo': {
+            'docs/alpha.md': '# Alpha\n',
+            'docs/beta.md': '# Beta\n'
+          }
+        },
+        git: {
+          status: vi.fn(async (ws) => ({
+            ...createEmptyGitStatus(true, ws),
+            branch: 'feat/compare'
+          })),
+          compareRefs: vi.fn(async (): Promise<GitCompareRefList> => ({
+            defaultBaseRef: 'main',
+            currentRef: 'feat/compare',
+            worktrees: [],
+            localBranches: [
+              { id: 'local:main', kind: 'local-branch', ref: 'main', displayName: 'main', isCurrent: false },
+              {
+                id: 'local:feat/compare',
+                kind: 'local-branch',
+                ref: 'feat/compare',
+                displayName: 'feat/compare',
+                isCurrent: true
+              }
+            ],
+            remoteBranches: []
+          })),
+          compareSummary: vi.fn(async () => summary),
+          diff: vi.fn(async (_ws, req) => ({
+            path: req.path,
+            status: req.status,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: [
+              `diff --git a/${req.path} b/${req.path}`,
+              `--- a/${req.path}`,
+              `+++ b/${req.path}`,
+              '@@ -1,2 +1,2 @@',
+              ' # Title',
+              '-old line',
+              '+new line'
+            ].join('\n')
+          }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('repo')).toBeInTheDocument()
+    })
+    await clickActivityBarButton(user, 'Compare')
+
+    const comparePanel = screen.getByRole('region', { name: '브랜치 비교' })
+    const alphaRow = await within(comparePanel).findByRole('button', { name: /alpha\.md/ })
+    await user.click(alphaRow)
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    await waitFor(() => {
+      expect(within(primaryPane).getByTestId('diff-side-by-side')).toBeInTheDocument()
+    })
+
+    const spanSpy = vi.spyOn(diffSyntaxHighlight, 'getDiffLineSyntaxSpans')
+
+    // 1. Typing in Compare file filter (keeping both files at 1 / 2)
+    const filterInput = within(comparePanel).getByRole('textbox', { name: '변경 파일 필터' })
+    await user.type(filterInput, 'docs/')
+    expect(spanSpy).not.toHaveBeenCalled()
+
+    // 2. Collapsing and expanding folder in Compare tree
+    const folderBtn = within(comparePanel).getByRole('button', { name: /docs/ })
+    await user.click(folderBtn)
+    await user.click(folderBtn)
+    expect(spanSpy).not.toHaveBeenCalled()
+
+    // 3. Switching Compare subtabs (Files -> Commits -> Files)
+    await user.click(within(comparePanel).getByRole('tab', { name: 'Commits (0)' }))
+    await user.click(within(comparePanel).getByRole('tab', { name: 'Files (2)' }))
+    expect(spanSpy).not.toHaveBeenCalled()
+
+    // 4. Resizing left sidebar via SidebarResizer
+    const sidebarResizer = screen.getByRole('separator', { name: '왼쪽 사이드바 너비 조절' })
+    sidebarResizer.focus()
+    await user.keyboard('{ArrowRight}{ArrowRight}')
+    expect(spanSpy).not.toHaveBeenCalled()
+
+    spanSpy.mockRestore()
   })
 })

@@ -1,11 +1,11 @@
-import { CSSProperties, SyntheticEvent } from 'react'
+import { CSSProperties, SyntheticEvent, useCallback, useMemo } from 'react'
 import type { ThemeMode } from '@shared/config'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { GitDiffRequest } from '@shared/git'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
-import { getPaneActiveTab, PaneState, SplitMode } from '../stores/PaneTabStore'
+import { getPaneActiveTab, GitDiffViewMode, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 import { DocumentEditor, type DocumentEditorFindControl } from './DocumentEditor'
 import {
@@ -41,6 +41,8 @@ interface PaneViewProps {
   actions: PaneInteractionActions
 }
 
+const LOADING_DIFF_STATE: GitDiffContentState = { status: 'loading' }
+
 export function PaneView({
   pane,
   splitMode,
@@ -65,8 +67,21 @@ export function PaneView({
     activeTab?.kind === 'document' ? (buffers[activeTab.bufferKey] ?? null) : null
   const activeDiffState =
     activeTab?.kind === 'diff'
-      ? (diffsByKey[formatGitDiffTabKey(activeTab.diff.request)] ?? { status: 'loading' as const })
+      ? (diffsByKey[formatGitDiffTabKey(activeTab.diff.request)] ?? LOADING_DIFF_STATE)
       : null
+  const activeDiffTabId = activeTab?.kind === 'diff' ? activeTab.id : null
+  const handleChangeDiffViewMode = useCallback(
+    (nextMode: GitDiffViewMode) => {
+      if (activeDiffTabId) {
+        actions.onChangeDiffViewMode(pane.id, activeDiffTabId, nextMode)
+      }
+    },
+    [actions.onChangeDiffViewMode, pane.id, activeDiffTabId]
+  )
+  const diffNavigation = useMemo(
+    () => (activeTab?.kind === 'diff' ? getDiffNavigation?.(activeTab.diff.request) : undefined),
+    [activeTab, getDiffNavigation]
+  )
   const activeScrollRequest =
     activeTab && scrollRequest && scrollRequest.paneId === pane.id && scrollRequest.tabId === activeTab.id
       ? scrollRequest
@@ -120,11 +135,9 @@ export function PaneView({
           request={activeTab.diff.request}
           viewMode={activeTab.diff.viewMode}
           state={activeDiffState}
-          onChangeViewMode={(nextMode) =>
-            actions.onChangeDiffViewMode(pane.id, activeTab.id, nextMode)
-          }
+          onChangeViewMode={handleChangeDiffViewMode}
           onOpenFile={actions.onOpenDiffTargetFile}
-          navigation={getDiffNavigation?.(activeTab.diff.request)}
+          navigation={diffNavigation}
         />
       ) : activeTab?.kind === 'document' && activeBuffer ? (
         <DocumentEditor

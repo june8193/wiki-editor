@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { GitDiffRequest, GitFileDiff } from '@shared/git'
 import type { CodeBlockHighlightSpan, CodeParser } from '../editor/codeBlockHighlight'
 import type { GitDiffViewMode } from '../stores/PaneTabStore'
-import { getDiffLineSyntaxSpans, loadDiffLanguageParser } from '../utils/diffSyntaxHighlight'
+import {
+  getDiffLineSyntaxSpans,
+  loadDiffLanguageParser,
+  resolveDiffLanguageParserSync
+} from '../utils/diffSyntaxHighlight'
 import {
   formatGitFileLabel,
   getGitDiffContextLabel,
@@ -185,7 +189,39 @@ function SideCell({
   )
 }
 
-export function GitDiffViewer({
+function areNavigationPropsEqual(
+  prev: GitDiffNavigationProps | undefined,
+  next: GitDiffNavigationProps | undefined
+): boolean {
+  if (prev === next) {
+    return true
+  }
+  if (!prev || !next) {
+    return false
+  }
+  return (
+    prev.currentIndex === next.currentIndex &&
+    prev.totalCount === next.totalCount &&
+    prev.onPrevFile === next.onPrevFile &&
+    prev.onNextFile === next.onNextFile
+  )
+}
+
+function areGitDiffViewerPropsEqual(
+  prev: GitDiffViewerProps,
+  next: GitDiffViewerProps
+): boolean {
+  return (
+    prev.request === next.request &&
+    prev.viewMode === next.viewMode &&
+    prev.state === next.state &&
+    prev.onChangeViewMode === next.onChangeViewMode &&
+    prev.onOpenFile === next.onOpenFile &&
+    areNavigationPropsEqual(prev.navigation, next.navigation)
+  )
+}
+
+function GitDiffViewerInner({
   request,
   viewMode,
   state,
@@ -199,12 +235,20 @@ export function GitDiffViewer({
   const contextLabel = getGitDiffContextLabel(request)
   const canOpenFile = loadedDiff?.existsInWorkspace === true && displayFile.status !== 'D'
 
+  const syncParserResolution = useMemo(
+    () => resolveDiffLanguageParserSync(displayFile.path),
+    [displayFile.path]
+  )
+
   const [loadedParserState, setLoadedParserState] = useState<{
     path: string
     parser: CodeParser | null
   }>({ path: '', parser: null })
 
   useEffect(() => {
+    if (!syncParserResolution.needsAsyncLoad) {
+      return
+    }
     let cancelled = false
     const targetPath = displayFile.path
     void loadDiffLanguageParser(targetPath).then((parser) => {
@@ -215,10 +259,11 @@ export function GitDiffViewer({
     return () => {
       cancelled = true
     }
-  }, [displayFile.path])
+  }, [displayFile.path, syncParserResolution.needsAsyncLoad])
 
   const activeSyntaxParser =
-    loadedParserState.path === displayFile.path ? loadedParserState.parser : null
+    syncParserResolution.parser ??
+    (loadedParserState.path === displayFile.path ? loadedParserState.parser : null)
 
   const parsed = useMemo(
     () => (loadedDiff && !loadedDiff.isBinary ? parseUnifiedDiff(loadedDiff.rawPatch) : null),
@@ -402,3 +447,5 @@ export function GitDiffViewer({
     </section>
   )
 }
+
+export const GitDiffViewer = memo(GitDiffViewerInner, areGitDiffViewerPropsEqual)

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { GitDiffRequest, GitFileDiff } from '@shared/git'
+import { typescriptLanguage } from '@codemirror/lang-javascript'
+import * as diffSyntaxHighlight from '../utils/diffSyntaxHighlight'
 import { GitDiffViewer } from './GitDiffViewer'
 
 function matchDiffLineText(expected: string) {
@@ -375,5 +377,201 @@ describe('GitDiffViewer', () => {
     expect((screen.getByRole('button', { name: '다음 파일' }) as HTMLButtonElement).disabled).toBe(
       true
     )
+  })
+
+  it('resolves bundled parsers synchronously in a single pass without triggering async reload', async () => {
+    const loadSpy = vi.spyOn(diffSyntaxHighlight, 'loadDiffLanguageParser')
+    const tsParseSpy = vi.spyOn(typescriptLanguage.parser, 'parse')
+
+    const tsPatch = [
+      'diff --git a/src/singlePass.ts b/src/singlePass.ts',
+      '--- a/src/singlePass.ts',
+      '+++ b/src/singlePass.ts',
+      '@@ -1,1 +1,1 @@',
+      '-const a = 1',
+      '+const a = 2'
+    ].join('\n')
+
+    const { container } = render(
+      <GitDiffViewer
+        request={{ kind: 'unstaged', path: 'src/singlePass.ts', status: 'M' }}
+        viewMode="side-by-side"
+        state={{
+          status: 'loaded',
+          diff: makeDiff({ path: 'src/singlePass.ts', rawPatch: tsPatch })
+        }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+      />
+    )
+
+    // Bundled parser is applied synchronously on initial render
+    expect(container.querySelectorAll('.tok-keyword').length).toBeGreaterThan(0)
+    const initialParseCount = tsParseSpy.mock.calls.length
+
+    // Flush microtasks; no async parser load or second-pass re-parse should occur
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(loadSpy).not.toHaveBeenCalled()
+    expect(tsParseSpy.mock.calls.length).toBe(initialParseCount)
+
+    loadSpy.mockRestore()
+    tsParseSpy.mockRestore()
+  })
+
+  it('loads uncached dynamic parsers once without fallback parsing, then resolves synchronously from cache on subsequent renders', async () => {
+    const rbPatch = [
+      'diff --git a/scripts/build.rb b/scripts/build.rb',
+      '--- a/scripts/build.rb',
+      '+++ b/scripts/build.rb',
+      '@@ -1,1 +1,1 @@',
+      '-def hello(name)',
+      '+def greet(name)'
+    ].join('\n')
+
+    const { container, unmount } = render(
+      <GitDiffViewer
+        request={{ kind: 'unstaged', path: 'scripts/build.rb', status: 'M' }}
+        viewMode="inline"
+        state={{
+          status: 'loaded',
+          diff: makeDiff({ path: 'scripts/build.rb', rawPatch: rbPatch })
+        }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+      />
+    )
+
+    // Before async parser resolves: word highlights are present, no syntax tokens yet
+    expect(container.querySelectorAll('mark.git-diff-word-highlight').length).toBe(2)
+
+    // Wait for dynamic parser to load and apply syntax spans
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll('.tok-keyword').length).toBeGreaterThan(0)
+    })
+
+    unmount()
+
+    // Second render for another .rb file should resolve synchronously from cache without calling loadDiffLanguageParser
+    const loadSpy = vi.spyOn(diffSyntaxHighlight, 'loadDiffLanguageParser')
+    const { container: secondContainer } = render(
+      <GitDiffViewer
+        request={{ kind: 'unstaged', path: 'scripts/deploy.rb', status: 'M' }}
+        viewMode="inline"
+        state={{
+          status: 'loaded',
+          diff: makeDiff({ path: 'scripts/deploy.rb', rawPatch: rbPatch })
+        }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+      />
+    )
+
+    expect(secondContainer.querySelectorAll('.tok-keyword').length).toBeGreaterThan(0)
+    expect(loadSpy).not.toHaveBeenCalled()
+    loadSpy.mockRestore()
+  })
+
+  it('memoizes syntax spans per line and parser so side-by-side context lines and mode switches do not re-parse', () => {
+    const tsParseSpy = vi.spyOn(typescriptLanguage.parser, 'parse')
+    const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).slice(2)}`
+    const contextLine = `const sharedContext_${uniqueSuffix} = true`
+    const oldLine = `const oldVal_${uniqueSuffix} = 1`
+    const newLine = `const newVal_${uniqueSuffix} = 2`
+
+    const patch = [
+      'diff --git a/src/memoTest.ts b/src/memoTest.ts',
+      '--- a/src/memoTest.ts',
+      '+++ b/src/memoTest.ts',
+      '@@ -1,3 +1,3 @@',
+      ` ${contextLine}`,
+      `-${oldLine}`,
+      `+${newLine}`
+    ].join('\n')
+
+    const diff = makeDiff({ path: 'src/memoTest.ts', rawPatch: patch })
+    const request: GitDiffRequest = { kind: 'unstaged', path: 'src/memoTest.ts', status: 'M' }
+
+    const { rerender } = render(
+      <GitDiffViewer
+        request={request}
+        viewMode="side-by-side"
+        state={{ status: 'loaded', diff }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+      />
+    )
+
+    // 1 parse for contextLine (shared across old/new), 1 for oldLine, 1 for newLine = 3
+    expect(tsParseSpy).toHaveBeenCalledTimes(3)
+
+    // Switching to inline and back should reuse cached spans with 0 additional parses
+    rerender(
+      <GitDiffViewer
+        request={request}
+        viewMode="inline"
+        state={{ status: 'loaded', diff }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+      />
+    )
+    rerender(
+      <GitDiffViewer
+        request={request}
+        viewMode="side-by-side"
+        state={{ status: 'loaded', diff }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+      />
+    )
+
+    expect(tsParseSpy).toHaveBeenCalledTimes(3)
+    tsParseSpy.mockRestore()
+  })
+
+  it('skips re-rendering via React.memo when props and navigation values are unchanged', () => {
+    const request: GitDiffRequest = {
+      kind: 'branch-compare',
+      baseRef: 'main',
+      compareRef: 'feat/test',
+      mode: 'three-dot',
+      path: 'docs/guide.md',
+      status: 'M'
+    }
+    const state = { status: 'loaded' as const, diff: makeDiff() }
+    const onChangeViewMode = vi.fn()
+    const onOpenFile = vi.fn()
+    const onPrevFile = vi.fn()
+    const onNextFile = vi.fn()
+
+    const { rerender } = render(
+      <GitDiffViewer
+        request={request}
+        viewMode="side-by-side"
+        state={state}
+        onChangeViewMode={onChangeViewMode}
+        onOpenFile={onOpenFile}
+        navigation={{ currentIndex: 1, totalCount: 3, onPrevFile, onNextFile }}
+      />
+    )
+
+    const spanSpy = vi.spyOn(diffSyntaxHighlight, 'getDiffLineSyntaxSpans')
+
+    // Re-render parent with a fresh navigation object having identical values & callbacks
+    rerender(
+      <GitDiffViewer
+        request={request}
+        viewMode="side-by-side"
+        state={state}
+        onChangeViewMode={onChangeViewMode}
+        onOpenFile={onOpenFile}
+        navigation={{ currentIndex: 1, totalCount: 3, onPrevFile, onNextFile }}
+      />
+    )
+
+    expect(spanSpy).not.toHaveBeenCalled()
+    spanSpy.mockRestore()
   })
 })
