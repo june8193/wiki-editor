@@ -4,7 +4,11 @@ import type {
   GitFileStatusCode,
   GitStashEntry
 } from '@shared/git'
-import { isAbsoluteOrDrivePrefix, resolveRepoFileInWorkspace } from '@shared/workspace'
+import {
+  isAbsoluteOrDrivePrefix,
+  joinWorkspacePath,
+  resolveRepoFileInWorkspace
+} from '@shared/workspace'
 
 export type GitFileStatusTone = 'amber' | 'green' | 'red' | 'accent'
 
@@ -70,6 +74,34 @@ export interface GitChangedFileDisplay {
 
 function normalizeRepoRelativePath(filePath: string): string {
   return filePath.replace(/\\/g, '/').replace(/^\/+/, '')
+}
+
+export type GitCopyPathMode = 'relative' | 'absolute'
+
+/**
+ * Formats a Git/Compare file or compressed folder path for clipboard copying.
+ * For `relative`, returns a POSIX path anchored to `workspaceRootPath` when nested inside it,
+ * or falls back to the normalized repo-relative path for paths outside the workspace.
+ * For `absolute`, joins onto `repoRoot ?? workspaceRootPath` using its platform separator style.
+ */
+export function formatGitRepoCopyPath(
+  repoRelativePath: string,
+  mode: GitCopyPathMode,
+  repoRoot?: string | null,
+  workspaceRootPath?: string | null
+): string {
+  const normalized = normalizeRepoRelativePath(repoRelativePath).replace(/\/+$/, '')
+  const baseRoot = repoRoot ?? workspaceRootPath
+  if (mode === 'absolute') {
+    return baseRoot ? joinWorkspacePath(baseRoot, normalized) : normalized
+  }
+  if (baseRoot && workspaceRootPath) {
+    const resolved = resolveRepoFileInWorkspace(baseRoot, workspaceRootPath, normalized)
+    if (resolved) {
+      return resolved.relativePath
+    }
+  }
+  return normalized
 }
 
 /**
@@ -311,4 +343,37 @@ export function buildStashDropConfirmMessage(
  */
 export function buildStashClearConfirmMessage(count: number): string {
   return `보관된 Stash ${count}개를 모두 영구적으로 삭제합니다. 삭제한 Stash는 복구할 수 없습니다. 계속할까요?`
+}
+
+/**
+ * Builds click (preview or Shift+click pinned) and double-click (pinned) handlers for Diff file rows.
+ */
+export function createDiffRowGestureHandlers<T>(
+  file: T,
+  onOpen: (file: T, options?: { pinned?: boolean }) => void
+): {
+  onClick: (event: { shiftKey: boolean }) => void
+  onDoubleClick: () => void
+} {
+  return {
+    onClick: (event) => (event.shiftKey ? onOpen(file, { pinned: true }) : onOpen(file)),
+    onDoubleClick: () => onOpen(file, { pinned: true })
+  }
+}
+
+/**
+ * Forwards a target+file Diff open action while preserving 1-arg calls when `options` is omitted.
+ */
+export function forwardGitDiffOpen(
+  target: GitDiffTarget,
+  file: GitChangedFile,
+  onOpenFileDiff: (request: GitDiffRequest, options?: { pinned?: boolean }) => void,
+  options?: { pinned?: boolean }
+): void {
+  const request = toGitDiffRequest(target, file)
+  if (options) {
+    onOpenFileDiff(request, options)
+  } else {
+    onOpenFileDiff(request)
+  }
 }

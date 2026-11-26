@@ -17,29 +17,45 @@ import {
   type ComparePanelState
 } from '../stores/CompareSession'
 import {
+  createDiffRowGestureHandlers,
   formatGitChangedFileDisplay,
   formatGitTimestamp,
-  getGitFileStatusDisplay
+  getGitFileStatusDisplay,
+  type GitCopyPathMode
 } from '../utils/gitFilePresentation'
 import { buildCompressedGitFileTree, type GitFileTreeNode } from '../utils/gitFileTree'
 import { CompareRefPicker } from './CompareRefPicker'
 import { getGitTreeIndentStyle } from './GitChangedFileRow'
 import { GitCommitDetailPanel } from './GitDetailPanel'
+import { GitTreeContextMenu, useGitTreeContextMenu } from './GitTreeContextMenu'
 
 export interface CompareSidebarPanelProps {
   state: ComparePanelState
   isRepo: boolean | null
   actions: ComparePanelActions
+  repoRoot?: string | null
+  onCopyPath?: (repoRelativePath: string, mode: GitCopyPathMode) => void
 }
 
 /**
  * Left sidebar panel for comparing branches and worktrees (`Base` vs `Compare`)
  * with 3-dot/2-dot mode switching and compressed file tree diff navigation.
  */
-export function CompareSidebarPanel({ state, isRepo, actions }: CompareSidebarPanelProps) {
+export function CompareSidebarPanel({
+  state,
+  isRepo,
+  actions,
+  repoRoot = null,
+  onCopyPath
+}: CompareSidebarPanelProps) {
   const hasWorkspace = state.workspaceRootPath !== null
   const isBusy = state.isLoadingRefs || state.isLoadingSummary
   const canCompare = hasWorkspace && isRepo === true
+  const treeContextMenu = useGitTreeContextMenu({
+    workspaceRootPath: state.workspaceRootPath,
+    repoRoot,
+    onCopyPath
+  })
 
   const filteredFiles = useMemo(
     () => (state.summary ? filterCompareFiles(state.summary.files, state.fileFilter) : []),
@@ -52,14 +68,15 @@ export function CompareSidebarPanel({ state, isRepo, actions }: CompareSidebarPa
       if (node.kind === 'dir') {
         const isCollapsed = state.collapsedTreeDirs.has(node.path)
         return (
-          <div key={`dir:${node.path}`} className="git-tree-branch">
+          <div key={`dir:${node.path}`} className="git-tree-dir-item">
             <button
               type="button"
-              className="git-tree-dir-row"
+              className="git-tree-dir-btn"
               style={getGitTreeIndentStyle(depth)}
               aria-expanded={!isCollapsed}
               title={node.path}
               onClick={() => actions.toggleTreeDirCollapsed(node.path)}
+              onContextMenu={(event) => treeContextMenu.openDirMenu(event, node.path)}
             >
               <span className="git-tree-chevron" aria-hidden="true">
                 {isCollapsed ? (
@@ -92,7 +109,12 @@ export function CompareSidebarPanel({ state, isRepo, actions }: CompareSidebarPa
           className="compare-file-row"
           style={getGitTreeIndentStyle(depth)}
           title={display.tooltip}
-          onClick={() => actions.openCompareFileDiff(file)}
+          {...createDiffRowGestureHandlers(file, actions.openCompareFileDiff)}
+          onContextMenu={(event) =>
+            treeContextMenu.openFileMenu(event, file.path, () =>
+              actions.openCompareFileDiff(file, { pinned: true })
+            )
+          }
         >
           <FileText size={13} strokeWidth={1.75} className="git-file-icon" aria-hidden="true" />
           <span
@@ -353,6 +375,13 @@ export function CompareSidebarPanel({ state, isRepo, actions }: CompareSidebarPa
           )}
         </div>
       )}
+
+      <GitTreeContextMenu
+        target={treeContextMenu.target}
+        onClose={treeContextMenu.closeMenu}
+        onCopyPath={treeContextMenu.handleCopyPath}
+        onClampPosition={treeContextMenu.clampPosition}
+      />
     </section>
   )
 }

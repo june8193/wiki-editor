@@ -4,6 +4,7 @@ import {
   canOpenGitChangedFile,
   formatGitChangedFileDisplay,
   formatGitDiffTabKey,
+  formatGitRepoCopyPath,
   getGitDiffContextLabel,
   getGitDiffTabLabel,
   getGitFileDirPath,
@@ -239,5 +240,49 @@ describe('gitFilePresentation', () => {
       canOpenGitChangedFile({ path: '../escape.md', status: 'M' }, 'C:/repo', 'C:/repo/wiki')
     ).toBe(false)
     expect(canOpenGitChangedFile({ path: 'notes.md', status: 'M' }, 'C:/repo', null)).toBe(false)
+  })
+
+  it('formats workspace-relative and platform-aware absolute paths for Git and Compare files and compressed folders', () => {
+    // Same root (POSIX)
+    expect(formatGitRepoCopyPath('docs/guide.md', 'relative', '/repo', '/repo')).toBe('docs/guide.md')
+    expect(formatGitRepoCopyPath('docs/guide.md', 'absolute', '/repo', '/repo')).toBe(
+      '/repo/docs/guide.md'
+    )
+
+    // Sub-workspace inside monorepo: relative path is anchored to workspaceRootPath
+    expect(
+      formatGitRepoCopyPath('packages/wiki/docs/guide.md', 'relative', '/repo', '/repo/packages/wiki')
+    ).toBe('docs/guide.md')
+    expect(
+      formatGitRepoCopyPath('packages/wiki/docs/guide.md', 'absolute', '/repo', '/repo/packages/wiki')
+    ).toBe('/repo/packages/wiki/docs/guide.md')
+
+    // External monorepo path: relative falls back to normalized repo-relative path
+    expect(
+      formatGitRepoCopyPath('packages/other/readme.md', 'relative', '/repo', '/repo/packages/wiki')
+    ).toBe('packages/other/readme.md')
+    expect(
+      formatGitRepoCopyPath('packages/other/readme.md', 'absolute', '/repo', '/repo/packages/wiki')
+    ).toBe('/repo/packages/other/readme.md')
+
+    // Compressed folder node path (`a/b/c`)
+    expect(formatGitRepoCopyPath('a/b/c', 'relative', '/repo', '/repo')).toBe('a/b/c')
+    expect(formatGitRepoCopyPath('a/b/c', 'absolute', '/repo', '/repo')).toBe('/repo/a/b/c')
+
+    // Windows root & backslash normalization
+    expect(
+      formatGitRepoCopyPath('wiki\\docs\\a.md', 'relative', 'C:\\repo', 'C:\\repo\\wiki')
+    ).toBe('docs/a.md')
+    expect(
+      formatGitRepoCopyPath('wiki/docs/a.md', 'absolute', 'C:\\repo', 'C:\\repo\\wiki')
+    ).toBe('C:\\repo\\wiki\\docs\\a.md')
+
+    // Missing repoRoot falls back to workspaceRootPath
+    expect(formatGitRepoCopyPath('notes/today.md', 'relative', null, '/workspace')).toBe(
+      'notes/today.md'
+    )
+    expect(formatGitRepoCopyPath('notes/today.md', 'absolute', null, '/workspace')).toBe(
+      '/workspace/notes/today.md'
+    )
   })
 })

@@ -2695,4 +2695,74 @@ describe('GitSidebarPanel', () => {
       includeUntracked: true
     })
   })
+
+  it('shows right-click context menu on Changes file rows (list & tree) and compressed folder rows', async () => {
+    const user = userEvent.setup()
+    const onOpenFileDiff = vi.fn()
+    const onCopyPath = vi.fn()
+    const props = buildProps({
+      status: {
+        ...createEmptyGitStatus(true, 'C:/repo'),
+        staged: [{ status: 'M', path: 'docs/staged.md' }],
+        unstaged: [{ status: 'M', path: 'a/b/c/file.md' }],
+        untracked: []
+      },
+      changesViewState: { ...createDefaultGitChangesViewState(), viewMode: 'list' }
+    })
+
+    const { rerender } = render(
+      <GitSidebarPanel
+        state={props.state}
+        actions={{ ...props.actions, openFileDiff: onOpenFileDiff }}
+        onCopyPath={onCopyPath}
+      />
+    )
+
+    // List mode: right-click file row
+    const stagedGroup = screen.getByRole('group', { name: 'Staged Changes' })
+    fireEvent.contextMenu(within(stagedGroup).getByTitle('docs/staged.md'))
+    const fileMenu = screen.getByRole('menu')
+    expect(within(fileMenu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      '새 탭에서 Diff 열기',
+      '상대 경로 복사',
+      '절대 경로 복사'
+    ])
+    await user.click(within(fileMenu).getByRole('menuitem', { name: '새 탭에서 Diff 열기' }))
+    expect(onOpenFileDiff).toHaveBeenCalledWith(
+      { kind: 'staged', path: 'docs/staged.md', status: 'M' },
+      { pinned: true }
+    )
+
+    // Tree mode: right-click compressed directory row `a/b/c`
+    const treeProps = buildProps({
+      status: {
+        ...createEmptyGitStatus(true, 'C:/repo'),
+        staged: [{ status: 'M', path: 'docs/staged.md' }],
+        unstaged: [{ status: 'M', path: 'a/b/c/file.md' }],
+        untracked: []
+      },
+      changesViewState: { ...createDefaultGitChangesViewState(), viewMode: 'tree' }
+    })
+    rerender(
+      <GitSidebarPanel
+        state={treeProps.state}
+        actions={{ ...treeProps.actions, openFileDiff: onOpenFileDiff }}
+        onCopyPath={onCopyPath}
+      />
+    )
+
+    const changesGroup = screen.getByRole('group', { name: 'Changes' })
+    fireEvent.contextMenu(within(changesGroup).getByTitle('a/b/c'))
+    const dirMenu = screen.getByRole('menu')
+    expect(within(dirMenu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      '상대 경로 복사',
+      '절대 경로 복사'
+    ])
+    await user.click(within(dirMenu).getByRole('menuitem', { name: '상대 경로 복사' }))
+    expect(onCopyPath).toHaveBeenCalledWith('a/b/c', 'relative')
+
+    fireEvent.contextMenu(within(changesGroup).getByTitle('a/b/c'))
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '절대 경로 복사' }))
+    expect(onCopyPath).toHaveBeenCalledWith('a/b/c', 'absolute')
+  })
 })

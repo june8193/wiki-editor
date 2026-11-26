@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -427,9 +427,25 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
     await waitFor(() => {
       expect(within(comparePanel).getByText('src/features/auth')).toBeInTheDocument()
     })
+    const dirButton = within(comparePanel).getByRole('button', { name: 'src/features/auth' })
+    expect(dirButton).toHaveClass('git-tree-dir-btn')
+    expect(dirButton).not.toHaveClass('git-tree-dir-row')
+    expect(dirButton.parentElement).toHaveClass('git-tree-dir-item')
+    expect(dirButton.parentElement).not.toHaveClass('git-tree-branch')
+    expect(dirButton).toHaveAttribute('aria-expanded', 'true')
+    expect(dirButton).toHaveAttribute('title', 'src/features/auth')
+
     expect(within(comparePanel).getByText('login.ts')).toBeInTheDocument()
     expect(within(comparePanel).getByText('session.ts')).toBeInTheDocument()
     expect(within(comparePanel).getByText('Binary')).toBeInTheDocument()
+
+    // Collapse and re-expand folder row
+    await user.click(dirButton)
+    expect(dirButton).toHaveAttribute('aria-expanded', 'false')
+    expect(within(comparePanel).queryByText('login.ts')).not.toBeInTheDocument()
+    await user.click(dirButton)
+    expect(dirButton).toHaveAttribute('aria-expanded', 'true')
+    expect(within(comparePanel).getByText('login.ts')).toBeInTheDocument()
 
     // Filter files
     const filterInput = within(comparePanel).getByRole('textbox', { name: '변경 파일 필터' })
@@ -963,5 +979,231 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
     expect(
       within(comparePanel).queryByRole('region', { name: 'aaaa111 커밋 상세' })
     ).not.toBeInTheDocument()
+  })
+
+  it('supports preview/pin multi-diff tabs via click, shift+click, dblclick, tab-bar dblclick, and reconciles all open compare diff tabs on mode change', async () => {
+    const user = userEvent.setup()
+    const { api } = createInMemoryWikiApi(
+      { recentWorkspaces: ['C:/repo'] },
+      {
+        workspaces: {
+          'C:/repo': {
+            'docs/a.md': '# A',
+            'docs/b.md': '# B',
+            'docs/c.md': '# C'
+          }
+        },
+        git: {
+          status: vi.fn(async (ws) => ({
+            ...createEmptyGitStatus(true, ws),
+            branch: 'feat/compare'
+          })),
+          compareRefs: vi.fn(async (): Promise<GitCompareRefList> => ({
+            defaultBaseRef: 'main',
+            currentRef: 'feat/compare',
+            worktrees: [],
+            localBranches: [
+              { id: 'local:main', kind: 'local-branch', ref: 'main', displayName: 'main' },
+              {
+                id: 'local:feat/compare',
+                kind: 'local-branch',
+                ref: 'feat/compare',
+                displayName: 'feat/compare',
+                isCurrent: true
+              }
+            ],
+            remoteBranches: []
+          })),
+          compareSummary: vi.fn(async (_ws, req): Promise<GitCompareSummary> => {
+            if (req.mode === 'two-dot') {
+              return {
+                baseRef: req.baseRef,
+                compareRef: req.compareRef,
+                mode: 'two-dot',
+                mergeBaseHash: '2222222',
+                totalAdditions: 2,
+                totalDeletions: 0,
+                files: [
+                  { path: 'docs/a.md', status: 'M', additions: 1, deletions: 0, isBinary: false },
+                  { path: 'docs/c.md', status: 'A', additions: 1, deletions: 0, isBinary: false }
+                ],
+                commits: []
+              }
+            }
+            return {
+              baseRef: req.baseRef,
+              compareRef: req.compareRef,
+              mode: 'three-dot',
+              mergeBaseHash: '1111111',
+              totalAdditions: 3,
+              totalDeletions: 0,
+              files: [
+                { path: 'docs/a.md', status: 'M', additions: 1, deletions: 0, isBinary: false },
+                { path: 'docs/b.md', status: 'M', additions: 1, deletions: 0, isBinary: false },
+                { path: 'docs/c.md', status: 'A', additions: 1, deletions: 0, isBinary: false }
+              ],
+              commits: []
+            }
+          }),
+          diff: vi.fn(async (_ws, req) => ({
+            path: req.path,
+            status: req.status,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: `@@ -1,1 +1,1 @@\n-old\n+new ${req.path} (${req.kind === 'branch-compare' ? req.mode : req.kind})\n`
+          }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('repo')).toBeInTheDocument())
+    await clickActivityBarButton(user, 'Compare')
+
+    const comparePanel = screen.getByRole('region', { name: '브랜치 비교' })
+    await within(comparePanel).findByText('a.md')
+    const primaryPane = screen.getByTestId('pane-primary')
+
+    // 1. Single click opens preview tab (.is-preview)
+    await user.click(within(comparePanel).getByRole('button', { name: /a\.md/ }))
+    const tabA = await within(primaryPane).findByRole('tab', { name: /a\.md/ })
+    expect(tabA.closest('.tab-item')).toHaveClass('is-preview')
+
+    // 2. Single click on b.md replaces preview tab
+    await user.click(within(comparePanel).getByRole('button', { name: /b\.md/ }))
+    const tabB = await within(primaryPane).findByRole('tab', { name: /b\.md/ })
+    expect(tabB.closest('.tab-item')).toHaveClass('is-preview')
+    expect(within(primaryPane).queryByRole('tab', { name: /a\.md/ })).not.toBeInTheDocument()
+
+    // 3. Double click on tab bar preview tab pins it (removes .is-preview)
+    await user.dblClick(tabB)
+    expect(tabB.closest('.tab-item')).not.toHaveClass('is-preview')
+
+    // 4. Shift+click on a.md opens a pinned tab alongside tabB
+    await user.keyboard('{Shift>}')
+    await user.click(within(comparePanel).getByRole('button', { name: /a\.md/ }))
+    await user.keyboard('{/Shift}')
+    const pinnedA = await within(primaryPane).findByRole('tab', { name: /a\.md/ })
+    expect(pinnedA.closest('.tab-item')).not.toHaveClass('is-preview')
+    expect(within(primaryPane).getByRole('tab', { name: /b\.md/ })).toBeInTheDocument()
+
+    // 5. Single click on c.md opens a new preview tab alongside pinned A and pinned B
+    await user.click(within(comparePanel).getByRole('button', { name: /c\.md/ }))
+    const previewC = await within(primaryPane).findByRole('tab', { name: /c\.md/ })
+    expect(previewC.closest('.tab-item')).toHaveClass('is-preview')
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(3)
+
+    // 6. Switch to 2-dot mode -> b.md (out-of-range) closes, a.md (pinned) and c.md (preview) remain and preserve isPreview
+    await user.click(within(comparePanel).getByRole('button', { name: '2-dot (직접 비교)' }))
+    await waitFor(() => {
+      expect(within(primaryPane).queryByRole('tab', { name: /b\.md/ })).not.toBeInTheDocument()
+    })
+    const remainingA = within(primaryPane).getByRole('tab', { name: /a\.md/ })
+    const remainingC = within(primaryPane).getByRole('tab', { name: /c\.md/ })
+    expect(remainingA.closest('.tab-item')).not.toHaveClass('is-preview')
+    expect(remainingC.closest('.tab-item')).toHaveClass('is-preview')
+    expect(within(primaryPane).getByText('new docs/c.md (two-dot)')).toBeInTheDocument()
+  })
+
+  it('supports right-click context menu on Compare files and compressed folders, opening pinned diff tabs and copying paths with error reporting', async () => {
+    const user = userEvent.setup()
+    let shouldFailCopy = false
+    const copiedTexts: string[] = []
+    const { api } = createInMemoryWikiApi(
+      { recentWorkspaces: ['C:/repo'] },
+      {
+        workspaces: {
+          'C:/repo': {
+            'a/b/c/file.md': '# File'
+          }
+        },
+        clipboard: {
+          writeText: vi.fn(async (text: string) => {
+            if (shouldFailCopy) {
+              throw new Error('클립보드 접근 거부')
+            }
+            copiedTexts.push(text)
+          })
+        },
+        git: {
+          status: vi.fn(async (ws) => ({
+            ...createEmptyGitStatus(true, ws),
+            branch: 'feat/compare'
+          })),
+          compareRefs: vi.fn(async (): Promise<GitCompareRefList> => ({
+            defaultBaseRef: 'main',
+            currentRef: 'feat/compare',
+            worktrees: [],
+            localBranches: [
+              { id: 'local:main', kind: 'local-branch', ref: 'main', displayName: 'main' },
+              {
+                id: 'local:feat/compare',
+                kind: 'local-branch',
+                ref: 'feat/compare',
+                displayName: 'feat/compare',
+                isCurrent: true
+              }
+            ],
+            remoteBranches: []
+          })),
+          compareSummary: vi.fn(async (_ws, req): Promise<GitCompareSummary> => ({
+            baseRef: req.baseRef,
+            compareRef: req.compareRef,
+            mode: req.mode,
+            mergeBaseHash: '1111111',
+            totalAdditions: 1,
+            totalDeletions: 0,
+            files: [{ path: 'a/b/c/file.md', status: 'M', additions: 1, deletions: 0, isBinary: false }],
+            commits: []
+          })),
+          diff: vi.fn(async (_ws, req) => ({
+            path: req.path,
+            status: req.status,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: '@@ -1 +1 @@\n-old\n+new\n'
+          }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('repo')).toBeInTheDocument())
+    await clickActivityBarButton(user, 'Compare')
+
+    const comparePanel = screen.getByRole('region', { name: '브랜치 비교' })
+    const dirRow = await within(comparePanel).findByTitle('a/b/c')
+    const fileRow = within(comparePanel).getByTitle('a/b/c/file.md')
+
+    // Compressed folder right-click -> relative & absolute copy
+    fireEvent.contextMenu(dirRow)
+    const dirMenu = screen.getByRole('menu')
+    expect(within(dirMenu).queryByRole('menuitem', { name: '새 탭에서 Diff 열기' })).toBeNull()
+    await user.click(within(dirMenu).getByRole('menuitem', { name: '상대 경로 복사' }))
+    expect(copiedTexts).toEqual(['a/b/c'])
+
+    fireEvent.contextMenu(dirRow)
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '절대 경로 복사' }))
+    expect(copiedTexts).toEqual(['a/b/c', 'C:/repo/a/b/c'])
+
+    // File right-click -> open pinned diff tab
+    fireEvent.contextMenu(fileRow)
+    const fileMenu = screen.getByRole('menu')
+    await user.click(within(fileMenu).getByRole('menuitem', { name: '새 탭에서 Diff 열기' }))
+    const primaryPane = screen.getByTestId('pane-primary')
+    const diffTab = await within(primaryPane).findByRole('tab', { name: /file\.md/ })
+    expect(diffTab.closest('.tab-item')).not.toHaveClass('is-preview')
+
+    // Clipboard failure reports through global error banner
+    shouldFailCopy = true
+    fireEvent.contextMenu(fileRow)
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '상대 경로 복사' }))
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('클립보드 접근 거부')
+    })
   })
 })

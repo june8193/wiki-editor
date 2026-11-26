@@ -272,7 +272,8 @@ export function useEditorWorkspace({
         })
       },
       onUpdateTabViewState: tabStore.updateTabViewState,
-      onChangeDiffViewMode: tabStore.updateDiffTabViewMode
+      onChangeDiffViewMode: tabStore.updateDiffTabViewMode,
+      onPinDiffTab: tabStore.pinDiffTab
     }),
     [canDetachToNewWindow, syncClient, tabDragController, tabStore]
   )

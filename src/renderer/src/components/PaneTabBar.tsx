@@ -33,6 +33,7 @@ export interface PaneInteractionActions extends TabDragDropActions {
   onReopenWithEncoding?: (bufferKey: string, targetEncoding: TextEncoding) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
   onChangeDiffViewMode: (paneId: PaneId, tabId: string, viewMode: GitDiffViewMode) => void
+  onPinDiffTab?: (paneId: PaneId, tabId: string) => void
   onOpenDiffTargetFile?: (repoRelativePath: string) => void
   onNavigateLink?: (paneId: PaneId, tabId: string, href: string) => void
 }
@@ -62,6 +63,7 @@ interface PaneTabBarProps {
     | 'onStartTabDrag'
     | 'onDropTabInWindow'
     | 'onEndTabDrag'
+    | 'onPinDiffTab'
   >
 }
 
@@ -101,6 +103,7 @@ export function PaneTabBar({
         if (tab.kind === 'document' && !buffer) return null
         const isActive = tab.id === activeTabId
         const isDiff = tab.kind === 'diff'
+        const isPreviewDiff = isDiff && tab.diff.isPreview === true
         const tabLabel = isDiff ? getGitDiffTabLabel(tab.diff.request) : buffer!.name
         const tabTitle = isDiff
           ? `${formatGitFileLabel(tab.diff.request)} · ${getGitDiffContextLabel(tab.diff.request)}`
@@ -110,7 +113,7 @@ export function PaneTabBar({
         return (
           <div
             key={tab.id}
-            className={`tab-item${isActive ? ' is-active' : ''}${isDiff ? ' is-diff-tab' : ''}`}
+            className={`tab-item${isActive ? ' is-active' : ''}${isDiff ? ' is-diff-tab' : ''}${isPreviewDiff ? ' is-preview' : ''}`}
             draggable
             onDragStart={(event) => {
               writeTabDragDataTransfer(event, { paneId, tabId: tab.id })
@@ -149,6 +152,9 @@ export function PaneTabBar({
               className="tab-trigger"
               title={tabTitle}
               onClick={() => actions.onActivateTab(paneId, tab.id)}
+              onDoubleClick={
+                isPreviewDiff ? () => actions.onPinDiffTab?.(paneId, tab.id) : undefined
+              }
             >
               {isDiff && <span className="tab-diff-badge">Diff</span>}
               <span className="tab-label">{tabLabel}</span>

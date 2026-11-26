@@ -49,6 +49,7 @@ import { ActivityBar, type LeftSidebarView } from './ActivityBar'
 import { getOrderedVisibleCompareFiles } from '../stores/CompareSession'
 import { buildPaneWorkspaceProps, EditorWindowFrame } from './EditorWindowFrame'
 import { CompareSidebarPanel } from './CompareSidebarPanel'
+import { formatGitRepoCopyPath, type GitCopyPathMode } from '../utils/gitFilePresentation'
 import type { GitDiffNavigationProps } from './GitDiffViewer'
 import { type EntryPathCopyMode, FolderTreeSidebar } from './FolderTreeSidebar'
 import { FrontmatterFilterBar } from './FrontmatterFilterBar'
@@ -511,6 +512,22 @@ export function MainAppShell() {
     [reportErrorBanner, wikiApi, workspace?.rootPath]
   )
 
+  const handleCopyGitRepoPath = useCallback(
+    (repoRelativePath: string, mode: GitCopyPathMode): void => {
+      reportErrorBanner(null)
+      const textToCopy = formatGitRepoCopyPath(
+        repoRelativePath,
+        mode,
+        git.panelState.status?.repoRoot ?? null,
+        workspace?.rootPath ?? null
+      )
+      void writeTextToClipboard(wikiApi, textToCopy).catch((error: unknown) => {
+        reportErrorBanner(toErrorMessage(error, '경로를 클립보드에 복사하지 못했습니다.'), error)
+      })
+    },
+    [git.panelState.status?.repoRoot, reportErrorBanner, wikiApi, workspace?.rootPath]
+  )
+
   const handleReportImageError = useCallback(
     (title: string, error: unknown): void => {
       const detail = toErrorMessage(error, '')
@@ -697,7 +714,11 @@ export function MainAppShell() {
             )}
 
             {leftSidebar.activeView === 'git' && (
-              <GitSidebarPanel state={git.panelState} actions={git.actions} />
+              <GitSidebarPanel
+                state={git.panelState}
+                actions={git.actions}
+                onCopyPath={handleCopyGitRepoPath}
+              />
             )}
 
             {leftSidebar.activeView === 'compare' && (
@@ -705,6 +726,8 @@ export function MainAppShell() {
                 state={compare.state}
                 isRepo={activeGitIsRepo}
                 actions={compare.actions}
+                repoRoot={git.panelState.status?.repoRoot ?? null}
+                onCopyPath={handleCopyGitRepoPath}
               />
             )}
           </aside>

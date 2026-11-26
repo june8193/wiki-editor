@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { Plus } from 'lucide-react'
 import type { GitDiffRequest, GitStashDetail, GitStashEntry } from '@shared/git'
 import type { GitDetailState } from '../stores/GitSession'
+import type { DiffTabOpenOptions } from '../stores/PaneTabStore'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { GitDetailFilesList, GitDetailPanel } from './GitDetailPanel'
 
@@ -53,7 +54,7 @@ export interface GitStashesSectionProps {
   stashDetail: GitDetailState<GitStashDetail>
   isBusy: boolean
   onToggleStashDetail: (entry: GitStashEntry) => void
-  onOpenFileDiff: (request: GitDiffRequest) => void
+  onOpenFileDiff: (request: GitDiffRequest, options?: DiffTabOpenOptions) => void
   onPopStash: (stashRef: string) => void
   onApplyStash: (stashRef: string) => void
   onDropStash: (stashRef: string) => void

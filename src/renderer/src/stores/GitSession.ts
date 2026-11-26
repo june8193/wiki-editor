@@ -18,6 +18,7 @@ import {
 import type { WikiGitApi } from '@shared/ipc'
 import { resolveRepoFileInWorkspace } from '@shared/workspace'
 import type { GitDiffContentState } from '../components/GitDiffViewer'
+import type { DiffTabOpenOptions } from './PaneTabStore'
 import {
   promptUnsavedWorkspaceChanges,
   type ConfirmActionDialogRequest,
@@ -192,7 +193,7 @@ export interface GitBufferCollaborator {
 export interface GitDiffTabsCollaborator {
   listOpenRequests(): readonly GitDiffRequest[]
   subscribe(listener: () => void): () => void
-  openDiffTab(request: GitDiffRequest): void
+  openDiffTab(request: GitDiffRequest, options?: DiffTabOpenOptions): void
   closeAllUnstagedDiffTabs(): void
   closeUnstagedDiffTabsForPaths(repoRelativePaths: readonly string[]): void
   closeUnstagedDiffTabsExcept(activeRepoRelativePaths: ReadonlySet<string>): void
@@ -244,7 +245,7 @@ export interface GitPanelActions {
   openStashDialog: (initialScope?: 'unstaged' | 'all') => void
   closeStashDialog: () => void
   submitStashDialog: (options: GitStashCreateOptions) => Promise<boolean>
-  openFileDiff: (request: GitDiffRequest) => void
+  openFileDiff: (request: GitDiffRequest, options?: DiffTabOpenOptions) => void
   openWorkspaceFile: (repoRelativePath: string) => void
   toggleChangesCollapsed: () => void
   toggleStashesCollapsed: () => void
@@ -879,10 +880,10 @@ export class GitSession {
     }
   }
 
-  private openFileDiff = (request: GitDiffRequest): void => {
+  private openFileDiff = (request: GitDiffRequest, options?: DiffTabOpenOptions): void => {
     const tabKey = formatGitDiffTabKey(request)
     const seqBefore = this.inFlightDiffSeq.get(tabKey) ?? 0
-    this.diffTabs.openDiffTab(request)
+    this.diffTabs.openDiffTab(request, options)
     if ((this.inFlightDiffSeq.get(tabKey) ?? 0) === seqBefore) {
       const ctx = this.currentRequestContext()
       if (!ctx) return

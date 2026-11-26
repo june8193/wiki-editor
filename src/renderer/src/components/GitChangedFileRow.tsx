@@ -1,3 +1,4 @@
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import {
   Archive,
   File,
@@ -10,7 +11,9 @@ import {
   Undo2
 } from 'lucide-react'
 import type { GitChangedFile } from '@shared/git'
+import type { DiffTabOpenOptions } from '../stores/PaneTabStore'
 import {
+  createDiffRowGestureHandlers,
   formatGitChangedFileDisplay,
   formatGitFileLabel,
   getGitFileBaseName,
@@ -42,11 +45,12 @@ export interface GitChangedFileRowProps {
   isBusy?: boolean
   canOpenFile?: boolean
   itemAction?: GitFileRowActionKind
-  onSelectFile: (file: GitChangedFile) => void
+  onSelectFile: (file: GitChangedFile, options?: DiffTabOpenOptions) => void
   onOpenWorkspaceFile?: (repoRelativePath: string) => void
   onDiscardFile?: (file: GitChangedFile) => void
   onStashFile?: (file: GitChangedFile) => void
   onItemAction?: (file: GitChangedFile) => void
+  onContextMenu?: (event: ReactMouseEvent, file: GitChangedFile) => void
 }
 
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|ico)$/i
@@ -88,7 +92,8 @@ export function GitChangedFileRow({
   onOpenWorkspaceFile,
   onDiscardFile,
   onStashFile,
-  onItemAction
+  onItemAction,
+  onContextMenu
 }: GitChangedFileRowProps) {
   const statusDisplay = getGitFileStatusDisplay(file.status)
   const listDisplay = displayMode === 'list' ? formatGitChangedFileDisplay(file) : null
@@ -104,12 +109,16 @@ export function GitChangedFileRow({
     (itemAction !== undefined && onItemAction !== undefined)
 
   return (
-    <li className="git-file-item" style={indentStyle}>
+    <li
+      className="git-file-item"
+      style={indentStyle}
+      onContextMenu={onContextMenu ? (event) => onContextMenu(event, file) : undefined}
+    >
       <button
         type="button"
         className="git-file-trigger"
         title={tooltip}
-        onClick={() => onSelectFile(file)}
+        {...createDiffRowGestureHandlers(file, onSelectFile)}
       >
         <GitFileTypeIcon filePath={file.path} />
         <span className={`git-file-name${statusDisplay.strikethrough ? ' is-deleted' : ''}`}>
