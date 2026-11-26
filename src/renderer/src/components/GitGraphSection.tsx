@@ -16,6 +16,7 @@ import type {
   GitLogScope
 } from '@shared/git'
 import type { GitGraphState } from '../stores/GitSession'
+import type { DiffTabOpenOptions } from '../stores/PaneTabStore'
 import { formatGitTimestamp } from '../utils/gitFilePresentation'
 import { normalizeGitGraphRefs, type GitGraphDisplayRef } from '../utils/gitGraphRefs'
 import { GitCommitDetailPanel } from './GitDetailPanel'
@@ -59,7 +60,7 @@ export interface GitGraphSectionProps {
   graphState: GitGraphState
   onLoadMore: () => void
   onToggleCommitDetail: (commitHash: string) => void
-  onOpenFileDiff: (request: GitDiffRequest) => void
+  onOpenFileDiff: (request: GitDiffRequest, options?: DiffTabOpenOptions) => void
 }
 
 function getLaneColor(colorIndex: number): string {

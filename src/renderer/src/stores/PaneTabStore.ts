@@ -34,6 +34,7 @@ export interface DiffTabState {
   request: GitDiffRequest
   viewMode: GitDiffViewMode
   workspaceRootPath?: string
+  isPreview?: boolean
 }
 
 export type MermaidDiagramHeightMap = Readonly<Record<string, number>>
@@ -62,7 +63,10 @@ export interface OpenDiffTabOptions {
   paneId?: PaneId
   viewMode?: GitDiffViewMode
   workspaceRootPath?: string
+  pinned?: boolean
 }
+
+export type DiffTabOpenOptions = Pick<OpenDiffTabOptions, 'pinned'>
 
 export interface PaneState {
   id: PaneId
@@ -279,6 +283,17 @@ function collapseOrPromoteSplitLayout(
   }
 }
 
+function isPreviewDiffTab(tab: TabItem): tab is DiffTabItem {
+  return tab.kind === 'diff' && tab.diff.isPreview === true
+}
+
+function pinDiffTabItem(tab: DiffTabItem): DiffTabItem {
+  return {
+    ...tab,
+    diff: { ...tab.diff, isPreview: false }
+  }
+}
+
 export function getPaneActiveTab(pane: PaneState): TabItem | null {
   if (!pane.activeTabId) return null
   return pane.tabs.find((tab) => tab.id === pane.activeTabId) ?? null
@@ -460,7 +475,8 @@ export class PaneTabStore {
         {
           paneId,
           viewMode: payload.diff.viewMode,
-          workspaceRootPath: payload.diff.workspaceRootPath
+          workspaceRootPath: payload.diff.workspaceRootPath,
+          pinned: true
         },
         undefined,
         placement
@@ -543,28 +559,42 @@ export class PaneTabStore {
       placement?.splitDirection
     )
     const nextDiffKey = formatGitDiffTabKey(request)
+    const shouldPin = Boolean(options.pinned || duplicateFrom)
 
-    const existing = duplicateFrom
-      ? targetPane.tabs.find(
-          (tab): tab is DiffTabItem =>
-            tab.kind === 'diff' && formatGitDiffTabKey(tab.diff.request) === nextDiffKey
-        )
-      : targetPane.tabs.find((tab): tab is DiffTabItem => tab.kind === 'diff')
+    const existingSameKey = targetPane.tabs.find(
+      (tab): tab is DiffTabItem =>
+        tab.kind === 'diff' && formatGitDiffTabKey(tab.diff.request) === nextDiffKey
+    )
+    const existingPreview =
+      !existingSameKey && !shouldPin ? targetPane.tabs.find(isPreviewDiffTab) : undefined
+    const existing = existingSameKey ?? existingPreview
 
     if (existing) {
       const isSameTarget = formatGitDiffTabKey(existing.diff.request) === nextDiffKey
       const nextViewMode =
         options.viewMode ?? (isSameTarget ? existing.diff.viewMode : 'side-by-side')
+      const nextIsPreview = shouldPin
+        ? false
+        : existingSameKey
+          ? Boolean(existingSameKey.diff.isPreview)
+          : true
+      const nextWorkspaceRootPath = options.workspaceRootPath ?? existing.diff.workspaceRootPath
       const updatedTab: DiffTabItem = {
         ...existing,
-        diff: { request, viewMode: nextViewMode }
+        diff: {
+          request,
+          viewMode: nextViewMode,
+          ...(nextWorkspaceRootPath ? { workspaceRootPath: nextWorkspaceRootPath } : {}),
+          isPreview: nextIsPreview
+        }
       }
       const nextTabs = targetPane.tabs.map((tab) => (tab.id === existing.id ? updatedTab : tab))
       const tabChanged =
         this.state.activePaneId !== targetPaneId ||
         targetPane.activeTabId !== existing.id ||
         !isSameTarget ||
-        existing.diff.viewMode !== nextViewMode
+        existing.diff.viewMode !== nextViewMode ||
+        existing.diff.isPreview !== nextIsPreview
 
       if (tabChanged || this.state.splitMode !== nextSplitMode) {
         this.commit(
@@ -593,7 +623,8 @@ export class PaneTabStore {
       diff: {
         request,
         viewMode: options.viewMode ?? 'side-by-side',
-        ...(options.workspaceRootPath ? { workspaceRootPath: options.workspaceRootPath } : {})
+        ...(options.workspaceRootPath ? { workspaceRootPath: options.workspaceRootPath } : {}),
+        isPreview: !shouldPin
       }
     }
 
@@ -698,10 +729,11 @@ export class PaneTabStore {
     const primary = this.state.panes.primary
     const secondary = this.state.panes.secondary
     const existingKeys = new Set(primary.tabs.map(getTabIdentityKey))
-    const mergedTabs = [
-      ...primary.tabs,
-      ...secondary.tabs.filter((tab) => !existingKeys.has(getTabIdentityKey(tab)))
-    ]
+    const primaryHasPreviewDiff = primary.tabs.some(isPreviewDiffTab)
+    const normalizedSecondaryTabs = secondary.tabs
+      .filter((tab) => !existingKeys.has(getTabIdentityKey(tab)))
+      .map((tab) => (primaryHasPreviewDiff && isPreviewDiffTab(tab) ? pinDiffTabItem(tab) : tab))
+    const mergedTabs = [...primary.tabs, ...normalizedSecondaryTabs]
     const activeSecondaryTab =
       this.state.activePaneId === 'secondary' ? getPaneActiveTab(secondary) : null
     const preservedSecondaryFocus = activeSecondaryTab
@@ -789,16 +821,35 @@ export class PaneTabStore {
       (tab) => getTabIdentityKey(tab) === targetIdentity
     )
 
-    const nextTargetPane: PaneState = existingInTarget
-      ? {
-          ...targetPane,
-          activeTabId: existingInTarget.id
-        }
-      : {
-          ...targetPane,
-          tabs: insertTabAt(targetPane.tabs, removed, targetIndex),
-          activeTabId: removed.id
-        }
+    let nextTargetPane: PaneState
+    let movedOrExistingTab: TabItem
+    if (existingInTarget) {
+      const shouldPromoteExisting =
+        isPreviewDiffTab(existingInTarget) &&
+        removed.kind === 'diff' &&
+        !removed.diff.isPreview
+      movedOrExistingTab = shouldPromoteExisting
+        ? pinDiffTabItem(existingInTarget)
+        : existingInTarget
+      nextTargetPane = {
+        ...targetPane,
+        tabs: shouldPromoteExisting
+          ? targetPane.tabs.map((tab) =>
+              tab.id === existingInTarget.id ? movedOrExistingTab : tab
+            )
+          : targetPane.tabs,
+        activeTabId: existingInTarget.id
+      }
+    } else {
+      const targetHasPreviewDiff = targetPane.tabs.some(isPreviewDiffTab)
+      movedOrExistingTab =
+        targetHasPreviewDiff && isPreviewDiffTab(removed) ? pinDiffTabItem(removed) : removed
+      nextTargetPane = {
+        ...targetPane,
+        tabs: insertTabAt(targetPane.tabs, movedOrExistingTab, targetIndex),
+        activeTabId: movedOrExistingTab.id
+      }
+    }
 
     const nextPrimary = sourcePaneId === 'primary' ? nextSourcePane : nextTargetPane
     const nextSecondary = sourcePaneId === 'secondary' ? nextSourcePane : nextTargetPane
@@ -820,7 +871,7 @@ export class PaneTabStore {
           type: 'tab-moved',
           sourcePaneId,
           targetPaneId,
-          tab: existingInTarget ?? removed,
+          tab: movedOrExistingTab,
           ...(targetIndex !== undefined ? { targetIndex } : {})
         }
       ]
@@ -969,6 +1020,16 @@ export class PaneTabStore {
       ...current,
       diff: { ...current.diff, viewMode }
     })
+  }
+
+  pinDiffTab = (paneId: PaneId, tabId: string): void => {
+    const pane = this.state.panes[paneId]
+    const index = pane.tabs.findIndex((tab) => tab.id === tabId)
+    if (index === -1) return
+    const current = pane.tabs[index]
+    if (!isPreviewDiffTab(current)) return
+
+    this.replaceTabInPane(paneId, index, pinDiffTabItem(current))
   }
 
   updateTabViewState = (paneId: PaneId, tabId: string, patch: TabViewPatch): void => {

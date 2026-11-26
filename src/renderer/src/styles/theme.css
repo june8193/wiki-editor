@@ -2013,6 +2013,10 @@ body.is-resizing-sidebar .pane-workspace {
   white-space: nowrap;
 }
 
+.tab-item.is-preview .tab-label {
+  font-style: italic;
+}
+
 .tab-dirty-dot {
   color: var(--accent-color);
   font-size: 11px;

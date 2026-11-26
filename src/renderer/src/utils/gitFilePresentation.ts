@@ -312,3 +312,36 @@ export function buildStashDropConfirmMessage(
 export function buildStashClearConfirmMessage(count: number): string {
   return `보관된 Stash ${count}개를 모두 영구적으로 삭제합니다. 삭제한 Stash는 복구할 수 없습니다. 계속할까요?`
 }
+
+/**
+ * Builds click (preview or Shift+click pinned) and double-click (pinned) handlers for Diff file rows.
+ */
+export function createDiffRowGestureHandlers<T>(
+  file: T,
+  onOpen: (file: T, options?: { pinned?: boolean }) => void
+): {
+  onClick: (event: { shiftKey: boolean }) => void
+  onDoubleClick: () => void
+} {
+  return {
+    onClick: (event) => (event.shiftKey ? onOpen(file, { pinned: true }) : onOpen(file)),
+    onDoubleClick: () => onOpen(file, { pinned: true })
+  }
+}
+
+/**
+ * Forwards a target+file Diff open action while preserving 1-arg calls when `options` is omitted.
+ */
+export function forwardGitDiffOpen(
+  target: GitDiffTarget,
+  file: GitChangedFile,
+  onOpenFileDiff: (request: GitDiffRequest, options?: { pinned?: boolean }) => void,
+  options?: { pinned?: boolean }
+): void {
+  const request = toGitDiffRequest(target, file)
+  if (options) {
+    onOpenFileDiff(request, options)
+  } else {
+    onOpenFileDiff(request)
+  }
+}

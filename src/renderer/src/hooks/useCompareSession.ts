@@ -36,7 +36,7 @@ export function useCompareSession({
     sessionRef.current = new CompareSession({
       gitApi: wikiApi.git,
       diffTabs: {
-        openDiffTab: (request) => diffTabsRef.current.openDiffTab(request),
+        openDiffTab: (request, options) => diffTabsRef.current.openDiffTab(request, options),
         reconcileBranchCompareDiffTabs: (baseRef, compareRef, mode, files) =>
           diffTabsRef.current.reconcileBranchCompareDiffTabs(baseRef, compareRef, mode, files)
       },

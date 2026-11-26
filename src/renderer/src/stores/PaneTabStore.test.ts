@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   canAcceptIncomingSplitDrop,
   canSplitWithTab,
+  type DiffTabItem,
   normalizeSplitRatio,
   PaneTabStore,
   type PaneTabTransition
@@ -335,7 +336,8 @@ describe('PaneTabStore', () => {
     expect(diffTab1.kind).toBe('diff')
     expect(diffTab1.diff).toEqual({
       request: { kind: 'unstaged', path: 'docs/a.md', status: 'M' },
-      viewMode: 'side-by-side'
+      viewMode: 'side-by-side',
+      isPreview: true
     })
     expect(store.getSnapshot().panes.primary.tabs).toHaveLength(2)
     expect(store.getSnapshot().panes.primary.activeTabId).toBe(diffTab1.id)
@@ -352,7 +354,8 @@ describe('PaneTabStore', () => {
     expect(store.getSnapshot().panes.primary.tabs).toHaveLength(2)
     expect(diffTabReplaced.diff).toEqual({
       request: { kind: 'staged', path: 'docs/b.md', status: 'A' },
-      viewMode: 'side-by-side'
+      viewMode: 'side-by-side',
+      isPreview: true
     })
 
     // Moving diff tab to secondary keeps secondary diff tab isolated when primary opens a new diff tab
@@ -856,5 +859,134 @@ describe('PaneTabStore', () => {
     store.reconcileStashDiffTabs([])
     expect(store.getSnapshot().splitMode).toBe('horizontal')
     expect(store.getSnapshot().panes.secondary.tabs.map((t) => t.id)).toEqual([commitTab.id])
+  })
+
+  it('supports VS Code-style preview and pinned diff tabs with max 1 preview per pane', () => {
+    const store = new PaneTabStore()
+
+    // 1. Single click opens a preview diff tab (isPreview: true)
+    const previewA = store.openDiffTab({ kind: 'unstaged', path: 'docs/a.md', status: 'M' })
+    expect(previewA.diff.isPreview).toBe(true)
+
+    // 2. Single click on another file replaces the existing preview tab
+    const previewB = store.openDiffTab({ kind: 'unstaged', path: 'docs/b.md', status: 'M' })
+    expect(previewB.id).toBe(previewA.id)
+    expect(previewB.diff.isPreview).toBe(true)
+    expect(store.getSnapshot().panes.primary.tabs).toHaveLength(1)
+
+    // 3. Pinned open on a new file adds a second tab without touching existing preview tab
+    const pinnedC = store.openDiffTab(
+      { kind: 'unstaged', path: 'docs/c.md', status: 'M' },
+      { pinned: true }
+    )
+    expect(pinnedC.id).not.toBe(previewB.id)
+    expect(pinnedC.diff.isPreview).toBe(false)
+    expect(store.getSnapshot().panes.primary.tabs).toHaveLength(2)
+    expect(store.getSnapshot().panes.primary.activeTabId).toBe(pinnedC.id)
+
+    // 4. Single click on already-open pinned tab focuses it without demoting to preview
+    const focusedC = store.openDiffTab({ kind: 'unstaged', path: 'docs/c.md', status: 'M' })
+    expect(focusedC.id).toBe(pinnedC.id)
+    expect(focusedC.diff.isPreview).toBe(false)
+
+    // 5. Pinned open on already-open preview tab promotes it to pinned without duplicating
+    const promotedB = store.openDiffTab(
+      { kind: 'unstaged', path: 'docs/b.md', status: 'M' },
+      { pinned: true }
+    )
+    expect(promotedB.id).toBe(previewB.id)
+    expect(promotedB.diff.isPreview).toBe(false)
+    expect(store.getSnapshot().panes.primary.tabs).toHaveLength(2)
+
+    // 6. Opening a new preview tab now creates a new tab (since no preview exists)
+    const previewD = store.openDiffTab({ kind: 'unstaged', path: 'docs/d.md', status: 'M' })
+    expect(previewD.diff.isPreview).toBe(true)
+    expect(store.getSnapshot().panes.primary.tabs).toHaveLength(3)
+
+    // 7. pinDiffTab promotes previewD to pinned
+    store.pinDiffTab('primary', previewD.id)
+    const afterPin = store
+      .getSnapshot()
+      .panes.primary.tabs.find((tab) => tab.id === previewD.id)
+    expect(afterPin?.kind === 'diff' && afterPin.diff.isPreview).toBe(false)
+  })
+
+  it('maintains max-1-preview invariant across duplicate, transfer, move, split merge, and preserves isPreview on branch-compare reconcile', () => {
+    const store = new PaneTabStore()
+
+    // Primary has preview A; duplicate to secondary -> secondary copy is pinned
+    const primaryPreview = store.openDiffTab({
+      kind: 'branch-compare',
+      baseRef: 'main',
+      compareRef: 'feat',
+      mode: 'three-dot',
+      path: 'a.md',
+      status: 'M'
+    })
+    const dupSecondary = store.duplicateTabToOtherPane('primary', primaryPreview.id)
+    expect(dupSecondary?.kind === 'diff' && dupSecondary.diff.isPreview).toBe(false)
+
+    // Secondary opens its own preview B, then moves it to primary (which already has preview A) -> moved tab becomes pinned
+    store.focusPane('secondary')
+    const secondaryPreview = store.openDiffTab({
+      kind: 'branch-compare',
+      baseRef: 'main',
+      compareRef: 'feat',
+      mode: 'three-dot',
+      path: 'b.md',
+      status: 'M'
+    })
+    expect(secondaryPreview.diff.isPreview).toBe(true)
+    store.moveTab('secondary', 'primary', secondaryPreview.id)
+    const primaryAfterMove = store.getSnapshot().panes.primary.tabs.filter((t) => t.kind === 'diff')
+    expect(primaryAfterMove.filter((t) => t.diff.isPreview === true)).toHaveLength(1)
+    expect(primaryAfterMove.find((t) => t.id === secondaryPreview.id)?.diff.isPreview).toBe(false)
+
+    // Secondary opens preview C, then setSplitMode('single') merges -> primary still has max 1 preview
+    store.focusPane('secondary')
+    const secondaryPreviewC = store.openDiffTab({
+      kind: 'branch-compare',
+      baseRef: 'main',
+      compareRef: 'feat',
+      mode: 'three-dot',
+      path: 'c.md',
+      status: 'M'
+    })
+    expect(secondaryPreviewC.diff.isPreview).toBe(true)
+    store.setSplitMode('single')
+    const mergedDiffs = store.getSnapshot().panes.primary.tabs.filter((t) => t.kind === 'diff')
+    expect(mergedDiffs.filter((t) => t.diff.isPreview === true)).toHaveLength(1)
+    expect(mergedDiffs.find((t) => t.id === primaryPreview.id)?.diff.isPreview).toBe(true)
+    expect(mergedDiffs.find((t) => t.id === secondaryPreviewC.id)?.diff.isPreview).toBe(false)
+
+    // acceptTransferredTab opens diff tab as pinned
+    const transferred = store.acceptTransferredTab({
+      kind: 'diff',
+      diff: {
+        request: { kind: 'unstaged', path: 'x.md', status: 'M' },
+        viewMode: 'side-by-side'
+      }
+    })
+    expect(transferred.kind === 'diff' && transferred.diff.isPreview).toBe(false)
+
+    // reconcileBranchCompareDiffTabs updates all branch-compare tabs, closes out-of-range, and preserves isPreview
+    store.reconcileBranchCompareDiffTabs('main', 'feat', 'two-dot', [
+      { path: 'a.md', status: 'M' },
+      { path: 'b.md', status: 'A' }
+    ])
+    const afterReconcile = store
+      .getSnapshot()
+      .panes.primary.tabs.filter(
+        (t): t is DiffTabItem => t.kind === 'diff' && t.diff.request.kind === 'branch-compare'
+      )
+    expect(afterReconcile).toHaveLength(2)
+    expect(afterReconcile.find((t) => t.id === primaryPreview.id)?.diff).toMatchObject({
+      isPreview: true,
+      request: { mode: 'two-dot', path: 'a.md', status: 'M' }
+    })
+    expect(afterReconcile.find((t) => t.id === secondaryPreview.id)?.diff).toMatchObject({
+      isPreview: false,
+      request: { mode: 'two-dot', path: 'b.md', status: 'A' }
+    })
   })
 })

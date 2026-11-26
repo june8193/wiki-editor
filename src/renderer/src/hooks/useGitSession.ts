@@ -98,10 +98,10 @@ export function useGitSession({
             bridge.unsubscribe = null
           }
         },
-        openDiffTab: (request) => {
+        openDiffTab: (request, options) => {
           const runtime = collaboratorsRef.current
           if (!runtime) return
-          runtime.editor.openDiffTab(request)
+          runtime.editor.openDiffTab(request, options)
         },
         closeAllUnstagedDiffTabs: () =>
           collaboratorsRef.current?.editor.closeAllUnstagedDiffTabs(),

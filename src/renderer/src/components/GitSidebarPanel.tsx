@@ -28,7 +28,7 @@ import {
   type GitPanelActions,
   type GitPanelState
 } from '../stores/GitSession'
-import { toGitDiffRequest } from '../utils/gitFilePresentation'
+import { forwardGitDiffOpen } from '../utils/gitFilePresentation'
 import {
   formatGitCommitPlaceholder,
   getGitBranchLabel,
@@ -751,11 +751,11 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 onUnstageAll={actions.unstageAll}
                 onStashChanges={actions.stashChanges}
                 onDiscardAll={actions.discardAll}
-                onSelectStagedFile={(file) =>
-                  actions.openFileDiff(toGitDiffRequest('staged', file))
+                onSelectStagedFile={(file, options) =>
+                  forwardGitDiffOpen('staged', file, actions.openFileDiff, options)
                 }
-                onSelectWorkingFile={(file) =>
-                  actions.openFileDiff(toGitDiffRequest('unstaged', file))
+                onSelectWorkingFile={(file, options) =>
+                  forwardGitDiffOpen('unstaged', file, actions.openFileDiff, options)
                 }
                 onOpenWorkspaceFile={actions.openWorkspaceFile}
                 onStageFile={(file) => actions.stageFile(file.path)}

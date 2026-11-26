@@ -12,6 +12,7 @@ import {
   Undo2
 } from 'lucide-react'
 import type { GitChangedFile } from '@shared/git'
+import type { DiffTabOpenOptions } from '../stores/PaneTabStore'
 import type {
   GitChangesGroupKey,
   GitChangesViewMode,
@@ -105,7 +106,7 @@ interface GitChangesSubgroupProps {
   onBulkAction: () => void
   onBulkStash?: () => void
   onBulkDiscard?: () => void
-  onSelectFile: (file: GitChangedFile) => void
+  onSelectFile: (file: GitChangedFile, options?: DiffTabOpenOptions) => void
   onOpenWorkspaceFile: (repoRelativePath: string) => void
   onItemAction: (file: GitChangedFile) => void
   onDiscardFile?: (file: GitChangedFile) => void
@@ -291,8 +292,8 @@ export interface GitChangesFileGroupsProps {
   onUnstageAll: () => void
   onStashChanges: () => void
   onDiscardAll: () => void
-  onSelectStagedFile: (file: GitChangedFile) => void
-  onSelectWorkingFile: (file: GitChangedFile) => void
+  onSelectStagedFile: (file: GitChangedFile, options?: DiffTabOpenOptions) => void
+  onSelectWorkingFile: (file: GitChangedFile, options?: DiffTabOpenOptions) => void
   onOpenWorkspaceFile: (repoRelativePath: string) => void
   onStageFile: (file: GitChangedFile) => void
   onUnstageFile: (file: GitChangedFile) => void

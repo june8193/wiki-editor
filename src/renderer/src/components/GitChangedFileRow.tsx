@@ -10,7 +10,9 @@ import {
   Undo2
 } from 'lucide-react'
 import type { GitChangedFile } from '@shared/git'
+import type { DiffTabOpenOptions } from '../stores/PaneTabStore'
 import {
+  createDiffRowGestureHandlers,
   formatGitChangedFileDisplay,
   formatGitFileLabel,
   getGitFileBaseName,
@@ -42,7 +44,7 @@ export interface GitChangedFileRowProps {
   isBusy?: boolean
   canOpenFile?: boolean
   itemAction?: GitFileRowActionKind
-  onSelectFile: (file: GitChangedFile) => void
+  onSelectFile: (file: GitChangedFile, options?: DiffTabOpenOptions) => void
   onOpenWorkspaceFile?: (repoRelativePath: string) => void
   onDiscardFile?: (file: GitChangedFile) => void
   onStashFile?: (file: GitChangedFile) => void
@@ -109,7 +111,7 @@ export function GitChangedFileRow({
         type="button"
         className="git-file-trigger"
         title={tooltip}
-        onClick={() => onSelectFile(file)}
+        {...createDiffRowGestureHandlers(file, onSelectFile)}
       >
         <GitFileTypeIcon filePath={file.path} />
         <span className={`git-file-name${statusDisplay.strikethrough ? ' is-deleted' : ''}`}>

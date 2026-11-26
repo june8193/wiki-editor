@@ -218,7 +218,8 @@ export function useEditorWorkspace({
       onChangeContent: syncClient.updateBufferContent,
       onSaveBuffer: syncClient.saveBufferByKey,
       onUpdateTabViewState: tabStore.updateTabViewState,
-      onChangeDiffViewMode: tabStore.updateDiffTabViewMode
+      onChangeDiffViewMode: tabStore.updateDiffTabViewMode,
+      onPinDiffTab: tabStore.pinDiffTab
     }),
     [canDetachToNewWindow, syncClient, tabDragController, tabStore]
   )

@@ -201,7 +201,8 @@ export class RendererBufferSyncClient {
             if (isDiffTabTransferPayload(tab)) {
               this.tabStore.openDiffTab(tab.diff.request, {
                 viewMode: tab.diff.viewMode,
-                workspaceRootPath: tab.diff.workspaceRootPath
+                workspaceRootPath: tab.diff.workspaceRootPath,
+                pinned: true
               })
               openedInitialTabs = true
               continue

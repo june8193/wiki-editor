@@ -2,9 +2,10 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, Copy } from 'lucide-react'
 import type { GitChangedFile, GitCommitDetail, GitDiffRequest } from '@shared/git'
 import type { GitDetailState } from '../stores/GitSession'
+import type { DiffTabOpenOptions } from '../stores/PaneTabStore'
 import {
   formatGitTimestamp,
-  toGitDiffRequest,
+  forwardGitDiffOpen,
   type GitDiffTarget
 } from '../utils/gitFilePresentation'
 import { GitChangedFileRow } from './GitChangedFileRow'
@@ -55,7 +56,7 @@ export function GitDetailFilesList({
 }: {
   files: readonly GitChangedFile[]
   target: GitDiffTarget
-  onOpenFileDiff: (request: GitDiffRequest) => void
+  onOpenFileDiff: (request: GitDiffRequest, options?: DiffTabOpenOptions) => void
 }) {
   if (files.length === 0) {
     return <p className="git-detail-empty-files">변경된 파일이 없습니다.</p>
@@ -70,7 +71,9 @@ export function GitDetailFilesList({
             key={`${file.status}:${file.origPath ?? ''}:${file.path}`}
             file={file}
             displayMode="list"
-            onSelectFile={(selectedFile) => onOpenFileDiff(toGitDiffRequest(target, selectedFile))}
+            onSelectFile={(selectedFile, options) =>
+              forwardGitDiffOpen(target, selectedFile, onOpenFileDiff, options)
+            }
           />
         ))}
       </ul>
@@ -81,7 +84,7 @@ export function GitDetailFilesList({
 export interface GitCommitDetailPanelProps {
   shortHash: string
   detailState: GitDetailState<GitCommitDetail>
-  onOpenFileDiff: (request: GitDiffRequest) => void
+  onOpenFileDiff: (request: GitDiffRequest, options?: DiffTabOpenOptions) => void
 }
 
 /**

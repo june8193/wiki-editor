@@ -20,6 +20,7 @@ import {
   type GitDetailState,
   type GitRequestContext
 } from './GitSession'
+import type { DiffTabOpenOptions } from './PaneTabStore'
 
 export type CompareSubTab = 'files' | 'commits'
 
@@ -58,7 +59,7 @@ function createDefaultComparePanelState(workspaceRootPath: string | null = null)
 }
 
 export interface CompareDiffTabsCollaborator {
-  openDiffTab(request: GitDiffRequest): void
+  openDiffTab(request: GitDiffRequest, options?: DiffTabOpenOptions): void
   reconcileBranchCompareDiffTabs(
     baseRef: string,
     compareRef: string,
@@ -82,9 +83,9 @@ export interface ComparePanelActions {
   setFileFilter: (filter: string) => void
   toggleTreeDirCollapsed: (dirKey: string) => void
   refresh: () => Promise<void>
-  openCompareFileDiff: (file: GitCompareChangedFile) => void
+  openCompareFileDiff: (file: GitCompareChangedFile, options?: DiffTabOpenOptions) => void
   toggleCommitDetail: (commitHash: string) => void
-  openCommitFileDiff: (request: GitDiffRequest) => void
+  openCommitFileDiff: (request: GitDiffRequest, options?: DiffTabOpenOptions) => void
   dismissError: () => void
 }
 
@@ -306,18 +307,24 @@ export class CompareSession {
     await this.loadRefsAndSummary(true)
   }
 
-  private openCompareFileDiff = (file: GitCompareChangedFile): void => {
+  private openCompareFileDiff = (
+    file: GitCompareChangedFile,
+    options?: DiffTabOpenOptions
+  ): void => {
     const { baseRef, compareRef, mode } = this.state
     if (!baseRef || !compareRef) return
-    this.diffTabs.openDiffTab({
-      kind: 'branch-compare',
-      baseRef,
-      compareRef,
-      mode,
-      path: file.path,
-      ...(file.origPath ? { origPath: file.origPath } : {}),
-      status: file.status
-    })
+    this.diffTabs.openDiffTab(
+      {
+        kind: 'branch-compare',
+        baseRef,
+        compareRef,
+        mode,
+        path: file.path,
+        ...(file.origPath ? { origPath: file.origPath } : {}),
+        status: file.status
+      },
+      options
+    )
   }
 
   private toggleCommitDetail = (commitHash: string): void => {
@@ -325,8 +332,11 @@ export class CompareSession {
     void this.commitDetailChannel.toggle(commitHash)
   }
 
-  private openCommitFileDiff = (request: GitDiffRequest): void => {
-    this.diffTabs.openDiffTab(request)
+  private openCommitFileDiff = (
+    request: GitDiffRequest,
+    options?: DiffTabOpenOptions
+  ): void => {
+    this.diffTabs.openDiffTab(request, options)
   }
 
   private async loadRefsAndSummary(reconcileDiffTabs: boolean): Promise<void> {

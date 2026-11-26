@@ -2188,4 +2188,134 @@ describe('Git Graph commit file diff integration', () => {
     await user.click(within(primaryPane).getByRole('button', { name: 'guide.md (a1b2c3d) 탭 닫기' }))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
+
+  it('supports preview/pin multi-diff tabs across Git Changes (list & tree), Graph commit detail, and Stashes detail', async () => {
+    const user = userEvent.setup()
+    const commitHash = 'bbbb111122223333444455556666777788889999'
+    const shortHash = 'bbbb111'
+    const stashHash = 'cccc111122223333444455556666777788889999'
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki/git-multi-diff',
+        workspaces: {
+          'C:/wiki/git-multi-diff': {
+            'docs/a.md': '# A',
+            'docs/b.md': '# B'
+          }
+        },
+        git: {
+          status: async (ws) => ({
+            ...createEmptyGitStatus(true, ws),
+            branch: 'main',
+            staged: [{ path: 'docs/a.md', status: 'M' }],
+            unstaged: [{ path: 'docs/b.md', status: 'M' }]
+          }),
+          log: async () => ({
+            commits: [
+              {
+                hash: commitHash,
+                shortHash,
+                parents: [],
+                subject: 'feat: commit multi',
+                authorName: 'Alice',
+                committedAt: '2026-11-15T10:00:00+09:00',
+                refs: [{ name: 'main', kind: 'local-branch' }]
+              }
+            ],
+            hasMore: false
+          }),
+          commitDetail: async () => ({
+            hash: commitHash,
+            shortHash,
+            parents: [],
+            subject: 'feat: commit multi',
+            body: '',
+            authorName: 'Alice',
+            authorEmail: 'alice@example.com',
+            committedAt: '2026-11-15T10:00:00+09:00',
+            files: [{ status: 'M', path: 'docs/commit-file.md' }]
+          }),
+          stashList: async () => [
+            {
+              ref: 'stash@{0}',
+              index: 0,
+              hash: stashHash,
+              message: 'WIP stash',
+              branch: 'main',
+              createdAt: '2026-11-15T11:00:00+09:00'
+            }
+          ],
+          stashDetail: async () => ({
+            ref: 'stash@{0}',
+            hash: stashHash,
+            message: 'WIP stash',
+            branch: 'main',
+            createdAt: '2026-11-15T11:00:00+09:00',
+            files: [{ status: 'M', path: 'docs/stash-file.md' }]
+          }),
+          diff: async (_ws, req) => ({
+            path: req.path,
+            status: req.status,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: `@@ -1 +1 @@\n-old\n+new ${req.path}\n`
+          })
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const gitPanel = await screen.findByLabelText('Git 소스 제어')
+    const primaryPane = screen.getByTestId('pane-primary')
+
+    // 1. Changes list: single click opens preview, double click pins it
+    const stagedList = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
+    await user.click(within(stagedList).getByText('a.md'))
+    const tabA = await within(primaryPane).findByRole('tab', { name: /a\.md/ })
+    expect(tabA.closest('.tab-item')).toHaveClass('is-preview')
+    await user.dblClick(within(stagedList).getByText('a.md'))
+    expect(tabA.closest('.tab-item')).not.toHaveClass('is-preview')
+
+    // Switch Changes to tree view and double-click b.md -> opens pinned tab alongside pinned a.md
+    const changesSection = within(gitPanel).getByRole('region', { name: 'Changes' })
+    await user.click(within(changesSection).getByRole('button', { name: '트리 보기로 전환' }))
+    const unstagedGroup = within(gitPanel).getByRole('group', { name: 'Changes' })
+    await user.dblClick(within(unstagedGroup).getByText('b.md'))
+    const tabB = await within(primaryPane).findByRole('tab', { name: /b\.md/ })
+    expect(tabB.closest('.tab-item')).not.toHaveClass('is-preview')
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(2)
+
+    // 2. Graph commit detail: Shift+click opens pinned commit diff tab
+    const graphRegion = within(gitPanel).getByRole('region', { name: 'Graph' })
+    await user.click(within(graphRegion).getByRole('button', { name: /feat: commit multi/ }))
+    const commitDetail = await within(graphRegion).findByRole('region', {
+      name: `${shortHash} 커밋 상세`
+    })
+    await user.keyboard('{Shift>}')
+    await user.click(within(commitDetail).getByTitle('docs/commit-file.md'))
+    await user.keyboard('{/Shift}')
+    const commitTab = await within(primaryPane).findByRole('tab', {
+      name: /commit-file\.md \(bbbb111\)/
+    })
+    expect(commitTab.closest('.tab-item')).not.toHaveClass('is-preview')
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(3)
+
+    // 3. Stashes detail: double-click opens pinned stash diff tab
+    const stashesRegion = within(gitPanel).getByRole('region', { name: 'Stashes' })
+    await user.click(within(stashesRegion).getByRole('button', { name: /^Stashes/ }))
+    await user.click(await within(stashesRegion).findByText('WIP stash'))
+    const stashFileBtn = await within(stashesRegion).findByTitle('docs/stash-file.md')
+    await user.dblClick(stashFileBtn)
+    const stashTab = await within(primaryPane).findByRole('tab', {
+      name: /stash-file\.md \(stash@\{0\}\)/
+    })
+    expect(stashTab.closest('.tab-item')).not.toHaveClass('is-preview')
+    expect(within(primaryPane).getAllByRole('tab')).toHaveLength(4)
+  })
 })

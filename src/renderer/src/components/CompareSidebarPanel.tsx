@@ -17,6 +17,7 @@ import {
   type ComparePanelState
 } from '../stores/CompareSession'
 import {
+  createDiffRowGestureHandlers,
   formatGitChangedFileDisplay,
   formatGitTimestamp,
   getGitFileStatusDisplay
@@ -92,7 +93,7 @@ export function CompareSidebarPanel({ state, isRepo, actions }: CompareSidebarPa
           className="compare-file-row"
           style={getGitTreeIndentStyle(depth)}
           title={display.tooltip}
-          onClick={() => actions.openCompareFileDiff(file)}
+          {...createDiffRowGestureHandlers(file, actions.openCompareFileDiff)}
         >
           <FileText size={13} strokeWidth={1.75} className="git-file-icon" aria-hidden="true" />
           <span
