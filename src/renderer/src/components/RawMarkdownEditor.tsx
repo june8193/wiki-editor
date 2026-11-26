@@ -1,6 +1,7 @@
 import type { EditorView } from '@codemirror/view'
 import type { ThemeMode } from '@shared/config'
 import type { WorkspaceEntry } from '@shared/workspace'
+import type { RawEditorLanguage } from '../editor/editorModes'
 import type { HeadingScrollSpySample } from '../editor/outlineScrollSpy'
 import type { RawFindHighlightRequest, RawJumpHighlightRequest } from '../editor/rawSearchHighlight'
 import type { RawTableAction } from '../editor/rawTableCommands'
@@ -10,7 +11,8 @@ import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
 
 interface RawMarkdownEditorProps {
   content: string
-  language: 'markdown' | 'json'
+  language: RawEditorLanguage
+  fileName?: string
   theme: ThemeMode
   cursor: CursorPosition
   scrollTop: number
@@ -53,6 +55,7 @@ const RAW_TABLE_BUTTONS: ReadonlyArray<{
 export function RawMarkdownEditor({
   content,
   language,
+  fileName,
   theme,
   cursor,
   scrollTop,
@@ -78,6 +81,7 @@ export function RawMarkdownEditor({
     useRawCodeMirrorEditor({
       content,
       language,
+      fileName,
       theme,
       cursor,
       scrollTop,

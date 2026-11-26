@@ -306,4 +306,107 @@ describe('DocumentOutlinePanel', () => {
       }
     }
   })
+
+  it('renders code symbol outline with filter and diff badges, and restores headings on markdown switch', async () => {
+    const user = userEvent.setup()
+    const onSelectSymbol = vi.fn()
+    const tsCode = [
+      'export interface User {',
+      '  id: string',
+      '}',
+      'export function loadUser(id: string): User {',
+      '  return { id }',
+      '}',
+      'export function saveUser(user: User) {}'
+    ].join('\n')
+
+    const { rerender } = render(
+      <DocumentOutlinePanel
+        document={{
+          documentName: 'user.ts',
+          documentKey: 'workspace:C:/repo/user.ts',
+          content: tsCode,
+          isMarkdownDocument: false
+        }}
+        showHeadingNumbers
+        onToggleHeadingNumbers={vi.fn()}
+        onSelectHeading={vi.fn()}
+        onSelectSymbol={onSelectSymbol}
+        onCollapse={vi.fn()}
+      />
+    )
+
+    expect(screen.queryByRole('button', { name: '목차 번호 표시' })).not.toBeInTheDocument()
+    expect(screen.getByText('User')).toBeInTheDocument()
+    expect(screen.getByText('loadUser')).toBeInTheDocument()
+    expect(screen.getByText('saveUser')).toBeInTheDocument()
+
+    const filterInput = screen.getByRole('searchbox', { name: '심볼 필터' })
+    await user.type(filterInput, 'load')
+    expect(screen.getByText('loadUser')).toBeInTheDocument()
+    expect(screen.queryByText('saveUser')).not.toBeInTheDocument()
+    expect(screen.queryByText('User')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /loadUser/ }))
+    expect(onSelectSymbol).toHaveBeenCalledTimes(1)
+    expect(onSelectSymbol.mock.calls[0][0]).toMatchObject({
+      name: 'loadUser',
+      kind: 'function',
+      lineNumber: 4
+    })
+
+    const rawPatch = [
+      '@@ -1,4 +1,7 @@',
+      '-export function updateUser() { return 1 }',
+      '+export function updateUser() { return 2 }',
+      '+export function createUser() {',
+      '+  return 3',
+      '+}'
+    ].join('\n')
+
+    rerender(
+      <DocumentOutlinePanel
+        document={{
+          documentName: 'user.ts',
+          documentKey: 'diff:unstaged:user.ts',
+          content: '',
+          isMarkdownDocument: false,
+          diffContext: {
+            rawPatch,
+            filePath: 'src/user.ts',
+            status: 'M'
+          }
+        }}
+        showHeadingNumbers
+        onToggleHeadingNumbers={vi.fn()}
+        onSelectHeading={vi.fn()}
+        onSelectSymbol={onSelectSymbol}
+        onCollapse={vi.fn()}
+      />
+    )
+
+    const updateBtn = screen.getByRole('button', { name: /updateUser/ })
+    const createBtn = screen.getByRole('button', { name: /createUser/ })
+    expect(within(updateBtn).getByText('M')).toBeInTheDocument()
+    expect(within(createBtn).getByText('+')).toBeInTheDocument()
+
+    rerender(
+      <DocumentOutlinePanel
+        document={{
+          documentName: 'note.md',
+          documentKey: 'workspace:C:/repo/note.md',
+          content: sampleMarkdown,
+          isMarkdownDocument: true
+        }}
+        showHeadingNumbers
+        onToggleHeadingNumbers={vi.fn()}
+        onSelectHeading={vi.fn()}
+        onSelectSymbol={onSelectSymbol}
+        onCollapse={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: '목차 번호 표시' })).toBeInTheDocument()
+    expect(screen.getByText('Overview')).toBeInTheDocument()
+  })
 })

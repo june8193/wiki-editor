@@ -804,4 +804,56 @@ describe('GitDiffViewer', () => {
       resizeObserver.restore()
     }
   })
+
+  it('jumps to and highlights a distant target line in virtualized side-by-side and inline diff modes', () => {
+    const resizeObserver = installResizeObserverStub()
+    try {
+      const largePatch = makeLargePatch(500, 'src/jumpTarget.ts', 'item')
+      const request: GitDiffRequest = { kind: 'unstaged', path: 'src/jumpTarget.ts', status: 'M' }
+      const diff = makeDiff({ path: 'src/jumpTarget.ts', rawPatch: largePatch })
+
+      const { container, rerender } = render(
+        <GitDiffViewer
+          request={request}
+          viewMode="side-by-side"
+          state={{ status: 'loaded', diff }}
+          onChangeViewMode={vi.fn()}
+          onOpenFile={vi.fn()}
+          jumpRequest={{ lineNumber: 350, nonce: 1 }}
+        />
+      )
+
+      const scrollEl = screen.getByTestId('diff-side-by-side')
+      const scrollStub = installScrollContainerStub(scrollEl, {
+        clientHeight: 220,
+        initialScrollTop: 0,
+        getScrollHeight: () => 501 * 22
+      })
+      resizeObserver.trigger()
+
+      expect(scrollStub.getScrollTop()).toBeGreaterThan(5000)
+      const targetText = screen.getByText(matchDiffLineText('const item_350 = 350'))
+      expect(targetText).toBeTruthy()
+      expect(targetText.closest('tr')).toHaveClass('is-jump-highlight')
+
+      // Inline mode jump to another distant line
+      rerender(
+        <GitDiffViewer
+          request={request}
+          viewMode="inline"
+          state={{ status: 'loaded', diff }}
+          onChangeViewMode={vi.fn()}
+          onOpenFile={vi.fn()}
+          jumpRequest={{ lineNumber: 420, nonce: 2 }}
+        />
+      )
+
+      const inlineTargetText = screen.getByText(matchDiffLineText('const item_420 = 420'))
+      expect(inlineTargetText).toBeTruthy()
+      expect(inlineTargetText.closest('tr')).toHaveClass('is-jump-highlight')
+      expect(container.querySelectorAll('tr.is-jump-highlight')).toHaveLength(1)
+    } finally {
+      resizeObserver.restore()
+    }
+  })
 })

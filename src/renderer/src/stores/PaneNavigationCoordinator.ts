@@ -6,7 +6,9 @@ import type {
   WorkspaceSearchFileResult,
   WorkspaceSearchLineMatch
 } from '@shared/search'
+import type { DocumentSymbolItem } from '@shared/symbol'
 import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
+import type { DiffJumpRequest } from '../components/GitDiffViewer'
 import { isImageDocument, isMarkdownDocument } from '../editor/editorModes'
 import type { MarkdownHeading } from '../editor/MarkdownTocEngine'
 import type {
@@ -25,9 +27,15 @@ import {
 } from './PaneTabStore'
 import type { OpenedWorkspaceDocument } from './RendererBufferSyncClient'
 
+export interface PaneDiffJumpRequest extends DiffJumpRequest {
+  paneId: PaneId
+  tabId: string
+}
+
 export interface PaneNavigationSnapshot {
   searchJumpRequest: DocumentSearchJumpRequest | null
   outlineScrollRequest: OutlineScrollRequest | null
+  diffJumpRequest: PaneDiffJumpRequest | null
   activeHeadingIndex: number | null
 }
 
@@ -181,6 +189,8 @@ export class PaneNavigationCoordinator {
 
   private outlineScrollSeq = 0
   private activeOutlineScroll: ActiveOutlineRecord | null = null
+  private diffJumpSeq = 0
+  private activeDiffJump: PaneDiffJumpRequest | null = null
   private spyOutlineHeading: ActiveOutlineHeadingState | null = null
   private pinnedOutlineHeading: PinnedOutlineHeadingState | null = null
   private latestSpyByPane: Partial<Record<PaneId, ActiveOutlineHeadingState>> = {}
@@ -195,6 +205,7 @@ export class PaneNavigationCoordinator {
     this.cachedSnapshot = {
       searchJumpRequest: null,
       outlineScrollRequest: null,
+      diffJumpRequest: null,
       activeHeadingIndex: null
     }
 
@@ -221,6 +232,7 @@ export class PaneNavigationCoordinator {
     this.inFlightJump = null
     this.activeJump = null
     this.activeOutlineScroll = null
+    this.activeDiffJump = null
     for (const unsub of this.unsubscribes) {
       unsub()
     }
@@ -233,6 +245,7 @@ export class PaneNavigationCoordinator {
     this.inFlightJump = null
     this.activeJump = null
     this.activeOutlineScroll = null
+    this.activeDiffJump = null
     this.spyOutlineHeading = null
     this.pinnedOutlineHeading = null
     this.latestSpyByPane = {}
@@ -379,6 +392,49 @@ export class PaneNavigationCoordinator {
     this.dispatchOutlineHeadingScroll(active.context, active.bufferContent, heading, index)
   }
 
+  selectOutlineSymbol = (symbol: DocumentSymbolItem): void => {
+    const layout = this.tabStore.getSnapshot()
+    const activePane = layout.panes[layout.activePaneId]
+    const activeTab = getPaneActiveTab(activePane)
+    if (!activeTab) return
+
+    if (activeTab.kind === 'diff') {
+      this.diffJumpSeq += 1
+      this.activeDiffJump = {
+        paneId: activePane.id,
+        tabId: activeTab.id,
+        lineNumber: symbol.lineNumber,
+        side: 'new',
+        nonce: this.diffJumpSeq
+      }
+      this.syncSnapshot()
+      return
+    }
+
+    const buffer = this.bufferStore.getBuffer(activeTab.bufferKey)
+    if (!buffer || isImageDocument(buffer)) return
+
+    const jumpSeq = ++this.searchJumpSeq
+    this.activeJump = {
+      paneId: activePane.id,
+      tabId: activeTab.id,
+      bufferKey: activeTab.bufferKey,
+      mode: activeTab.mode,
+      content: buffer.content,
+      request: {
+        paneId: activePane.id,
+        tabId: activeTab.id,
+        query: '',
+        options: { caseSensitive: false, wholeWord: false, useRegex: false },
+        lineNumber: symbol.lineNumber,
+        columnStart: symbol.columnStart,
+        columnEnd: symbol.columnEnd,
+        nonce: jumpSeq
+      }
+    }
+    this.syncSnapshot()
+  }
+
   reportActiveHeading = (report: OutlineActiveHeadingReport): void => {
     this.latestSpyByPane[report.context.paneId] = {
       context: report.context,
@@ -467,6 +523,26 @@ export class PaneNavigationCoordinator {
       }
     }
 
+    if (this.activeDiffJump) {
+      if (
+        (transition.type === 'tab-opened' || transition.type === 'tab-switched') &&
+        transition.paneId === this.activeDiffJump.paneId
+      ) {
+        this.activeDiffJump = null
+        changed = true
+      } else if (
+        transition.type === 'tab-closed' &&
+        transition.paneId === this.activeDiffJump.paneId &&
+        transition.closedTab.id === this.activeDiffJump.tabId
+      ) {
+        this.activeDiffJump = null
+        changed = true
+      } else if (transition.type === 'tab-moved' && transition.tab.id === this.activeDiffJump.tabId) {
+        this.activeDiffJump = null
+        changed = true
+      }
+    }
+
     if (changed) {
       this.syncSnapshot()
     }
@@ -524,6 +600,7 @@ export class PaneNavigationCoordinator {
 
     const nextSearchJump = this.activeJump?.request ?? null
     const nextOutlineScroll = this.activeOutlineScroll?.request ?? null
+    const nextDiffJump = this.activeDiffJump
     const nextActiveHeadingIndex = this.pinnedOutlineHeading
       ? this.pinnedOutlineHeading.index
       : this.spyOutlineHeading
@@ -533,6 +610,7 @@ export class PaneNavigationCoordinator {
     if (
       this.cachedSnapshot.searchJumpRequest === nextSearchJump &&
       this.cachedSnapshot.outlineScrollRequest === nextOutlineScroll &&
+      this.cachedSnapshot.diffJumpRequest === nextDiffJump &&
       this.cachedSnapshot.activeHeadingIndex === nextActiveHeadingIndex
     ) {
       return
@@ -541,6 +619,7 @@ export class PaneNavigationCoordinator {
     this.cachedSnapshot = {
       searchJumpRequest: nextSearchJump,
       outlineScrollRequest: nextOutlineScroll,
+      diffJumpRequest: nextDiffJump,
       activeHeadingIndex: nextActiveHeadingIndex
     }
     for (const listener of this.listeners) {

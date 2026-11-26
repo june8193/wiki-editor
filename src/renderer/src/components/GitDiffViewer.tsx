@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react'
 import type { GitDiffRequest, GitFileDiff } from '@shared/git'
 import type { CodeBlockHighlightSpan, CodeParser } from '../editor/codeBlockHighlight'
 import type { GitDiffViewMode } from '../stores/PaneTabStore'
@@ -35,6 +35,12 @@ export interface GitDiffNavigationProps {
   onNextFile: () => void
 }
 
+export interface DiffJumpRequest {
+  lineNumber: number
+  side?: 'old' | 'new'
+  nonce: number
+}
+
 interface GitDiffViewerProps {
   request: GitDiffRequest
   viewMode: GitDiffViewMode
@@ -42,6 +48,7 @@ interface GitDiffViewerProps {
   onChangeViewMode: (nextMode: GitDiffViewMode) => void
   onOpenFile?: (repoRelativePath: string) => void
   navigation?: GitDiffNavigationProps
+  jumpRequest?: DiffJumpRequest | null
 }
 
 const DIFF_ROW_TYPE_CLASS: Record<UnifiedDiffSideCell['type'], string> = {
@@ -224,7 +231,7 @@ function VirtualizedDiffBody<TRow>({
       {isVirtualized && <DiffSpacerRow height={topSpacerHeight} colSpan={colSpan} />}
       {rows.map((row, offset) => {
         const idx = isVirtualized ? startIndex + offset : offset
-        return renderRow(row, idx, isVirtualized ? idx : undefined)
+        return renderRow(row, idx, idx)
       })}
       {isVirtualized && <DiffSpacerRow height={bottomSpacerHeight} colSpan={colSpan} />}
     </tbody>
@@ -259,8 +266,29 @@ function areGitDiffViewerPropsEqual(
     prev.state === next.state &&
     prev.onChangeViewMode === next.onChangeViewMode &&
     prev.onOpenFile === next.onOpenFile &&
+    prev.jumpRequest === next.jumpRequest &&
     areNavigationPropsEqual(prev.navigation, next.navigation)
   )
+}
+
+function findDiffJumpRowIndex<TRow>(
+  rows: readonly TRow[],
+  getLineNumbers: (row: TRow) => { oldLine: number | null; newLine: number | null } | null,
+  lineNumber: number,
+  targetSide: 'old' | 'new'
+): number {
+  const exactIndex = rows.findIndex((row) => {
+    const lines = getLineNumbers(row)
+    if (!lines) return false
+    return targetSide === 'old' ? lines.oldLine === lineNumber : lines.newLine === lineNumber
+  })
+  if (exactIndex >= 0) {
+    return exactIndex
+  }
+  return rows.findIndex((row) => {
+    const lines = getLineNumbers(row)
+    return Boolean(lines && (lines.newLine === lineNumber || lines.oldLine === lineNumber))
+  })
 }
 
 function GitDiffViewerInner({
@@ -269,7 +297,8 @@ function GitDiffViewerInner({
   state,
   onChangeViewMode,
   onOpenFile,
-  navigation
+  navigation,
+  jumpRequest = null
 }: GitDiffViewerProps) {
   const loadedDiff = state.status === 'loaded' ? state.diff : null
   const displayFile = loadedDiff ?? request
@@ -327,13 +356,55 @@ function GitDiffViewerInner({
     endIndex,
     topSpacerHeight,
     bottomSpacerHeight,
-    scrollContainerRef
+    scrollContainerRef,
+    scrollToRowIndex
   } = useDiffVirtualScroll({
     totalRows,
     fileKey,
     viewMode,
     patchIdentity: parsed
   })
+
+  const [highlightedRowIndex, setHighlightedRowIndex] = useState<number | null>(null)
+
+  useEffect(() => {
+    setHighlightedRowIndex(null)
+  }, [fileKey])
+
+  useEffect(() => {
+    if (!jumpRequest || jumpRequest.nonce <= 0 || totalRows === 0) {
+      return
+    }
+    const targetSide = jumpRequest.side ?? 'new'
+    const matchedIndex =
+      viewMode === 'side-by-side'
+        ? findDiffJumpRowIndex(
+            sideBySideRows,
+            (row) =>
+              row.kind === 'pair'
+                ? {
+                    oldLine: row.oldCell?.lineNumber ?? null,
+                    newLine: row.newCell?.lineNumber ?? null
+                  }
+                : null,
+            jumpRequest.lineNumber,
+            targetSide
+          )
+        : findDiffJumpRowIndex(
+            inlineRows,
+            (row) =>
+              row.kind === 'line'
+                ? { oldLine: row.oldLineNumber, newLine: row.newLineNumber }
+                : null,
+            jumpRequest.lineNumber,
+            targetSide
+          )
+
+    if (matchedIndex >= 0) {
+      setHighlightedRowIndex(matchedIndex)
+      scrollToRowIndex(matchedIndex)
+    }
+  }, [jumpRequest, totalRows, viewMode, sideBySideRows, inlineRows, scrollToRowIndex])
   const visibleSideBySideRows = isVirtualized
     ? sideBySideRows.slice(startIndex, endIndex)
     : sideBySideRows
@@ -457,7 +528,11 @@ function GitDiffViewerInner({
                     </td>
                   </tr>
                 ) : (
-                  <tr key={`row-${idx}`} data-row-index={dataRowIndex} className="git-diff-row">
+                  <tr
+                    key={`row-${idx}`}
+                    data-row-index={dataRowIndex}
+                    className={`git-diff-row${highlightedRowIndex === idx ? ' is-jump-highlight' : ''}`}
+                  >
                     <SideCell
                       cell={row.oldCell}
                       side="old"
@@ -506,7 +581,7 @@ function GitDiffViewerInner({
                   <tr
                     key={`row-${idx}`}
                     data-row-index={dataRowIndex}
-                    className={`git-diff-row${DIFF_ROW_TYPE_CLASS[row.lineType]}`}
+                    className={`git-diff-row${DIFF_ROW_TYPE_CLASS[row.lineType]}${highlightedRowIndex === idx ? ' is-jump-highlight' : ''}`}
                   >
                     <td className="git-diff-gutter">{row.oldLineNumber ?? ''}</td>
                     <td className="git-diff-gutter">{row.newLineNumber ?? ''}</td>

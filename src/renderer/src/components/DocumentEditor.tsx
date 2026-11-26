@@ -281,6 +281,7 @@ export function DocumentEditor({
       <RawMarkdownEditor
         content={activeDoc.content}
         language={rawLanguage}
+        fileName={activeDoc.name}
         theme={theme}
         cursor={tab.cursor}
         scrollTop={tab.scrollTop}

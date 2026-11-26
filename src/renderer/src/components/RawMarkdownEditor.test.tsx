@@ -1329,4 +1329,48 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
       coordsAtPosSpy.mockRestore()
     }
   })
+
+  it('applies lazy-loaded Lezer syntax highlighting for non-markdown code files in Raw mode', async () => {
+    const { container } = render(
+      <RawMarkdownEditor
+        content={'export function greet(name: string): number {\n  return name.length\n}'}
+        language="code"
+        fileName="example.ts"
+        theme="dark"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    await waitFor(() => {
+      const spans = Array.from(container.querySelectorAll('.cm-line span'))
+      const keywordSpan = spans.find((el) => el.textContent === 'export')
+      const fnSpan = spans.find((el) => el.textContent === 'greet')
+      const typeSpan = spans.find((el) => el.textContent === 'string')
+      expect(keywordSpan).toBeDefined()
+      expect(fnSpan).toBeDefined()
+      expect(typeSpan).toBeDefined()
+
+      const styleSheetsText = Array.from(document.head.querySelectorAll('style'))
+        .map((el) => el.textContent ?? '')
+        .join('\n')
+
+      const getRulesForSpan = (span: Element) =>
+        span.className
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((cls) => {
+            const escaped = cls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            return styleSheetsText.match(new RegExp(`\\.${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+          })
+          .join('\n')
+
+      expect(getRulesForSpan(keywordSpan!)).toContain('color: var(--cm-keyword)')
+      expect(getRulesForSpan(fnSpan!)).toContain('color: var(--cm-function)')
+      expect(getRulesForSpan(typeSpan!)).toContain('color: var(--cm-type)')
+    })
+  })
 })

@@ -5,6 +5,7 @@ import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { GitDiffRequest } from '@shared/git'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
+import type { PaneDiffJumpRequest } from '../stores/PaneNavigationCoordinator'
 import { getPaneActiveTab, GitDiffViewMode, PaneState, SplitMode } from '../stores/PaneTabStore'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 import { DocumentEditor, type DocumentEditorFindControl } from './DocumentEditor'
@@ -30,6 +31,7 @@ interface PaneViewProps {
   autoSave: boolean
   scrollRequest?: OutlineScrollRequest | null
   searchJumpRequest?: DocumentSearchJumpRequest | null
+  diffJumpRequest?: PaneDiffJumpRequest | null
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   buffers: DocumentBufferSnapshot
@@ -52,6 +54,7 @@ export function PaneView({
   autoSave,
   scrollRequest = null,
   searchJumpRequest = null,
+  diffJumpRequest = null,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   buffers,
@@ -92,6 +95,13 @@ export function PaneView({
     searchJumpRequest.paneId === pane.id &&
     searchJumpRequest.tabId === activeTab.id
       ? searchJumpRequest
+      : null
+  const activeDiffJumpRequest =
+    activeTab?.kind === 'diff' &&
+    diffJumpRequest &&
+    diffJumpRequest.paneId === pane.id &&
+    diffJumpRequest.tabId === activeTab.id
+      ? diffJumpRequest
       : null
   const canMoveToSplit = !(splitMode === 'single' && pane.tabs.length <= 1)
   const paneStyle: CSSProperties | undefined =
@@ -138,6 +148,7 @@ export function PaneView({
           onChangeViewMode={handleChangeDiffViewMode}
           onOpenFile={actions.onOpenDiffTargetFile}
           navigation={diffNavigation}
+          jumpRequest={activeDiffJumpRequest}
         />
       ) : activeTab?.kind === 'document' && activeBuffer ? (
         <DocumentEditor

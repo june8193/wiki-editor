@@ -6,6 +6,7 @@ import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { ActiveTabDragSession } from '@shared/window'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
+import type { PaneDiffJumpRequest } from '../stores/PaneNavigationCoordinator'
 import {
   canAcceptIncomingSplitDrop,
   canSplitWithTab,
@@ -34,6 +35,7 @@ export interface PaneWorkspaceProps {
   autoSave: boolean
   scrollRequest?: OutlineScrollRequest | null
   searchJumpRequest?: DocumentSearchJumpRequest | null
+  diffJumpRequest?: PaneDiffJumpRequest | null
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   dragState: TabDragUiState
@@ -62,6 +64,7 @@ export function PaneWorkspace({
   autoSave,
   scrollRequest = null,
   searchJumpRequest = null,
+  diffJumpRequest = null,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   dragState,
@@ -149,6 +152,7 @@ export function PaneWorkspace({
     autoSave,
     scrollRequest,
     searchJumpRequest,
+    diffJumpRequest,
     isShortcutDisabled,
     workspaceMarkdownFiles,
     buffers,

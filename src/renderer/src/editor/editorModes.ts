@@ -1,4 +1,5 @@
 import type { DocumentBuffer } from '@shared/documentBuffer'
+import type { GitFileStatusCode } from '@shared/git'
 import type { EditorMode } from '../stores/PaneTabStore'
 
 export interface ModeShortcutEvent {
@@ -34,11 +35,18 @@ export type EditorModeDocumentRef = Pick<DocumentBuffer, 'kind' | 'name'> & {
   contentKind?: DocumentBuffer['contentKind']
 }
 
+export interface SidebarDiffContext {
+  rawPatch: string | null
+  filePath: string
+  status: GitFileStatusCode
+}
+
 export interface SidebarDocumentContext {
   documentName: string | null
   documentKey?: string | null
   content: string
   isMarkdownDocument: boolean
+  diffContext?: SidebarDiffContext
 }
 
 /**
@@ -80,14 +88,19 @@ export function resolveEffectiveEditorMode(
   }
 }
 
+export type RawEditorLanguage = 'markdown' | 'json' | 'code'
+
 /**
  * Resolves the CodeMirror syntax language for Raw mode.
  */
-export function getRawEditorLanguage(doc: Pick<DocumentBuffer, 'kind' | 'name'>): 'markdown' | 'json' {
+export function getRawEditorLanguage(doc: Pick<DocumentBuffer, 'kind' | 'name'>): RawEditorLanguage {
   if (doc.kind === 'config' || doc.name.toLowerCase().endsWith('.json')) {
     return 'json'
   }
-  return 'markdown'
+  if (isMarkdownDocument(doc)) {
+    return 'markdown'
+  }
+  return 'code'
 }
 
 /**

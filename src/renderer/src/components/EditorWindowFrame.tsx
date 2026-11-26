@@ -19,7 +19,7 @@ import {
   type UseMarkdownLinkNavigationOptions
 } from '../hooks/useMarkdownLinkNavigation'
 import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
-import type { PaneNavigationCoordinator } from '../stores/PaneNavigationCoordinator'
+import type { PaneNavigationCoordinator, PaneDiffJumpRequest } from '../stores/PaneNavigationCoordinator'
 import { getPaneActiveTab, type PaneId } from '../stores/PaneTabStore'
 import {
   createTwoSectionSplitState,
@@ -28,7 +28,7 @@ import {
   type TwoSectionSplitState,
   updateTopSectionRatio
 } from '../utils/accordionSplit'
-import { getGitFileBaseName } from '../utils/gitFilePresentation'
+import { formatGitDiffTabKey, getGitFileBaseName } from '../utils/gitFilePresentation'
 import {
   clampSidebarWidth,
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
@@ -54,7 +54,7 @@ interface RightSidebarState {
 
 export type WindowFramePaneWorkspaceProps = Omit<
   PaneWorkspaceProps,
-  'scrollRequest' | 'searchJumpRequest' | 'onActiveHeadingChange' | 'getPaneFindControl'
+  'scrollRequest' | 'searchJumpRequest' | 'diffJumpRequest' | 'onActiveHeadingChange' | 'getPaneFindControl'
 >
 
 export function buildPaneWorkspaceProps(
@@ -264,15 +264,29 @@ export function EditorWindowFrame({
   const activeBuffer =
     activeTab?.kind === 'document' ? paneWorkspaceProps.buffers[activeTab.bufferKey] : undefined
   const activeBufferKey = activeBuffer?.key ?? null
-  const rightSidebarDocument: SidebarDocumentContext = {
-    documentName:
-      activeTab?.kind === 'diff'
-        ? getGitFileBaseName(activeTab.diff.request.path)
-        : (activeBuffer?.name ?? null),
-    documentKey: activeBufferKey,
-    content: activeBuffer?.content ?? '',
-    isMarkdownDocument: activeBuffer ? isMarkdownDocument(activeBuffer) : false
-  }
+  const activeDiffKey =
+    activeTab?.kind === 'diff' ? formatGitDiffTabKey(activeTab.diff.request) : null
+  const activeDiffState = activeDiffKey ? paneWorkspaceProps.diffsByKey[activeDiffKey] : undefined
+  const rightSidebarDocument: SidebarDocumentContext =
+    activeTab?.kind === 'diff'
+      ? {
+          documentName: getGitFileBaseName(activeTab.diff.request.path),
+          documentKey: activeDiffKey,
+          content: '',
+          isMarkdownDocument: false,
+          diffContext: {
+            rawPatch:
+              activeDiffState?.status === 'loaded' ? activeDiffState.diff.rawPatch : null,
+            filePath: activeTab.diff.request.path,
+            status: activeTab.diff.request.status
+          }
+        }
+      : {
+          documentName: activeBuffer?.name ?? null,
+          documentKey: activeBufferKey,
+          content: activeBuffer?.content ?? '',
+          isMarkdownDocument: activeBuffer ? isMarkdownDocument(activeBuffer) : false
+        }
   const onPaneChangeContent = paneWorkspaceProps.actions.onChangeContent
 
   const handlePropertiesChangeContent = useCallback(
@@ -303,6 +317,7 @@ export function EditorWindowFrame({
               {...paneWorkspaceProps}
               scrollRequest={navState.outlineScrollRequest}
               searchJumpRequest={navState.searchJumpRequest}
+              diffJumpRequest={navState.diffJumpRequest}
               getPaneFindControl={paneFind.getPaneFindControl}
               onActiveHeadingChange={navigation.reportActiveHeading}
               actions={paneActions}
@@ -334,6 +349,7 @@ export function EditorWindowFrame({
                 outlineProps={{
                   activeHeadingIndex: navState.activeHeadingIndex,
                   onSelectHeading: navigation.selectOutlineHeading,
+                  onSelectSymbol: navigation.selectOutlineSymbol,
                   showHeadingNumbers,
                   onToggleHeadingNumbers,
                   onCollapse: handleCollapseRightSidebar

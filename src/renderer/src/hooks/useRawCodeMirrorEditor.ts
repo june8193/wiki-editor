@@ -33,8 +33,12 @@ import {
   detectLinkQuery,
   type LinkQueryMatch
 } from '../editor/LinkAutocompleteEngine'
-import { isLinkNavigationClick } from '../editor/editorModes'
+import { isLinkNavigationClick, type RawEditorLanguage } from '../editor/editorModes'
 import { extractMarkdownLinkHrefAtOffset } from '../editor/MarkdownLinkSyntax'
+import {
+  loadRawCodeLanguage,
+  resolveRawCodeLanguageSync
+} from '../editor/rawLanguageSupport'
 import {
   detectDocumentLineEnding,
   isOffsetInCodeFence,
@@ -60,7 +64,8 @@ export interface RawScrollRequest {
 
 export interface UseRawCodeMirrorEditorOptions {
   content: string
-  language: 'markdown' | 'json'
+  language: RawEditorLanguage
+  fileName?: string
   theme: ThemeMode
   cursor: CursorPosition
   scrollTop: number
@@ -91,11 +96,38 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: [tags.link, tags.url], color: 'var(--cm-link)', textDecoration: 'underline' },
   { tag: tags.monospace, color: 'var(--cm-code)' },
   { tag: tags.quote, color: 'var(--cm-quote)', fontStyle: 'italic' },
-  { tag: tags.keyword, color: 'var(--cm-keyword)' },
-  { tag: tags.string, color: 'var(--cm-string)' },
-  { tag: [tags.number, tags.bool], color: 'var(--cm-number)' },
-  { tag: [tags.comment, tags.meta, tags.processingInstruction], color: 'var(--text-secondary)' },
-  { tag: tags.propertyName, color: 'var(--cm-heading)' }
+  {
+    tag: [
+      tags.function(tags.variableName),
+      tags.function(tags.propertyName),
+      tags.function(tags.definition(tags.variableName)),
+      tags.standard(tags.function(tags.variableName))
+    ],
+    color: 'var(--cm-function)'
+  },
+  {
+    tag: [
+      tags.keyword,
+      tags.controlKeyword,
+      tags.definitionKeyword,
+      tags.moduleKeyword,
+      tags.operatorKeyword,
+      tags.modifier
+    ],
+    color: 'var(--cm-keyword)'
+  },
+  { tag: [tags.string, tags.special(tags.string), tags.attributeValue, tags.regexp], color: 'var(--cm-string)' },
+  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: 'var(--cm-number)' },
+  {
+    tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment, tags.meta, tags.processingInstruction],
+    color: 'var(--text-secondary)'
+  },
+  { tag: [tags.typeName, tags.className, tags.standard(tags.typeName), tags.tagName, tags.namespace], color: 'var(--cm-type)' },
+  { tag: [tags.propertyName, tags.attributeName, tags.labelName, tags.definition(tags.propertyName)], color: 'var(--cm-heading)' },
+  {
+    tag: [tags.operator, tags.compareOperator, tags.logicOperator, tags.arithmeticOperator, tags.updateOperator],
+    color: 'var(--cm-operator)'
+  }
 ])
 
 function resolveRawClickOffset(view: EditorView, event: MouseEvent): number | null {
@@ -175,8 +207,14 @@ function createEditorThemeExtension(theme: ThemeMode): Extension {
   ]
 }
 
-function createLanguageExtension(language: 'markdown' | 'json'): Extension {
-  return language === 'json' ? json() : markdown({ codeLanguages: languages })
+function createLanguageExtension(language: RawEditorLanguage, fileName?: string | null): Extension {
+  if (language === 'json') {
+    return json()
+  }
+  if (language === 'markdown') {
+    return markdown({ codeLanguages: languages })
+  }
+  return resolveRawCodeLanguageSync(fileName).extension ?? []
 }
 
 function clampSelection(docLength: number, cursor: CursorPosition): { anchor: number; head: number } {
@@ -207,6 +245,7 @@ function isViewCursorInRawTable(view: EditorView): boolean {
 export function useRawCodeMirrorEditor({
   content,
   language,
+  fileName,
   theme,
   cursor,
   scrollTop,
@@ -246,6 +285,7 @@ export function useRawCodeMirrorEditor({
   const runtimeRef = useRef({
     content,
     language,
+    fileName,
     theme,
     cursor,
     scrollTop,
@@ -261,6 +301,7 @@ export function useRawCodeMirrorEditor({
   runtimeRef.current = {
     content,
     language,
+    fileName,
     theme,
     cursor,
     scrollTop,
@@ -322,7 +363,12 @@ export function useRawCodeMirrorEditor({
   const dismissLinkMenu = linkMenuProps.onDismiss
   const lineEndingRef = useRef<'\r\n' | '\n'>(detectDocumentLineEnding(content))
   const lastCursorPropRef = useRef<CursorPosition>(cursor)
-  const prevCompartmentsRef = useRef({ language, theme, showTableToolbar })
+  const prevCompartmentsRef = useRef({
+    language,
+    languageTarget: fileName ?? documentPath ?? null,
+    theme,
+    showTableToolbar
+  })
 
   const [inTable, setInTable] = useState(() => {
     if (!showTableToolbar) return false
@@ -379,7 +425,9 @@ export function useRawCodeMirrorEditor({
         syntaxHighlighting(markdownHighlightStyle),
         rawSearchHighlightField,
         rawSearchJumpHighlightField,
-        compartments.language.of(createLanguageExtension(initial.language)),
+        compartments.language.of(
+          createLanguageExtension(initial.language, initial.fileName ?? documentPath)
+        ),
         compartments.theme.of(createEditorThemeExtension(initial.theme)),
         compartments.tableKeymap.of(initial.showTableToolbar ? rawTableKeymap : []),
         EditorView.domEventHandlers({
@@ -541,9 +589,12 @@ export function useRawCodeMirrorEditor({
     const prev = prevCompartmentsRef.current
     const compartments = compartmentsRef.current
     const effects: StateEffect<unknown>[] = []
+    const languageTarget = fileName ?? documentPath ?? null
 
-    if (prev.language !== language) {
-      effects.push(compartments.language.reconfigure(createLanguageExtension(language)))
+    if (prev.language !== language || prev.languageTarget !== languageTarget) {
+      effects.push(
+        compartments.language.reconfigure(createLanguageExtension(language, languageTarget))
+      )
     }
     if (!enableLinkAutocomplete) {
       dismissLinkMenu()
@@ -559,15 +610,42 @@ export function useRawCodeMirrorEditor({
     }
 
     if (effects.length === 0) return
-    prevCompartmentsRef.current = { language, theme, showTableToolbar }
+    prevCompartmentsRef.current = { language, languageTarget, theme, showTableToolbar }
     view.dispatch({ effects, annotations: externalSyncAnnotation.of(true) })
   }, [
     dismissLinkMenu,
+    documentPath,
     enableLinkAutocomplete,
+    fileName,
     language,
     theme,
     showTableToolbar
   ])
+
+  useEffect(() => {
+    const languageTarget = fileName ?? documentPath ?? null
+    if (language !== 'code' || !languageTarget) return
+    const resolution = resolveRawCodeLanguageSync(languageTarget)
+    if (!resolution.needsAsyncLoad) return
+
+    let cancelled = false
+    void loadRawCodeLanguage(languageTarget).then((extension) => {
+      if (cancelled || !extension) return
+      const view = viewRef.current
+      const currentTarget = runtimeRef.current.fileName ?? documentPath ?? null
+      if (!view || runtimeRef.current.language !== 'code' || currentTarget !== languageTarget) {
+        return
+      }
+      view.dispatch({
+        effects: compartmentsRef.current.language.reconfigure(extension),
+        annotations: externalSyncAnnotation.of(true)
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [documentPath, fileName, language])
 
   useLayoutEffect(() => {
     const view = viewRef.current
