@@ -13,6 +13,8 @@ interface UseDiffVirtualScrollOptions {
   viewMode: string
   /** Reference identity for parsed patch content; changes clear measured row heights. */
   patchIdentity: unknown
+  /** Optional layout key (e.g. side-by-side split ratio); changes clear measured row heights without resetting scrollTop. */
+  layoutKey?: string | number
 }
 
 export interface UseDiffVirtualScrollResult {
@@ -51,7 +53,8 @@ export function useDiffVirtualScroll({
   totalRows,
   fileKey,
   viewMode,
-  patchIdentity
+  patchIdentity,
+  layoutKey
 }: UseDiffVirtualScrollOptions): UseDiffVirtualScrollResult {
   const isVirtualized = totalRows > VIRTUAL_SCROLL_ROW_THRESHOLD
   const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null)
@@ -63,6 +66,7 @@ export function useDiffVirtualScroll({
   const prevFileKeyRef = useRef(fileKey)
   const prevViewModeRef = useRef(viewMode)
   const prevPatchIdentityRef = useRef(patchIdentity)
+  const prevLayoutKeyRef = useRef(layoutKey)
 
   const scrollContainerRef = useCallback((element: HTMLDivElement | null) => {
     setScrollElement(element)
@@ -83,10 +87,12 @@ export function useDiffVirtualScroll({
     if (
       prevViewModeRef.current !== viewMode ||
       prevPatchIdentityRef.current !== patchIdentity ||
-      prevFileKeyRef.current !== fileKey
+      prevFileKeyRef.current !== fileKey ||
+      prevLayoutKeyRef.current !== layoutKey
     ) {
       prevViewModeRef.current = viewMode
       prevPatchIdentityRef.current = patchIdentity
+      prevLayoutKeyRef.current = layoutKey
       measuredHeightsRef.current.clear()
     }
     if (!isVirtualized) {
@@ -100,7 +106,7 @@ export function useDiffVirtualScroll({
     return offsets
     // measureVersion intentionally invalidates offsets when measuredHeightsRef updates
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isVirtualized, totalRows, measureVersion, fileKey, viewMode, patchIdentity])
+  }, [isVirtualized, totalRows, measureVersion, fileKey, viewMode, patchIdentity, layoutKey])
 
   const { startIndex, endIndex, topSpacerHeight, bottomSpacerHeight } = useMemo(() => {
     if (!isVirtualized || !rowOffsets) {

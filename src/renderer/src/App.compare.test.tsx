@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createEmptyGitStatus,
   type GitCompareRefList,
-  type GitCompareSummary
+  type GitCompareSummary,
+  type GitDiffRequest
 } from '@shared/git'
 import { App } from './App'
 import { clickActivityBarButton, switchWorkspaceFromView } from './test/appTestHelpers'
@@ -1497,4 +1498,99 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
 
     void container
   }, 15000)
+
+  it('persists adjusted side-by-side diff split ratio when navigating between files in Compare view', async () => {
+    const user = userEvent.setup()
+
+    const { api } = createInMemoryWikiApi(
+      { recentWorkspaces: ['C:/repo'] },
+      {
+        workspaces: {
+          'C:/repo': {
+            'a.md': '# A\n',
+            'b.md': '# B\n'
+          }
+        },
+        git: {
+          status: vi.fn(async () => ({
+            ...createEmptyGitStatus(true, 'C:/repo'),
+            branch: 'feat/ratio'
+          })),
+          compareRefs: vi.fn(async (): Promise<GitCompareRefList> => ({
+            defaultBaseRef: 'main',
+            currentRef: 'feat/ratio',
+            worktrees: [],
+            localBranches: [
+              { id: 'local:main', kind: 'local-branch', ref: 'main', displayName: 'main' },
+              {
+                id: 'local:feat/ratio',
+                kind: 'local-branch',
+                ref: 'feat/ratio',
+                displayName: 'feat/ratio',
+                isCurrent: true
+              }
+            ],
+            remoteBranches: []
+          })),
+          compareSummary: vi.fn(async (_ws, req): Promise<GitCompareSummary> => ({
+            baseRef: req.baseRef,
+            compareRef: req.compareRef,
+            mode: req.mode,
+            mergeBaseHash: '0000000',
+            totalAdditions: 2,
+            totalDeletions: 2,
+            commits: [],
+            files: [
+              { path: 'a.md', status: 'M', additions: 1, deletions: 1, isBinary: false },
+              { path: 'b.md', status: 'M', additions: 1, deletions: 1, isBinary: false }
+            ]
+          })),
+          diff: vi.fn(async (_ws, req: GitDiffRequest) => ({
+            path: req.path,
+            status: req.status,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: [
+              `diff --git a/${req.path} b/${req.path}`,
+              `--- a/${req.path}`,
+              `+++ b/${req.path}`,
+              '@@ -1,1 +1,1 @@',
+              `-old-${req.path}`,
+              `+new-${req.path}`
+            ].join('\n')
+          }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await waitFor(() => {
+      expect(screen.getByText('repo')).toBeInTheDocument()
+    })
+
+    await clickActivityBarButton(user, 'Compare')
+    const comparePanel = screen.getByRole('region', { name: '브랜치 비교' })
+    await user.click(await within(comparePanel).findByRole('button', { name: /a\.md/ }))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+    await within(primaryPane).findByText(matchDiffLineText('new-a.md'))
+
+    const resizer = within(primaryPane).getByRole('separator', { name: 'Diff 좌우 비교 비율 조절' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '50')
+
+    fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+    fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+    expect(resizer).toHaveAttribute('aria-valuenow', '60')
+
+    // Navigate to next file (b.md) and confirm 60% ratio is preserved
+    await user.click(within(primaryPane).getByRole('button', { name: '다음 파일' }))
+    await within(primaryPane).findByText(matchDiffLineText('new-b.md'))
+
+    const nextResizer = within(primaryPane).getByRole('separator', {
+      name: 'Diff 좌우 비교 비율 조절'
+    })
+    expect(nextResizer).toHaveAttribute('aria-valuenow', '60')
+  })
 })

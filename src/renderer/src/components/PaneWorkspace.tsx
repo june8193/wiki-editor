@@ -5,6 +5,7 @@ import type { GitDiffRequest } from '@shared/git'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { ActiveTabDragSession } from '@shared/window'
 import type { WorkspaceEntry } from '@shared/workspace'
+import { DEFAULT_SPLIT_RATIO } from '@shared/window'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
 import {
   canAcceptIncomingSplitDrop,
@@ -72,6 +73,7 @@ export function PaneWorkspace({
   actions
 }: PaneWorkspaceProps) {
   const [isExternalDragOver, setIsExternalDragOver] = useState(false)
+  const [diffSplitRatio, setDiffSplitRatio] = useState(DEFAULT_SPLIT_RATIO)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const externalDragDepthRef = useRef(0)
   const prevExternalSessionRef = useRef<ActiveTabDragSession | null>(dragState.externalDragSession)
@@ -154,6 +156,8 @@ export function PaneWorkspace({
     buffers,
     diffsByKey,
     getDiffNavigation,
+    diffSplitRatio,
+    onChangeDiffSplitRatio: setDiffSplitRatio,
     dragState,
     onActiveHeadingChange,
     actions

@@ -1,7 +1,23 @@
-import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
+import {
+  memo,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import type { GitDiffRequest, GitFileDiff } from '@shared/git'
+import { DEFAULT_SPLIT_RATIO, roundSplitRatio } from '@shared/window'
 import type { CodeBlockHighlightSpan, CodeParser } from '../editor/codeBlockHighlight'
 import type { GitDiffViewMode } from '../stores/PaneTabStore'
+import {
+  clampDiffSplitRatio,
+  getDiffSplitColumnWidths,
+  getDiffSplitRatioBounds
+} from '../utils/diffSplitRatio'
+import { SPLITTER_KEYBOARD_STEP } from './SplitSplitter'
 import {
   getDiffLineSyntaxSpans,
   loadDiffLanguageParser,
@@ -39,6 +55,8 @@ interface GitDiffViewerProps {
   request: GitDiffRequest
   viewMode: GitDiffViewMode
   state: GitDiffContentState
+  splitRatio?: number
+  onChangeSplitRatio?: (nextRatio: number) => void
   onChangeViewMode: (nextMode: GitDiffViewMode) => void
   onOpenFile?: (repoRelativePath: string) => void
   navigation?: GitDiffNavigationProps
@@ -257,20 +275,59 @@ function areGitDiffViewerPropsEqual(
     prev.request === next.request &&
     prev.viewMode === next.viewMode &&
     prev.state === next.state &&
+    prev.splitRatio === next.splitRatio &&
+    prev.onChangeSplitRatio === next.onChangeSplitRatio &&
     prev.onChangeViewMode === next.onChangeViewMode &&
     prev.onOpenFile === next.onOpenFile &&
     areNavigationPropsEqual(prev.navigation, next.navigation)
   )
 }
 
+function measureScrollTableWidth(element: HTMLDivElement | null): number {
+  if (!element) {
+    return 0
+  }
+  if (element.clientWidth > 0) {
+    return element.clientWidth
+  }
+  return element.getBoundingClientRect().width
+}
+
 function GitDiffViewerInner({
   request,
   viewMode,
   state,
+  splitRatio,
+  onChangeSplitRatio,
   onChangeViewMode,
   onOpenFile,
   navigation
 }: GitDiffViewerProps) {
+  const [uncontrolledSplitRatio, setUncontrolledSplitRatio] = useState(DEFAULT_SPLIT_RATIO)
+  const [observedScrollElement, setObservedScrollElement] = useState<HTMLDivElement | null>(null)
+  const [tableWidth, setTableWidth] = useState(0)
+  const [isResizing, setIsResizing] = useState(false)
+  const scrollElementRef = useRef<HTMLDivElement | null>(null)
+  const tableRef = useRef<HTMLTableElement | null>(null)
+
+  const activeSplitRatio = splitRatio ?? uncontrolledSplitRatio
+  const handleChangeSplitRatio = useCallback(
+    (nextRatio: number) => {
+      if (splitRatio === undefined) {
+        setUncontrolledSplitRatio(nextRatio)
+      }
+      onChangeSplitRatio?.(nextRatio)
+    },
+    [splitRatio, onChangeSplitRatio]
+  )
+  const handleChangeSplitRatioRef = useRef(handleChangeSplitRatio)
+  handleChangeSplitRatioRef.current = handleChangeSplitRatio
+
+  const { effectiveRatio, leftCodeWidth, rightCodeWidth } = useMemo(
+    () => getDiffSplitColumnWidths(activeSplitRatio, tableWidth),
+    [activeSplitRatio, tableWidth]
+  )
+  const splitBounds = useMemo(() => getDiffSplitRatioBounds(tableWidth), [tableWidth])
   const loadedDiff = state.status === 'loaded' ? state.diff : null
   const displayFile = loadedDiff ?? request
   const displayPath = formatGitFileLabel(displayFile)
@@ -332,8 +389,90 @@ function GitDiffViewerInner({
     totalRows,
     fileKey,
     viewMode,
-    patchIdentity: parsed
+    patchIdentity: parsed,
+    layoutKey: viewMode === 'side-by-side' ? effectiveRatio : undefined
   })
+
+  const combinedScrollRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      scrollElementRef.current = element
+      setObservedScrollElement(element)
+      scrollContainerRef(element)
+    },
+    [scrollContainerRef]
+  )
+
+  useEffect(() => {
+    if (viewMode !== 'side-by-side' || !observedScrollElement) {
+      setTableWidth(0)
+      return
+    }
+
+    const syncWidth = () => {
+      const nextWidth = measureScrollTableWidth(observedScrollElement)
+      setTableWidth((prev) => (prev === nextWidth ? prev : nextWidth))
+    }
+
+    syncWidth()
+
+    if (typeof ResizeObserver === 'undefined') {
+      return
+    }
+    const observer = new ResizeObserver(() => {
+      syncWidth()
+    })
+    observer.observe(observedScrollElement)
+    return () => {
+      observer.disconnect()
+    }
+  }, [observedScrollElement, viewMode])
+
+  useEffect(() => {
+    if (!isResizing) {
+      return
+    }
+
+    const handleMouseMove = (event: MouseEvent): void => {
+      const scrollEl = scrollElementRef.current
+      const tableEl = tableRef.current ?? scrollEl
+      if (!scrollEl || !tableEl) {
+        return
+      }
+      const rect = tableEl.getBoundingClientRect()
+      const width = scrollEl.clientWidth > 0 ? scrollEl.clientWidth : rect.width
+      if (width <= 0) {
+        return
+      }
+      const rawRatio = (event.clientX - rect.left) / width
+      handleChangeSplitRatioRef.current(clampDiffSplitRatio(rawRatio, width))
+    }
+
+    const handleDragEnd = (): void => {
+      setIsResizing(false)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleDragEnd)
+    window.addEventListener('blur', handleDragEnd)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleDragEnd)
+      window.removeEventListener('blur', handleDragEnd)
+    }
+  }, [isResizing])
+
+  const handleResizerKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      const delta = event.key === 'ArrowLeft' ? -SPLITTER_KEYBOARD_STEP : SPLITTER_KEYBOARD_STEP
+      handleChangeSplitRatio(clampDiffSplitRatio(effectiveRatio + delta, tableWidth))
+    },
+    [effectiveRatio, handleChangeSplitRatio, tableWidth]
+  )
   const visibleSideBySideRows = isVirtualized
     ? sideBySideRows.slice(startIndex, endIndex)
     : sideBySideRows
@@ -425,112 +564,138 @@ function GitDiffViewerInner({
         <div className="git-diff-empty-state">바이너리 파일은 Diff 미리보기를 지원하지 않습니다.</div>
       ) : !parsed || parsed.hunks.length === 0 ? (
         <div className="git-diff-empty-state">표시할 텍스트 변경 사항이 없습니다.</div>
-      ) : viewMode === 'side-by-side' ? (
-        <div
-          ref={scrollContainerRef}
-          className="git-diff-scroll"
-          data-testid="diff-side-by-side"
-        >
-          <table className="git-diff-table git-diff-table--split">
-            <colgroup>
-              <col className="git-diff-col-gutter" />
-              <col className="git-diff-col-code" />
-              <col className="git-diff-col-gutter" />
-              <col className="git-diff-col-code" />
-            </colgroup>
-            <VirtualizedDiffBody
-              rows={visibleSideBySideRows}
-              colSpan={4}
-              isVirtualized={isVirtualized}
-              startIndex={startIndex}
-              topSpacerHeight={topSpacerHeight}
-              bottomSpacerHeight={bottomSpacerHeight}
-              renderRow={(row, idx, dataRowIndex) =>
-                row.kind === 'hunk' ? (
-                  <tr
-                    key={`hunk-${idx}`}
-                    data-row-index={dataRowIndex}
-                    className="git-diff-hunk-row"
-                  >
-                    <td colSpan={4} className="git-diff-hunk-cell">
-                      {row.header}
-                    </td>
-                  </tr>
-                ) : (
-                  <tr key={`row-${idx}`} data-row-index={dataRowIndex} className="git-diff-row">
-                    <SideCell
-                      cell={row.oldCell}
-                      side="old"
-                      filePath={displayFile.path}
-                      syntaxParser={activeSyntaxParser}
-                    />
-                    <SideCell
-                      cell={row.newCell}
-                      side="new"
-                      filePath={displayFile.path}
-                      syntaxParser={activeSyntaxParser}
-                    />
-                  </tr>
-                )
-              }
-            />
-          </table>
-        </div>
       ) : (
-        <div ref={scrollContainerRef} className="git-diff-scroll" data-testid="diff-inline">
-          <table className="git-diff-table git-diff-table--inline">
-            <colgroup>
-              <col className="git-diff-col-gutter" />
-              <col className="git-diff-col-gutter" />
-              <col className="git-diff-col-code" />
-            </colgroup>
-            <VirtualizedDiffBody
-              rows={visibleInlineRows}
-              colSpan={3}
-              isVirtualized={isVirtualized}
-              startIndex={startIndex}
-              topSpacerHeight={topSpacerHeight}
-              bottomSpacerHeight={bottomSpacerHeight}
-              renderRow={(row, idx, dataRowIndex) =>
-                row.kind === 'hunk' ? (
-                  <tr
-                    key={`hunk-${idx}`}
-                    data-row-index={dataRowIndex}
-                    className="git-diff-hunk-row"
-                  >
-                    <td colSpan={3} className="git-diff-hunk-cell">
-                      {row.header}
-                    </td>
-                  </tr>
-                ) : (
-                  <tr
-                    key={`row-${idx}`}
-                    data-row-index={dataRowIndex}
-                    className={`git-diff-row${DIFF_ROW_TYPE_CLASS[row.lineType]}`}
-                  >
-                    <td className="git-diff-gutter">{row.oldLineNumber ?? ''}</td>
-                    <td className="git-diff-gutter">{row.newLineNumber ?? ''}</td>
-                    <td className="git-diff-code">
-                      <DiffCodeContent
-                        marker={row.marker}
-                        content={row.content}
-                        wordHighlights={row.wordHighlights}
-                        syntaxSpans={
-                          row.lineType === 'note'
-                            ? undefined
-                            : getDiffLineSyntaxSpans(
-                                row.content,
-                                displayFile.path,
-                                activeSyntaxParser
-                              )
-                        }
-                      />
-                    </td>
-                  </tr>
-                )
-              }
+        <div className="git-diff-split-body">
+          <div
+            ref={combinedScrollRef}
+            className="git-diff-scroll"
+            data-testid={viewMode === 'side-by-side' ? 'diff-side-by-side' : 'diff-inline'}
+          >
+            {viewMode === 'side-by-side' ? (
+              <table ref={tableRef} className="git-diff-table git-diff-table--split">
+                <colgroup>
+                  <col className="git-diff-col-gutter" />
+                  <col className="git-diff-col-code" style={{ width: leftCodeWidth }} />
+                  <col className="git-diff-col-gutter" />
+                  <col className="git-diff-col-code" style={{ width: rightCodeWidth }} />
+                </colgroup>
+                <VirtualizedDiffBody
+                  rows={visibleSideBySideRows}
+                  colSpan={4}
+                  isVirtualized={isVirtualized}
+                  startIndex={startIndex}
+                  topSpacerHeight={topSpacerHeight}
+                  bottomSpacerHeight={bottomSpacerHeight}
+                  renderRow={(row, idx, dataRowIndex) =>
+                    row.kind === 'hunk' ? (
+                      <tr
+                        key={`hunk-${idx}`}
+                        data-row-index={dataRowIndex}
+                        className="git-diff-hunk-row"
+                      >
+                        <td colSpan={4} className="git-diff-hunk-cell">
+                          {row.header}
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr key={`row-${idx}`} data-row-index={dataRowIndex} className="git-diff-row">
+                        <SideCell
+                          cell={row.oldCell}
+                          side="old"
+                          filePath={displayFile.path}
+                          syntaxParser={activeSyntaxParser}
+                        />
+                        <SideCell
+                          cell={row.newCell}
+                          side="new"
+                          filePath={displayFile.path}
+                          syntaxParser={activeSyntaxParser}
+                        />
+                      </tr>
+                    )
+                  }
+                />
+              </table>
+            ) : (
+              <table className="git-diff-table git-diff-table--inline">
+                <colgroup>
+                  <col className="git-diff-col-gutter" />
+                  <col className="git-diff-col-gutter" />
+                  <col className="git-diff-col-code" />
+                </colgroup>
+                <VirtualizedDiffBody
+                  rows={visibleInlineRows}
+                  colSpan={3}
+                  isVirtualized={isVirtualized}
+                  startIndex={startIndex}
+                  topSpacerHeight={topSpacerHeight}
+                  bottomSpacerHeight={bottomSpacerHeight}
+                  renderRow={(row, idx, dataRowIndex) =>
+                    row.kind === 'hunk' ? (
+                      <tr
+                        key={`hunk-${idx}`}
+                        data-row-index={dataRowIndex}
+                        className="git-diff-hunk-row"
+                      >
+                        <td colSpan={3} className="git-diff-hunk-cell">
+                          {row.header}
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr
+                        key={`row-${idx}`}
+                        data-row-index={dataRowIndex}
+                        className={`git-diff-row${DIFF_ROW_TYPE_CLASS[row.lineType]}`}
+                      >
+                        <td className="git-diff-gutter">{row.oldLineNumber ?? ''}</td>
+                        <td className="git-diff-gutter">{row.newLineNumber ?? ''}</td>
+                        <td className="git-diff-code">
+                          <DiffCodeContent
+                            marker={row.marker}
+                            content={row.content}
+                            wordHighlights={row.wordHighlights}
+                            syntaxSpans={
+                              row.lineType === 'note'
+                                ? undefined
+                                : getDiffLineSyntaxSpans(
+                                    row.content,
+                                    displayFile.path,
+                                    activeSyntaxParser
+                                  )
+                            }
+                          />
+                        </td>
+                      </tr>
+                    )
+                  }
+                />
+              </table>
+            )}
+          </div>
+          {viewMode === 'side-by-side' && (
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-label="Diff 좌우 비교 비율 조절"
+              aria-orientation="vertical"
+              aria-valuemin={Math.round(splitBounds.min * 100)}
+              aria-valuemax={Math.round(splitBounds.max * 100)}
+              aria-valuenow={Math.round(effectiveRatio * 100)}
+              className={`git-diff-split-resizer${isResizing ? ' is-dragging' : ''}`}
+              style={{
+                left:
+                  tableWidth > 0
+                    ? `${effectiveRatio * tableWidth}px`
+                    : `${roundSplitRatio(effectiveRatio * 100)}%`
+              }}
+              onMouseDown={(event) => {
+                event.preventDefault()
+                setIsResizing(true)
+              }}
+              onDoubleClick={() => handleChangeSplitRatio(DEFAULT_SPLIT_RATIO)}
+              onKeyDown={handleResizerKeyDown}
             />
-          </table>
+          )}
         </div>
       )}
     </section>
