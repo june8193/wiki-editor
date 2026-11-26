@@ -6,7 +6,7 @@
 
 **Blocked by:** 01-fix-compare-folder-shading, 02-preview-pin-multi-diff-tabs
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 저장소 상대 경로, 저장소 루트, 워크스페이스 루트를 입력받아 워크스페이스 기준 상대 경로(모노레포 외부 경로는 저장소 기준 상대 경로)와 플랫폼 구분자 기반 절대 경로를 계산하는 순수 포맷 함수 및 단위 테스트가 구현됩니다.
 - [ ] **Compare 패널** 폴더 트리와 **Git 뷰** **Changes 섹션**(리스트 모드·트리 모드)의 파일 행 우클릭 시 `새 탭에서 Diff 열기`, `상대 경로 복사`, `절대 경로 복사` 메뉴가 표시됩니다.

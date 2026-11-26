@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] **Compare 패널** 폴더 트리의 폴더 행 버튼이 정의되지 않은 클래스 대신 **Git 뷰** 폴더 트리 폴더 행의 공통 스타일 클래스(`git-tree-dir-btn` 및 컨테이너 구조)를 사용하여 기본 버튼 배경 음영이 제거됩니다.
 - [ ] 기존 폴더 접기/펼치기, 들여쓰기(`depth`), 폴더/열린 폴더 아이콘, `aria-expanded` 상태, `title` 툴팁 동작이 그대로 유지됩니다.

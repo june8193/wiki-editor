@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `PaneTabStore`가 `DiffTabState`의 `isPreview` 상태와 `openDiffTab`의 `pinned` 옵션을 지원하며, 한 **편집기 영역** 내 Preview **Diff 탭**은 최대 1개만 유지됩니다.
 - [ ] 단일 클릭(`pinned` 미지정) 시 동일 키 탭이 없으면 기존 Preview **Diff 탭**을 교체하고, 이미 열린 고정 탭을 단일 클릭하면 포커스만 이동하며 Preview로 강등되지 않습니다.
