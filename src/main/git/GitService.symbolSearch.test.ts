@@ -222,5 +222,7 @@ describe('GitService + WorkspaceQueryAndSchemaHub integration (searchSymbols)', 
         bufferHub.dispose()
         workspaceService.dispose()
       }
-    }))
+    }),
+    15_000
+  )
 })

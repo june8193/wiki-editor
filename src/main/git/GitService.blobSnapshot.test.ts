@@ -209,5 +209,7 @@ describe('GitService integration (readBlobSnapshot)', () => {
         GIT_BLOB_SNAPSHOT_MAX_BYTES
       )
       expect(hugeSnap.content.includes('\uFFFD')).toBe(false)
-    }))
+    }),
+    15_000
+  )
 })

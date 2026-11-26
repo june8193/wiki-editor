@@ -28,7 +28,13 @@ export type ValidatedGitBlobSnapshotScope =
 export function validateBlobSnapshotRequest(request: GitBlobSnapshotRequest): {
   scope: ValidatedGitBlobSnapshotScope
 } {
-  if (!request || typeof request !== 'object' || !request.scope || typeof request.scope !== 'object') {
+  if (
+    !request ||
+    typeof request !== 'object' ||
+    !request.scope ||
+    typeof request.scope !== 'object' ||
+    typeof request.scope.displayRef !== 'string'
+  ) {
     throw new Error('유효하지 않은 스냅샷 요청 형식입니다.')
   }
   if (request.stashHash !== undefined) {
@@ -36,9 +42,6 @@ export function validateBlobSnapshotRequest(request: GitBlobSnapshotRequest): {
   }
 
   if (request.scope.kind === 'git-index') {
-    if (typeof request.scope.displayRef !== 'string') {
-      throw new Error('유효하지 않은 스냅샷 요청 형식입니다.')
-    }
     return {
       scope: {
         kind: 'git-index',
@@ -48,9 +51,6 @@ export function validateBlobSnapshotRequest(request: GitBlobSnapshotRequest): {
   }
 
   if (request.scope.kind === 'git-ref') {
-    if (typeof request.scope.displayRef !== 'string') {
-      throw new Error('유효하지 않은 스냅샷 요청 형식입니다.')
-    }
     const ref = assertValidSnapshotRef(request.scope.ref, '스냅샷 Ref')
     const untrackedParentRef =
       request.scope.untrackedParentRef !== undefined
