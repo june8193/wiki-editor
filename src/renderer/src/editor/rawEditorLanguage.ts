@@ -22,7 +22,9 @@ import type { Extension } from '@codemirror/state'
 import { tags } from '@lezer/highlight'
 import type { DocumentBuffer } from '@shared/documentBuffer'
 
-export type RawEditorLanguage = string
+export type BundledRawEditorLanguage = keyof typeof BUNDLED_LANGUAGE_FACTORIES | 'plaintext'
+
+export type RawEditorLanguage = BundledRawEditorLanguage | (string & {})
 
 export interface RawLanguageExtensionResolution {
   extension: Extension
@@ -37,7 +39,7 @@ const jsoncExtension = (): Extension =>
 
 const shellExtension = (): Extension => StreamLanguage.define(shell)
 
-const BUNDLED_LANGUAGE_FACTORIES: Readonly<Record<string, () => Extension>> = {
+const BUNDLED_LANGUAGE_FACTORIES = {
   markdown: () => markdown({ codeLanguages: languages }),
   json: () => json(),
   jsonc: jsoncExtension,
@@ -61,7 +63,7 @@ const BUNDLED_LANGUAGE_FACTORIES: Readonly<Record<string, () => Extension>> = {
   rust: () => rust(),
   xml: () => xml(),
   php: () => php()
-}
+} satisfies Readonly<Record<string, () => Extension>>
 
 const BUNDLED_EXTENSION_TO_LANGUAGE: Readonly<Record<string, RawEditorLanguage>> = {
   md: 'markdown',
@@ -133,17 +135,24 @@ function getExtension(baseName: string): string {
   return baseName.slice(lastDot + 1).toLowerCase()
 }
 
-/**
- * Returns true when an extensionless filename matches a known non-Markdown language
- * in `@codemirror/language-data` (for example `Dockerfile` or `Makefile`).
- */
-export function hasKnownCodeFilename(fileName: string): boolean {
-  const baseName = getBaseName(fileName)
+function matchExtensionlessCodeLanguage(baseName: string): string | null {
   if (!baseName || getExtension(baseName) !== '') {
-    return false
+    return null
   }
   const desc = LanguageDescription.matchFilename(languages, baseName)
-  return desc !== null && desc.name.toLowerCase() !== 'markdown'
+  if (!desc) {
+    return null
+  }
+  const name = desc.name.toLowerCase()
+  return name === 'markdown' ? null : name
+}
+
+/**
+ * Returns true when an extensionless filename matches a known non-Markdown language
+ * in `@codemirror/language-data` (for example `Dockerfile` or `Gemfile`).
+ */
+export function hasKnownCodeFilename(fileName: string): boolean {
+  return matchExtensionlessCodeLanguage(getBaseName(fileName)) !== null
 }
 
 /**
@@ -167,12 +176,7 @@ export function resolveRawEditorLanguageId(
     return matched ? matched.name.toLowerCase() : 'plaintext'
   }
 
-  const matchedExtensionless = LanguageDescription.matchFilename(languages, baseName)
-  if (matchedExtensionless && matchedExtensionless.name.toLowerCase() !== 'markdown') {
-    return matchedExtensionless.name.toLowerCase()
-  }
-
-  return 'markdown'
+  return matchExtensionlessCodeLanguage(baseName) ?? 'markdown'
 }
 
 /**
@@ -186,7 +190,9 @@ export function resolveRawLanguageExtensionSync(
     return { extension: [], needsAsyncLoad: false }
   }
 
-  const bundledFactory = BUNDLED_LANGUAGE_FACTORIES[normalized]
+  const bundledFactory = (
+    BUNDLED_LANGUAGE_FACTORIES as Readonly<Record<string, (() => Extension) | undefined>>
+  )[normalized]
   if (bundledFactory) {
     return { extension: bundledFactory(), needsAsyncLoad: false }
   }
