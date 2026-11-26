@@ -28,7 +28,10 @@ import {
   type GitPanelActions,
   type GitPanelState
 } from '../stores/GitSession'
-import { forwardGitDiffOpen } from '../utils/gitFilePresentation'
+import {
+  forwardGitDiffOpen,
+  type GitCopyPathMode
+} from '../utils/gitFilePresentation'
 import {
   formatGitCommitPlaceholder,
   getGitBranchLabel,
@@ -39,6 +42,7 @@ import { GitChangesFileGroups, GitChangesHeaderActions } from './GitChangesSecti
 import { GitGraphHeaderActions, GitGraphSection } from './GitGraphSection'
 import { GitStashDialog } from './GitStashDialog'
 import { GitStashesHeaderActions, GitStashesSection } from './GitStashesSection'
+import { GitTreeContextMenu, useGitTreeContextMenu } from './GitTreeContextMenu'
 import { HorizontalSectionResizer } from './HorizontalSectionResizer'
 import {
   type AccordionSectionClassNames,
@@ -65,6 +69,7 @@ const COMMIT_ACTION_MENU_ITEMS: ReadonlyArray<{ mode: GitCommitActionMode; label
 export interface GitSidebarPanelProps {
   state: GitPanelState
   actions: GitPanelActions
+  onCopyPath?: (repoRelativePath: string, mode: GitCopyPathMode) => void
 }
 
 /**
@@ -563,7 +568,8 @@ function GitCommitForm({
  */
 export const GitSidebarPanel = memo(function GitSidebarPanel({
   state,
-  actions
+  actions,
+  onCopyPath
 }: GitSidebarPanelProps) {
   const {
     workspaceRootPath,
@@ -582,6 +588,11 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
 
   const isBusy = pendingAction !== null
   const commitInput = useGitCommitInputState(workspaceRootPath, status, isBusy, actions.commit)
+  const treeContextMenu = useGitTreeContextMenu({
+    workspaceRootPath,
+    repoRoot: status?.repoRoot ?? null,
+    onCopyPath
+  })
   const unstagedAndUntracked: GitChangedFile[] = status
     ? [...status.unstaged, ...status.untracked]
     : []
@@ -762,6 +773,8 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
                 onUnstageFile={(file) => actions.unstageFile(file.path, file.origPath)}
                 onDiscardFile={(file) => actions.discardFile(file.path)}
                 onStashFile={(file) => actions.stashFile(file.path)}
+                onFileContextMenu={treeContextMenu.openFileMenu}
+                onDirContextMenu={treeContextMenu.openDirMenu}
               />
             </SidebarAccordionSection>
 
@@ -848,6 +861,13 @@ export const GitSidebarPanel = memo(function GitSidebarPanel({
           onClose={actions.closeStashDialog}
         />
       )}
+
+      <GitTreeContextMenu
+        target={treeContextMenu.target}
+        onClose={treeContextMenu.closeMenu}
+        onCopyPath={treeContextMenu.handleCopyPath}
+        onClampPosition={treeContextMenu.clampPosition}
+      />
     </section>
   )
 })

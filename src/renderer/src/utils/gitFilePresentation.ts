@@ -4,7 +4,11 @@ import type {
   GitFileStatusCode,
   GitStashEntry
 } from '@shared/git'
-import { isAbsoluteOrDrivePrefix, resolveRepoFileInWorkspace } from '@shared/workspace'
+import {
+  isAbsoluteOrDrivePrefix,
+  joinWorkspacePath,
+  resolveRepoFileInWorkspace
+} from '@shared/workspace'
 
 export type GitFileStatusTone = 'amber' | 'green' | 'red' | 'accent'
 
@@ -70,6 +74,34 @@ export interface GitChangedFileDisplay {
 
 function normalizeRepoRelativePath(filePath: string): string {
   return filePath.replace(/\\/g, '/').replace(/^\/+/, '')
+}
+
+export type GitCopyPathMode = 'relative' | 'absolute'
+
+/**
+ * Formats a Git/Compare file or compressed folder path for clipboard copying.
+ * For `relative`, returns a POSIX path anchored to `workspaceRootPath` when nested inside it,
+ * or falls back to the normalized repo-relative path for paths outside the workspace.
+ * For `absolute`, joins onto `repoRoot ?? workspaceRootPath` using its platform separator style.
+ */
+export function formatGitRepoCopyPath(
+  repoRelativePath: string,
+  mode: GitCopyPathMode,
+  repoRoot?: string | null,
+  workspaceRootPath?: string | null
+): string {
+  const normalized = normalizeRepoRelativePath(repoRelativePath).replace(/\/+$/, '')
+  const baseRoot = repoRoot ?? workspaceRootPath
+  if (mode === 'absolute') {
+    return baseRoot ? joinWorkspacePath(baseRoot, normalized) : normalized
+  }
+  if (baseRoot && workspaceRootPath) {
+    const resolved = resolveRepoFileInWorkspace(baseRoot, workspaceRootPath, normalized)
+    if (resolved) {
+      return resolved.relativePath
+    }
+  }
+  return normalized
 }
 
 /**

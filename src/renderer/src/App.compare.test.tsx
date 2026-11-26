@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -1105,5 +1105,105 @@ describe('Compare view shell, ref picker, and single-file diff navigation', () =
     expect(remainingA.closest('.tab-item')).not.toHaveClass('is-preview')
     expect(remainingC.closest('.tab-item')).toHaveClass('is-preview')
     expect(within(primaryPane).getByText('new docs/c.md (two-dot)')).toBeInTheDocument()
+  })
+
+  it('supports right-click context menu on Compare files and compressed folders, opening pinned diff tabs and copying paths with error reporting', async () => {
+    const user = userEvent.setup()
+    let shouldFailCopy = false
+    const copiedTexts: string[] = []
+    const { api } = createInMemoryWikiApi(
+      { recentWorkspaces: ['C:/repo'] },
+      {
+        workspaces: {
+          'C:/repo': {
+            'a/b/c/file.md': '# File'
+          }
+        },
+        clipboard: {
+          writeText: vi.fn(async (text: string) => {
+            if (shouldFailCopy) {
+              throw new Error('클립보드 접근 거부')
+            }
+            copiedTexts.push(text)
+          })
+        },
+        git: {
+          status: vi.fn(async (ws) => ({
+            ...createEmptyGitStatus(true, ws),
+            branch: 'feat/compare'
+          })),
+          compareRefs: vi.fn(async (): Promise<GitCompareRefList> => ({
+            defaultBaseRef: 'main',
+            currentRef: 'feat/compare',
+            worktrees: [],
+            localBranches: [
+              { id: 'local:main', kind: 'local-branch', ref: 'main', displayName: 'main' },
+              {
+                id: 'local:feat/compare',
+                kind: 'local-branch',
+                ref: 'feat/compare',
+                displayName: 'feat/compare',
+                isCurrent: true
+              }
+            ],
+            remoteBranches: []
+          })),
+          compareSummary: vi.fn(async (_ws, req): Promise<GitCompareSummary> => ({
+            baseRef: req.baseRef,
+            compareRef: req.compareRef,
+            mode: req.mode,
+            mergeBaseHash: '1111111',
+            totalAdditions: 1,
+            totalDeletions: 0,
+            files: [{ path: 'a/b/c/file.md', status: 'M', additions: 1, deletions: 0, isBinary: false }],
+            commits: []
+          })),
+          diff: vi.fn(async (_ws, req) => ({
+            path: req.path,
+            status: req.status,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            rawPatch: '@@ -1 +1 @@\n-old\n+new\n'
+          }))
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('repo')).toBeInTheDocument())
+    await clickActivityBarButton(user, 'Compare')
+
+    const comparePanel = screen.getByRole('region', { name: '브랜치 비교' })
+    const dirRow = await within(comparePanel).findByTitle('a/b/c')
+    const fileRow = within(comparePanel).getByTitle('a/b/c/file.md')
+
+    // Compressed folder right-click -> relative & absolute copy
+    fireEvent.contextMenu(dirRow)
+    const dirMenu = screen.getByRole('menu')
+    expect(within(dirMenu).queryByRole('menuitem', { name: '새 탭에서 Diff 열기' })).toBeNull()
+    await user.click(within(dirMenu).getByRole('menuitem', { name: '상대 경로 복사' }))
+    expect(copiedTexts).toEqual(['a/b/c'])
+
+    fireEvent.contextMenu(dirRow)
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '절대 경로 복사' }))
+    expect(copiedTexts).toEqual(['a/b/c', 'C:/repo/a/b/c'])
+
+    // File right-click -> open pinned diff tab
+    fireEvent.contextMenu(fileRow)
+    const fileMenu = screen.getByRole('menu')
+    await user.click(within(fileMenu).getByRole('menuitem', { name: '새 탭에서 Diff 열기' }))
+    const primaryPane = screen.getByTestId('pane-primary')
+    const diffTab = await within(primaryPane).findByRole('tab', { name: /file\.md/ })
+    expect(diffTab.closest('.tab-item')).not.toHaveClass('is-preview')
+
+    // Clipboard failure reports through global error banner
+    shouldFailCopy = true
+    fireEvent.contextMenu(fileRow)
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '상대 경로 복사' }))
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('클립보드 접근 거부')
+    })
   })
 })

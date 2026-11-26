@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, type MouseEvent as ReactMouseEvent } from 'react'
 import {
   Archive,
   Check,
@@ -111,6 +111,12 @@ interface GitChangesSubgroupProps {
   onItemAction: (file: GitChangedFile) => void
   onDiscardFile?: (file: GitChangedFile) => void
   onStashFile?: (file: GitChangedFile) => void
+  onFileContextMenu?: (
+    event: ReactMouseEvent,
+    repoRelativePath: string,
+    onOpenPinnedDiff: () => void
+  ) => void
+  onDirContextMenu?: (event: ReactMouseEvent, dirPath: string) => void
 }
 
 function GitChangesSubgroup({
@@ -135,7 +141,9 @@ function GitChangesSubgroup({
   onOpenWorkspaceFile,
   onItemAction,
   onDiscardFile,
-  onStashFile
+  onStashFile,
+  onFileContextMenu,
+  onDirContextMenu
 }: GitChangesSubgroupProps) {
   const treeNodes = useMemo(
     () => (viewMode === 'tree' ? buildCompressedGitFileTree(files) : []),
@@ -160,6 +168,14 @@ function GitChangesSubgroup({
       onDiscardFile={onDiscardFile}
       onStashFile={onStashFile}
       onItemAction={onItemAction}
+      onContextMenu={
+        onFileContextMenu
+          ? (event, targetFile) =>
+              onFileContextMenu(event, targetFile.path, () =>
+                onSelectFile(targetFile, { pinned: true })
+              )
+          : undefined
+      }
     />
   )
 
@@ -180,6 +196,9 @@ function GitChangesSubgroup({
             title={node.path}
             style={getGitTreeIndentStyle(depth)}
             onClick={() => onToggleTreeDir(dirKey)}
+            onContextMenu={
+              onDirContextMenu ? (event) => onDirContextMenu(event, node.path) : undefined
+            }
           >
             <span className="git-tree-chevron" aria-hidden="true">
               {isDirExpanded ? (
@@ -299,6 +318,12 @@ export interface GitChangesFileGroupsProps {
   onUnstageFile: (file: GitChangedFile) => void
   onDiscardFile: (file: GitChangedFile) => void
   onStashFile: (file: GitChangedFile) => void
+  onFileContextMenu?: (
+    event: ReactMouseEvent,
+    repoRelativePath: string,
+    onOpenPinnedDiff: () => void
+  ) => void
+  onDirContextMenu?: (event: ReactMouseEvent, dirPath: string) => void
 }
 
 /**
@@ -324,7 +349,9 @@ export const GitChangesFileGroups = memo(function GitChangesFileGroups({
   onStageFile,
   onUnstageFile,
   onDiscardFile,
-  onStashFile
+  onStashFile,
+  onFileContextMenu,
+  onDirContextMenu
 }: GitChangesFileGroupsProps) {
   return (
     <>
@@ -347,6 +374,8 @@ export const GitChangesFileGroups = memo(function GitChangesFileGroups({
           onSelectFile={onSelectStagedFile}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
           onItemAction={onUnstageFile}
+          onFileContextMenu={onFileContextMenu}
+          onDirContextMenu={onDirContextMenu}
         />
       )}
 
@@ -373,6 +402,8 @@ export const GitChangesFileGroups = memo(function GitChangesFileGroups({
         onItemAction={onStageFile}
         onDiscardFile={onDiscardFile}
         onStashFile={onStashFile}
+        onFileContextMenu={onFileContextMenu}
+        onDirContextMenu={onDirContextMenu}
       />
     </>
   )

@@ -1,3 +1,4 @@
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import {
   Archive,
   File,
@@ -49,6 +50,7 @@ export interface GitChangedFileRowProps {
   onDiscardFile?: (file: GitChangedFile) => void
   onStashFile?: (file: GitChangedFile) => void
   onItemAction?: (file: GitChangedFile) => void
+  onContextMenu?: (event: ReactMouseEvent, file: GitChangedFile) => void
 }
 
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|ico)$/i
@@ -90,7 +92,8 @@ export function GitChangedFileRow({
   onOpenWorkspaceFile,
   onDiscardFile,
   onStashFile,
-  onItemAction
+  onItemAction,
+  onContextMenu
 }: GitChangedFileRowProps) {
   const statusDisplay = getGitFileStatusDisplay(file.status)
   const listDisplay = displayMode === 'list' ? formatGitChangedFileDisplay(file) : null
@@ -106,7 +109,11 @@ export function GitChangedFileRow({
     (itemAction !== undefined && onItemAction !== undefined)
 
   return (
-    <li className="git-file-item" style={indentStyle}>
+    <li
+      className="git-file-item"
+      style={indentStyle}
+      onContextMenu={onContextMenu ? (event) => onContextMenu(event, file) : undefined}
+    >
       <button
         type="button"
         className="git-file-trigger"

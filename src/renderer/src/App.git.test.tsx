@@ -2318,4 +2318,86 @@ describe('Git Graph commit file diff integration', () => {
     expect(stashTab.closest('.tab-item')).not.toHaveClass('is-preview')
     expect(within(primaryPane).getAllByRole('tab')).toHaveLength(4)
   })
+
+  it('supports right-click context menu in Git Changes (list & tree) for pinned diff open, monorepo-aware path copy, and error banner reporting', async () => {
+    const user = userEvent.setup()
+    let shouldFailCopy = false
+    const copiedTexts: string[] = []
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      {},
+      {
+        selectedFolder: 'C:/repo/wiki',
+        workspaces: {
+          'C:/repo/wiki': {
+            'docs/a.md': '# A'
+          }
+        },
+        clipboard: {
+          writeText: vi.fn(async (text: string) => {
+            if (shouldFailCopy) {
+              throw new Error('클립보드 복사 오류')
+            }
+            copiedTexts.push(text)
+          })
+        },
+        git: {
+          status: async () => ({
+            ...createEmptyGitStatus(true, 'C:/repo'),
+            staged: [{ status: 'M', path: 'wiki/docs/a.md' }],
+            unstaged: [{ status: 'M', path: 'packages/other/b.md' }],
+            untracked: []
+          }),
+          diff: async (_ws, req) => ({
+            path: req.path,
+            status: req.status,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: false,
+            rawPatch: `@@ -1 +1 @@\n-old\n+new ${req.path}\n`
+          })
+        }
+      }
+    )
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    await clickActivityBarButton(user, 'Git')
+
+    const gitPanel = await screen.findByLabelText('Git 소스 제어')
+    const primaryPane = screen.getByTestId('pane-primary')
+
+    // List mode: copy workspace-relative path for file inside workspace & repo-relative for external file
+    const stagedGroup = within(gitPanel).getByRole('group', { name: 'Staged Changes' })
+    fireEvent.contextMenu(within(stagedGroup).getByTitle('wiki/docs/a.md'))
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '상대 경로 복사' }))
+    expect(copiedTexts).toEqual(['docs/a.md'])
+
+    const changesGroup = within(gitPanel).getByRole('group', { name: 'Changes' })
+    fireEvent.contextMenu(within(changesGroup).getByTitle('packages/other/b.md'))
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '상대 경로 복사' }))
+    expect(copiedTexts).toEqual(['docs/a.md', 'packages/other/b.md'])
+
+    fireEvent.contextMenu(within(changesGroup).getByTitle('packages/other/b.md'))
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '절대 경로 복사' }))
+    expect(copiedTexts).toEqual(['docs/a.md', 'packages/other/b.md', 'C:/repo/packages/other/b.md'])
+
+    // Open pinned diff tab from context menu
+    fireEvent.contextMenu(within(stagedGroup).getByTitle('wiki/docs/a.md'))
+    await user.click(
+      within(screen.getByRole('menu')).getByRole('menuitem', { name: '새 탭에서 Diff 열기' })
+    )
+    const tabA = await within(primaryPane).findByRole('tab', { name: /a\.md/ })
+    expect(tabA.closest('.tab-item')).not.toHaveClass('is-preview')
+
+    // Switch to tree view, right-click compressed folder `packages/other` -> clipboard error triggers banner
+    const changesSection = within(gitPanel).getByRole('region', { name: 'Changes' })
+    await user.click(within(changesSection).getByRole('button', { name: '트리 보기로 전환' }))
+    shouldFailCopy = true
+    fireEvent.contextMenu(within(changesSection).getByTitle('packages/other'))
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '절대 경로 복사' }))
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('클립보드 복사 오류')
+    })
+  })
 })
