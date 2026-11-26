@@ -182,7 +182,8 @@ export function MainAppShell() {
     loadInitContext: workspaceLifecycle.loadInitContext,
     onWorkspaceSaved: () => void git.actions.refreshStatus(),
     onError: reportErrorBanner,
-    onConfirmCloseDirtyTab: confirmCloseDirtyTab
+    onConfirmCloseDirtyTab: confirmCloseDirtyTab,
+    onConfirmAction: requestConfirm
   })
 
   refreshConfigDocRef.current = editor.refreshCleanConfig

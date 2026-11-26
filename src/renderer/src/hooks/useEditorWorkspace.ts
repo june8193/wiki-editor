@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
+import { TEXT_ENCODING_LABELS, type TextEncoding } from '@shared/encoding'
+import { toErrorMessage } from '@shared/errors'
 import { canDetachTabFromWindow, type WindowInitContext } from '@shared/window'
+import type { ConfirmActionDialogRequest } from '../utils/confirmPrompts'
 import type { PaneInteractionActions } from '../components/PaneTabBar'
 import {
   isImageDocument,
@@ -114,6 +117,7 @@ interface UseEditorWorkspaceOptions {
   onWorkspaceSaved?: () => void
   onError: (message: string | null, error?: unknown) => void
   onConfirmCloseDirtyTab: (request: DirtyTabCloseRequest) => void
+  onConfirmAction?: (request: ConfirmActionDialogRequest) => Promise<boolean>
 }
 
 /**
@@ -125,21 +129,24 @@ export function useEditorWorkspace({
   loadInitContext,
   onWorkspaceSaved,
   onError,
-  onConfirmCloseDirtyTab
+  onConfirmCloseDirtyTab,
+  onConfirmAction
 }: UseEditorWorkspaceOptions) {
   const wikiApi = useWikiApi()
   const isShortcutDisabledRef = useRef<boolean>(isShortcutDisabled)
   const callbacksRef = useRef({
     onWorkspaceSaved,
     onError,
-    onConfirmCloseDirtyTab
+    onConfirmCloseDirtyTab,
+    onConfirmAction
   })
 
   isShortcutDisabledRef.current = isShortcutDisabled
   callbacksRef.current = {
     onWorkspaceSaved,
     onError,
-    onConfirmCloseDirtyTab
+    onConfirmCloseDirtyTab,
+    onConfirmAction
   }
 
   const storesRef = useRef<{
@@ -162,7 +169,22 @@ export function useEditorWorkspace({
       loadInitContext,
       onWorkspaceSaved: () => callbacksRef.current.onWorkspaceSaved?.(),
       onError: (message, error) => callbacksRef.current.onError(message, error),
-      onConfirmCloseDirtyTab: (request) => callbacksRef.current.onConfirmCloseDirtyTab(request)
+      onConfirmCloseDirtyTab: (request) => callbacksRef.current.onConfirmCloseDirtyTab(request),
+      onConfirmLossySave: async ({ bufferName, encoding, unencodableChars }) => {
+        const confirmAction = callbacksRef.current.onConfirmAction
+        if (!confirmAction) return false
+        const label = TEXT_ENCODING_LABELS[encoding]
+        const samplePreview = unencodableChars.samples.join(' ')
+        return confirmAction({
+          title: '표현할 수 없는 문자 포함',
+          message:
+            `"${bufferName}"에 ${label} 인코딩으로 표현할 수 없는 문자 ${unencodableChars.count}개` +
+            (samplePreview ? `(${samplePreview})` : '') +
+            `가 포함되어 있습니다. 그대로 저장하면 해당 문자가 '?'로 대체됩니다. 계속 저장할까요?`,
+          confirmLabel: "'?'로 대체하여 저장",
+          confirmTone: 'danger'
+        })
+      }
     })
     const tabDragController = new RendererTabDragController({
       tabStore,
@@ -217,6 +239,38 @@ export function useEditorWorkspace({
       onEndTabDrag: (screenPoint) => void tabDragController.endDrag(screenPoint),
       onChangeContent: syncClient.updateBufferContent,
       onSaveBuffer: syncClient.saveBufferByKey,
+      onChangeEncoding: (bufferKey: string, nextEncoding: TextEncoding) => {
+        callbacksRef.current.onError(null)
+        void syncClient.setEncoding(bufferKey, nextEncoding).catch((error: unknown) => {
+          callbacksRef.current.onError(
+            toErrorMessage(error, '인코딩 변경에 실패했습니다.'),
+            error
+          )
+        })
+      },
+      onReopenWithEncoding: (bufferKey: string, targetEncoding: TextEncoding) => {
+        void (async () => {
+          const buffer = bufferStore.getBuffer(bufferKey)
+          if (!buffer) return
+          if (buffer.isDirty && callbacksRef.current.onConfirmAction) {
+            const label = TEXT_ENCODING_LABELS[targetEncoding]
+            const confirmed = await callbacksRef.current.onConfirmAction({
+              title: '인코딩으로 다시 열기',
+              message: `"${buffer.name}"에 저장하지 않은 변경 사항이 있습니다. ${label} 인코딩으로 다시 열면 변경 사항이 사라집니다. 계속할까요?`,
+              confirmLabel: '다시 열기',
+              confirmTone: 'danger'
+            })
+            if (!confirmed) return
+          }
+          callbacksRef.current.onError(null)
+          await syncClient.reopenWithEncoding(bufferKey, targetEncoding)
+        })().catch((error: unknown) => {
+          callbacksRef.current.onError(
+            toErrorMessage(error, '인코딩으로 다시 열기에 실패했습니다.'),
+            error
+          )
+        })
+      },
       onUpdateTabViewState: tabStore.updateTabViewState,
       onChangeDiffViewMode: tabStore.updateDiffTabViewMode
     }),

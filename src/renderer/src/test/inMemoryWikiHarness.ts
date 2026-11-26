@@ -1,5 +1,6 @@
 import { act } from '@testing-library/react'
 import { vi } from 'vitest'
+import iconv from 'iconv-lite'
 import { EditorView } from '@codemirror/view'
 import {
   getImageExtensionForMimeType,
@@ -15,6 +16,12 @@ import {
   validateConfigRaw
 } from '@shared/config'
 import type { SharedBufferHubEvent, SharedBufferStateSnapshot, SyncWindowTabsOptions } from '@shared/documentBuffer'
+import {
+  DEFAULT_TEXT_ENCODING,
+  type TextEncoding,
+  UnencodableCharactersError,
+  type WriteFileWithEncodingOptions
+} from '@shared/encoding'
 import {
   FRONTMATTER_SCHEMA_DIR,
   FRONTMATTER_SCHEMA_RELATIVE_PATH,
@@ -95,6 +102,7 @@ import {
 
 export interface VirtualFsOptions {
   workspaces?: Record<string, Record<string, string | null>>
+  workspacesEncoding?: Record<string, Record<string, TextEncoding>>
   workspaceStates?: Record<string, Partial<PersistedWorkspaceState>>
   selectedFolder?: string | null
   git?: Partial<WikiGitApi>
@@ -298,6 +306,7 @@ export interface MultiWindowWikiHarness {
   emitWorkspaceChange: (event: WorkspaceChangeEvent) => void
   getListenerCount: () => number
   getFilesSnapshot: () => Map<string, string>
+  getFileEncoding: (filePath: string) => TextEncoding
   readDirCalls: string[]
   copiedTexts: string[]
   emitTerminalData: (sessionId: string, data: string) => void
@@ -346,6 +355,7 @@ export function createMultiWindowWikiHarness(
 
   const dirs = new Set<string>()
   const files = new Map<string, string>()
+  const fileEncodings = new Map<string, TextEncoding>()
   const readDirCalls: string[] = []
   const copiedTexts: string[] = []
   const terminalSessions = new Map<string, TerminalSessionInfo>()
@@ -396,6 +406,10 @@ export function createMultiWindowWikiHarness(
         const isLast = i === parts.length - 1
         if (isLast && content !== null) {
           files.set(cursor, content)
+          const seededEncoding = fsOptions.workspacesEncoding?.[rootRaw]?.[relRaw]
+          if (seededEncoding) {
+            fileEncodings.set(cursor, seededEncoding)
+          }
         } else {
           dirs.add(cursor)
         }
@@ -603,8 +617,63 @@ export function createMultiWindowWikiHarness(
         },
         storage: {
           readWorkspaceFile: (filePath) => primaryApi!.workspace.readFile(filePath),
-          writeWorkspaceFile: (filePath, content) =>
-            primaryApi!.workspace.writeFile(filePath, content),
+          readWorkspaceFileWithEncoding: async (filePath, forcedEncoding) => {
+            const content = await primaryApi!.workspace.readFile(filePath)
+            const normalized = normalizePosix(filePath)
+            const storedEncoding = fileEncodings.get(normalized) ?? DEFAULT_TEXT_ENCODING
+            if (!forcedEncoding || forcedEncoding === storedEncoding) {
+              return { content, encoding: storedEncoding }
+            }
+            const rawBytes =
+              storedEncoding === 'euc-kr'
+                ? iconv.encode(content, 'cp949')
+                : new TextEncoder().encode(content)
+            const redecoded =
+              forcedEncoding === 'euc-kr'
+                ? iconv.decode(rawBytes, 'cp949')
+                : new TextDecoder('utf-8', { fatal: false }).decode(rawBytes)
+            return { content: redecoded, encoding: forcedEncoding }
+          },
+          writeWorkspaceFile: async (
+            filePath,
+            content,
+            options?: WriteFileWithEncodingOptions
+          ) => {
+            const normalized = normalizePosix(filePath)
+            if (!files.has(normalized) && !dirs.has(parentDirOf(normalized))) {
+              throw new Error(`경로를 찾을 수 없습니다: ${filePath}`)
+            }
+            const encoding = options?.encoding ?? DEFAULT_TEXT_ENCODING
+            if (encoding === 'euc-kr') {
+              const encoded = iconv.encode(content, 'cp949')
+              const roundtripped = iconv.decode(encoded, 'cp949')
+              if (roundtripped !== content) {
+                const samples: string[] = []
+                let count = 0
+                const origChars = Array.from(content)
+                const roundChars = Array.from(roundtripped)
+                for (let i = 0; i < origChars.length; i += 1) {
+                  if (origChars[i] !== roundChars[i]) {
+                    count += 1
+                    if (!samples.includes(origChars[i]) && samples.length < 5) {
+                      samples.push(origChars[i])
+                    }
+                  }
+                }
+                if (!options?.allowLossy) {
+                  throw new UnencodableCharactersError('euc-kr', {
+                    count: Math.max(1, count),
+                    samples
+                  })
+                }
+                files.set(normalized, roundtripped)
+                fileEncodings.set(normalized, 'euc-kr')
+                return
+              }
+            }
+            fileEncodings.set(normalized, encoding)
+            await primaryApi!.workspace.writeFile(filePath, content)
+          },
           readWorkspaceDirectory: (dirPath) => primaryApi!.workspace.readDir(dirPath),
           getConfigPath: () => primaryApi!.config.getConfigPath(),
           readConfigRaw: () => primaryApi!.config.readRaw(),
@@ -1506,6 +1575,7 @@ export function createMultiWindowWikiHarness(
     },
     getListenerCount: () => configListeners.size,
     getFilesSnapshot: () => new Map(files),
+    getFileEncoding: (filePath) => fileEncodings.get(normalizePosix(filePath)) ?? DEFAULT_TEXT_ENCODING,
     readDirCalls,
     copiedTexts,
     emitTerminalData(sessionId, data) {
@@ -1550,6 +1620,7 @@ export function createInMemoryWikiApi(
   getListenerCount: () => number
   getMenuListenerCount: () => number
   getFilesSnapshot: () => Map<string, string>
+  getFileEncoding: (filePath: string) => TextEncoding
   readDirCalls: string[]
   copiedTexts: string[]
   emitTerminalData: (sessionId: string, data: string) => void
@@ -1571,6 +1642,7 @@ export function createInMemoryWikiApi(
     getListenerCount: harness.getListenerCount,
     getMenuListenerCount: primaryWindow.getMenuListenerCount,
     getFilesSnapshot: harness.getFilesSnapshot,
+    getFileEncoding: harness.getFileEncoding,
     readDirCalls: harness.readDirCalls,
     copiedTexts: harness.copiedTexts,
     emitTerminalData: harness.emitTerminalData,

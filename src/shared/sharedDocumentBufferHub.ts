@@ -4,6 +4,8 @@ import {
   buildRemappedPath,
   type BufferKeyRemap,
   type DocumentBuffer,
+  isEncodingLockedBuffer,
+  isFrontmatterSchemaKey,
   isKeyNestedOrSame,
   isMissingWorkspaceFileError,
   type OpenBufferInput,
@@ -23,7 +25,6 @@ import {
   type WriteFileWithEncodingOptions
 } from './encoding'
 import { toErrorMessage } from './errors'
-import { FRONTMATTER_SCHEMA_RELATIVE_PATH } from './frontmatterSchema'
 import type { WindowRole } from './window'
 import { type TabCountChange, WindowTabTracker } from './windowTabTracker'
 import {
@@ -53,21 +54,6 @@ export interface SharedDocumentBufferStorage {
   getConfigPath: () => Promise<string>
   readConfigRaw: () => Promise<string>
   saveConfigRaw: (raw: string) => Promise<unknown>
-}
-
-function isFrontmatterSchemaKey(key: string): boolean {
-  return (
-    key === FRONTMATTER_SCHEMA_RELATIVE_PATH ||
-    key.endsWith(`/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`)
-  )
-}
-
-function isEncodingLockedBuffer(buffer: DocumentBuffer): boolean {
-  return (
-    buffer.kind === 'config' ||
-    buffer.contentKind === 'image' ||
-    isFrontmatterSchemaKey(buffer.key)
-  )
 }
 
 export interface SharedDocumentBufferHubOptions {

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
+import type { TextEncoding } from '@shared/encoding'
 import type { ScreenPoint } from '@shared/window'
 import { useDismissable } from '../hooks/useDismissable'
 import { GitDiffViewMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
@@ -28,6 +29,8 @@ export interface PaneInteractionActions extends TabDragDropActions {
   onEndTabDrag: (screenPoint?: ScreenPoint) => void
   onChangeContent: (bufferKey: string, nextContent: string) => void
   onSaveBuffer: (bufferKey: string) => void
+  onChangeEncoding?: (bufferKey: string, nextEncoding: TextEncoding) => void
+  onReopenWithEncoding?: (bufferKey: string, targetEncoding: TextEncoding) => void
   onUpdateTabViewState: (paneId: PaneId, tabId: string, patch: TabViewPatch) => void
   onChangeDiffViewMode: (paneId: PaneId, tabId: string, viewMode: GitDiffViewMode) => void
   onOpenDiffTargetFile?: (repoRelativePath: string) => void

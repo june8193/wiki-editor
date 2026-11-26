@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DocumentBuffer, SharedBufferHubEvent } from '@shared/documentBuffer'
 import { DocumentBufferStore } from '@shared/documentBufferStore'
+import { UnencodableCharactersError } from '@shared/encoding'
 import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
 import type { WindowInitContext } from '@shared/window'
 import { SharedDocumentBufferHub } from '@shared/sharedDocumentBufferHub'
@@ -931,6 +932,89 @@ describe('RendererBufferSyncClient race guards', () => {
       stop2()
       win1.detach()
       win2.detach()
+      hub.dispose()
+    }
+  })
+
+  it('prompts onConfirmLossySave on manual save unencodableChars and retries with allowLossy: true only when confirmed', async () => {
+    let diskContent = '초기'
+    const listeners = new Set<(event: SharedBufferHubEvent) => void>()
+    const hub = new SharedDocumentBufferHub({
+      initialAutoSaveConfig: { autoSave: false },
+      storage: {
+        readWorkspaceFile: async () => diskContent,
+        readWorkspaceFileWithEncoding: async () => ({ content: diskContent, encoding: 'euc-kr' }),
+        writeWorkspaceFile: async (_filePath, content, options) => {
+          if (options?.encoding === 'euc-kr' && content.includes('😀')) {
+            if (!options.allowLossy) {
+              throw new UnencodableCharactersError('euc-kr', { count: 1, samples: ['😀'] })
+            }
+            diskContent = content.replace(/😀/g, '?')
+            return
+          }
+          diskContent = content
+        },
+        getConfigPath: async () => 'C:/Users/test/config.json',
+        readConfigRaw: async () => '{}',
+        saveConfigRaw: async () => ({})
+      }
+    })
+    const unsubscribeHub = hub.subscribe((event) => {
+      for (const listener of listeners) {
+        listener(event)
+      }
+    })
+    const bufferApi = createHubBufferApi(hub, 1, listeners)
+    const bufferStore = new DocumentBufferStore()
+    const tabStore = new PaneTabStore()
+    const onError = vi.fn()
+    let confirmResponse = false
+    const onConfirmLossySave = vi.fn(async () => confirmResponse)
+    const client = new RendererBufferSyncClient({
+      bufferStore,
+      tabStore,
+      bufferApi,
+      onError,
+      onConfirmCloseDirtyTab: vi.fn(),
+      onConfirmLossySave
+    })
+    const stop = client.start()
+
+    try {
+      await client.openWorkspaceFile({
+        name: 'lossy.md',
+        path: 'C:/wiki/lossy.md',
+        relativePath: 'lossy.md',
+        kind: 'file'
+      })
+      client.updateBufferContent('c:/wiki/lossy.md', '안녕 😀')
+
+      // 1. Cancel lossy save -> no error banner, disk untouched, still dirty
+      confirmResponse = false
+      client.saveBufferByKey('c:/wiki/lossy.md')
+      await vi.waitFor(() => {
+        expect(onConfirmLossySave).toHaveBeenCalledTimes(1)
+      })
+      expect(onConfirmLossySave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          encoding: 'euc-kr',
+          unencodableChars: { count: 1, samples: ['😀'] }
+        })
+      )
+      expect(onError).not.toHaveBeenCalledWith(expect.any(String), expect.anything())
+      expect(diskContent).toBe('초기')
+      expect(bufferStore.getBuffer('c:/wiki/lossy.md')?.isDirty).toBe(true)
+
+      // 2. Confirm lossy save -> retries with allowLossy: true and saves '?'
+      confirmResponse = true
+      client.saveBufferByKey('c:/wiki/lossy.md')
+      await vi.waitFor(() => {
+        expect(diskContent).toBe('안녕 ?')
+      })
+      expect(bufferStore.getBuffer('c:/wiki/lossy.md')?.isDirty).toBe(false)
+    } finally {
+      stop()
+      unsubscribeHub()
       hub.dispose()
     }
   })

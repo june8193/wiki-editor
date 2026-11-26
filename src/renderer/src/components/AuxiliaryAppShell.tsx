@@ -24,7 +24,7 @@ import { TitleBar } from './TitleBar'
 export function AuxiliaryAppShell() {
   const wikiApi = useWikiApi()
   const { errorMessage, reportErrorBanner } = useErrorBanner()
-  const { pendingDialog, dismissDialog, confirmCloseDirtyTab, confirmUnsavedChanges } =
+  const { pendingDialog, dismissDialog, confirmCloseDirtyTab, confirmUnsavedChanges, requestConfirm } =
     useConfirmDialog()
   const { config, toggleShowHeadingNumbers } = useConfigController({
     onError: reportErrorBanner
@@ -41,7 +41,8 @@ export function AuxiliaryAppShell() {
     isShortcutDisabled,
     loadInitContext,
     onError: reportErrorBanner,
-    onConfirmCloseDirtyTab: confirmCloseDirtyTab
+    onConfirmCloseDirtyTab: confirmCloseDirtyTab,
+    onConfirmAction: requestConfirm
   })
   const frontmatterSchema = useFrontmatterSchema({
     workspaceRootPath: null,

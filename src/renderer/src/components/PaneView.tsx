@@ -141,6 +141,12 @@ export function PaneView({
           findControl={findControl}
           onChangeContent={(nextContent) => actions.onChangeContent(activeBuffer.key, nextContent)}
           onSave={() => actions.onSaveBuffer(activeBuffer.key)}
+          onChangeEncoding={(nextEncoding) =>
+            actions.onChangeEncoding?.(activeBuffer.key, nextEncoding)
+          }
+          onReopenWithEncoding={(targetEncoding) =>
+            actions.onReopenWithEncoding?.(activeBuffer.key, targetEncoding)
+          }
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}
           onNavigateLink={(href) => actions.onNavigateLink?.(pane.id, activeTab.id, href)}
           onActiveHeadingChange={

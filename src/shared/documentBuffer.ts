@@ -1,5 +1,6 @@
 import type { TextEncoding, UnencodableCharsInfo } from './encoding'
 import { toErrorMessage } from './errors'
+import { FRONTMATTER_SCHEMA_RELATIVE_PATH } from './frontmatterSchema'
 import { normalizeWorkspacePath } from './workspace'
 
 export type DocumentKind = 'workspace' | 'config'
@@ -111,6 +112,23 @@ export type SharedBufferHubEvent =
       path: string
       message: string
     }
+
+export function isFrontmatterSchemaKey(key: string): boolean {
+  return (
+    key === FRONTMATTER_SCHEMA_RELATIVE_PATH ||
+    key.endsWith(`/${FRONTMATTER_SCHEMA_RELATIVE_PATH}`)
+  )
+}
+
+export function isEncodingLockedBuffer(
+  buffer: Pick<DocumentBuffer, 'kind' | 'contentKind' | 'key'>
+): boolean {
+  return (
+    buffer.kind === 'config' ||
+    buffer.contentKind === 'image' ||
+    isFrontmatterSchemaKey(buffer.key)
+  )
+}
 
 // Electron contextBridge strips Error subclasses/errno codes, so deleted workspace files match localized/ENOENT messages.
 export function isMissingWorkspaceFileError(error: unknown): boolean {

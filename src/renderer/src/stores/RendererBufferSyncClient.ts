@@ -9,7 +9,7 @@ import {
   type SharedBufferStateSnapshot
 } from '@shared/documentBuffer'
 import { DocumentBufferStore, mergePendingLocalBuffer } from '@shared/documentBufferStore'
-import type { TextEncoding } from '@shared/encoding'
+import type { TextEncoding, UnencodableCharsInfo } from '@shared/encoding'
 import { toErrorMessage } from '@shared/errors'
 import type { WikiBufferApi, WikiWindowApi } from '@shared/ipc'
 import {
@@ -112,6 +112,13 @@ function movePendingFlush(
   flushes.set(newKey, combined)
 }
 
+export interface LossySaveConfirmRequest {
+  bufferKey: string
+  bufferName: string
+  encoding: TextEncoding
+  unencodableChars: UnencodableCharsInfo
+}
+
 export interface RendererBufferSyncClientOptions {
   bufferStore: DocumentBufferStore
   tabStore: PaneTabStore
@@ -121,6 +128,7 @@ export interface RendererBufferSyncClientOptions {
   onWorkspaceSaved?: () => void
   onError: (message: string | null, error?: unknown) => void
   onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
+  onConfirmLossySave?: (request: LossySaveConfirmRequest) => Promise<boolean>
 }
 
 /**
@@ -137,6 +145,7 @@ export class RendererBufferSyncClient {
   private onWorkspaceSaved?: () => void
   private onError: (message: string | null, error?: unknown) => void
   private onConfirmCloseDirtyTab: (request: DirtyTabClosePrompt) => void
+  private onConfirmLossySave?: (request: LossySaveConfirmRequest) => Promise<boolean>
 
   private windowId: number | null = null
   private hasAppliedInitContext = false
@@ -174,6 +183,7 @@ export class RendererBufferSyncClient {
     this.onWorkspaceSaved = options.onWorkspaceSaved
     this.onError = options.onError
     this.onConfirmCloseDirtyTab = options.onConfirmCloseDirtyTab
+    this.onConfirmLossySave = options.onConfirmLossySave
 
     this.localTabCounts = countBufferKeys(this.tabStore.getBufferKeys())
     this.recomputeEffectiveTabCounts()
@@ -792,6 +802,23 @@ export class RendererBufferSyncClient {
   private async runSaveBufferRequest(key: string): Promise<boolean> {
     try {
       const result = await this.saveBuffer(key)
+      if (!result.ok && result.unencodableChars && this.onConfirmLossySave && this.mounted) {
+        const buffer = result.buffer ?? this.bufferStore.getBuffer(key)
+        const confirmed = await this.onConfirmLossySave({
+          bufferKey: buffer?.key ?? key,
+          bufferName: buffer?.name ?? key,
+          encoding: buffer?.encoding ?? 'euc-kr',
+          unencodableChars: result.unencodableChars
+        })
+        if (!confirmed || !this.mounted) {
+          return false
+        }
+        const lossyResult = await this.saveBuffer(key, { allowLossy: true })
+        if (!lossyResult.ok && lossyResult.errorMessage && this.mounted) {
+          this.onError(lossyResult.errorMessage, new Error(lossyResult.errorMessage))
+        }
+        return lossyResult.ok
+      }
       if (!result.ok && result.errorMessage && this.mounted) {
         this.onError(result.errorMessage, new Error(result.errorMessage))
       }
