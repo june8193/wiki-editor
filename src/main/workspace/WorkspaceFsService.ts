@@ -20,6 +20,12 @@ import {
   WorkspaceImageIngestInput,
   WorkspaceImageIngestResult
 } from '@shared/assets'
+import {
+  DEFAULT_TEXT_ENCODING,
+  type ReadFileWithEncodingResult,
+  type TextEncoding,
+  type WriteFileWithEncodingOptions
+} from '@shared/encoding'
 import { WORKSPACE_SEARCH_MAX_FILE_BYTES } from '@shared/search'
 import {
   compareWorkspaceEntriesByRelativePath,
@@ -37,6 +43,11 @@ import {
   WorkspaceInfo,
   WorkspaceMovedEntry
 } from '@shared/workspace'
+import {
+  decodeTextAuto,
+  decodeTextWithEncoding,
+  encodeTextWithEncoding
+} from '../encoding/textEncoding'
 import {
   hasBlockedPathSegment,
   isErrnoCode,
@@ -346,12 +357,27 @@ export class WorkspaceFsService {
   }
 
   async readFile(filePath: string): Promise<string> {
+    const result = await this.readFileWithEncoding(filePath)
+    return result.content
+  }
+
+  async readFileWithEncoding(
+    filePath: string,
+    encoding?: TextEncoding
+  ): Promise<ReadFileWithEncodingResult> {
     const resolvedFile = await this.resolveExistingPath(filePath)
     const fileStats = await stat(resolvedFile)
     if (!fileStats.isFile()) {
       throw new Error('파일이 아닙니다.')
     }
-    return readFile(resolvedFile, 'utf8')
+    const bytes = await readFile(resolvedFile)
+    if (encoding) {
+      return {
+        content: decodeTextWithEncoding(bytes, encoding),
+        encoding
+      }
+    }
+    return decodeTextAuto(bytes)
   }
 
   /**
@@ -406,7 +432,7 @@ export class WorkspaceFsService {
         return null
       }
       if (probeRead >= fileStats.size) {
-        return validProbe.toString('utf8')
+        return decodeTextAuto(validProbe).content
       }
 
       const chunks: Buffer[] = [validProbe]
@@ -426,7 +452,7 @@ export class WorkspaceFsService {
         chunks.push(chunk.subarray(0, bytesRead))
       }
 
-      return Buffer.concat(chunks, totalRead).toString('utf8')
+      return decodeTextAuto(Buffer.concat(chunks, totalRead)).content
     } catch (error) {
       if (isMissingPathError(error) || isErrnoCode(error, 'EISDIR')) {
         return null
@@ -437,7 +463,11 @@ export class WorkspaceFsService {
     }
   }
 
-  async writeFile(filePath: string, content: string): Promise<void> {
+  async writeFile(
+    filePath: string,
+    content: string,
+    options: WriteFileWithEncodingOptions = {}
+  ): Promise<void> {
     const resolvedTarget = await this.resolveWritablePath(filePath)
     try {
       const targetStats = await stat(resolvedTarget)
@@ -455,7 +485,12 @@ export class WorkspaceFsService {
       throw new Error('상위 폴더가 존재하지 않습니다.')
     }
 
-    await writeFile(resolvedTarget, content, 'utf8')
+    const encodedBytes = encodeTextWithEncoding(
+      content,
+      options.encoding ?? DEFAULT_TEXT_ENCODING,
+      { allowLossy: options.allowLossy }
+    )
+    await writeFile(resolvedTarget, encodedBytes)
   }
 
   async createEntry(

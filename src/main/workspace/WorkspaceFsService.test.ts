@@ -1,7 +1,9 @@
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import iconv from 'iconv-lite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { UnencodableCharactersError } from '../encoding/textEncoding'
 import { WorkspaceFsService } from './WorkspaceFsService'
 
 describe('WorkspaceFsService', () => {
@@ -672,5 +674,47 @@ describe('WorkspaceFsService', () => {
         signal: controller.signal
       })
     ).toBeNull()
+  })
+
+  it('auto-detects and explicitly decodes/encodes euc-kr files with lossy write protection', async () => {
+    const legacyPath = join(workspaceDir, 'legacy.md')
+    const utf8Path = join(workspaceDir, 'modern.md')
+    const legacyText = '# 레거시 문서\n한글 본문입니다?'
+    const utf8Text = '# 최신 문서\n한글과 이모지 😀'
+
+    await writeFile(legacyPath, iconv.encode(legacyText, 'cp949'))
+    await writeFile(utf8Path, utf8Text, 'utf8')
+    await service.openWorkspace(workspaceDir)
+
+    expect(await service.readFile(legacyPath)).toBe(legacyText)
+    expect(await service.readFileWithEncoding(legacyPath)).toEqual({
+      content: legacyText,
+      encoding: 'euc-kr'
+    })
+    expect(await service.readFileWithEncoding(utf8Path)).toEqual({
+      content: utf8Text,
+      encoding: 'utf-8'
+    })
+
+    // Explicit encoding override
+    const forcedUtf8 = await service.readFileWithEncoding(legacyPath, 'utf-8')
+    expect(forcedUtf8.encoding).toBe('utf-8')
+    expect(forcedUtf8.content).toContain('\uFFFD')
+
+    // Lossless euc-kr write preserves CP949 bytes on disk
+    const updatedLegacy = '# 수정된 레거시\n질문?'
+    await service.writeFile(legacyPath, updatedLegacy, { encoding: 'euc-kr' })
+    const rawAfterWrite = await readFile(legacyPath)
+    expect(iconv.decode(rawAfterWrite, 'cp949')).toBe(updatedLegacy)
+
+    // Unencodable character without allowLossy rejects and leaves disk untouched
+    await expect(
+      service.writeFile(legacyPath, '한글? 😀', { encoding: 'euc-kr' })
+    ).rejects.toBeInstanceOf(UnencodableCharactersError)
+    expect(iconv.decode(await readFile(legacyPath), 'cp949')).toBe(updatedLegacy)
+
+    // allowLossy: true writes '?' replacement in CP949
+    await service.writeFile(legacyPath, '한글? 😀', { encoding: 'euc-kr', allowLossy: true })
+    expect(iconv.decode(await readFile(legacyPath), 'cp949')).toBe('한글? ?')
   })
 })
