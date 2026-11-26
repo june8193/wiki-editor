@@ -6,7 +6,7 @@
 
 **Blocked by:** 01-text-encoding-codec-and-workspace-fs
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 통합 패치(unified diff) 출력이 줄 단위 엄격 UTF-8 검증 후 CP949 폴백으로 디코딩되어, 순수 EUC-KR 파일 변경분은 물론 한 커밋 내에서 `UTF-8` ↔ `EUC-KR`로 인코딩이 바뀐 Diff도 `-`/`+` 줄 모두 깨지지 않는다.
 - [ ] 미추적(untracked) EUC-KR 새 파일의 가상 Diff 생성 시 전체 버퍼 자동 감지로 올바르게 디코딩된다.

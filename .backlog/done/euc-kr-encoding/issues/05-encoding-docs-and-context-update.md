@@ -6,7 +6,7 @@
 
 **Blocked by:** 03-editor-header-encoding-ui-and-dialogs, 04-git-diff-euckr-decoding
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 사용자 매뉴얼(`docs/manual.md`)에 EUC-KR 지원 범위, **에디터 헤더** 인코딩 확인·전환 방법(`다시 열기` vs `인코딩 변경`), 표현 불가 문자 저장 안내가 사용자 관점으로 문서화되어 있다.
 - [ ] 도메인 용어집(`CONTEXT.md`)의 **문서 버퍼**, **에디터 헤더**, **확인 다이얼로그**, **검색 패널**, **Diff 뷰어** 설명이 EUC-KR 인코딩 지원 사항과 일치하도록 갱신되어 있다.

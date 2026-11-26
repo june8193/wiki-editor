@@ -6,7 +6,7 @@
 
 **Blocked by:** 01-text-encoding-codec-and-workspace-fs
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] **문서 버퍼**가 `encoding`과 `savedEncoding`(기본 `'utf-8'`)을 보유하며, 텍스트 버퍼의 `isDirty`가 `content !== savedContent || encoding !== savedEncoding` 불변식을 따른다.
 - [ ] `setEncoding` 호출 시 메모리 본문은 유지한 채 대상 인코딩만 변경되어 `isDirty`가 갱신되고, 저장 전 원래 인코딩으로 되돌리면(본문 미변경 시) `isDirty`가 `false`로 복원된다.

@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `iconv-lite`가 `devDependencies`에 추가되고(Electron 패키징 규칙인 `dependencies` = `node-pty` 단독 제약 유지), `packaging.test.ts` 및 빌드가 통과한다.
 - [ ] 텍스트 인코딩 코덱·감지 API가 `utf-8` / `euc-kr` 타입, 엄격 UTF-8 검증 후 CP949 자동 감지 디코딩, 명시적 인코딩 디코딩, 그리고 멀티바이트(UTF-8/CP949) 경계 안전 바이트 절단 기능을 제공한다.

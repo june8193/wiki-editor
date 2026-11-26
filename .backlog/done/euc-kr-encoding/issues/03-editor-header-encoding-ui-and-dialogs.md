@@ -6,7 +6,7 @@
 
 **Blocked by:** 02-shared-buffer-encoding-and-ipc
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] **에디터 헤더**에 현재 **문서 버퍼**의 인코딩(`UTF-8` 또는 `EUC-KR`)을 표시하는 버튼이 노출되고, 이미지 미리보기 탭에서는 숨겨지며, `config.json` 및 `.wiki-editor/frontmatter.json` 탭에서는 `UTF-8` 고정(전환 비활성화) 상태로 동작한다.
 - [ ] 인코딩 버튼 클릭 시 메뉴에서 **인코딩으로 다시 열기(Reopen)**(`UTF-8` / `EUC-KR`)와 **인코딩 변경(변환)**(`UTF-8` / `EUC-KR`)이 명확히 구분되어 선택 가능하다.
