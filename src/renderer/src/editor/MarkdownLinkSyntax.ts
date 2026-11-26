@@ -1,6 +1,8 @@
 import { isOffsetInCodeFence } from './MarkdownTocEngine'
 
 const EXTERNAL_SCHEME_REGEX = /^(?:https?:|mailto:)/i
+const HTTP_SCHEME_PREFIX_RE = /^https?:\/\//i
+const TRAILING_BARE_URL_PUNCT_RE = /[.,;:!?'">\]]/
 const PARAGRAPH_BREAK_LINE_RE = /^(?:[ \t]*|[ ]{0,3}(?:`{3,}[^`]*|~{3,}.*))$/
 const ASCII_PUNCT_ESCAPE_RE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g
 
@@ -235,9 +237,82 @@ function parseLinkDestination(
   return null
 }
 
+function parseAngleAutolink(
+  text: string,
+  start: number,
+  limit: number
+): { href: string; end: number } | null {
+  if (!HTTP_SCHEME_PREFIX_RE.test(text.slice(start + 1, limit))) {
+    return null
+  }
+  let cursor = start + 1
+  while (cursor < limit) {
+    const ch = text[cursor]
+    if (ch === '>') {
+      return cursor > start + 1
+        ? { href: text.slice(start + 1, cursor), end: cursor + 1 }
+        : null
+    }
+    if (ch === '<' || /\s/.test(ch)) {
+      return null
+    }
+    cursor++
+  }
+  return null
+}
+
+function hasExcessClosingParen(value: string): boolean {
+  let balance = 0
+  for (const ch of value) {
+    if (ch === '(') balance++
+    else if (ch === ')') balance--
+  }
+  return balance < 0
+}
+
+function parseBareHttpUrl(
+  text: string,
+  start: number,
+  paragraphStart: number,
+  limit: number
+): { href: string; end: number } | null {
+  if (
+    start > paragraphStart &&
+    (/[A-Za-z0-9\\]/.test(text[start - 1]) ||
+      (text[start - 1] === '<' && isEscapedAt(text, start - 1)))
+  ) {
+    return null
+  }
+  const schemeMatch = HTTP_SCHEME_PREFIX_RE.exec(text.slice(start, limit))
+  if (!schemeMatch) {
+    return null
+  }
+  let end = start + schemeMatch[0].length
+  while (end < limit && !/[\s<>]/.test(text[end])) {
+    end++
+  }
+  while (end > start + schemeMatch[0].length) {
+    const last = text[end - 1]
+    if (TRAILING_BARE_URL_PUNCT_RE.test(last)) {
+      end--
+      continue
+    }
+    if (last === ')' && hasExcessClosingParen(text.slice(start, end))) {
+      end--
+      continue
+    }
+    break
+  }
+  if (end <= start + schemeMatch[0].length) {
+    return null
+  }
+  return { href: text.slice(start, end), end }
+}
+
 /**
- * Extracts the `href` of the inline Markdown link `[label](href)` enclosing `offset` on
- * non-fenced paragraphs, ignoring Markdown images (`![alt](src)`), inline code spans, and fences.
+ * Extracts the `href` of the inline Markdown link `[label](href)`, `<http(s)://...>` autolink,
+ * or bare `http(s)://...` URL enclosing `offset` on non-fenced paragraphs, ignoring Markdown
+ * images (`![alt](src)`), inline code spans, escaped prefixes, and fences.
  */
 export function extractMarkdownLinkHrefAtOffset(text: string, offset: number): string | null {
   if (offset < 0 || offset > text.length || text.length === 0 || isOffsetInCodeFence(text, offset)) {
@@ -270,24 +345,42 @@ export function extractMarkdownLinkHrefAtOffset(text: string, offset: number): s
     if (ch === '[') {
       const isImage =
         cursor > paragraphStart && text[cursor - 1] === '!' && !isEscapedAt(text, cursor - 1)
-      if (!isImage) {
-        const closeBracket = findClosingBracket(text, cursor, paragraphEnd)
-        if (
-          closeBracket !== -1 &&
-          closeBracket + 1 < paragraphEnd &&
-          text[closeBracket + 1] === '('
-        ) {
-          const destLineEnd = findLineEndAt(text, closeBracket + 1, paragraphEnd)
-          const parsedDest = parseLinkDestination(text, closeBracket + 1, destLineEnd)
-          if (parsedDest) {
-            const linkTo = parsedDest.closeParen + 1
-            if (offset >= cursor && offset < linkTo) {
-              return parsedDest.href
-            }
-            cursor = linkTo
-            continue
+      const closeBracket = findClosingBracket(text, cursor, paragraphEnd)
+      if (
+        closeBracket !== -1 &&
+        closeBracket + 1 < paragraphEnd &&
+        text[closeBracket + 1] === '('
+      ) {
+        const destLineEnd = findLineEndAt(text, closeBracket + 1, paragraphEnd)
+        const parsedDest = parseLinkDestination(text, closeBracket + 1, destLineEnd)
+        if (parsedDest) {
+          const linkTo = parsedDest.closeParen + 1
+          if (!isImage && offset >= cursor && offset < linkTo) {
+            return parsedDest.href
           }
+          cursor = linkTo
+          continue
         }
+      }
+    }
+    if (ch === '<') {
+      const parsedAuto = parseAngleAutolink(text, cursor, paragraphEnd)
+      if (parsedAuto) {
+        if (offset >= cursor && offset < parsedAuto.end) {
+          return parsedAuto.href
+        }
+        cursor = parsedAuto.end
+        continue
+      }
+    }
+    if (ch === 'h' || ch === 'H') {
+      const parsedBare = parseBareHttpUrl(text, cursor, paragraphStart, paragraphEnd)
+      if (parsedBare) {
+        if (offset >= cursor && offset < parsedBare.end) {
+          return parsedBare.href
+        }
+        cursor = parsedBare.end
+        continue
       }
     }
     cursor++

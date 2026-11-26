@@ -59,4 +59,62 @@ describe('extractMarkdownLinkHrefAtOffset', () => {
     expect(extractMarkdownLinkHrefAtOffset(splitBlank, splitBlank.indexOf('first'))).toBeNull()
     expect(extractMarkdownLinkHrefAtOffset(splitBlank, splitBlank.indexOf('second'))).toBeNull()
   })
+
+  it('extracts <http(s)://...> autolinks and bare http(s)://... URLs while trimming trailing punctuation and preserving balanced parens', () => {
+    const content = [
+      'Angle <https://example.com/docs?q=1#top> and <http://localhost:3000/api>.',
+      'Bare https://example.com/a, http://example.com/b! Visit https://example.com/c.',
+      'Wiki https://en.wikipedia.org/wiki/Foo_(bar) and wrapped (https://en.wikipedia.org/wiki/Foo_(bar)).',
+      'Quoted "https://example.com/q"; colon https://example.com/col: end'
+    ].join('\n')
+
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('docs?q=1'))).toBe(
+      'https://example.com/docs?q=1#top'
+    )
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('localhost:3000'))).toBe(
+      'http://localhost:3000/api'
+    )
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('example.com/a'))).toBe(
+      'https://example.com/a'
+    )
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('example.com/b'))).toBe(
+      'http://example.com/b'
+    )
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('example.com/c'))).toBe(
+      'https://example.com/c'
+    )
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('Foo_(bar)'))).toBe(
+      'https://en.wikipedia.org/wiki/Foo_(bar)'
+    )
+    const wrappedIdx = content.indexOf('(https://en.wikipedia.org/wiki/Foo_(bar))')
+    expect(extractMarkdownLinkHrefAtOffset(content, wrappedIdx + 10)).toBe(
+      'https://en.wikipedia.org/wiki/Foo_(bar)'
+    )
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('example.com/q'))).toBe(
+      'https://example.com/q'
+    )
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('example.com/col'))).toBe(
+      'https://example.com/col'
+    )
+  })
+
+  it('ignores autolinks and bare URLs inside code fences, inline code, images, and escaped prefixes', () => {
+    const content = [
+      'Image ![alt](https://example.com/pic.png) and `<https://example.com/ic1>` and `https://example.com/ic2`',
+      'Escaped \\<https://example.com/esc1> and \\https://example.com/esc2',
+      '',
+      '```ts',
+      'const a = "https://example.com/fence"',
+      '// <https://example.com/fence2>',
+      '```'
+    ].join('\n')
+
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('pic.png'))).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('ic1'))).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('ic2'))).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('esc1'))).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('esc2'))).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('fence'))).toBeNull()
+    expect(extractMarkdownLinkHrefAtOffset(content, content.indexOf('fence2'))).toBeNull()
+  })
 })

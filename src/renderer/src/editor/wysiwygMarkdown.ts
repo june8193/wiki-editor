@@ -649,6 +649,7 @@ export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): 
     CustomCode,
     CustomLink.configure({
       openOnClick: false,
+      markdownLinks: true,
       protocols: [],
       isAllowedUri: (url) => isSafeMarkdownUrl(url)
     }),

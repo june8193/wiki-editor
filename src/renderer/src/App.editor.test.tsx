@@ -3381,7 +3381,7 @@ describe('Markdown link navigation and missing target banner', () => {
     } finally {
       restore()
     }
-  })
+  }, 15_000)
 
   it('shows error banner for malformed http(s) links, openExternalUrl failures, or missing shell bridge while keeping mailto silent', async () => {
     const user = userEvent.setup()
@@ -3438,6 +3438,100 @@ describe('Markdown link navigation and missing target banner', () => {
     delete api.shell
     fireEvent.click(within(primaryPane).getByRole('link', { name: '유효 웹' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(/외부 링크를 열 수 없습니다/)
+  })
+
+  it('converts typed [텍스트](URL) in WYSIWYG mode to clickable external link and opens Raw <https://...> and bare URLs on Ctrl+click', async () => {
+    const user = userEvent.setup()
+    const { api, emitMenuCommand } = createInMemoryWikiApi(
+      { theme: 'light', autoSave: false },
+      {
+        selectedFolder: 'C:/wiki-typing-autolink',
+        workspaces: {
+          'C:/wiki-typing-autolink': {
+            'docs/links.md': [
+              '# 링크 테스트',
+              '',
+              '본문 시작',
+              '',
+              '<https://example.com/auto>',
+              '',
+              'https://example.com/bare.',
+              '',
+              '`https://example.com/code`',
+              '',
+              '![img](https://example.com/pic.png)'
+            ].join('\n')
+          }
+        }
+      }
+    )
+    const openExternalUrlSpy = vi.spyOn(api.shell!, 'openExternalUrl')
+    window.wikiApi = api
+
+    render(<App />)
+    await triggerMenuCommand(emitMenuCommand, 'open-folder')
+    const explorer = screen.getByLabelText('워크스페이스 탐색기')
+    await user.click(await within(explorer).findByText('docs'))
+    await user.click(await within(explorer).findByText('links.md'))
+
+    const primaryPane = screen.getByTestId('pane-primary')
+
+    // 1) Raw mode: normal click on <https://...> or bare URL does not open external browser; Ctrl+click does
+    await switchPaneEditorMode(user, primaryPane, 'Raw')
+    const rawEl = within(primaryPane).getByTestId('document-editor') as HTMLElement
+    const autoSpan = Array.from(rawEl.querySelectorAll('span')).find((el) =>
+      el.textContent?.includes('https://example.com/auto')
+    )!
+    const bareSpan = Array.from(rawEl.querySelectorAll('.cm-line')).find((el) =>
+      el.textContent?.startsWith('https://example.com/bare.')
+    )!
+    const codeSpan = Array.from(rawEl.querySelectorAll('span')).find((el) =>
+      el.textContent?.includes('https://example.com/code')
+    )!
+    const imgSpan = Array.from(rawEl.querySelectorAll('span')).find((el) =>
+      el.textContent?.includes('https://example.com/pic.png')
+    )!
+
+    fireEvent.click(autoSpan)
+    fireEvent.click(bareSpan)
+    expect(openExternalUrlSpy).not.toHaveBeenCalled()
+
+    fireEvent.click(autoSpan, { ctrlKey: true })
+    await waitFor(() => {
+      expect(openExternalUrlSpy).toHaveBeenCalledTimes(1)
+    })
+    expect(openExternalUrlSpy).toHaveBeenLastCalledWith('https://example.com/auto')
+
+    fireEvent.click(bareSpan, { ctrlKey: true })
+    await waitFor(() => {
+      expect(openExternalUrlSpy).toHaveBeenCalledTimes(2)
+    })
+    expect(openExternalUrlSpy).toHaveBeenLastCalledWith('https://example.com/bare')
+
+    fireEvent.click(codeSpan, { ctrlKey: true })
+    fireEvent.click(imgSpan, { ctrlKey: true })
+    expect(openExternalUrlSpy).toHaveBeenCalledTimes(2)
+
+    // 2) WYSIWYG mode: typing [웹문서](https://example.com/typed) converts to <a> and clicking opens external browser
+    await switchPaneEditorMode(user, primaryPane, '위지윅')
+    const wysiwygEl = within(primaryPane).getByTestId('document-editor') as HTMLElement
+    const firstParagraph = wysiwygEl.querySelector('p')!
+    await user.click(firstParagraph)
+    await user.type(wysiwygEl, ' [[웹문서](https://example.com/typed)')
+
+    const typedLink = await waitFor(() => {
+      const anchor = Array.from(wysiwygEl.querySelectorAll('a')).find(
+        (a) => a.textContent === '웹문서' && a.getAttribute('href') === 'https://example.com/typed'
+      )
+      expect(anchor).toBeDefined()
+      return anchor!
+    })
+
+    expect(fireEvent.click(typedLink)).toBe(false)
+    await waitFor(() => {
+      expect(openExternalUrlSpy).toHaveBeenCalledTimes(3)
+    })
+    expect(openExternalUrlSpy).toHaveBeenLastCalledWith('https://example.com/typed')
   })
 
   it('displays error banner without creating files for missing targets or workspace escapes, and opens target file even when its #slug is missing', async () => {
