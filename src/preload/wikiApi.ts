@@ -45,6 +45,7 @@ import {
   LOG_IPC_CHANNELS,
   type MainMenuAction,
   MENU_IPC_CHANNELS,
+  SHELL_IPC_CHANNELS,
   TERMINAL_IPC_CHANNELS,
   WikiApi,
   WINDOW_IPC_CHANNELS,
@@ -466,6 +467,10 @@ export function createWikiApi(
     clipboard: {
       writeText: (text) =>
         ipcRenderer.invoke(CLIPBOARD_IPC_CHANNELS.writeText, text) as Promise<void>
+    },
+    shell: {
+      openExternalUrl: (url) =>
+        ipcRenderer.invoke(SHELL_IPC_CHANNELS.openExternalUrl, url) as Promise<boolean>
     },
     diagram: {
       copyText: (text) => ipcRenderer.invoke(DIAGRAM_IPC_CHANNELS.copyText, text) as Promise<void>,

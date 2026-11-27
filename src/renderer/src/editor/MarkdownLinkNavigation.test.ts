@@ -12,16 +12,34 @@ describe('resolveMarkdownLinkTarget', () => {
     activeFilePath: 'C:\\wiki\\notes\\docs\\current.md'
   }
 
-  it('treats http, https, and mailto links as external without reading files', () => {
+  it('resolves valid http/https links (including hash fragments) as external, mailto as noop, and malformed http(s) or unsupported schemes as error', () => {
     expect(resolveMarkdownLinkTarget('https://example.com/docs', posixCtx)).toEqual({
-      kind: 'external'
+      kind: 'external',
+      url: 'https://example.com/docs'
     })
     expect(resolveMarkdownLinkTarget('HTTP://example.com', posixCtx)).toEqual({
-      kind: 'external'
+      kind: 'external',
+      url: 'HTTP://example.com'
+    })
+    expect(resolveMarkdownLinkTarget('https://example.com/docs#section-1', posixCtx)).toEqual({
+      kind: 'external',
+      url: 'https://example.com/docs#section-1'
     })
     expect(resolveMarkdownLinkTarget('mailto:team@example.com', posixCtx)).toEqual({
-      kind: 'external'
+      kind: 'noop'
     })
+    expect(resolveMarkdownLinkTarget('MAILTO:team@example.com', posixCtx)).toEqual({
+      kind: 'noop'
+    })
+
+    for (const invalidHttp of ['https://', 'http:///path', 'https://example.com\n--evil']) {
+      const result = resolveMarkdownLinkTarget(invalidHttp, posixCtx)
+      expect(result.kind).toBe('error')
+    }
+    for (const unsupported of ['javascript:alert(1)', 'file:///C:/secret.md', 'ftp://example.com/file']) {
+      const result = resolveMarkdownLinkTarget(unsupported, posixCtx)
+      expect(result.kind).toBe('error')
+    }
   })
 
   it('resolves same-document section links including percent-encoded slugs', () => {

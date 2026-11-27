@@ -2374,4 +2374,80 @@ describe('Multi-window workspaceState exclusion and close flush (<App />)', () =
     expect(getRawEditorSelection(restoredSplitRaw)).toEqual({ start: 3, end: 7 })
     expect(getRawEditorScroller(restoredSplitRaw).scrollTop).toBe(135)
   })
+
+  it('opens external http/https links from an auxiliary window across Preview, WYSIWYG, and Raw Ctrl+click and shows error banner on failure', async () => {
+    const user = userEvent.setup()
+    const harness = createHarness(
+      { autoSave: false },
+      {
+        selectedFolder: 'C:/wiki-aux-ext',
+        workspaces: {
+          'C:/wiki-aux-ext': {
+            'note.md': [
+              '# 보조 창 링크',
+              '',
+              '- [웹 문서](https://example.com/aux)',
+              '- [메일](mailto:aux@example.com)'
+            ].join('\n')
+          }
+        }
+      }
+    )
+    const mainWin = harness.createWindow({ role: 'main' })
+    const mainRendered = render(<App wikiApi={mainWin.api} />)
+
+    await openFolderAndNoteInWindow(user, mainRendered.container, mainWin.emitMenuCommand, 'note.md')
+    await detachTabViaContextMenu(user, mainRendered.container, /note\.md/)
+    await waitFor(() => {
+      expect(harness.getAuxiliaryWindows()).toHaveLength(1)
+    })
+
+    const auxWin = harness.getAuxiliaryWindows()[0]
+    const auxOpenExternalSpy = vi.spyOn(auxWin.api.shell!, 'openExternalUrl')
+    const auxRendered = render(<App wikiApi={auxWin.api} />)
+
+    const auxPane = await within(auxRendered.container).findByTestId('pane-primary')
+    const modeGroup = within(auxPane).getByRole('group', { name: '에디터 모드 전환' })
+
+    // Preview click
+    await user.click(within(modeGroup).getByRole('button', { name: 'Preview' }))
+    fireEvent.click(within(auxPane).getByRole('link', { name: '웹 문서' }))
+    await waitFor(() => {
+      expect(auxOpenExternalSpy).toHaveBeenCalledTimes(1)
+    })
+    expect(auxOpenExternalSpy).toHaveBeenLastCalledWith('https://example.com/aux')
+    expect(within(auxRendered.container).queryByRole('dialog')).toBeNull()
+
+    // mailto stays silent
+    fireEvent.click(within(auxPane).getByRole('link', { name: '메일' }))
+    expect(auxOpenExternalSpy).toHaveBeenCalledTimes(1)
+    expect(within(auxRendered.container).queryByRole('alert')).toBeNull()
+
+    // WYSIWYG click
+    await user.click(within(modeGroup).getByRole('button', { name: '위지윅' }))
+    const auxWysiwygLink = Array.from(
+      within(auxPane).getByTestId('document-editor').querySelectorAll('a')
+    ).find((a) => a.getAttribute('href') === 'https://example.com/aux')!
+    fireEvent.click(auxWysiwygLink)
+    await waitFor(() => {
+      expect(auxOpenExternalSpy).toHaveBeenCalledTimes(2)
+    })
+
+    // Raw Ctrl+click
+    await user.click(within(modeGroup).getByRole('button', { name: 'Raw' }))
+    const auxRawSpan = Array.from(
+      within(auxPane).getByTestId('document-editor').querySelectorAll('span')
+    ).find((el) => el.textContent?.includes('https://example.com/aux'))!
+    fireEvent.click(auxRawSpan, { ctrlKey: true })
+    await waitFor(() => {
+      expect(auxOpenExternalSpy).toHaveBeenCalledTimes(3)
+    })
+
+    // Failure shows error banner in auxiliary window
+    auxOpenExternalSpy.mockResolvedValueOnce(false)
+    fireEvent.click(auxRawSpan, { ctrlKey: true })
+    expect(await within(auxRendered.container).findByRole('alert')).toHaveTextContent(
+      /외부 링크를 열 수 없습니다/
+    )
+  })
 })

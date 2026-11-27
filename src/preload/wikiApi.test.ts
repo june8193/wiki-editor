@@ -12,6 +12,7 @@ import {
   GIT_IPC_CHANNELS,
   LOG_IPC_CHANNELS,
   MENU_IPC_CHANNELS,
+  SHELL_IPC_CHANNELS,
   TERMINAL_IPC_CHANNELS,
   WINDOW_IPC_CHANNELS,
   WORKSPACE_IPC_CHANNELS,
@@ -616,5 +617,15 @@ describe('createWikiApi', () => {
     unsubExit()
     expect(ipc.listenerCount(TERMINAL_IPC_CHANNELS.data)).toBe(0)
     expect(ipc.listenerCount(TERMINAL_IPC_CHANNELS.exit)).toBe(0)
+  })
+
+  it('routes shell.openExternalUrl through SHELL_IPC_CHANNELS.openExternalUrl', async () => {
+    const ipc = createFakeIpcRenderer()
+    const api = createWikiApi(ipc)
+
+    await api.shell?.openExternalUrl('https://example.com/docs')
+    expect(ipc.lastInvoked).toEqual([
+      { channel: SHELL_IPC_CHANNELS.openExternalUrl, args: ['https://example.com/docs'] }
+    ])
   })
 })

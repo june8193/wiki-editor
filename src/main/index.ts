@@ -30,6 +30,7 @@ import { registerFrontmatterIpc } from './ipc/registerFrontmatterIpc'
 import { registerGitIpc } from './ipc/registerGitIpc'
 import { registerLogIpc } from './ipc/registerLogIpc'
 import { registerMenuIpc } from './ipc/registerMenuIpc'
+import { registerShellIpc } from './ipc/registerShellIpc'
 import { registerTerminalIpc } from './ipc/registerTerminalIpc'
 import { registerWindowIpc } from './ipc/registerWindowIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
@@ -71,6 +72,7 @@ let disposeTerminalIpc: (() => void) | undefined
 let disposeWindowIpc: (() => void) | undefined
 let disposeLogIpc: (() => void) | undefined
 let disposeClipboardIpc: (() => void) | undefined
+let disposeShellIpc: (() => void) | undefined
 let disposeMenuIpc: (() => void) | undefined
 let disposeWikiAssetProtocol: (() => void) | undefined
 let windowManager: WindowManager | undefined
@@ -89,6 +91,8 @@ function disposeMainResources(): Promise<void> | undefined {
   disposeTerminalIpc = undefined
   disposeClipboardIpc?.()
   disposeClipboardIpc = undefined
+  disposeShellIpc?.()
+  disposeShellIpc = undefined
   disposeLogIpc?.()
   disposeLogIpc = undefined
   disposeDiagramIpc?.()
@@ -170,6 +174,11 @@ void app.whenReady().then(async () => {
   disposeClipboardIpc = registerClipboardIpc({
     ipcMain,
     writeClipboardText: (text) => clipboard.writeText(text),
+    logService
+  })
+  disposeShellIpc = registerShellIpc({
+    ipcMain,
+    openExternal: (url) => shell.openExternal(url),
     logService
   })
   disposeConfigIpc = registerConfigIpc(ipcMain, configService, getTargets, logService)

@@ -237,4 +237,82 @@ describe('wysiwygMarkdown link extensions & helpers', () => {
       editor.destroy()
     }
   })
+
+  it('[텍스트](URL) 입력 후 닫는 ) 를 타이핑하면 안전한 링크 마크로 즉시 변환되고 inclusive=false·비충돌 규칙을 지킨다', () => {
+    const countLinkMarks = (editor: Editor): number => {
+      let count = 0
+      editor.state.doc.descendants((node) => {
+        if (node.isText && node.marks.some((m) => m.type.name === 'link')) {
+          count += 1
+        }
+        return true
+      })
+      return count
+    }
+
+    const typeText = (editor: Editor, text: string): void => {
+      for (const ch of text) {
+        const { from, to } = editor.state.selection
+        const handled = editor.view.someProp('handleTextInput', (fn) =>
+          fn(editor.view, from, to, ch, () => editor.state.tr.insertText(ch, from, to))
+        )
+        if (!handled) {
+          editor.view.dispatch(editor.state.tr.insertText(ch, from, to))
+        }
+      }
+    }
+
+    const editor = createMarkdownEditor('')
+    try {
+      // 1) [텍스트](https://example.com) + 후속 타이핑에 링크 번짐 없음
+      editor.commands.focus('end')
+      typeText(editor, '[문서](https://example.com)')
+      const linkPos = getParagraphPosAtText(editor, '문서')
+      expect(linkPos).toBeGreaterThan(0)
+      const linkMark = editor.state.doc
+        .resolve(linkPos + 1)
+        .marks()
+        .find((m) => m.type.name === 'link')
+      expect(linkMark?.attrs.href).toBe('https://example.com')
+
+      typeText(editor, ' 뒤')
+      expect(editor.getMarkdown()).toContain('[문서](https://example.com) 뒤')
+
+      // 2) [텍스트](#섹션) 변환
+      editor.commands.setContent('', { contentType: 'markdown' })
+      editor.commands.focus('end')
+      typeText(editor, '[섹션](#개요)')
+      const secPos = getParagraphPosAtText(editor, '섹션')
+      const secMark = editor.state.doc
+        .resolve(secPos + 1)
+        .marks()
+        .find((m) => m.type.name === 'link')
+      expect(secMark?.attrs.href).toBe('#개요')
+
+      // 3) 위험 스킴(javascript:), 이미지 ![alt](...), 빈 라벨 [](), 인라인 코드, 코드 블록은 변환하지 않음
+      editor.commands.setContent('', { contentType: 'markdown' })
+      editor.commands.focus('end')
+      typeText(editor, '[위험](javascript:alert(1)) ')
+      typeText(editor, '![이미지](https://example.com/a.png) ')
+      typeText(editor, '[](https://example.com) ')
+      typeText(editor, '`[코드](https://example.com)`')
+      expect(countLinkMarks(editor)).toBe(0)
+
+      editor.commands.setContent('```md\n\n```', { contentType: 'markdown' })
+      const cbPos = getParagraphPosAtText(editor, '')
+      editor.commands.setTextSelection(cbPos > 0 ? cbPos : 1)
+      typeText(editor, '[블록](https://example.com)')
+      expect(countLinkMarks(editor)).toBe(0)
+
+      // 4) Ctrl+K 로 [라벨]( 삽입 후 외부 URL과 ) 입력 시에도 링크 마크로 변환된다
+      editor.commands.setContent('참고', { contentType: 'markdown' })
+      const refPos = getParagraphPosAtText(editor, '참고')
+      editor.commands.setTextSelection({ from: refPos, to: refPos + 2 })
+      expect(applyWysiwygCtrlK(editor)).toBe(true)
+      typeText(editor, 'https://example.com/k)')
+      expect(editor.getMarkdown()).toContain('[참고](https://example.com/k)')
+    } finally {
+      editor.destroy()
+    }
+  })
 })

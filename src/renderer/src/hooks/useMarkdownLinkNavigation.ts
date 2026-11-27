@@ -6,6 +6,7 @@ import type { OutlineContextTarget } from '../editor/outlineScrollSpy'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { PaneId, PaneLayoutState } from '../stores/PaneTabStore'
 import type { OpenedWorkspaceDocument } from './useEditorWorkspace'
+import { useOptionalWikiApi } from './useWikiApi'
 
 export interface UseMarkdownLinkNavigationOptions {
   panes: PaneLayoutState['panes']
@@ -37,6 +38,7 @@ export function useMarkdownLinkNavigation({
   dispatchHeadingScroll,
   reportErrorBanner
 }: UseMarkdownLinkNavigationOptions): (paneId: PaneId, tabId: string, href: string) => void {
+  const wikiApi = useOptionalWikiApi() ?? (typeof window !== 'undefined' ? window.wikiApi : undefined)
   const linkNavigationSeqRef = useRef(0)
   const workspaceRootRef = useRef<string | null>(null)
   workspaceRootRef.current = workspaceRootPath
@@ -71,7 +73,27 @@ export function useMarkdownLinkNavigation({
         activeFilePath: sourceBuffer.kind === 'workspace' ? sourceBuffer.path : null
       })
 
+      if (resolved.kind === 'noop') {
+        return
+      }
+
       if (resolved.kind === 'external') {
+        reportErrorBanner(null)
+        const openExternalUrl = wikiApi?.shell?.openExternalUrl
+        if (!openExternalUrl) {
+          reportErrorBanner(`외부 링크를 열 수 없습니다: ${resolved.url}`)
+          return
+        }
+        void openExternalUrl(resolved.url).then(
+          (opened) => {
+            if (!opened) {
+              reportErrorBanner(`외부 링크를 열 수 없습니다: ${resolved.url}`)
+            }
+          },
+          (error) => {
+            reportErrorBanner(`외부 링크를 열 수 없습니다: ${resolved.url}`, error)
+          }
+        )
         return
       }
 
@@ -117,6 +139,7 @@ export function useMarkdownLinkNavigation({
       panes,
       reportErrorBanner,
       scrollToHeadingOrReport,
+      wikiApi,
       workspaceRootPath
     ]
   )
