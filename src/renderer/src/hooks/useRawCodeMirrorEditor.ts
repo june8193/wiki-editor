@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { json } from '@codemirror/lang-json'
-import { markdown } from '@codemirror/lang-markdown'
 import { bracketMatching, HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { languages } from '@codemirror/language-data'
 import { Annotation, Compartment, EditorState, Extension, Prec, StateEffect } from '@codemirror/state'
 import {
   drawSelection,
@@ -34,6 +31,11 @@ import {
   type LinkQueryMatch
 } from '../editor/LinkAutocompleteEngine'
 import { isLinkNavigationClick } from '../editor/editorModes'
+import {
+  loadRawLanguageExtension,
+  type RawEditorLanguage,
+  resolveRawLanguageExtensionSync
+} from '../editor/rawEditorLanguage'
 import { extractMarkdownLinkHrefAtOffset } from '../editor/MarkdownLinkSyntax'
 import {
   detectDocumentLineEnding,
@@ -60,7 +62,7 @@ export interface RawScrollRequest {
 
 export interface UseRawCodeMirrorEditorOptions {
   content: string
-  language: 'markdown' | 'json'
+  language: RawEditorLanguage
   theme: ThemeMode
   cursor: CursorPosition
   scrollTop: number
@@ -83,19 +85,80 @@ export interface UseRawCodeMirrorEditorOptions {
   onRawScroll?: () => void
 }
 
-const markdownHighlightStyle = HighlightStyle.define([
-  { tag: [tags.heading, tags.heading1, tags.heading2, tags.heading3], color: 'var(--cm-heading)', fontWeight: '700' },
+const rawEditorHighlightStyle = HighlightStyle.define([
+  {
+    tag: [
+      tags.heading,
+      tags.heading1,
+      tags.heading2,
+      tags.heading3,
+      tags.heading4,
+      tags.heading5,
+      tags.heading6
+    ],
+    color: 'var(--cm-heading)',
+    fontWeight: '700'
+  },
   { tag: tags.strong, fontWeight: '700' },
   { tag: tags.emphasis, fontStyle: 'italic' },
   { tag: tags.strikethrough, textDecoration: 'line-through' },
   { tag: [tags.link, tags.url], color: 'var(--cm-link)', textDecoration: 'underline' },
   { tag: tags.monospace, color: 'var(--cm-code)' },
   { tag: tags.quote, color: 'var(--cm-quote)', fontStyle: 'italic' },
-  { tag: tags.keyword, color: 'var(--cm-keyword)' },
-  { tag: tags.string, color: 'var(--cm-string)' },
-  { tag: [tags.number, tags.bool], color: 'var(--cm-number)' },
-  { tag: [tags.comment, tags.meta, tags.processingInstruction], color: 'var(--text-secondary)' },
-  { tag: tags.propertyName, color: 'var(--cm-heading)' }
+  {
+    tag: [
+      tags.function(tags.variableName),
+      tags.function(tags.propertyName),
+      tags.function(tags.definition(tags.variableName)),
+      tags.standard(tags.function(tags.variableName))
+    ],
+    color: 'var(--cm-function)'
+  },
+  {
+    tag: [
+      tags.keyword,
+      tags.controlKeyword,
+      tags.definitionKeyword,
+      tags.moduleKeyword,
+      tags.operatorKeyword,
+      tags.modifier
+    ],
+    color: 'var(--cm-keyword)'
+  },
+  {
+    tag: [tags.string, tags.special(tags.string), tags.attributeValue, tags.regexp],
+    color: 'var(--cm-string)'
+  },
+  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: 'var(--cm-number)' },
+  {
+    tag: [
+      tags.comment,
+      tags.lineComment,
+      tags.blockComment,
+      tags.docComment,
+      tags.meta,
+      tags.processingInstruction
+    ],
+    color: 'var(--text-secondary)'
+  },
+  {
+    tag: [tags.typeName, tags.className, tags.standard(tags.typeName), tags.tagName, tags.namespace],
+    color: 'var(--cm-type)'
+  },
+  {
+    tag: [tags.propertyName, tags.attributeName, tags.labelName, tags.definition(tags.propertyName)],
+    color: 'var(--cm-property)'
+  },
+  {
+    tag: [
+      tags.operator,
+      tags.compareOperator,
+      tags.logicOperator,
+      tags.arithmeticOperator,
+      tags.updateOperator
+    ],
+    color: 'var(--cm-operator)'
+  }
 ])
 
 function resolveRawClickOffset(view: EditorView, event: MouseEvent): number | null {
@@ -175,9 +238,6 @@ function createEditorThemeExtension(theme: ThemeMode): Extension {
   ]
 }
 
-function createLanguageExtension(language: 'markdown' | 'json'): Extension {
-  return language === 'json' ? json() : markdown({ codeLanguages: languages })
-}
 
 function clampSelection(docLength: number, cursor: CursorPosition): { anchor: number; head: number } {
   const anchor = Math.max(0, Math.min(cursor.selectionStart, docLength))
@@ -376,10 +436,10 @@ export function useRawCodeMirrorEditor({
         drawSelection(),
         bracketMatching(),
         EditorView.lineWrapping,
-        syntaxHighlighting(markdownHighlightStyle),
+        syntaxHighlighting(rawEditorHighlightStyle),
         rawSearchHighlightField,
         rawSearchJumpHighlightField,
-        compartments.language.of(createLanguageExtension(initial.language)),
+        compartments.language.of(resolveRawLanguageExtensionSync(initial.language).extension),
         compartments.theme.of(createEditorThemeExtension(initial.theme)),
         compartments.tableKeymap.of(initial.showTableToolbar ? rawTableKeymap : []),
         EditorView.domEventHandlers({
@@ -543,7 +603,9 @@ export function useRawCodeMirrorEditor({
     const effects: StateEffect<unknown>[] = []
 
     if (prev.language !== language) {
-      effects.push(compartments.language.reconfigure(createLanguageExtension(language)))
+      effects.push(
+        compartments.language.reconfigure(resolveRawLanguageExtensionSync(language).extension)
+      )
     }
     if (!enableLinkAutocomplete) {
       dismissLinkMenu()
@@ -568,6 +630,30 @@ export function useRawCodeMirrorEditor({
     theme,
     showTableToolbar
   ])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+
+    const syncResolution = resolveRawLanguageExtensionSync(language)
+    if (!syncResolution.needsAsyncLoad) return
+
+    let cancelled = false
+    const languageCompartment = compartmentsRef.current.language
+    void loadRawLanguageExtension(language).then((extension) => {
+      if (cancelled || viewRef.current !== view) {
+        return
+      }
+      view.dispatch({
+        effects: languageCompartment.reconfigure(extension),
+        annotations: externalSyncAnnotation.of(true)
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [language])
 
   useLayoutEffect(() => {
     const view = viewRef.current

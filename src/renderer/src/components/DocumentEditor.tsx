@@ -7,11 +7,11 @@ import { TEXT_ENCODING_LABELS, type TextEncoding } from '@shared/encoding'
 import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import {
-  getRawEditorLanguage,
   isImageDocument,
   resolveEditorShortcut,
   resolveEffectiveEditorMode
 } from '../editor/editorModes'
+import { resolveRawEditorLanguageId } from '../editor/rawEditorLanguage'
 import { deriveDocumentTitle } from '../editor/mermaidExport'
 import { updateMermaidHeightMap } from '../editor/mermaidHeightSession'
 import type { MermaidRenderer } from '../editor/mermaidRenderer'
@@ -140,7 +140,7 @@ export function DocumentEditor({
   const { allowRichModes, effectiveMode } = resolveEffectiveEditorMode(activeDoc, tab.mode)
   const rawRatio = normalizeSplitRatio(tab.splitPreviewRatio ?? DEFAULT_SPLIT_RATIO)
   const previewRatio = roundSplitRatio(1 - rawRatio)
-  const rawLanguage = getRawEditorLanguage(activeDoc)
+  const rawLanguage = resolveRawEditorLanguageId(activeDoc)
   const documentTitle = allowRichModes ? deriveDocumentTitle(activeDoc.name) : undefined
   const documentPath =
     activeDoc.kind === 'workspace' && activeDoc.path ? activeDoc.path : undefined

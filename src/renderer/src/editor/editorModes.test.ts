@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   cycleEditorMode,
-  getRawEditorLanguage,
   isImageDocument,
   isLinkNavigationClick,
   isMarkdownDocument,
@@ -16,13 +15,11 @@ describe('editorModes helpers', () => {
     expect(isMarkdownDocument({ kind: 'workspace', name: 'readme.md' })).toBe(true)
     expect(isMarkdownDocument({ kind: 'workspace', name: 'Guide.MARKDOWN' })).toBe(true)
     expect(isMarkdownDocument({ kind: 'workspace', name: 'scratch-note' })).toBe(true)
+    expect(isMarkdownDocument({ kind: 'workspace', name: 'Dockerfile' })).toBe(false)
+    expect(isMarkdownDocument({ kind: 'workspace', name: 'Gemfile' })).toBe(false)
     expect(isMarkdownDocument({ kind: 'config', name: 'config.json' })).toBe(false)
     expect(isMarkdownDocument({ kind: 'workspace', name: 'settings.json' })).toBe(false)
     expect(isMarkdownDocument({ kind: 'workspace', name: 'notes.txt' })).toBe(false)
-
-    expect(getRawEditorLanguage({ kind: 'config', name: 'config.json' })).toBe('json')
-    expect(getRawEditorLanguage({ kind: 'workspace', name: 'data.json' })).toBe('json')
-    expect(getRawEditorLanguage({ kind: 'workspace', name: 'doc.md' })).toBe('markdown')
 
     expect(resolveEffectiveEditorMode({ kind: 'workspace', name: 'readme.md' }, 'split')).toEqual({
       allowRichModes: true,

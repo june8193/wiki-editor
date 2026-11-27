@@ -1,5 +1,6 @@
 import type { DocumentBuffer } from '@shared/documentBuffer'
 import type { EditorMode } from '../stores/PaneTabStore'
+import { hasKnownCodeFilename } from './rawEditorLanguage'
 
 export interface ModeShortcutEvent {
   key: string
@@ -60,7 +61,7 @@ export function isMarkdownDocument(doc: EditorModeDocumentRef): boolean {
   }
   const lastDot = doc.name.lastIndexOf('.')
   if (lastDot < 0) {
-    return true
+    return !hasKnownCodeFilename(doc.name)
   }
   const ext = doc.name.slice(lastDot).toLowerCase()
   return ext === '.md' || ext === '.markdown'
@@ -78,16 +79,6 @@ export function resolveEffectiveEditorMode(
     allowRichModes,
     effectiveMode: allowRichModes ? requestedMode : 'raw'
   }
-}
-
-/**
- * Resolves the CodeMirror syntax language for Raw mode.
- */
-export function getRawEditorLanguage(doc: Pick<DocumentBuffer, 'kind' | 'name'>): 'markdown' | 'json' {
-  if (doc.kind === 'config' || doc.name.toLowerCase().endsWith('.json')) {
-    return 'json'
-  }
-  return 'markdown'
 }
 
 /**

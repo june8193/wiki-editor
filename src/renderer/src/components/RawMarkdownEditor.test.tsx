@@ -1329,4 +1329,104 @@ describe('RawMarkdownEditor link autocomplete & Ctrl+K', () => {
       coordsAtPosSpy.mockRestore()
     }
   })
+
+  it('applies syntax highlighting for source code languages with theme CSS variables', () => {
+    const { container } = render(
+      <RawMarkdownEditor
+        content={'const greet = (name: string): number => {\n  return name.length\n}'}
+        language="typescript"
+        theme="dark"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const spans = Array.from(container.querySelectorAll('.cm-line span'))
+    const styleSheetsText = Array.from(document.head.querySelectorAll('style'))
+      .map((el) => el.textContent ?? '')
+      .join('\n')
+
+    const getMatchingCss = (tokenText: string): string => {
+      const span = spans.find((el) => el.textContent === tokenText)
+      expect(span).toBeDefined()
+      const classes = span!.className.trim().split(/\s+/).filter(Boolean)
+      return classes
+        .map((cls) => {
+          const escaped = cls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          return styleSheetsText.match(new RegExp(`\\.${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+        })
+        .join('\n')
+    }
+
+    expect(getMatchingCss('const')).toContain('color: var(--cm-keyword)')
+    expect(getMatchingCss('string')).toContain('color: var(--cm-type)')
+    expect(getMatchingCss('return')).toContain('color: var(--cm-keyword)')
+  })
+
+  it('renders plaintext without Markdown heading highlighting and reconfigures on language change', () => {
+    const { container, rerender } = render(
+      <RawMarkdownEditor
+        content={'# not a heading\nconst x = 1'}
+        language="plaintext"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    expect(container.querySelectorAll('.cm-line span')).toHaveLength(0)
+
+    rerender(
+      <RawMarkdownEditor
+        content={'# not a heading\nconst x = 1'}
+        language="typescript"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    const spans = Array.from(container.querySelectorAll('.cm-line span'))
+    expect(spans.some((el) => el.textContent === 'const')).toBe(true)
+  })
+
+  it('lazy-loads @codemirror/language-data languages and ignores stale async results after unmount', async () => {
+    const { container, unmount } = render(
+      <RawMarkdownEditor
+        content={'FROM node:20-alpine\nRUN npm ci'}
+        language="dockerfile"
+        theme="dark"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+
+    await waitFor(() => {
+      const spans = Array.from(container.querySelectorAll('.cm-line span'))
+      expect(spans.some((el) => el.textContent === 'FROM')).toBe(true)
+    })
+
+    // Unmounting while a fresh lazy-loaded language is rendered should not throw
+    const second = render(
+      <RawMarkdownEditor
+        content={'[package]\nname = "demo"'}
+        language="toml"
+        theme="light"
+        cursor={{ selectionStart: 0, selectionEnd: 0 }}
+        scrollTop={0}
+        onChangeContent={vi.fn()}
+        onUpdateViewState={vi.fn()}
+      />
+    )
+    second.unmount()
+    unmount()
+  })
 })
