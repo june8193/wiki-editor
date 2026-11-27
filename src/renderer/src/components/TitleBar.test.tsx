@@ -168,4 +168,25 @@ describe('TitleBar', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
     expect(fileTrigger).toBeDisabled()
   })
+
+  it('renders title overlay before menubar in DOM order so no-drag menu triggers stay clickable', () => {
+    const { container } = render(<TitleBar title="Wiki Editor v1.9.0" menus={createMenus()} />)
+
+    const titleEl = container.querySelector('.app-titlebar-title')
+    const menuBarEl = screen.getByRole('menubar')
+    expect(titleEl).not.toBeNull()
+    expect(
+      Boolean(titleEl!.compareDocumentPosition(menuBarEl) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ).toBe(true)
+  })
+
+  it('applies is-macos class on .app-titlebar only when isMacOS is true', () => {
+    const { container, rerender } = render(
+      <TitleBar title="Wiki Editor v1.9.0" menus={createMenus()} isMacOS={true} />
+    )
+    expect(container.querySelector('.app-titlebar')).toHaveClass('is-macos')
+
+    rerender(<TitleBar title="Wiki Editor v1.9.0" menus={createMenus()} isMacOS={false} />)
+    expect(container.querySelector('.app-titlebar')).not.toHaveClass('is-macos')
+  })
 })

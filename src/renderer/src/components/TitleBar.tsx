@@ -23,15 +23,21 @@ export interface TitleBarProps {
   title: string
   menus?: readonly TitleBarMenuGroup[]
   isMenuDisabled?: boolean
+  isMacOS?: boolean
 }
 
 type ActionMenuItem = Extract<TitleBarMenuItem, { kind: 'item' }>
+
+function detectMacOS(): boolean {
+  return typeof navigator !== 'undefined' && /mac/i.test(navigator.platform || navigator.userAgent || '')
+}
 
 /**
  * Custom 32px draggable title bar integrating optional left application dropdown menus (Main Window),
  * centered window title with version, and space on the right for Windows native titleBarOverlay controls.
  */
-export function TitleBar({ title, menus, isMenuDisabled = false }: TitleBarProps) {
+export function TitleBar({ title, menus, isMenuDisabled = false, isMacOS }: TitleBarProps) {
+  const resolvedIsMacOS = isMacOS ?? detectMacOS()
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const [focusedItemIndex, setFocusedItemIndex] = useState<number>(-1)
   const menuBarRef = useRef<HTMLElement | null>(null)
@@ -139,7 +145,10 @@ export function TitleBar({ title, menus, isMenuDisabled = false }: TitleBarProps
   }
 
   return (
-    <div className="app-titlebar">
+    <div className={`app-titlebar${resolvedIsMacOS ? ' is-macos' : ''}`}>
+      <div className="app-titlebar-title" title={title}>
+        {title}
+      </div>
       {menus && menus.length > 0 && (
         <nav
           ref={menuBarRef}
@@ -219,9 +228,6 @@ export function TitleBar({ title, menus, isMenuDisabled = false }: TitleBarProps
           })}
         </nav>
       )}
-      <div className="app-titlebar-title" title={title}>
-        {title}
-      </div>
     </div>
   )
 }
