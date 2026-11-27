@@ -16,6 +16,7 @@ import type { SymbolNotFoundTooltipState } from '../components/SymbolCandidatePo
 import type { SymbolContextMenuViewState } from '../components/SymbolContextMenu'
 import type { SymbolNavigateRequest } from '../editor/symbolHoverDom'
 import {
+  normalizeRepoPath,
   resolveDiffLineScope,
   resolveSymbolDefinitions,
   resolveSymbolReferences
@@ -56,6 +57,18 @@ export interface SymbolCandidatePopoverState {
 }
 
 export type { SymbolNotFoundTooltipState }
+
+export interface SymbolPaletteScopeInfo {
+  scope: CodeSourceScope
+  scopeLabel: string
+  stashHash?: string
+  currentFilePath: string
+  changedFilePaths?: ReadonlySet<string>
+  diffTabId?: string
+  diffSide?: 'old' | 'new'
+  isInCurrentDiffHunk?: (repoRelativePath: string, lineNumber: number) => boolean
+  workspaceRootPath: string | null
+}
 
 interface UseSymbolNavigationControllerOptions {
   layout: PaneLayoutState
@@ -714,6 +727,104 @@ export function useSymbolNavigationController({
     [handleSelectReferenceMatch, referencesState]
   )
 
+  const resolveActivePaletteScope = useCallback((): SymbolPaletteScopeInfo => {
+    const {
+      layout: currentLayout,
+      buffers: currentBuffers,
+      diffsByKey: currentDiffs,
+      workspaceRootPath: propRootPath,
+      getActiveDiffChangedFiles: getChangedFiles
+    } = latestRef.current
+    const activePaneId = currentLayout.activePaneId
+    const activeTab = getPaneActiveTab(currentLayout.panes[activePaneId])
+
+    if (activeTab?.kind === 'diff') {
+      const side: 'old' | 'new' = 'new'
+      const scope = resolveDiffLineScope(activeTab.diff.request, side)
+      const extraChanged = getChangedFiles?.(activeTab.diff.request)
+      const changedFilePaths = new Set<string>([
+        normalizeRepoPath(activeTab.diff.request.path),
+        ...(extraChanged ? Array.from(extraChanged, normalizeRepoPath) : [])
+      ])
+      const diffState = currentDiffs[formatGitDiffTabKey(activeTab.diff.request)]
+      const isInCurrentDiffHunk =
+        diffState?.status === 'loaded' && !diffState.diff.isBinary
+          ? buildHunkLineChecker(diffState.diff.rawPatch, activeTab.diff.request.path, side)
+          : undefined
+      return {
+        scope,
+        scopeLabel: formatScopeLabel(scope),
+        stashHash: activeTab.diff.request.kind === 'stash' ? activeTab.diff.request.stashHash : undefined,
+        currentFilePath: activeTab.diff.request.path,
+        changedFilePaths,
+        diffTabId: activeTab.id,
+        diffSide: side,
+        isInCurrentDiffHunk,
+        workspaceRootPath: activeTab.diff.workspaceRootPath ?? propRootPath ?? null
+      }
+    }
+
+    if (activeTab?.kind === 'snapshot') {
+      return {
+        scope: activeTab.snapshot.request.scope,
+        scopeLabel: formatScopeLabel(activeTab.snapshot.request.scope),
+        stashHash: activeTab.snapshot.request.stashHash,
+        currentFilePath: activeTab.snapshot.request.path,
+        workspaceRootPath: activeTab.snapshot.workspaceRootPath ?? propRootPath ?? null
+      }
+    }
+
+    const activeBuffer =
+      activeTab?.kind === 'document' ? currentBuffers[activeTab.bufferKey] : undefined
+    const rootPath = propRootPath ?? null
+    return {
+      scope: { kind: 'working-tree' },
+      scopeLabel: '워킹트리',
+      currentFilePath:
+        activeBuffer && rootPath ? toRepoRelativePath(activeBuffer.path, rootPath) : '',
+      workspaceRootPath: rootPath
+    }
+  }, [])
+
+  const jumpToPaletteMatch = useCallback(
+    (match: SymbolCandidateMatch, scopeInfo: SymbolPaletteScopeInfo, pinned: boolean): void => {
+      const { layout: currentLayout, buffers: currentBuffers } = latestRef.current
+      const paneId = currentLayout.activePaneId
+      const effectiveRootPath = scopeInfo.workspaceRootPath
+      if (!effectiveRootPath) return
+
+      const fallbackOrigin: PaneNavigationEntry = {
+        kind: 'document',
+        tabId: '',
+        bufferKey: '',
+        filePath: '',
+        lineNumber: 1,
+        columnStart: 0,
+        columnEnd: 0
+      }
+      const originEntry = buildCurrentPaneOriginEntry(
+        paneId,
+        currentLayout,
+        currentBuffers,
+        fallbackOrigin,
+        effectiveRootPath
+      )
+
+      const ctx: SymbolNavigationTargetContext = {
+        paneId,
+        originEntry,
+        scope: scopeInfo.scope,
+        stashHash: scopeInfo.stashHash,
+        pinned,
+        diffTabId: scopeInfo.diffTabId,
+        diffSide: scopeInfo.diffSide,
+        isInCurrentDiffHunk: scopeInfo.isInCurrentDiffHunk
+      }
+      void jumpToCandidate(ctx, match)
+    },
+    [jumpToCandidate]
+  )
+
   return {
     candidatePopover,
     notFoundTooltip,
@@ -728,6 +839,8 @@ export function useSymbolNavigationController({
     selectCandidate,
     handleSymbolNavigate,
     handleSymbolContextMenu,
-    handleFindReferences
+    handleFindReferences,
+    resolveActivePaletteScope,
+    jumpToPaletteMatch
   }
 }

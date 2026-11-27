@@ -156,11 +156,12 @@ export function usePaneDocumentFind({
       }
 
       event.preventDefault()
-      if (activeTab.kind !== 'document') {
-        return
-      }
-      const activeBuffer = buffersRef.current[activeTab.bufferKey]
-      if (!activeBuffer || isImageDocument(activeBuffer)) {
+      if (activeTab.kind === 'document') {
+        const activeBuffer = buffersRef.current[activeTab.bufferKey]
+        if (!activeBuffer || isImageDocument(activeBuffer)) {
+          return
+        }
+      } else if (activeTab.kind !== 'diff' && activeTab.kind !== 'snapshot') {
         return
       }
 

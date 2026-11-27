@@ -23,7 +23,7 @@ export function isFindReferencesShortcut(
 
 const MAX_CANDIDATE_FILES_TO_VERIFY = 30
 
-function normalizeRepoPath(filePath: string): string {
+export function normalizeRepoPath(filePath: string): string {
   return filePath.replace(/\\/g, '/').replace(/^\/+/, '')
 }
 

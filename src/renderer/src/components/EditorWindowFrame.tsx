@@ -48,6 +48,8 @@ import {
 import { SidebarResizer } from './SidebarResizer'
 import { SymbolCandidatePopover } from './SymbolCandidatePopover'
 import { SymbolContextMenu } from './SymbolContextMenu'
+import { SymbolSearchPalette } from './SymbolSearchPalette'
+import { isEventOutsideShell, isSymbolSearchShortcut } from '../utils/workspaceSearch'
 
 const DEFAULT_IMAGE_TRANSFER_CONTEXT: ImageTransferContextValue = {}
 
@@ -127,6 +129,7 @@ export interface EditorWindowFrameProps {
   isSchemaModalOpen: boolean
   onOpenSchemaModal: () => void
   onCloseSchemaModal: () => void
+  onSymbolPaletteOpenChange?: (isOpen: boolean) => void
   titleBarSlot?: ReactNode
   leftSidebarSlot?: ReactNode
   terminalPanelSlot?: ReactNode
@@ -160,6 +163,7 @@ export function EditorWindowFrame({
   isSchemaModalOpen,
   onOpenSchemaModal,
   onCloseSchemaModal,
+  onSymbolPaletteOpenChange,
   titleBarSlot,
   leftSidebarSlot,
   terminalPanelSlot,
@@ -253,11 +257,26 @@ export function EditorWindowFrame({
     return Boolean(opened)
   }, [ensureSchemaFilePath, openWorkspaceFile])
 
+  const [isSymbolPaletteOpen, setIsSymbolPaletteOpen] = useState(false)
+  const updateSymbolPaletteOpen = useCallback(
+    (nextOpen: boolean): void => {
+      setIsSymbolPaletteOpen(nextOpen)
+      onSymbolPaletteOpenChange?.(nextOpen)
+    },
+    [onSymbolPaletteOpenChange]
+  )
+
+  useEffect(() => {
+    updateSymbolPaletteOpen(false)
+  }, [updateSymbolPaletteOpen, workspaceRootPath])
+
+  const effectiveShortcutDisabled = Boolean(paneWorkspaceProps.isShortcutDisabled) || isSymbolPaletteOpen
+
   const paneFind = usePaneDocumentFind({
     layout: paneWorkspaceProps.layout,
     buffers: paneWorkspaceProps.buffers,
     workspaceRootPath,
-    isShortcutDisabled: Boolean(paneWorkspaceProps.isShortcutDisabled),
+    isShortcutDisabled: effectiveShortcutDisabled,
     shellRef: localShellRef
   })
 
@@ -306,7 +325,30 @@ export function EditorWindowFrame({
   )
 
   const activePaneId = paneWorkspaceProps.layout.activePaneId
-  const isShortcutDisabled = Boolean(paneWorkspaceProps.isShortcutDisabled)
+  const isShortcutDisabled = effectiveShortcutDisabled
+  const isOtherModalOpen = Boolean(paneWorkspaceProps.isShortcutDisabled) && !isSymbolPaletteOpen
+  const resolveActivePaletteScope = symbolNav.resolveActivePaletteScope
+  useEffect(() => {
+    const handleSymbolPaletteShortcut = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || !isSymbolSearchShortcut(event)) return
+      if (isEventOutsideShell(event.target, localShellRef.current)) return
+      if (isSymbolPaletteOpen) {
+        event.preventDefault()
+        updateSymbolPaletteOpen(false)
+        return
+      }
+      if (isOtherModalOpen) return
+      const scopeInfo = resolveActivePaletteScope()
+      if (!scopeInfo.workspaceRootPath) return
+      event.preventDefault()
+      updateSymbolPaletteOpen(true)
+    }
+    window.addEventListener('keydown', handleSymbolPaletteShortcut)
+    return () => {
+      window.removeEventListener('keydown', handleSymbolPaletteShortcut)
+    }
+  }, [isOtherModalOpen, isSymbolPaletteOpen, resolveActivePaletteScope, updateSymbolPaletteOpen])
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || isShortcutDisabled) return
@@ -408,6 +450,7 @@ export function EditorWindowFrame({
           >
             <PaneWorkspace
               {...paneWorkspaceProps}
+              isShortcutDisabled={effectiveShortcutDisabled}
               scrollRequest={navState.outlineScrollRequest}
               searchJumpRequest={navState.searchJumpRequest}
               diffJumpRequest={navState.diffJumpRequest}
@@ -528,6 +571,20 @@ export function EditorWindowFrame({
         onDismiss={symbolNav.dismissContextMenu}
         onClampPosition={symbolNav.clampContextMenuPosition}
       />
+
+      {isSymbolPaletteOpen && (
+        <SymbolSearchPalette
+          isOpen={isSymbolPaletteOpen}
+          scopeInfo={symbolNav.resolveActivePaletteScope()}
+          searchSymbols={(request) =>
+            window.wikiApi.workspace.searchSymbols?.(request) ?? Promise.resolve([])
+          }
+          onSelectMatch={(match, pinned) => {
+            symbolNav.jumpToPaletteMatch(match, symbolNav.resolveActivePaletteScope(), pinned)
+          }}
+          onClose={() => updateSymbolPaletteOpen(false)}
+        />
+      )}
 
       {pendingDialog && (
         <ConfirmDialog

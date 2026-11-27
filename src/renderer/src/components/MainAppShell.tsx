@@ -120,6 +120,7 @@ export function MainAppShell() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [isSchemaModalOpen, setIsSchemaModalOpen] = useState<boolean>(false)
   const [isManualOpen, setIsManualOpen] = useState<boolean>(false)
+  const [isSymbolPaletteOpen, setIsSymbolPaletteOpen] = useState<boolean>(false)
   const gitCollaboratorsRef = useRef<GitSessionRuntimeCollaborators | null>(null)
   const gitConfirm = useMemo(
     () => ({
@@ -175,7 +176,11 @@ export function MainAppShell() {
   })
 
   const isEditorShortcutDisabled =
-    hasActiveModalDialog || isSettingsOpen || isSchemaModalOpen || isManualOpen
+    hasActiveModalDialog ||
+    isSettingsOpen ||
+    isSchemaModalOpen ||
+    isManualOpen ||
+    isSymbolPaletteOpen
   const isEditorShortcutDisabledRef = useRef<boolean>(isEditorShortcutDisabled)
   isEditorShortcutDisabledRef.current = isEditorShortcutDisabled
   const editor = useEditorWorkspace({
@@ -945,6 +950,7 @@ export function MainAppShell() {
       showHeadingNumbers={config.showHeadingNumbers}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
       workspaceRootPath={workspace?.rootPath ?? null}
+      onSymbolPaletteOpenChange={setIsSymbolPaletteOpen}
       getActiveDiffChangedFiles={(request) => {
         if (request.kind === 'branch-compare' && compare.state.summary) {
           return new Set(compare.state.summary.files.map((f) => f.path))

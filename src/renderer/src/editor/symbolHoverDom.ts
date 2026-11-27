@@ -88,14 +88,21 @@ export function resolveSingleLineSymbolAtEvent(
   }
 }
 
+export interface FindHighlightSpan {
+  from: number
+  to: number
+  isActive: boolean
+}
+
 /**
- * Renders syntax-highlighted spans with `data-col-start` attributes, optional word-diff highlights, and hover underline.
+ * Renders syntax-highlighted spans with `data-col-start` attributes, optional word-diff highlights, hover underline, and find match highlights.
  */
 export function renderSyntaxLineWithHover(
   lineText: string,
   syntaxSpans: readonly CodeBlockHighlightSpan[] | undefined,
   hoverRange: { columnStart: number; columnEnd: number } | null,
-  wordHighlights?: readonly { from: number; to: number }[]
+  wordHighlights?: readonly { from: number; to: number }[],
+  findHighlights?: readonly FindHighlightSpan[]
 ): ReactNode {
   if (!lineText) {
     return '\u00a0'
@@ -103,6 +110,12 @@ export function renderSyntaxLineWithHover(
   const boundaries = new Set<number>([0, lineText.length])
   if (wordHighlights) {
     for (const range of wordHighlights) {
+      if (range.from >= 0 && range.from <= lineText.length) boundaries.add(range.from)
+      if (range.to >= 0 && range.to <= lineText.length) boundaries.add(range.to)
+    }
+  }
+  if (findHighlights) {
+    for (const range of findHighlights) {
       if (range.from >= 0 && range.from <= lineText.length) boundaries.add(range.from)
       if (range.to >= 0 && range.to <= lineText.length) boundaries.add(range.to)
     }
@@ -131,20 +144,28 @@ export function renderSyntaxLineWithHover(
     const text = lineText.slice(from, to)
     const isWordChanged =
       wordHighlights?.some((range) => range.from <= from && to <= range.to) ?? false
+    const matchedFind = findHighlights?.find((range) => range.from <= from && to <= range.to)
     const syntaxClass = syntaxSpans?.find((s) => s.from <= from && to <= s.to)?.className ?? null
     const isHovered = Boolean(hoverRange && hoverRange.columnStart <= from && to <= hoverRange.columnEnd)
-    const className = [syntaxClass, isHovered ? 'symbol-hover-target' : null]
+    const findClass = matchedFind
+      ? matchedFind.isActive
+        ? 'viewer-search-match is-active'
+        : 'viewer-search-match'
+      : null
+    const className = [syntaxClass, isHovered ? 'symbol-hover-target' : null, findClass]
       .filter(Boolean)
       .join(' ')
 
-    if (isWordChanged) {
+    if (isWordChanged || matchedFind) {
       nodes.push(
         createElement(
           'mark',
           {
             key: i,
             'data-col-start': from,
-            className: className ? `git-diff-word-highlight ${className}` : 'git-diff-word-highlight'
+            className: [isWordChanged ? 'git-diff-word-highlight' : null, className]
+              .filter(Boolean)
+              .join(' ')
           },
           text
         )

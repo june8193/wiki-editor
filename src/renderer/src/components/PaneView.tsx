@@ -206,6 +206,9 @@ export function PaneView({
           request={activeTab.diff.request}
           viewMode={activeTab.diff.viewMode}
           state={activeDiffState}
+          isActive={isActivePane}
+          isShortcutDisabled={isShortcutDisabled}
+          findControl={findControl}
           onChangeViewMode={handleChangeDiffViewMode}
           onOpenFile={actions.onOpenDiffTargetFile}
           onSymbolNavigate={onSymbolNavigate ? handleDiffSymbolNavigate : undefined}
@@ -221,6 +224,9 @@ export function PaneView({
           state={activeSnapshotState}
           scrollTop={activeTab.snapshot.scrollTop}
           jumpRequest={activeSnapshotJumpRequest}
+          isActive={isActivePane}
+          isShortcutDisabled={isShortcutDisabled}
+          findControl={findControl}
           onScrollTopChange={(nextScrollTop) =>
             actions.onUpdateSnapshotScrollTop?.(pane.id, activeTab.id, nextScrollTop)
           }

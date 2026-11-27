@@ -1,13 +1,17 @@
-import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { GitDiffRequest, GitFileDiff } from '@shared/git'
+import type { CompiledSearchMatcher } from '@shared/search'
 import type { CodeBlockHighlightSpan, CodeParser } from '../editor/codeBlockHighlight'
 import { isSymbolSupportedFile } from '../editor/codeSymbolExtractor'
 import {
+  type FindHighlightSpan,
   type HoveredSymbolRange,
   renderSyntaxLineWithHover,
   type SymbolNavigateRequest
 } from '../editor/symbolHoverDom'
 import { isSymbolModifierPressed } from '../editor/symbolNavigation'
+import type { DocumentEditorFindControl } from '../hooks/useDocumentEditorFind'
+import { groupFindHighlightsByKey, useViewerDocumentFind } from '../hooks/useViewerDocumentFind'
 import type { GitDiffViewMode } from '../stores/PaneTabStore'
 import {
   getDiffLineSyntaxSpans,
@@ -29,6 +33,7 @@ import {
   type DiffTextRange,
   type UnifiedDiffSideCell
 } from '../utils/unifiedDiff'
+import { DocumentFindBar } from './DocumentFindBar'
 
 export type GitDiffContentState =
   | { status: 'loading' }
@@ -53,6 +58,9 @@ interface GitDiffViewerProps {
   request: GitDiffRequest
   viewMode: GitDiffViewMode
   state: GitDiffContentState
+  isActive?: boolean
+  isShortcutDisabled?: boolean
+  findControl?: DocumentEditorFindControl
   onChangeViewMode: (nextMode: GitDiffViewMode) => void
   onOpenFile?: (repoRelativePath: string) => void
   onSymbolNavigate?: (request: SymbolNavigateRequest) => void
@@ -60,6 +68,13 @@ interface GitDiffViewerProps {
   onFindReferences?: (request: SymbolNavigateRequest) => void
   navigation?: GitDiffNavigationProps
   jumpRequest?: DiffJumpRequest | null
+}
+
+interface DiffFindMatch {
+  rowIndex: number
+  side: 'old' | 'new'
+  start: number
+  end: number
 }
 
 const DIFF_ROW_TYPE_CLASS: Record<UnifiedDiffSideCell['type'], string> = {
@@ -73,6 +88,7 @@ function DiffCodeContent({
   marker,
   content,
   wordHighlights,
+  findHighlights,
   syntaxSpans,
   hoverRange,
   onMouseMove,
@@ -83,6 +99,7 @@ function DiffCodeContent({
   marker: string
   content: string
   wordHighlights?: DiffTextRange[]
+  findHighlights?: readonly FindHighlightSpan[]
   syntaxSpans?: CodeBlockHighlightSpan[]
   hoverRange?: { columnStart: number; columnEnd: number } | null
   onMouseMove?: (event: React.MouseEvent<HTMLSpanElement>) => void
@@ -102,7 +119,13 @@ function DiffCodeContent({
         onClick={onClick}
         onContextMenu={onContextMenu}
       >
-        {renderSyntaxLineWithHover(content, syntaxSpans, hoverRange ?? null, wordHighlights)}
+        {renderSyntaxLineWithHover(
+          content,
+          syntaxSpans,
+          hoverRange ?? null,
+          wordHighlights,
+          findHighlights
+        )}
       </span>
     </>
   )
@@ -114,6 +137,7 @@ function SideCell({
   filePath,
   syntaxParser,
   hoveredSymbol,
+  findHighlights,
   onLineMouseMove,
   onLineMouseLeave,
   onLineClick,
@@ -124,6 +148,7 @@ function SideCell({
   filePath: string
   syntaxParser: CodeParser | null
   hoveredSymbol: HoveredSymbolRange | null
+  findHighlights?: readonly FindHighlightSpan[]
   onLineMouseMove?: (
     lineText: string,
     lineNumber: number,
@@ -175,6 +200,7 @@ function SideCell({
           marker={cell.marker}
           content={cell.content}
           wordHighlights={cell.wordHighlights}
+          findHighlights={findHighlights}
           syntaxSpans={syntaxSpans}
           hoverRange={hoverRange}
           onMouseMove={
@@ -269,6 +295,9 @@ function areGitDiffViewerPropsEqual(
     prev.request === next.request &&
     prev.viewMode === next.viewMode &&
     prev.state === next.state &&
+    prev.isActive === next.isActive &&
+    prev.isShortcutDisabled === next.isShortcutDisabled &&
+    prev.findControl === next.findControl &&
     prev.onChangeViewMode === next.onChangeViewMode &&
     prev.onOpenFile === next.onOpenFile &&
     prev.onSymbolNavigate === next.onSymbolNavigate &&
@@ -303,6 +332,9 @@ function GitDiffViewerInner({
   request,
   viewMode,
   state,
+  isActive = true,
+  isShortcutDisabled = false,
+  findControl,
   onChangeViewMode,
   onOpenFile,
   onSymbolNavigate,
@@ -433,6 +465,76 @@ function GitDiffViewerInner({
       scrollToRowIndex(matchedIndex)
     }
   }, [jumpRequest, totalRows, viewMode, sideBySideRows, inlineRows, scrollToRowIndex])
+  const scrollElementRef = useRef<HTMLDivElement | null>(null)
+  const mergedScrollContainerRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      scrollElementRef.current = element
+      scrollContainerRef(element)
+    },
+    [scrollContainerRef]
+  )
+
+  const computeDiffMatches = useCallback(
+    (matcher: CompiledSearchMatcher): DiffFindMatch[] => {
+      const results: DiffFindMatch[] = []
+      if (viewMode === 'side-by-side') {
+        for (let rowIndex = 0; rowIndex < sideBySideRows.length; rowIndex += 1) {
+          const row = sideBySideRows[rowIndex]
+          if (row.kind !== 'pair') continue
+          if (row.oldCell && row.oldCell.type !== 'note') {
+            for (const span of matcher.findMatches(row.oldCell.content)) {
+              results.push({ rowIndex, side: 'old', start: span.start, end: span.end })
+            }
+          }
+          if (row.newCell && row.newCell.type !== 'note') {
+            for (const span of matcher.findMatches(row.newCell.content)) {
+              results.push({ rowIndex, side: 'new', start: span.start, end: span.end })
+            }
+          }
+        }
+      } else {
+        for (let rowIndex = 0; rowIndex < inlineRows.length; rowIndex += 1) {
+          const row = inlineRows[rowIndex]
+          if (row.kind !== 'line' || row.lineType === 'note') continue
+          const side: 'old' | 'new' = row.lineType === 'delete' ? 'old' : 'new'
+          for (const span of matcher.findMatches(row.content)) {
+            results.push({ rowIndex, side, start: span.start, end: span.end })
+          }
+        }
+      }
+      return results
+    },
+    [viewMode, sideBySideRows, inlineRows]
+  )
+
+  const handleScrollToDiffMatch = useCallback(
+    (activeMatch: DiffFindMatch) => {
+      scrollToRowIndex(activeMatch.rowIndex)
+      return null
+    },
+    [scrollToRowIndex]
+  )
+
+  const {
+    matches: findMatches,
+    activeMatchIndex,
+    findBarProps
+  } = useViewerDocumentFind({
+    findControl,
+    isActive,
+    isShortcutDisabled,
+    selectionContainerRef: scrollElementRef,
+    excludedSelectionSelector:
+      '.git-diff-gutter, .git-diff-marker, .git-diff-hunk-row, .document-find-bar',
+    computeMatches: computeDiffMatches,
+    onScrollToMatch: handleScrollToDiffMatch
+  })
+
+  const findHighlightsByCell = useMemo(
+    () => groupFindHighlightsByKey(findMatches, activeMatchIndex, (m) => `${m.rowIndex}:${m.side}`),
+    [findMatches, activeMatchIndex]
+  )
+
   const visibleSideBySideRows = isVirtualized
     ? sideBySideRows.slice(startIndex, endIndex)
     : sideBySideRows
@@ -519,22 +621,24 @@ function GitDiffViewerInner({
         </div>
       )}
 
-      {state.status === 'loading' ? (
-        <div className="git-diff-empty-state">Diff 불러오는 중...</div>
-      ) : state.status === 'error' ? (
-        <div className="git-diff-empty-state is-error" role="alert">
-          {state.errorMessage}
-        </div>
-      ) : loadedDiff?.isBinary ? (
-        <div className="git-diff-empty-state">바이너리 파일은 Diff 미리보기를 지원하지 않습니다.</div>
-      ) : !parsed || parsed.hunks.length === 0 ? (
-        <div className="git-diff-empty-state">표시할 텍스트 변경 사항이 없습니다.</div>
-      ) : viewMode === 'side-by-side' ? (
-        <div
-          ref={scrollContainerRef}
-          className="git-diff-scroll"
-          data-testid="diff-side-by-side"
-        >
+      <div className="viewer-body-container">
+        {findBarProps && <DocumentFindBar {...findBarProps} />}
+        {state.status === 'loading' ? (
+          <div className="git-diff-empty-state">Diff 불러오는 중...</div>
+        ) : state.status === 'error' ? (
+          <div className="git-diff-empty-state is-error" role="alert">
+            {state.errorMessage}
+          </div>
+        ) : loadedDiff?.isBinary ? (
+          <div className="git-diff-empty-state">바이너리 파일은 Diff 미리보기를 지원하지 않습니다.</div>
+        ) : !parsed || parsed.hunks.length === 0 ? (
+          <div className="git-diff-empty-state">표시할 텍스트 변경 사항이 없습니다.</div>
+        ) : viewMode === 'side-by-side' ? (
+          <div
+            ref={mergedScrollContainerRef}
+            className="git-diff-scroll"
+            data-testid="diff-side-by-side"
+          >
           <table className="git-diff-table git-diff-table--split">
             <colgroup>
               <col className="git-diff-col-gutter" />
@@ -572,6 +676,7 @@ function GitDiffViewerInner({
                       filePath={displayFile.path}
                       syntaxParser={activeSyntaxParser}
                       hoveredSymbol={hoveredSymbol}
+                      findHighlights={findHighlightsByCell.get(`${idx}:old`)}
                       onLineMouseMove={handleLineMouseMove}
                       onLineMouseLeave={handleLineMouseLeave}
                       onLineClick={handleLineClick}
@@ -583,6 +688,7 @@ function GitDiffViewerInner({
                       filePath={displayFile.path}
                       syntaxParser={activeSyntaxParser}
                       hoveredSymbol={hoveredSymbol}
+                      findHighlights={findHighlightsByCell.get(`${idx}:new`)}
                       onLineMouseMove={handleLineMouseMove}
                       onLineMouseLeave={handleLineMouseLeave}
                       onLineClick={handleLineClick}
@@ -595,7 +701,7 @@ function GitDiffViewerInner({
           </table>
         </div>
       ) : (
-        <div ref={scrollContainerRef} className="git-diff-scroll" data-testid="diff-inline">
+        <div ref={mergedScrollContainerRef} className="git-diff-scroll" data-testid="diff-inline">
           <table className="git-diff-table git-diff-table--inline">
             <colgroup>
               <col className="git-diff-col-gutter" />
@@ -649,6 +755,7 @@ function GitDiffViewerInner({
                           marker={row.marker}
                           content={row.content}
                           wordHighlights={row.wordHighlights}
+                          findHighlights={findHighlightsByCell.get(`${idx}:${inlineSide}`)}
                           syntaxSpans={
                             row.lineType === 'note'
                               ? undefined
@@ -706,6 +813,7 @@ function GitDiffViewerInner({
           </table>
         </div>
       )}
+      </div>
     </section>
   )
 }

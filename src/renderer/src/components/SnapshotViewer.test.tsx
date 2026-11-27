@@ -143,4 +143,74 @@ describe('SnapshotViewer', () => {
       })
     )
   })
+
+  it('opens Find Bar on Ctrl+F with single-line selection, highlights matches with Aa/ab/.*, cycles with Enter/Shift+Enter, and closes on Esc', () => {
+    const state: SnapshotContentState = {
+      status: 'loaded',
+      snapshot: {
+        path: 'src/utils/helper.ts',
+        scope: baseRequest.scope,
+        isBinary: false,
+        isTruncated: false,
+        existsInWorkspace: true,
+        encoding: 'utf-8',
+        content: [
+          'const alpha = 1',
+          'const AlphaBeta = 2',
+          'const alpha = 3'
+        ].join('\n')
+      }
+    }
+
+    const { container } = render(
+      <SnapshotViewer request={baseRequest} state={state} isActive />
+    )
+
+    // Select "alpha" on line 1
+    const firstCodeCell = container.querySelector('[data-line-number="1"] .snapshot-line-code')
+    expect(firstCodeCell).toBeTruthy()
+    const walker = document.createTreeWalker(firstCodeCell!, NodeFilter.SHOW_TEXT)
+    let alphaNode: Text | null = null
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text
+      if (node.textContent?.includes('alpha')) {
+        alphaNode = node
+        break
+      }
+    }
+    expect(alphaNode).toBeTruthy()
+    const range = document.createRange()
+    const startIdx = alphaNode!.textContent!.indexOf('alpha')
+    range.setStart(alphaNode!, startIdx)
+    range.setEnd(alphaNode!, startIdx + 5)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+
+    const findInput = screen.getByLabelText('문서 내 검색어 입력') as HTMLInputElement
+    expect(findInput.value).toBe('alpha')
+    expect(screen.getByText('1 / 3')).toBeTruthy()
+    expect(container.querySelectorAll('.viewer-search-match').length).toBe(3)
+    expect(container.querySelectorAll('.viewer-search-match.is-active').length).toBe(1)
+
+    // Cycle next with Enter -> 2 / 3
+    fireEvent.keyDown(findInput, { key: 'Enter' })
+    expect(screen.getByText('2 / 3')).toBeTruthy()
+
+    // Toggle wholeWord (ab) -> only exact 'alpha' matches (2 matches)
+    fireEvent.click(screen.getByRole('button', { name: '단어 단위 (ab)' }))
+    expect(screen.getByText('1 / 2')).toBeTruthy()
+    expect(container.querySelectorAll('.viewer-search-match').length).toBe(2)
+
+    // Cycle prev with Shift+Enter -> wraps to 2 / 2
+    fireEvent.keyDown(findInput, { key: 'Enter', shiftKey: true })
+    expect(screen.getByText('2 / 2')).toBeTruthy()
+
+    // Esc closes Find Bar and clears highlights
+    fireEvent.keyDown(findInput, { key: 'Escape' })
+    expect(screen.queryByLabelText('문서 내 검색어 입력')).toBeNull()
+    expect(container.querySelectorAll('.viewer-search-match').length).toBe(0)
+  })
 })

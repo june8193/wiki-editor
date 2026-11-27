@@ -1,17 +1,22 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { CompiledSearchMatcher } from '@shared/search'
 import type { GitBlobSnapshot, GitBlobSnapshotRequest } from '@shared/symbol'
 import type { CodeParser } from '../editor/codeBlockHighlight'
 import { isSymbolSupportedFile } from '../editor/codeSymbolExtractor'
 import {
+  type FindHighlightSpan,
   renderSyntaxLineWithHover,
   type SymbolNavigateRequest
 } from '../editor/symbolHoverDom'
+import type { DocumentEditorFindControl } from '../hooks/useDocumentEditorFind'
 import { useLineSymbolHover } from '../hooks/useSymbolHoverCleanup'
+import { groupFindHighlightsByKey, useViewerDocumentFind } from '../hooks/useViewerDocumentFind'
 import {
   getDiffLineSyntaxSpans,
   loadDiffLanguageParser,
   resolveDiffLanguageParserSync
 } from '../utils/diffSyntaxHighlight'
+import { DocumentFindBar } from './DocumentFindBar'
 
 export type SnapshotContentState =
   | { status: 'loading' }
@@ -28,6 +33,9 @@ export interface SnapshotViewerProps {
   state: SnapshotContentState
   scrollTop?: number
   jumpRequest?: SnapshotJumpRequest | null
+  isActive?: boolean
+  isShortcutDisabled?: boolean
+  findControl?: DocumentEditorFindControl
   onScrollTopChange?: (scrollTop: number) => void
   onOpenLocalFile?: (repoRelativePath: string) => void
   onSymbolNavigate?: (request: SymbolNavigateRequest) => void
@@ -35,11 +43,20 @@ export interface SnapshotViewerProps {
   onFindReferences?: (request: SymbolNavigateRequest) => void
 }
 
+interface SnapshotFindMatch {
+  lineNumber: number
+  start: number
+  end: number
+}
+
 function SnapshotViewerInner({
   request,
   state,
   scrollTop = 0,
   jumpRequest = null,
+  isActive = true,
+  isShortcutDisabled = false,
+  findControl,
   onScrollTopChange,
   onOpenLocalFile,
   onSymbolNavigate,
@@ -88,6 +105,45 @@ function SnapshotViewerInner({
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const [highlightedLine, setHighlightedLine] = useState<number | null>(null)
+
+  const computeSnapshotMatches = useCallback(
+    (matcher: CompiledSearchMatcher): SnapshotFindMatch[] => {
+      const results: SnapshotFindMatch[] = []
+      for (let i = 0; i < lines.length; i += 1) {
+        const lineMatches = matcher.findMatches(lines[i])
+        for (const span of lineMatches) {
+          results.push({ lineNumber: i + 1, start: span.start, end: span.end })
+        }
+      }
+      return results
+    },
+    [lines]
+  )
+
+  const handleScrollToMatch = useCallback(
+    (activeMatch: SnapshotFindMatch, container: HTMLElement | null) =>
+      container?.querySelector(`[data-line-number="${activeMatch.lineNumber}"]`) ?? null,
+    []
+  )
+
+  const {
+    matches: findMatches,
+    activeMatchIndex,
+    findBarProps
+  } = useViewerDocumentFind({
+    findControl,
+    isActive,
+    isShortcutDisabled,
+    selectionContainerRef: scrollContainerRef,
+    excludedSelectionSelector: '.snapshot-line-gutter, .document-find-bar',
+    computeMatches: computeSnapshotMatches,
+    onScrollToMatch: handleScrollToMatch
+  })
+
+  const findHighlightsByLine = useMemo(
+    () => groupFindHighlightsByKey(findMatches, activeMatchIndex, (m) => m.lineNumber),
+    [findMatches, activeMatchIndex]
+  )
   const isSymbolNavEnabled = isSymbolSupportedFile(request.path) && activeSyntaxParser !== null
   const {
     hoveredSymbol,
@@ -171,63 +227,73 @@ function SnapshotViewerInner({
         )}
       </div>
 
-      {state.status === 'loading' ? (
-        <div className="snapshot-empty-state">스냅샷 불러오는 중...</div>
-      ) : state.status === 'error' ? (
-        <div className="snapshot-empty-state is-error" role="alert">
-          {state.errorMessage}
-        </div>
-      ) : loadedSnapshot?.isBinary ? (
-        <div className="snapshot-empty-state">바이너리 파일은 텍스트 스냅샷 미리보기를 지원하지 않습니다.</div>
-      ) : (
-        <div
-          ref={scrollContainerRef}
-          className="snapshot-code-scroll"
-          onScroll={(event) => {
-            onScrollTopChange?.(event.currentTarget.scrollTop)
-          }}
-        >
-          <table className="snapshot-code-table">
-            <tbody>
-              {lines.map((lineText, idx) => {
-                const lineNumber = idx + 1
-                const syntaxSpans = getDiffLineSyntaxSpans(
-                  lineText,
-                  request.path,
-                  activeSyntaxParser
-                )
-                const isHighlighted = highlightedLine === lineNumber
-                const hoverRange =
-                  hoveredSymbol && hoveredSymbol.lineNumber === lineNumber
-                    ? { columnStart: hoveredSymbol.columnStart, columnEnd: hoveredSymbol.columnEnd }
-                    : null
-                return (
-                  <tr
-                    key={lineNumber}
-                    data-line-number={lineNumber}
-                    className={`snapshot-code-row${isHighlighted ? ' is-jump-highlight' : ''}`}
-                  >
-                    <td className="snapshot-line-gutter">{lineNumber}</td>
-                    <td
-                      className="snapshot-line-code"
-                      onMouseMove={(event) =>
-                        handleLineMouseMove(lineText, lineNumber, undefined, event)
-                      }
-                      onMouseLeave={() => handleLineMouseLeave(lineNumber)}
-                      onClick={(event) => handleLineClick(lineText, lineNumber, undefined, event)}
-                      onContextMenu={(event) =>
-                        handleLineContextMenu(lineText, lineNumber, undefined, event)
-                      }
+      <div className="viewer-body-container">
+        {findBarProps && <DocumentFindBar {...findBarProps} />}
+        {state.status === 'loading' ? (
+          <div className="snapshot-empty-state">스냅샷 불러오는 중...</div>
+        ) : state.status === 'error' ? (
+          <div className="snapshot-empty-state is-error" role="alert">
+            {state.errorMessage}
+          </div>
+        ) : loadedSnapshot?.isBinary ? (
+          <div className="snapshot-empty-state">바이너리 파일은 텍스트 스냅샷 미리보기를 지원하지 않습니다.</div>
+        ) : (
+          <div
+            ref={scrollContainerRef}
+            className="snapshot-code-scroll"
+            onScroll={(event) => {
+              onScrollTopChange?.(event.currentTarget.scrollTop)
+            }}
+          >
+            <table className="snapshot-code-table">
+              <tbody>
+                {lines.map((lineText, idx) => {
+                  const lineNumber = idx + 1
+                  const syntaxSpans = getDiffLineSyntaxSpans(
+                    lineText,
+                    request.path,
+                    activeSyntaxParser
+                  )
+                  const isHighlighted = highlightedLine === lineNumber
+                  const hoverRange =
+                    hoveredSymbol && hoveredSymbol.lineNumber === lineNumber
+                      ? { columnStart: hoveredSymbol.columnStart, columnEnd: hoveredSymbol.columnEnd }
+                      : null
+                  const lineFindHighlights = findHighlightsByLine.get(lineNumber)
+                  return (
+                    <tr
+                      key={lineNumber}
+                      data-line-number={lineNumber}
+                      className={`snapshot-code-row${isHighlighted ? ' is-jump-highlight' : ''}`}
                     >
-                      {renderSyntaxLineWithHover(lineText, syntaxSpans, hoverRange)}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+                      <td className="snapshot-line-gutter">{lineNumber}</td>
+                      <td
+                        className="snapshot-line-code"
+                        onMouseMove={(event) =>
+                          handleLineMouseMove(lineText, lineNumber, undefined, event)
+                        }
+                        onMouseLeave={() => handleLineMouseLeave(lineNumber)}
+                        onClick={(event) => handleLineClick(lineText, lineNumber, undefined, event)}
+                        onContextMenu={(event) =>
+                          handleLineContextMenu(lineText, lineNumber, undefined, event)
+                        }
+                      >
+                        {renderSyntaxLineWithHover(
+                          lineText,
+                          syntaxSpans,
+                          hoverRange,
+                          undefined,
+                          lineFindHighlights
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </section>
   )
 }

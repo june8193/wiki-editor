@@ -31,12 +31,13 @@ export function AuxiliaryAppShell() {
     onError: reportErrorBanner
   })
   const [isSchemaModalOpen, setIsSchemaModalOpen] = useState(false)
+  const [isSymbolPaletteOpen, setIsSymbolPaletteOpen] = useState(false)
   const loadInitContext = useMemo(
     () => createWindowInitContextLoader(wikiApi.window),
     [wikiApi.window]
   )
   const isDialogOpen = pendingDialog !== null
-  const isShortcutDisabled = isDialogOpen || isSchemaModalOpen
+  const isShortcutDisabled = isDialogOpen || isSchemaModalOpen || isSymbolPaletteOpen
   const editor = useEditorWorkspace({
     isAutoSavePaused: isDialogOpen,
     isShortcutDisabled,
@@ -124,6 +125,7 @@ export function AuxiliaryAppShell() {
       isSchemaModalOpen={isSchemaModalOpen}
       onOpenSchemaModal={() => setIsSchemaModalOpen(true)}
       onCloseSchemaModal={() => setIsSchemaModalOpen(false)}
+      onSymbolPaletteOpenChange={setIsSymbolPaletteOpen}
       showHeadingNumbers={config.showHeadingNumbers}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
       frontmatterSchema={frontmatterSchema}

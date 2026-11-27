@@ -81,6 +81,19 @@ export function isDocumentFindShortcut(event: KeyboardEventLike): boolean {
 }
 
 /**
+ * Returns true when a keyboard event matches the Symbol Search Palette shortcut (`Ctrl+T` / `Cmd+T` without Shift/Alt).
+ */
+export function isSymbolSearchShortcut(event: KeyboardEventLike): boolean {
+  return (
+    (event.ctrlKey || event.metaKey) &&
+    !event.shiftKey &&
+    !event.altKey &&
+    !isKeyboardEventComposing(event) &&
+    event.key.toLowerCase() === 't'
+  )
+}
+
+/**
  * Returns true when a DOM event originated inside another window's `.app-shell` element.
  */
 export function isEventOutsideShell(

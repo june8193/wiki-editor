@@ -964,4 +964,89 @@ describe('GitDiffViewer', () => {
       })
     )
   })
+
+  it('supports Ctrl+F Find Bar in side-by-side, inline, and virtualized diff views with selection auto-fill and distant match scroll', () => {
+    const lines = ['@@ -1,260 +1,260 @@']
+    lines.push(' const targetAlpha = 1')
+    lines.push('-const TargetAlphaBeta = 2')
+    lines.push('+const targetAlphaBeta = 2')
+    for (let i = 4; i <= 250; i += 1) {
+      lines.push(` const filler_${i} = ${i}`)
+    }
+    lines.push('+const distantTarget = targetAlpha')
+
+    const patch = lines.join('\n')
+    const diff = makeDiff({ path: 'src/largeFind.ts', rawPatch: patch })
+    const request: GitDiffRequest = { kind: 'unstaged', path: 'src/largeFind.ts', status: 'M' }
+
+    const { container, rerender } = render(
+      <GitDiffViewer
+        request={request}
+        viewMode="side-by-side"
+        state={{ status: 'loaded', diff }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+        isActive
+      />
+    )
+
+    // Select "targetAlpha" in the first rendered code line
+    const firstLineText = container.querySelector('.git-diff-line-text')
+    expect(firstLineText).toBeTruthy()
+    const walker = document.createTreeWalker(firstLineText!, NodeFilter.SHOW_TEXT)
+    let textNode: Text | null = null
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text
+      if (node.textContent?.includes('targetAlpha')) {
+        textNode = node
+        break
+      }
+    }
+    expect(textNode).toBeTruthy()
+    const range = document.createRange()
+    const idx = textNode!.textContent!.indexOf('targetAlpha')
+    range.setStart(textNode!, idx)
+    range.setEnd(textNode!, idx + 'targetAlpha'.length)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const findInput = screen.getByLabelText('문서 내 검색어 입력') as HTMLInputElement
+    expect(findInput.value).toBe('targetAlpha')
+
+    // side-by-side: context line has old+new (2), delete+add pair has old+new (2), distant add line (1) => 5 matches
+    expect(screen.getByText('1 / 5')).toBeTruthy()
+
+    // Toggle wholeWord (ab): only exact 'targetAlpha' matches (old+new on line 1 + distant add = 3)
+    fireEvent.click(screen.getByRole('button', { name: '단어 단위 (ab)' }))
+    expect(screen.getByText('1 / 3')).toBeTruthy()
+
+    // Navigate to match 3 (distant row 250) -> virtual scroll moves scrollTop > 0 and mounts distantTarget
+    fireEvent.keyDown(findInput, { key: 'Enter' })
+    fireEvent.keyDown(findInput, { key: 'Enter' })
+    expect(screen.getByText('3 / 3')).toBeTruthy()
+    const scrollEl = screen.getByTestId('diff-side-by-side')
+    expect(scrollEl.scrollTop).toBeGreaterThan(0)
+    expect(screen.getByText(/distantTarget/)).toBeTruthy()
+
+    // Switch to inline mode while Find Bar is open -> matches recalculate for inline (1 on line 1 + 1 on distant = 2)
+    rerender(
+      <GitDiffViewer
+        request={request}
+        viewMode="inline"
+        state={{ status: 'loaded', diff }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+        isActive
+      />
+    )
+    expect(screen.getByText('2 / 2')).toBeTruthy()
+    expect(container.querySelectorAll('.viewer-search-match').length).toBeGreaterThan(0)
+
+    // Esc closes Find Bar and clears highlights
+    fireEvent.keyDown(findInput, { key: 'Escape' })
+    expect(screen.queryByLabelText('문서 내 검색어 입력')).toBeNull()
+    expect(container.querySelectorAll('.viewer-search-match').length).toBe(0)
+  })
 })
