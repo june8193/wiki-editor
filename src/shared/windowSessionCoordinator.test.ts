@@ -272,7 +272,8 @@ describe('WindowSessionCoordinator', () => {
       expect(aux1.windowId).toBe(aux1Id)
       expect(coordinator.getWindowInitContext(aux1Id)).toEqual({
         role: 'auxiliary',
-        initialTabs: [onePayload]
+        initialTabs: [onePayload],
+        initialWorkspacePath: 'C:\\wiki\\alpha'
       })
       await expect(
         coordinator.openWorkspaceInNewWindow(aux1Id, 'C:/wiki/alpha')

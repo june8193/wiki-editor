@@ -6,7 +6,8 @@ import { formatWindowTitle, type WindowInitContext } from '@shared/window'
  */
 export function useWindowTitle(
   loadInitContext: () => Promise<WindowInitContext | null>,
-  activeTitleName?: string | null
+  activeTitleName?: string | null,
+  workspaceName?: string | null
 ): string {
   const [appVersion, setAppVersion] = useState<string | undefined>(undefined)
 
@@ -22,7 +23,7 @@ export function useWindowTitle(
     }
   }, [loadInitContext])
 
-  const windowTitle = formatWindowTitle(activeTitleName, appVersion)
+  const windowTitle = formatWindowTitle(activeTitleName, appVersion, workspaceName)
 
   useEffect(() => {
     document.title = windowTitle

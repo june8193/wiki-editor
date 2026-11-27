@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createWindowInitContextLoader } from '@shared/window'
+import { getWorkspaceDisplayName } from '@shared/workspace'
 import { useAuxiliaryDiffState } from '../hooks/useAuxiliaryDiffState'
 import { useSnapshotTabState } from '../hooks/useSnapshotTabState'
 import { useConfigController } from '../hooks/useConfigController'
@@ -36,6 +37,18 @@ export function AuxiliaryAppShell() {
     () => createWindowInitContextLoader(wikiApi.window),
     [wikiApi.window]
   )
+  const [initWorkspaceRootPath, setInitWorkspaceRootPath] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void loadInitContext().then((context) => {
+      if (!cancelled && context?.initialWorkspacePath) {
+        setInitWorkspaceRootPath(context.initialWorkspacePath)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [loadInitContext])
   const isDialogOpen = pendingDialog !== null
   const isShortcutDisabled = isDialogOpen || isSchemaModalOpen || isSymbolPaletteOpen
   const editor = useEditorWorkspace({
@@ -112,7 +125,11 @@ export function AuxiliaryAppShell() {
         ? `🔒 ${activeTab.snapshot.request.scope.displayRef} · ${activeTab.snapshot.request.path.split(/[\\/]/).pop() ?? activeTab.snapshot.request.path}`
         : editor.activeBuffer?.name
 
-  const windowTitle = useWindowTitle(loadInitContext, activeTitleName)
+  const titleWorkspaceRootPath = initWorkspaceRootPath ?? auxiliaryWorkspaceRootPath
+  const workspaceName = titleWorkspaceRootPath
+    ? getWorkspaceDisplayName(titleWorkspaceRootPath)
+    : null
+  const windowTitle = useWindowTitle(loadInitContext, activeTitleName, workspaceName)
 
   return (
     <EditorWindowFrame

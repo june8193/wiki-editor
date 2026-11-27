@@ -109,17 +109,27 @@ describe('Auxiliary window shell, tab detach/merge, and close guards (<App />)',
 
     const mainWin = harness.createWindow({ role: 'main' })
     const mainRendered = render(<App wikiApi={mainWin.api} />)
+    expect(document.title).toBe('Wiki Editor')
+    expect(mainRendered.container.querySelector('.app-titlebar-title')).toHaveTextContent('Wiki Editor')
+
     await openFolderAndNoteInWindow(user, mainRendered.container, mainWin.emitMenuCommand, 'intro.md')
 
     await waitFor(() => {
       expect(harness.getWatchState().active).toBe(true)
+      expect(mainRendered.container.querySelector('.app-titlebar-title')).toHaveTextContent(
+        'docs - Wiki Editor'
+      )
+      expect(document.title).toBe('docs - Wiki Editor')
     })
 
     const auxWin = harness.createWindow({ role: 'auxiliary', initialTabs: [] })
     const auxRendered = render(<App wikiApi={auxWin.api} />)
 
     await waitFor(() => {
-      expect(document.title).toBe('Wiki Editor')
+      expect(document.title).toBe('docs - Wiki Editor')
+      expect(auxRendered.container.querySelector('.app-titlebar-title')).toHaveTextContent(
+        'docs - Wiki Editor'
+      )
     })
 
     // Auxiliary shell omits Activity Bar, Left Sidebar, and Settings panel, and collapses Right Sidebar
@@ -212,7 +222,10 @@ describe('Auxiliary window shell, tab detach/merge, and close guards (<App />)',
 
     const auxEditor = await within(auxRendered.container).findByTestId('document-editor')
     await waitFor(() => {
-      expect(document.title).toBe('guide.md - Wiki Editor')
+      expect(document.title).toBe('guide.md - docs - Wiki Editor')
+      expect(auxRendered.container.querySelector('.app-titlebar-title')).toHaveTextContent(
+        'guide.md - docs - Wiki Editor'
+      )
       expect(within(auxRendered.container).getByTestId('dirty-indicator')).toBeInTheDocument()
       expect(getRawEditorText(auxEditor)).toContain('Edited unsaved body')
     })

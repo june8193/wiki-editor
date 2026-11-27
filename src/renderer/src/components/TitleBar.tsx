@@ -220,7 +220,7 @@ export function TitleBar({ title, menus, isMenuDisabled = false }: TitleBarProps
         </nav>
       )}
       <div className="app-titlebar-title" title={title}>
-        {title}
+        <span className="app-titlebar-title-text">{title}</span>
       </div>
     </div>
   )

@@ -62,9 +62,12 @@ function createMenus(overrides?: {
 
 describe('TitleBar', () => {
   it('renders centered title without menubar when menus are omitted (auxiliary window)', () => {
-    render(<TitleBar title="notes.md - Wiki Editor v1.9.0" />)
+    const { container } = render(<TitleBar title="notes.md - my-wiki - Wiki Editor v1.9.0" />)
 
-    expect(screen.getByText('notes.md - Wiki Editor v1.9.0')).toBeInTheDocument()
+    const titleText = screen.getByText('notes.md - my-wiki - Wiki Editor v1.9.0')
+    expect(titleText).toBeInTheDocument()
+    expect(titleText).toHaveClass('app-titlebar-title-text')
+    expect(container.querySelector('.app-titlebar-title')).toContainElement(titleText)
     expect(screen.queryByRole('menubar')).not.toBeInTheDocument()
   })
 
