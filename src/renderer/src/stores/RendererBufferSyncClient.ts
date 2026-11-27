@@ -1043,10 +1043,12 @@ export class RendererBufferSyncClient {
 
   completeTransferredOutTab = async (paneId: PaneId, tabId: string): Promise<void> => {
     const tab = this.tabStore.getTab(paneId, tabId)
-    if (!tab || tab.kind !== 'document') return
-    const resolvedKey = this.resolveLatestKey(tab.bufferKey)
-    if (this.needsAsyncHubSync(resolvedKey)) {
-      await this.syncBufferKeyToHub(resolvedKey).catch(() => null)
+    if (!tab) return
+    if (tab.kind === 'document') {
+      const resolvedKey = this.resolveLatestKey(tab.bufferKey)
+      if (this.needsAsyncHubSync(resolvedKey)) {
+        await this.syncBufferKeyToHub(resolvedKey).catch(() => null)
+      }
     }
     if (this.mounted) {
       this.forceCloseTab(paneId, tabId)
@@ -1116,7 +1118,7 @@ export class RendererBufferSyncClient {
       const initialTab = this.tabStore.getTab(paneId, tabId)
       if (!initialTab) return
       const latestTab =
-        initialTab.kind === 'diff'
+        initialTab.kind === 'diff' || initialTab.kind === 'snapshot'
           ? initialTab
           : await this.syncTabBufferForTransfer(paneId, tabId)
       if (!latestTab) return

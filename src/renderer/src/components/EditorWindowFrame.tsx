@@ -20,6 +20,7 @@ import {
 } from '../hooks/useMarkdownLinkNavigation'
 import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
 import { useSymbolNavigationController } from '../hooks/useSymbolNavigationController'
+import { useWikiApi } from '../hooks/useWikiApi'
 import type { PaneNavigationCoordinator } from '../stores/PaneNavigationCoordinator'
 import { formatGitSnapshotTabKey, getPaneActiveTab, type PaneId } from '../stores/PaneTabStore'
 import {
@@ -171,6 +172,7 @@ export function EditorWindowFrame({
   manualModalSlot,
   isSchemaModalDismissDisabled = false
 }: EditorWindowFrameProps) {
+  const wikiApi = useWikiApi()
   const [rightSidebar, setRightSidebar] = useState<RightSidebarState>(() => ({
     isCollapsed: initialRightSidebarCollapsed,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
@@ -301,7 +303,7 @@ export function EditorWindowFrame({
     openSnapshotTab: paneWorkspaceProps.actions.onOpenSnapshotTab,
     getActiveDiffChangedFiles,
     onRevealReferencesSection: handleEnsureReferencesVisible,
-    wikiApi: window.wikiApi
+    wikiApi
   })
 
   const paneActions = useMemo<PaneInteractionActions>(
@@ -577,7 +579,7 @@ export function EditorWindowFrame({
           isOpen={isSymbolPaletteOpen}
           scopeInfo={symbolNav.resolveActivePaletteScope()}
           searchSymbols={(request) =>
-            window.wikiApi.workspace.searchSymbols?.(request) ?? Promise.resolve([])
+            wikiApi.workspace.searchSymbols?.(request) ?? Promise.resolve([])
           }
           onSelectMatch={(match, pinned) => {
             symbolNav.jumpToPaletteMatch(match, symbolNav.resolveActivePaletteScope(), pinned)

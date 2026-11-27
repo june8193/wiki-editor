@@ -248,6 +248,8 @@ export function useSymbolNavigationController({
   }, [])
 
   useEffect(() => {
+    navSeqRef.current += 1
+    refSeqRef.current += 1
     setCandidatePopover(null)
     setNotFoundTooltip(null)
     setContextMenu(null)

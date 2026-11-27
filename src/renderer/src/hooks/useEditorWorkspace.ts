@@ -298,7 +298,9 @@ export function useEditorWorkspace({
   }, [isAutoSavePaused, wikiApi])
 
   useEffect(() => {
-    syncClient.syncWindowTabs(extractLayoutBufferKeys(layout))
+    const bufferKeys = extractLayoutBufferKeys(layout)
+    const nonBufferTabCount = Math.max(0, countLayoutTabs(layout) - bufferKeys.length)
+    syncClient.syncWindowTabs(bufferKeys, nonBufferTabCount)
   }, [layout, syncClient])
 
   // Global fallback Ctrl+S and mode-switch shortcut handler when focus is outside a specific pane editor

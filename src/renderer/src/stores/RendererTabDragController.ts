@@ -231,7 +231,7 @@ export class RendererTabDragController {
       this.lastReclaimableDrag = { dragSessionId: session.dragSessionId, drag }
       const currentTab = this.tabStore.getTab(drag.paneId, drag.tabId)
       const latestTab =
-        currentTab?.kind === 'diff'
+        currentTab && currentTab.kind !== 'document'
           ? currentTab
           : await this.bufferSync.syncTabBufferForTransfer(drag.paneId, drag.tabId)
       if (!this.mounted) return
