@@ -5,6 +5,14 @@
 
 ---
 
+## [1.13.0] - 2026-11-27
+
+### Added
+- 메인 창 및 보조 창 상단 통합 타이틀 바에 현재 워크스페이스 이름 표시 기능 추가: 워크스페이스 열림 시 메인 창은 `<워크스페이스명> - Wiki Editor v{version}`, 보조 창은 `<문서명> - <워크스페이스명> - Wiki Editor v{version}` 형식으로 표시하고 긴 제목에 말줄임(`ellipsis`) 처리를 적용
+
+### Fixed
+- 상단 통합 타이틀 바에서 타이틀 오버레이와 메뉴 바의 DOM 순서 및 `-webkit-app-region: no-drag` 처리를 보완해 상단 애플리케이션 메뉴(`File`, `Settings`, `Terminal`, `Help`) 클릭이 정상 동작하도록 수정하고, macOS 환경에서 창 제어 신호등 버튼(`trafficLightPosition`)과 메뉴 바가 겹치지 않도록 좌측 여백 확보
+
 ## [1.12.0] - 2026-11-27
 
 ### Added
