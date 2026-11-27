@@ -639,6 +639,188 @@ const WysiwygExternalTextPaste = Extension.create({
   }
 })
 
+const CODE_BLOCK_INDENT_UNIT = '  '
+
+interface CodeBlockSelectionContext {
+  blockStart: number
+  text: string
+  fromOffset: number
+  toOffset: number
+  anchorOffset: number
+  headOffset: number
+}
+
+function getEditableCodeBlockContext(editor: Editor): CodeBlockSelectionContext | null {
+  if (!editor.isEditable) {
+    return null
+  }
+  const { selection } = editor.state
+  if (!(selection instanceof TextSelection)) {
+    return null
+  }
+  const { $from, $to } = selection
+  if (!$from.sameParent($to) || $from.parent.type.name !== 'codeBlock') {
+    return null
+  }
+  const blockStart = $from.start()
+  return {
+    blockStart,
+    text: $from.parent.textContent,
+    fromOffset: selection.from - blockStart,
+    toOffset: selection.to - blockStart,
+    anchorOffset: selection.anchor - blockStart,
+    headOffset: selection.head - blockStart
+  }
+}
+
+function dispatchRemappedCodeBlockSelection(
+  view: Editor['view'],
+  tr: Transaction,
+  ctx: CodeBlockSelectionContext,
+  shiftOffset: (offset: number) => number
+): true {
+  tr.setSelection(
+    TextSelection.create(
+      tr.doc,
+      ctx.blockStart + shiftOffset(ctx.anchorOffset),
+      ctx.blockStart + shiftOffset(ctx.headOffset)
+    )
+  )
+  view.dispatch(tr.scrollIntoView())
+  return true
+}
+
+function getCodeBlockLineStart(text: string, offset: number): number {
+  return offset === 0 ? 0 : text.lastIndexOf('\n', offset - 1) + 1
+}
+
+function collectSelectedLineStarts(text: string, fromOffset: number, toOffset: number): number[] {
+  const firstLineStart = getCodeBlockLineStart(text, fromOffset)
+  const effectiveEnd =
+    toOffset > fromOffset && text[toOffset - 1] === '\n' ? toOffset - 1 : toOffset
+  const starts: number[] = []
+  let lineStart = firstLineStart
+  while (lineStart <= effectiveEnd) {
+    starts.push(lineStart)
+    const nextNewline = text.indexOf('\n', lineStart)
+    if (nextNewline === -1 || nextNewline >= effectiveEnd) {
+      break
+    }
+    lineStart = nextNewline + 1
+  }
+  return starts
+}
+
+function getCodeBlockOutdentLength(text: string, lineStart: number): number {
+  if (text[lineStart] === '\t') {
+    return 1
+  }
+  let count = 0
+  while (
+    count < CODE_BLOCK_INDENT_UNIT.length &&
+    lineStart + count < text.length &&
+    text[lineStart + count] === ' '
+  ) {
+    count += 1
+  }
+  return count
+}
+
+function indentCodeBlockSelection(editor: Editor): boolean {
+  const ctx = getEditableCodeBlockContext(editor)
+  if (!ctx) {
+    return false
+  }
+  const { state, view } = editor
+  if (ctx.fromOffset === ctx.toOffset) {
+    view.dispatch(
+      state.tr
+        .insertText(CODE_BLOCK_INDENT_UNIT, state.selection.from, state.selection.to)
+        .scrollIntoView()
+    )
+    return true
+  }
+
+  const lineStarts = collectSelectedLineStarts(ctx.text, ctx.fromOffset, ctx.toOffset)
+  const tr = state.tr
+  for (let i = lineStarts.length - 1; i >= 0; i -= 1) {
+    tr.insertText(CODE_BLOCK_INDENT_UNIT, ctx.blockStart + lineStarts[i])
+  }
+  return dispatchRemappedCodeBlockSelection(view, tr, ctx, (offset) => {
+    let added = 0
+    for (const start of lineStarts) {
+      if (start <= offset) {
+        added += CODE_BLOCK_INDENT_UNIT.length
+      }
+    }
+    return offset + added
+  })
+}
+
+function outdentCodeBlockSelection(editor: Editor): boolean {
+  const ctx = getEditableCodeBlockContext(editor)
+  if (!ctx) {
+    return false
+  }
+
+  const lineStarts = collectSelectedLineStarts(ctx.text, ctx.fromOffset, ctx.toOffset)
+  const removals: Array<{ start: number; length: number }> = []
+  for (const start of lineStarts) {
+    const length = getCodeBlockOutdentLength(ctx.text, start)
+    if (length > 0) {
+      removals.push({ start, length })
+    }
+  }
+  if (removals.length === 0) {
+    return true
+  }
+
+  const { state, view } = editor
+  const tr = state.tr
+  for (let i = removals.length - 1; i >= 0; i -= 1) {
+    const { start, length } = removals[i]
+    tr.delete(ctx.blockStart + start, ctx.blockStart + start + length)
+  }
+  return dispatchRemappedCodeBlockSelection(view, tr, ctx, (offset) => {
+    let removed = 0
+    for (const r of removals) {
+      removed += Math.max(0, Math.min(offset, r.start + r.length) - r.start)
+    }
+    return offset - removed
+  })
+}
+
+function insertIndentedCodeBlockNewline(editor: Editor): boolean {
+  const ctx = getEditableCodeBlockContext(editor)
+  if (!ctx) {
+    return false
+  }
+  const lineStart = getCodeBlockLineStart(ctx.text, ctx.fromOffset)
+  const leadingIndent = ctx.text.slice(lineStart, ctx.fromOffset).match(/^[ \t]+/)?.[0] ?? ''
+  if (!leadingIndent) {
+    return false
+  }
+  const { state, view } = editor
+  view.dispatch(
+    state.tr
+      .insertText(`\n${leadingIndent}`, state.selection.from, state.selection.to)
+      .scrollIntoView()
+  )
+  return true
+}
+
+const CodeBlockIndentation = Extension.create({
+  name: 'codeBlockIndentation',
+  priority: 1000,
+  addKeyboardShortcuts() {
+    return {
+      Tab: () => indentCodeBlockSelection(this.editor),
+      'Shift-Tab': () => outdentCodeBlockSelection(this.editor),
+      Enter: () => insertIndentedCodeBlockNewline(this.editor)
+    }
+  }
+})
+
 export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): AnyExtension[] {
   return [
     StarterKit.configure({
@@ -653,6 +835,7 @@ export function createWysiwygExtensions(options: WysiwygExtensionOptions = {}): 
       isAllowedUri: (url) => isSafeMarkdownUrl(url)
     }),
     HighlightedCodeBlock,
+    CodeBlockIndentation,
     WikiAssetImage.configure({
       getDocumentPath: options.getDocumentPath
     }),
