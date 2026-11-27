@@ -175,6 +175,20 @@ describe('createAuxiliaryWindowOptions', () => {
     })
     expect(iconOptions.icon).toBe('C:\\app\\build\\icon.png')
   })
+
+  it('sets trafficLightPosition on darwin and omits it on win32 for both main and auxiliary windows', () => {
+    const preloadPath = '/app/out/preload/index.js'
+
+    const macMain = createMainWindowOptions(preloadPath, { platform: 'darwin' })
+    const macAux = createAuxiliaryWindowOptions(preloadPath, { platform: 'darwin' })
+    expect(macMain.trafficLightPosition).toEqual({ x: 12, y: 10 })
+    expect(macAux.trafficLightPosition).toEqual({ x: 12, y: 10 })
+
+    const winMain = createMainWindowOptions(preloadPath, { platform: 'win32' })
+    const winAux = createAuxiliaryWindowOptions(preloadPath, { platform: 'win32' })
+    expect(winMain.trafficLightPosition).toBeUndefined()
+    expect(winAux.trafficLightPosition).toBeUndefined()
+  })
 })
 
 describe('formatBaseWindowTitle, formatWindowTitle, and getTitleBarOverlayOptions', () => {

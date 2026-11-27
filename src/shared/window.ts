@@ -442,6 +442,7 @@ export type TabDragEndResult =
 
 export const WINDOW_BASE_TITLE = 'Wiki Editor'
 export const TITLE_BAR_HEIGHT = 32
+export const MACOS_TRAFFIC_LIGHT_POSITION = { x: 12, y: 10 } as const
 
 export interface TitleBarOverlayOptions {
   color: string

@@ -7,6 +7,7 @@ import {
   AUXILIARY_WINDOW_MIN_WIDTH,
   formatBaseWindowTitle,
   getTitleBarOverlayOptions,
+  MACOS_TRAFFIC_LIGHT_POSITION,
   MAIN_WINDOW_DEFAULT_HEIGHT,
   MAIN_WINDOW_DEFAULT_WIDTH,
   MAIN_WINDOW_MIN_HEIGHT,
@@ -26,6 +27,7 @@ export interface MainWindowOptionsInput {
   icon?: string
   theme?: ThemeMode
   appVersion?: string
+  platform?: NodeJS.Platform
 }
 
 export interface AuxiliaryWindowOptionsInput {
@@ -34,6 +36,7 @@ export interface AuxiliaryWindowOptionsInput {
   icon?: string
   theme?: ThemeMode
   appVersion?: string
+  platform?: NodeJS.Platform
 }
 
 export interface NavigationGuardedWebContents {
@@ -111,10 +114,12 @@ function buildWindowOptions(
     icon?: string
     theme?: ThemeMode
     appVersion?: string
+    platform?: NodeJS.Platform
   }
 ): BrowserWindowConstructorOptions {
   const width = options?.bounds?.width ?? defaults.width
   const height = options?.bounds?.height ?? defaults.height
+  const platform = options?.platform ?? process.platform
 
   return {
     width,
@@ -128,6 +133,7 @@ function buildWindowOptions(
     title: options?.title ?? formatBaseWindowTitle(options?.appVersion),
     titleBarStyle: 'hidden',
     titleBarOverlay: getTitleBarOverlayOptions(options?.theme ?? 'light'),
+    ...(platform === 'darwin' ? { trafficLightPosition: MACOS_TRAFFIC_LIGHT_POSITION } : {}),
     autoHideMenuBar: true,
     webPreferences: createSecureWebPreferences(preloadPath)
   }
