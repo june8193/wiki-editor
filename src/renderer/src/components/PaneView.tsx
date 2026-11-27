@@ -35,6 +35,8 @@ interface PaneViewProps {
   buffers: DocumentBufferSnapshot
   diffsByKey: Record<string, GitDiffContentState>
   getDiffNavigation?: (request: GitDiffRequest) => GitDiffNavigationProps | undefined
+  diffSplitRatio?: number
+  onChangeDiffSplitRatio?: (nextRatio: number) => void
   dragState: TabDragUiState
   findControl?: DocumentEditorFindControl
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
@@ -57,6 +59,8 @@ export function PaneView({
   buffers,
   diffsByKey,
   getDiffNavigation,
+  diffSplitRatio,
+  onChangeDiffSplitRatio,
   dragState,
   findControl,
   onActiveHeadingChange,
@@ -135,6 +139,8 @@ export function PaneView({
           request={activeTab.diff.request}
           viewMode={activeTab.diff.viewMode}
           state={activeDiffState}
+          splitRatio={diffSplitRatio}
+          onChangeSplitRatio={onChangeDiffSplitRatio}
           onChangeViewMode={handleChangeDiffViewMode}
           onOpenFile={actions.onOpenDiffTargetFile}
           navigation={diffNavigation}

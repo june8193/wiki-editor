@@ -804,4 +804,169 @@ describe('GitDiffViewer', () => {
       resizeObserver.restore()
     }
   })
+
+  it('renders side-by-side split resizer only in side-by-side mode and supports drag, double-click reset, and keyboard arrows', () => {
+    const resizeObserver = installResizeObserverStub()
+    try {
+      const onChangeSplitRatio = vi.fn()
+      const { container, rerender } = render(
+        <GitDiffViewer
+          request={{ kind: 'staged', path: 'docs/guide.md', status: 'M' }}
+          viewMode="side-by-side"
+          state={{ status: 'loaded', diff: makeDiff() }}
+          onChangeSplitRatio={onChangeSplitRatio}
+          onChangeViewMode={vi.fn()}
+          onOpenFile={vi.fn()}
+        />
+      )
+
+      const scrollEl = screen.getByTestId('diff-side-by-side')
+      mockElementBoundingRect(scrollEl, { width: 1000, height: 400 })
+      const tableEl = container.querySelector('table.git-diff-table--split') as HTMLElement
+      mockElementBoundingRect(tableEl, { width: 1000, height: 200 })
+      resizeObserver.trigger()
+
+      const resizer = screen.getByRole('separator', { name: 'Diff 좌우 비교 비율 조절' })
+      expect(resizer.getAttribute('aria-valuenow')).toBe('50')
+
+      const codeCols = container.querySelectorAll('col.git-diff-col-code')
+      expect(codeCols).toHaveLength(2)
+      expect((codeCols[0] as HTMLElement).style.width).toBe('calc(50% - 48px)')
+      expect((codeCols[1] as HTMLElement).style.width).toBe('calc(50% - 48px)')
+
+      // Mouse drag to 65%
+      fireEvent.mouseDown(resizer, { clientX: 500 })
+      fireEvent.mouseMove(window, { clientX: 650 })
+      fireEvent.mouseUp(window)
+
+      expect(onChangeSplitRatio).toHaveBeenLastCalledWith(0.65)
+      expect(resizer.getAttribute('aria-valuenow')).toBe('65')
+      expect((codeCols[0] as HTMLElement).style.width).toBe('calc(65% - 48px)')
+      expect((codeCols[1] as HTMLElement).style.width).toBe('calc(35% - 48px)')
+
+      // Keyboard ArrowRight (+5%) and ArrowLeft (-5%)
+      fireEvent.keyDown(resizer, { key: 'ArrowRight' })
+      expect(onChangeSplitRatio).toHaveBeenLastCalledWith(0.7)
+      expect(resizer.getAttribute('aria-valuenow')).toBe('70')
+
+      fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+      expect(onChangeSplitRatio).toHaveBeenLastCalledWith(0.65)
+      expect(resizer.getAttribute('aria-valuenow')).toBe('65')
+
+      // Double-click resets to 50%
+      fireEvent.doubleClick(resizer)
+      expect(onChangeSplitRatio).toHaveBeenLastCalledWith(0.5)
+      expect(resizer.getAttribute('aria-valuenow')).toBe('50')
+
+      // Inline mode does not render the resizer
+      rerender(
+        <GitDiffViewer
+          request={{ kind: 'staged', path: 'docs/guide.md', status: 'M' }}
+          viewMode="inline"
+          state={{ status: 'loaded', diff: makeDiff() }}
+          onChangeSplitRatio={onChangeSplitRatio}
+          onChangeViewMode={vi.fn()}
+          onOpenFile={vi.fn()}
+        />
+      )
+      expect(screen.queryByRole('separator', { name: 'Diff 좌우 비교 비율 조절' })).toBeNull()
+    } finally {
+      resizeObserver.restore()
+    }
+  })
+
+  it('clamps split ratio to minimum side width on narrow containers', () => {
+    const resizeObserver = installResizeObserverStub()
+    try {
+      const { container } = render(
+        <GitDiffViewer
+          request={{ kind: 'staged', path: 'docs/guide.md', status: 'M' }}
+          viewMode="side-by-side"
+          state={{ status: 'loaded', diff: makeDiff() }}
+          onChangeViewMode={vi.fn()}
+          onOpenFile={vi.fn()}
+        />
+      )
+
+      const scrollEl = screen.getByTestId('diff-side-by-side')
+      // 300px -> min side width 108px => [36%, 64%]
+      mockElementBoundingRect(scrollEl, { width: 300, height: 400 })
+      const tableEl = container.querySelector('table.git-diff-table--split') as HTMLElement
+      mockElementBoundingRect(tableEl, { width: 300, height: 200 })
+      resizeObserver.trigger()
+
+      const resizer = screen.getByRole('separator', { name: 'Diff 좌우 비교 비율 조절' })
+      expect(resizer.getAttribute('aria-valuemin')).toBe('36')
+      expect(resizer.getAttribute('aria-valuemax')).toBe('64')
+
+      fireEvent.mouseDown(resizer, { clientX: 150 })
+      fireEvent.mouseMove(window, { clientX: 20 })
+      fireEvent.mouseUp(window)
+
+      expect(resizer.getAttribute('aria-valuenow')).toBe('36')
+      const codeCols = container.querySelectorAll('col.git-diff-col-code')
+      expect((codeCols[0] as HTMLElement).style.width).toBe('calc(36% - 48px)')
+      expect((codeCols[1] as HTMLElement).style.width).toBe('calc(64% - 48px)')
+    } finally {
+      resizeObserver.restore()
+    }
+  })
+
+  it('re-measures virtualized row heights when splitRatio changes without resetting scrollTop', () => {
+    const resizeObserver = installResizeObserverStub()
+    try {
+      const patch = makeLargePatch(300, 'src/ratio-virtual.ts', 'ratioRow')
+      const { container, rerender } = render(
+        <GitDiffViewer
+          request={{ kind: 'unstaged', path: 'src/ratio-virtual.ts', status: 'M' }}
+          viewMode="side-by-side"
+          splitRatio={0.5}
+          state={{
+            status: 'loaded',
+            diff: makeDiff({ path: 'src/ratio-virtual.ts', rawPatch: patch })
+          }}
+          onChangeViewMode={vi.fn()}
+          onOpenFile={vi.fn()}
+        />
+      )
+
+      const scrollEl = screen.getByTestId('diff-side-by-side')
+      const scrollStub = installScrollContainerStub(scrollEl, {
+        clientHeight: 220,
+        initialScrollTop: 0,
+        getScrollHeight: () => 301 * 22
+      })
+      resizeObserver.trigger()
+
+      act(() => {
+        scrollStub.setScrollTop(100)
+        fireEvent.scroll(scrollEl)
+      })
+      const row1Before = container.querySelector('tr[data-row-index="1"]') as HTMLElement
+      expect(row1Before).toBeTruthy()
+      mockElementBoundingRect(row1Before, { width: 400, height: 44 })
+      resizeObserver.trigger()
+      const scrollAfterInitialMeasure = scrollStub.getScrollTop()
+      expect(scrollAfterInitialMeasure).toBe(122)
+
+      // Changing splitRatio clears cached heights and re-measures without resetting scrollTop to 0
+      rerender(
+        <GitDiffViewer
+          request={{ kind: 'unstaged', path: 'src/ratio-virtual.ts', status: 'M' }}
+          viewMode="side-by-side"
+          splitRatio={0.7}
+          state={{
+            status: 'loaded',
+            diff: makeDiff({ path: 'src/ratio-virtual.ts', rawPatch: patch })
+          }}
+          onChangeViewMode={vi.fn()}
+          onOpenFile={vi.fn()}
+        />
+      )
+
+      expect(scrollStub.getScrollTop()).toBeGreaterThan(0)
+    } finally {
+      resizeObserver.restore()
+    }
+  })
 })
