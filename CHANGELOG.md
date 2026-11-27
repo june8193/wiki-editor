@@ -5,6 +5,17 @@
 
 ---
 
+## [1.12.0] - 2026-11-27
+
+### Added
+- 코드 심볼 네비게이션, Git 스냅샷 탭, `Ctrl+T` 심볼 검색 팔레트 및 Diff·스냅샷 `Ctrl+F` 찾기 바 추가: 코드 파일·Diff·스냅샷에서 Lezer 기반 심볼 추출 및 우측 사이드바 심볼 아웃라인, `Ctrl+클릭` 정의 이동(다중 후보 팝오버 및 레퍼런스 폴백), `Shift+F12`·우클릭 컨텍스트 메뉴 기반 우측 사이드바 **레퍼런스** 섹션(시점 일치 참조 목록), 읽기 전용 Git 스냅샷 탭 및 편집기 영역별 탐색 히스토리(`Alt+←`/`Alt+→`·마우스 뒤로/앞으로 버튼), 전역 심볼 검색 팔레트(`Ctrl+T`), Diff·스냅샷 뷰어 플로팅 찾기 바(`Ctrl+F`, 가상 스크롤 원거리 매치 점프) 및 보조 창 간 스냅샷·Diff 탭 분리/이동 동기화 지원 ([상세 스펙](.backlog/done/symbol-navigation-diff-search/spec.md), [티켓 01](.backlog/done/symbol-navigation-diff-search/issues/01-code-raw-highlighting-and-symbol-outline.md), [티켓 02](.backlog/done/symbol-navigation-diff-search/issues/02-git-snapshot-blob-and-symbol-search-ipc.md), [티켓 03](.backlog/done/symbol-navigation-diff-search/issues/03-snapshot-tab-history-and-ctrl-click-definition.md), [티켓 04](.backlog/done/symbol-navigation-diff-search/issues/04-right-sidebar-references-and-definition-fallback.md), [티켓 05](.backlog/done/symbol-navigation-diff-search/issues/05-symbol-search-palette-and-diff-snapshot-find.md), [티켓 06](.backlog/done/symbol-navigation-diff-search/issues/06-polish-domain-glossary-and-manual.md))
+- Raw 모드 소스코드 신택스 하이라이팅 추가: 23종 주요 언어(`ts`/`tsx`/`js`/`jsx`/`py`/`c`/`cpp`/`go`/`rs`/`java`/`html`/`css`/`scss`/`sass`/`less`/`json`/`jsonc`/`yaml`/`sql`/`sh`/`xml`/`php` 등) 동기 로드 및 `@codemirror/language-data` 기반 추가 언어 지연 로드, `Dockerfile`·`Gemfile` 등 확장자 없는 코드 파일 자동 감지 및 테마 CSS 변수 기반 구문 강조 적용
+- Diff 뷰어 좌우 비교(Side-by-Side) 모드 분할 비율 리사이저 추가: 드래그·키보드 방향키(`←`/`→`) 조절, 더블클릭 50% 초기화, 좁은 컨테이너 최소 폭 클램핑, 가상 스크롤 행 높이 재측정(스크롤 위치 유지) 및 파일 전환 시 비율 유지 지원
+- 외부 `http://`/`https://` 웹 링크 탐색 및 위지윅·Raw 링크 입력 지원 추가: 공용 HTTP(S) URL 검증 및 `shell:open-external-url` IPC를 통한 시스템 기본 브라우저 열기(Preview·위지윅·Split 일반 클릭, Raw `Ctrl+클릭`), 위지윅 모드 `[텍스트](URL)` 실시간 링크 변환, Raw 모드 `<https://...>` 자동 링크 및 맨 URL `Ctrl+클릭` 지원 ([상세 스펙](.backlog/done/external-web-link-navigation/spec.md), [티켓 01](.backlog/done/external-web-link-navigation/issues/01-external-http-url-shell-ipc-and-navigation.md), [티켓 02](.backlog/done/external-web-link-navigation/issues/02-wysiwyg-markdown-link-typing-and-raw-autolink.md))
+
+### Fixed
+- 위지윅(WYSIWYG) 모드 코드블럭 내부에서 `Tab`/`Shift+Tab` 2칸 들여쓰기·내어쓰기(단일 커서 및 다중 줄 선택)와 `Enter` 시 현재 줄 들여쓰기 자동 유지가 동작하도록 수정
+
 ## [1.11.0] - 2026-11-26
 
 ### Added
