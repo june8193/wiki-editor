@@ -51,6 +51,12 @@ import type {
 import type { RendererLogPayload } from './logging'
 import type { WorkspaceSearchRequest, WorkspaceSearchResponse } from './search'
 import type {
+  GitBlobSnapshot,
+  GitBlobSnapshotRequest,
+  SymbolCandidateMatch,
+  SymbolQueryRequest
+} from './symbol'
+import type {
   FocusOpenWorkspaceResult,
   OpenWorkspaceInNewWindowResult,
   WorkspaceChangeEvent,
@@ -91,6 +97,7 @@ export const WORKSPACE_IPC_CHANNELS = {
   readDir: 'workspace:read-dir',
   listMarkdownFiles: 'workspace:list-markdown-files',
   search: 'workspace:search',
+  searchSymbols: 'workspace:search-symbols',
   readFile: 'workspace:read-file',
   writeFile: 'workspace:write-file',
   createEntry: 'workspace:create-entry',
@@ -135,6 +142,7 @@ export const GIT_IPC_CHANNELS = {
   log: 'git:log',
   commitDetail: 'git:commit-detail',
   diff: 'git:diff',
+  readBlobSnapshot: 'git:read-blob-snapshot',
   compareRefs: 'git:compare-refs',
   compareSummary: 'git:compare-summary',
   stashList: 'git:stash-list',
@@ -254,6 +262,7 @@ export interface WikiWorkspaceApi {
   readDir(dirPath?: string): Promise<WorkspaceEntry[]>
   listMarkdownFiles(): Promise<WorkspaceEntry[]>
   search?(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse>
+  searchSymbols?(request: SymbolQueryRequest): Promise<SymbolCandidateMatch[]>
   readFile(filePath: string): Promise<string>
   writeFile(filePath: string, content: string): Promise<void>
   createEntry(
@@ -291,6 +300,10 @@ export interface WikiGitApi {
   log(workspacePath: string, options?: GitLogOptions): Promise<GitLogResult>
   commitDetail(workspacePath: string, commitHash: string): Promise<GitCommitDetail>
   diff(workspacePath: string, request: GitDiffRequest): Promise<GitFileDiff>
+  readBlobSnapshot(
+    workspacePath: string,
+    request: GitBlobSnapshotRequest
+  ): Promise<GitBlobSnapshot>
   compareRefs(workspacePath: string): Promise<GitCompareRefList>
   compareSummary(
     workspacePath: string,

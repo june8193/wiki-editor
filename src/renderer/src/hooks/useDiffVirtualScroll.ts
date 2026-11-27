@@ -24,6 +24,7 @@ export interface UseDiffVirtualScrollResult {
   topSpacerHeight: number
   bottomSpacerHeight: number
   scrollContainerRef: (element: HTMLDivElement | null) => void
+  scrollToRowIndex: (rowIndex: number) => void
 }
 
 function findRowIndexAtOffset(offsets: Float64Array, targetOffset: number): number {
@@ -225,12 +226,40 @@ export function useDiffVirtualScroll({
     }
   }, [scrollElement, measureMountedRows])
 
+  const scrollToRowIndex = useCallback(
+    (rowIndex: number) => {
+      if (rowIndex < 0 || rowIndex >= totalRows || !scrollElement) {
+        return
+      }
+      if (isVirtualized && rowOffsets) {
+        const totalHeight = rowOffsets[totalRows]
+        const effectiveViewport = viewportHeight > 0 ? viewportHeight : DEFAULT_DIFF_VIEWPORT_HEIGHT
+        const maxScroll = Math.max(0, totalHeight - effectiveViewport)
+        const rowTop = rowOffsets[rowIndex]
+        const rowHeight = (rowOffsets[rowIndex + 1] ?? rowTop + DEFAULT_DIFF_ROW_HEIGHT) - rowTop
+        const centeredTop = Math.max(
+          0,
+          Math.min(maxScroll, rowTop - effectiveViewport / 2 + rowHeight / 2)
+        )
+        scrollElement.scrollTop = centeredTop
+        setScrollTop(centeredTop)
+        return
+      }
+      const targetRow = scrollElement.querySelector<HTMLElement>(`tr[data-row-index="${rowIndex}"]`)
+      if (targetRow && typeof targetRow.scrollIntoView === 'function') {
+        targetRow.scrollIntoView({ block: 'center' })
+      }
+    },
+    [isVirtualized, rowOffsets, scrollElement, totalRows, viewportHeight]
+  )
+
   return {
     isVirtualized,
     startIndex,
     endIndex,
     topSpacerHeight,
     bottomSpacerHeight,
-    scrollContainerRef
+    scrollContainerRef,
+    scrollToRowIndex
   }
 }

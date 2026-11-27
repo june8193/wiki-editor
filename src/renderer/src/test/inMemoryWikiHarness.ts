@@ -29,6 +29,7 @@ import {
 } from '@shared/frontmatter'
 import { createEmptyGitStatus } from '@shared/git'
 import type { WorkspaceSearchRequest, WorkspaceSearchResponse } from '@shared/search'
+import type { SymbolCandidateMatch, SymbolQueryRequest } from '@shared/symbol'
 import type {
   TerminalDataEvent,
   TerminalExitEvent,
@@ -926,6 +927,9 @@ export function createMultiWindowWikiHarness(
           search(request: WorkspaceSearchRequest): Promise<WorkspaceSearchResponse> {
             return session.queryAndSchemaHub.search(request)
           },
+          searchSymbols(request: SymbolQueryRequest): Promise<SymbolCandidateMatch[]> {
+            return session.queryAndSchemaHub.searchSymbols(request)
+          },
           async readFile(filePath) {
             const normalized = normalizePosix(filePath)
             const content = files.get(normalized)
@@ -1259,6 +1263,15 @@ export function createMultiWindowWikiHarness(
             isTruncated: false,
             existsInWorkspace: true,
             rawPatch: ''
+          }),
+          readBlobSnapshot: async (_workspacePath, request) => ({
+            path: request.path,
+            scope: request.scope,
+            isBinary: false,
+            isTruncated: false,
+            existsInWorkspace: true,
+            encoding: 'utf-8',
+            content: ''
           }),
           compareRefs: async () => ({
             defaultBaseRef: null,

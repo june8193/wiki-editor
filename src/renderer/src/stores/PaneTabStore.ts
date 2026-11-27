@@ -1,11 +1,13 @@
 import type { BufferKeyRemap } from '@shared/documentBuffer'
 import type { GitChangedFile, GitCompareMode, GitDiffRequest, GitDiffViewMode, GitStashEntry } from '@shared/git'
+import type { GitBlobSnapshotRequest, SnapshotTabState } from '@shared/symbol'
 import {
   clampSplitRatio,
   type CursorPosition,
   DEFAULT_SPLIT_RATIO,
   type EditorMode,
   isDiffTabTransferPayload,
+  isSnapshotTabTransferPayload,
   MAX_SPLIT_RATIO,
   MIN_SPLIT_RATIO,
   normalizeSplitRatio,
@@ -57,13 +59,30 @@ export interface DiffTabItem {
   diff: DiffTabState
 }
 
-export type TabItem = DocumentTabItem | DiffTabItem
+export interface SnapshotTabRuntimeState extends SnapshotTabState {
+  workspaceRootPath?: string
+}
+
+export interface SnapshotTabItem {
+  id: string
+  kind: 'snapshot'
+  snapshot: SnapshotTabRuntimeState
+}
+
+export type TabItem = DocumentTabItem | DiffTabItem | SnapshotTabItem
 
 export interface OpenDiffTabOptions {
   paneId?: PaneId
   viewMode?: GitDiffViewMode
   workspaceRootPath?: string
   pinned?: boolean
+}
+
+export interface OpenSnapshotTabOptions {
+  paneId?: PaneId
+  workspaceRootPath?: string
+  pinned?: boolean
+  scrollTop?: number
 }
 
 export type DiffTabOpenOptions = Pick<OpenDiffTabOptions, 'pinned'>
@@ -283,8 +302,20 @@ function collapseOrPromoteSplitLayout(
   }
 }
 
+export function formatGitSnapshotTabKey(request: GitBlobSnapshotRequest): string {
+  const scopePart =
+    request.scope.kind === 'git-index'
+      ? `git-index:${request.scope.displayRef}`
+      : `git-ref:${request.scope.ref}:${request.scope.displayRef}:${request.scope.untrackedParentRef ?? ''}`
+  return `snapshot:${scopePart}:${request.stashHash ?? ''}:${request.path}`
+}
+
 function isPreviewDiffTab(tab: TabItem): tab is DiffTabItem {
   return tab.kind === 'diff' && tab.diff.isPreview === true
+}
+
+function isPreviewSnapshotTab(tab: TabItem): tab is SnapshotTabItem {
+  return tab.kind === 'snapshot' && tab.snapshot.isPreview === true
 }
 
 function pinDiffTabItem(tab: DiffTabItem): DiffTabItem {
@@ -294,13 +325,22 @@ function pinDiffTabItem(tab: DiffTabItem): DiffTabItem {
   }
 }
 
+function pinSnapshotTabItem(tab: SnapshotTabItem): SnapshotTabItem {
+  return {
+    ...tab,
+    snapshot: { ...tab.snapshot, isPreview: false }
+  }
+}
+
 export function getPaneActiveTab(pane: PaneState): TabItem | null {
   if (!pane.activeTabId) return null
   return pane.tabs.find((tab) => tab.id === pane.activeTabId) ?? null
 }
 
 function getTabIdentityKey(tab: TabItem): string {
-  return tab.kind === 'document' ? tab.bufferKey : formatGitDiffTabKey(tab.diff.request)
+  if (tab.kind === 'document') return tab.bufferKey
+  if (tab.kind === 'diff') return formatGitDiffTabKey(tab.diff.request)
+  return formatGitSnapshotTabKey(tab.snapshot.request)
 }
 
 function hasBufferReferenceInPanes(
@@ -491,6 +531,20 @@ export class PaneTabStore {
       )
     }
 
+    if (isSnapshotTabTransferPayload(payload)) {
+      return this.openSnapshotTab(
+        payload.snapshot.request,
+        {
+          paneId,
+          scrollTop: payload.snapshot.scrollTop,
+          workspaceRootPath: payload.snapshot.workspaceRootPath,
+          pinned: true
+        },
+        undefined,
+        placement
+      )
+    }
+
     const viewOptions: OpenTabOptions = {
       mode: payload.mode,
       cursor: payload.cursor,
@@ -646,6 +700,95 @@ export class PaneTabStore {
     )
   }
 
+  openSnapshotTab = (
+    request: GitBlobSnapshotRequest,
+    options: OpenSnapshotTabOptions = {},
+    duplicateFrom?: { sourcePaneId: PaneId; sourceTabId: string },
+    placement?: { targetIndex?: number; splitDirection?: SplitDirection }
+  ): SnapshotTabItem => {
+    const { targetPaneId, targetPane, nextSplitMode } = this.resolveTargetPaneContext(
+      options.paneId,
+      placement?.splitDirection
+    )
+    const nextSnapshotKey = formatGitSnapshotTabKey(request)
+    const shouldPin = Boolean(options.pinned || duplicateFrom)
+
+    const existingSameKey = targetPane.tabs.find(
+      (tab): tab is SnapshotTabItem =>
+        tab.kind === 'snapshot' && formatGitSnapshotTabKey(tab.snapshot.request) === nextSnapshotKey
+    )
+    const existingPreview =
+      !existingSameKey && !shouldPin ? targetPane.tabs.find(isPreviewSnapshotTab) : undefined
+    const existing = existingSameKey ?? existingPreview
+
+    if (existing) {
+      const isSameTarget = formatGitSnapshotTabKey(existing.snapshot.request) === nextSnapshotKey
+      const nextIsPreview = shouldPin
+        ? false
+        : existingSameKey
+          ? Boolean(existingSameKey.snapshot.isPreview)
+          : true
+      const nextScrollTop = options.scrollTop ?? (isSameTarget ? existing.snapshot.scrollTop : 0)
+      const nextWorkspaceRootPath = options.workspaceRootPath ?? existing.snapshot.workspaceRootPath
+      const updatedTab: SnapshotTabItem = {
+        ...existing,
+        snapshot: {
+          request,
+          scrollTop: nextScrollTop,
+          ...(nextWorkspaceRootPath ? { workspaceRootPath: nextWorkspaceRootPath } : {}),
+          isPreview: nextIsPreview
+        }
+      }
+      const nextTabs = targetPane.tabs.map((tab) => (tab.id === existing.id ? updatedTab : tab))
+      const tabChanged =
+        this.state.activePaneId !== targetPaneId ||
+        targetPane.activeTabId !== existing.id ||
+        !isSameTarget ||
+        existing.snapshot.scrollTop !== nextScrollTop ||
+        existing.snapshot.isPreview !== nextIsPreview
+
+      if (tabChanged || this.state.splitMode !== nextSplitMode) {
+        this.commit(
+          {
+            ...this.state,
+            splitMode: nextSplitMode,
+            activePaneId: targetPaneId,
+            panes: {
+              ...this.state.panes,
+              [targetPaneId]: {
+                ...targetPane,
+                tabs: nextTabs,
+                activeTabId: existing.id
+              }
+            }
+          },
+          [{ type: 'tab-switched', paneId: targetPaneId, tab: updatedTab }]
+        )
+      }
+      return updatedTab
+    }
+
+    const created: SnapshotTabItem = {
+      id: this.nextTabId(),
+      kind: 'snapshot',
+      snapshot: {
+        request,
+        scrollTop: options.scrollTop ?? 0,
+        ...(options.workspaceRootPath ? { workspaceRootPath: options.workspaceRootPath } : {}),
+        isPreview: !shouldPin
+      }
+    }
+
+    return this.appendNewTabInPane(
+      targetPaneId,
+      targetPane,
+      nextSplitMode,
+      created,
+      duplicateFrom,
+      placement?.targetIndex
+    )
+  }
+
   private openOrFocusTab(
     bufferKey: string,
     options: OpenTabOptions = {},
@@ -738,9 +881,14 @@ export class PaneTabStore {
     const secondary = this.state.panes.secondary
     const existingKeys = new Set(primary.tabs.map(getTabIdentityKey))
     const primaryHasPreviewDiff = primary.tabs.some(isPreviewDiffTab)
+    const primaryHasPreviewSnapshot = primary.tabs.some(isPreviewSnapshotTab)
     const normalizedSecondaryTabs = secondary.tabs
       .filter((tab) => !existingKeys.has(getTabIdentityKey(tab)))
-      .map((tab) => (primaryHasPreviewDiff && isPreviewDiffTab(tab) ? pinDiffTabItem(tab) : tab))
+      .map((tab) => {
+        if (primaryHasPreviewDiff && isPreviewDiffTab(tab)) return pinDiffTabItem(tab)
+        if (primaryHasPreviewSnapshot && isPreviewSnapshotTab(tab)) return pinSnapshotTabItem(tab)
+        return tab
+      })
     const mergedTabs = [...primary.tabs, ...normalizedSecondaryTabs]
     const activeSecondaryTab =
       this.state.activePaneId === 'secondary' ? getPaneActiveTab(secondary) : null
@@ -832,26 +980,38 @@ export class PaneTabStore {
     let nextTargetPane: PaneState
     let movedOrExistingTab: TabItem
     if (existingInTarget) {
-      const shouldPromoteExisting =
+      const shouldPromoteDiff =
         isPreviewDiffTab(existingInTarget) &&
         removed.kind === 'diff' &&
         !removed.diff.isPreview
-      movedOrExistingTab = shouldPromoteExisting
+      const shouldPromoteSnapshot =
+        isPreviewSnapshotTab(existingInTarget) &&
+        removed.kind === 'snapshot' &&
+        !removed.snapshot.isPreview
+      movedOrExistingTab = shouldPromoteDiff
         ? pinDiffTabItem(existingInTarget)
-        : existingInTarget
+        : shouldPromoteSnapshot
+          ? pinSnapshotTabItem(existingInTarget)
+          : existingInTarget
       nextTargetPane = {
         ...targetPane,
-        tabs: shouldPromoteExisting
-          ? targetPane.tabs.map((tab) =>
-              tab.id === existingInTarget.id ? movedOrExistingTab : tab
-            )
-          : targetPane.tabs,
+        tabs:
+          shouldPromoteDiff || shouldPromoteSnapshot
+            ? targetPane.tabs.map((tab) =>
+                tab.id === existingInTarget.id ? movedOrExistingTab : tab
+              )
+            : targetPane.tabs,
         activeTabId: existingInTarget.id
       }
     } else {
       const targetHasPreviewDiff = targetPane.tabs.some(isPreviewDiffTab)
+      const targetHasPreviewSnapshot = targetPane.tabs.some(isPreviewSnapshotTab)
       movedOrExistingTab =
-        targetHasPreviewDiff && isPreviewDiffTab(removed) ? pinDiffTabItem(removed) : removed
+        targetHasPreviewDiff && isPreviewDiffTab(removed)
+          ? pinDiffTabItem(removed)
+          : targetHasPreviewSnapshot && isPreviewSnapshotTab(removed)
+            ? pinSnapshotTabItem(removed)
+            : removed
       nextTargetPane = {
         ...targetPane,
         tabs: insertTabAt(targetPane.tabs, movedOrExistingTab, targetIndex),
@@ -978,6 +1138,13 @@ export class PaneTabStore {
         { sourcePaneId, sourceTabId: tabId }
       )
     }
+    if (sourceTab.kind === 'snapshot') {
+      return this.openSnapshotTab(
+        sourceTab.snapshot.request,
+        { paneId: targetPaneId, scrollTop: sourceTab.snapshot.scrollTop },
+        { sourcePaneId, sourceTabId: tabId }
+      )
+    }
     return this.openOrFocusTab(
       sourceTab.bufferKey,
       {
@@ -1038,6 +1205,29 @@ export class PaneTabStore {
     if (!isPreviewDiffTab(current)) return
 
     this.replaceTabInPane(paneId, index, pinDiffTabItem(current))
+  }
+
+  pinSnapshotTab = (paneId: PaneId, tabId: string): void => {
+    const pane = this.state.panes[paneId]
+    const index = pane.tabs.findIndex((tab) => tab.id === tabId)
+    if (index === -1) return
+    const current = pane.tabs[index]
+    if (!isPreviewSnapshotTab(current)) return
+
+    this.replaceTabInPane(paneId, index, pinSnapshotTabItem(current))
+  }
+
+  updateSnapshotTabScrollTop = (paneId: PaneId, tabId: string, scrollTop: number): void => {
+    const pane = this.state.panes[paneId]
+    const index = pane.tabs.findIndex((tab) => tab.id === tabId)
+    if (index === -1) return
+    const current = pane.tabs[index]
+    if (current.kind !== 'snapshot' || current.snapshot.scrollTop === scrollTop) return
+
+    this.replaceTabInPane(paneId, index, {
+      ...current,
+      snapshot: { ...current.snapshot, scrollTop }
+    })
   }
 
   updateTabViewState = (paneId: PaneId, tabId: string, patch: TabViewPatch): void => {
@@ -1139,6 +1329,10 @@ export class PaneTabStore {
     this.removeTabsWhere((tab) => tab.kind === 'diff')
   }
 
+  closeAllSnapshotTabs = (): void => {
+    this.removeTabsWhere((tab) => tab.kind === 'snapshot')
+  }
+
   listOpenDiffRequests = (): GitDiffRequest[] => {
     const seen = new Set<string>()
     const requests: GitDiffRequest[] = []
@@ -1193,6 +1387,35 @@ export class PaneTabStore {
   reconcileStashDiffTabs = (activeStashes: readonly GitStashEntry[]): void => {
     const refByHash = new Map(activeStashes.map((entry) => [entry.hash, entry.ref]))
     this.transformPaneTabs((tab) => {
+      if (tab.kind === 'snapshot') {
+        const stashHash = tab.snapshot.request.stashHash
+        if (!stashHash) {
+          return tab
+        }
+        const nextRef = refByHash.get(stashHash)
+        if (!nextRef) {
+          return null
+        }
+        if (
+          tab.snapshot.request.scope.kind === 'git-ref' &&
+          tab.snapshot.request.scope.displayRef !== nextRef
+        ) {
+          return {
+            ...tab,
+            snapshot: {
+              ...tab.snapshot,
+              request: {
+                ...tab.snapshot.request,
+                scope: {
+                  ...tab.snapshot.request.scope,
+                  displayRef: nextRef
+                }
+              }
+            }
+          }
+        }
+        return tab
+      }
       if (tab.kind !== 'diff' || tab.diff.request.kind !== 'stash') {
         return tab
       }

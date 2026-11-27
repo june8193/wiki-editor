@@ -99,6 +99,15 @@ function createTestGitApi(overrides: Partial<WikiGitApi> = {}): WikiGitApi {
       existsInWorkspace: true,
       rawPatch: ''
     })),
+    readBlobSnapshot: vi.fn(async (_ws, req) => ({
+      path: req.path,
+      scope: req.scope,
+      isBinary: false,
+      isTruncated: false,
+      existsInWorkspace: true,
+      encoding: 'utf-8' as const,
+      content: ''
+    })),
     compareRefs: vi.fn(async () => ({
       defaultBaseRef: 'main',
       currentRef: 'main',

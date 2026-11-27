@@ -994,4 +994,80 @@ describe('PaneTabStore', () => {
       request: { mode: 'two-dot', path: 'b.md', status: 'A' }
     })
   })
+
+  it('supports snapshot tabs with preview+pin lifecycle, stash reconciliation, transfer, and workspace cleanup', () => {
+    const store = new PaneTabStore()
+    const docTab = store.openTab('c:/wiki/docs/keep.md')
+
+    // 1. Single open creates preview snapshot tab
+    const snapA = store.openSnapshotTab({
+      path: 'src/a.ts',
+      scope: { kind: 'git-ref', ref: 'abcdef1', displayRef: 'abcdef1' }
+    })
+    expect(snapA.kind).toBe('snapshot')
+    expect(snapA.snapshot.isPreview).toBe(true)
+    expect(snapA.snapshot.scrollTop).toBe(0)
+
+    // 2. Second single open replaces preview snapshot tab in same pane
+    const snapB = store.openSnapshotTab({
+      path: 'src/b.ts',
+      scope: { kind: 'git-index', displayRef: 'Staged' }
+    })
+    expect(snapB.id).toBe(snapA.id)
+    expect(snapB.snapshot.request.path).toBe('src/b.ts')
+    expect(snapB.snapshot.isPreview).toBe(true)
+
+    // 3. Pinned open adds a separate tab and promotes when re-opened pinned
+    const snapPinnedC = store.openSnapshotTab(
+      {
+        path: 'src/c.ts',
+        scope: { kind: 'git-ref', ref: 'main', displayRef: 'main' }
+      },
+      { pinned: true }
+    )
+    expect(snapPinnedC.id).not.toBe(snapB.id)
+    expect(snapPinnedC.snapshot.isPreview).toBe(false)
+
+    // 4. pinSnapshotTab promotes preview tab
+    store.pinSnapshotTab('primary', snapB.id)
+    const promotedB = store
+      .getSnapshot()
+      .panes.primary.tabs.find((t) => t.id === snapB.id)
+    expect(promotedB?.kind === 'snapshot' && promotedB.snapshot.isPreview).toBe(false)
+
+    // 5. Stash snapshot tabs are pruned when stashHash disappears
+    const stashHash = '1111111111111111111111111111111111111111'
+    const stashSnap = store.openSnapshotTab(
+      {
+        path: 'src/stash.ts',
+        scope: { kind: 'git-ref', ref: stashHash, displayRef: 'stash@{0}' },
+        stashHash
+      },
+      { paneId: 'secondary' }
+    )
+    expect(store.getSnapshot().splitMode).toBe('horizontal')
+    store.reconcileStashDiffTabs([])
+    expect(store.getSnapshot().splitMode).toBe('single')
+    expect(
+      store.getSnapshot().panes.secondary.tabs.some((t) => t.id === stashSnap.id)
+    ).toBe(false)
+
+    // 6. acceptTransferredTab opens snapshot tab as pinned
+    const transferred = store.acceptTransferredTab({
+      kind: 'snapshot',
+      snapshot: {
+        request: {
+          path: 'src/transferred.ts',
+          scope: { kind: 'git-ref', ref: 'HEAD', displayRef: 'HEAD' }
+        },
+        scrollTop: 120
+      }
+    })
+    expect(transferred.kind === 'snapshot' && transferred.snapshot.isPreview).toBe(false)
+    expect(transferred.kind === 'snapshot' && transferred.snapshot.scrollTop).toBe(120)
+
+    // 7. closeAllSnapshotTabs removes snapshot tabs while preserving document tabs
+    store.closeAllSnapshotTabs()
+    expect(store.getSnapshot().panes.primary.tabs.map((t) => t.id)).toEqual([docTab.id])
+  })
 })

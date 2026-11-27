@@ -149,4 +149,106 @@ describe('RightSidebarPanel', () => {
     expect(outlineSection).toHaveStyle({ flex: '0.7 1 0%' })
     expect(propertiesSection).toHaveStyle({ flex: '0.3 1 0%' })
   })
+
+  it('switches bottom section between 문서 속성 (markdown) and 레퍼런스 (code/diff/snapshot) and groups references without closing on click', async () => {
+    const user = userEvent.setup()
+    const onSelectMatch = vi.fn()
+    const splitState = createTwoSectionSplitState(RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)
+
+    const baseOutlineProps = {
+      activeHeadingIndex: null,
+      showHeadingNumbers: false,
+      onToggleHeadingNumbers: vi.fn(),
+      onSelectHeading: vi.fn(),
+      onCollapse: vi.fn()
+    }
+    const basePropertiesProps = {
+      schemaResult: {
+        exists: true,
+        path: 'C:/wiki/.wiki-editor/frontmatter.json',
+        schema: createDefaultFrontmatterSchema()
+      },
+      onChangeContent: vi.fn(),
+      onCreateDefaultSchema: vi.fn()
+    }
+    const referencesProps = {
+      state: {
+        status: 'loaded' as const,
+        symbolName: 'greet',
+        scopeLabel: 'abc1234',
+        fallbackNotice: '명확한 선언부를 찾지 못해 참조 2건을 표시합니다',
+        changedFilePaths: new Set(['src/changed.ts']),
+        matches: [
+          {
+            path: 'src/changed.ts',
+            lineNumber: 12,
+            lineText: '  return greet()',
+            columnStart: 9,
+            columnEnd: 14
+          },
+          {
+            path: 'src/other.ts',
+            lineNumber: 4,
+            lineText: 'greet()',
+            columnStart: 0,
+            columnEnd: 5
+          }
+        ],
+        onSelectMatch
+      }
+    }
+
+    const { rerender } = render(
+      <RightSidebarPanel
+        splitState={splitState}
+        onToggleOutlineCollapsed={vi.fn()}
+        onTogglePropertiesCollapsed={vi.fn()}
+        onResizeOutlineRatio={vi.fn()}
+        document={{
+          documentName: 'caller.ts',
+          documentKey: 'c:/wiki/src/caller.ts',
+          content: 'export function run() { return greet() }',
+          isMarkdownDocument: false
+        }}
+        outlineProps={baseOutlineProps}
+        propertiesProps={basePropertiesProps}
+        referencesProps={referencesProps}
+      />
+    )
+
+    expect(screen.queryByRole('region', { name: '문서 속성' })).toBeNull()
+    const refSection = screen.getByRole('region', { name: '레퍼런스' })
+    expect(within(refSection).getByText('abc1234')).toBeInTheDocument()
+    expect(
+      within(refSection).getByText('명확한 선언부를 찾지 못해 참조 2건을 표시합니다')
+    ).toBeInTheDocument()
+    expect(within(refSection).getByText('변경됨')).toBeInTheDocument()
+
+    await user.click(within(refSection).getByText('return greet()'))
+    expect(onSelectMatch).toHaveBeenCalledTimes(1)
+    // List stays open after clicking
+    expect(within(refSection).getByText('src/other.ts')).toBeInTheDocument()
+
+    // Switching back to Markdown restores 문서 속성
+    rerender(
+      <RightSidebarPanel
+        splitState={splitState}
+        onToggleOutlineCollapsed={vi.fn()}
+        onTogglePropertiesCollapsed={vi.fn()}
+        onResizeOutlineRatio={vi.fn()}
+        document={{
+          documentName: 'guide.md',
+          documentKey: 'c:/wiki/guide.md',
+          content: '# Guide',
+          isMarkdownDocument: true
+        }}
+        outlineProps={baseOutlineProps}
+        propertiesProps={basePropertiesProps}
+        referencesProps={referencesProps}
+      />
+    )
+
+    expect(screen.queryByRole('region', { name: '레퍼런스' })).toBeNull()
+    expect(screen.getByRole('region', { name: '문서 속성' })).toBeInTheDocument()
+  })
 })

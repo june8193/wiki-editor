@@ -969,4 +969,249 @@ describe('GitDiffViewer', () => {
       resizeObserver.restore()
     }
   })
+
+  it('jumps to and highlights a distant target line in virtualized side-by-side and inline diff modes', () => {
+    const resizeObserver = installResizeObserverStub()
+    try {
+      const largePatch = makeLargePatch(500, 'src/jumpTarget.ts', 'item')
+      const request: GitDiffRequest = { kind: 'unstaged', path: 'src/jumpTarget.ts', status: 'M' }
+      const diff = makeDiff({ path: 'src/jumpTarget.ts', rawPatch: largePatch })
+
+      const { container, rerender } = render(
+        <GitDiffViewer
+          request={request}
+          viewMode="side-by-side"
+          state={{ status: 'loaded', diff }}
+          onChangeViewMode={vi.fn()}
+          onOpenFile={vi.fn()}
+          jumpRequest={{ lineNumber: 350, nonce: 1 }}
+        />
+      )
+
+      const scrollEl = screen.getByTestId('diff-side-by-side')
+      const scrollStub = installScrollContainerStub(scrollEl, {
+        clientHeight: 220,
+        initialScrollTop: 0,
+        getScrollHeight: () => 501 * 22
+      })
+      resizeObserver.trigger()
+
+      expect(scrollStub.getScrollTop()).toBeGreaterThan(5000)
+      const targetText = screen.getByText(matchDiffLineText('const item_350 = 350'))
+      expect(targetText).toBeTruthy()
+      expect(targetText.closest('tr')).toHaveClass('is-jump-highlight')
+
+      // Inline mode jump to another distant line
+      rerender(
+        <GitDiffViewer
+          request={request}
+          viewMode="inline"
+          state={{ status: 'loaded', diff }}
+          onChangeViewMode={vi.fn()}
+          onOpenFile={vi.fn()}
+          jumpRequest={{ lineNumber: 420, nonce: 2 }}
+        />
+      )
+
+      const inlineTargetText = screen.getByText(matchDiffLineText('const item_420 = 420'))
+      expect(inlineTargetText).toBeTruthy()
+      expect(inlineTargetText.closest('tr')).toHaveClass('is-jump-highlight')
+      expect(container.querySelectorAll('tr.is-jump-highlight')).toHaveLength(1)
+    } finally {
+      resizeObserver.restore()
+    }
+  })
+
+  it('highlights valid identifiers on Ctrl+hover (excluding keywords/comments/strings) and emits side-aware Ctrl+click navigation', () => {
+    const patch = [
+      'diff --git a/src/sample.ts b/src/sample.ts',
+      '--- a/src/sample.ts',
+      '+++ b/src/sample.ts',
+      '@@ -1,1 +1,2 @@',
+      '-const legacyVal = oldHelper()',
+      '+const nextVal = newHelper() // ignoreComment',
+      '+const label = "ignoredString"'
+    ].join('\n')
+
+    const onSymbolNavigate = vi.fn()
+    const { container } = render(
+      <GitDiffViewer
+        request={{ kind: 'unstaged', path: 'src/sample.ts', status: 'M' }}
+        viewMode="side-by-side"
+        state={{
+          status: 'loaded',
+          diff: makeDiff({ path: 'src/sample.ts', rawPatch: patch })
+        }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+        onSymbolNavigate={onSymbolNavigate}
+      />
+    )
+
+    // Hovering keyword `const` with Ctrl does not mark hover target
+    const constToken = screen.getAllByText('const')[0]
+    fireEvent.mouseMove(constToken, { ctrlKey: true })
+    expect(container.querySelector('.symbol-hover-target')).toBeNull()
+
+    // Hovering comment or string with Ctrl does not mark hover target
+    const commentToken = screen.getByText('// ignoreComment')
+    fireEvent.mouseMove(commentToken, { ctrlKey: true })
+    expect(container.querySelector('.symbol-hover-target')).toBeNull()
+
+    const stringToken = screen.getByText('"ignoredString"')
+    fireEvent.mouseMove(stringToken, { ctrlKey: true })
+    expect(container.querySelector('.symbol-hover-target')).toBeNull()
+
+    // Hovering valid identifier `oldHelper` with Ctrl marks `.symbol-hover-target`
+    const oldHelperEl = screen.getByText('oldHelper')
+    fireEvent.mouseMove(oldHelperEl, { ctrlKey: true })
+    expect(container.querySelector('.symbol-hover-target')?.textContent).toBe('oldHelper')
+
+    // Ctrl+Click on old-side `oldHelper` emits side: 'old'
+    fireEvent.click(oldHelperEl, { ctrlKey: true })
+    expect(onSymbolNavigate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        symbolName: 'oldHelper',
+        lineNumber: 1,
+        side: 'old'
+      })
+    )
+
+    // Ctrl+Click on new-side `newHelper` emits side: 'new'
+    const newHelperEl = screen.getByText('newHelper')
+    fireEvent.click(newHelperEl, { ctrlKey: true })
+    expect(onSymbolNavigate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        symbolName: 'newHelper',
+        lineNumber: 1,
+        side: 'new'
+      })
+    )
+  })
+
+  it('emits onSymbolContextMenu on right-click and onFindReferences on Shift+F12 for code identifiers', () => {
+    const patch = ['@@ -1,1 +1,1 @@', '-const a = oldSym()', '+const b = newSym()'].join('\n')
+    const onSymbolContextMenu = vi.fn()
+    const onFindReferences = vi.fn()
+
+    const { container } = render(
+      <GitDiffViewer
+        request={{ kind: 'unstaged', path: 'src/sample.ts', status: 'M' }}
+        viewMode="side-by-side"
+        state={{
+          status: 'loaded',
+          diff: makeDiff({ path: 'src/sample.ts', rawPatch: patch })
+        }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+        onSymbolContextMenu={onSymbolContextMenu}
+        onFindReferences={onFindReferences}
+      />
+    )
+
+    const newSymEl = screen.getByText('newSym')
+    fireEvent.contextMenu(newSymEl)
+    expect(onSymbolContextMenu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbolName: 'newSym',
+        lineNumber: 1,
+        side: 'new'
+      })
+    )
+
+    const viewer = container.querySelector('.git-diff-viewer') as HTMLElement
+    fireEvent.keyDown(viewer, { key: 'F12', shiftKey: true })
+    expect(onFindReferences).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbolName: 'newSym',
+        lineNumber: 1,
+        side: 'new'
+      })
+    )
+  })
+
+  it('supports Ctrl+F Find Bar in side-by-side, inline, and virtualized diff views with selection auto-fill and distant match scroll', () => {
+    const lines = ['@@ -1,260 +1,260 @@']
+    lines.push(' const targetAlpha = 1')
+    lines.push('-const TargetAlphaBeta = 2')
+    lines.push('+const targetAlphaBeta = 2')
+    for (let i = 4; i <= 250; i += 1) {
+      lines.push(` const filler_${i} = ${i}`)
+    }
+    lines.push('+const distantTarget = targetAlpha')
+
+    const patch = lines.join('\n')
+    const diff = makeDiff({ path: 'src/largeFind.ts', rawPatch: patch })
+    const request: GitDiffRequest = { kind: 'unstaged', path: 'src/largeFind.ts', status: 'M' }
+
+    const { container, rerender } = render(
+      <GitDiffViewer
+        request={request}
+        viewMode="side-by-side"
+        state={{ status: 'loaded', diff }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+        isActive
+      />
+    )
+
+    // Select "targetAlpha" in the first rendered code line
+    const firstLineText = container.querySelector('.git-diff-line-text')
+    expect(firstLineText).toBeTruthy()
+    const walker = document.createTreeWalker(firstLineText!, NodeFilter.SHOW_TEXT)
+    let textNode: Text | null = null
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text
+      if (node.textContent?.includes('targetAlpha')) {
+        textNode = node
+        break
+      }
+    }
+    expect(textNode).toBeTruthy()
+    const range = document.createRange()
+    const idx = textNode!.textContent!.indexOf('targetAlpha')
+    range.setStart(textNode!, idx)
+    range.setEnd(textNode!, idx + 'targetAlpha'.length)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const findInput = screen.getByLabelText('문서 내 검색어 입력') as HTMLInputElement
+    expect(findInput.value).toBe('targetAlpha')
+
+    // side-by-side: context line has old+new (2), delete+add pair has old+new (2), distant add line (1) => 5 matches
+    expect(screen.getByText('1 / 5')).toBeTruthy()
+
+    // Toggle wholeWord (ab): only exact 'targetAlpha' matches (old+new on line 1 + distant add = 3)
+    fireEvent.click(screen.getByRole('button', { name: '단어 단위 (ab)' }))
+    expect(screen.getByText('1 / 3')).toBeTruthy()
+
+    // Navigate to match 3 (distant row 250) -> virtual scroll moves scrollTop > 0 and mounts distantTarget
+    fireEvent.keyDown(findInput, { key: 'Enter' })
+    fireEvent.keyDown(findInput, { key: 'Enter' })
+    expect(screen.getByText('3 / 3')).toBeTruthy()
+    const scrollEl = screen.getByTestId('diff-side-by-side')
+    expect(scrollEl.scrollTop).toBeGreaterThan(0)
+    expect(screen.getByText(/distantTarget/)).toBeTruthy()
+
+    // Switch to inline mode while Find Bar is open -> matches recalculate for inline (1 on line 1 + 1 on distant = 2)
+    rerender(
+      <GitDiffViewer
+        request={request}
+        viewMode="inline"
+        state={{ status: 'loaded', diff }}
+        onChangeViewMode={vi.fn()}
+        onOpenFile={vi.fn()}
+        isActive
+      />
+    )
+    expect(screen.getByText('2 / 2')).toBeTruthy()
+    expect(container.querySelectorAll('.viewer-search-match').length).toBeGreaterThan(0)
+
+    // Esc closes Find Bar and clears highlights
+    fireEvent.keyDown(findInput, { key: 'Escape' })
+    expect(screen.queryByLabelText('문서 내 검색어 입력')).toBeNull()
+    expect(container.querySelectorAll('.viewer-search-match').length).toBe(0)
+  })
 })

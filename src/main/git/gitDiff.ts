@@ -36,6 +36,8 @@ export interface GitDiffExecArgs {
   cwd: string
   args: readonly string[]
   execOptions: GitDiffExecOptions
+  maxBytes?: number
+  signal?: AbortSignal
 }
 
 function truncateUnifiedPatchBuffer(
@@ -117,28 +119,66 @@ export async function inspectTargetFileState(
   }
 }
 
-async function execGitStdoutCapped({
+export interface SpawnGitStreamArgs {
+  cwd: string
+  args: readonly string[]
+  execOptions: GitDiffExecOptions
+  signal?: AbortSignal
+  onStdout: (chunk: Buffer, stopEarly: () => void) => void
+  onClose?: () => void
+  acceptExitCode?: (code: number | null, stderr: string) => boolean
+}
+
+/**
+ * Spawns a `git` child process with bounded stderr collection, timeout, and `AbortSignal` support.
+ */
+export async function spawnGitStdoutStream({
   cwd,
   args,
-  execOptions
-}: GitDiffExecArgs): Promise<GitBufferResult> {
+  execOptions,
+  signal,
+  onStdout,
+  onClose,
+  acceptExitCode
+}: SpawnGitStreamArgs): Promise<{ aborted: boolean; stoppedEarly: boolean }> {
   const { env, timeoutMs, onFailureMeta } = execOptions
   return new Promise((resolvePromise, rejectPromise) => {
+    if (signal?.aborted) {
+      resolvePromise({ aborted: true, stoppedEarly: false })
+      return
+    }
+
     const child = spawn('git', [...args], {
       cwd,
       env,
       windowsHide: true
     })
 
-    const stdoutChunks: Buffer[] = []
-    let collectedBytes = 0
-    let truncated = false
-    let hasNullByte = false
+    let stoppedEarly = false
     let timedOut = false
+    let aborted = false
     let settled = false
     const stderrChunks: Buffer[] = []
     let stderrBytes = 0
     const MAX_STDERR_BYTES = 16 * 1024
+
+    const stopEarly = (): void => {
+      if (!stoppedEarly) {
+        stoppedEarly = true
+        child.kill()
+      }
+    }
+
+    const onAbort = (): void => {
+      aborted = true
+      child.kill()
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+
+    const cleanupListeners = (): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+    }
 
     const timer = setTimeout(() => {
       timedOut = true
@@ -148,7 +188,7 @@ async function execGitStdoutCapped({
     const finishError = (err: unknown): void => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
+      cleanupListeners()
       onFailureMeta?.(err, cwd, [...args])
       rejectPromise(err)
     }
@@ -156,22 +196,8 @@ async function execGitStdoutCapped({
     child.on('error', finishError)
 
     child.stdout.on('data', (chunk: Buffer) => {
-      if (settled || truncated) return
-      if (chunk.includes(0)) {
-        hasNullByte = true
-      }
-      const remaining = GIT_DIFF_MAX_BYTES + 1 - collectedBytes
-      if (chunk.length >= remaining) {
-        if (remaining > 0) {
-          stdoutChunks.push(chunk.subarray(0, remaining))
-          collectedBytes += remaining
-        }
-        truncated = true
-        child.kill()
-        return
-      }
-      stdoutChunks.push(chunk)
-      collectedBytes += chunk.length
+      if (settled || stoppedEarly || aborted) return
+      onStdout(chunk, stopEarly)
     })
 
     child.stderr.on('data', (chunk: Buffer) => {
@@ -181,50 +207,96 @@ async function execGitStdoutCapped({
       stderrBytes += slice.length
     })
 
-    child.on('close', (code, signal) => {
+    child.on('close', (code, execSignal) => {
       if (settled) return
-      clearTimeout(timer)
+      cleanupListeners()
+      onClose?.()
 
-      if (truncated) {
+      if (aborted) {
         settled = true
-        resolvePromise({
-          buffer: Buffer.concat(stdoutChunks, collectedBytes),
-          truncated: true,
-          hasNullByte
-        })
+        resolvePromise({ aborted: true, stoppedEarly })
         return
       }
 
+      if (stoppedEarly) {
+        settled = true
+        resolvePromise({ aborted: false, stoppedEarly: true })
+        return
+      }
+
+      const stderr = Buffer.concat(stderrChunks, stderrBytes).toString('utf8')
       if (timedOut) {
         finishError(
           Object.assign(new Error(`Git command timed out after ${timeoutMs}ms`), {
             killed: true,
-            signal: signal ?? undefined,
-            stderr: Buffer.concat(stderrChunks, stderrBytes).toString('utf8')
+            signal: execSignal ?? undefined,
+            stderr
           })
         )
         return
       }
 
-      if (code !== 0) {
+      const ok = acceptExitCode ? acceptExitCode(code, stderr) : code === 0
+      if (!ok) {
         finishError(
           Object.assign(new Error(`Git command failed with exit code ${code ?? 'unknown'}`), {
             code: code ?? undefined,
-            signal: signal ?? undefined,
-            stderr: Buffer.concat(stderrChunks, stderrBytes).toString('utf8')
+            signal: execSignal ?? undefined,
+            stderr
           })
         )
         return
       }
 
       settled = true
-      resolvePromise({
-        buffer: Buffer.concat(stdoutChunks, collectedBytes),
-        truncated: false,
-        hasNullByte
-      })
+      resolvePromise({ aborted: false, stoppedEarly: false })
     })
   })
+}
+
+export async function execGitStdoutCapped({
+  cwd,
+  args,
+  execOptions,
+  maxBytes = GIT_DIFF_MAX_BYTES,
+  signal
+}: GitDiffExecArgs): Promise<GitBufferResult> {
+  const stdoutChunks: Buffer[] = []
+  let collectedBytes = 0
+  let hasNullByte = false
+
+  const { aborted, stoppedEarly } = await spawnGitStdoutStream({
+    cwd,
+    args,
+    execOptions,
+    signal,
+    onStdout: (chunk, stopEarly) => {
+      if (chunk.includes(0)) {
+        hasNullByte = true
+      }
+      const remaining = maxBytes + 1 - collectedBytes
+      if (chunk.length >= remaining) {
+        if (remaining > 0) {
+          stdoutChunks.push(chunk.subarray(0, remaining))
+          collectedBytes += remaining
+        }
+        stopEarly()
+        return
+      }
+      stdoutChunks.push(chunk)
+      collectedBytes += chunk.length
+    }
+  })
+
+  if (aborted) {
+    throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
+  }
+
+  return {
+    buffer: Buffer.concat(stdoutChunks, collectedBytes),
+    truncated: stoppedEarly,
+    hasNullByte
+  }
 }
 
 function buildUntrackedUnifiedPatch(safePath: string, text: string): string {

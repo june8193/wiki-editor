@@ -2,12 +2,22 @@ import { useCallback, useRef, useState } from 'react'
 import type { DocumentBufferSnapshot } from '@shared/documentBuffer'
 import type { TextEncoding } from '@shared/encoding'
 import type { ScreenPoint } from '@shared/window'
+import type { GitBlobSnapshotRequest } from '@shared/symbol'
+import type { SymbolNavigateRequest } from '../editor/symbolHoverDom'
 import { useDismissable } from '../hooks/useDismissable'
-import { GitDiffViewMode, PaneId, TabItem, TabViewPatch } from '../stores/PaneTabStore'
+import {
+  GitDiffViewMode,
+  type OpenSnapshotTabOptions,
+  PaneId,
+  type SnapshotTabItem,
+  TabItem,
+  TabViewPatch
+} from '../stores/PaneTabStore'
 import {
   formatGitFileLabel,
   getGitDiffContextLabel,
-  getGitDiffTabLabel
+  getGitDiffTabLabel,
+  getGitFileBaseName
 } from '../utils/gitFilePresentation'
 import {
   allowWikiTabDragOver,
@@ -35,7 +45,19 @@ export interface PaneInteractionActions extends TabDragDropActions {
   onChangeDiffViewMode: (paneId: PaneId, tabId: string, viewMode: GitDiffViewMode) => void
   onPinDiffTab?: (paneId: PaneId, tabId: string) => void
   onOpenDiffTargetFile?: (repoRelativePath: string) => void
+  onPinSnapshotTab?: (paneId: PaneId, tabId: string) => void
+  onOpenSnapshotTab?: (
+    request: GitBlobSnapshotRequest,
+    options?: OpenSnapshotTabOptions
+  ) => SnapshotTabItem
+  onOpenSnapshotTargetFile?: (repoRelativePath: string) => void
+  onUpdateSnapshotScrollTop?: (paneId: PaneId, tabId: string, scrollTop: number) => void
+  onGoBack?: (paneId: PaneId) => void
+  onGoForward?: (paneId: PaneId) => void
   onNavigateLink?: (paneId: PaneId, tabId: string, href: string) => void
+  onSymbolNavigate?: (paneId: PaneId, tabId: string, request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (paneId: PaneId, tabId: string, request: SymbolNavigateRequest) => void
+  onFindReferences?: (paneId: PaneId, tabId: string, request: SymbolNavigateRequest) => void
 }
 
 interface TabContextMenuState {
@@ -52,6 +74,7 @@ interface PaneTabBarProps {
   canMoveToSplit: boolean
   buffers: DocumentBufferSnapshot
   dragState: TabDragUiState
+  history?: { canGoBack: boolean; canGoForward: boolean }
   actions: Pick<
     PaneInteractionActions,
     | 'onActivateTab'
@@ -64,6 +87,9 @@ interface PaneTabBarProps {
     | 'onDropTabInWindow'
     | 'onEndTabDrag'
     | 'onPinDiffTab'
+    | 'onPinSnapshotTab'
+    | 'onGoBack'
+    | 'onGoForward'
   >
 }
 
@@ -78,6 +104,7 @@ export function PaneTabBar({
   canMoveToSplit,
   buffers,
   dragState,
+  history,
   actions
 }: PaneTabBarProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
@@ -98,22 +125,53 @@ export function PaneTabBar({
         handleTabMoveDrop(event, dragState, paneId, actions, { stopPropagation: true })
       }
     >
+      <div className="pane-history-controls">
+        <button
+          type="button"
+          className="pane-history-btn"
+          aria-label="이전 위치로 이동"
+          title="이전 위치로 이동 (Alt+←)"
+          disabled={!history?.canGoBack}
+          onClick={() => actions.onGoBack?.(paneId)}
+        >
+          ←
+        </button>
+        <button
+          type="button"
+          className="pane-history-btn"
+          aria-label="다음 위치로 이동"
+          title="다음 위치로 이동 (Alt+→)"
+          disabled={!history?.canGoForward}
+          onClick={() => actions.onGoForward?.(paneId)}
+        >
+          →
+        </button>
+      </div>
       {tabs.map((tab, index) => {
         const buffer = tab.kind === 'document' ? buffers[tab.bufferKey] : undefined
         if (tab.kind === 'document' && !buffer) return null
         const isActive = tab.id === activeTabId
         const isDiff = tab.kind === 'diff'
+        const isSnapshot = tab.kind === 'snapshot'
         const isPreviewDiff = isDiff && tab.diff.isPreview === true
-        const tabLabel = isDiff ? getGitDiffTabLabel(tab.diff.request) : buffer!.name
+        const isPreviewSnapshot = isSnapshot && tab.snapshot.isPreview === true
+        const isPreview = isPreviewDiff || isPreviewSnapshot
+        const tabLabel = isDiff
+          ? getGitDiffTabLabel(tab.diff.request)
+          : isSnapshot
+            ? getGitFileBaseName(tab.snapshot.request.path)
+            : buffer!.name
         const tabTitle = isDiff
           ? `${formatGitFileLabel(tab.diff.request)} · ${getGitDiffContextLabel(tab.diff.request)}`
-          : buffer!.path
-        const isDirty = !isDiff && Boolean(buffer?.isDirty)
+          : isSnapshot
+            ? `${tab.snapshot.request.path} · 🔒 ${tab.snapshot.request.scope.displayRef}`
+            : buffer!.path
+        const isDirty = !isDiff && !isSnapshot && Boolean(buffer?.isDirty)
 
         return (
           <div
             key={tab.id}
-            className={`tab-item${isActive ? ' is-active' : ''}${isDiff ? ' is-diff-tab' : ''}${isPreviewDiff ? ' is-preview' : ''}`}
+            className={`tab-item${isActive ? ' is-active' : ''}${isDiff ? ' is-diff-tab' : ''}${isSnapshot ? ' is-snapshot-tab' : ''}${isPreview ? ' is-preview' : ''}`}
             draggable
             onDragStart={(event) => {
               writeTabDragDataTransfer(event, { paneId, tabId: tab.id })
@@ -153,10 +211,19 @@ export function PaneTabBar({
               title={tabTitle}
               onClick={() => actions.onActivateTab(paneId, tab.id)}
               onDoubleClick={
-                isPreviewDiff ? () => actions.onPinDiffTab?.(paneId, tab.id) : undefined
+                isPreviewDiff
+                  ? () => actions.onPinDiffTab?.(paneId, tab.id)
+                  : isPreviewSnapshot
+                    ? () => actions.onPinSnapshotTab?.(paneId, tab.id)
+                    : undefined
               }
             >
               {isDiff && <span className="tab-diff-badge">Diff</span>}
+              {isSnapshot && (
+                <span className="tab-snapshot-badge">
+                  🔒 {tab.snapshot.request.scope.displayRef}
+                </span>
+              )}
               <span className="tab-label">{tabLabel}</span>
               {isDirty && (
                 <span

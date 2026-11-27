@@ -1,4 +1,5 @@
 import type { DocumentBuffer } from '@shared/documentBuffer'
+import type { GitFileStatusCode } from '@shared/git'
 import type { EditorMode } from '../stores/PaneTabStore'
 import { hasKnownCodeFilename } from './rawEditorLanguage'
 
@@ -35,11 +36,18 @@ export type EditorModeDocumentRef = Pick<DocumentBuffer, 'kind' | 'name'> & {
   contentKind?: DocumentBuffer['contentKind']
 }
 
+export interface SidebarDiffContext {
+  rawPatch: string | null
+  filePath: string
+  status: GitFileStatusCode
+}
+
 export interface SidebarDocumentContext {
   documentName: string | null
   documentKey?: string | null
   content: string
   isMarkdownDocument: boolean
+  diffContext?: SidebarDiffContext
 }
 
 /**

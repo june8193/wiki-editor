@@ -7,6 +7,12 @@ import {
   type DocumentPropertiesSectionProps
 } from './DocumentPropertiesSection'
 import { HorizontalSectionResizer } from './HorizontalSectionResizer'
+import {
+  IDLE_REFERENCES_STATE,
+  isCodeReferencesDocument,
+  ReferencesSection,
+  type ReferencesSectionProps
+} from './ReferencesSection'
 
 export const RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO = 0.35
 
@@ -24,11 +30,15 @@ export interface RightSidebarPanelProps {
     DocumentPropertiesSectionProps,
     'document' | 'isExpanded' | 'flexRatio' | 'onToggleExpanded'
   >
+  referencesProps?: Omit<
+    ReferencesSectionProps,
+    'isExpanded' | 'flexRatio' | 'onToggleExpanded'
+  >
 }
 
 /**
  * Right sidebar 2-tier accordion hosting Document Outline (top, default 35%) and
- * Document Properties (bottom, default 65%) separated by an accessible horizontal resizer.
+ * Document Properties or Code References (bottom, default 65%) separated by an accessible horizontal resizer.
  */
 export const RightSidebarPanel = memo(function RightSidebarPanel({
   document,
@@ -37,10 +47,12 @@ export const RightSidebarPanel = memo(function RightSidebarPanel({
   onTogglePropertiesCollapsed,
   onResizeOutlineRatio,
   outlineProps,
-  propertiesProps
+  propertiesProps,
+  referencesProps
 }: RightSidebarPanelProps) {
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
   const layout = computeTwoSectionLayout(splitState, RIGHT_SIDEBAR_DEFAULT_OUTLINE_RATIO)
+  const showReferences = isCodeReferencesDocument(document)
 
   return (
     <div ref={splitContainerRef} className="right-sidebar-split-container">
@@ -63,13 +75,22 @@ export const RightSidebarPanel = memo(function RightSidebarPanel({
         />
       )}
 
-      <DocumentPropertiesSection
-        document={document}
-        {...propertiesProps}
-        isExpanded={layout.showBottomBody}
-        flexRatio={layout.bottomFlexRatio}
-        onToggleExpanded={onTogglePropertiesCollapsed}
-      />
+      {showReferences ? (
+        <ReferencesSection
+          state={referencesProps?.state ?? IDLE_REFERENCES_STATE}
+          isExpanded={layout.showBottomBody}
+          flexRatio={layout.bottomFlexRatio}
+          onToggleExpanded={onTogglePropertiesCollapsed}
+        />
+      ) : (
+        <DocumentPropertiesSection
+          document={document}
+          {...propertiesProps}
+          isExpanded={layout.showBottomBody}
+          flexRatio={layout.bottomFlexRatio}
+          onToggleExpanded={onTogglePropertiesCollapsed}
+        />
+      )}
     </div>
   )
 })

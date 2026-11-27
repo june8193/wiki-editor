@@ -21,6 +21,12 @@ import {
   type GitStatus,
   type GitSyncResult
 } from '@shared/git'
+import type {
+  GitBlobSnapshot,
+  GitBlobSnapshotRequest,
+  SymbolCandidateMatch,
+  SymbolQueryRequest
+} from '@shared/symbol'
 import {
   hasBlockedPathSegment,
   isErrnoCode,
@@ -51,6 +57,8 @@ import {
   resolveDefaultBaseRef
 } from './gitCompare'
 import { computeGitDiff, validateGitDiffTarget } from './gitDiff'
+import { readGitBlobSnapshot, validateBlobSnapshotRequest } from './gitBlobSnapshot'
+import { grepGitSymbols, validateSymbolQueryScope } from './gitSymbolSearch'
 import { parseForEachRefOutput, parseGitLogOutput } from './gitLog'
 import { assertValidGitHash, parseGitNameStatusZ } from './gitObjectParsing'
 import { parsePorcelainV2Z } from './gitPorcelain'
@@ -620,6 +628,60 @@ export class GitService {
         throw await this.formatAndLogGitError('diff', new Error(UNBORN_COMPARE_ERROR_MESSAGE))
       }
       throw await this.formatAndLogGitError('diff', error)
+    }
+  }
+
+  async readBlobSnapshot(
+    workspacePath: string,
+    request: GitBlobSnapshotRequest
+  ): Promise<GitBlobSnapshot> {
+    const { scope } = validateBlobSnapshotRequest(request)
+    const { repoRoot, workspaceRealRoot } = await this.requireRepoContext(workspacePath)
+    const [safePath] = await this.validateRepoRelativePaths(repoRoot, [request.path])
+
+    try {
+      return await readGitBlobSnapshot({
+        repoRoot,
+        workspaceRealRoot,
+        safePath,
+        scope,
+        execOptions: {
+          env: this.createGitChildEnv(),
+          timeoutMs: this.localTimeoutMs,
+          onFailureMeta: this.recordFailedExecMeta
+        }
+      })
+    } catch (error) {
+      throw await this.formatAndLogGitError('readBlobSnapshot', error)
+    }
+  }
+
+  async grepSymbols(
+    workspacePath: string,
+    request: SymbolQueryRequest,
+    signal?: AbortSignal
+  ): Promise<SymbolCandidateMatch[] | null> {
+    validateSymbolQueryScope(request?.scope)
+    const repoRoot = await this.findRepoRoot(workspacePath)
+    if (!repoRoot) {
+      return null
+    }
+    try {
+      return await grepGitSymbols({
+        repoRoot,
+        request,
+        execOptions: {
+          env: this.createGitChildEnv(),
+          timeoutMs: this.localTimeoutMs,
+          onFailureMeta: this.recordFailedExecMeta
+        },
+        signal
+      })
+    } catch (error) {
+      if (signal?.aborted) {
+        return []
+      }
+      throw await this.formatAndLogGitError('grepSymbols', error)
     }
   }
 

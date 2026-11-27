@@ -33,6 +33,7 @@ import type {
 } from '@shared/workspace'
 import type { WorkspaceQueryAndSchemaHub } from '@shared/workspaceQueryAndSchema'
 import type { ConfigService } from './config/ConfigService'
+import type { GitService } from './git/GitService'
 import type { WebContentsLike } from './ipc/ipcHelpers'
 import {
   createSharedDocumentBufferHub,
@@ -107,6 +108,7 @@ export interface WindowManagerDependencies {
   rendererFilePath: string
   windowIconPath?: string
   configService: ConfigService
+  gitService?: GitService
   logService?: LogService
   trashItem?: (targetPath: string) => Promise<void>
   watchDebounceMs?: number
@@ -175,6 +177,7 @@ export class WindowManager
   private readonly rendererFilePath: string
   private readonly windowIconPath?: string
   private readonly configService: ConfigService
+  private readonly gitService?: GitService
   private readonly logService?: LogService
   private readonly trashItem?: (targetPath: string) => Promise<void>
   private readonly watchDebounceMs?: number
@@ -196,6 +199,7 @@ export class WindowManager
     rendererFilePath,
     windowIconPath,
     configService,
+    gitService,
     logService,
     trashItem,
     watchDebounceMs,
@@ -211,6 +215,7 @@ export class WindowManager
     this.rendererFilePath = rendererFilePath
     this.windowIconPath = windowIconPath
     this.configService = configService
+    this.gitService = gitService
     this.logService = logService
     this.trashItem = trashItem
     this.watchDebounceMs = watchDebounceMs
@@ -366,6 +371,7 @@ export class WindowManager
     const queryAndSchemaHub = createDiskWorkspaceQueryAndSchemaHub({
       workspaceService,
       bufferHub,
+      gitService: this.gitService,
       watchDebounceMs: this.watchDebounceMs,
       logService: this.logService
     })

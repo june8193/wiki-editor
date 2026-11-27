@@ -306,4 +306,117 @@ describe('PaneNavigationCoordinator', () => {
       previewJumpHighlight: null
     })
   })
+
+  it('tracks per-pane navigation history (back/forward), caps stack at 50, restores closed tabs, and resets on workspace switch', async () => {
+    const { coordinator, tabStore, openDocument } = setupNavigation()
+
+    const first = openDocument('c:/wiki/a.ts', 'const a = 1\nconst b = 2\n')
+    const second = openDocument('c:/wiki/b.ts', 'function b() {}\n')
+    expect(coordinator.getSnapshot().historyByPane.primary).toEqual({
+      canGoBack: false,
+      canGoForward: false
+    })
+
+    // Record origin at a.ts line 2 before jumping to b.ts
+    coordinator.recordNavigationOrigin('primary', {
+      kind: 'document',
+      tabId: first.tab.id,
+      bufferKey: first.tab.bufferKey,
+      filePath: 'c:/wiki/a.ts',
+      lineNumber: 2,
+      columnStart: 6,
+      columnEnd: 7
+    })
+    expect(coordinator.getSnapshot().historyByPane.primary).toEqual({
+      canGoBack: true,
+      canGoForward: false
+    })
+    expect(coordinator.getSnapshot().historyByPane.secondary).toEqual({
+      canGoBack: false,
+      canGoForward: false
+    })
+
+    // Go back from b.ts line 1 -> restores a.ts line 2 and enables forward
+    const wentBack = await coordinator.goBack('primary', {
+      kind: 'document',
+      tabId: second.tab.id,
+      bufferKey: second.tab.bufferKey,
+      filePath: 'c:/wiki/b.ts',
+      lineNumber: 1,
+      columnStart: 9,
+      columnEnd: 10
+    })
+    expect(wentBack).toBe(true)
+    expect(tabStore.getSnapshot().panes.primary.activeTabId).toBe(first.tab.id)
+    expect(coordinator.getSnapshot().searchJumpRequest?.lineNumber).toBe(2)
+    expect(coordinator.getSnapshot().historyByPane.primary).toEqual({
+      canGoBack: false,
+      canGoForward: true
+    })
+
+    // Close second tab, then goForward -> reopens b.ts and jumps to line 1
+    tabStore.closeTab('primary', second.tab.id)
+    const wentForward = await coordinator.goForward('primary')
+    expect(wentForward).toBe(true)
+    expect(coordinator.getSnapshot().searchJumpRequest?.lineNumber).toBe(1)
+    expect(coordinator.getSnapshot().historyByPane.primary).toEqual({
+      canGoBack: true,
+      canGoForward: false
+    })
+
+    // Cap at 50 entries
+    for (let i = 1; i <= 60; i += 1) {
+      coordinator.recordNavigationOrigin('secondary', {
+        kind: 'snapshot',
+        tabId: `snap-${i}`,
+        request: {
+          path: 'src/x.ts',
+          scope: { kind: 'git-ref', ref: 'HEAD', displayRef: 'HEAD' }
+        },
+        lineNumber: i,
+        columnStart: 0,
+        columnEnd: 1
+      })
+    }
+    let backCount = 0
+    while (await coordinator.goBack('secondary')) {
+      backCount += 1
+    }
+    expect(backCount).toBe(50)
+
+    // Preserves lineNumber and side on goBack -> goForward from Diff and Snapshot tabs
+    const diffTab = tabStore.openDiffTab({ kind: 'unstaged', path: 'src/a.ts', status: 'M' }, { paneId: 'primary' })
+    coordinator.jumpToDiffLine('primary', diffTab.id, 42, 'old')
+    const snapTab = tabStore.openSnapshotTab(
+      { path: 'src/b.ts', scope: { kind: 'git-ref', ref: 'HEAD', displayRef: 'HEAD' } },
+      { paneId: 'primary' }
+    )
+    coordinator.recordNavigationOrigin('primary', {
+      kind: 'diff',
+      tabId: diffTab.id,
+      request: diffTab.diff.request,
+      viewMode: diffTab.diff.viewMode,
+      lineNumber: 42,
+      side: 'old'
+    })
+    coordinator.jumpToSnapshotLine('primary', snapTab.id, 17, 0, 5)
+    expect(await coordinator.goBack('primary')).toBe(true)
+    expect(coordinator.getSnapshot().diffJumpRequest?.lineNumber).toBe(42)
+    expect(coordinator.getSnapshot().diffJumpRequest?.side).toBe('old')
+    expect(await coordinator.goForward('primary')).toBe(true)
+    expect(coordinator.getSnapshot().snapshotJumpRequest?.lineNumber).toBe(17)
+
+    // Workspace switch clears all history
+    coordinator.resetForWorkspaceSwitch()
+    expect(coordinator.getSnapshot().historyByPane.primary).toEqual({
+      canGoBack: false,
+      canGoForward: false
+    })
+    expect(coordinator.getSnapshot().historyByPane.secondary).toEqual({
+      canGoBack: false,
+      canGoForward: false
+    })
+
+    coordinator.dispose()
+  })
 })

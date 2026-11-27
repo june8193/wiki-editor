@@ -44,9 +44,11 @@ function logPaneTabTransition(
   const resolveTabPath = (tab: TabItem): string =>
     tab.kind === 'diff'
       ? tab.diff.request.path
-      : (bufferStore.getBuffer(tab.bufferKey)?.path ?? tab.bufferKey)
+      : tab.kind === 'snapshot'
+        ? tab.snapshot.request.path
+        : (bufferStore.getBuffer(tab.bufferKey)?.path ?? tab.bufferKey)
   const resolveTabModeMeta = (tab: TabItem): Record<string, string> =>
-    tab.kind === 'document' ? { mode: tab.mode } : { kind: 'diff' }
+    tab.kind === 'document' ? { mode: tab.mode } : { kind: tab.kind }
 
   switch (transition.type) {
     case 'tab-opened':
@@ -273,7 +275,10 @@ export function useEditorWorkspace({
       },
       onUpdateTabViewState: tabStore.updateTabViewState,
       onChangeDiffViewMode: tabStore.updateDiffTabViewMode,
-      onPinDiffTab: tabStore.pinDiffTab
+      onPinDiffTab: tabStore.pinDiffTab,
+      onPinSnapshotTab: tabStore.pinSnapshotTab,
+      onOpenSnapshotTab: tabStore.openSnapshotTab,
+      onUpdateSnapshotScrollTop: tabStore.updateSnapshotTabScrollTop
     }),
     [canDetachToNewWindow, syncClient, tabDragController, tabStore]
   )
@@ -293,7 +298,9 @@ export function useEditorWorkspace({
   }, [isAutoSavePaused, wikiApi])
 
   useEffect(() => {
-    syncClient.syncWindowTabs(extractLayoutBufferKeys(layout))
+    const bufferKeys = extractLayoutBufferKeys(layout)
+    const nonBufferTabCount = Math.max(0, countLayoutTabs(layout) - bufferKeys.length)
+    syncClient.syncWindowTabs(bufferKeys, nonBufferTabCount)
   }, [layout, syncClient])
 
   // Global fallback Ctrl+S and mode-switch shortcut handler when focus is outside a specific pane editor
@@ -301,7 +308,7 @@ export function useEditorWorkspace({
     const handleGlobalKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || isShortcutDisabledRef.current) return
       const activeTab = tabStore.getActiveTab()
-      if (!activeTab || activeTab.kind === 'diff') return
+      if (!activeTab || activeTab.kind !== 'document') return
       const activeBuffer = bufferStore.getBuffer(activeTab.bufferKey)
       const isImage = isImageDocument(activeBuffer)
       const { allowRichModes, effectiveMode } = resolveEffectiveEditorMode(
@@ -346,6 +353,7 @@ export function useEditorWorkspace({
     setSplitRatio: tabStore.setSplitRatio,
     splitWithTab: tabStore.splitWithTab,
     openDiffTab: tabStore.openDiffTab,
+    openSnapshotTab: tabStore.openSnapshotTab,
     listOpenDiffRequests: tabStore.listOpenDiffRequests,
     subscribeLayout: tabStore.subscribe,
     closeUnstagedDiffTabsForPaths: tabStore.closeUnstagedDiffTabsForPaths,

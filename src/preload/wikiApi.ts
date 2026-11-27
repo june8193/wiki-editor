@@ -76,6 +76,12 @@ import type {
 } from '@shared/workspaceState'
 import type { WorkspaceSearchRequest, WorkspaceSearchResponse } from '@shared/search'
 import type {
+  GitBlobSnapshot,
+  GitBlobSnapshotRequest,
+  SymbolCandidateMatch,
+  SymbolQueryRequest
+} from '@shared/symbol'
+import type {
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalSessionInfo,
@@ -170,6 +176,11 @@ export function createWikiApi(
           WORKSPACE_IPC_CHANNELS.search,
           request
         ) as Promise<WorkspaceSearchResponse>,
+      searchSymbols: (request: SymbolQueryRequest) =>
+        ipcRenderer.invoke(
+          WORKSPACE_IPC_CHANNELS.searchSymbols,
+          request
+        ) as Promise<SymbolCandidateMatch[]>,
       readFile: (filePath) =>
         ipcRenderer.invoke(WORKSPACE_IPC_CHANNELS.readFile, filePath) as Promise<string>,
       writeFile: (filePath, content) =>
@@ -301,6 +312,12 @@ export function createWikiApi(
         ) as Promise<GitCommitDetail>,
       diff: (workspacePath, request: GitDiffRequest) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.diff, workspacePath, request) as Promise<GitFileDiff>,
+      readBlobSnapshot: (workspacePath, request: GitBlobSnapshotRequest) =>
+        ipcRenderer.invoke(
+          GIT_IPC_CHANNELS.readBlobSnapshot,
+          workspacePath,
+          request
+        ) as Promise<GitBlobSnapshot>,
       compareRefs: (workspacePath) =>
         ipcRenderer.invoke(GIT_IPC_CHANNELS.compareRefs, workspacePath) as Promise<GitCompareRefList>,
       compareSummary: (workspacePath, request: GitCompareSummaryRequest) =>

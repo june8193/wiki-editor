@@ -37,6 +37,12 @@ import {
 } from './search'
 import type { SharedDocumentBufferHub } from './sharedDocumentBufferHub'
 import {
+  normalizeSymbolQuery,
+  scanTextForSymbolCandidates,
+  type SymbolCandidateMatch,
+  type SymbolQueryRequest
+} from './symbol'
+import {
   getWorkspacePathKey,
   isSameWorkspacePath,
   joinWorkspacePath,
@@ -72,6 +78,10 @@ export interface WorkspaceQueryAndSchemaStorage {
   readSchemaRaw(rootPath: string): Promise<SchemaRawReadResult>
   writeSchemaRaw(rootPath: string, serializedSchema: string): Promise<{ schemaPath: string }>
   watchSchema?(rootPath: string, onPossibleChange: () => void): () => void
+  searchGitSymbols?(
+    request: SymbolQueryRequest,
+    signal?: AbortSignal
+  ): Promise<SymbolCandidateMatch[] | null>
 }
 
 export type FrontmatterSchemaChangedListener = (result: FrontmatterSchemaLoadResult) => void
@@ -182,6 +192,33 @@ function isExcludedSearchFileName(fileName: string): boolean {
     return false
   }
   return KNOWN_BINARY_EXTENSIONS.has(fileName.slice(dotIndex).toLowerCase())
+}
+
+const EXCLUDED_SYMBOL_SEGMENTS: ReadonlySet<string> = new Set([
+  '.git',
+  '.wiki-editor',
+  'node_modules'
+])
+
+/**
+ * Returns true when a workspace-relative path targets an excluded directory or binary/image file.
+ */
+export function isExcludedWorkspaceRelativePath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '')
+  if (!normalized) {
+    return true
+  }
+  const segments = normalized.split('/')
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    if (EXCLUDED_SYMBOL_SEGMENTS.has(segments[i].toLowerCase())) {
+      return true
+    }
+  }
+  const fileName = segments[segments.length - 1]
+  if (EXCLUDED_SYMBOL_SEGMENTS.has(fileName.toLowerCase())) {
+    return true
+  }
+  return isExcludedSearchFileName(fileName)
 }
 
 function normalizeSearchLimit(value: number | undefined, fallback: number): number {
@@ -586,6 +623,7 @@ export class WorkspaceQueryAndSchemaHub {
   private readonly schemaListeners = new Set<FrontmatterSchemaChangedListener>()
   private readonly searchLane = new SingleFlightScanLane()
   private readonly fieldValuesLane = new SingleFlightScanLane()
+  private readonly symbolSearchLane = new SingleFlightScanLane()
   private readonly unsubscribeRootChanged: () => void
   private readonly unsubscribeBufferHub?: () => void
 
@@ -702,6 +740,7 @@ export class WorkspaceQueryAndSchemaHub {
   cancelActiveScans(): void {
     this.searchLane.cancel()
     this.fieldValuesLane.cancel()
+    this.symbolSearchLane.cancel()
   }
 
   collectFieldValues(
@@ -820,6 +859,172 @@ export class WorkspaceQueryAndSchemaHub {
         })
       }
     )
+  }
+
+  searchSymbols(request: SymbolQueryRequest): Promise<SymbolCandidateMatch[]> {
+    return this.runSingleFlightScan<SymbolCandidateMatch[]>(
+      this.symbolSearchLane,
+      [],
+      async (session) => {
+        const query = normalizeSymbolQuery(request)
+        if (!query) {
+          return []
+        }
+
+        const scope = request?.scope
+        if (!scope || typeof scope !== 'object') {
+          throw new Error('유효하지 않은 심볼 검색 범위입니다.')
+        }
+
+        if (scope.kind === 'git-ref' || scope.kind === 'git-index') {
+          if (!this.storage.searchGitSymbols) {
+            return []
+          }
+          const matches = await this.storage.searchGitSymbols(request, session.signal)
+          if (session.isInvalidated()) {
+            return []
+          }
+          return (matches ?? []).slice(0, query.maxResults)
+        }
+
+        if (scope.kind !== 'working-tree') {
+          throw new Error('유효하지 않은 심볼 검색 범위입니다.')
+        }
+
+        const gitMatches = this.storage.searchGitSymbols
+          ? await this.storage.searchGitSymbols(request, session.signal)
+          : null
+        if (session.isInvalidated()) {
+          return []
+        }
+
+        if (gitMatches !== null) {
+          const dirtyBuffers = this.collectDirtyWorkspaceTextBuffers()
+          const dirtyPathKeys = new Set(dirtyBuffers.map((item) => item.pathKey))
+          const results: SymbolCandidateMatch[] = []
+
+          for (const dirty of dirtyBuffers) {
+            if (results.length >= query.maxResults || session.isInvalidated()) {
+              break
+            }
+            const remaining = query.maxResults - results.length
+            results.push(
+              ...scanTextForSymbolCandidates(
+                dirty.relativePath,
+                dirty.content,
+                query,
+                remaining,
+                () => session.signal.aborted
+              )
+            )
+          }
+
+          for (const match of gitMatches) {
+            if (results.length >= query.maxResults) {
+              break
+            }
+            const matchKey = getWorkspacePathKey(match.path)
+            if (dirtyPathKeys.has(matchKey)) {
+              continue
+            }
+            results.push(match)
+          }
+
+          return results
+        }
+
+        const scanEntries = await session.listEligibleEntries({ onlyFrontmatterDocuments: false })
+        if (!scanEntries || session.isInvalidated()) {
+          return []
+        }
+
+        const eligible = scanEntries.filter(
+          (item) => !isExcludedWorkspaceRelativePath(item.entry.relativePath)
+        )
+        const slotMatches: SymbolCandidateMatch[][] = new Array(eligible.length)
+        let collectedCount = 0
+
+        await session.runWorkers(eligible, async (scanEntry, index) => {
+          if (collectedCount >= query.maxResults || session.isInvalidated()) {
+            return
+          }
+          const text = await session.readCandidateTextSafe(scanEntry.entry)
+          if (text === null || session.isInvalidated()) {
+            return
+          }
+          const found = scanTextForSymbolCandidates(
+            scanEntry.entry.relativePath,
+            text,
+            query,
+            query.maxResults,
+            () => session.signal.aborted
+          )
+          if (found.length > 0) {
+            slotMatches[index] = found
+            collectedCount += found.length
+          }
+        })
+
+        if (session.isInvalidated()) {
+          return []
+        }
+
+        const results: SymbolCandidateMatch[] = []
+        for (const list of slotMatches) {
+          if (!list) continue
+          for (const item of list) {
+            results.push(item)
+            if (results.length >= query.maxResults) {
+              return results
+            }
+          }
+        }
+        return results
+      }
+    )
+  }
+
+  private collectDirtyWorkspaceTextBuffers(): Array<{
+    relativePath: string
+    pathKey: string
+    content: string
+  }> {
+    if (!this.bufferHub) {
+      return []
+    }
+    const root = this.storage.getWorkspaceRoot()
+    if (!root) {
+      return []
+    }
+    const normalizedRoot = root.replace(/\\/g, '/').replace(/\/+$/, '')
+    const rootKey = getWorkspacePathKey(normalizedRoot)
+    const dirty: Array<{ relativePath: string; pathKey: string; content: string }> = []
+
+    for (const buffer of Object.values(this.bufferHub.getSnapshot().buffers)) {
+      if (buffer.kind !== 'workspace' || buffer.contentKind !== 'text' || !buffer.isDirty) {
+        continue
+      }
+      const normalizedPath = buffer.path.replace(/\\/g, '/')
+      const pathKey = getWorkspacePathKey(normalizedPath)
+      if (!pathKey.startsWith(`${rootKey}/`)) {
+        continue
+      }
+      const relativePath = normalizedPath.slice(normalizedRoot.length + 1)
+      if (isExcludedWorkspaceRelativePath(relativePath)) {
+        continue
+      }
+      const searchable = filterSearchableTextContent(buffer.content)
+      if (searchable === null) {
+        continue
+      }
+      dirty.push({
+        relativePath,
+        pathKey: getWorkspacePathKey(relativePath),
+        content: searchable
+      })
+    }
+
+    return dirty
   }
 
   dispose(): void {

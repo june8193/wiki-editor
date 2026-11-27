@@ -1,4 +1,4 @@
-import { type ReactNode, type Ref, useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { type ReactNode, type Ref, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ListTree } from 'lucide-react'
 import type { AppConfig } from '@shared/config'
 import { toErrorMessage } from '@shared/errors'
@@ -19,8 +19,10 @@ import {
   type UseMarkdownLinkNavigationOptions
 } from '../hooks/useMarkdownLinkNavigation'
 import { usePaneDocumentFind } from '../hooks/usePaneDocumentFind'
+import { useSymbolNavigationController } from '../hooks/useSymbolNavigationController'
+import { useWikiApi } from '../hooks/useWikiApi'
 import type { PaneNavigationCoordinator } from '../stores/PaneNavigationCoordinator'
-import { getPaneActiveTab, type PaneId } from '../stores/PaneTabStore'
+import { formatGitSnapshotTabKey, getPaneActiveTab, type PaneId } from '../stores/PaneTabStore'
 import {
   createTwoSectionSplitState,
   toggleBottomSectionCollapsed,
@@ -28,7 +30,7 @@ import {
   type TwoSectionSplitState,
   updateTopSectionRatio
 } from '../utils/accordionSplit'
-import { getGitFileBaseName } from '../utils/gitFilePresentation'
+import { formatGitDiffTabKey, getGitFileBaseName } from '../utils/gitFilePresentation'
 import {
   clampSidebarWidth,
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
@@ -37,6 +39,7 @@ import {
 import { ConfirmDialog } from './ConfirmDialog'
 import { FrontmatterSchemaModal } from './FrontmatterSchemaModal'
 import type { GitDiffContentState, GitDiffNavigationProps } from './GitDiffViewer'
+import type { SnapshotContentState } from './SnapshotViewer'
 import type { PaneInteractionActions } from './PaneTabBar'
 import { PaneWorkspace, type PaneWorkspaceProps } from './PaneWorkspace'
 import {
@@ -44,6 +47,10 @@ import {
   RightSidebarPanel
 } from './RightSidebarPanel'
 import { SidebarResizer } from './SidebarResizer'
+import { SymbolCandidatePopover } from './SymbolCandidatePopover'
+import { SymbolContextMenu } from './SymbolContextMenu'
+import { SymbolSearchPalette } from './SymbolSearchPalette'
+import { isEventOutsideShell, isSymbolSearchShortcut } from '../utils/workspaceSearch'
 
 const DEFAULT_IMAGE_TRANSFER_CONTEXT: ImageTransferContextValue = {}
 
@@ -54,7 +61,13 @@ interface RightSidebarState {
 
 export type WindowFramePaneWorkspaceProps = Omit<
   PaneWorkspaceProps,
-  'scrollRequest' | 'searchJumpRequest' | 'onActiveHeadingChange' | 'getPaneFindControl'
+  | 'scrollRequest'
+  | 'searchJumpRequest'
+  | 'diffJumpRequest'
+  | 'snapshotJumpRequest'
+  | 'historyByPane'
+  | 'onActiveHeadingChange'
+  | 'getPaneFindControl'
 >
 
 export function buildPaneWorkspaceProps(
@@ -67,6 +80,7 @@ export function buildPaneWorkspaceProps(
   isShortcutDisabled: boolean,
   extras?: {
     diffsByKey?: Record<string, GitDiffContentState>
+    snapshotsByKey?: Record<string, SnapshotContentState>
     getDiffNavigation?: (request: GitDiffRequest) => GitDiffNavigationProps | undefined
     workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   }
@@ -75,6 +89,7 @@ export function buildPaneWorkspaceProps(
     layout: editor.layout,
     buffers: editor.buffers,
     diffsByKey: extras?.diffsByKey ?? {},
+    snapshotsByKey: extras?.snapshotsByKey,
     getDiffNavigation: extras?.getDiffNavigation,
     theme: config.theme,
     autoSave: config.autoSave,
@@ -97,6 +112,7 @@ export interface EditorWindowFrameProps {
   showHeadingNumbers: boolean
   onToggleHeadingNumbers: () => void
   workspaceRootPath?: string | null
+  getActiveDiffChangedFiles?: (request: GitDiffRequest) => ReadonlySet<string> | undefined
   frontmatterSchema: FrontmatterSchemaController
   frontmatterFieldValues: FrontmatterFieldValuesController
   openWorkspaceFile: (
@@ -114,6 +130,7 @@ export interface EditorWindowFrameProps {
   isSchemaModalOpen: boolean
   onOpenSchemaModal: () => void
   onCloseSchemaModal: () => void
+  onSymbolPaletteOpenChange?: (isOpen: boolean) => void
   titleBarSlot?: ReactNode
   leftSidebarSlot?: ReactNode
   terminalPanelSlot?: ReactNode
@@ -134,6 +151,7 @@ export function EditorWindowFrame({
   showHeadingNumbers,
   onToggleHeadingNumbers,
   workspaceRootPath = null,
+  getActiveDiffChangedFiles,
   frontmatterSchema,
   frontmatterFieldValues,
   openWorkspaceFile,
@@ -146,6 +164,7 @@ export function EditorWindowFrame({
   isSchemaModalOpen,
   onOpenSchemaModal,
   onCloseSchemaModal,
+  onSymbolPaletteOpenChange,
   titleBarSlot,
   leftSidebarSlot,
   terminalPanelSlot,
@@ -153,6 +172,7 @@ export function EditorWindowFrame({
   manualModalSlot,
   isSchemaModalDismissDisabled = false
 }: EditorWindowFrameProps) {
+  const wikiApi = useWikiApi()
   const [rightSidebar, setRightSidebar] = useState<RightSidebarState>(() => ({
     isCollapsed: initialRightSidebarCollapsed,
     width: RIGHT_SIDEBAR_DEFAULT_WIDTH
@@ -202,6 +222,13 @@ export function EditorWindowFrame({
     )
   }, [])
 
+  const handleEnsureReferencesVisible = useCallback((): void => {
+    setRightSidebar((prev) => (prev.isCollapsed ? { ...prev, isCollapsed: false } : prev))
+    setRightSidebarSplit((prev) =>
+      prev.isBottomCollapsed ? toggleBottomSectionCollapsed(prev) : prev
+    )
+  }, [])
+
   const {
     schemaResult,
     isSchemaLoading,
@@ -232,11 +259,26 @@ export function EditorWindowFrame({
     return Boolean(opened)
   }, [ensureSchemaFilePath, openWorkspaceFile])
 
+  const [isSymbolPaletteOpen, setIsSymbolPaletteOpen] = useState(false)
+  const updateSymbolPaletteOpen = useCallback(
+    (nextOpen: boolean): void => {
+      setIsSymbolPaletteOpen(nextOpen)
+      onSymbolPaletteOpenChange?.(nextOpen)
+    },
+    [onSymbolPaletteOpenChange]
+  )
+
+  useEffect(() => {
+    updateSymbolPaletteOpen(false)
+  }, [updateSymbolPaletteOpen, workspaceRootPath])
+
+  const effectiveShortcutDisabled = Boolean(paneWorkspaceProps.isShortcutDisabled) || isSymbolPaletteOpen
+
   const paneFind = usePaneDocumentFind({
     layout: paneWorkspaceProps.layout,
     buffers: paneWorkspaceProps.buffers,
     workspaceRootPath,
-    isShortcutDisabled: Boolean(paneWorkspaceProps.isShortcutDisabled),
+    isShortcutDisabled: effectiveShortcutDisabled,
     shellRef: localShellRef
   })
 
@@ -251,28 +293,137 @@ export function EditorWindowFrame({
     reportErrorBanner
   })
 
+  const symbolNav = useSymbolNavigationController({
+    layout: paneWorkspaceProps.layout,
+    buffers: paneWorkspaceProps.buffers,
+    diffsByKey: paneWorkspaceProps.diffsByKey,
+    snapshotsByKey: paneWorkspaceProps.snapshotsByKey,
+    workspaceRootPath,
+    navigation,
+    openSnapshotTab: paneWorkspaceProps.actions.onOpenSnapshotTab,
+    getActiveDiffChangedFiles,
+    onRevealReferencesSection: handleEnsureReferencesVisible,
+    wikiApi
+  })
+
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       ...paneWorkspaceProps.actions,
-      onNavigateLink: handleNavigateMarkdownLink
+      onNavigateLink: handleNavigateMarkdownLink,
+      onSymbolNavigate: symbolNav.handleSymbolNavigate,
+      onSymbolContextMenu: symbolNav.handleSymbolContextMenu,
+      onFindReferences: symbolNav.handleFindReferences,
+      onGoBack: (paneId) => void navigation.goBack(paneId),
+      onGoForward: (paneId) => void navigation.goForward(paneId)
     }),
-    [handleNavigateMarkdownLink, paneWorkspaceProps.actions]
+    [
+      handleNavigateMarkdownLink,
+      navigation,
+      paneWorkspaceProps.actions,
+      symbolNav.handleFindReferences,
+      symbolNav.handleSymbolNavigate,
+      symbolNav.handleSymbolContextMenu
+    ]
   )
+
+  const activePaneId = paneWorkspaceProps.layout.activePaneId
+  const isShortcutDisabled = effectiveShortcutDisabled
+  const isOtherModalOpen = Boolean(paneWorkspaceProps.isShortcutDisabled) && !isSymbolPaletteOpen
+  const resolveActivePaletteScope = symbolNav.resolveActivePaletteScope
+  useEffect(() => {
+    const handleSymbolPaletteShortcut = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || !isSymbolSearchShortcut(event)) return
+      if (isEventOutsideShell(event.target, localShellRef.current)) return
+      if (isSymbolPaletteOpen) {
+        event.preventDefault()
+        updateSymbolPaletteOpen(false)
+        return
+      }
+      if (isOtherModalOpen) return
+      const scopeInfo = resolveActivePaletteScope()
+      if (!scopeInfo.workspaceRootPath) return
+      event.preventDefault()
+      updateSymbolPaletteOpen(true)
+    }
+    window.addEventListener('keydown', handleSymbolPaletteShortcut)
+    return () => {
+      window.removeEventListener('keydown', handleSymbolPaletteShortcut)
+    }
+  }, [isOtherModalOpen, isSymbolPaletteOpen, resolveActivePaletteScope, updateSymbolPaletteOpen])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || isShortcutDisabled) return
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        void navigation.goBack(activePaneId)
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        void navigation.goForward(activePaneId)
+      }
+    }
+    const handleMouseUp = (event: MouseEvent): void => {
+      if (isShortcutDisabled) return
+      if (event.button === 3) {
+        event.preventDefault()
+        void navigation.goBack(activePaneId)
+      } else if (event.button === 4) {
+        event.preventDefault()
+        void navigation.goForward(activePaneId)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [activePaneId, isShortcutDisabled, navigation])
 
   const activePane = paneWorkspaceProps.layout.panes[paneWorkspaceProps.layout.activePaneId]
   const activeTab = getPaneActiveTab(activePane)
   const activeBuffer =
     activeTab?.kind === 'document' ? paneWorkspaceProps.buffers[activeTab.bufferKey] : undefined
   const activeBufferKey = activeBuffer?.key ?? null
-  const rightSidebarDocument: SidebarDocumentContext = {
-    documentName:
-      activeTab?.kind === 'diff'
-        ? getGitFileBaseName(activeTab.diff.request.path)
-        : (activeBuffer?.name ?? null),
-    documentKey: activeBufferKey,
-    content: activeBuffer?.content ?? '',
-    isMarkdownDocument: activeBuffer ? isMarkdownDocument(activeBuffer) : false
-  }
+  const activeDiffKey =
+    activeTab?.kind === 'diff' ? formatGitDiffTabKey(activeTab.diff.request) : null
+  const activeDiffState = activeDiffKey ? paneWorkspaceProps.diffsByKey[activeDiffKey] : undefined
+  const activeSnapshotKey =
+    activeTab?.kind === 'snapshot' ? formatGitSnapshotTabKey(activeTab.snapshot.request) : null
+  const activeSnapshotState = activeSnapshotKey
+    ? paneWorkspaceProps.snapshotsByKey?.[activeSnapshotKey]
+    : undefined
+  const rightSidebarDocument: SidebarDocumentContext =
+    activeTab?.kind === 'diff'
+      ? {
+          documentName: getGitFileBaseName(activeTab.diff.request.path),
+          documentKey: activeDiffKey,
+          content: '',
+          isMarkdownDocument: false,
+          diffContext: {
+            rawPatch:
+              activeDiffState?.status === 'loaded' ? activeDiffState.diff.rawPatch : null,
+            filePath: activeTab.diff.request.path,
+            status: activeTab.diff.request.status
+          }
+        }
+      : activeTab?.kind === 'snapshot'
+        ? {
+            documentName: getGitFileBaseName(activeTab.snapshot.request.path),
+            documentKey: activeSnapshotKey,
+            content:
+              activeSnapshotState?.status === 'loaded' && !activeSnapshotState.snapshot.isBinary
+                ? activeSnapshotState.snapshot.content
+                : '',
+            isMarkdownDocument: false
+          }
+        : {
+            documentName: activeBuffer?.name ?? null,
+            documentKey: activeBufferKey,
+            content: activeBuffer?.content ?? '',
+            isMarkdownDocument: activeBuffer ? isMarkdownDocument(activeBuffer) : false
+          }
   const onPaneChangeContent = paneWorkspaceProps.actions.onChangeContent
 
   const handlePropertiesChangeContent = useCallback(
@@ -301,8 +452,12 @@ export function EditorWindowFrame({
           >
             <PaneWorkspace
               {...paneWorkspaceProps}
+              isShortcutDisabled={effectiveShortcutDisabled}
               scrollRequest={navState.outlineScrollRequest}
               searchJumpRequest={navState.searchJumpRequest}
+              diffJumpRequest={navState.diffJumpRequest}
+              snapshotJumpRequest={navState.snapshotJumpRequest}
+              historyByPane={navState.historyByPane}
               getPaneFindControl={paneFind.getPaneFindControl}
               onActiveHeadingChange={navigation.reportActiveHeading}
               actions={paneActions}
@@ -334,6 +489,7 @@ export function EditorWindowFrame({
                 outlineProps={{
                   activeHeadingIndex: navState.activeHeadingIndex,
                   onSelectHeading: navigation.selectOutlineHeading,
+                  onSelectSymbol: navigation.selectOutlineSymbol,
                   showHeadingNumbers,
                   onToggleHeadingNumbers,
                   onCollapse: handleCollapseRightSidebar
@@ -359,6 +515,9 @@ export function EditorWindowFrame({
                       }
                     })
                   }
+                }}
+                referencesProps={{
+                  state: symbolNav.referencesState
                 }}
               />
             </aside>
@@ -399,6 +558,35 @@ export function EditorWindowFrame({
       {settingsPanelSlot}
 
       {manualModalSlot}
+
+      <SymbolCandidatePopover
+        popover={symbolNav.candidatePopover}
+        notFoundNotice={symbolNav.notFoundTooltip}
+        onSelectCandidate={symbolNav.selectCandidate}
+        onDismiss={symbolNav.dismissPopover}
+      />
+
+      <SymbolContextMenu
+        menu={symbolNav.contextMenu}
+        onGoToDefinition={symbolNav.runContextMenuGoToDefinition}
+        onFindReferences={symbolNav.runContextMenuFindReferences}
+        onDismiss={symbolNav.dismissContextMenu}
+        onClampPosition={symbolNav.clampContextMenuPosition}
+      />
+
+      {isSymbolPaletteOpen && (
+        <SymbolSearchPalette
+          isOpen={isSymbolPaletteOpen}
+          scopeInfo={symbolNav.resolveActivePaletteScope()}
+          searchSymbols={(request) =>
+            wikiApi.workspace.searchSymbols?.(request) ?? Promise.resolve([])
+          }
+          onSelectMatch={(match, pinned) => {
+            symbolNav.jumpToPaletteMatch(match, symbolNav.resolveActivePaletteScope(), pinned)
+          }}
+          onClose={() => updateSymbolPaletteOpen(false)}
+        />
+      )}
 
       {pendingDialog && (
         <ConfirmDialog

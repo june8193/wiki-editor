@@ -3,6 +3,7 @@ import { toErrorMessage } from '@shared/errors'
 import type { WikiWindowApi } from '@shared/ipc'
 import {
   isDiffTabTransferPayload,
+  isSnapshotTabTransferPayload,
   toTabTransferPayload,
   type ActiveTabDragSession,
   type PaneId,
@@ -52,9 +53,13 @@ interface ActiveLocalDragState {
 }
 
 function getDragPayloadKey(payload: TabTransferPayload): string {
-  return isDiffTabTransferPayload(payload)
-    ? `diff:${payload.diff.request.kind}:${payload.diff.request.path}`
-    : `doc:${payload.bufferKey}`
+  if (isDiffTabTransferPayload(payload)) {
+    return `diff:${payload.diff.request.kind}:${payload.diff.request.path}`
+  }
+  if (isSnapshotTabTransferPayload(payload)) {
+    return `snapshot:${payload.snapshot.request.path}`
+  }
+  return `doc:${payload.bufferKey}`
 }
 
 function isSameDragSession(
@@ -145,7 +150,7 @@ export class RendererTabDragController {
     dragState.startPromise = (async () => {
       try {
         const latestTab =
-          initialTab.kind === 'diff'
+          initialTab.kind !== 'document'
             ? this.tabStore.getTab(paneId, tabId)
             : this.bufferSync.isBufferReadyForImmediateDrag(initialTab.bufferKey)
               ? this.tabStore.getTab(paneId, tabId)
@@ -226,7 +231,7 @@ export class RendererTabDragController {
       this.lastReclaimableDrag = { dragSessionId: session.dragSessionId, drag }
       const currentTab = this.tabStore.getTab(drag.paneId, drag.tabId)
       const latestTab =
-        currentTab?.kind === 'diff'
+        currentTab && currentTab.kind !== 'document'
           ? currentTab
           : await this.bufferSync.syncTabBufferForTransfer(drag.paneId, drag.tabId)
       if (!this.mounted) return

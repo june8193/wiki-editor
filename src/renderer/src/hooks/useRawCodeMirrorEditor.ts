@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { bracketMatching, HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { Annotation, Compartment, EditorState, Extension, Prec, StateEffect } from '@codemirror/state'
+import { Annotation, Compartment, EditorState, Extension, Prec, StateEffect, StateField } from '@codemirror/state'
 import {
+  Decoration,
+  type DecorationSet,
   drawSelection,
   EditorView,
   highlightActiveLine,
@@ -37,6 +39,10 @@ import {
   resolveRawLanguageExtensionSync
 } from '../editor/rawEditorLanguage'
 import { extractMarkdownLinkHrefAtOffset } from '../editor/MarkdownLinkSyntax'
+import { extractIdentifierAtPosition, isSymbolSupportedFile } from '../editor/codeSymbolExtractor'
+import type { SymbolNavigateRequest } from '../editor/symbolHoverDom'
+import { isFindReferencesShortcut, isSymbolModifierPressed } from '../editor/symbolNavigation'
+import { loadDiffLanguageParser, resolveDiffLanguageParserSync } from '../utils/diffSyntaxHighlight'
 import {
   detectDocumentLineEnding,
   isOffsetInCodeFence,
@@ -54,15 +60,71 @@ import { syncElementScrollTop } from './useSyncScrollTop'
 
 const externalSyncAnnotation = Annotation.define<boolean>()
 const linkInsertAnnotation = Annotation.define<boolean>()
+const setSymbolHoverRangeEffect = StateEffect.define<{ from: number; to: number } | null>()
+const symbolHoverMark = Decoration.mark({ class: 'symbol-hover-target' })
+const symbolHoverHighlightField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(decorations, tr) {
+    let next = decorations.map(tr.changes)
+    for (const effect of tr.effects) {
+      if (effect.is(setSymbolHoverRangeEffect)) {
+        next = effect.value
+          ? Decoration.set([symbolHoverMark.range(effect.value.from, effect.value.to)])
+          : Decoration.none
+      }
+    }
+    return next
+  },
+  provide: (field) => EditorView.decorations.from(field)
+})
 
 export interface RawScrollRequest {
   line: number
   nonce: number
 }
 
+function clearSymbolHover(view: EditorView): void {
+  if (view.state.field(symbolHoverHighlightField).size > 0) {
+    view.dispatch({ effects: setSymbolHoverRangeEffect.of(null) })
+  }
+}
+
+function buildRawSymbolRequest(
+  token: NonNullable<ReturnType<typeof extractIdentifierAtPosition>>,
+  event?: Pick<MouseEvent, 'clientX' | 'clientY' | 'shiftKey'>
+): SymbolNavigateRequest {
+  return {
+    symbolName: token.name,
+    lineNumber: token.lineNumber,
+    columnStart: token.columnStart,
+    columnEnd: token.columnEnd,
+    clientX: event?.clientX ?? 0,
+    clientY: event?.clientY ?? 0,
+    shiftKey: event?.shiftKey ?? false
+  }
+}
+
+function resolveRawSymbolTokenAtEvent(
+  view: EditorView,
+  event: MouseEvent,
+  targetName: string,
+  cachedParser: { path: string; parser: Parameters<typeof extractIdentifierAtPosition>[2] }
+) {
+  const parser =
+    cachedParser.path === targetName
+      ? cachedParser.parser
+      : resolveDiffLanguageParserSync(targetName).parser
+  const offset = resolveRawClickOffset(view, event)
+  if (offset === null || !parser) {
+    return null
+  }
+  return extractIdentifierAtPosition(view.state.doc.toString(), offset, parser)
+}
+
 export interface UseRawCodeMirrorEditorOptions {
   content: string
   language: RawEditorLanguage
+  fileName?: string
   theme: ThemeMode
   cursor: CursorPosition
   scrollTop: number
@@ -81,6 +143,9 @@ export interface UseRawCodeMirrorEditorOptions {
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onLinkNavigate?: (href: string) => void
+  onSymbolNavigate?: (request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (request: SymbolNavigateRequest) => void
+  onFindReferences?: (request: SymbolNavigateRequest) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
   onRawScroll?: () => void
 }
@@ -238,7 +303,6 @@ function createEditorThemeExtension(theme: ThemeMode): Extension {
   ]
 }
 
-
 function clampSelection(docLength: number, cursor: CursorPosition): { anchor: number; head: number } {
   const anchor = Math.max(0, Math.min(cursor.selectionStart, docLength))
   const head = Math.max(anchor, Math.min(cursor.selectionEnd, docLength))
@@ -267,6 +331,7 @@ function isViewCursorInRawTable(view: EditorView): boolean {
 export function useRawCodeMirrorEditor({
   content,
   language,
+  fileName,
   theme,
   cursor,
   scrollTop,
@@ -285,6 +350,9 @@ export function useRawCodeMirrorEditor({
   onChangeContent,
   onUpdateViewState,
   onLinkNavigate,
+  onSymbolNavigate,
+  onSymbolContextMenu,
+  onFindReferences,
   onActiveHeadingChange,
   onRawScroll
 }: UseRawCodeMirrorEditorOptions) {
@@ -306,6 +374,7 @@ export function useRawCodeMirrorEditor({
   const runtimeRef = useRef({
     content,
     language,
+    fileName,
     theme,
     cursor,
     scrollTop,
@@ -316,11 +385,15 @@ export function useRawCodeMirrorEditor({
     onChangeContent,
     onUpdateViewState,
     onLinkNavigate,
+    onSymbolNavigate,
+    onSymbolContextMenu,
+    onFindReferences,
     onRawScroll
   })
   runtimeRef.current = {
     content,
     language,
+    fileName,
     theme,
     cursor,
     scrollTop,
@@ -331,8 +404,37 @@ export function useRawCodeMirrorEditor({
     onChangeContent,
     onUpdateViewState,
     onLinkNavigate,
+    onSymbolNavigate,
+    onSymbolContextMenu,
+    onFindReferences,
     onRawScroll
   }
+  const symbolParserRef = useRef<{ path: string; parser: ReturnType<typeof resolveDiffLanguageParserSync>['parser'] }>({
+    path: '',
+    parser: null
+  })
+  useEffect(() => {
+    const targetName = fileName ?? documentPath ?? ''
+    if (!targetName || language === 'markdown' || !isSymbolSupportedFile(targetName)) {
+      symbolParserRef.current = { path: '', parser: null }
+      return
+    }
+    const sync = resolveDiffLanguageParserSync(targetName)
+    if (sync.parser) {
+      symbolParserRef.current = { path: targetName, parser: sync.parser }
+      return
+    }
+    if (!sync.needsAsyncLoad) return
+    let cancelled = false
+    void loadDiffLanguageParser(targetName).then((parser) => {
+      if (!cancelled) {
+        symbolParserRef.current = { path: targetName, parser }
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [documentPath, fileName, language])
 
   const { linkControlsRef, linkMenuProps } = useLinkMenu({
     documentContent: content,
@@ -382,7 +484,12 @@ export function useRawCodeMirrorEditor({
   const dismissLinkMenu = linkMenuProps.onDismiss
   const lineEndingRef = useRef<'\r\n' | '\n'>(detectDocumentLineEnding(content))
   const lastCursorPropRef = useRef<CursorPosition>(cursor)
-  const prevCompartmentsRef = useRef({ language, theme, showTableToolbar })
+  const prevCompartmentsRef = useRef({
+    language,
+    languageTarget: fileName ?? documentPath ?? null,
+    theme,
+    showTableToolbar
+  })
 
   const [inTable, setInTable] = useState(() => {
     if (!showTableToolbar) return false
@@ -439,28 +546,142 @@ export function useRawCodeMirrorEditor({
         syntaxHighlighting(rawEditorHighlightStyle),
         rawSearchHighlightField,
         rawSearchJumpHighlightField,
+        symbolHoverHighlightField,
         compartments.language.of(resolveRawLanguageExtensionSync(initial.language).extension),
         compartments.theme.of(createEditorThemeExtension(initial.theme)),
         compartments.tableKeymap.of(initial.showTableToolbar ? rawTableKeymap : []),
         EditorView.domEventHandlers({
+          mousemove: (event, view) => {
+            const targetName = runtimeRef.current.fileName ?? documentPath ?? ''
+            if (
+              runtimeRef.current.language === 'markdown' ||
+              !isSymbolModifierPressed(event) ||
+              !isSymbolSupportedFile(targetName)
+            ) {
+              clearSymbolHover(view)
+              return false
+            }
+            const token = resolveRawSymbolTokenAtEvent(
+              view,
+              event,
+              targetName,
+              symbolParserRef.current
+            )
+            if (!token) {
+              clearSymbolHover(view)
+              return false
+            }
+            const line = view.state.doc.line(token.lineNumber)
+            const from = line.from + token.columnStart
+            const to = line.from + token.columnEnd
+            view.dispatch({ effects: setSymbolHoverRangeEffect.of({ from, to }) })
+            return false
+          },
+          mouseleave: (_event, view) => {
+            clearSymbolHover(view)
+            return false
+          },
+          keyup: (event, view) => {
+            if (!isSymbolModifierPressed(event)) {
+              clearSymbolHover(view)
+            }
+            return false
+          },
           click: (event, view) => {
-            if (runtimeRef.current.language !== 'markdown' || !isLinkNavigationClick('raw', event)) {
+            if (runtimeRef.current.language === 'markdown') {
+              if (!isLinkNavigationClick('raw', event)) {
+                return false
+              }
+              const navigate = runtimeRef.current.onLinkNavigate
+              if (!navigate) {
+                return false
+              }
+              const offset = resolveRawClickOffset(view, event)
+              if (offset === null) {
+                return false
+              }
+              const href = extractMarkdownLinkHrefAtOffset(view.state.doc.toString(), offset)
+              if (href === null) {
+                return false
+              }
+              event.preventDefault()
+              navigate(href)
+              return true
+            }
+
+            if (!isSymbolModifierPressed(event)) {
               return false
             }
-            const navigate = runtimeRef.current.onLinkNavigate
-            if (!navigate) {
+            const symbolNavigate = runtimeRef.current.onSymbolNavigate
+            const targetName = runtimeRef.current.fileName ?? documentPath ?? ''
+            if (!symbolNavigate || !isSymbolSupportedFile(targetName)) {
               return false
             }
-            const offset = resolveRawClickOffset(view, event)
-            if (offset === null) {
-              return false
-            }
-            const href = extractMarkdownLinkHrefAtOffset(view.state.doc.toString(), offset)
-            if (href === null) {
+            const token = resolveRawSymbolTokenAtEvent(
+              view,
+              event,
+              targetName,
+              symbolParserRef.current
+            )
+            if (!token) {
               return false
             }
             event.preventDefault()
-            navigate(href)
+            symbolNavigate(buildRawSymbolRequest(token, event))
+            return true
+          },
+          contextmenu: (event, view) => {
+            if (runtimeRef.current.language === 'markdown') {
+              return false
+            }
+            const symbolContextMenu = runtimeRef.current.onSymbolContextMenu
+            const targetName = runtimeRef.current.fileName ?? documentPath ?? ''
+            if (!symbolContextMenu || !isSymbolSupportedFile(targetName)) {
+              return false
+            }
+            const token = resolveRawSymbolTokenAtEvent(
+              view,
+              event,
+              targetName,
+              symbolParserRef.current
+            )
+            if (!token) {
+              return false
+            }
+            event.preventDefault()
+            symbolContextMenu(buildRawSymbolRequest(token, event))
+            return true
+          },
+          keydown: (event, view) => {
+            if (
+              runtimeRef.current.isShortcutDisabled ||
+              runtimeRef.current.language === 'markdown' ||
+              !isFindReferencesShortcut(event)
+            ) {
+              return false
+            }
+            const findReferences = runtimeRef.current.onFindReferences
+            const targetName = runtimeRef.current.fileName ?? documentPath ?? ''
+            if (!findReferences || !isSymbolSupportedFile(targetName)) {
+              return false
+            }
+            const parser =
+              symbolParserRef.current.path === targetName
+                ? symbolParserRef.current.parser
+                : resolveDiffLanguageParserSync(targetName).parser
+            if (!parser) {
+              return false
+            }
+            const token = extractIdentifierAtPosition(
+              view.state.doc.toString(),
+              view.state.selection.main.head,
+              parser
+            )
+            if (!token) {
+              return false
+            }
+            event.preventDefault()
+            findReferences(buildRawSymbolRequest(token))
             return true
           }
         }),
@@ -601,6 +822,7 @@ export function useRawCodeMirrorEditor({
     const prev = prevCompartmentsRef.current
     const compartments = compartmentsRef.current
     const effects: StateEffect<unknown>[] = []
+    const languageTarget = fileName ?? documentPath ?? null
 
     if (prev.language !== language) {
       effects.push(
@@ -621,11 +843,13 @@ export function useRawCodeMirrorEditor({
     }
 
     if (effects.length === 0) return
-    prevCompartmentsRef.current = { language, theme, showTableToolbar }
+    prevCompartmentsRef.current = { language, languageTarget, theme, showTableToolbar }
     view.dispatch({ effects, annotations: externalSyncAnnotation.of(true) })
   }, [
     dismissLinkMenu,
+    documentPath,
     enableLinkAutocomplete,
+    fileName,
     language,
     theme,
     showTableToolbar

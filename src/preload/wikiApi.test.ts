@@ -131,6 +131,10 @@ describe('createWikiApi', () => {
     await api.workspace.listMarkdownFiles()
     const searchRequest = { query: 'needle', options: DEFAULT_SEARCH_MATCH_OPTIONS }
     await api.workspace.search?.(searchRequest)
+    await api.workspace.searchSymbols?.({
+      symbolName: 'needle',
+      scope: { kind: 'working-tree' }
+    })
     await api.workspace.readFile('C:\\wiki\\readme.md')
     await api.workspace.writeFile('C:\\wiki\\readme.md', '# Hi')
     await api.workspace.createEntry('C:\\wiki', 'note.md', 'file', '')
@@ -160,6 +164,7 @@ describe('createWikiApi', () => {
       WORKSPACE_IPC_CHANNELS.readDir,
       WORKSPACE_IPC_CHANNELS.listMarkdownFiles,
       WORKSPACE_IPC_CHANNELS.search,
+      WORKSPACE_IPC_CHANNELS.searchSymbols,
       WORKSPACE_IPC_CHANNELS.readFile,
       WORKSPACE_IPC_CHANNELS.writeFile,
       WORKSPACE_IPC_CHANNELS.createEntry,
@@ -200,6 +205,10 @@ describe('createWikiApi', () => {
       stashHash: '1234567890abcdef1234567890abcdef12345678',
       path: 'draft.md',
       status: '?'
+    })
+    await api.git.readBlobSnapshot('C:\\wiki', {
+      path: 'src/app.ts',
+      scope: { kind: 'git-ref', ref: 'HEAD', displayRef: 'HEAD' }
     })
     await api.git.stashList('C:\\wiki')
     await api.git.stashDetail('C:\\wiki', 'stash@{0}')
@@ -249,6 +258,16 @@ describe('createWikiApi', () => {
             stashHash: '1234567890abcdef1234567890abcdef12345678',
             path: 'draft.md',
             status: '?'
+          }
+        ]
+      },
+      {
+        channel: GIT_IPC_CHANNELS.readBlobSnapshot,
+        args: [
+          'C:\\wiki',
+          {
+            path: 'src/app.ts',
+            scope: { kind: 'git-ref', ref: 'HEAD', displayRef: 'HEAD' }
           }
         ]
       },

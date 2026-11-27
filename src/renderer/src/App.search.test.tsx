@@ -696,7 +696,7 @@ describe('In-Document Find Bar Pane State & Integration (<App />)', () => {
     vi.useRealTimers()
   })
 
-  it('persists Find Bar state per pane across text tabs, hides/suppresses on Diff and Image tabs, suppresses during modals, shows inline regex errors, and resets on workspace switch', async () => {
+  it('persists Find Bar state per pane across text and Diff tabs, hides/suppresses on Image tabs, suppresses during modals, shows inline regex errors, and resets on workspace switch', async () => {
     const user = userEvent.setup()
     const gitStatus = {
       ...createEmptyGitStatus(true, 'C:/wiki/alpha'),
@@ -794,15 +794,15 @@ describe('In-Document Find Bar Pane State & Integration (<App />)', () => {
     expect(within(restoredBar1).getByText('1 / 2')).toBeInTheDocument()
     expect(container.querySelectorAll('.cm-search-match')).toHaveLength(2)
 
-    // Open Git Diff tab -> Find Bar hides, Ctrl+F suppressed
+    // Open Git Diff tab -> Find Bar stays active and searches inside DiffViewer
     const activityBar = screen.getByRole('navigation', { name: '액티비티 바' })
     await user.click(within(activityBar).getByRole('button', { name: 'Git' }))
     const gitRegion = screen.getByRole('region', { name: 'Git 소스 제어' })
     await user.click(await within(gitRegion).findByText('notes.md'))
     expect(await screen.findByText('Working Tree')).toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '문서 내 찾기 바' })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
-    expect(screen.queryByRole('region', { name: '문서 내 찾기 바' })).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '문서 내 찾기 바' })).toBeInTheDocument()
 
     // Switch back to notes.md -> Find Bar reappears
     await user.click(screen.getByRole('tab', { name: 'notes.md' }))

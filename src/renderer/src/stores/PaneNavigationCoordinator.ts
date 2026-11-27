@@ -6,7 +6,10 @@ import type {
   WorkspaceSearchFileResult,
   WorkspaceSearchLineMatch
 } from '@shared/search'
+import type { GitDiffRequest, GitDiffViewMode } from '@shared/git'
+import type { DocumentSymbolItem, GitBlobSnapshotRequest } from '@shared/symbol'
 import { getWorkspacePathKey, type WorkspaceEntry } from '@shared/workspace'
+import type { DiffJumpRequest } from '../components/GitDiffViewer'
 import { isImageDocument, isMarkdownDocument } from '../editor/editorModes'
 import type { MarkdownHeading } from '../editor/MarkdownTocEngine'
 import type {
@@ -25,10 +28,61 @@ import {
 } from './PaneTabStore'
 import type { OpenedWorkspaceDocument } from './RendererBufferSyncClient'
 
+export interface PaneDiffJumpRequest extends DiffJumpRequest {
+  paneId: PaneId
+  tabId: string
+}
+
+export interface PaneSnapshotJumpRequest {
+  paneId: PaneId
+  tabId: string
+  lineNumber: number
+  columnStart: number
+  columnEnd: number
+  nonce: number
+}
+
+export type PaneNavigationEntry =
+  | {
+      kind: 'document'
+      tabId: string
+      bufferKey: string
+      filePath: string
+      lineNumber: number
+      columnStart: number
+      columnEnd: number
+    }
+  | {
+      kind: 'diff'
+      tabId: string
+      request: GitDiffRequest
+      viewMode: GitDiffViewMode
+      workspaceRootPath?: string
+      lineNumber: number
+      side: 'old' | 'new'
+    }
+  | {
+      kind: 'snapshot'
+      tabId: string
+      request: GitBlobSnapshotRequest
+      workspaceRootPath?: string
+      lineNumber: number
+      columnStart: number
+      columnEnd: number
+    }
+
+export interface PaneHistoryAvailability {
+  canGoBack: boolean
+  canGoForward: boolean
+}
+
 export interface PaneNavigationSnapshot {
   searchJumpRequest: DocumentSearchJumpRequest | null
   outlineScrollRequest: OutlineScrollRequest | null
+  diffJumpRequest: PaneDiffJumpRequest | null
+  snapshotJumpRequest: PaneSnapshotJumpRequest | null
   activeHeadingIndex: number | null
+  historyByPane: Record<PaneId, PaneHistoryAvailability>
 }
 
 export interface DocumentJumpHighlights {
@@ -78,6 +132,29 @@ interface PinnedOutlineHeadingState {
   context: OutlineContextTarget
   content: string
   index: number
+}
+
+const MAX_PANE_HISTORY_ENTRIES = 50
+
+const EMPTY_HISTORY_AVAILABILITY: PaneHistoryAvailability = {
+  canGoBack: false,
+  canGoForward: false
+}
+
+function getLineColumnFromOffset(
+  content: string,
+  offset: number
+): { lineNumber: number; column: number } {
+  const clamped = Math.max(0, Math.min(offset, content.length))
+  let lineNumber = 1
+  let lastLineStart = 0
+  for (let i = 0; i < clamped; i += 1) {
+    if (content.charCodeAt(i) === 10) {
+      lineNumber += 1
+      lastLineStart = i + 1
+    }
+  }
+  return { lineNumber, column: clamped - lastLineStart }
 }
 
 const EMPTY_JUMP_HIGHLIGHTS: DocumentJumpHighlights = {
@@ -181,9 +258,22 @@ export class PaneNavigationCoordinator {
 
   private outlineScrollSeq = 0
   private activeOutlineScroll: ActiveOutlineRecord | null = null
+  private diffJumpSeq = 0
+  private activeDiffJump: PaneDiffJumpRequest | null = null
+  private snapshotJumpSeq = 0
+  private activeSnapshotJump: PaneSnapshotJumpRequest | null = null
   private spyOutlineHeading: ActiveOutlineHeadingState | null = null
   private pinnedOutlineHeading: PinnedOutlineHeadingState | null = null
   private latestSpyByPane: Partial<Record<PaneId, ActiveOutlineHeadingState>> = {}
+  private backStackByPane: Record<PaneId, PaneNavigationEntry[]> = {
+    primary: [],
+    secondary: []
+  }
+  private forwardStackByPane: Record<PaneId, PaneNavigationEntry[]> = {
+    primary: [],
+    secondary: []
+  }
+  private lastLocationByTabId = new Map<string, { lineNumber: number; side?: 'old' | 'new' }>()
 
   private cachedSnapshot: PaneNavigationSnapshot
 
@@ -195,7 +285,13 @@ export class PaneNavigationCoordinator {
     this.cachedSnapshot = {
       searchJumpRequest: null,
       outlineScrollRequest: null,
-      activeHeadingIndex: null
+      diffJumpRequest: null,
+      snapshotJumpRequest: null,
+      activeHeadingIndex: null,
+      historyByPane: {
+        primary: EMPTY_HISTORY_AVAILABILITY,
+        secondary: EMPTY_HISTORY_AVAILABILITY
+      }
     }
 
     this.unsubscribes.push(
@@ -221,6 +317,8 @@ export class PaneNavigationCoordinator {
     this.inFlightJump = null
     this.activeJump = null
     this.activeOutlineScroll = null
+    this.activeDiffJump = null
+    this.activeSnapshotJump = null
     for (const unsub of this.unsubscribes) {
       unsub()
     }
@@ -233,9 +331,14 @@ export class PaneNavigationCoordinator {
     this.inFlightJump = null
     this.activeJump = null
     this.activeOutlineScroll = null
+    this.activeDiffJump = null
+    this.activeSnapshotJump = null
     this.spyOutlineHeading = null
     this.pinnedOutlineHeading = null
     this.latestSpyByPane = {}
+    this.backStackByPane = { primary: [], secondary: [] }
+    this.forwardStackByPane = { primary: [], secondary: [] }
+    this.lastLocationByTabId.clear()
     this.syncSnapshot()
   }
 
@@ -285,6 +388,7 @@ export class PaneNavigationCoordinator {
 
   private openFileWithJump = async ({
     filePath,
+    targetPaneId,
     explicitName,
     lineNumber,
     columnStart,
@@ -293,6 +397,7 @@ export class PaneNavigationCoordinator {
     options
   }: {
     filePath: string
+    targetPaneId?: PaneId
     explicitName?: string
     lineNumber: number
     columnStart: number
@@ -308,7 +413,12 @@ export class PaneNavigationCoordinator {
 
     const isCancelled = (): boolean => this.disposed || this.searchJumpSeq !== jumpSeq
 
-    const opened = await this.openWorkspaceFileFn(filePath, undefined, explicitName, isCancelled)
+    const opened = await this.openWorkspaceFileFn(
+      filePath,
+      targetPaneId,
+      explicitName,
+      isCancelled
+    )
     if (this.inFlightJump?.seq === jumpSeq) {
       this.inFlightJump = null
     }
@@ -377,6 +487,293 @@ export class PaneNavigationCoordinator {
     const active = this.resolveActiveOutlineContext()
     if (!active.context) return
     this.dispatchOutlineHeadingScroll(active.context, active.bufferContent, heading, index)
+  }
+
+  recordNavigationOrigin = (paneId: PaneId, entry: PaneNavigationEntry): void => {
+    this.lastLocationByTabId.set(entry.tabId, {
+      lineNumber: entry.lineNumber,
+      ...(entry.kind === 'diff' ? { side: entry.side } : {})
+    })
+    const stack = this.backStackByPane[paneId]
+    stack.push(entry)
+    if (stack.length > MAX_PANE_HISTORY_ENTRIES) {
+      stack.splice(0, stack.length - MAX_PANE_HISTORY_ENTRIES)
+    }
+    this.forwardStackByPane[paneId] = []
+    this.syncSnapshot()
+  }
+
+  captureCurrentPaneEntry = (paneId: PaneId): PaneNavigationEntry | null => {
+    const layout = this.tabStore.getSnapshot()
+    const pane = layout.panes[paneId]
+    const activeTab = getPaneActiveTab(pane)
+    if (!activeTab) return null
+    if (activeTab.kind === 'diff') {
+      const remembered = this.lastLocationByTabId.get(activeTab.id)
+      const activeJump =
+        this.activeDiffJump && this.activeDiffJump.tabId === activeTab.id
+          ? this.activeDiffJump
+          : null
+      return {
+        kind: 'diff',
+        tabId: activeTab.id,
+        request: activeTab.diff.request,
+        viewMode: activeTab.diff.viewMode,
+        workspaceRootPath: activeTab.diff.workspaceRootPath,
+        lineNumber: activeJump?.lineNumber ?? remembered?.lineNumber ?? 1,
+        side: activeJump?.side ?? remembered?.side ?? 'new'
+      }
+    }
+    if (activeTab.kind === 'snapshot') {
+      const remembered = this.lastLocationByTabId.get(activeTab.id)
+      const activeJump =
+        this.activeSnapshotJump && this.activeSnapshotJump.tabId === activeTab.id
+          ? this.activeSnapshotJump
+          : null
+      return {
+        kind: 'snapshot',
+        tabId: activeTab.id,
+        request: activeTab.snapshot.request,
+        workspaceRootPath: activeTab.snapshot.workspaceRootPath,
+        lineNumber: activeJump?.lineNumber ?? remembered?.lineNumber ?? 1,
+        columnStart: activeJump?.columnStart ?? 0,
+        columnEnd: activeJump?.columnEnd ?? 0
+      }
+    }
+    const buffer = this.bufferStore.getBuffer(activeTab.bufferKey)
+    if (!buffer || isImageDocument(buffer)) return null
+    const { lineNumber, column } = getLineColumnFromOffset(
+      buffer.content,
+      activeTab.cursor.selectionStart
+    )
+    return {
+      kind: 'document',
+      tabId: activeTab.id,
+      bufferKey: activeTab.bufferKey,
+      filePath: buffer.path,
+      lineNumber,
+      columnStart: column,
+      columnEnd: column
+    }
+  }
+
+  private stepNavigationHistory = async (
+    paneId: PaneId,
+    sourceStack: PaneNavigationEntry[],
+    targetStack: PaneNavigationEntry[],
+    currentEntryOverride?: PaneNavigationEntry | null
+  ): Promise<boolean> => {
+    const target = sourceStack.pop()
+    if (!target) {
+      return false
+    }
+    const currentEntry =
+      currentEntryOverride !== undefined
+        ? currentEntryOverride
+        : this.captureCurrentPaneEntry(paneId)
+    if (currentEntry) {
+      targetStack.push(currentEntry)
+      if (targetStack.length > MAX_PANE_HISTORY_ENTRIES) {
+        targetStack.splice(0, targetStack.length - MAX_PANE_HISTORY_ENTRIES)
+      }
+    }
+    await this.restoreNavigationEntry(paneId, target)
+    this.syncSnapshot()
+    return true
+  }
+
+  goBack = (
+    paneId: PaneId,
+    currentEntryOverride?: PaneNavigationEntry | null
+  ): Promise<boolean> =>
+    this.stepNavigationHistory(
+      paneId,
+      this.backStackByPane[paneId],
+      this.forwardStackByPane[paneId],
+      currentEntryOverride
+    )
+
+  goForward = (
+    paneId: PaneId,
+    currentEntryOverride?: PaneNavigationEntry | null
+  ): Promise<boolean> =>
+    this.stepNavigationHistory(
+      paneId,
+      this.forwardStackByPane[paneId],
+      this.backStackByPane[paneId],
+      currentEntryOverride
+    )
+
+  private restoreNavigationEntry = async (
+    paneId: PaneId,
+    entry: PaneNavigationEntry
+  ): Promise<void> => {
+    const pane = this.tabStore.getSnapshot().panes[paneId]
+    if (entry.kind === 'diff') {
+      const existing = pane.tabs.find((tab) => tab.kind === 'diff' && tab.id === entry.tabId)
+      const tab = existing
+        ? existing
+        : this.tabStore.openDiffTab(entry.request, {
+            paneId,
+            viewMode: entry.viewMode,
+            workspaceRootPath: entry.workspaceRootPath
+          })
+      if (existing) {
+        this.tabStore.activateTab(paneId, existing.id)
+      }
+      this.jumpToDiffLine(paneId, tab.id, entry.lineNumber, entry.side)
+      return
+    }
+
+    if (entry.kind === 'snapshot') {
+      const existing = pane.tabs.find((tab) => tab.kind === 'snapshot' && tab.id === entry.tabId)
+      const tab = existing
+        ? existing
+        : this.tabStore.openSnapshotTab(entry.request, {
+            paneId,
+            workspaceRootPath: entry.workspaceRootPath
+          })
+      if (existing) {
+        this.tabStore.activateTab(paneId, existing.id)
+      }
+      this.jumpToSnapshotLine(
+        paneId,
+        tab.id,
+        entry.lineNumber,
+        entry.columnStart,
+        entry.columnEnd
+      )
+      return
+    }
+
+    const existingDoc = pane.tabs.find(
+      (tab) =>
+        tab.kind === 'document' && (tab.id === entry.tabId || tab.bufferKey === entry.bufferKey)
+    )
+    if (existingDoc && existingDoc.kind === 'document') {
+      this.tabStore.activateTab(paneId, existingDoc.id)
+      const buffer = this.bufferStore.getBuffer(existingDoc.bufferKey)
+      if (buffer && !isImageDocument(buffer)) {
+        const jumpSeq = ++this.searchJumpSeq
+        this.activeJump = {
+          paneId,
+          tabId: existingDoc.id,
+          bufferKey: existingDoc.bufferKey,
+          mode: existingDoc.mode,
+          content: buffer.content,
+          request: {
+            paneId,
+            tabId: existingDoc.id,
+            query: '',
+            options: { caseSensitive: false, wholeWord: false, useRegex: false },
+            lineNumber: entry.lineNumber,
+            columnStart: entry.columnStart,
+            columnEnd: entry.columnEnd,
+            nonce: jumpSeq
+          }
+        }
+        this.syncSnapshot()
+        return
+      }
+    }
+
+    await this.openFileWithJump({
+      filePath: entry.filePath,
+      targetPaneId: paneId,
+      lineNumber: entry.lineNumber,
+      columnStart: entry.columnStart,
+      columnEnd: entry.columnEnd,
+      query: '',
+      options: { caseSensitive: false, wholeWord: false, useRegex: false }
+    })
+  }
+
+  jumpToDiffLine = (
+    paneId: PaneId,
+    tabId: string,
+    lineNumber: number,
+    side: 'old' | 'new' = 'new'
+  ): void => {
+    this.lastLocationByTabId.set(tabId, { lineNumber, side })
+    this.diffJumpSeq += 1
+    this.activeDiffJump = {
+      paneId,
+      tabId,
+      lineNumber,
+      side,
+      nonce: this.diffJumpSeq
+    }
+    this.syncSnapshot()
+  }
+
+  jumpToSnapshotLine = (
+    paneId: PaneId,
+    tabId: string,
+    lineNumber: number,
+    columnStart = 0,
+    columnEnd = 0
+  ): void => {
+    this.lastLocationByTabId.set(tabId, { lineNumber })
+    this.snapshotJumpSeq += 1
+    this.activeSnapshotJump = {
+      paneId,
+      tabId,
+      lineNumber,
+      columnStart,
+      columnEnd,
+      nonce: this.snapshotJumpSeq
+    }
+    this.syncSnapshot()
+  }
+
+  selectOutlineSymbol = (symbol: DocumentSymbolItem): void => {
+    const layout = this.tabStore.getSnapshot()
+    const activePane = layout.panes[layout.activePaneId]
+    const activeTab = getPaneActiveTab(activePane)
+    if (!activeTab) return
+
+    if (activeTab.kind === 'diff') {
+      this.jumpToDiffLine(activePane.id, activeTab.id, symbol.lineNumber, 'new')
+      return
+    }
+
+    if (activeTab.kind === 'snapshot') {
+      this.jumpToSnapshotLine(
+        activePane.id,
+        activeTab.id,
+        symbol.lineNumber,
+        symbol.columnStart,
+        symbol.columnEnd
+      )
+      return
+    }
+
+    if (activeTab.kind !== 'document') {
+      return
+    }
+
+    const buffer = this.bufferStore.getBuffer(activeTab.bufferKey)
+    if (!buffer || isImageDocument(buffer)) return
+
+    const jumpSeq = ++this.searchJumpSeq
+    this.activeJump = {
+      paneId: activePane.id,
+      tabId: activeTab.id,
+      bufferKey: activeTab.bufferKey,
+      mode: activeTab.mode,
+      content: buffer.content,
+      request: {
+        paneId: activePane.id,
+        tabId: activeTab.id,
+        query: '',
+        options: { caseSensitive: false, wholeWord: false, useRegex: false },
+        lineNumber: symbol.lineNumber,
+        columnStart: symbol.columnStart,
+        columnEnd: symbol.columnEnd,
+        nonce: jumpSeq
+      }
+    }
+    this.syncSnapshot()
   }
 
   reportActiveHeading = (report: OutlineActiveHeadingReport): void => {
@@ -467,9 +864,40 @@ export class PaneNavigationCoordinator {
       }
     }
 
+    if (this.activeDiffJump && this.shouldInvalidateTabJump(this.activeDiffJump, transition)) {
+      this.activeDiffJump = null
+      changed = true
+    }
+
+    if (this.activeSnapshotJump && this.shouldInvalidateTabJump(this.activeSnapshotJump, transition)) {
+      this.activeSnapshotJump = null
+      changed = true
+    }
+
     if (changed) {
       this.syncSnapshot()
     }
+  }
+
+  private shouldInvalidateTabJump(
+    jump: { paneId: PaneId; tabId: string },
+    transition: PaneTabTransition
+  ): boolean {
+    if (
+      (transition.type === 'tab-opened' || transition.type === 'tab-switched') &&
+      transition.paneId === jump.paneId &&
+      transition.tab.id !== jump.tabId
+    ) {
+      return true
+    }
+    if (
+      transition.type === 'tab-closed' &&
+      transition.paneId === jump.paneId &&
+      transition.closedTab.id === jump.tabId
+    ) {
+      return true
+    }
+    return transition.type === 'tab-moved' && transition.tab.id === jump.tabId
   }
 
   private shouldInvalidateTarget(
@@ -524,16 +952,29 @@ export class PaneNavigationCoordinator {
 
     const nextSearchJump = this.activeJump?.request ?? null
     const nextOutlineScroll = this.activeOutlineScroll?.request ?? null
+    const nextDiffJump = this.activeDiffJump
+    const nextSnapshotJump = this.activeSnapshotJump
     const nextActiveHeadingIndex = this.pinnedOutlineHeading
       ? this.pinnedOutlineHeading.index
       : this.spyOutlineHeading
         ? this.spyOutlineHeading.index
         : null
+    const nextPrimaryBack = this.backStackByPane.primary.length > 0
+    const nextPrimaryForward = this.forwardStackByPane.primary.length > 0
+    const nextSecondaryBack = this.backStackByPane.secondary.length > 0
+    const nextSecondaryForward = this.forwardStackByPane.secondary.length > 0
+    const prevHistory = this.cachedSnapshot.historyByPane
 
     if (
       this.cachedSnapshot.searchJumpRequest === nextSearchJump &&
       this.cachedSnapshot.outlineScrollRequest === nextOutlineScroll &&
-      this.cachedSnapshot.activeHeadingIndex === nextActiveHeadingIndex
+      this.cachedSnapshot.diffJumpRequest === nextDiffJump &&
+      this.cachedSnapshot.snapshotJumpRequest === nextSnapshotJump &&
+      this.cachedSnapshot.activeHeadingIndex === nextActiveHeadingIndex &&
+      prevHistory.primary.canGoBack === nextPrimaryBack &&
+      prevHistory.primary.canGoForward === nextPrimaryForward &&
+      prevHistory.secondary.canGoBack === nextSecondaryBack &&
+      prevHistory.secondary.canGoForward === nextSecondaryForward
     ) {
       return
     }
@@ -541,7 +982,13 @@ export class PaneNavigationCoordinator {
     this.cachedSnapshot = {
       searchJumpRequest: nextSearchJump,
       outlineScrollRequest: nextOutlineScroll,
-      activeHeadingIndex: nextActiveHeadingIndex
+      diffJumpRequest: nextDiffJump,
+      snapshotJumpRequest: nextSnapshotJump,
+      activeHeadingIndex: nextActiveHeadingIndex,
+      historyByPane: {
+        primary: { canGoBack: nextPrimaryBack, canGoForward: nextPrimaryForward },
+        secondary: { canGoBack: nextSecondaryBack, canGoForward: nextSecondaryForward }
+      }
     }
     for (const listener of this.listeners) {
       listener()

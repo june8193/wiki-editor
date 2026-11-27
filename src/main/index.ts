@@ -151,6 +151,7 @@ void app.whenReady().then(async () => {
     rendererFilePath: join(__dirname, '../renderer/index.html'),
     windowIconPath: join(__dirname, '../../build/icon.png'),
     configService,
+    gitService,
     logService,
     trashItem: (targetPath) => shell.trashItem(targetPath),
     initialAutoSaveConfig: {

@@ -22,6 +22,7 @@ import {
   WORKSPACE_OUTSIDE_ERROR_MESSAGE,
   WORKSPACE_SYMLINK_ERROR_MESSAGE
 } from '../fs/pathSecurity'
+import type { GitService } from '../git/GitService'
 import type { LogService } from '../logging/LogService'
 import type { WorkspaceFsService } from './WorkspaceFsService'
 
@@ -30,6 +31,7 @@ const DEFAULT_WATCH_DEBOUNCE_MS = 60
 export interface DiskWorkspaceQueryAndSchemaOptions {
   workspaceService: WorkspaceFsService
   bufferHub?: SharedDocumentBufferHub
+  gitService?: GitService
   watchDebounceMs?: number
   concurrency?: number
   logService?: LogService
@@ -174,8 +176,12 @@ function watchDiskSchema(
  */
 export function createDiskWorkspaceQueryAndSchemaStorage({
   workspaceService,
+  gitService,
   watchDebounceMs = DEFAULT_WATCH_DEBOUNCE_MS
-}: Pick<DiskWorkspaceQueryAndSchemaOptions, 'workspaceService' | 'watchDebounceMs'>): WorkspaceQueryAndSchemaStorage {
+}: Pick<
+  DiskWorkspaceQueryAndSchemaOptions,
+  'workspaceService' | 'gitService' | 'watchDebounceMs'
+>): WorkspaceQueryAndSchemaStorage {
   const resolvedDebounceMs = Math.max(5, Math.floor(watchDebounceMs))
 
   return {
@@ -188,7 +194,18 @@ export function createDiskWorkspaceQueryAndSchemaStorage({
     readSchemaRaw: readDiskSchemaRaw,
     writeSchemaRaw: writeDiskSchemaRaw,
     watchSchema: (rootPath, onPossibleChange) =>
-      watchDiskSchema(rootPath, resolvedDebounceMs, onPossibleChange)
+      watchDiskSchema(rootPath, resolvedDebounceMs, onPossibleChange),
+    ...(gitService
+      ? {
+          searchGitSymbols: (request, signal) => {
+            const rootPath = workspaceService.getWorkspaceRoot()
+            if (!rootPath) {
+              return Promise.resolve(null)
+            }
+            return gitService.grepSymbols(rootPath, request, signal)
+          }
+        }
+      : {})
   }
 }
 
@@ -199,6 +216,7 @@ export function createDiskWorkspaceQueryAndSchemaStorage({
 export function createDiskWorkspaceQueryAndSchemaHub({
   workspaceService,
   bufferHub,
+  gitService,
   watchDebounceMs = DEFAULT_WATCH_DEBOUNCE_MS,
   concurrency,
   logService
@@ -206,6 +224,7 @@ export function createDiskWorkspaceQueryAndSchemaHub({
   return new WorkspaceQueryAndSchemaHub({
     storage: createDiskWorkspaceQueryAndSchemaStorage({
       workspaceService,
+      gitService,
       watchDebounceMs
     }),
     bufferHub,

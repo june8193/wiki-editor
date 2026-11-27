@@ -5,7 +5,17 @@ import type { DocumentSearchJumpRequest } from '@shared/search'
 import type { WorkspaceEntry } from '@shared/workspace'
 import type { GitDiffRequest } from '@shared/git'
 import type { OutlineActiveHeadingReport, OutlineScrollRequest } from '../editor/outlineScrollSpy'
-import { getPaneActiveTab, GitDiffViewMode, PaneState, SplitMode } from '../stores/PaneTabStore'
+import type {
+  PaneDiffJumpRequest,
+  PaneSnapshotJumpRequest
+} from '../stores/PaneNavigationCoordinator'
+import {
+  formatGitSnapshotTabKey,
+  getPaneActiveTab,
+  GitDiffViewMode,
+  PaneState,
+  SplitMode
+} from '../stores/PaneTabStore'
 import { formatGitDiffTabKey } from '../utils/gitFilePresentation'
 import { DocumentEditor, type DocumentEditorFindControl } from './DocumentEditor'
 import {
@@ -13,6 +23,7 @@ import {
   type GitDiffNavigationProps,
   GitDiffViewer
 } from './GitDiffViewer'
+import { type SnapshotContentState, SnapshotViewer } from './SnapshotViewer'
 import {
   allowWikiTabDragOver,
   handleTabMoveDrop,
@@ -30,20 +41,25 @@ interface PaneViewProps {
   autoSave: boolean
   scrollRequest?: OutlineScrollRequest | null
   searchJumpRequest?: DocumentSearchJumpRequest | null
+  diffJumpRequest?: PaneDiffJumpRequest | null
+  snapshotJumpRequest?: PaneSnapshotJumpRequest | null
   isShortcutDisabled?: boolean
   workspaceMarkdownFiles?: readonly WorkspaceEntry[]
   buffers: DocumentBufferSnapshot
   diffsByKey: Record<string, GitDiffContentState>
+  snapshotsByKey?: Record<string, SnapshotContentState>
   getDiffNavigation?: (request: GitDiffRequest) => GitDiffNavigationProps | undefined
   diffSplitRatio?: number
   onChangeDiffSplitRatio?: (nextRatio: number) => void
   dragState: TabDragUiState
+  history?: { canGoBack: boolean; canGoForward: boolean }
   findControl?: DocumentEditorFindControl
   onActiveHeadingChange?: (report: OutlineActiveHeadingReport) => void
   actions: PaneInteractionActions
 }
 
 const LOADING_DIFF_STATE: GitDiffContentState = { status: 'loading' }
+const LOADING_SNAPSHOT_STATE: SnapshotContentState = { status: 'loading' }
 
 export function PaneView({
   pane,
@@ -54,14 +70,18 @@ export function PaneView({
   autoSave,
   scrollRequest = null,
   searchJumpRequest = null,
+  diffJumpRequest = null,
+  snapshotJumpRequest = null,
   isShortcutDisabled = false,
   workspaceMarkdownFiles,
   buffers,
   diffsByKey,
+  snapshotsByKey,
   getDiffNavigation,
   diffSplitRatio,
   onChangeDiffSplitRatio,
   dragState,
+  history,
   findControl,
   onActiveHeadingChange,
   actions
@@ -73,6 +93,11 @@ export function PaneView({
     activeTab?.kind === 'diff'
       ? (diffsByKey[formatGitDiffTabKey(activeTab.diff.request)] ?? LOADING_DIFF_STATE)
       : null
+  const activeSnapshotState =
+    activeTab?.kind === 'snapshot'
+      ? (snapshotsByKey?.[formatGitSnapshotTabKey(activeTab.snapshot.request)] ??
+          LOADING_SNAPSHOT_STATE)
+      : null
   const activeDiffTabId = activeTab?.kind === 'diff' ? activeTab.id : null
   const handleChangeDiffViewMode = useCallback(
     (nextMode: GitDiffViewMode) => {
@@ -81,6 +106,37 @@ export function PaneView({
       }
     },
     [actions.onChangeDiffViewMode, pane.id, activeDiffTabId]
+  )
+  const onSymbolNavigate = actions.onSymbolNavigate
+  const onSymbolContextMenu = actions.onSymbolContextMenu
+  const onFindReferences = actions.onFindReferences
+  const bindDiffSymbolHandler = useCallback(
+    (
+      handler:
+        | ((
+            paneId: typeof pane.id,
+            tabId: string,
+            req: import('../editor/symbolHoverDom').SymbolNavigateRequest
+          ) => void)
+        | undefined
+    ) =>
+      handler && activeDiffTabId
+        ? (req: import('../editor/symbolHoverDom').SymbolNavigateRequest) =>
+            handler(pane.id, activeDiffTabId, req)
+        : undefined,
+    [pane.id, activeDiffTabId]
+  )
+  const handleDiffSymbolNavigate = useMemo(
+    () => bindDiffSymbolHandler(onSymbolNavigate),
+    [bindDiffSymbolHandler, onSymbolNavigate]
+  )
+  const handleDiffSymbolContextMenu = useMemo(
+    () => bindDiffSymbolHandler(onSymbolContextMenu),
+    [bindDiffSymbolHandler, onSymbolContextMenu]
+  )
+  const handleDiffFindReferences = useMemo(
+    () => bindDiffSymbolHandler(onFindReferences),
+    [bindDiffSymbolHandler, onFindReferences]
   )
   const diffNavigation = useMemo(
     () => (activeTab?.kind === 'diff' ? getDiffNavigation?.(activeTab.diff.request) : undefined),
@@ -96,6 +152,20 @@ export function PaneView({
     searchJumpRequest.paneId === pane.id &&
     searchJumpRequest.tabId === activeTab.id
       ? searchJumpRequest
+      : null
+  const activeDiffJumpRequest =
+    activeTab?.kind === 'diff' &&
+    diffJumpRequest &&
+    diffJumpRequest.paneId === pane.id &&
+    diffJumpRequest.tabId === activeTab.id
+      ? diffJumpRequest
+      : null
+  const activeSnapshotJumpRequest =
+    activeTab?.kind === 'snapshot' &&
+    snapshotJumpRequest &&
+    snapshotJumpRequest.paneId === pane.id &&
+    snapshotJumpRequest.tabId === activeTab.id
+      ? snapshotJumpRequest
       : null
   const canMoveToSplit = !(splitMode === 'single' && pane.tabs.length <= 1)
   const paneStyle: CSSProperties | undefined =
@@ -130,6 +200,7 @@ export function PaneView({
           canMoveToSplit={canMoveToSplit}
           buffers={buffers}
           dragState={dragState}
+          history={history}
           actions={actions}
         />
       )}
@@ -141,9 +212,34 @@ export function PaneView({
           state={activeDiffState}
           splitRatio={diffSplitRatio}
           onChangeSplitRatio={onChangeDiffSplitRatio}
+          isActive={isActivePane}
+          isShortcutDisabled={isShortcutDisabled}
+          findControl={findControl}
           onChangeViewMode={handleChangeDiffViewMode}
           onOpenFile={actions.onOpenDiffTargetFile}
+          onSymbolNavigate={onSymbolNavigate ? handleDiffSymbolNavigate : undefined}
+          onSymbolContextMenu={onSymbolContextMenu ? handleDiffSymbolContextMenu : undefined}
+          onFindReferences={onFindReferences ? handleDiffFindReferences : undefined}
           navigation={diffNavigation}
+          jumpRequest={activeDiffJumpRequest}
+        />
+      ) : activeTab?.kind === 'snapshot' && activeSnapshotState ? (
+        <SnapshotViewer
+          key={activeTab.id}
+          request={activeTab.snapshot.request}
+          state={activeSnapshotState}
+          scrollTop={activeTab.snapshot.scrollTop}
+          jumpRequest={activeSnapshotJumpRequest}
+          isActive={isActivePane}
+          isShortcutDisabled={isShortcutDisabled}
+          findControl={findControl}
+          onScrollTopChange={(nextScrollTop) =>
+            actions.onUpdateSnapshotScrollTop?.(pane.id, activeTab.id, nextScrollTop)
+          }
+          onOpenLocalFile={actions.onOpenSnapshotTargetFile}
+          onSymbolNavigate={(req) => actions.onSymbolNavigate?.(pane.id, activeTab.id, req)}
+          onSymbolContextMenu={(req) => actions.onSymbolContextMenu?.(pane.id, activeTab.id, req)}
+          onFindReferences={(req) => actions.onFindReferences?.(pane.id, activeTab.id, req)}
         />
       ) : activeTab?.kind === 'document' && activeBuffer ? (
         <DocumentEditor
@@ -168,6 +264,21 @@ export function PaneView({
           }
           onUpdateViewState={(patch) => actions.onUpdateTabViewState(pane.id, activeTab.id, patch)}
           onNavigateLink={(href) => actions.onNavigateLink?.(pane.id, activeTab.id, href)}
+          onSymbolNavigate={
+            actions.onSymbolNavigate
+              ? (req) => actions.onSymbolNavigate!(pane.id, activeTab.id, req)
+              : undefined
+          }
+          onSymbolContextMenu={
+            actions.onSymbolContextMenu
+              ? (req) => actions.onSymbolContextMenu!(pane.id, activeTab.id, req)
+              : undefined
+          }
+          onFindReferences={
+            actions.onFindReferences
+              ? (req) => actions.onFindReferences!(pane.id, activeTab.id, req)
+              : undefined
+          }
           onActiveHeadingChange={
             onActiveHeadingChange
               ? (update) =>

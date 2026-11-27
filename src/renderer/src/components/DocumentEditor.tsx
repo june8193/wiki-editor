@@ -24,6 +24,7 @@ import {
   type DocumentEditorFindControl,
   useDocumentEditorFind
 } from '../hooks/useDocumentEditorFind'
+import type { SymbolNavigateRequest } from '../editor/symbolHoverDom'
 import { useDismissable } from '../hooks/useDismissable'
 import { resolveDocumentJumpHighlights } from '../stores/PaneNavigationCoordinator'
 import { useSplitScrollSync } from '../hooks/useSplitScrollSync'
@@ -62,6 +63,9 @@ interface DocumentEditorProps {
   onReopenWithEncoding?: (targetEncoding: TextEncoding) => void
   onUpdateViewState: (patch: TabViewPatch) => void
   onNavigateLink?: (href: string) => void
+  onSymbolNavigate?: (request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (request: SymbolNavigateRequest) => void
+  onFindReferences?: (request: SymbolNavigateRequest) => void
   onActiveHeadingChange?: (update: DocumentOutlineSpyUpdate) => void
 }
 
@@ -97,6 +101,9 @@ export function DocumentEditor({
   onReopenWithEncoding,
   onUpdateViewState,
   onNavigateLink,
+  onSymbolNavigate,
+  onSymbolContextMenu,
+  onFindReferences,
   onActiveHeadingChange
 }: DocumentEditorProps) {
   const activeFilePath = activeDoc.kind === 'workspace' ? activeDoc.path : null
@@ -281,6 +288,7 @@ export function DocumentEditor({
       <RawMarkdownEditor
         content={activeDoc.content}
         language={rawLanguage}
+        fileName={activeDoc.name}
         theme={theme}
         cursor={tab.cursor}
         scrollTop={tab.scrollTop}
@@ -309,6 +317,9 @@ export function DocumentEditor({
         }
         onRawScroll={effectiveMode === 'split' ? handleSplitRawScroll : undefined}
         onLinkNavigate={allowRichModes ? onNavigateLink : undefined}
+        onSymbolNavigate={!allowRichModes ? onSymbolNavigate : undefined}
+        onSymbolContextMenu={!allowRichModes ? onSymbolContextMenu : undefined}
+        onFindReferences={!allowRichModes ? onFindReferences : undefined}
       />
     ) : null
 

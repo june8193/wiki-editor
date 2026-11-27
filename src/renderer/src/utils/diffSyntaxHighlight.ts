@@ -19,7 +19,10 @@ export interface DiffLanguageParserResolution {
   needsAsyncLoad: boolean
 }
 
-function getExtensionFromPath(filePath: string): string {
+export function getFileExtension(filePath: string | null | undefined): string {
+  if (!filePath) {
+    return ''
+  }
   const baseName = filePath.split(/[/\\]/).pop() ?? ''
   const dotIndex = baseName.lastIndexOf('.')
   if (dotIndex <= 0 || dotIndex === baseName.length - 1) {
@@ -32,7 +35,7 @@ function getExtensionFromPath(filePath: string): string {
  * Synchronously resolves a bundled or already-cached language parser for the given file path.
  */
 export function resolveDiffLanguageParserSync(filePath: string): DiffLanguageParserResolution {
-  const ext = getExtensionFromPath(filePath)
+  const ext = getFileExtension(filePath)
   const bundledParser = ext ? resolveCodeBlockParser(ext) : null
   if (bundledParser) {
     return { parser: bundledParser, needsAsyncLoad: false }
@@ -52,6 +55,11 @@ export function resolveDiffLanguageParserSync(filePath: string): DiffLanguagePar
  * Loads a Lezer parser for the given file path via `@codemirror/language-data`, caching results.
  */
 export async function loadDiffLanguageParser(filePath: string): Promise<CodeParser | null> {
+  const ext = getFileExtension(filePath)
+  const bundledParser = ext ? resolveCodeBlockParser(ext) : null
+  if (bundledParser) {
+    return bundledParser
+  }
   const desc = LanguageDescription.matchFilename(languages, filePath)
   if (!desc) {
     return null

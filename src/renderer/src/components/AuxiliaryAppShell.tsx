@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { createWindowInitContextLoader } from '@shared/window'
 import { useAuxiliaryDiffState } from '../hooks/useAuxiliaryDiffState'
+import { useSnapshotTabState } from '../hooks/useSnapshotTabState'
 import { useConfigController } from '../hooks/useConfigController'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useEditorWorkspace } from '../hooks/useEditorWorkspace'
@@ -30,12 +31,13 @@ export function AuxiliaryAppShell() {
     onError: reportErrorBanner
   })
   const [isSchemaModalOpen, setIsSchemaModalOpen] = useState(false)
+  const [isSymbolPaletteOpen, setIsSymbolPaletteOpen] = useState(false)
   const loadInitContext = useMemo(
     () => createWindowInitContextLoader(wikiApi.window),
     [wikiApi.window]
   )
   const isDialogOpen = pendingDialog !== null
-  const isShortcutDisabled = isDialogOpen || isSchemaModalOpen
+  const isShortcutDisabled = isDialogOpen || isSchemaModalOpen || isSymbolPaletteOpen
   const editor = useEditorWorkspace({
     isAutoSavePaused: isDialogOpen,
     isShortcutDisabled,
@@ -54,8 +56,35 @@ export function AuxiliaryAppShell() {
     activeDocumentKey: editor.activeBuffer?.key ?? null
   })
 
+  const activeTab = getPaneActiveTab(editor.layout.panes[editor.layout.activePaneId])
+  const auxiliaryWorkspaceRootPath = useMemo(() => {
+    if (activeTab?.kind === 'diff' && activeTab.diff.workspaceRootPath) {
+      return activeTab.diff.workspaceRootPath
+    }
+    if (activeTab?.kind === 'snapshot' && activeTab.snapshot.workspaceRootPath) {
+      return activeTab.snapshot.workspaceRootPath
+    }
+    for (const pane of [editor.layout.panes.primary, editor.layout.panes.secondary]) {
+      for (const tab of pane.tabs) {
+        if (tab.kind === 'diff' && tab.diff.workspaceRootPath) {
+          return tab.diff.workspaceRootPath
+        }
+        if (tab.kind === 'snapshot' && tab.snapshot.workspaceRootPath) {
+          return tab.snapshot.workspaceRootPath
+        }
+      }
+    }
+    return null
+  }, [activeTab, editor.layout.panes.primary, editor.layout.panes.secondary])
+
   const { diffsByKey, openDiffTargetFile } = useAuxiliaryDiffState({
     layout: editor.layout,
+    gitApi: wikiApi.git,
+    openWorkspaceFile: editor.openWorkspaceFile
+  })
+  const { snapshotsByKey, openSnapshotTargetFile } = useSnapshotTabState({
+    layout: editor.layout,
+    workspaceRootPath: auxiliaryWorkspaceRootPath,
     gitApi: wikiApi.git,
     openWorkspaceFile: editor.openWorkspaceFile
   })
@@ -63,9 +92,10 @@ export function AuxiliaryAppShell() {
   const paneActions = useMemo<PaneInteractionActions>(
     () => ({
       ...editor.paneActions,
-      onOpenDiffTargetFile: openDiffTargetFile
+      onOpenDiffTargetFile: openDiffTargetFile,
+      onOpenSnapshotTargetFile: openSnapshotTargetFile
     }),
-    [editor.paneActions, openDiffTargetFile]
+    [editor.paneActions, openDiffTargetFile, openSnapshotTargetFile]
   )
 
   useWindowCloseGuard({
@@ -75,17 +105,19 @@ export function AuxiliaryAppShell() {
     confirmUnsavedChanges
   })
 
-  const activeTab = getPaneActiveTab(editor.layout.panes[editor.layout.activePaneId])
   const activeTitleName =
     activeTab?.kind === 'diff'
       ? getGitDiffTabLabel(activeTab.diff.request)
-      : editor.activeBuffer?.name
+      : activeTab?.kind === 'snapshot'
+        ? `🔒 ${activeTab.snapshot.request.scope.displayRef} · ${activeTab.snapshot.request.path.split(/[\\/]/).pop() ?? activeTab.snapshot.request.path}`
+        : editor.activeBuffer?.name
 
   const windowTitle = useWindowTitle(loadInitContext, activeTitleName)
 
   return (
     <EditorWindowFrame
       initialRightSidebarCollapsed
+      workspaceRootPath={auxiliaryWorkspaceRootPath}
       titleBarSlot={<TitleBar title={windowTitle} />}
       errorMessage={errorMessage}
       pendingDialog={pendingDialog}
@@ -93,6 +125,7 @@ export function AuxiliaryAppShell() {
       isSchemaModalOpen={isSchemaModalOpen}
       onOpenSchemaModal={() => setIsSchemaModalOpen(true)}
       onCloseSchemaModal={() => setIsSchemaModalOpen(false)}
+      onSymbolPaletteOpenChange={setIsSymbolPaletteOpen}
       showHeadingNumbers={config.showHeadingNumbers}
       onToggleHeadingNumbers={toggleShowHeadingNumbers}
       frontmatterSchema={frontmatterSchema}
@@ -104,7 +137,7 @@ export function AuxiliaryAppShell() {
         config,
         { ...editor, paneActions },
         isShortcutDisabled,
-        { diffsByKey }
+        { diffsByKey, snapshotsByKey }
       )}
     />
   )

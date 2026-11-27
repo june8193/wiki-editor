@@ -6,12 +6,14 @@ import type { RawEditorLanguage } from '../editor/rawEditorLanguage'
 import type { RawFindHighlightRequest, RawJumpHighlightRequest } from '../editor/rawSearchHighlight'
 import type { RawTableAction } from '../editor/rawTableCommands'
 import { type RawScrollRequest, useRawCodeMirrorEditor } from '../hooks/useRawCodeMirrorEditor'
+import type { SymbolNavigateRequest } from '../editor/symbolHoverDom'
 import type { CursorPosition } from '../stores/PaneTabStore'
 import { LinkAutocompleteMenu } from './LinkAutocompleteMenu'
 
 interface RawMarkdownEditorProps {
   content: string
   language: RawEditorLanguage
+  fileName?: string
   theme: ThemeMode
   cursor: CursorPosition
   scrollTop: number
@@ -30,6 +32,9 @@ interface RawMarkdownEditorProps {
   onChangeContent: (nextContent: string) => void
   onUpdateViewState: (patch: { cursor?: CursorPosition; scrollTop?: number }) => void
   onLinkNavigate?: (href: string) => void
+  onSymbolNavigate?: (request: SymbolNavigateRequest) => void
+  onSymbolContextMenu?: (request: SymbolNavigateRequest) => void
+  onFindReferences?: (request: SymbolNavigateRequest) => void
   onActiveHeadingChange?: (sample: HeadingScrollSpySample) => void
   onRawScroll?: () => void
 }
@@ -54,6 +59,7 @@ const RAW_TABLE_BUTTONS: ReadonlyArray<{
 export function RawMarkdownEditor({
   content,
   language,
+  fileName,
   theme,
   cursor,
   scrollTop,
@@ -72,6 +78,9 @@ export function RawMarkdownEditor({
   onChangeContent,
   onUpdateViewState,
   onLinkNavigate,
+  onSymbolNavigate,
+  onSymbolContextMenu,
+  onFindReferences,
   onActiveHeadingChange,
   onRawScroll
 }: RawMarkdownEditorProps) {
@@ -79,6 +88,7 @@ export function RawMarkdownEditor({
     useRawCodeMirrorEditor({
       content,
       language,
+      fileName,
       theme,
       cursor,
       scrollTop,
@@ -97,6 +107,9 @@ export function RawMarkdownEditor({
       onChangeContent,
       onUpdateViewState,
       onLinkNavigate,
+      onSymbolNavigate,
+      onSymbolContextMenu,
+      onFindReferences,
       onActiveHeadingChange,
       onRawScroll
     })
