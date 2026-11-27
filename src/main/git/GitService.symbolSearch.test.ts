@@ -89,7 +89,7 @@ describe('GitService + WorkspaceQueryAndSchemaHub integration (searchSymbols)', 
         await runGit(repoDir, ['commit', '-m', 'initial'])
         const commit1 = (await runGit(repoDir, ['rev-parse', 'HEAD'])).trim()
 
-        await workspaceService.openWorkspace(repoDir)
+        const openedWorkspace = await workspaceService.openWorkspace(repoDir)
 
         // Whole-word symbolName match in working-tree (excludes parseTokenAsync, .wiki-editor, node_modules, binary)
         const wtMatches = await hub.searchSymbols({
@@ -120,7 +120,7 @@ describe('GitService + WorkspaceQueryAndSchemaHub integration (searchSymbols)', 
         expect(eucMatches[0].lineText).toContain('koreanValue')
 
         // Open unsaved dirty buffer overrides disk in working-tree
-        const parserPath = join(repoDir, 'src', 'parser.ts')
+        const parserPath = join(openedWorkspace.rootPath, 'src', 'parser.ts')
         const opened = await bufferHub.openWorkspaceFile(parserPath, 'parser.ts')
         await bufferHub.updateContent(
           opened.key,
