@@ -6,7 +6,7 @@
 
 **Blocked by:** 01-code-raw-highlighting-and-symbol-outline, 02-git-snapshot-blob-and-symbol-search-ipc
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] **스냅샷 탭**이 **탭 바**에 `🔒 <ref>` 배지로 구분 표시되고 **스냅샷 뷰어** **에디터 헤더**에서 `저장`·모드 전환 버튼을 숨긴 채 상단 읽기 전용 안내 띠와 `[로컬 파일 열기]` 액션을 제공하며, Preview + Pin 규칙·Stash 삭제 시 자동 정리·`workspace-state.json` 미영속 계약을 준수한다.
 - [ ] **Diff 뷰어**, **스냅샷 뷰어**, 비마크다운 코드 `Raw` 편집기에서 `Ctrl`(`Cmd`) 키를 누른 채 유효한 식별자 위에 마우스를 올리면 점선 밑줄과 포인터 커서가 표시되며, 주석·문자열·언어 키워드는 대상에서 제외된다.

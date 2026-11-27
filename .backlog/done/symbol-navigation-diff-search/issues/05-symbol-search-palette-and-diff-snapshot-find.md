@@ -6,7 +6,7 @@
 
 **Blocked by:** 03-snapshot-tab-history-and-ctrl-click-definition
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `Ctrl+T`(`Cmd+T`) 단축키로 **심볼 검색 팔레트**를 여닫을 수 있으며, 열려 있는 동안 배경 에디터·전역 단축키를 억제하고 한글 IME 조합에 안전한 디바운스·`Enter` 즉시 검색 및 `↑`/`↓`/`Esc` 키보드 내비게이션을 지원한다.
 - [ ] **심볼 검색 팔레트**가 활성 탭의 시점(일반 탭은 워킹트리, **Diff 탭**·**스냅샷 탭**은 해당 Git Ref)을 자동 반영하고 현재 Diff/Compare 변경 파일의 심볼을 상단에 우선 표시하며, 선택 시 시점 일치 이동과 **탐색 히스토리** 기록이 수행된다.

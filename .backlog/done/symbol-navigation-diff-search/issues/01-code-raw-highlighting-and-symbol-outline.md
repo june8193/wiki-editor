@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 비마크다운 코드 문서(`.ts`, `.tsx`, `.js`, `.py`, `.go`, `.rs`, `.cpp`, `.java` 등)를 `Raw` **에디터 모드**로 열 때 기존 마크다운·JSON 동작을 유지하면서 지연 로드된 Lezer 언어 파서로 신택스 하이라이팅이 적용된다.
 - [ ] 내장 Lezer 구문 트리 순회 기반 심볼·식별자 추출기가 주요 언어의 함수·클래스·메서드·타입·인터페이스·변수 선언 심볼 목록과 특정 위치의 식별자 토큰을 정확히 판별하며, 주석·문자열 내부의 동명 단어는 제외한다.

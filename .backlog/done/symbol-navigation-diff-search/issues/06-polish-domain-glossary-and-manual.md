@@ -6,7 +6,7 @@
 
 **Blocked by:** 04-right-sidebar-references-and-definition-fallback, 05-symbol-search-palette-and-diff-snapshot-find
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] **메인 창**에서 연 **스냅샷 탭**과 **Diff 탭**을 **보조 창**으로 분리·드래그 이동·재병합했을 때 `Ctrl+클릭` 정의 이동, **우측 사이드바** 심볼 **문서 목차** 및 **레퍼런스 섹션**, **탐색 히스토리**, `Ctrl+F` **문서 내 찾기 바**가 동일하게 동작한다.
 - [ ] 워크스페이스 전환·닫기·다른 창 포커스 시 **스냅샷 탭**, **편집기 영역**별 **탐색 히스토리**, **레퍼런스 섹션**, **심볼 검색 팔레트** 상태가 이전 세션 잔여물 없이 초기화된다.

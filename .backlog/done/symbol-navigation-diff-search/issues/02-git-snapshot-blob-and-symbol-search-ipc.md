@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 공유 스키마에 `CodeSourceScope`, `GitBlobSnapshotRequest`, `GitBlobSnapshot`, `SymbolQueryRequest`, `SymbolCandidateMatch` 계약을 정의하고 `WikiGitApi`·`WikiWorkspaceApi`·IPC·프리로드 브리지·인메모리 테스트 하네스에 노출한다.
 - [ ] Git 블롭 스냅샷 읽기가 `commit`, `branch-compare`, `stash`(미추적 `^3` 포함), `staged` 인덱스 시점의 파일 원문을 반환하며, 바이너리 판별, `2MB` 상한 절단(`isTruncated`), `existsInWorkspace`, 엄격 UTF-8 후 EUC-KR 자동 디코딩을 일관되게 처리한다.
