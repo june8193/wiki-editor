@@ -477,13 +477,17 @@ export function formatBaseWindowTitle(appVersion?: string | null): string {
 }
 
 /**
- * Formats an OS/title-bar window title from the active document display name and optional version.
+ * Formats an OS/title-bar window title from optional active document name, workspace name, and version.
  */
 export function formatWindowTitle(
   activeDocumentName?: string | null,
-  appVersion?: string | null
+  appVersion?: string | null,
+  workspaceName?: string | null
 ): string {
-  const baseTitle = formatBaseWindowTitle(appVersion)
-  const trimmed = activeDocumentName?.trim()
-  return trimmed ? `${trimmed} - ${baseTitle}` : baseTitle
+  const segments = [
+    activeDocumentName?.trim(),
+    workspaceName?.trim(),
+    formatBaseWindowTitle(appVersion)
+  ].filter((segment): segment is string => Boolean(segment))
+  return segments.join(' - ')
 }

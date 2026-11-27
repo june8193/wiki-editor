@@ -24,6 +24,7 @@ export {
 
 export interface MainWindowOptionsInput {
   bounds?: Partial<WindowBounds>
+  title?: string
   icon?: string
   theme?: ThemeMode
   appVersion?: string

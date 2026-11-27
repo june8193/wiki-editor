@@ -33,6 +33,7 @@ import {
 } from './window'
 import {
   type FocusOpenWorkspaceResult,
+  getWorkspaceDisplayName,
   isSameWorkspacePath,
   type OpenWorkspaceInNewWindowResult,
   type WorkspaceInfo
@@ -458,11 +459,15 @@ export class WindowSessionCoordinator<
       throw new Error('WindowSessionCoordinator is disposed')
     }
     const initialWorkspacePath = options?.initialWorkspacePath ?? null
+    const workspaceName = initialWorkspacePath
+      ? getWorkspaceDisplayName(initialWorkspacePath)
+      : null
     const session = this.createManagedSession(initialWorkspacePath)
     const record = this.registerHostedWindow(session, {
       role: 'main',
       initialTabs: [],
       bounds: options?.bounds,
+      title: workspaceName ? formatWindowTitle(null, this.host.appVersion, workspaceName) : undefined,
       initialWorkspacePath: options?.initialWorkspacePath
     })
     this.notifySessionCreated(session)
@@ -486,12 +491,17 @@ export class WindowSessionCoordinator<
           ? (firstTab.snapshot.request.path.split(/[\\/]/).pop() ?? firstTab.snapshot.request.path)
           : session.services.bufferHub.getBufferName(firstTab.bufferKey)
       : undefined
+    const workspaceRootPath = session.services.getWorkspaceRoot()
+    const workspaceName = workspaceRootPath ? getWorkspaceDisplayName(workspaceRootPath) : null
     const record = this.registerHostedWindow(session, {
       role: options.role,
       initialTabs: options.initialTabs,
       bounds: options.bounds,
+      initialWorkspacePath: workspaceRootPath,
       title:
-        options.role === 'auxiliary' ? formatWindowTitle(firstName, this.host.appVersion) : undefined
+        options.role === 'auxiliary'
+          ? formatWindowTitle(firstName, this.host.appVersion, workspaceName)
+          : undefined
     })
     this.host.mountWindow?.(record.hosted, options.role)
     return record

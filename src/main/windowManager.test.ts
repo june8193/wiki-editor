@@ -21,7 +21,7 @@ import type {
   WorkspaceFrontmatterFieldValuesResponse,
   WorkspaceFrontmatterSchema
 } from '@shared/frontmatter'
-import type { WorkspaceInfo } from '@shared/workspace'
+import { getWorkspaceDisplayName, type WorkspaceInfo } from '@shared/workspace'
 import {
   WINDOW_BASE_TITLE,
   type AcceptTabDragDropResult,
@@ -376,12 +376,18 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       height: 760,
       minWidth: 520,
       minHeight: 420,
-      title: 'alpha.md - Wiki Editor',
+      title: `alpha.md - ${getWorkspaceDisplayName(workspaceDir)} - Wiki Editor`,
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true
       }
+    })
+    expect(
+      await ipcHarness.invokeFrom<WindowInitContext>(auxWin.webContents, WINDOW_IPC_CHANNELS.getInitContext)
+    ).toMatchObject({
+      role: 'auxiliary',
+      initialWorkspacePath: await realpath(workspaceDir)
     })
     // Main window bounds {100,120,1280,820} + (40,40) -> (140,160) with 960x760 -> clamped inside 1400x900 workArea (max y = 140)
     expect(auxWin.getBounds()).toEqual({ x: 140, y: 140, width: 960, height: 760 })
@@ -414,8 +420,16 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       auxWin.webContents,
       WINDOW_IPC_CHANNELS.getInitContext
     )
-    expect(initCtx1).toEqual({ role: 'auxiliary', initialTabs: [payload] })
-    expect(initCtx2).toEqual({ role: 'auxiliary', initialTabs: [payload] })
+    expect(initCtx1).toEqual({
+      role: 'auxiliary',
+      initialTabs: [payload],
+      initialWorkspacePath: await realpath(workspaceDir)
+    })
+    expect(initCtx2).toEqual({
+      role: 'auxiliary',
+      initialTabs: [payload],
+      initialWorkspacePath: await realpath(workspaceDir)
+    })
 
     await ipcHarness.invokeFrom(auxWin.webContents, BUFFER_IPC_CHANNELS.syncWindowTabs, [buffer.key])
     expect(auxWin.isDestroyed()).toBe(false)
@@ -473,7 +487,9 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
       }
     )
     expect(createdWindows[2].webContents.id).toBe(result2.windowId)
-    expect(createdWindows[2].options.title).toBe('beta.md - Wiki Editor')
+    expect(createdWindows[2].options.title).toBe(
+      `beta.md - ${getWorkspaceDisplayName(workspaceDir)} - Wiki Editor`
+    )
   })
 
   it('keeps booting auxiliary window open before initial tab hydration and auto-closes once synced tabs drop to zero', async () => {
@@ -774,7 +790,11 @@ describe('WindowManager + Multi-window Main Process IPC', () => {
           aux1.webContents,
           WINDOW_IPC_CHANNELS.getInitContext
         )
-      ).toEqual({ role: 'auxiliary', initialTabs: [payload] })
+      ).toEqual({
+        role: 'auxiliary',
+        initialTabs: [payload],
+        initialWorkspacePath: await realpath(workspaceDir)
+      })
 
       // Dropping inside ANY open auxiliary window's bounds also suppresses detach
       const betaBuf = (await wideIpc.invokeFrom(
@@ -1754,6 +1774,7 @@ describe('Multi-Main-Window Workspace Session Coordinator', () => {
       minHeight: 600,
       x: 140,
       y: 140,
+      title: `${getWorkspaceDisplayName(realBeta)} - Wiki Editor`,
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,

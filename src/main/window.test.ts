@@ -212,6 +212,15 @@ describe('formatBaseWindowTitle, formatWindowTitle, and getTitleBarOverlayOption
     expect(formatWindowTitle(undefined)).toBe('Wiki Editor')
   })
 
+  it('formats title with workspace name for main and auxiliary windows', () => {
+    expect(formatWindowTitle(null, '1.9.0', 'my-wiki')).toBe('my-wiki - Wiki Editor v1.9.0')
+    expect(formatWindowTitle(null, null, 'my-wiki')).toBe('my-wiki - Wiki Editor')
+    expect(formatWindowTitle('notes.md', '1.9.0', 'my-wiki')).toBe(
+      'notes.md - my-wiki - Wiki Editor v1.9.0'
+    )
+    expect(formatWindowTitle('notes.md', '1.9.0', '   ')).toBe('notes.md - Wiki Editor v1.9.0')
+  })
+
   it('returns theme-matched titleBarOverlay options', () => {
     expect(getTitleBarOverlayOptions('light')).toEqual({
       color: '#f0f3f7',

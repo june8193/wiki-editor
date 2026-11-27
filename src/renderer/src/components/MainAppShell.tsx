@@ -277,8 +277,6 @@ export function MainAppShell() {
     }
   }, [focusSearchInput, workspaceLifecycle])
 
-  const windowTitle = useWindowTitle(workspaceLifecycle.loadInitContext)
-
   const handleResizeLeftSidebar = useCallback((nextWidth: number): void => {
     setLeftSidebar((prev) => (prev.width === nextWidth ? prev : { ...prev, width: nextWidth }))
   }, [])
@@ -325,6 +323,11 @@ export function MainAppShell() {
   })
 
   const activeWorkspaceRoot = workspace?.rootPath ?? null
+  const windowTitle = useWindowTitle(
+    workspaceLifecycle.loadInitContext,
+    null,
+    workspace?.name ?? null
+  )
   const terminal = useTerminalSession({
     wikiApi,
     workspaceRootPath: activeWorkspaceRoot,

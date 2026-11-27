@@ -147,7 +147,7 @@ export function TitleBar({ title, menus, isMenuDisabled = false, isMacOS }: Titl
   return (
     <div className={`app-titlebar${resolvedIsMacOS ? ' is-macos' : ''}`}>
       <div className="app-titlebar-title" title={title}>
-        {title}
+        <span className="app-titlebar-title-text">{title}</span>
       </div>
       {menus && menus.length > 0 && (
         <nav

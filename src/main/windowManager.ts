@@ -241,6 +241,7 @@ export class WindowManager
               })
             : createMainWindowOptions(this.preloadPath, {
                 bounds,
+                title,
                 icon: this.windowIconPath,
                 theme: this.latestTheme,
                 appVersion: this.appVersion
